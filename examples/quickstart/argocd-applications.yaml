@@ -1,0 +1,32 @@
+# Argo CD ApplicationSet for the 3 environments.
+# Each Application syncs from a directory in the GitOps repo.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: nginx-demo
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: test
+          - env: uat
+          - env: prod
+  template:
+    metadata:
+      name: nginx-demo-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/<your-username>/kardinal-demo
+        targetRevision: main
+        path: environments/{{env}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: nginx-demo-{{env}}
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

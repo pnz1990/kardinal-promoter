@@ -1,0 +1,23 @@
+# Sample Bundle for manual creation.
+# In practice, your CI pipeline creates this via the /api/v1/bundles webhook
+# or via: kardinal create bundle nginx-demo --image ghcr.io/<your-username>/nginx-demo:1.29.0
+apiVersion: kardinal.io/v1alpha1
+kind: Bundle
+metadata:
+  name: nginx-demo-v1-29-0
+  namespace: default
+  labels:
+    kardinal.io/pipeline: nginx-demo
+spec:
+  artifacts:
+    images:
+      - name: nginx
+        reference: ghcr.io/<your-username>/nginx-demo:1.29.0
+        digest: sha256:replace-with-actual-digest
+  provenance:
+    commitSHA: "abc123def456"
+    ciRunURL: "https://github.com/<your-username>/nginx-demo/actions/runs/12345"
+    author: "your-username"
+    buildTimestamp: "2026-04-09T10:00:00Z"
+  intent:
+    target: prod

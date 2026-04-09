@@ -1,0 +1,41 @@
+# Argo CD ApplicationSet for 4 environments across 4 clusters.
+# Argo CD runs in the hub cluster and manages Applications in all workload clusters.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: rollouts-demo
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: test
+            cluster: test-cluster
+            server: https://test-cluster.example.com
+          - env: pre-prod
+            cluster: pre-prod-cluster
+            server: https://pre-prod-cluster.example.com
+          - env: prod-eu
+            cluster: prod-eu-cluster
+            server: https://prod-eu-cluster.example.com
+          - env: prod-us
+            cluster: prod-us-cluster
+            server: https://prod-us-cluster.example.com
+  template:
+    metadata:
+      name: rollouts-demo-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/myorg/rollouts-demo-deploy
+        targetRevision: main
+        path: env/{{env}}
+      destination:
+        server: "{{server}}"
+        namespace: rollouts-demo
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

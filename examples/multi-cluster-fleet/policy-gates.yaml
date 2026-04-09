@@ -1,0 +1,30 @@
+# Org-level PolicyGates for production environments.
+# Injected automatically into any Pipeline that targets environments matching kardinal.io/applies-to.
+---
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-weekend-deploys
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod-eu,prod-us
+    kardinal.io/type: gate
+spec:
+  expression: "!schedule.isWeekend"
+  message: "Production deployments are blocked on weekends"
+  recheckInterval: 5m
+---
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: pre-prod-soak
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod-eu,prod-us
+    kardinal.io/type: gate
+spec:
+  expression: "bundle.upstreamSoakMinutes >= 30"
+  message: "Bundle must be verified in pre-prod for at least 30 minutes"
+  recheckInterval: 1m

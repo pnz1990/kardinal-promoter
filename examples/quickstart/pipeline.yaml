@@ -1,0 +1,50 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: nginx-demo
+  namespace: default
+spec:
+  git:
+    url: https://github.com/<your-username>/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        argocd:
+          name: nginx-demo-test
+          namespace: argocd
+
+    - name: uat
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        argocd:
+          name: nginx-demo-uat
+          namespace: argocd
+
+    - name: prod
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        argocd:
+          name: nginx-demo-prod
+          namespace: argocd
+        timeout: 15m
+
+  historyLimit: 20
