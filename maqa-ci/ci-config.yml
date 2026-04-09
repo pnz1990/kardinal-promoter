@@ -1,0 +1,56 @@
+# MAQA CI/CD Configuration — kardinal-promoter
+# Provider: GitHub Actions
+
+provider: "github-actions"
+
+github_actions:
+  owner: "pnz1990"
+  repo: "kardinal-promoter"
+  workflow: "ci.yml"
+
+circleci:
+  org_slug: ""
+  project_slug: ""
+
+gitlab:
+  base_url: "https://gitlab.com"
+  project_id: ""
+
+bitbucket:
+  workspace: ""
+  repo_slug: ""
+
+wait_timeout_seconds: 1200
+block_on_red: true
+
+# Detected provider: github-actions | circleci | gitlab | bitbucket | none
+provider: ""
+
+# GitHub Actions
+# Requires: GH_TOKEN with repo scope (or gh auth login)
+github_actions:
+  owner: ""       # org or username
+  repo: ""        # repository name
+  workflow: ""    # workflow filename or ID to check (e.g. ci.yml) — leave empty to check all
+
+# CircleCI
+# Requires: CIRCLE_TOKEN
+circleci:
+  org_slug: ""    # e.g. github/my-org
+  project_slug: ""# e.g. github/my-org/my-repo
+
+# GitLab CI
+# Requires: GITLAB_TOKEN
+gitlab:
+  base_url: "https://gitlab.com"
+  project_id: "" # numeric project ID
+
+# Bitbucket Pipelines
+# Requires: BITBUCKET_USER and BITBUCKET_TOKEN (app password)
+bitbucket:
+  workspace: ""
+  repo_slug: ""
+
+# Behaviour
+wait_timeout_seconds: 300   # max seconds to wait for pending pipeline before giving up
+block_on_red: true          # if false, coordinator warns but does not block In Review move
