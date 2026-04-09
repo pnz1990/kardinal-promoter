@@ -161,7 +161,7 @@ The feature set is equivalent. The difference is that Graph does not carry resou
 2. kardinal-controller detects new Bundle. Validates `intent.skip` if present (see Section 5.6). Generates a Graph spec from the Pipeline CRD, tailored to the Bundle's intent. Injects org/team PolicyGate nodes. Creates a Graph CR owned by the Bundle via `ownerReferences`.
 3. Graph controller reconciles the Graph. Resolves DAG dependencies. Creates the first PromotionStep CR (e.g., dev).
 4. kardinal-controller sees the PromotionStep. Clones the Git repo (from cached work tree), updates manifests using the configured update strategy, pushes. For `approval: auto`, pushes directly to the target branch. For `approval: pr-review`, opens a PR with promotion evidence.
-5. For PR-gated environments: waits for merge (webhook primary, 5m background sweep fallback).
+5. For PR-gated environments: waits for merge via webhook (`/webhooks` endpoint). On controller startup, performs a one-time reconciliation by listing open PRs with the `kardinal` label to catch any merges missed during downtime.
 6. After merge: monitors health via the appropriate adapter (Deployment, Argo CD, Flux).
 7. When healthy: writes `status.state = "Verified"`. Copies promotion evidence (metrics, gate results, approver, timing) into Bundle `status.environments` for durable audit storage.
 8. Graph controller sees `readyWhen` satisfied. Creates next nodes (PolicyGates, then PromotionStep for the next environment).
@@ -914,7 +914,7 @@ ghcr.io/myorg/my-app: 1.28.0 to 1.29.0
 
 For `approval: auto` environments: direct push to the target branch, no PR. Add `pr: true` on the environment config if an audit trail PR is desired.
 
-Merge detection: webhook primary (`/webhooks` endpoint), 5m background sweep fallback.
+Merge detection: webhook-based (`/webhooks` endpoint). On controller startup, the controller lists all open PRs with the `kardinal` label and reconciles any that were merged during downtime. There is no periodic polling.
 
 Mid-flight policy changes: new PolicyGates added after a Graph is created do not apply to that Graph. They apply to all subsequent Bundles. Use `kardinal pause` to block in-flight promotions.
 
@@ -1117,7 +1117,7 @@ Git cache at `/var/cache/kardinal/` uses an emptyDir volume.
 | Leader election | Lease-based. One active replica, one standby. 15s failover. |
 | Git rate limit | Exponential backoff from 1s to 5m maximum. |
 | PR creation fails | 3 retries with exponential backoff. |
-| SCM webhook missed | Background sweep catches open PRs within 5m. |
+| SCM webhook missed | Caught on controller restart via one-time PR reconciliation (lists open PRs with `kardinal` label). |
 | CEL evaluation error | PolicyGate set to not-ready. Fail-closed. |
 | PolicyGate stale after restart | lastEvaluatedAt freshness check in Graph readyWhen. Treated as not-ready until re-evaluated. |
 | PolicyGate timer-based recheck fails | Gate stays in last-known state. Graph does not advance (stale lastEvaluatedAt). Resumes on next successful evaluation. |
