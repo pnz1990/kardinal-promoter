@@ -1,0 +1,19 @@
+# MAQA GitHub Projects Configuration
+# Project: https://github.com/users/pnz1990/projects/1
+#
+# Prerequisites: GH_TOKEN with read:project + write:project scope
+# Run /speckit.maqa-github-projects.setup to auto-fill project_id and status field IDs.
+
+owner: "pnz1990"
+project_number: "1"
+project_id: ""          # fill via /speckit.maqa-github-projects.setup
+
+# Status field option IDs — fill via /speckit.maqa-github-projects.setup
+status_field_id: ""
+todo_option_id: ""
+in_progress_option_id: ""
+in_review_option_id: ""
+done_option_id: ""
+
+# Link items to this repo so PRs auto-associate
+linked_repo: "pnz1990/kardinal-promoter"

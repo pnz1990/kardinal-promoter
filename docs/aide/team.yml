@@ -68,15 +68,16 @@ roles:
     rules:
       - Work ONLY in the assigned worktree. Never touch main repo.
       - Write tests BEFORE implementation (tdd: true in maqa-config.yml).
-      - Work backwards from docs/ and examples/ - if it is not in the user docs, do not build it.
+      - Work backwards from docs/ and examples/ — if it is not in the user docs, do not build it.
       - Run go test ./... -race before marking done.
       - Run /speckit.verify-tasks.run to confirm no phantom completions.
+      - Run /speckit.verify to validate spec acceptance criteria are met.
       - Every new .go file needs Apache 2.0 copyright header.
       - No util.go, helpers.go, common.go.
       - Every reconciler must be idempotent.
-      - Stage all changes. Set auto_push: true so branches are pushed.
+      - auto_push: true — branch is pushed automatically.
       - PR title format: "feat(<scope>): <description>"
-      - PR body must reference the work item and spec.
+      - PR body must use docs/aide/pr-template.md and reference work item + spec.
 
   qa:
     description: >
@@ -133,6 +134,19 @@ dependencies:
   # The coordinator enforces this via .specify/specs/<feature>/spec.md Depends-on field.
   enforcement: strict     # never start a feature if its dependencies are not done
   parallel_ok: true       # features with no shared dependency can run in parallel
+
+# ── Board ──────────────────────────────────────────────────────────────────────
+board:
+  provider: github-projects
+  url: https://github.com/users/pnz1990/projects/1
+  config: maqa-github-projects/github-projects-config.yml
+  setup_command: /speckit.maqa-github-projects.setup
+  populate_command: /speckit.maqa-github-projects.populate
+  # Status columns map to lifecycle states:
+  todo_column: "Todo"
+  in_progress_column: "In Progress"
+  in_review_column: "In Review"
+  done_column: "Done"
 
 # ── CI Gate ────────────────────────────────────────────────────────────────────
 ci_gate:

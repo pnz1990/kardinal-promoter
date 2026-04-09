@@ -43,7 +43,7 @@
       "version": "1.0.0",
       "source": "local",
       "manifest_hash": "sha256:8755e3a1f73f49d0b247f4cbdbcf9db68573abb8ec82321eb4de87b2a1b3d71a",
-      "enabled": true,
+      "enabled": false,
       "priority": 10,
       "registered_commands": {
         "opencode": [
@@ -72,7 +72,7 @@
       "version": "1.0.0",
       "source": "local",
       "manifest_hash": "sha256:45150c8ac10b6b002ebea9de34a203911951fe3a89cb8635a2a149082c02eeed",
-      "enabled": true,
+      "enabled": false,
       "priority": 10,
       "registered_commands": {
         "opencode": [
@@ -87,7 +87,7 @@
       "version": "1.0.0",
       "source": "local",
       "manifest_hash": "sha256:25d080d9f1a0ea2fc62de2464479143c7c008b9131d32755f351413605d7946f",
-      "enabled": true,
+      "enabled": false,
       "priority": 10,
       "registered_commands": {
         "opencode": [
@@ -151,7 +151,7 @@
       "version": "1.0.0",
       "source": "local",
       "manifest_hash": "sha256:7aeaac4af9046a3ac9773fa2ef6c8938beef9cc02d7b8f841e72f388ecbdae69",
-      "enabled": true,
+      "enabled": false,
       "priority": 10,
       "registered_commands": {
         "opencode": [
@@ -160,6 +160,84 @@
       },
       "registered_skills": [],
       "installed_at": "2026-04-09T23:35:36.241516+00:00"
+    },
+    "maqa-github-projects": {
+      "version": "0.1.0",
+      "source": "local",
+      "manifest_hash": "sha256:04dc23dcaebb6312fb9fcdfaea073cf68a7c67f44cf99af6725d82f652909c7a",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.maqa-github-projects.setup",
+          "speckit.maqa-github-projects.populate"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:50:58.462648+00:00"
+    },
+    "cleanup": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:b15a5e3b4e5b43f867c093d962492f502b01503d0ec174611d0797854b017578",
+      "enabled": false,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.cleanup.run",
+          "speckit.cleanup"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:50:58.739523+00:00"
+    },
+    "verify": {
+      "version": "1.0.3",
+      "source": "local",
+      "manifest_hash": "sha256:74202b2c3bb17058b10787838cdf30c9ebe11e8793fc1de04bee75d5f111949a",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.verify.run"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:50:58.967458+00:00"
+    },
+    "review": {
+      "version": "1.0.1",
+      "source": "local",
+      "manifest_hash": "sha256:3f9eedfc8079662edfb8d1f9c07a161be4e66111ea57621061f1658e91710d83",
+      "enabled": false,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.review.run",
+          "speckit.review.code",
+          "speckit.review.comments",
+          "speckit.review.tests",
+          "speckit.review.errors",
+          "speckit.review.types",
+          "speckit.review.simplify"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:50:59.216132+00:00"
+    },
+    "retro": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:f27959726b2bb9b5257b8a164f0096e94c03c443b2e99ccde14af220f9781457",
+      "enabled": false,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.retro.run"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:50:59.435675+00:00"
     }
   }
 }
