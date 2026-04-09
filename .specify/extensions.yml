@@ -10,6 +10,14 @@ hooks:
     prompt: Execute speckit.git.initialize?
     description: Initialize Git repository before constitution setup
     condition: null
+  - extension: memorylint
+    command: speckit.memorylint.run
+    enabled: true
+    optional: true
+    prompt: Run MemoryLint to prune out-of-bounds architecture rules and enrich missing
+      infrastructure guidelines in AGENTS.md?
+    description: ''
+    condition: null
   before_specify:
   - extension: git
     command: speckit.git.feature
@@ -90,6 +98,13 @@ hooks:
     prompt: Commit specification changes?
     description: Auto-commit after specification
     condition: null
+  - extension: worktree
+    command: speckit.worktree.create
+    enabled: true
+    optional: true
+    prompt: Create an isolated worktree for this new feature?
+    description: Auto-spawn a worktree after a new feature is specified
+    condition: null
   after_clarify:
   - extension: git
     command: speckit.git.commit
@@ -121,6 +136,13 @@ hooks:
     optional: true
     prompt: Commit implementation changes?
     description: Auto-commit after implementation
+    condition: null
+  - extension: verify-tasks
+    command: speckit.verify-tasks.run
+    enabled: true
+    optional: true
+    prompt: Run verify-tasks in a fresh session to check for phantom completions
+    description: Post-implementation phantom completion detector
     condition: null
   after_checklist:
   - extension: git
