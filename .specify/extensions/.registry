@@ -113,6 +113,53 @@
       },
       "registered_skills": [],
       "installed_at": "2026-04-09T23:28:03.051468+00:00"
+    },
+    "maqa": {
+      "version": "0.1.5",
+      "source": "local",
+      "manifest_hash": "sha256:61bac8035e69bf0c3e464cdd35028218db8a21977bbc8d1cc206f417e341d4aa",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.maqa.coordinator",
+          "speckit.maqa",
+          "speckit.maqa.feature",
+          "speckit.maqa.qa",
+          "speckit.maqa.setup"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:35:35.710163+00:00"
+    },
+    "maqa-ci": {
+      "version": "0.1.0",
+      "source": "local",
+      "manifest_hash": "sha256:d5757b07b8ec5c31d7d24bee4a2b920ff7d2aa83be8db1cc48ec305662397a99",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.maqa-ci.setup",
+          "speckit.maqa-ci.check"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:35:35.972715+00:00"
+    },
+    "ship": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:7aeaac4af9046a3ac9773fa2ef6c8938beef9cc02d7b8f841e72f388ecbdae69",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "opencode": [
+          "speckit.ship.run"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-09T23:35:36.241516+00:00"
     }
   }
 }

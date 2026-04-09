@@ -2,6 +2,9 @@
 
 ## Core Principles
 
+### XI. Autonomous Development is Non-Negotiable
+This project is built 100% by autonomous AI agents. No human writes code, specs, or tests. Agents work in parallel in isolated git worktrees, validate each other's work via PR review, and work backwards from user documentation and examples. If a feature is not described in `docs/`, `examples/`, or `.specify/specs/`, it does not exist. The implementation serves the documentation, not the other way around. Any agent that skips tests, marks tasks complete without implementation, or deviates from the spec without escalating is in violation of this principle.
+
 ### I. Kubernetes is the Control Plane
 Every object in the system is a Kubernetes CRD. etcd is the database. The API server is the API. There is no external database, no dedicated API server, and no state outside of etcd. CLI, UI, and webhook endpoints are convenience layers that create and read CRDs. A user can operate the entire system with kubectl.
 

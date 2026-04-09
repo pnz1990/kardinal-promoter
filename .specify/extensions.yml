@@ -129,6 +129,13 @@ hooks:
     prompt: Commit task changes?
     description: Auto-commit after task generation
     condition: null
+  - extension: maqa
+    command: speckit.maqa.coordinator
+    enabled: true
+    optional: true
+    prompt: Launch MAQA coordinator to start parallel implementation?
+    description: Optionally start the coordinator workflow after task breakdown
+    condition: null
   after_implement:
   - extension: git
     command: speckit.git.commit
@@ -143,6 +150,21 @@ hooks:
     optional: true
     prompt: Run verify-tasks in a fresh session to check for phantom completions
     description: Post-implementation phantom completion detector
+    condition: null
+  - extension: maqa-ci
+    command: speckit.maqa-ci.check
+    enabled: true
+    optional: true
+    prompt: Check CI pipeline status before moving to review?
+    description: Gate on CI status after implementation completes
+    condition: null
+  - extension: ship
+    command: speckit.ship.run
+    enabled: true
+    optional: true
+    prompt: Ship this feature?
+    description: Runs pre-flight checks, syncs branches, generates changelog, and
+      creates PR
     condition: null
   after_checklist:
   - extension: git

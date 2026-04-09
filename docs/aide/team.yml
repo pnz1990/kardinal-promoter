@@ -1,0 +1,187 @@
+# kardinal-promoter — Autonomous Team Configuration
+# This file defines the roles, responsibilities, and coordination protocol
+# for the autonomous agent team. Agents read this to understand their role
+# and what to pick up next.
+#
+# WORKFLOW:
+#   1. Human updates docs/aide/progress.md with new stages to start
+#   2. Human runs /speckit.aide.create-queue to generate next batch of work items
+#   3. Coordinator agent reads this file + queue + progress, assigns items to agents
+#   4. Feature agents pick up items, work in isolated worktrees, push PRs
+#   5. QA agent reviews PRs, validates against spec + user docs + tests
+#   6. CI gate must pass before QA approves
+#   7. Loop back to step 2 when queue is exhausted
+
+version: "1.0"
+
+# ── Source of Truth (read in this order at session start) ──────────────────────
+source_of_truth:
+  - docs/aide/vision.md          # product vision, features, success criteria
+  - docs/aide/roadmap.md         # staged delivery plan, acceptance criteria
+  - docs/aide/progress.md        # what is done / in progress / planned
+  - .specify/memory/constitution.md  # non-negotiable principles
+  - docs/aide/team.yml           # this file
+  - AGENTS.md                    # full agent context and command reference
+
+# ── Roles ──────────────────────────────────────────────────────────────────────
+roles:
+
+  coordinator:
+    description: >
+      Orchestrates the team. Reads progress.md and the current queue, assigns
+      work items to feature agents, tracks state in .maqa/state.json, gates on
+      CI, and spawns the QA agent after each feature agent completes.
+    command: /speckit.maqa.coordinator
+    reads:
+      - docs/aide/progress.md
+      - docs/aide/queue/          # current active queue file
+      - .maqa/state.json          # persistent state (created on first run)
+      - maqa-config.yml
+    writes:
+      - .maqa/state.json
+    rules:
+      - Never implement features. Never commit or push. Return SPAWN blocks only.
+      - Respect max_parallel from maqa-config.yml (default 3).
+      - Gate on CI before spawning QA (MAQA CI extension).
+      - If a feature agent is blocked, log reason and continue with others.
+      - After all queue items are done, update docs/aide/progress.md.
+
+  feature:
+    description: >
+      Implements one work item in an isolated git worktree. Works backwards from
+      the spec, user documentation, and examples. Writes tests first (TDD mode).
+      Pushes a PR with the spec item as the PR description.
+    command: /speckit.maqa.feature
+    reads:
+      - docs/aide/items/<assigned-item>.md  # detailed work item spec
+      - .specify/specs/<feature>/spec.md    # feature specification
+      - .specify/specs/<feature>/tasks.md   # task checklist
+      - docs/design/<feature>.md            # technical implementation spec
+      - docs/aide/vision.md                 # product context
+      - AGENTS.md                           # Go standards, architecture
+      - .specify/memory/constitution.md     # non-negotiable principles
+      - examples/                           # working examples as acceptance tests
+      - docs/quickstart.md                  # user docs as acceptance criteria
+    writes:
+      - code in assigned worktree
+      - .specify/specs/<feature>/tasks.md   # tick tasks as completed
+    rules:
+      - Work ONLY in the assigned worktree. Never touch main repo.
+      - Write tests BEFORE implementation (tdd: true in maqa-config.yml).
+      - Work backwards from docs/ and examples/ - if it is not in the user docs, do not build it.
+      - Run go test ./... -race before marking done.
+      - Run /speckit.verify-tasks.run to confirm no phantom completions.
+      - Every new .go file needs Apache 2.0 copyright header.
+      - No util.go, helpers.go, common.go.
+      - Every reconciler must be idempotent.
+      - Stage all changes. Set auto_push: true so branches are pushed.
+      - PR title format: "feat(<scope>): <description>"
+      - PR body must reference the work item and spec.
+
+  qa:
+    description: >
+      Reviews the feature agent's PR. Validates implementation against the spec,
+      user documentation, and working examples. Runs static analysis. Approves
+      or rejects with specific, actionable feedback.
+    command: /speckit.maqa.qa
+    reads:
+      - PR diff and commits
+      - .specify/specs/<feature>/spec.md     # acceptance criteria
+      - docs/design/<feature>.md             # implementation spec
+      - docs/aide/items/<item>.md            # work item definition
+      - docs/                                # user docs as acceptance criteria
+      - examples/                            # working examples
+      - AGENTS.md                            # anti-patterns and standards
+    writes:
+      - PR review comments
+      - PR approval or request-for-changes
+    checks:
+      - All acceptance scenarios from spec.md pass
+      - go vet ./... passes
+      - go test ./... -race passes
+      - No .go file missing Apache 2.0 header
+      - No util.go, helpers.go, common.go created
+      - Error wrapping uses fmt.Errorf("context: %w", err)
+      - Every reconciler has idempotency test
+      - User docs are consistent with implementation (if user-facing)
+      - Examples in examples/ still work with new code
+      - No phantom completions (tasks [x] without implementation)
+      - MAQA CI gate green
+
+# ── Work Item Lifecycle ────────────────────────────────────────────────────────
+lifecycle:
+  states:
+    - backlog     # in queue, not started
+    - todo        # coordinator assigned, worktree not created yet
+    - in_progress # feature agent working
+    - in_review   # PR open, QA agent reviewing
+    - done        # PR merged, CI green, QA approved
+
+  state_file: .maqa/state.json
+
+  transitions:
+    backlog -> todo: coordinator assigns based on max_parallel and dependencies
+    todo -> in_progress: feature agent spawned with worktree
+    in_progress -> in_review: feature agent done, CI green, PR opened
+    in_review -> done: QA approves, PR merged
+    in_review -> in_progress: QA rejects, feature agent re-spawned with feedback
+    in_progress -> backlog: feature agent blocked (dependency not met)
+
+# ── Dependency Rules ───────────────────────────────────────────────────────────
+dependencies:
+  # Specs must be implemented in dependency order.
+  # The coordinator enforces this via .specify/specs/<feature>/spec.md Depends-on field.
+  enforcement: strict     # never start a feature if its dependencies are not done
+  parallel_ok: true       # features with no shared dependency can run in parallel
+
+# ── CI Gate ────────────────────────────────────────────────────────────────────
+ci_gate:
+  enabled: true
+  config: maqa-ci/ci-config.yml
+  block_on_red: true      # never move to in_review if CI is red
+  timeout_minutes: 20
+  provider: github_actions  # auto-detected; also supports gitlab_ci, circleci
+
+# ── PR Protocol ────────────────────────────────────────────────────────────────
+pr_protocol:
+  base_branch: main
+  require_ci: true
+  require_qa_approval: true
+  squash_merge: true
+  delete_branch_on_merge: true
+  pr_template: docs/aide/pr-template.md   # see below
+
+# ── Queue Protocol ─────────────────────────────────────────────────────────────
+queue_protocol:
+  queue_dir: docs/aide/queue/
+  items_dir: docs/aide/items/
+  batch_size: 10          # items per queue file
+  regenerate_when: empty  # human runs /speckit.aide.create-queue when queue exhausted
+
+# ── Communication Protocol ────────────────────────────────────────────────────
+communication:
+  # Agents communicate through files, not messages.
+  # State changes are written to .maqa/state.json.
+  # Blocking issues are written as GitHub Issue comments.
+  state_file: .maqa/state.json
+  blocking_label: "blocked"
+  needs_human_label: "needs-human"
+
+  # When an agent is stuck (blocked 2+ times on same item), it labels the
+  # GitHub Issue with "needs-human" and stops. Human reviews and unblocks.
+  max_retries_before_escalation: 2
+
+# ── Human-in-the-Loop Gates ────────────────────────────────────────────────────
+human_gates:
+  # These decisions always require human review. Agents stop and label
+  # the relevant issue/PR with "needs-human" when they encounter these.
+  - type: architectural_change
+    description: Any change to CRD API, Go interfaces, or module structure not in the spec
+  - type: dependency_addition
+    description: Adding a new Go module dependency
+  - type: spec_ambiguity
+    description: Spec contradicts user docs or examples; agent cannot resolve
+  - type: test_failure_unknown
+    description: Tests fail for reasons not explained by the implementation
+  - type: security_finding
+    description: QA identifies a potential security issue
