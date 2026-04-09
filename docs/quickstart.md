@@ -354,4 +354,4 @@ Or use the GitHub Action:
 
 - [Core Concepts](concepts.md): deeper dive into Bundles, Pipelines, PolicyGates, and health adapters
 - [Multi-Cluster Fleet Example](../examples/multi-cluster-fleet/): parallel prod regions with Argo Rollouts canary
-- [Design Document](design-v2.1.md): full technical design
+- [Design Document](design/design-v2.1.md): full technical design

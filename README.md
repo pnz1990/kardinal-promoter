@@ -27,7 +27,7 @@ Pre-release. Design document: v2.1. Not yet implemented.
 
 ## Design
 
-See [kardinal-promoter Technical Design Document v2.1](docs/design-v2.1.md).
+See [kardinal-promoter Technical Design Document v2.1](docs/design/design-v2.1.md).
 
 ## License
 
