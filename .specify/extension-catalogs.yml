@@ -1,0 +1,4 @@
+catalogs:
+  - name: community
+    url: https://raw.githubusercontent.com/github/spec-kit/main/community-catalog.yml
+    install_allowed: true
