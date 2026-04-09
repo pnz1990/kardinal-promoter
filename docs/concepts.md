@@ -29,6 +29,37 @@ kubectl apply -f bundle.yaml
 | Failed | A promotion step or health check failed |
 | Superseded | Replaced by a newer Bundle |
 
+### Bundle types
+
+Bundles have a `type` field that determines what artifacts they carry:
+
+- **`image`** (default): References container image tags. The promotion updates image references in manifests using `kustomize-set-image` or `helm-set-image`.
+- **`config`**: References a Git commit SHA from a configuration repository. The promotion merges that commit's changes into each environment directory. This supports promoting configuration changes (resource limits, env vars, feature flags) independently from image changes.
+
+Image Bundle:
+```yaml
+spec:
+  type: image
+  artifacts:
+    images:
+      - name: my-app
+        reference: ghcr.io/myorg/my-app:1.29.0
+        digest: sha256:a1b2c3d4...
+```
+
+Config Bundle:
+```yaml
+spec:
+  type: config
+  artifacts:
+    gitCommit:
+      repository: https://github.com/myorg/app-config
+      sha: "abc123def456"
+      message: "Update resource limits for all environments"
+```
+
+Both types go through the same Pipeline, same PolicyGates, and same PR flow.
+
 ### Bundle intent
 
 The `spec.intent` field declares how far the Bundle should be promoted:
@@ -91,6 +122,46 @@ Environments promote sequentially by default (dev, then staging, then prod). For
 ```
 
 Both prod regions promote in parallel after staging is verified.
+
+### Promotion steps
+
+By default, each environment uses a standard promotion sequence (clone, update image, commit, push/PR, health check). For custom workflows, you can define explicit steps:
+
+```yaml
+  environments:
+    - name: prod
+      approval: pr-review
+      steps:
+        - uses: git-clone
+        - uses: kustomize-set-image
+        - uses: run-tests                  # custom step (HTTP webhook)
+          config:
+            url: https://test-runner.internal/validate
+            timeout: 5m
+        - uses: git-commit
+        - uses: git-push
+        - uses: open-pr
+        - uses: wait-for-merge
+        - uses: health-check
+```
+
+Built-in steps: `git-clone`, `kustomize-set-image`, `helm-set-image`, `kustomize-build`, `config-merge`, `git-commit`, `git-push`, `open-pr`, `wait-for-merge`, `health-check`. Custom steps call an HTTP endpoint that returns pass/fail.
+
+When `steps` is omitted, the default sequence is inferred from `update.strategy` and `approval`.
+
+### Distributed mode and sharding
+
+For multi-cluster deployments where some clusters are behind firewalls, environments can be assigned to a `shard`. A kardinal-agent running in the target cluster reconciles PromotionSteps for that shard.
+
+```yaml
+  environments:
+    - name: prod-eu
+      shard: eu-cluster              # handled by the agent in the EU cluster
+      dependsOn: [staging]
+      approval: pr-review
+```
+
+In standalone mode (single binary), the shard field is ignored and all PromotionSteps are reconciled locally.
 
 ### How it works under the hood
 
@@ -222,13 +293,15 @@ health:
 
 ## Subscription (Phase 3)
 
-A Subscription watches an OCI registry for new image tags and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
+A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
+
+**Image Subscription** (watches OCI registries for new image tags):
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
 kind: Subscription
 metadata:
-  name: my-app-watch
+  name: my-app-image-watch
 spec:
   pipeline: my-app
   source:
@@ -239,4 +312,22 @@ spec:
       interval: 5m
 ```
 
-When a new tag matching the constraint is discovered, a Bundle is created automatically.
+**Git Subscription** (watches a Git repository for config changes, creates config Bundles):
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: Subscription
+metadata:
+  name: my-app-config-watch
+spec:
+  pipeline: my-app
+  source:
+    type: gitCommit
+    gitCommit:
+      repository: https://github.com/myorg/app-config
+      branch: main
+      path: configs/my-app/
+      interval: 5m
+```
+
+When a new image tag or Git commit is discovered, a Bundle of the appropriate type (`image` or `config`) is created automatically.

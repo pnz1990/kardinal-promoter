@@ -100,6 +100,22 @@ A declarative CRD that watches an OCI registry and auto-creates Bundles when new
 ### 3.1 Component Overview
 
 ```
+Standalone mode (Phase 1, single binary):
+  kardinal-controller handles everything:
+    Pipeline reconciler, PromotionStep reconciler, PolicyGate reconciler
+
+Distributed mode (Phase 2+, control plane + agents):
+  Control plane cluster:
+    Graph controller:       DAG orchestration
+    kardinal-controller:    Pipeline reconciler, PolicyGate reconciler
+    kardinal-ui:            Embedded UI
+
+  Agent clusters (one per shard):
+    kardinal-agent:         PromotionStep reconciler only
+                            Labeled with --shard=<name>
+                            Reconciles PromotionSteps matching its shard
+                            Writes status back to control plane CRDs
+
 UX Surfaces (convenience, not required):
   CLI:     kardinal promote  -->  patches Bundle CR
   UI:      kardinal-ui       -->  reads CRDs, renders DAG
@@ -119,16 +135,20 @@ Controllers:
              forEach, readyWhen, propagateWhen, scoped walks,
              change detection, teardown
 
-  kardinal-controller:
+  kardinal-controller (control plane):
     Pipeline reconciler:
       Watches Pipeline + Bundle CRDs
       Generates per-Bundle Graph spec with PolicyGate injection
       Validates intent.skip against SkipPermission gates
-    PromotionStep reconciler:
-      Git write, PR creation, merge detection, health check, status update
     PolicyGate reconciler:
       CEL evaluation, status.ready + status.lastEvaluatedAt
       Timer-based re-evaluation at recheckInterval (see Section 3.5)
+
+  kardinal-agent (per shard, or combined into kardinal-controller in standalone mode):
+    PromotionStep reconciler:
+      Executes promotion steps (built-in and custom)
+      Git write, PR creation, merge detection, health check, status update
+    Filtered by: --shard label on PromotionStep CRs
 
   kardinal-ui:
     Embedded in controller binary (React via go:embed)
@@ -160,7 +180,7 @@ The feature set is equivalent. The difference is that Graph does not carry resou
 1. Bundle CR created (webhook, CLI, kubectl, or Subscription).
 2. kardinal-controller detects new Bundle. Validates `intent.skip` if present (see Section 5.6). Generates a Graph spec from the Pipeline CRD, tailored to the Bundle's intent. Injects org/team PolicyGate nodes. Creates a Graph CR owned by the Bundle via `ownerReferences`.
 3. Graph controller reconciles the Graph. Resolves DAG dependencies. Creates the first PromotionStep CR (e.g., dev).
-4. kardinal-controller sees the PromotionStep. Clones the Git repo (from cached work tree), updates manifests using the configured update strategy, pushes. For `approval: auto`, pushes directly to the target branch. For `approval: pr-review`, opens a PR with promotion evidence.
+4. kardinal-agent (or kardinal-controller in standalone mode) sees the PromotionStep. Executes the promotion steps defined on the environment (or the default step sequence). Steps include: Git clone, manifest update (kustomize/helm), Git commit, Git push or PR creation, merge detection, health verification. Custom steps can call external webhooks between any built-in steps.
 5. For PR-gated environments: waits for merge via webhook (`/webhooks` endpoint). On controller startup, performs a one-time reconciliation by listing open PRs with the `kardinal` label to catch any merges missed during downtime.
 6. After merge: monitors health via the appropriate adapter (Deployment, Argo CD, Flux).
 7. When healthy: writes `status.state = "Verified"`. Copies promotion evidence (metrics, gate results, approver, timing) into Bundle `status.environments` for durable audit storage.
@@ -312,6 +332,174 @@ The controller exposes a `/metrics` endpoint in Prometheus format.
 | `kardinal_scm_api_requests_total` | Counter | SCM API calls (by endpoint, status) |
 | `kardinal_promotion_lead_time_seconds` | Histogram | Time from Bundle creation to environment verification |
 
+### 3.14 Distributed Controller Architecture
+
+The architecture separates orchestration (what to promote where) from execution (how to promote). This separation is the natural sharding boundary for distributed deployments.
+
+**Standalone mode** (Phase 1): A single `kardinal-controller` binary handles everything. The PromotionStep reconciler runs in the same process as the Pipeline reconciler and PolicyGate reconciler. Suitable for single-cluster or small multi-cluster deployments.
+
+**Distributed mode** (Phase 2+): The controller splits into two binaries:
+
+- **kardinal-controller** runs in the control plane cluster. Handles Pipeline reconciliation, Graph generation, PolicyGate evaluation, and Bundle lifecycle. Does not execute promotion steps.
+- **kardinal-agent** runs in each agent cluster (one per shard). Handles PromotionStep reconciliation only. Executes Git writes, PRs, health checks. Connects to the control plane's API server to watch and update PromotionStep CRDs.
+
+**Sharding:** Each Pipeline environment has an optional `shard` field. Each agent is started with `--shard=<name>`. The agent only reconciles PromotionSteps whose `kardinal.io/shard` label matches its shard name. PromotionSteps without a shard label are reconciled by the control plane controller (standalone behavior).
+
+```yaml
+environments:
+  - name: prod-eu
+    shard: eu-cluster           # reconciled by the agent in the EU cluster
+    path: env/prod-eu
+    approval: pr-review
+```
+
+**Why this design:**
+
+| Concern | How it's addressed |
+|---|---|
+| Firewalls | Agents run behind firewalls. They connect outbound to the control plane API server. The control plane has no privileged access to agent clusters. |
+| Scalability | Each agent handles a subset of PromotionSteps. The control plane handles decisions (PolicyGates, Graph generation) which are lightweight. |
+| Security | Agents only need Git and SCM credentials for their shard's repositories. The control plane does not hold credentials for workload clusters. |
+| Observability | All CRDs (including agent-updated PromotionStep status) live in the control plane. The UI shows all shards from one place. |
+| Upgrade path | Phase 1 single binary works unchanged. Splitting into controller + agent is a deployment change, not a code change. The PromotionStep reconciler is the same code in both modes. |
+
+**Agent configuration:**
+
+```bash
+kardinal-agent \
+  --shard=eu-cluster \
+  --control-plane-kubeconfig=/etc/kardinal/kubeconfig \
+  --git-cache-dir=/var/cache/kardinal
+```
+
+The agent uses the control plane kubeconfig to watch and update PromotionStep CRDs. It uses local cluster credentials (or kubeconfig Secrets) for health checks.
+
+### 3.15 Pluggable Promotion Steps
+
+The PromotionStep reconciler executes a sequence of steps for each promotion. Steps are configurable per environment.
+
+**Default step sequence** (when `steps` is not specified): The controller infers the steps from `update.strategy` and `approval`:
+
+- `approval: auto` + `strategy: kustomize`: git-clone, kustomize-set-image, git-commit, git-push, health-check
+- `approval: pr-review` + `strategy: kustomize`: git-clone, kustomize-set-image, git-commit, git-push, open-pr, wait-for-merge, health-check
+- `approval: pr-review` + `strategy: helm`: git-clone, helm-set-image, git-commit, git-push, open-pr, wait-for-merge, health-check
+
+**Explicit step sequence** (when `steps` is specified): Users define the exact steps to run, including custom steps.
+
+```yaml
+environments:
+  - name: prod
+    approval: pr-review
+    steps:
+      - uses: git-clone
+      - uses: kustomize-set-image
+      - uses: run-tests
+        config:
+          url: https://test-runner.internal/validate
+          timeout: 5m
+      - uses: git-commit
+      - uses: git-push
+      - uses: open-pr
+      - uses: wait-for-merge
+      - uses: health-check
+```
+
+**Built-in steps:**
+
+| Step | What it does | Phase |
+|---|---|---|
+| `git-clone` | Clone the GitOps repo from the Git cache | Phase 1 |
+| `kustomize-set-image` | Run `kustomize edit set-image` in the environment directory | Phase 1 |
+| `helm-set-image` | Patch image tag in Helm `values.yaml` | Phase 2 |
+| `kustomize-build` | Run `kustomize build` and write rendered output (Rendered Manifests pattern) | Phase 2 |
+| `git-commit` | Commit changes with structured message | Phase 1 |
+| `git-push` | Push to the target branch (for auto approval) | Phase 1 |
+| `open-pr` | Open a PR with promotion evidence | Phase 1 |
+| `wait-for-merge` | Wait for PR merge via webhook | Phase 1 |
+| `health-check` | Verify health via the configured adapter | Phase 1 |
+
+**Custom steps** (Phase 2): Any step with a `uses` value that doesn't match a built-in step is treated as a custom step. The controller sends an HTTP POST to the configured `url` with a JSON payload containing the Bundle, environment, and promotion context. The endpoint returns a pass/fail result.
+
+```go
+// Custom step webhook request
+type StepRequest struct {
+    Pipeline    string            `json:"pipeline"`
+    Environment string            `json:"environment"`
+    Bundle      BundleSpec        `json:"bundle"`
+    Context     map[string]any    `json:"context"`
+    Config      map[string]any    `json:"config"`
+}
+
+// Custom step webhook response
+type StepResponse struct {
+    Success bool   `json:"success"`
+    Message string `json:"message"`
+}
+```
+
+If a custom step returns `success: false`, the PromotionStep is marked as Failed and the promotion halts.
+
+**Backwards compatibility:** When `steps` is omitted from an environment, the default step sequence is used. Existing Pipeline definitions continue to work unchanged.
+
+### 3.16 Config-Only Promotions
+
+Bundles support two types of artifacts: images (default) and Git commits (config-only).
+
+**Image Bundles** (existing behavior): Reference container image tags. The promotion updates image references in manifests.
+
+**Config Bundles** (new): Reference a Git commit SHA from a configuration repository. The promotion merges that commit's changes into each environment directory. This supports promoting configuration changes (resource limits, env vars, feature flags) independently from image changes.
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: Bundle
+metadata:
+  name: my-app-config-update-1712567890
+  labels:
+    kardinal.io/pipeline: my-app
+spec:
+  type: config                              # "image" (default) or "config"
+  artifacts:
+    gitCommit:
+      repository: https://github.com/myorg/app-config
+      sha: "abc123def456"
+      message: "Update resource limits for all environments"
+  provenance:
+    commitSHA: "abc123def456"
+    ciRunURL: "https://github.com/myorg/app-config/actions/runs/67890"
+    author: "platform-team"
+```
+
+When the PromotionStep reconciler processes a config Bundle, the step sequence is:
+1. `git-clone`: Clone the GitOps repo and the config source repo
+2. `config-merge`: Cherry-pick or overlay the config commit's changes into the environment directory
+3. `git-commit`, `git-push` / `open-pr`, `wait-for-merge`, `health-check` (same as image Bundles)
+
+**Config-merge strategies:**
+- `cherry-pick` (default): Apply the referenced commit as a cherry-pick into the environment directory
+- `overlay`: Copy changed files from the source repo path into the environment directory
+
+Config Bundles go through the same Pipeline, same PolicyGates, same PR flow as image Bundles. The only difference is the update step.
+
+**Mixed Bundles** (Phase 3): A single Bundle can reference both images and a Git commit, allowing coordinated promotion of an image update alongside a config change.
+
+**Subscription CRD for Git** (Phase 3): The Subscription CRD supports `type: gitCommit` to watch a Git repository for new commits and auto-create config Bundles:
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: Subscription
+metadata:
+  name: my-app-config-watch
+spec:
+  pipeline: my-app
+  source:
+    type: gitCommit
+    gitCommit:
+      repository: https://github.com/myorg/app-config
+      branch: main
+      path: configs/my-app/          # only watch changes in this path
+      interval: 5m
+```
+
 ---
 
 ## 4. Pluggable Architecture
@@ -411,15 +599,43 @@ type Watcher interface {
 }
 ```
 
+**Promotion Step** (`pkg/steps/step.go`): A single promotion step in the step sequence.
+
+```go
+type Step interface {
+    Execute(ctx context.Context, state *StepState) (StepResult, error)
+    Name() string
+}
+
+type StepState struct {
+    Pipeline    PipelineSpec
+    Environment EnvironmentSpec
+    Bundle      BundleSpec
+    WorkDir     string              // local Git work tree path
+    Outputs     map[string]any      // outputs from previous steps
+}
+
+type StepResult struct {
+    Success bool
+    Message string
+    Outputs map[string]any          // passed to subsequent steps
+}
+```
+
+Built-in implementations: `git-clone`, `kustomize-set-image`, `helm-set-image`, `kustomize-build`, `config-merge`, `git-commit`, `git-push`, `open-pr`, `wait-for-merge`, `health-check`.
+
+Custom steps: any `uses` value not matching a built-in step is dispatched as an HTTP POST to the configured `config.url`. The webhook receives a `StepRequest` and returns a `StepResponse`.
+
 ### 4.2 Provider Selection
 
 The PromotionStep reconciler selects providers from CRD spec fields:
 
 ```
 scm.GitClient + scm.SCMProvider  <--  pipeline.spec.git.provider ("github")
-update.Strategy                  <--  env.update.strategy ("kustomize")
+update.Strategy                  <--  env.update.strategy ("kustomize") [used by default steps]
 health.Adapter                   <--  env.health.type ("argocd", or auto-detected)
 delivery.Delegate                <--  env.delivery.delegate ("argoRollouts")
+steps.Step                       <--  env.steps[].uses ("kustomize-set-image", "open-pr", etc.)
 ```
 
 The provider registry is a map from string identifier to constructor. Adding a provider: implement the interface, add `registry["gitea"] = gitea.New` to the registry initialization.
@@ -456,10 +672,12 @@ spec:
       path: environments/prod
       update: { strategy: kustomize }
       approval: pr-review
+      shard: prod-cluster                       # optional: agent shard for distributed mode
       health:
         timeout: 15m
       delivery:
         delegate: argoRollouts
+      # steps: [...]                            # optional: override default promotion steps
   historyLimit: 20
 ```
 
@@ -716,6 +934,7 @@ metadata:
   annotations:
     kardinal.io/pin: "false"
 spec:
+  type: image                                 # "image" (default) or "config"
   artifacts:
     images:
       - name: my-app
@@ -1005,6 +1224,10 @@ On in-flight failure (PromotionStep `status.state = "Failed"`), Graph stops all 
 |---|---|
 | Rollback CLI + automatic rollback on failure | |
 | Delegation: Argo Rollouts + Flagger | argoRollouts and flagger health adapters |
+| **Distributed mode (kardinal-agent)** | Agent binary, shard label, control plane kubeconfig |
+| **Custom promotion steps** | Webhook-based custom steps in environment step sequence |
+| **Config-only Bundles** | `type: config` with `artifacts.gitCommit` |
+| **kustomize-build step** | Rendered Manifests pattern support |
 | MetricCheck CRD | Prometheus provider |
 | Metric-based CEL context | metrics.* in PolicyGate expressions |
 | Promotion evidence | Metrics, gate duration, approver recorded in Bundle status |
@@ -1019,7 +1242,9 @@ On in-flight failure (PromotionStep `status.state = "Failed"`), Graph stops all 
 
 | Feature | Detail |
 |---|---|
-| Subscription CRD | Declarative registry watcher, auto-creates Bundles |
+| Subscription CRD | Declarative registry + Git watcher, auto-creates Bundles |
+| **Mixed Bundles** | Single Bundle with both image and config artifacts |
+| **Subscription for Git** | Watch Git repos for config changes, auto-create config Bundles |
 | Direct Graph authoring | Power users write Graphs for fan-out, conditional steps |
 | Webhook gate | externalApproval.* in CEL context |
 | GitHub App auth | |

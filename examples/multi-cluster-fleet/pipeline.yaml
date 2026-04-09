@@ -41,6 +41,7 @@ spec:
     - name: prod-eu
       dependsOn: [pre-prod]
       path: env/prod-eu
+      shard: eu-cluster                   # handled by the agent in the EU cluster
       update:
         strategy: kustomize
       approval: pr-review
@@ -57,6 +58,7 @@ spec:
     - name: prod-us
       dependsOn: [pre-prod]
       path: env/prod-us
+      shard: us-cluster                   # handled by the agent in the US cluster
       update:
         strategy: kustomize
       approval: pr-review

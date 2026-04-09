@@ -50,6 +50,10 @@ spec:
         timeout: <duration>             # Health check timeout (default: "10m")
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (Phase 2), "flagger" (Phase 2)
+      shard: <string>                   # Agent shard name for distributed mode (optional)
+      steps:                            # Custom promotion step sequence (optional, overrides defaults)
+        - uses: <string>                # Step name (built-in or custom)
+          config: <map>                 # Step-specific configuration (for custom steps: url, timeout)
 
   historyLimit: <int>                   # Number of Bundles to retain (default: 20)
 ```
@@ -79,6 +83,8 @@ spec:
 | `health.timeout` | No | `10m` | How long to wait for health verification before marking the step as Failed. |
 | `health.cluster` | No | (local cluster) | Name of a Kubernetes Secret containing a kubeconfig for a remote cluster. Used for multi-cluster health verification. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Rollout status after promotion. `flagger`: watch Canary status. `none`: instant deploy (rolling update). |
+| `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` will reconcile this environment's PromotionSteps. When omitted, the control plane controller handles the step. |
+| `steps` | No | (inferred) | Custom promotion step sequence. When omitted, the default sequence is inferred from `update.strategy` and `approval`. When specified, overrides the default entirely. See [Promotion Steps](#promotion-steps). |
 
 ### spec.historyLimit
 

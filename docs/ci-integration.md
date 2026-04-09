@@ -225,6 +225,34 @@ A Bundle can contain multiple images for applications that deploy multiple conta
 
 The Kustomize update strategy will run `kustomize edit set-image` for each image in the Bundle.
 
+## Config-Only Bundles
+
+To promote configuration changes (resource limits, env vars, feature flags) without an image change, create a config Bundle:
+
+```bash
+curl -X POST https://kardinal.example.com/api/v1/bundles \
+  -H "Authorization: Bearer $KARDINAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pipeline": "my-app",
+    "type": "config",
+    "artifacts": {
+      "gitCommit": {
+        "repository": "https://github.com/myorg/app-config",
+        "sha": "abc123def456",
+        "message": "Update resource limits for all environments"
+      }
+    },
+    "provenance": {
+      "commitSHA": "abc123def456",
+      "ciRunURL": "https://github.com/myorg/app-config/actions/runs/67890",
+      "author": "platform-team"
+    }
+  }'
+```
+
+Config Bundles go through the same Pipeline, PolicyGates, and PR flow as image Bundles. The only difference is the update step: instead of `kustomize-set-image`, the controller uses `config-merge` to apply the referenced commit's changes.
+
 ## Bundle Intent
 
 When creating a Bundle from CI, you can specify the promotion intent:
