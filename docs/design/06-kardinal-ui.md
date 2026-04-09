@@ -1,46 +1,254 @@
 # 06: kardinal-ui
 
-> Status: Outline
-> Depends on: CRD types (for data model)
-> Blocks: nothing (can be built in parallel with controller)
+> Status: Comprehensive
+> Depends on: CRD types
+> Blocks: nothing (can be built in parallel with the controller)
 
-Embedded React frontend. Read-only. Renders the promotion DAG with policy gate nodes.
+## Purpose
 
-## Scope
+kardinal-ui is an embedded web UI served by the kardinal-controller binary. It renders the promotion DAG with per-node state, PolicyGate evaluations, Bundle provenance, and PR links. It is read-only; all mutations go through CRDs (CLI, kubectl, webhook).
 
-- Data model
-  - Which CRDs: Graph, PromotionStep, PolicyGate, Bundle, Pipeline
-  - Which fields per CRD: status.state, status.ready, status.prURL, status.evidence, spec.environment, spec.expression, etc.
-  - How often refreshed: Kubernetes watch (via websocket proxy from controller) or periodic fetch (polling from browser)
+## Technical Stack
 
-- DAG rendering
-  - Layout algorithm: how to position nodes (dagre? elkjs? custom?)
-  - Node types: PromotionStep (environment box) vs PolicyGate (gate diamond/hexagon)
-  - Node states: color coding (green=verified, amber=promoting/pending, red=failed, gray=waiting)
-  - Edge rendering: solid for data dependencies, style for gate dependencies
-  - Fan-out layout: parallel nodes side by side
+- **Frontend:** React 19 + TypeScript + Vite
+- **Bundling:** Static assets built to `web/dist/`, embedded in the Go binary via `go:embed`
+- **Serving:** Go HTTP handler at `/ui` (configurable via `--ui-listen-address` for port separation)
+- **Data:** Reads Kubernetes CRDs via a backend API proxy. No direct browser-to-API-server connection (avoids CORS and auth complexity).
+- **Architecture:** Same pattern as kro-ui. Single binary, no separate frontend deployment.
 
-- Views
-  - Pipeline list: all Pipelines with current Bundle per environment (like `kardinal get pipelines` output)
-  - Pipeline detail: the DAG view for a specific Bundle promotion
-  - Bundle history: list of Bundles with provenance and per-environment status
-  - Node detail panel: click a node to see PromotionStep or PolicyGate detail (PR URL, CEL expression, evidence)
+## Go Package Structure
 
-- Real-time updates
-  - Option A: controller proxies Kubernetes watch events via websocket to the browser
-  - Option B: browser fetches CRD data every N seconds via the controller's API
-  - Tradeoff: websocket is real-time but more complex; polling is simpler but has latency
+```
+web/
+  embed.go              # go:embed all:dist
+  dist/                 # built frontend assets (index.html, JS, CSS)
+  src/
+    main.tsx            # React entry point
+    App.tsx             # Router, layout
+    pages/
+      PipelineList.tsx  # Pipeline overview (all pipelines with current Bundle per env)
+      PipelineDetail.tsx # DAG view for a specific Pipeline + Bundle
+      BundleList.tsx    # Bundle history for a Pipeline
+      BundleDetail.tsx  # Single Bundle with per-environment evidence
+    components/
+      DAGGraph.tsx      # DAG renderer (nodes + edges)
+      DAGNode.tsx       # PromotionStep or PolicyGate node
+      NodeDetail.tsx    # Side panel with node details
+      HealthBadge.tsx   # Health status indicator
+      PolicyGateCard.tsx # Gate expression + evaluation result
+      PRLink.tsx        # Link to GitHub/GitLab PR
+      BundleProvenance.tsx # Commit, CI run, author display
+    lib/
+      api.ts            # Backend API client
+      types.ts          # TypeScript types matching CRD specs
+      dag.ts            # DAG layout computation (dagre)
+    hooks/
+      usePolling.ts     # Polling hook for data refresh
+```
 
-- Embedded architecture
-  - React app built to static assets (Vite or similar)
-  - Bundled into Go binary via go:embed
-  - Served at /ui by the controller's HTTP server
-  - --ui-listen-address flag for separate port
-  - No authentication (relies on Kubernetes RBAC for CRD access; the controller reads CRDs on behalf of the UI)
+## Backend API Proxy
 
-- Interaction model
-  - Read-only: no mutations from the UI
-  - Click node to expand details
-  - Link to GitHub PR from PromotionStep node
-  - Link to Bundle from any node
-  - Filter by Pipeline
+The controller exposes a REST API at `/api/v1/ui/` that proxies CRD reads from the Kubernetes API server. This avoids requiring the browser to authenticate directly to the K8s API.
+
+| Endpoint | Returns | Source CRD |
+|---|---|---|
+| `GET /api/v1/ui/pipelines` | All Pipelines with current Bundle status | Pipeline + Bundle CRDs |
+| `GET /api/v1/ui/pipelines/:name` | Single Pipeline with environment status | Pipeline + Bundle + PromotionStep CRDs |
+| `GET /api/v1/ui/pipelines/:name/graph` | Graph spec + node statuses for current Bundle | Graph + PromotionStep + PolicyGate CRDs |
+| `GET /api/v1/ui/pipelines/:name/bundles` | Bundle history for a Pipeline | Bundle CRDs |
+| `GET /api/v1/ui/bundles/:name` | Single Bundle with evidence | Bundle CRD |
+| `GET /api/v1/ui/policygates` | All PolicyGate templates (not instances) | PolicyGate CRDs in policy namespaces |
+
+All endpoints return JSON. The controller reads CRDs using its existing Kubernetes client and transforms them into UI-friendly JSON structures (omitting internal fields, resolving references).
+
+## Data Refresh
+
+The UI uses polling (fetch every 5 seconds on the active page) rather than WebSocket/watch for simplicity in Phase 1.
+
+Phase 2+ may add WebSocket support for real-time updates:
+- Controller watches relevant CRDs via informers (already running for reconciliation)
+- On change, broadcast to connected WebSocket clients
+- UI receives updates and patches the local state
+
+For Phase 1, 5-second polling is sufficient. The API proxy caches responses for 2 seconds to reduce API server load.
+
+## DAG Rendering
+
+The promotion DAG is rendered using [dagre](https://github.com/dagrejs/dagre) for layout computation and SVG for rendering.
+
+**Node types:**
+
+| CRD | Visual | Color coding |
+|---|---|---|
+| PromotionStep (Pending) | Rounded rectangle | Gray |
+| PromotionStep (Promoting) | Rounded rectangle | Amber |
+| PromotionStep (WaitingForMerge) | Rounded rectangle | Amber with PR icon |
+| PromotionStep (HealthChecking) | Rounded rectangle | Amber with health icon |
+| PromotionStep (Verified) | Rounded rectangle | Green |
+| PromotionStep (Failed) | Rounded rectangle | Red |
+| PolicyGate (pass) | Hexagon | Green |
+| PolicyGate (fail) | Hexagon | Red |
+| PolicyGate (pending) | Hexagon | Gray |
+
+**Edges:** Solid lines from upstream to downstream. Arrow direction indicates promotion flow.
+
+**Layout:** Top-to-bottom or left-to-right (user toggle). Dagre handles node positioning. Parallel fan-out nodes are placed side by side.
+
+## Views
+
+### Pipeline List
+
+The landing page. Shows all Pipelines with:
+- Pipeline name
+- Current Bundle version
+- Per-environment status (colored dots: green/amber/red/gray)
+- Age of the current promotion
+
+Clicking a Pipeline navigates to the Pipeline Detail view.
+
+### Pipeline Detail (DAG View)
+
+The primary view for monitoring a promotion. Shows:
+- The promotion DAG with PromotionStep and PolicyGate nodes
+- Per-node status (color + label)
+- Clicking a node opens the Node Detail panel
+
+### Node Detail Panel
+
+A side panel that appears when clicking a DAG node. Contents depend on node type:
+
+**PromotionStep:**
+- Environment name
+- Bundle version
+- Current state with timestamp
+- PR URL (clickable link to GitHub/GitLab)
+- Health adapter type and status details
+- Evidence (metrics, gate duration, approver) if Verified
+- Failure reason if Failed
+
+**PolicyGate:**
+- Gate name and scope (org/team)
+- CEL expression (displayed as code)
+- Current evaluation result (pass/fail)
+- Evaluation reason (e.g., "schedule.isWeekend = false")
+- Last evaluated timestamp
+- Recheck interval
+
+### Bundle List
+
+Shows Bundle history for a Pipeline:
+- Version, images, phase, age
+- Per-environment status columns
+- Provenance (commit, author, CI run)
+- Clickable to Bundle Detail
+
+### Bundle Detail
+
+Single Bundle view with:
+- Artifact details (images, digests)
+- Provenance (commit link, CI run link, author)
+- Intent (target, skip)
+- Per-environment status with evidence
+- Graph reference (link to DAG view)
+
+## Embedded Architecture
+
+The frontend is built during CI (`bun run build` or `npm run build`) and the output (`web/dist/`) is embedded in the Go binary:
+
+```go
+// web/embed.go
+package web
+
+import "embed"
+
+//go:embed all:dist
+var DistFS embed.FS
+```
+
+The controller serves it:
+
+```go
+// internal/server/server.go
+func (s *Server) setupRoutes() {
+    // API routes
+    s.router.Route("/api/v1", func(r chi.Router) {
+        r.Route("/bundles", s.bundleWebhookRoutes)
+        r.Route("/ui", s.uiAPIRoutes)
+    })
+
+    // Webhook route
+    s.router.Post("/webhooks", s.handleSCMWebhook)
+
+    // Metrics
+    s.router.Handle("/metrics", promhttp.Handler())
+
+    // SPA fallback: serve index.html for all unmatched routes under /ui
+    s.router.Handle("/ui/*", s.spaHandler())
+}
+
+func (s *Server) spaHandler() http.Handler {
+    fs, _ := fs.Sub(web.DistFS, "dist")
+    fileServer := http.FileServer(http.FS(fs))
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Try to serve the file. If not found, serve index.html (SPA routing).
+        path := strings.TrimPrefix(r.URL.Path, "/ui")
+        if _, err := fs.Open(path); err != nil {
+            r.URL.Path = "/"
+        }
+        fileServer.ServeHTTP(w, r)
+    })
+}
+```
+
+## Port Separation
+
+Default: all endpoints on `:8080`.
+
+With `--ui-listen-address=:8081`:
+- `:8080` serves `/api/v1/bundles`, `/webhooks`, `/metrics`
+- `:8081` serves `/ui/*` and `/api/v1/ui/*`
+
+This allows exposing the UI to browser users (VPN) while restricting the API to CI networks (firewall rules on port 8080).
+
+## Authentication
+
+Phase 1: No authentication on the UI. The controller reads CRDs on behalf of all UI users using its own ServiceAccount. This is acceptable when the UI is accessed via VPN or internal network.
+
+Phase 2+: Add optional OIDC authentication. The UI redirects unauthenticated users to an OIDC provider. The controller validates the token and scopes CRD reads to the user's Kubernetes RBAC permissions.
+
+## Interaction Model
+
+The UI is read-only. There are no buttons to promote, rollback, pause, or create Bundles. All mutations go through:
+- CLI (`kardinal promote`, `kardinal rollback`, `kardinal pause`)
+- kubectl (`kubectl apply -f bundle.yaml`)
+- Webhook (`POST /api/v1/bundles`)
+
+The UI is a monitoring and debugging tool. It answers: "What is the current state of my promotions?" and "Why is my promotion blocked?"
+
+## CSS and Design Tokens
+
+Use CSS custom properties (design tokens) for colors, spacing, and typography. No CSS frameworks (Tailwind, MUI, etc.). Consistent with kro-ui's approach.
+
+Key tokens:
+- `--color-status-verified`: green for Verified nodes
+- `--color-status-promoting`: amber for in-progress nodes
+- `--color-status-failed`: red for Failed nodes
+- `--color-status-pending`: gray for Pending nodes
+- `--color-gate-pass`: green for passing PolicyGates
+- `--color-gate-fail`: red for failing PolicyGates
+
+## Unit Tests
+
+Frontend tests (Vitest):
+1. DAG layout: verify node positioning for linear 3-env pipeline.
+2. DAG layout: verify parallel nodes for fan-out pipeline.
+3. Node coloring: verify correct colors for each state.
+4. PolicyGate card: verify expression display and evaluation result.
+5. Bundle provenance: verify commit link, CI run link rendering.
+6. PR link: verify correct URL from PromotionStep status.
+
+Backend API tests (Go):
+7. `/api/v1/ui/pipelines` returns correct structure.
+8. `/api/v1/ui/pipelines/:name/graph` returns nodes with status.
+9. `/api/v1/ui/bundles/:name` returns evidence.
+10. SPA fallback: unmatched routes serve index.html.
