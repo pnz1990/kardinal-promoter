@@ -1,18 +1,190 @@
 # 01: Graph Integration Layer
 
-> Status: Outline
+> Status: Comprehensive
 > Depends on: nothing (foundation)
-> Blocks: everything else
+> Blocks: all other specs
 
-This is the foundation. Everything else builds on it.
+## Purpose
 
-## Scope
+This spec defines how kardinal-promoter integrates with kro's Graph primitive. Every other component depends on this. The Graph controller creates and reconciles PromotionStep and PolicyGate CRDs in DAG order. The kardinal-controller generates Graph specs, watches Graph status, and reconciles the child CRDs that Graph creates.
 
-- How to import the experimental Graph library from ellistarn/kro/tree/krocodile/experimental
-- Go package structure for the Graph dependency
-- Graph spec generation: the template for PromotionStep and PolicyGate nodes
-- Dependency edge strategy (upstreamVerified/requiredGates fields vs future dependsOn)
-- Testing strategy: how to run the Graph controller in integration tests
-- What happens when the Graph API changes (compatibility strategy)
-- Graph CRD installation: what CRDs must exist before kardinal-controller starts
-- Error handling: what the controller does when Graph controller is unavailable or returns errors
+## Graph Primitive Reference
+
+Source: [ellistarn/kro/tree/krocodile/experimental](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+
+The Graph CRD (`kro.run/v1alpha1/Graph`) is namespace-scoped. It defines:
+
+- **nodes**: A list of resource templates with IDs. Each node has a Kubernetes resource template with `${...}` CEL expressions.
+- **readyWhen**: Per-node CEL expressions that determine when the node is considered ready. Graph aggregates node readiness into overall Graph readiness.
+- **includeWhen**: Per-node CEL expressions that conditionally include or exclude a node from the DAG.
+- **forEach**: Stamp out one node per item in a collection.
+- **propagateWhen**: Controls when data changes in one node flow to dependent nodes.
+- **finalizes**: Teardown hooks executed in reverse dependency order during Graph deletion.
+
+Dependency edges are inferred from CEL `${...}` references between nodes. If node B's template contains `${A.status.state}`, B depends on A. Graph resolves the DAG and creates nodes in topological order.
+
+## Go Package Structure
+
+```
+pkg/
+  graph/
+    client.go          # Graph CR CRUD operations (create, get, watch, delete)
+    builder.go         # Builds a Graph spec from Pipeline + Bundle + PolicyGates
+    types.go           # Go types mirroring the Graph CRD spec
+    testing.go         # Test helpers (create Graph, wait for node creation)
+```
+
+The `graph` package does not import any kro Go module directly. It works with the Graph CRD via the Kubernetes dynamic client (`k8s.io/client-go/dynamic`). This avoids a compile-time dependency on the experimental kro codebase, which may change. The Graph CRD schema is defined in `types.go` as Go structs matching the YAML structure.
+
+## Graph CRD Schema (as used by kardinal-promoter)
+
+```go
+type GraphSpec struct {
+    Nodes []GraphNode `json:"nodes"`
+}
+
+type GraphNode struct {
+    ID          string            `json:"id"`
+    Template    runtime.RawExtension `json:"template"`
+    ReadyWhen   []string          `json:"readyWhen,omitempty"`
+    IncludeWhen []string          `json:"includeWhen,omitempty"`
+    ForEach     string            `json:"forEach,omitempty"`
+}
+
+type GraphStatus struct {
+    Conditions []metav1.Condition `json:"conditions,omitempty"`
+    // Accepted: the Graph spec is valid
+    // Ready: all included nodes are ready
+}
+```
+
+The `template` field is a `runtime.RawExtension` containing the full Kubernetes resource YAML for the node. For kardinal-promoter, this is always a PromotionStep or PolicyGate CRD.
+
+## Creating a Graph
+
+The kardinal-controller creates a Graph CR using the dynamic client:
+
+```go
+func (c *GraphClient) Create(ctx context.Context, graph *Graph) error {
+    gvr := schema.GroupVersionResource{
+        Group:    "kro.run",
+        Version:  "v1alpha1",
+        Resource: "graphs",
+    }
+    unstructured := toUnstructured(graph)
+    _, err := c.dynamic.Resource(gvr).Namespace(graph.Namespace).Create(ctx, unstructured, metav1.CreateOptions{})
+    return err
+}
+```
+
+The Graph CR is owned by the Bundle CR via `ownerReferences`:
+
+```go
+graph.OwnerReferences = []metav1.OwnerReference{
+    {
+        APIVersion: "kardinal.io/v1alpha1",
+        Kind:       "Bundle",
+        Name:       bundle.Name,
+        UID:        bundle.UID,
+        Controller: ptr.To(true),
+    },
+}
+```
+
+Deleting a Bundle cascades to the Graph, which cascades to all PromotionStep and PolicyGate CRs that Graph created.
+
+## Watching Graph Status
+
+The kardinal-controller watches Graph CRs to detect when the overall promotion is complete or has failed:
+
+```go
+// Watch for Graph status changes
+informer := dynamicInformer.ForResource(graphGVR)
+informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+    UpdateFunc: func(old, new interface{}) {
+        graph := fromUnstructured(new)
+        if graphIsReady(graph) {
+            // All environments verified, mark Bundle as Verified
+        }
+        if graphIsFailed(graph) {
+            // A step failed, trigger rollback
+        }
+    },
+})
+```
+
+Graph status conditions:
+- `Accepted=True`: the Graph spec is valid, nodes are being created.
+- `Ready=True`: all included nodes have their `readyWhen` satisfied.
+- `Accepted=False`: the Graph spec has errors (invalid CEL, circular dependency).
+
+## Dependency Edge Creation
+
+Graph infers edges from CEL `${...}` references. To create an edge from node A to node B, B's template must contain a reference to A.
+
+kardinal-promoter creates edges using fields that the reconcilers consume:
+
+| Source node | Target node | Reference field in target | Purpose of the field |
+|---|---|---|---|
+| dev (PromotionStep) | staging (PromotionStep) | `spec.upstreamVerified: ${dev.status.state}` | PromotionStep reconciler checks upstream is Verified before proceeding |
+| staging (PromotionStep) | noWeekendDeploys (PolicyGate) | `spec.upstreamEnvironment: ${staging.status.state}` | PolicyGate reconciler knows which environment to check soak time against |
+| staging (PromotionStep) | stagingSoak (PolicyGate) | `spec.upstreamEnvironment: ${staging.status.state}` | Same as above |
+| noWeekendDeploys (PolicyGate) | prod (PromotionStep) | `spec.requiredGates: ["${noWeekendDeploys.metadata.name}", "${stagingSoak.metadata.name}"]` | PromotionStep reconciler knows which gates must pass |
+
+These fields are not synthetic placeholders. They carry data that the reconcilers need AND they create the CEL references that Graph uses for dependency inference.
+
+Proposed contribution to Graph: Add optional `dependsOn` to Graph node spec for cases where dependencies are structural rather than data-driven. Until this is available, all edges use field references.
+
+## Graph Naming Convention
+
+Graphs are named `{pipeline}-{bundle-short-version}`. Example: `my-app-v1-29-0`.
+
+The name is derived from the Pipeline name and the Bundle's semver tag (or commit SHA prefix for config Bundles). Collisions are prevented by including a timestamp suffix when needed: `my-app-v1-29-0-1712567890`.
+
+## Testing Strategy
+
+### Unit Tests
+
+The `graph/builder.go` module is tested by constructing Graph specs from test Pipeline, Bundle, and PolicyGate inputs and asserting:
+- Correct number of nodes
+- Correct dependency edges (CEL references present)
+- PolicyGate nodes injected in the right position
+- `readyWhen` expressions are correct
+- `includeWhen` correctly handles `intent.skip`
+- `intent.target` limits which nodes are included
+
+### Integration Tests
+
+Integration tests require a running Graph controller. The test harness:
+
+1. Starts a local Kubernetes cluster (envtest or kind).
+2. Installs the Graph CRD and starts the Graph controller.
+3. Creates a Graph CR with test PromotionStep and PolicyGate templates.
+4. Verifies the Graph controller creates the child CRDs in the correct order.
+5. Updates a child CRD's status to satisfy `readyWhen` and verifies the next child is created.
+
+These tests validate that the Graph controller behaves as expected and that the dependency inference from CEL references works correctly.
+
+### Compatibility Testing
+
+The Graph API is experimental. To detect breaking changes:
+- Pin the Graph CRD version in the Helm chart.
+- Run integration tests against the pinned version in CI (Tier 1).
+- Run integration tests against the latest Graph controller nightly (Tier 2).
+- If the nightly test fails, the breaking change is detected before it affects users.
+
+## Error Handling
+
+| Error | Behavior |
+|---|---|
+| Graph CRD not installed | Controller logs an error on startup and exits. Graph is a prerequisite. |
+| Graph controller not running | Graph CR is created but child CRDs are never produced. The promotion stalls. The controller detects this via a timeout (configurable, default 5 minutes) and marks the Bundle as Failed with reason "Graph controller not responding." |
+| Invalid Graph spec (Accepted=False) | The Graph status condition `Accepted=False` is set with an error message. The controller reads this, marks the Bundle as Failed with the error message, and logs it. |
+| Graph deletion (Bundle GC) | When a Bundle is garbage-collected, the owned Graph and all its child CRDs are cascade-deleted by Kubernetes. No controller intervention needed. |
+
+## What This Spec Does NOT Cover
+
+- How to build Graph specs from Pipeline CRDs (see 02-pipeline-to-graph-translator)
+- How PromotionStep CRs are reconciled (see 03-promotionstep-reconciler)
+- How PolicyGate CRs are reconciled (see 04-policygate-reconciler)
+- The Graph controller's internal implementation (maintained by the kro team)
