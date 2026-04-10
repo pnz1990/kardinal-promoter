@@ -17,8 +17,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.state
+      name: State
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -145,9 +145,15 @@ spec:
                   - type
                   type: object
                 type: array
+              currentStepIndex:
+                description: |-
+                  CurrentStepIndex is the index into the step sequence that the reconciler
+                  is currently executing. Persisted to etcd for idempotent crash recovery
+                  (spec 003 FR-002).
+                type: integer
               message:
                 description: Message provides human-readable detail about the current
-                  phase.
+                  state.
                 type: string
               outputs:
                 additionalProperties:
@@ -156,14 +162,23 @@ spec:
                   Outputs accumulates key/value results from completed steps in the
                   sequence (e.g. prURL from the open-pr step).
                 type: object
-              phase:
-                description: Phase is the step execution phase.
+              prURL:
+                description: |-
+                  PRURL is the GitHub pull request URL opened for this promotion.
+                  Set when the step enters WaitingForMerge state.
+                type: string
+              state:
+                description: |-
+                  State is the step execution state.
+                  The Graph controller uses readyWhen expressions of the form
+                  ${step.status.state == "Verified"} to advance the promotion DAG.
                 enum:
                 - Pending
-                - Running
-                - Succeeded
+                - Promoting
+                - WaitingForMerge
+                - HealthChecking
+                - Verified
                 - Failed
-                - Blocked
                 type: string
             type: object
         type: object

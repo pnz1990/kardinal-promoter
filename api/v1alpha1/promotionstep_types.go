@@ -36,13 +36,26 @@ type PromotionStepSpec struct {
 
 // PromotionStepStatus defines the observed state of a PromotionStep.
 type PromotionStepStatus struct {
-	// Phase is the step execution phase.
-	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Blocked
-	Phase string `json:"phase,omitempty"`
+	// State is the step execution state.
+	// The Graph controller uses readyWhen expressions of the form
+	// ${step.status.state == "Verified"} to advance the promotion DAG.
+	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verified;Failed
+	State string `json:"state,omitempty"`
 
-	// Message provides human-readable detail about the current phase.
+	// Message provides human-readable detail about the current state.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// CurrentStepIndex is the index into the step sequence that the reconciler
+	// is currently executing. Persisted to etcd for idempotent crash recovery
+	// (spec 003 FR-002).
+	// +optional
+	CurrentStepIndex int `json:"currentStepIndex,omitempty"`
+
+	// PRURL is the GitHub pull request URL opened for this promotion.
+	// Set when the step enters WaitingForMerge state.
+	// +optional
+	PRURL string `json:"prURL,omitempty"`
 
 	// Outputs accumulates key/value results from completed steps in the
 	// sequence (e.g. prURL from the open-pr step).
@@ -57,7 +70,7 @@ type PromotionStepStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=ps
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PromotionStep is a controller-internal CRD representing one step in a

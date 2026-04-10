@@ -6,22 +6,23 @@ metadata:
   labels:
     app: nginx-demo
 spec:
+  git:
+    url: https://github.com/myorg/gitops.git
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: gitops-creds
+      namespace: default
   environments:
     - name: test
-      gitRepo: https://github.com/myorg/gitops.git
-      branch: main
-      path: apps/nginx/overlays/test
+      path: environments/test
       approvalMode: auto
       updateStrategy: kustomize
       healthAdapter: deployment
       healthTimeout: 30m
-      gitCredentials:
-        secretName: gitops-creds
-        secretNamespace: default
     - name: uat
-      gitRepo: https://github.com/myorg/gitops.git
-      branch: main
-      path: apps/nginx/overlays/uat
+      path: environments/uat
       approvalMode: auto
       updateStrategy: kustomize
       healthAdapter: deployment
@@ -29,9 +30,7 @@ spec:
       dependsOn:
         - test
     - name: prod
-      gitRepo: https://github.com/myorg/gitops.git
-      branch: main
-      path: apps/nginx/overlays/prod
+      path: environments/prod
       approvalMode: pr-review
       updateStrategy: kustomize
       healthAdapter: argocd
@@ -39,7 +38,9 @@ spec:
       deliveryDelegate: argoRollouts
       dependsOn:
         - uat
+      shard: prod-cluster
   policyGates:
     - name: no-weekend-deploys
       namespace: platform-policies
   paused: false
+  historyLimit: 20

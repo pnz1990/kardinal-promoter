@@ -9,6 +9,10 @@ import (
 
 // PipelineSpec defines the desired state of a Pipeline.
 type PipelineSpec struct {
+	// Git holds the shared GitOps repository configuration for all
+	// environments in this pipeline.
+	Git PipelineGit `json:"git"`
+
 	// Environments lists the promotion path in order.
 	// +kubebuilder:validation:MinItems=1
 	Environments []EnvironmentSpec `json:"environments"`
@@ -23,10 +27,47 @@ type PipelineSpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
-	// Shard pins this pipeline to a specific kardinal-controller shard in
-	// distributed mode. Leave empty for single-controller deployments.
+	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// +optional
-	Shard string `json:"shard,omitempty"`
+	HistoryLimit int `json:"historyLimit,omitempty"`
+}
+
+// PipelineGit holds the shared GitOps repository configuration for a Pipeline.
+type PipelineGit struct {
+	// URL is the GitOps repository URL (e.g. https://github.com/myorg/gitops.git).
+	// +kubebuilder:validation:MinLength=1
+	URL string `json:"url"`
+
+	// Branch is the default base branch for this repository.
+	// +optional
+	Branch string `json:"branch,omitempty"`
+
+	// Layout controls how environment paths are organized in the repository.
+	// +kubebuilder:validation:Enum=directory;branch
+	// +kubebuilder:default=directory
+	// +optional
+	Layout string `json:"layout,omitempty"`
+
+	// Provider is the SCM provider.
+	// +kubebuilder:validation:Enum=github;gitlab
+	// +kubebuilder:default=github
+	// +optional
+	Provider string `json:"provider,omitempty"`
+
+	// SecretRef references a Kubernetes Secret containing the SCM token.
+	// +optional
+	SecretRef *SecretRef `json:"secretRef,omitempty"`
+}
+
+// SecretRef is a reference to a Kubernetes Secret by name and optional namespace.
+type SecretRef struct {
+	// Name is the Secret name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace is the Secret namespace. If empty, the Pipeline's namespace is used.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // EnvironmentSpec defines one environment in a Pipeline.
@@ -35,16 +76,8 @@ type EnvironmentSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// GitRepo is the GitOps repository URL.
-	// +optional
-	GitRepo string `json:"gitRepo,omitempty"`
-
-	// Branch is the target branch in the GitOps repository.
-	// +optional
-	Branch string `json:"branch,omitempty"`
-
-	// Path is the subdirectory within the GitOps repository that contains the
-	// kustomize overlay or Helm values for this environment.
+	// Path is the subdirectory within the GitOps repository for this environment.
+	// Used when spec.git.layout is "directory".
 	// +optional
 	Path string `json:"path,omitempty"`
 
@@ -81,22 +114,10 @@ type EnvironmentSpec struct {
 	// +optional
 	DependsOn []string `json:"dependsOn,omitempty"`
 
-	// GitCredentials references a Kubernetes Secret with Git credentials used
-	// for cloning and pushing to GitRepo.
+	// Shard pins this environment to a specific kardinal-controller agent shard
+	// in distributed mode. Leave empty for single-controller deployments.
 	// +optional
-	GitCredentials *GitCredentials `json:"gitCredentials,omitempty"`
-}
-
-// GitCredentials references a Kubernetes Secret containing Git credentials.
-type GitCredentials struct {
-	// SecretName is the name of the Secret.
-	// +kubebuilder:validation:MinLength=1
-	SecretName string `json:"secretName"`
-
-	// SecretNamespace is the namespace of the Secret.
-	// If empty, the Pipeline's namespace is used.
-	// +optional
-	SecretNamespace string `json:"secretNamespace,omitempty"`
+	Shard string `json:"shard,omitempty"`
 }
 
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before

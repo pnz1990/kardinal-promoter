@@ -32,39 +32,45 @@ func TestPipelineRoundtrip(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{
+				URL:      "https://github.com/myorg/gitops.git",
+				Branch:   "main",
+				Layout:   "directory",
+				Provider: "github",
+				SecretRef: &v1alpha1.SecretRef{
+					Name:      "github-token",
+					Namespace: "default",
+				},
+			},
 			Environments: []v1alpha1.EnvironmentSpec{
 				{
 					Name:             "test",
-					GitRepo:          "https://github.com/myorg/gitops.git",
-					Branch:           "main",
-					Path:             "apps/nginx/overlays/test",
+					Path:             "environments/test",
 					ApprovalMode:     "auto",
 					UpdateStrategy:   "kustomize",
 					HealthAdapter:    "deployment",
 					HealthTimeout:    "30m",
 					DeliveryDelegate: "",
 					DependsOn:        []string{},
-					GitCredentials: &v1alpha1.GitCredentials{
-						SecretName:      "gitops-creds",
-						SecretNamespace: "default",
-					},
 				},
 				{Name: "uat", ApprovalMode: "auto", UpdateStrategy: "kustomize"},
 				{
 					Name:             "prod",
+					Path:             "environments/prod",
 					ApprovalMode:     "pr-review",
 					UpdateStrategy:   "kustomize",
 					HealthAdapter:    "argocd",
 					HealthTimeout:    "60m",
 					DeliveryDelegate: "argoRollouts",
 					DependsOn:        []string{"uat"},
+					Shard:            "prod-cluster",
 				},
 			},
 			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
 				{Name: "no-weekend-deploys", Namespace: "platform-policies"},
 			},
-			Paused: false,
-			Shard:  "us-east",
+			Paused:       false,
+			HistoryLimit: 20,
 		},
 	}
 
@@ -75,20 +81,24 @@ func TestPipelineRoundtrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &got), "unmarshal Pipeline")
 
 	assert.Equal(t, original.Name, got.Name)
+
+	// Git block
+	assert.Equal(t, "https://github.com/myorg/gitops.git", got.Spec.Git.URL)
+	assert.Equal(t, "main", got.Spec.Git.Branch)
+	assert.Equal(t, "directory", got.Spec.Git.Layout)
+	assert.Equal(t, "github", got.Spec.Git.Provider)
+	require.NotNil(t, got.Spec.Git.SecretRef)
+	assert.Equal(t, "github-token", got.Spec.Git.SecretRef.Name)
+
 	assert.Len(t, got.Spec.Environments, 3)
 
 	e0 := got.Spec.Environments[0]
 	assert.Equal(t, "test", e0.Name)
-	assert.Equal(t, "https://github.com/myorg/gitops.git", e0.GitRepo)
-	assert.Equal(t, "main", e0.Branch)
-	assert.Equal(t, "apps/nginx/overlays/test", e0.Path)
+	assert.Equal(t, "environments/test", e0.Path)
 	assert.Equal(t, "auto", e0.ApprovalMode)
 	assert.Equal(t, "kustomize", e0.UpdateStrategy)
 	assert.Equal(t, "deployment", e0.HealthAdapter)
 	assert.Equal(t, "30m", e0.HealthTimeout)
-	require.NotNil(t, e0.GitCredentials)
-	assert.Equal(t, "gitops-creds", e0.GitCredentials.SecretName)
-	assert.Equal(t, "default", e0.GitCredentials.SecretNamespace)
 
 	e2 := got.Spec.Environments[2]
 	assert.Equal(t, "prod", e2.Name)
@@ -97,13 +107,14 @@ func TestPipelineRoundtrip(t *testing.T) {
 	assert.Equal(t, "60m", e2.HealthTimeout)
 	assert.Equal(t, "argoRollouts", e2.DeliveryDelegate)
 	assert.Equal(t, []string{"uat"}, e2.DependsOn)
+	assert.Equal(t, "prod-cluster", e2.Shard)
 
 	require.Len(t, got.Spec.PolicyGates, 1)
 	assert.Equal(t, "no-weekend-deploys", got.Spec.PolicyGates[0].Name)
 	assert.Equal(t, "platform-policies", got.Spec.PolicyGates[0].Namespace)
 
 	assert.False(t, got.Spec.Paused)
-	assert.Equal(t, "us-east", got.Spec.Shard)
+	assert.Equal(t, 20, got.Spec.HistoryLimit)
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +273,9 @@ func TestPolicyGateRoundtrip(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPromotionStepRoundtrip verifies that a fully-populated PromotionStep
-// serializes and deserializes correctly.
+// serializes and deserializes correctly. Note: PromotionStep uses status.state
+// (not status.phase) because the Graph controller's readyWhen expressions
+// reference ${step.status.state == "Verified"}.
 func TestPromotionStepRoundtrip(t *testing.T) {
 	original := &v1alpha1.PromotionStep{
 		TypeMeta: metav1.TypeMeta{
@@ -300,12 +313,15 @@ func TestPromotionStepRoundtrip(t *testing.T) {
 	assert.Equal(t, "kardinal/promote-nginx-demo-v1-prod", got.Spec.Inputs["branch"])
 }
 
-// TestPromotionStepStatusOutputs verifies the Outputs map in the status.
-func TestPromotionStepStatusOutputs(t *testing.T) {
+// TestPromotionStepStatusState verifies that status.state (not status.phase)
+// and all related fields roundtrip correctly.
+func TestPromotionStepStatusState(t *testing.T) {
 	ps := &v1alpha1.PromotionStep{}
 	ps.Status = v1alpha1.PromotionStepStatus{
-		Phase:   "Succeeded",
-		Message: "PR merged",
+		State:            "WaitingForMerge",
+		Message:          "PR opened, waiting for merge",
+		CurrentStepIndex: 3,
+		PRURL:            "https://github.com/myorg/gitops/pull/42",
 		Outputs: map[string]string{
 			"prURL": "https://github.com/myorg/gitops/pull/42",
 		},
@@ -317,10 +333,32 @@ func TestPromotionStepStatusOutputs(t *testing.T) {
 	var got v1alpha1.PromotionStep
 	require.NoError(t, json.Unmarshal(data, &got))
 
-	assert.Equal(t, "Succeeded", got.Status.Phase)
-	assert.Equal(t, "PR merged", got.Status.Message)
+	assert.Equal(t, "WaitingForMerge", got.Status.State)
+	assert.Equal(t, "PR opened, waiting for merge", got.Status.Message)
+	assert.Equal(t, 3, got.Status.CurrentStepIndex)
+	assert.Equal(t, "https://github.com/myorg/gitops/pull/42", got.Status.PRURL)
 	require.NotNil(t, got.Status.Outputs)
 	assert.Equal(t, "https://github.com/myorg/gitops/pull/42", got.Status.Outputs["prURL"])
+}
+
+// TestPromotionStepStateValues verifies each valid state value can be
+// marshaled and unmarshaled.
+func TestPromotionStepStateValues(t *testing.T) {
+	validStates := []string{
+		"Pending", "Promoting", "WaitingForMerge",
+		"HealthChecking", "Verified", "Failed",
+	}
+	for _, state := range validStates {
+		t.Run(state, func(t *testing.T) {
+			ps := &v1alpha1.PromotionStep{}
+			ps.Status.State = state
+			data, err := json.Marshal(ps)
+			require.NoError(t, err)
+			var got v1alpha1.PromotionStep
+			require.NoError(t, json.Unmarshal(data, &got))
+			assert.Equal(t, state, got.Status.State)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +370,7 @@ func TestPromotionStepStatusOutputs(t *testing.T) {
 func TestDeepCopy(t *testing.T) {
 	orig := &v1alpha1.Pipeline{
 		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/myorg/gitops.git"},
 			Environments: []v1alpha1.EnvironmentSpec{
 				{Name: "test"},
 			},
