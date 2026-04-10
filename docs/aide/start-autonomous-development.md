@@ -23,12 +23,12 @@ Read this. Open 5 terminal sessions. Step away.
 | Session | Directory | Role | Command |
 |---|---|---|---|
 | 1 | `kardinal-promoter/` | Coordinator | `/speckit.maqa.coordinator` |
-| 2 | `kardinal-promoter.feat-1/` | Engineer 1 | `/speckit.maqa.feature` |
-| 3 | `kardinal-promoter.feat-2/` | Engineer 2 | `/speckit.maqa.feature` |
-| 4 | `kardinal-promoter.feat-3/` | Engineer 3 | `/speckit.maqa.feature` |
+| 2 | `kardinal-promoter/` | Engineer 1 | `/speckit.maqa.feature` |
+| 3 | `kardinal-promoter/` | Engineer 2 | `/speckit.maqa.feature` |
+| 4 | `kardinal-promoter/` | Engineer 3 | `/speckit.maqa.feature` |
 | 5 | `kardinal-promoter/` | QA | `/speckit.maqa.qa` |
 
-Sessions 2-4 start as empty directories. The coordinator creates the worktrees.
+All sessions start in the main repo directory. The coordinator creates the worktrees. Engineers automatically cd into their assigned worktree when they pick up a work item (path is written to `.maqa/state.json` by the coordinator).
 
 ---
 

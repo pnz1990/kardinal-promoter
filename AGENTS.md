@@ -89,7 +89,18 @@ LOOP:
    - /speckit.maqa-github-projects.populate  (syncs items to GitHub Projects board)
 3. Validate dependency graph: confirm all Depends-on items are done before assigning
 4. Assign todo items to available engineers in .maqa/state.json (max 3 concurrent)
-   Move GitHub Projects card: Todo → In Progress
+   - Find engineer slot with null value in state.json engineer_slots
+   - Create worktree: /speckit.worktree.create for the feature branch
+     Worktree path: ../kardinal-promoter.<feature-branch>
+   - Write to .maqa/state.json (atomic: write tmp file then rename):
+     * engineer_slots.<ENGINEER-N> = <item-id>
+     * features.<item-id>.assigned_to = <ENGINEER-N>
+     * features.<item-id>.state = in_progress
+     * features.<item-id>.worktree_path = ../kardinal-promoter.<feature-branch>
+     * last_updated = <timestamp>
+   - Move GitHub Projects card: Todo → In Progress
+   - Comment on item's GitHub Issue:
+     "[🎯 COORDINATOR] Assigned to <ENGINEER-N>. Worktree ready at ../kardinal-promoter.<branch>"
 5. Monitor .maqa/state.json (poll every 2 min):
    - state=in_review: move card to In Review
    - state=done: move card to Done, free engineer slot, assign next item
@@ -145,7 +156,14 @@ LOOP (one iteration = one item, fully merged):
 
 1. PICK UP
    - Poll .maqa/state.json every 2 min for an item with my engineer slot assigned
-   - Read docs/aide/items/<item>.md (primary instruction)
+     (my slot is identified by AGENT_ID: ENGINEER-1, ENGINEER-2, or ENGINEER-3)
+   - When assignment found, read state.json field: features.<item>.worktree_path
+   - cd into the worktree: cd <worktree_path>
+     (format: ../kardinal-promoter.<feature-branch>, e.g. ../kardinal-promoter.001-graph-integration)
+   - If the worktree directory does not exist yet: wait 1 minute and re-poll
+     (coordinator creates it, may take a moment)
+   - All subsequent work happens inside the worktree. Never work in the main repo.
+   - Read docs/aide/items/<item>.md (primary instruction) — read from main repo path
    - Read .specify/specs/<feature>/spec.md (acceptance criteria)
    - Read .specify/specs/<feature>/tasks.md (task checklist)
    - Read docs/design/<feature>.md (implementation details)
