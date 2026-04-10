@@ -16,7 +16,7 @@ The Pipeline-to-Graph translator is the core logic that reads a Pipeline CRD, a 
 - `PolicyGate` CRDs (from `--policy-namespaces` + Pipeline namespace)
 
 **Output:**
-- A `Graph` CRD spec (`kro.run/v1alpha1/Graph`) with:
+- A `Graph` CRD spec (`experimental.kro.run/v1alpha1/Graph`) with:
   - One node per environment (PromotionStep template)
   - One node per matching PolicyGate per gated environment (PolicyGate instance template)
   - Correct CEL reference edges between nodes
