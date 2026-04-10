@@ -56,13 +56,13 @@ For each PolicyGate evaluation, the reconciler builds a context struct from clus
 
 | Attribute | Type | Source |
 |---|---|---|
-| `bundle.version` | string | `Bundle.spec.artifacts.images[0].reference` tag portion, or `Bundle.spec.artifacts.gitCommit.sha` prefix |
+| `bundle.version` | string | `Bundle.spec.images[0].tag` (image bundles) or `Bundle.spec.configRef.commitSHA[:8]` prefix (config bundles) |
 | `bundle.type` | string | `Bundle.spec.type` ("image" or "config") |
 | `bundle.labels.*` | map[string]string | `Bundle.metadata.labels` (filtered to user labels, excluding `kardinal.io/*`) |
 | `bundle.provenance.author` | string | `Bundle.spec.provenance.author` |
 | `bundle.provenance.commitSHA` | string | `Bundle.spec.provenance.commitSHA` |
 | `bundle.provenance.ciRunURL` | string | `Bundle.spec.provenance.ciRunURL` |
-| `bundle.intent.target` | string | `Bundle.spec.intent.target` |
+| `bundle.intent.targetEnvironment` | string | `Bundle.spec.intent.targetEnvironment` |
 | `schedule.isWeekend` | bool | Computed from system clock: `time.Now().Weekday() == Saturday || Sunday` |
 | `schedule.hour` | int | `time.Now().UTC().Hour()` |
 | `schedule.dayOfWeek` | string | `time.Now().UTC().Weekday().String()` |

@@ -227,7 +227,7 @@ Every reconcile call must be safe to repeat. Specific concerns:
 The reconciler itself does not open rollback PRs. When a PromotionStep reaches Failed:
 1. It writes `status.state = "Failed"` with a reason.
 2. The Graph controller stops all downstream nodes.
-3. The Pipeline reconciler (in the control plane) watches Bundle status. When it sees a Failed environment, it creates a rollback Bundle (with the previous verified version and `intent.target` set to the failed environment).
+3. The Pipeline reconciler (in the control plane) watches Bundle status. When it sees a Failed environment, it creates a rollback Bundle (with the previous verified version and `intent.targetEnvironment` set to the failed environment).
 4. The rollback Bundle goes through the normal translation -> Graph -> PromotionStep flow.
 
 ## PromotionStep CRD Status Subresource
