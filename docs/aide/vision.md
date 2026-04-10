@@ -57,6 +57,40 @@ Key semantic facts as of 2026-04-10 (verify against krocodile before implementin
 - Bug fix (2026-04-10 commit `94a24fa5`): `dep.ready()` in `readyWhen` was not re-evaluating after dep became ready — now fixed. Our `propagateWhen` usage is unaffected.
 - Bug fix (2026-04-10 commit `1b0ce353`): double-dispatch race in DAG coordinator — now fixed in krocodile. **Pinned krocodile commit: `1b0ce353` (minimum required).**
 
+## Release and Versioning Philosophy
+
+**GA (`v1.0.0`) is not a near-term goal.** Do not plan for or reference GA. We are a
+pre-release project — the focus is on shipping working, usable minor versions iteratively.
+
+### Versioning approach
+
+- **Minor versions (`v0.N.0`)** are substantial. Each minor ships meaningful, usable
+  new capability and takes multiple stages to complete. There is no upper bound on minor
+  versions — we may ship `v0.10.0`, `v0.20.0`, etc. as the project evolves. Minor versions
+  are cut when the milestone's open issues reach zero and its associated journeys pass.
+
+- **Patch versions (`v0.N.P`)** are bug fixes, security patches, and doc corrections.
+  Cut them whenever needed — they do not require a full milestone to complete.
+
+- **No `v1.0.0` planning.** Do not create a v1.0.0 milestone. When we are genuinely
+  production-ready we will decide on GA deliberately, not as a roadmap item.
+
+### Milestone scope per minor
+
+Milestones should be **small enough to ship in weeks, not months**. A minor milestone
+covers 2-4 stages maximum. If a group of stages would take more than ~6 weeks, split
+it into two milestones. Each milestone must have a clear "what can a user do after this"
+answer — if you can't state it in one sentence, the scope is too large.
+
+### PM instructions for milestone creation
+
+- Derive milestones from `docs/aide/roadmap.md` stage groupings
+- Each milestone title is `v0.N.0` (no v1.0.0)
+- Each milestone description states: stages covered, what users can do, which journeys unlock
+- Future milestones beyond the next two get epic issues only (no full specs)
+- When cutting a release: use `gh release create`, generate notes from closed issues,
+  close the milestone, open the next one, post `[📋 PM] RELEASE: vX.Y.Z` on the report issue
+
 ## Goals and Objectives
 
 1. Provide a declarative, Kubernetes-native promotion system where every object is a CRD and every state transition is observable via kubectl.
