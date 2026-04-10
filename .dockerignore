@@ -1,0 +1,44 @@
+# Build artifacts
+bin/
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Documentation (not needed in image)
+docs/
+
+# Examples (not needed in image)
+examples/
+
+# Helm chart (not needed in image)
+chart/
+
+# Local tooling
+.golangci.yml
+hack/
+
+# Git metadata
+.git/
+.gitignore
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# CI/CD config (not needed in image)
+.github/
+maqa-ci/
+maqa-github-projects/
+maqa-config.yml
+
+# Test files
+test/
+
+# Web UI build output (embedded separately)
+web/dist/
+web/node_modules/
