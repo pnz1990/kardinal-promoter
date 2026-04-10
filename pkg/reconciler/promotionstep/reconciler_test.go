@@ -59,6 +59,9 @@ func (m *mockSCM) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, e
 func (m *mockSCM) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
 	return scm.WebhookEvent{}, nil
 }
+func (m *mockSCM) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
+	return nil
+}
 
 type mockGit struct {
 	cloneErr error

@@ -75,6 +75,13 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 			fmt.Errorf("open-pr: %w", err)
 	}
 
+	// Apply standard kardinal labels to the PR.
+	baseLabels := []string{"kardinal", "kardinal/promotion"}
+	if labelsErr := state.SCM.AddLabelsToPR(ctx, repo, prNum, baseLabels); labelsErr != nil {
+		// Non-fatal: log but do not fail the step.
+		_ = labelsErr
+	}
+
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
 		Message: fmt.Sprintf("PR #%d: %s", prNum, prURL),
