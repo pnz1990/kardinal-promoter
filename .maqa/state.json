@@ -14,10 +14,10 @@
   },
   "features": {
     "001-go-module-scaffold": {
-      "state": "assigned",
+      "state": "in_review",
       "assigned_to": "ENGINEER-1",
       "worktree_path": "../kardinal-promoter.001-go-module-scaffold",
-      "pr_number": null,
+      "pr_number": 8,
       "pr_merged": false,
       "assigned_at": "2026-04-10T04:09:53Z"
     },
