@@ -355,17 +355,17 @@ None — this is the foundation.
   - `kardinal get pipelines [name]` — table output with phase and environment count
   - `kardinal get bundles [name]` — table with phase, type, and target env
   - `kardinal get steps [bundle]` — table matching `explain` output
-  - `kardinal create bundle --type image --image repo:tag --pipeline name` — creates a Bundle CRD
-  - `kardinal promote --bundle name --to env` — patches Bundle intent
-  - `kardinal explain [bundle] [--watch]` — rich DAG table; `--watch` streams updates
-  - `kardinal rollback --pipeline name --to version [--emergency]` — creates a rollback Bundle; `--emergency` sets a label that bypasses `skipPermission` gates (RBAC-protected)
-  - `kardinal pause --pipeline name` — patches Pipeline with `paused: true` annotation
-  - `kardinal resume --pipeline name` — removes pause annotation
-  - `kardinal history --pipeline name` — lists Bundle history with phases and timings
+  - `kardinal create bundle <pipeline> --image repo:tag [--type image|config]` — creates a Bundle CRD (pipeline is a positional arg; use `--image` flag for image reference)
+  - `kardinal promote <pipeline> --env <environment>` — manually trigger promotion to a specific environment
+  - `kardinal explain <pipeline> --env <environment> [--watch]` — rich DAG table with gate trace; `--watch` streams updates
+  - `kardinal rollback <pipeline> --env <environment> [--to version] [--emergency]` — creates a rollback Bundle; `--emergency` sets a label that bypasses `skipPermission` gates (RBAC-protected)
+  - `kardinal pause <pipeline>` — injects a PolicyGate with `expression: "false"` to freeze all in-flight promotions
+  - `kardinal resume <pipeline>` — deletes the freeze PolicyGate
+  - `kardinal history <pipeline>` — lists Bundle history with phases and timings
   - `kardinal policy list` — lists PolicyGates with current result and last evaluated
   - `kardinal policy test <file>` — validate CEL syntax, verify context attributes, dry-run against sample context
-  - `kardinal policy simulate --bundle name` — runs all gates for a hypothetical Bundle, prints pass/fail table
-  - `kardinal diff --bundle name --env name` — shows the Kustomize diff that would be applied
+  - `kardinal policy simulate --pipeline <name> --env <environment> [--time "..."] [--soak-minutes N]` — runs all gates for a hypothetical context, prints pass/fail table
+  - `kardinal diff <bundle-a> <bundle-b>` — shows the artifact differences between two Bundles (image tags, digests, commits)
   - `kardinal version` — prints CLI and controller versions
 - Shell completion scripts (bash, zsh, fish) via `cobra.GenBashCompletion`
 - `docs/cli-reference.md` updated to match all new commands
@@ -475,10 +475,10 @@ None — this is the foundation.
 
 - GitHub Action `kardinal-promoter/bundle-action` at `.github/actions/create-bundle/`:
   - Inputs: `pipeline`, `type` (`image|config`), `images` (newline-separated `repo:tag`), `namespace`, `kardinal-url`
-  - Authenticates via `KARDINAL_TOKEN` (bearer token sent to `/webhook/bundle` endpoint on the controller)
-  - Creates a Bundle by POST to `/webhook/bundle` with provenance auto-populated from `GITHUB_SHA`, `GITHUB_RUN_URL`, `GITHUB_ACTOR`
+  - Authenticates via `KARDINAL_TOKEN` (bearer token sent to `/api/v1/bundles` endpoint on the controller)
+  - Creates a Bundle by POST to `/api/v1/bundles` with provenance auto-populated from `GITHUB_SHA`, `GITHUB_RUN_URL`, `GITHUB_ACTOR`
   - Outputs: `bundle-name`, `bundle-status-url`
-- Bundle webhook endpoint at `/webhook/bundle`:
+- Bundle webhook endpoint at `/api/v1/bundles`:
   - Validates Bearer + HMAC signature
   - Creates a `Bundle` CRD and returns `{name, namespace}` JSON
   - Rate limited: 60 requests/minute per token
@@ -541,7 +541,7 @@ None — this is the foundation.
 ### Deliverables
 
 - Rollback flow:
-  - `kardinal rollback --pipeline name --to version` creates a new Bundle with `spec.provenance.rollbackOf` pointing to the original Bundle
+  - `kardinal rollback <pipeline> --env <environment> [--to version]` creates a new Bundle with `spec.provenance.rollbackOf` pointing to the original Bundle
   - Rollback Bundle has label `kardinal.io/rollback: "true"`; `kardinal/rollback` label applied to its PRs
   - Emergency rollback: `--emergency` flag sets `kardinal.io/emergency: "true"` label; PolicyGate evaluator skips gates where `spec.skipPermission: true`
   - RBAC: emergency rollback requires `create` verb on a `rollbackemergency` resource (custom verb enforced via webhook)
@@ -549,9 +549,9 @@ None — this is the foundation.
   - `Pipeline.spec.environments[].autoRollback.failureThreshold` (default: 3 consecutive health-check failures)
   - Controller creates a rollback Bundle automatically; records reason in Bundle status
 - Pause/resume:
-  - `Pipeline.spec.paused: true` annotation causes `PipelineReconciler` to skip advancing any PromotionStep
+  - `kardinal pause <pipeline>` injects a PolicyGate with `expression: "false"` into the Pipeline's effective gate list; blocks all new promotion steps immediately
   - Existing PRs remain open; no new steps are started
-  - `kardinal resume` removes the annotation; reconciler re-queues all in-flight steps
+  - `kardinal resume <pipeline>` deletes the freeze PolicyGate; reconciler re-queues all in-flight steps
 - `kardinal rollback` and `kardinal pause` documented in `docs/rollback.md`
 
 ### Dependencies
@@ -561,7 +561,7 @@ None — this is the foundation.
 
 ### Acceptance Criteria
 
-- `kardinal rollback --pipeline my-app --to v1.2.3` creates a Bundle with `rollbackOf` in status; PR is labeled `kardinal/rollback`
+- `kardinal rollback my-app --env prod --to v1.2.3` creates a Bundle with `rollbackOf` in status; PR is labeled `kardinal/rollback`
 - Emergency rollback bypasses `no-weekend-deploys` gate (configured with `skipPermission: true`) on a mocked weekend
 - `kardinal pause` stops new steps from starting; existing open PRs are unaffected
 - Auto-rollback: inject 3 consecutive health-check failures in integration test; verify rollback Bundle is created automatically
