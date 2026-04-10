@@ -1,48 +1,6 @@
-# MAQA — Multi-Agent & Quality Assurance
-# kardinal-promoter configuration
+# maqa-config.yml — kardinal-promoter
+# Only otherness-owned settings. Commands belong in AGENTS.md.
 
-# ── Execution mode ────────────────────────────────────────────────────────────
 mode: "standalone"
-
-# ── Agent files ───────────────────────────────────────────────────────────────
 agents_path: "~/.otherness/agents"
-
-# ── Test runner ───────────────────────────────────────────────────────────────
-test_command: "go test ./... -race -count=1 -timeout 120s"
-test_file_command: "go test {file} -race -v -count=1"
-
-# ── TDD mode ──────────────────────────────────────────────────────────────────
-tdd: true
-
-# ── Board integration ─────────────────────────────────────────────────────────
-board: "github-projects"
-
-# ── Parallelism ───────────────────────────────────────────────────────────────
 max_parallel: 3
-
-# ── Worktrees ─────────────────────────────────────────────────────────────────
-worktree_base: ".."
-
-# ── Git workflow ──────────────────────────────────────────────────────────────
-auto_push: true
-
-# ── QA cadence ────────────────────────────────────────────────────────────────
-qa_cadence: "per_feature"
-
-# ── QA checks ─────────────────────────────────────────────────────────────────
-qa:
-  text: false
-  links: false
-  security: true
-  accessibility: false
-  responsive: false
-  empty_states: false
-
-# ── Go-specific checks (consumed by speckit.maqa.qa command) ─────────────────
-go_qa:
-  vet: true
-  race: true
-  copyright_headers: true
-  no_banned_files: true
-  error_wrapping: true
-  idempotency: true
