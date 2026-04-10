@@ -75,3 +75,17 @@ jobs:
           go-version-file: go.mod
       - name: Verify go.sum
         run: go mod verify
+
+  e2e-journey-stubs:
+    name: e2e journey stubs compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Compile E2E tests
+        run: go test -run ^$ ./test/e2e/... -v
+        # Ensures journey test stubs compile and the t.Skip() runs correctly.
+        # When a journey is implemented, remove its t.Skip() and add make test-e2e-journey-N to CI.
+

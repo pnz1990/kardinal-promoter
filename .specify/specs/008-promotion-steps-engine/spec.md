@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 001-graph-integration, 003-promotionstep-reconciler
 **Design doc**: `docs/design/08-promotion-steps-engine.md`
+**Contributes to journey(s)**: J1, J2, J4, J5 (steps engine executes all promotions)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

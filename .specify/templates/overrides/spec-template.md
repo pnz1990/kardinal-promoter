@@ -6,6 +6,7 @@
 **Depends on**: [list of spec IDs this depends on]
 **Design doc**: `docs/design/[corresponding design doc].md`
 **Constitution ref**: `.specify/memory/constitution.md`
+**Contributes to journey(s)**: [J1/J2/J3/J4/J5 from docs/aide/definition-of-done.md]
 
 ---
 

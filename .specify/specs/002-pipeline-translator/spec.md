@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 001-graph-integration
 **Design doc**: `docs/design/02-pipeline-to-graph-translator.md`
+**Contributes to journey(s)**: J1, J2, J3, J4 (Pipeline translation is core to all promotions)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

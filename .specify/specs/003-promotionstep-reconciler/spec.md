@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 001-graph-integration, 002-pipeline-translator, 008-promotion-steps-engine
 **Design doc**: `docs/design/03-promotionstep-reconciler.md`
+**Contributes to journey(s)**: J1, J2, J4 (PromotionStep reconciler runs the promotion)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

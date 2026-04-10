@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 001-graph-integration
 **Design doc**: `docs/design/05-health-adapters.md`
+**Contributes to journey(s)**: J1, J2 (health verification determines when promotion is complete)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

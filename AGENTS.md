@@ -287,8 +287,10 @@ LOOP:
    □ fmt.Errorf("context: %w", err) for error wrapping
    □ Every new reconciler has an idempotency test
    □ No kro module in go.mod
-   □ examples/ YAML in the PR body confirms manual testing was done
+   □ Journey validation: PR body includes output from the relevant journey steps
+     in docs/aide/definition-of-done.md (kubectl apply, kardinal get pipelines, etc.)
    □ If user-facing: docs/ match the implementation
+   □ The journey the feature contributes to is one step closer to passing end-to-end
 
 3. POST REVIEW
    PASS all checks:

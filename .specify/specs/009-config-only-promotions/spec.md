@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 008-promotion-steps-engine, 002-pipeline-translator
 **Design doc**: `docs/design/09-config-only-promotions.md`
+**Contributes to journey(s)**: J2 (config-only promotions used in fleet scenarios)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

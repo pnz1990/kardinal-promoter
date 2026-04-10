@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: nothing (foundation)
 **Design doc**: `docs/design/01-graph-integration.md`
+**Contributes to journey(s)**: J1, J2, J3, J4, J5 (foundation for all journeys)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

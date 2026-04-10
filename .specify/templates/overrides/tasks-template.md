@@ -53,3 +53,15 @@
 
 - [ ] T007 Register [component] in controller setup — file: `internal/controller/setup.go`
 - [ ] T008 Write integration test using envtest — file: `pkg/[package]/integration_test.go`
+
+---
+
+## Phase 5: Journey Validation
+
+**Purpose**: Confirm this feature advances the journey(s) listed in the spec header.
+**Checkpoint**: The relevant journey steps in `docs/aide/definition-of-done.md` produce the documented output.
+
+- [ ] T009 Run the relevant journey steps from docs/aide/definition-of-done.md and capture output
+- [ ] T010 Run `/speckit.verify-tasks.run` — zero phantom completions
+- [ ] T011 Run `/speckit.verify` — all acceptance criteria pass
+- [ ] T012 Journey validation output added to PR body as evidence

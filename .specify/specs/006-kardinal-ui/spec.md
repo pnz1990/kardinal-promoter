@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: CRD types (Stage 1 in roadmap)
 **Design doc**: `docs/design/06-kardinal-ui.md`
+**Contributes to journey(s)**: J1, J2, J3, J4, J5 (UI visibility for all journeys)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 001-graph-integration
 **Design doc**: `docs/design/04-policygate-reconciler.md`
+**Contributes to journey(s)**: J1, J3 (PolicyGate evaluation gates prod promotion)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

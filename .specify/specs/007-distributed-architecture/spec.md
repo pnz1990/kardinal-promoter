@@ -5,6 +5,7 @@
 **Status**: Draft
 **Depends on**: 001-graph-integration, 003-promotionstep-reconciler
 **Design doc**: `docs/design/07-distributed-architecture.md`
+**Contributes to journey(s)**: J2 (distributed agents enable multi-cluster fleet)
 **Constitution ref**: `.specify/memory/constitution.md`
 
 ---

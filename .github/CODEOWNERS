@@ -1,0 +1,4 @@
+# CODEOWNERS
+# All PRs require review from pnz1990 (QA agent posts reviews as this user)
+# This ensures every PR gets the QA checklist applied before merge.
+* @pnz1990

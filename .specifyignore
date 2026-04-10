@@ -1,0 +1,10 @@
+# .specifyignore — files and directories spec-kit should not process
+.git/
+.github/
+vendor/
+bin/
+web/dist/
+**/*.pb.go
+**/zz_generated_*.go
+config/crd/bases/
+test/e2e/fixtures/
