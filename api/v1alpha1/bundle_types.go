@@ -148,6 +148,10 @@ type GateResult struct {
 	// GateName is the name of the PolicyGate.
 	GateName string `json:"gateName"`
 
+	// GateNamespace is the namespace of the PolicyGate.
+	// +optional
+	GateNamespace string `json:"gateNamespace,omitempty"`
+
 	// Result is the evaluation outcome: "pass" or "block".
 	Result string `json:"result"`
 

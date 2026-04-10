@@ -84,6 +84,9 @@ func (m *mockSCMForLoop) ParseWebhookEvent(payload []byte, _ string) (scm.Webhoo
 		RepoFullName: raw.Repository.FullName,
 	}, nil
 }
+func (m *mockSCMForLoop) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
+	return nil
+}
 
 type mockGitForLoop struct{}
 

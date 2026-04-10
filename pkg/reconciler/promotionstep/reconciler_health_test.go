@@ -58,6 +58,9 @@ func (n *noopSCM) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, e
 func (n *noopSCM) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
 	return scm.WebhookEvent{}, nil
 }
+func (n *noopSCM) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
+	return nil
+}
 
 type noopGit struct{}
 

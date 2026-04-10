@@ -69,13 +69,15 @@ func (m *mockGitClient) Push(_ context.Context, _, _, _, _ string) error {
 
 // mockSCMProvider records calls for testing.
 type mockSCMProvider struct {
-	openPRCalls int
-	prURL       string
-	prNumber    int
-	merged      bool
-	open        bool
-	openPRErr   error
-	getPRErr    error
+	openPRCalls    int
+	addLabelsCalls int
+	addedLabels    []string
+	prURL          string
+	prNumber       int
+	merged         bool
+	open           bool
+	openPRErr      error
+	getPRErr       error
 }
 
 func (m *mockSCMProvider) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
@@ -95,6 +97,12 @@ func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool,
 
 func (m *mockSCMProvider) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
 	return scm.WebhookEvent{}, nil
+}
+
+func (m *mockSCMProvider) AddLabelsToPR(_ context.Context, _ string, _ int, labels []string) error {
+	m.addLabelsCalls++
+	m.addedLabels = append(m.addedLabels, labels...)
+	return nil
 }
 
 func makeState(git *mockGitClient, scmProvider *mockSCMProvider) *parentsteps.StepState {
@@ -304,6 +312,25 @@ func TestDefaultSequence_PRReview(t *testing.T) {
 	assert.Contains(t, seq, "wait-for-merge")
 	assert.Contains(t, seq, "git-clone")
 	assert.Contains(t, seq, "health-check")
+}
+
+func TestOpenPRStep_AppliesLabels(t *testing.T) {
+	mockSCM := &mockSCMProvider{
+		prURL:    "https://github.com/owner/repo/pull/42",
+		prNumber: 42,
+	}
+	state := makeState(&mockGitClient{}, mockSCM)
+	state.Outputs["branch"] = "kardinal/nginx-demo-v1-29-0/prod"
+
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+
+	result, err := step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, 1, mockSCM.addLabelsCalls, "should call AddLabelsToPR once")
+	assert.Contains(t, mockSCM.addedLabels, "kardinal", "kardinal label must be applied")
+	assert.Contains(t, mockSCM.addedLabels, "kardinal/promotion", "kardinal/promotion label must be applied")
 }
 
 func TestLookup_UnknownStep(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"text/template"
+	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -45,41 +46,55 @@ type PRBody struct {
 	UpstreamEnvironments []v1alpha1.EnvironmentStatus
 }
 
-var prBodyTemplate = template.Must(template.New("pr-body").Parse(`
+// elapsedSince returns a human-readable elapsed time string since t.
+func elapsedSince(t time.Time) string {
+	d := time.Since(t)
+	if d < 0 {
+		d = -d
+	}
+	minutes := int(d.Minutes())
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	hours := int(d.Hours())
+	if hours < 24 {
+		return fmt.Sprintf("%dh%dm", hours, minutes%60)
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMap{
+	"elapsed": elapsedSince,
+}).Parse(`
 <!-- kardinal-promoter auto-generated PR -->
 ## Promotion: {{.BundleName}} → {{.PipelineName}}/{{.Environment}}
 
 ### Artifact Provenance
 
-| Field | Value |
-|---|---|
-| Bundle | {{.BundleName}} |
-| Type | {{.Bundle.Type}} |
+| Image | Tag | Digest | CI Run | Commit SHA | Author |
+|---|---|---|---|---|---|
 {{- range .Bundle.Images}}
-| Image | {{.Repository}}{{if .Tag}}:{{.Tag}}{{end}}{{if .Digest}} ({{.Digest}}){{end}} |
-{{- end}}
-{{- if .Bundle.Provenance}}
-| Commit SHA | {{.Bundle.Provenance.CommitSHA}} |
-| CI Run | {{.Bundle.Provenance.CIRunURL}} |
-| Author | {{.Bundle.Provenance.Author}} |
+| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}[CI run]({{$.Bundle.Provenance.CIRunURL}}){{else}}—{{end}} | {{if $.Bundle.Provenance}}{{$.Bundle.Provenance.CommitSHA}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{$.Bundle.Provenance.Author}}{{else}}—{{end}} |
+{{- else}}
+| — | — | — | — | — | — |
 {{- end}}
 
 ### Policy Gate Compliance
 
-| Gate | Result | Reason |
-|---|---|---|
+| Gate | Namespace | Result | Reason | Last Evaluated |
+|---|---|---|---|---|
 {{- range .GateResults}}
-| {{.GateName}} | {{.Result}} | {{.Reason}} |
+| {{.GateName}} | {{if .GateNamespace}}{{.GateNamespace}}{{else}}—{{end}} | {{.Result}} | {{.Reason}} | {{.EvaluatedAt.UTC.Format "2006-01-02T15:04Z"}} |
 {{- else}}
-| _(none)_ | — | — |
+| _(none)_ | — | — | — | — |
 {{- end}}
 
 ### Upstream Verification
 
-| Environment | Phase | Health Checked At |
+| Environment | Health Checked At | Elapsed |
 |---|---|---|
 {{- range .UpstreamEnvironments}}
-| {{.Name}} | {{.Phase}} | {{if .HealthCheckedAt}}{{.HealthCheckedAt.String}}{{else}}—{{end}} |
+| {{.Name}} | {{if .HealthCheckedAt}}{{.HealthCheckedAt.UTC.Format "2006-01-02T15:04Z"}}{{else}}—{{end}} | {{if .HealthCheckedAt}}{{elapsed .HealthCheckedAt.Time}}{{else}}—{{end}} |
 {{- else}}
 | _(none)_ | — | — |
 {{- end}}

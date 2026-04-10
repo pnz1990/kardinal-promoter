@@ -23,9 +23,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -194,14 +196,124 @@ func TestRenderPRBody(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, body, "nginx-demo-v1-29-0")
-	assert.Contains(t, body, "ghcr.io/nginx/nginx:1.29.0")
+	// New format: repo and tag are in separate columns
+	assert.Contains(t, body, "ghcr.io/nginx/nginx")
+	assert.Contains(t, body, "1.29.0")
 	assert.Contains(t, body, "no-weekend-deploys")
 	assert.Contains(t, body, "pass")
-	assert.Contains(t, body, "Verified")
+	// Upstream environments appear by name
+	assert.Contains(t, body, "test")
+	assert.Contains(t, body, "uat")
 	// All three tables present
 	assert.True(t, strings.Contains(body, "Artifact Provenance"), "missing provenance table")
 	assert.True(t, strings.Contains(body, "Policy Gate Compliance"), "missing gate table")
 	assert.True(t, strings.Contains(body, "Upstream Verification"), "missing upstream table")
+}
+
+func TestGitHubProvider_AddLabelsToPR(t *testing.T) {
+	var capturedLabels []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/repos/owner/repo/issues/42/labels", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		var payload map[string][]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		capturedLabels = payload["labels"]
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	p := scm.NewGitHubProvider("test-token", server.URL, "")
+	err := p.AddLabelsToPR(context.Background(), "owner/repo", 42, []string{"kardinal", "kardinal/promotion"})
+	require.NoError(t, err)
+	assert.Contains(t, capturedLabels, "kardinal")
+	assert.Contains(t, capturedLabels, "kardinal/promotion")
+}
+
+func TestGitHubProvider_AddLabelsToPR_Empty(t *testing.T) {
+	// No HTTP calls should be made for empty label list.
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer server.Close()
+
+	p := scm.NewGitHubProvider("test-token", server.URL, "")
+	err := p.AddLabelsToPR(context.Background(), "owner/repo", 42, nil)
+	require.NoError(t, err)
+	assert.False(t, called, "no HTTP call for empty labels")
+}
+
+func TestGitHubProvider_EnsureLabels_CreatesIfMissing(t *testing.T) {
+	var createdNames []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/repos/owner/repo/labels", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		var payload map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		createdNames = append(createdNames, payload["name"])
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	labels := scm.DefaultKardinalLabels()
+	p := scm.NewGitHubProvider("test-token", server.URL, "")
+	err := p.EnsureLabels(context.Background(), "owner/repo", labels)
+	require.NoError(t, err)
+	assert.Len(t, createdNames, len(labels))
+	assert.Contains(t, createdNames, "kardinal")
+	assert.Contains(t, createdNames, "kardinal/promotion")
+	assert.Contains(t, createdNames, "kardinal/rollback")
+	assert.Contains(t, createdNames, "kardinal/emergency")
+}
+
+func TestGitHubProvider_EnsureLabels_AlreadyExists(t *testing.T) {
+	// When GitHub returns 422 with already_exists, EnsureLabels should not return an error.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"message":"Validation Failed","errors":[{"code":"already_exists"}]}`))
+	}))
+	defer server.Close()
+
+	labels := []scm.Label{{Name: "kardinal", Color: "0075ca"}}
+	p := scm.NewGitHubProvider("test-token", server.URL, "")
+	err := p.EnsureLabels(context.Background(), "owner/repo", labels)
+	require.NoError(t, err, "422 already_exists should not be an error")
+}
+
+func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
+	evalTime := metav1.NewTime(time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC))
+	data := scm.PRBody{
+		PipelineName: "nginx-demo",
+		Environment:  "prod",
+		BundleName:   "nginx-demo-v1-29-0",
+		Bundle: v1alpha1.BundleSpec{
+			Type: "image",
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0", Digest: "sha256:abc123"},
+			},
+			Provenance: &v1alpha1.BundleProvenance{
+				CommitSHA: "abc123",
+				Author:    "ci-bot",
+				CIRunURL:  "https://github.com/runs/1",
+			},
+		},
+		GateResults: []v1alpha1.GateResult{
+			{GateName: "no-weekend-deploys", GateNamespace: "platform-policies", Result: "pass", Reason: "weekday", EvaluatedAt: evalTime},
+		},
+		UpstreamEnvironments: []v1alpha1.EnvironmentStatus{
+			{Name: "test", Phase: "Verified"},
+			{Name: "uat", Phase: "Verified"},
+		},
+	}
+
+	body, err := scm.RenderPRBody(data)
+	require.NoError(t, err)
+
+	assert.Contains(t, body, "platform-policies", "gate namespace must appear in PR body")
+	assert.Contains(t, body, "no-weekend-deploys")
+	assert.Contains(t, body, "sha256:abc123", "digest must appear in provenance table")
 }
 
 func TestInjectToken(t *testing.T) {

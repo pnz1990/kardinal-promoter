@@ -50,6 +50,10 @@ type SCMProvider interface {
 
 	// ParseWebhookEvent parses a raw webhook payload and validates the HMAC signature.
 	ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error)
+
+	// AddLabelsToPR applies labels to a pull request.
+	// Labels that do not exist in the repository are created with a default color.
+	AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error
 }
 
 // GitClient abstracts Git operations needed by the promotion steps engine.

@@ -53,6 +53,9 @@ func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool,
 func (m *mockSCMProvider) ParseWebhookEvent(payload []byte, _ string) (scm.WebhookEvent, error) {
 	return m.event, m.err
 }
+func (m *mockSCMProvider) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
+	return nil
+}
 
 func webhookScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
