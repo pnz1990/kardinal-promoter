@@ -14,19 +14,10 @@
 // Package main is the entry point for the kardinal-controller binary.
 // The controller watches Pipeline, Bundle, and PolicyGate CRDs and drives
 // promotion workflows using kro Graph as the DAG execution engine.
+//
+// Stage 0: stub entrypoint only. Controller logic is wired in Stage 2.
 package main
 
-import (
-	"os"
-
-	"github.com/rs/zerolog"
-	ctrl "sigs.k8s.io/controller-runtime"
-)
-
 func main() {
-	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
-	log.Info().Msg("kardinal-controller starting")
-
 	// TODO(stage-2): wire controller-runtime Manager, reconcilers, leader election.
-	_ = ctrl.SetupSignalHandler()
 }

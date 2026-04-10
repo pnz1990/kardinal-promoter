@@ -13,28 +13,10 @@
 
 // Package main is the entry point for the kardinal CLI binary.
 // The CLI creates and reads kardinal-promoter CRDs via the Kubernetes API.
+//
+// Stage 0: stub entrypoint only. CLI commands are wired in Stage 8.
 package main
 
-import (
-	"os"
-
-	"github.com/spf13/cobra"
-	"k8s.io/client-go/tools/clientcmd"
-)
-
 func main() {
-	root := &cobra.Command{
-		Use:   "kardinal",
-		Short: "kardinal-promoter CLI",
-		Long:  "kardinal manages promotion pipelines for Kubernetes-native artifact delivery.",
-	}
-
-	// TODO(stage-8): add all subcommands (get, create, explain, rollback, etc.)
-
-	// Load kubeconfig (used by subcommands in Stage 8)
-	_ = clientcmd.NewDefaultClientConfigLoadingRules()
-
-	if err := root.Execute(); err != nil {
-		os.Exit(1)
-	}
+	// TODO(stage-8): wire cobra root command and all subcommands.
 }
