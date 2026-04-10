@@ -1,9 +1,21 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // Package bundle implements the BundleReconciler which watches Bundle objects,
-// sets status.phase = Available on newly-created Bundles, and triggers the
-// Pipeline-to-Graph translation when a Bundle is Available.
+// sets status.phase = Available on newly-created Bundles, triggers the
+// Pipeline-to-Graph translation, and handles Bundle supersession.
 package bundle
 
 import (
@@ -24,7 +36,8 @@ type BundleTranslator interface {
 	Translate(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (string, error)
 }
 
-// Reconciler watches Bundle objects, sets Available phase, and triggers translation.
+// Reconciler watches Bundle objects, sets Available phase, triggers translation,
+// and manages Bundle supersession.
 type Reconciler struct {
 	client.Client
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
@@ -35,9 +48,9 @@ type Reconciler struct {
 // Reconcile is called whenever a Bundle is created, updated, or deleted.
 //
 // State machine:
-//   - Phase = "" (new Bundle): set to Available
+//   - Phase = "" (new Bundle): supersede older Promoting bundles, set to Available
 //   - Phase = "Available" (ready to promote): look up Pipeline, call Translator,
-//     set phase to Promoting with GraphRef
+//     set phase to Promoting
 //   - All other phases: idempotent no-op
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
@@ -66,8 +79,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // handleNew sets the phase to Available on a newly-created Bundle.
+// It also supersedes any older Bundles in Promoting state for the same Pipeline.
 func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	// Supersession: mark older Promoting bundles for the same Pipeline as Superseded.
+	if supersErr := r.supersedeSiblings(ctx, log, b); supersErr != nil {
+		// Non-fatal: log and continue. The new bundle must still become Available.
+		log.Warn().Err(supersErr).Msg("failed to supersede sibling bundles (non-fatal)")
+	}
+
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Available"
 
@@ -83,6 +103,46 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 
 	// Requeue immediately to advance to Promoting
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// supersedeSiblings finds and marks Promoting bundles for the same Pipeline as Superseded.
+// It is idempotent: already-superseded bundles are skipped.
+func (r *Reconciler) supersedeSiblings(ctx context.Context, log zerolog.Logger,
+	newBundle *kardinalv1alpha1.Bundle) error {
+	var bundles kardinalv1alpha1.BundleList
+	if err := r.List(ctx, &bundles,
+		client.InNamespace(newBundle.Namespace),
+	); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
+
+	for i := range bundles.Items {
+		sibling := &bundles.Items[i]
+		// Skip self and bundles targeting a different Pipeline.
+		if sibling.Name == newBundle.Name {
+			continue
+		}
+		if sibling.Spec.Pipeline != newBundle.Spec.Pipeline {
+			continue
+		}
+		// Only supersede bundles that are actively promoting.
+		if sibling.Status.Phase != "Promoting" && sibling.Status.Phase != "Available" {
+			continue
+		}
+
+		patch := client.MergeFrom(sibling.DeepCopy())
+		sibling.Status.Phase = "Superseded"
+		if patchErr := r.Status().Patch(ctx, sibling, patch); patchErr != nil {
+			log.Error().Err(patchErr).Str("sibling", sibling.Name).Msg("failed to supersede bundle")
+			return fmt.Errorf("supersede bundle %s: %w", sibling.Name, patchErr)
+		}
+
+		log.Info().
+			Str("superseded", sibling.Name).
+			Str("by", newBundle.Name).
+			Msg("bundle superseded")
+	}
+	return nil
 }
 
 // handleAvailable triggers Graph creation and advances phase to Promoting.

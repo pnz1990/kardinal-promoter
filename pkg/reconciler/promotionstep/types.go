@@ -1,27 +1,31 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package promotionstep
 
-import (
-	"context"
-
-	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-)
-
-// Reconciler drives the PromotionStep state machine.
-// Each PromotionStep object transitions through: Pending → Running → Succeeded | Failed | Blocked.
-// Implemented in Stage 6 (spec 003).
-type Reconciler interface {
-	// Reconcile processes a single PromotionStep.
-	Reconcile(ctx context.Context, step *kardinalv1alpha1.PromotionStep) error
-}
-
-// Phase constants for PromotionStep.status.phase.
+// State constants for PromotionStep.status.state.
+// These are the user-visible states emitted by the reconciler.
+// The Graph controller uses readyWhen: '${step.status.state == "Verified"}'
+// to advance the promotion DAG.
 const (
-	PhasePending   = "Pending"
-	PhaseRunning   = "Running"
-	PhaseSucceeded = "Succeeded"
-	PhaseFailed    = "Failed"
-	PhaseBlocked   = "Blocked"
+	// PhaseVerified is the terminal success state.
+	PhaseVerified = "Verified"
+	// PhaseFailed is the terminal failure state.
+	PhaseFailedConst = "Failed"
+	// PhaseWaitingForMerge indicates the reconciler is waiting for a PR merge.
+	PhaseWaitingForMergeConst = "WaitingForMerge"
+	// PhaseHealthChecking indicates health verification is running.
+	PhaseHealthCheckingConst = "HealthChecking"
 )

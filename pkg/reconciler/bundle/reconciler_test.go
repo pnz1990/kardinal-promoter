@@ -243,3 +243,110 @@ func TestBundleReconciler_PromotingPhaseIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, translator.called, "Translator must NOT be called for Promoting bundles")
 }
+
+// TestBundleReconciler_Supersession verifies that creating a new Bundle for a Pipeline
+// supersedes older Promoting bundles.
+func TestBundleReconciler_Supersession(t *testing.T) {
+	// Old bundle is Promoting for the same pipeline.
+	oldBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// New bundle: no status yet.
+	newBundleObj := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(oldBundle, newBundleObj).
+		WithStatusSubresource(oldBundle, newBundleObj).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// New bundle should be Available.
+	var gotNew kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"}, &gotNew))
+	assert.Equal(t, "Available", gotNew.Status.Phase)
+
+	// Old bundle should be Superseded.
+	var gotOld kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &gotOld))
+	assert.Equal(t, "Superseded", gotOld.Status.Phase)
+}
+
+// TestBundleReconciler_Supersession_DifferentPipeline verifies that bundles for
+// different pipelines are NOT superseded.
+func TestBundleReconciler_Supersession_DifferentPipeline(t *testing.T) {
+	otherPipelineBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-pipeline-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "other-pipeline"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	newBundleObj := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(otherPipelineBundle, newBundleObj).
+		WithStatusSubresource(otherPipelineBundle, newBundleObj).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Other pipeline bundle must remain Promoting (not superseded).
+	var gotOther kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "other-pipeline-v1", Namespace: "default"}, &gotOther))
+	assert.Equal(t, "Promoting", gotOther.Status.Phase)
+}
+
+// TestBundleReconciler_Supersession_IdempotentForSuperseded verifies that
+// already-Superseded bundles are not touched again.
+func TestBundleReconciler_Supersession_IdempotentForSuperseded(t *testing.T) {
+	alreadySuperseded := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v0", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Superseded"},
+	}
+	newBundleObj := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(alreadySuperseded, newBundleObj).
+		WithStatusSubresource(alreadySuperseded, newBundleObj).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Still Superseded (not re-patched to a different value).
+	var gotOld kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v0", Namespace: "default"}, &gotOld))
+	assert.Equal(t, "Superseded", gotOld.Status.Phase)
+}
