@@ -21,7 +21,7 @@ The Pipeline-to-Graph translator is the core logic that reads a Pipeline CRD, a 
   - One node per matching PolicyGate per gated environment (PolicyGate instance template)
   - Correct CEL reference edges between nodes
   - `readyWhen` expressions on each node
-  - Nodes excluded based on `intent.target` and `intent.skip`
+  - Nodes excluded based on `intent.targetEnvironment` and `intent.skipEnvironments`
 
 ## Go Package Structure
 
@@ -54,15 +54,15 @@ Output: a map of `environmentName -> []dependsOnNames`.
 
 Read `spec.intent` from the Bundle CRD.
 
-- `intent.target`: only include environments up to and including the target in the dependency graph. Walk the graph from the first environment to the target, including all environments on any path.
-- `intent.skip`: remove skipped environments from the graph. Before removing, validate skip permissions (see Step 3).
+- `intent.targetEnvironment`: only include environments up to and including the target in the dependency graph. Walk the graph from the first environment to the target, including all environments on any path.
+- `intent.skipEnvironments`: remove skipped environments from the graph. Before removing, validate skip permissions (see Step 3).
 - Default (no intent): include all environments.
 
 Output: a filtered list of environment names to include in the Graph.
 
 ### Step 3: Validate skip permissions
 
-For each environment in `intent.skip`:
+For each environment in `intent.skipEnvironments`:
 
 1. Collect all org-level PolicyGates (`kardinal.io/scope: org`) that match this environment via `kardinal.io/applies-to`.
 2. If any org gate applies, check for a SkipPermission PolicyGate:
@@ -208,8 +208,8 @@ If the Pipeline CRD is updated while a Bundle is mid-flight:
 | Case | Behavior |
 |---|---|
 | Pipeline has 0 environments | Error: Bundle set to Failed with reason "Pipeline has no environments." |
-| intent.target names an environment not in the Pipeline | Error: Bundle set to Failed with reason "Unknown target environment." |
-| intent.skip removes all environments | Error: Bundle set to Failed with reason "All environments skipped." |
+| intent.targetEnvironment names an environment not in the Pipeline | Error: Bundle set to Failed with reason "Unknown target environment." |
+| intent.skipEnvironments removes all environments | Error: Bundle set to Failed with reason "All environments skipped." |
 | PolicyGate applies-to matches no environment in the Pipeline | Gate is ignored (not injected). No error. |
 | Two PolicyGates with the same name in different namespaces | Both are injected. Node IDs include the namespace to prevent collisions. |
 | dependsOn references a skipped environment | Error: Bundle set to Failed with reason "dependsOn references skipped environment." |
@@ -222,9 +222,9 @@ Test cases for `translator.go`:
 1. Linear 3-env pipeline, no gates, default intent: verify 3 PromotionStep nodes with sequential dependencies.
 2. Linear 3-env pipeline with 2 org gates on prod: verify 3 PromotionStep nodes + 2 PolicyGate nodes, gates between staging and prod.
 3. Fan-out pipeline (staging -> [prod-us, prod-eu]): verify parallel nodes with shared dependency on staging.
-4. intent.target = staging: verify only dev and staging nodes, no prod.
-5. intent.skip = [staging] with SkipPermission: verify staging removed, dev -> prod directly.
-6. intent.skip = [staging] without SkipPermission: verify Bundle set to SkipDenied.
+4. intent.targetEnvironment = staging: verify only dev and staging nodes, no prod.
+5. intent.skipEnvironments = [staging] with SkipPermission: verify staging removed, dev -> prod directly.
+6. intent.skipEnvironments = [staging] without SkipPermission: verify Bundle set to SkipDenied.
 7. Pipeline with shard on prod: verify shard label on prod PromotionStep.
 8. Pipeline with custom steps on prod: verify steps field on prod PromotionStep.
 9. Config Bundle: verify different default step sequence (config-merge instead of kustomize-set-image).

@@ -53,12 +53,30 @@ type GraphSpec struct {
 }
 
 type GraphNode struct {
-    ID          string            `json:"id"`
-    Template    runtime.RawExtension `json:"template"`
-    ReadyWhen   []string          `json:"readyWhen,omitempty"`
-    IncludeWhen []string          `json:"includeWhen,omitempty"`
-    ForEach     string            `json:"forEach,omitempty"`
+    ID            string               `json:"id"`
+    Template      runtime.RawExtension `json:"template"`
+    ReadyWhen     []string             `json:"readyWhen,omitempty"`
+    PropagateWhen []string             `json:"propagateWhen,omitempty"`
+    IncludeWhen   []string             `json:"includeWhen,omitempty"`
+    ForEach       string               `json:"forEach,omitempty"`
 }
+
+// PropagateWhen usage:
+//
+//   ReadyWhen   = health signal only. Feeds the Graph's aggregated Ready condition
+//                 and the UI. Does NOT block downstream nodes.
+//   PropagateWhen = data-flow gate. When unsatisfied, downstream nodes do not receive
+//                   updated data and are not re-evaluated. This is the field that
+//                   gates PolicyGate blocking. See design-v2.1.md §3.5.
+//
+// For PromotionStep nodes: use PropagateWhen to block downstream when not Verified.
+//   propagateWhen: ["${dev.status.state == \"Verified\"}"]
+//
+// For PolicyGate nodes: use PropagateWhen to block downstream when gate not ready.
+//   propagateWhen: ["${noWeekendDeploys.status.ready == true}"]
+//
+// ReadyWhen on PolicyGate nodes is only the UI health signal (shows pass/fail colour).
+// The actual blocking is done by PropagateWhen on the upstream PolicyGate node.
 
 type GraphStatus struct {
     Conditions []metav1.Condition `json:"conditions,omitempty"`
