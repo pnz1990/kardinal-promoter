@@ -1,135 +1,44 @@
 ---
-description: 'One-time Claude Code setup: creates coordinator, feature, and QA as
-  native subagents in .claude/agents/. Run once per project. Other AI tools use the
-  slash commands directly and do not need this step.'
+description: "One-time MAQA setup: copies maqa-config.yml to the project root. Run once per project."
 ---
 
-
-<!-- Extension: maqa -->
-<!-- Config: .specify/extensions/maqa/ -->
-You are setting up MAQA native subagents for Claude Code. This is a one-time operation.
+You are setting up MAQA for this project. This is a one-time operation.
 
 ## What this does
 
-1. Copies `maqa-config.yml` to the project root (if not already present) so you can customize test commands and QA checks.
-2. Creates three files in `.claude/agents/`:
-   - `coordinator.md` — the MAQA coordinator as a Claude Code subagent
-   - `feature.md` — the feature implementation agent
-   - `qa.md` — the QA analysis agent
-
-After this, `/speckit.maqa.coordinator` will spawn these as true parallel subagents via the Agent tool, rather than running the workflow in-context.
-
-## Not using Claude Code?
-
-You do not need this step. The slash commands (`/speckit.maqa.coordinator`, `/speckit.maqa.feature`, `/speckit.maqa.qa`) work directly in any AI tool's session. Skip this command.
-
----
+Copies `maqa-config.yml` to the project root so you can customize test commands,
+QA checks, execution mode, and agent file path.
 
 ## Setup
 
-Create the agents directory and drop the config file:
-
 ```bash
-mkdir -p .claude/agents
-
 # Copy maqa-config.yml to project root if not already present
 if [ ! -f "maqa-config.yml" ]; then
   cp .specify/extensions/maqa/config-template.yml maqa-config.yml
-  echo "Created maqa-config.yml — edit test_command and qa checks before running the coordinator."
+  echo "Created maqa-config.yml — edit before running the coordinator."
 fi
 ```
 
-Now write the following three files exactly as shown.
+Open `maqa-config.yml` and configure at minimum:
 
----
+- `test_command` — your test runner (e.g. `go test ./...`, `npm test`, `pytest`)
+- `agents_path` — path to your agent instruction files (e.g. `~/.myproject/agents`)
+- `mode` — `team` (multiple sessions) or `standalone` (single session)
 
-### Write `.claude/agents/coordinator.md`
+## Agent files
 
-Create the file `.claude/agents/coordinator.md` with this exact content:
+Agent instruction files live outside the repo so all worktrees always read
+the latest version. Create them at your `agents_path`:
 
-```markdown
----
-name: coordinator
-description: "MAQA Coordinator. Manages feature state and git worktrees. Reads maqa-config.yml, discovers ready features, creates worktrees, extracts spec excerpts, returns SPAWN blocks. Does NOT implement features. Invoke: assess | merged #N | results."
-tools: Bash, Read, Grep, Write
-model: haiku
-color: purple
----
+- `coordinator.md` — continuous coordinator loop
+- `engineer.md`    — feature engineer loop (reads CLAIM file for identity)
+- `qa-watcher.md`  — continuous PR review loop
+- `scrum-master.md`— one-shot SDLC health review
+- `product-manager.md` — one-shot product review
+- `standalone.md`  — single session, all roles sequentially
 
-You are the MAQA Coordinator. Follow the full workflow in `.claude/commands/speckit.maqa.coordinator.md`. Your input is:
-
-$ARGUMENTS
-
-Key rules:
-- Never spawn feature or QA agents. Return SPAWN blocks only.
-- Never commit, push, or merge.
-- All structured output in TOON format.
-- Write state to `.maqa/state.json` before returning SPAWN block.
-```
-
----
-
-### Write `.claude/agents/feature.md`
-
-Create the file `.claude/agents/feature.md` with this exact content:
-
-```markdown
----
-name: feature
-description: "MAQA Feature Agent. Implements one feature in one git worktree. Reads maqa-config.yml for test runner and TDD mode. Ticks Trello checklist in real-time if card_id is not local. Reports done or blocked."
-tools: Bash, Read, Write, Edit, Glob, Grep
-model: sonnet
-color: green
----
-
-You are the MAQA Feature Agent. Follow the full workflow in `.claude/commands/speckit.maqa.feature.md`. Your assignment:
-
-$ARGUMENTS
-
-Key rules:
-- CRITICAL: Bash resets cwd to the main repo between calls. Prefix every git/test command with `cd <worktree> &&`. Never rely on cwd persisting.
-- Work only in your assigned worktree. Never touch the main repo.
-- No git commit or push. Stage only.
-- Use spec_excerpt as your design reference.
-- Follow the implementation cycle matching your config (no tests / tests / TDD).
-```
-
----
-
-### Write `.claude/agents/qa.md`
-
-Create the file `.claude/agents/qa.md` with this exact content:
-
-```markdown
----
-name: qa
-description: "MAQA QA Agent. Static analysis quality gate: text/spelling, links, security, accessibility (configurable). Does NOT re-run tests. Returns PASS or FAIL with precise TOON report."
-tools: Bash, Read, Glob, Grep
-model: haiku
-color: red
----
-
-You are the MAQA QA Agent. Follow the full workflow in `.claude/commands/speckit.maqa.qa.md`. Your assignment:
-
-$ARGUMENTS
-
-Key rules:
-- Static analysis only. Do not re-run the test suite.
-- Every check either passes or fails. No partial credit.
-- Return only the TOON result block — nothing else.
-- State failures exactly: category, description, file:line.
-```
-
----
+See `~/.kardinal/agents/` in the kardinal-promoter project for reference implementations.
 
 ## Done
 
-The three agent files are now in `.claude/agents/`. The coordinator will spawn them as true parallel subagents when you run `/speckit.maqa.coordinator`.
-
-To verify:
-
-```bash
-ls -la .claude/agents/
-```
-
-You should see `coordinator.md`, `feature.md`, and `qa.md`.
+Run `/speckit.maqa.coordinator` (team mode) or `/speckit.maqa.standalone` (standalone mode).

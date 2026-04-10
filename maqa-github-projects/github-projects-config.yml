@@ -1,15 +1,22 @@
 # MAQA GitHub Projects Configuration
 # Project: https://github.com/users/pnz1990/projects/1
 # Generated: 2026-04-09
+# Updated: 2026-04-10 (added Blocked column, Team field, corrected option IDs)
 
 owner: "pnz1990"
 project_number: "1"
 project_id: "PVT_kwHOC22HhM4BUMuc"
 
 status_field_id: "PVTSSF_lAHOC22HhM4BUMuczhBWhSY"
-todo_option_id: "f75ad846"
-in_progress_option_id: "47fc9ee4"
-in_review_option_id: "eb44bf15"
-done_option_id: "98236657"
+todo_option_id: "6b907ee2"
+in_progress_option_id: "a319a29c"
+in_review_option_id: "a28ea749"
+done_option_id: "6b05228e"
+blocked_option_id: "5a260a66"
+
+team_field_id: "PVTSSF_lAHOC22HhM4BUMuczhBWhac"
+team_engineer1_option_id: "04ec03ca"
+team_engineer2_option_id: "23ad3c53"
+team_engineer3_option_id: "ac0496fe"
 
 linked_repo: "pnz1990/kardinal-promoter"
