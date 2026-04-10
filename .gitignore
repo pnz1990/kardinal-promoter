@@ -32,3 +32,4 @@ coverage.txt
 
 # Misc
 *.log
+.claude/agents/
