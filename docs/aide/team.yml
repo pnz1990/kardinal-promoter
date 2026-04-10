@@ -28,21 +28,20 @@ roles:
     loop: continuous
     stop_condition: all 20 roadmap stages complete
     consistency_audit:
-      runs: after every batch (before generating next queue)
+      runs: "after every batch (before generating next queue)"
       commands:
-        - /speckit.analyze          # cross-artifact: spec ↔ tasks ↔ implementation
-        - /speckit.memorylint.run   # AGENTS.md vs constitution drift
-        - go build ./...            # full project compiles
-        - govulncheck ./...         # known CVE scan
-        - go test ./... -race -count=1  # full regression suite on main
-      on_failure: post [BATCH QUALITY GATE FAILED] to Issue #1, label needs-human,
-                  do NOT generate next queue until human resolves
+        - "/speckit.analyze"
+        - "/speckit.memorylint.run"
+        - "go build ./..."
+        - "govulncheck ./..."
+        - "go test ./... -race -count=1"
+      on_failure: "post [BATCH QUALITY GATE FAILED] to Issue #1, label needs-human, do NOT generate next queue until human resolves"
     doc_freshness:
-      runs: after any batch with user-facing features merged
-      check: docs/ pages affected by merged features match the implementation
-      on_discrepancy: open GitHub Issue labeled doc-gap, include in next queue
+      runs: "after any batch with user-facing features merged"
+      check: "docs/ pages affected by merged features match the implementation"
+      on_discrepancy: "open GitHub Issue labeled doc-gap, include in next queue"
     spec_traceability:
-      runs: after each feature merges
+      runs: "after each feature merges"
       check: every FR-NNN in spec.md has a corresponding test in the codebase
       method: grep for FR identifier in test files
       on_missing: open GitHub Issue labeled missing-test, include in next queue
@@ -101,12 +100,12 @@ lifecycle:
   state_file: .maqa/state.json
 
   state_machine:
-    backlog -> todo:       coordinator validates all dependencies are done
-    todo -> in_progress:   coordinator assigns + creates worktree
-    in_progress -> in_review: engineer: tests pass + self-validate + CI green + PR open
-    in_review -> in_progress: QA requests changes
-    in_review -> done:     QA approves + CI green + engineer merges + smoke test passes
-    in_progress -> backlog: engineer blocked after 2 retries
+    "backlog -> todo": "coordinator validates all dependencies are done"
+    "todo -> in_progress": "coordinator assigns and creates worktree"
+    "in_progress -> in_review": "engineer passes tests, self-validates, CI green, PR open"
+    "in_review -> in_progress": "QA requests changes"
+    "in_review -> done": "QA approves + CI green + engineer merges + smoke test passes"
+    "in_progress -> backlog": "engineer blocked after 2 retries"
 
 # ── Dependency Enforcement ───────────────────────────────────────────────────
 dependencies:
@@ -179,7 +178,7 @@ worktrees:
 # ── Reporting ────────────────────────────────────────────────────────────────
 reporting:
   issue_number: 1
-  issue_url: https://github.com/pnz1990/kardinal-promoter/issues/1
+  issue_url: "https://github.com/pnz1990/kardinal-promoter/issues/1"
   label: report
   post_command: "gh issue comment 1 --body \"{body}\""
 
@@ -273,7 +272,7 @@ human_gates:
 # ── Board ────────────────────────────────────────────────────────────────────
 board:
   provider: github-projects
-  url: https://github.com/users/pnz1990/projects/1
+  url: "https://github.com/users/pnz1990/projects/1"
   config: maqa-github-projects/github-projects-config.yml
   columns:
     todo: "Todo"

@@ -36,8 +36,19 @@ Sessions 2-4 start as empty directories. The coordinator creates the worktrees.
 
 ```bash
 export GH_TOKEN=<token-with-repo-and-project-scopes>
+
+# Set your agent identity — every GitHub comment will be prefixed with this
+# Session 1 (Coordinator):
+export AGENT_ID="COORDINATOR"
+# Session 2 (Engineer 1):  export AGENT_ID="ENGINEER-1"
+# Session 3 (Engineer 2):  export AGENT_ID="ENGINEER-2"
+# Session 4 (Engineer 3):  export AGENT_ID="ENGINEER-3"
+# Session 5 (QA):          export AGENT_ID="QA"
+
 git pull origin main
 ```
+
+All sessions share the same GitHub account. The `AGENT_ID` badge prefixes every issue comment and PR review so you can tell who said what in your notification feed.
 
 ---
 

@@ -4,6 +4,46 @@
 
 A Kubernetes-native promotion controller. Go 1.23+ backend + React 19 frontend, embedded via `go:embed`. All state in Kubernetes CRDs. No external database.
 
+---
+
+## Agent Identities
+
+All sessions share the same GitHub account (pnz1990). Every agent MUST prefix every GitHub comment, issue update, and PR review with its identity badge so the human can tell who said what.
+
+| Session | Role | Badge | AGENT_ID env var |
+|---|---|---|---|
+| 1 | Coordinator | `[🎯 COORDINATOR]` | `export AGENT_ID="COORDINATOR"` |
+| 2 | Engineer 1 | `[🔨 ENGINEER-1]` | `export AGENT_ID="ENGINEER-1"` |
+| 3 | Engineer 2 | `[🔨 ENGINEER-2]` | `export AGENT_ID="ENGINEER-2"` |
+| 4 | Engineer 3 | `[🔨 ENGINEER-3]` | `export AGENT_ID="ENGINEER-3"` |
+| 5 | QA | `[🔍 QA]` | `export AGENT_ID="QA"` |
+
+**Every GitHub comment MUST start with the badge.** No exceptions. This is how the human tells who is talking.
+
+Examples:
+```bash
+# Coordinator posting a batch report
+gh issue comment 1 --body "[🎯 COORDINATOR] ## [BATCH COMPLETE] ..."
+
+# Engineer commenting on a blocked item
+gh issue comment 42 --body "[🔨 ENGINEER-1] Blocked on dependency: spec 001 not yet done."
+
+# QA requesting changes
+gh pr review 7 --request-changes --body "[🔍 QA] ## QA Review — Changes Required ..."
+
+# Engineer merging
+gh issue comment 42 --body "[🔨 ENGINEER-2] Merged in PR #7. Feature complete."
+```
+
+Set `AGENT_ID` at the start of each session before running any role command:
+```bash
+export AGENT_ID="COORDINATOR"   # session 1
+export AGENT_ID="ENGINEER-1"    # session 2
+export AGENT_ID="ENGINEER-2"    # session 3
+export AGENT_ID="ENGINEER-3"    # session 4
+export AGENT_ID="QA"            # session 5
+```
+
 **Status**: Pre-release. Design and specs complete. Implementation not started.
 
 ---
