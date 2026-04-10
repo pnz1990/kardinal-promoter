@@ -1,156 +1,218 @@
 ---
-description: MAQA coordinator. Reads specs, manages state, spawns feature and QA agents
-  in parallel, gates on CI, updates board. The top-level command to run for multi-agent
-  spec execution.
+description: Coordinator agent. Reads the roadmap and progress, generates work queues,
+  assigns items to engineers, runs batch audits, spawns Scrum Master and PM after
+  each batch, and updates the GitHub Projects board. Run once — loops until all
+  journeys complete.
 ---
 
-
 <!-- Extension: maqa -->
-<!-- Config: .specify/extensions/maqa/ -->
-You are the MAQA coordinator. You orchestrate parallel feature agents and QA agents across the full spec workflow.
+You are the kardinal-promoter Coordinator. Read `.specify/memory/sdlc.md` section
+"Coordinator Loop" for the authoritative process. This command implements it.
 
-## Step 1 — Read config
-
-Read `maqa-config.yml` from the project root (user config), falling back to the extension's bundled template. Extract: `max_parallel`, `worktree_base`, `test_command`, `tdd`, `board`, `auto_push`, `qa_cadence`.
+## Step 0 — Read context
 
 ```bash
-CONFIG_FILE="maqa-config.yml"
-[ -f "$CONFIG_FILE" ] || CONFIG_FILE=".specify/extensions/maqa/config-template.yml"
-cat "$CONFIG_FILE"
+git pull origin main
+cat .specify/memory/sdlc.md
+cat docs/aide/team.yml
+cat AGENTS.md
+cat docs/aide/progress.md
+cat docs/aide/roadmap.md
+cat .maqa/state.json
 ```
 
-**Detect active board tool.** Check `board:` field in config first; if `auto` or absent, probe installed companions in this order:
+Identify: current stage, items in queue (if any), engineer slot availability.
+
+## Step 1 — Generate queue if empty
 
 ```bash
-BOARD="local"
-BOARD_CONFIG=$(python3 -c "
-import re
-cfg = {}
-try:
-    for line in open('$CONFIG_FILE'):
-        m = re.match(r'^board:\s*\"?([^\"#\n]+)\"?', line.strip())
-        if m: cfg['board'] = m.group(1).strip()
-except: pass
-print(cfg.get('board','auto'))
-")
+ls docs/aide/queue/ 2>/dev/null && ls docs/aide/items/ 2>/dev/null
+```
 
-if [ "$BOARD_CONFIG" != "auto" ] && [ -n "$BOARD_CONFIG" ]; then
-  BOARD="$BOARD_CONFIG"
-else
-  [ -f "maqa-trello/trello-config.yml" ]          && [ -n "$TRELLO_API_KEY" ]        && BOARD="trello"
-  [ -f "maqa-linear/linear-config.yml" ]           && [ -n "$LINEAR_API_KEY" ]        && BOARD="linear"
-  [ -f "maqa-github-projects/github-projects-config.yml" ] && { [ -n "$GH_TOKEN" ] || gh auth token &>/dev/null; } && BOARD="github-projects"
-  [ -f "maqa-jira/jira-config.yml" ]               && [ -n "$JIRA_API_TOKEN" ]        && BOARD="jira"
-  [ -f "maqa-azure-devops/azure-devops-config.yml" ] && [ -n "$AZURE_DEVOPS_TOKEN" ] && BOARD="azure-devops"
+If `docs/aide/queue/` is empty or has no queue file matching current stage:
+
+Run `/speckit.aide.create-queue` to generate `docs/aide/queue/queue-NNN.md`.
+Then for each item in the queue, run `/speckit.aide.create-item` to generate
+`docs/aide/items/NNN-item-name.md`.
+
+Then populate the GitHub Projects board:
+```bash
+cat maqa-github-projects/github-projects-config.yml
+```
+Run `/speckit.maqa-github-projects.populate` to sync items to the board.
+
+## Step 2 — Validate dependencies and assign
+
+Read `.specify/specs/<feature>/spec.md` for each queue item's `Depends on:` field.
+Only assign items where all dependencies have `state: done` in `.maqa/state.json`.
+
+For each assignable item (up to 3 concurrent):
+
+```bash
+# 1. Create worktree
+BRANCH="NNN-feature-name"
+WORKTREE="../kardinal-promoter.$BRANCH"
+git worktree add "$WORKTREE" -b "$BRANCH" 2>&1
+
+# 2. Update state.json atomically
+python3 -c "
+import json, os
+state = json.load(open('.maqa/state.json'))
+# Find a free engineer slot
+for slot in ['ENGINEER-1','ENGINEER-2','ENGINEER-3']:
+    if state['engineer_slots'].get(slot) is None:
+        state['engineer_slots'][slot] = '$BRANCH'
+        state['features']['$BRANCH'] = {
+            'state': 'in_progress',
+            'assigned_to': slot,
+            'worktree_path': '$WORKTREE',
+            'pr_number': None,
+            'pr_merged': False
+        }
+        state['last_updated'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+        break
+tmp = '.maqa/state.json.tmp'
+json.dump(state, open(tmp,'w'), indent=2)
+os.rename(tmp, '.maqa/state.json')
+print(f'Assigned $BRANCH to {slot}')
+"
+
+# 3. Move board card to In Progress
+GH_PROJ_ID=$(python3 -c "import yaml; c=yaml.safe_load(open('maqa-github-projects/github-projects-config.yml')); print(c['project_id'])")
+# (use gh api GraphQL to move card — see maqa-github-projects extension)
+
+# 4. Comment on GitHub Issue for this item
+ISSUE_NUM=$(gh issue list --search "$BRANCH" --json number -q '.[0].number' 2>/dev/null || echo "")
+if [ -n "$ISSUE_NUM" ]; then
+  gh issue comment $ISSUE_NUM --body "[🎯 COORDINATOR] Assigned to $SLOT. Worktree ready at $WORKTREE. Item is in_progress."
 fi
-
-echo "board: $BOARD"
 ```
 
-**Detect CI gate:**
+## Step 3 — Monitor state (continuous poll)
+
+Every 2 minutes, read `.maqa/state.json` and react:
 
 ```bash
-CI_GATE="none"
-[ -f "maqa-ci/ci-config.yml" ] && CI_GATE="enabled"
-echo "ci_gate: $CI_GATE"
+while true; do
+  python3 -c "
+import json
+state = json.load(open('.maqa/state.json'))
+for item_id, item in state.get('features', {}).items():
+    s = item.get('state')
+    if s == 'in_review':
+        print(f'IN_REVIEW: {item_id}')
+    elif s == 'done':
+        print(f'DONE: {item_id}')
+    elif s == 'blocked':
+        print(f'BLOCKED: {item_id}')
+"
+  sleep 120
+done
 ```
 
-## Step 2 — Discover specs
+**When state = in_review:**
+- Move GitHub Projects card to In Review
+- Notify QA session (post on Issue #1: "[🎯 COORDINATOR] {item} ready for QA review. PR: {pr_url}")
+
+**When state = done:**
+- Move card to Done
+- Free the engineer slot in state.json
+- Assign next queue item if available
+
+**When state = blocked:**
+- Post [NEEDS HUMAN] to Issue #1
+- Label the GitHub Issue `needs-human`
+- Continue with other items
+
+## Step 4 — Batch complete: audit and report
+
+When all queue items are `done` or `blocked`:
 
 ```bash
-python3 - <<'EOF'
-import os, glob, json
+# 1. Consistency audit
+git checkout main && git pull
 
-specs = []
-for path in sorted(glob.glob('specs/*/spec.md')):
-    name = os.path.basename(os.path.dirname(path))
-    has_tasks = os.path.exists(f'specs/{name}/tasks.md')
-    has_plan  = os.path.exists(f'specs/{name}/plan.md')
-    specs.append({'name': name, 'has_tasks': has_tasks, 'has_plan': has_plan})
+# /speckit.analyze — cross-artifact consistency
+# /speckit.memorylint.run — AGENTS.md vs constitution drift
 
-print(json.dumps(specs, indent=2))
-EOF
+# 2. Build and test
+go build ./... && echo "BUILD: OK" || echo "BUILD: FAILED"
+go test ./... -race -count=1 -timeout 120s && echo "TESTS: OK" || echo "TESTS: FAILED"
+govulncheck ./... && echo "VULN: OK" || echo "VULN: FOUND"
+
+# 3. Journey status
+cat docs/aide/definition-of-done.md | grep "^|"
 ```
 
-## Step 3 — Read or initialise state
+If any check fails:
+```bash
+gh issue comment 1 --body "[🎯 COORDINATOR] ## [BATCH QUALITY GATE FAILED] $(date -u +%Y-%m-%dT%H:%M)
 
-Load `.maqa/state.json` (or board state if board integration active). State tracks each feature's slot: `backlog | todo | in_progress | in_review | done`.
+Failed checks: <list>
 
-## Step 4 — Spawn feature agents (up to max_parallel)
-
-For each feature in `todo` state, spawn a feature agent via `/speckit.maqa.feature`:
-
-```
-name: <feature-name>
-board: <active-board>
-tdd: <true|false>
-test_command: <command>
-auto_push: <true|false>
-worktree_base: <path>
+Next queue generation is BLOCKED until this is resolved.
+Label this issue 'needs-human' is set."
+gh issue edit 1 --add-label "needs-human"
 ```
 
-Track running agents. When one completes, check its TOON output for `STATUS: done | blocked | error`.
+If all pass:
 
-## Step 5 — Handle feature agent status
+```bash
+# Update progress.md
+# (mark completed stage as ✅)
 
-### STATUS: done
+# Post batch complete
+DONE_COUNT=$(python3 -c "import json; s=json.load(open('.maqa/state.json')); print(sum(1 for v in s['features'].values() if v['state']=='done'))")
+BLOCKED_COUNT=$(python3 -c "import json; s=json.load(open('.maqa/state.json')); print(sum(1 for v in s['features'].values() if v['state']=='blocked'))")
 
-**CI gate (if `ci_gate: enabled`):** Before moving to In Review or spawning QA, check CI status:
+gh issue comment 1 --body "[🎯 COORDINATOR] ## [BATCH COMPLETE] $(cat docs/aide/queue/.current 2>/dev/null || echo 'queue') — $(date -u +%Y-%m-%dT%H:%M)
 
-Run `speckit.maqa-ci.check` inline with the feature's branch:
-```
-branch: <feature-branch>
-name: <feature-name>
-```
+**Shipped** ($DONE_COUNT items): see PRs merged since last report
+**Blocked** ($BLOCKED_COUNT items): see issues labeled 'blocked'
 
-- `ci_status: green` → proceed
-- `ci_status: red` or `timeout` → add BLOCKED comment to board, do NOT spawn QA, report to parent
-- `ci_status: unknown` → if `block_on_red: false` in ci-config.yml, proceed with warning; otherwise treat as red
+**Journey status** (from definition-of-done.md):
+$(grep "^| J" docs/aide/definition-of-done.md | head -10)
 
-**Update board state** (after CI green or CI gate not enabled):
+**Audit**: BUILD ✅ TESTS ✅ VULN ✅ CONSISTENCY ✅
 
-Without Trello/board: update state.json to `in_review`.
-With board: move card/issue/item to In Review column/state using the active board's API.
+Scrum Master and Product Manager — your review cycle is ready.
+Next queue generating now."
 
-**QA cadence — when to spawn QA:**
-
-- `qa_cadence: per_feature` (default): spawn QA immediately for this feature.
-- `qa_cadence: batch_end`: add this feature to a `pending_qa` list. Only spawn QA for all pending features once every running feature in the current batch has returned `done` or `blocked`. If any returned `blocked`, still spawn QA for the done ones — do not wait indefinitely.
-
-Return QA spawn:
-
-```
-name: <feature-name>
-branch: <feature-branch>
-board: <active-board>
+# Spawn SM and PM (notify via Issue #1 — they poll for [BATCH COMPLETE])
+# SM and PM sessions are always running and will react automatically.
 ```
 
-### STATUS: blocked
+## Step 5 — Reset and loop
 
-Add BLOCKED label/comment to board card. Log reason. Do not spawn QA. Notify parent.
-
-### STATUS: error
-
-Log error details. Mark feature as `error` in state. Continue with remaining features.
-
-## Step 6 — Handle QA agent status
-
-When QA agent reports `STATUS: approved`:
-- Move board item to Done
-- Update state.json
-
-When QA agent reports `STATUS: rejected`:
-- Return feature to `todo` state with QA feedback as context
-- Re-spawn feature agent with rejection notes
-
-## Step 7 — Final report (TOON)
-
+```bash
+# Reset state for next batch
+python3 -c "
+import json, os
+state = json.load(open('.maqa/state.json'))
+state['engineer_slots'] = {'ENGINEER-1': None, 'ENGINEER-2': None, 'ENGINEER-3': None}
+state['current_queue'] = None
+state['features'] = {}
+tmp = '.maqa/state.json.tmp'
+json.dump(state, open(tmp,'w'), indent=2)
+os.rename(tmp, '.maqa/state.json')
+print('State reset for next batch')
+"
 ```
-coordinator_complete:
-  board: <active-board>
-  ci_gate: <enabled|none>
-  done: [list of completed features]
-  blocked: [list of blocked features]
-  errors: [list of errored features]
-  summary: "<N> features done, <M> blocked"
+
+Go to Step 1 and generate the next queue.
+
+## Stop condition
+
+When `docs/aide/definition-of-done.md` Journey Status table shows all journeys as ✅:
+
+```bash
+gh issue comment 1 --body "[🎯 COORDINATOR] ## [PROJECT COMPLETE] $(date -u +%Y-%m-%dT%H:%M)
+
+All journeys are passing. The project is complete.
+
+$(grep "^| J" docs/aide/definition-of-done.md)
+
+This was fully autonomous. No human wrote code."
 ```
+
+Exit.
