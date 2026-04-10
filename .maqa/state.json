@@ -2,7 +2,7 @@
   "version": "1.1",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T08:51:53Z",
+  "last_updated": "2026-04-10T08:59:33Z",
   "current_queue": "queue-001",
   "last_sm_review": null,
   "last_pm_review": null,
@@ -22,7 +22,7 @@
       "assigned_at": "2026-04-10T04:09:53Z"
     },
     "002-kubebuilder-scaffold": {
-      "state": "assigned",
+      "state": "in_progress",
       "assigned_to": "ENGINEER-1",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.002-kubebuilder-scaffold",
@@ -30,7 +30,7 @@
       "pr_merged": false
     },
     "003-dockerfile-and-helm": {
-      "state": "assigned",
+      "state": "in_progress",
       "assigned_to": "ENGINEER-2",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.003-dockerfile-and-helm",
@@ -38,11 +38,11 @@
       "pr_merged": false
     },
     "004-ci-and-lint": {
-      "state": "assigned",
+      "state": "in_review",
       "assigned_to": "ENGINEER-3",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.004-ci-and-lint",
-      "pr_number": null,
+      "pr_number": 9,
       "pr_merged": false
     }
   }
