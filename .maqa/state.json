@@ -3,11 +3,11 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T23:11:13Z",
-  "current_queue": "queue-006",
-  "last_sm_review": "2026-04-10T22:19:17Z",
-  "last_pm_review": "2026-04-10T22:21:43Z",
-  "batches_since_competitive_analysis": 0,
+  "last_updated": "2026-04-10T23:18:42Z",
+  "current_queue": "queue-007",
+  "last_sm_review": "2026-04-10T23:15:01Z",
+  "last_pm_review": "2026-04-10T23:15:25Z",
+  "batches_since_competitive_analysis": 1,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
@@ -132,6 +132,33 @@
       "worktree_path": "../kardinal-promoter.013-promotionstep-reconciler",
       "pr_number": 58,
       "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "014-health-adapters": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
+    },
+    "015-cli-full": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
+    },
+    "016-pr-evidence": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
       "dependency_mode": "merged"
     }
   },
