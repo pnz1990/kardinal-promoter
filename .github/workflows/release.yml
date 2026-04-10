@@ -49,7 +49,7 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-windows-amd64.exe ./cmd/kardinal/
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
