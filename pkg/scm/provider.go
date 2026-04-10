@@ -11,8 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package scm contains the SCMProvider interface and implementations.
-// Handles PR lifecycle: create, comment, detect merge, close.
 package scm
 
 import "context"

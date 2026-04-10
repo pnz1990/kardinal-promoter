@@ -11,7 +11,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package steps contains the promotion step engine and built-in step implementations.
 package steps
 
 import (
