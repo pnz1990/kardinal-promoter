@@ -2,7 +2,7 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T14:55:09Z",
+  "last_updated": "2026-04-10T14:57:03Z",
   "current_queue": "queue-001",
   "last_sm_review": null,
   "last_pm_review": null,
@@ -52,8 +52,8 @@
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T14:55:09Z",
-      "cycle": 0
+      "last_seen": "2026-04-10T14:57:03Z",
+      "cycle": 1
     },
     "QA": {
       "last_seen": null,
