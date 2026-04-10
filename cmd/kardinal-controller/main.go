@@ -35,9 +35,11 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	celpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
+	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -109,6 +111,17 @@ func main() {
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient()}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
+	}
+
+	celEnv, err := celpkg.NewCELEnvironment()
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create CEL environment")
+	}
+	if err := (&policygaterecon.Reconciler{
+		Client:    mgr.GetClient(),
+		Evaluator: celpkg.NewEvaluator(celEnv),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

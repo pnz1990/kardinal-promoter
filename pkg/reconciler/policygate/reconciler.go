@@ -1,0 +1,217 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+// Package policygate implements the PolicyGateReconciler which evaluates
+// CEL policy expressions on PolicyGate instances created by the Graph controller.
+package policygate
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
+)
+
+const (
+	// labelBundle is the label that identifies a PolicyGate instance (vs template).
+	labelBundle = "kardinal.io/bundle"
+	// labelEnvironment is the environment the gate is evaluated for.
+	labelEnvironment = "kardinal.io/environment"
+	// defaultRecheckInterval is used when gate.Spec.RecheckInterval is empty or invalid.
+	defaultRecheckInterval = 5 * time.Minute
+)
+
+// Reconciler evaluates PolicyGate CEL expressions and patches status.
+// It only processes instances (gates with kardinal.io/bundle label).
+// Template PolicyGates (no bundle label) are ignored.
+type Reconciler struct {
+	client.Client
+	// Evaluator evaluates CEL expressions.
+	Evaluator *cel.Evaluator
+	// NowFn returns the current time. Overridable for testing.
+	NowFn func() time.Time
+}
+
+// Reconcile evaluates the CEL expression on a PolicyGate instance.
+//
+// State machine:
+//   - No kardinal.io/bundle label → template, skip (no-op)
+//   - Gate not found → deleted, skip
+//   - Otherwise → build context, evaluate CEL, patch status, requeue
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := zerolog.Ctx(ctx).With().
+		Str("gate", req.Name).
+		Str("namespace", req.Namespace).
+		Logger()
+
+	var gate kardinalv1alpha1.PolicyGate
+	if err := r.Get(ctx, req.NamespacedName, &gate); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("get policygate: %w", err)
+	}
+
+	// Skip templates (no bundle label = platform/team template, not instance)
+	bundleName := gate.Labels[labelBundle]
+	if bundleName == "" {
+		log.Debug().Msg("policygate has no bundle label, skipping (template)")
+		return ctrl.Result{}, nil
+	}
+
+	recheckInterval := parseRecheckInterval(gate.Spec.RecheckInterval)
+
+	// Build CEL context
+	celCtx, err := r.buildContext(ctx, &gate, bundleName)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to build CEL context, setting gate to blocked")
+		if patchErr := r.patchStatus(ctx, &gate, false,
+			fmt.Sprintf("context error: %s", err)); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
+		}
+		return ctrl.Result{RequeueAfter: recheckInterval}, nil
+	}
+
+	// Evaluate CEL expression
+	pass, reason, evalErr := r.Evaluator.Evaluate(gate.Spec.Expression, celCtx)
+	if evalErr != nil {
+		// Fail-closed on evaluation error
+		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
+			Msg("CEL evaluation error, setting gate to blocked")
+		if patchErr := r.patchStatus(ctx, &gate, false, reason); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch gate status on eval error: %w", patchErr)
+		}
+		return ctrl.Result{RequeueAfter: recheckInterval}, nil
+	}
+
+	log.Info().
+		Bool("ready", pass).
+		Str("reason", reason).
+		Str("expr", gate.Spec.Expression).
+		Msg("policygate evaluated")
+
+	if patchErr := r.patchStatus(ctx, &gate, pass, reason); patchErr != nil {
+		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
+	}
+
+	return ctrl.Result{RequeueAfter: recheckInterval}, nil
+}
+
+// buildContext constructs the Phase 1 CEL context for gate evaluation.
+func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	bundleName string) (map[string]interface{}, error) {
+	var bundle kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      bundleName,
+		Namespace: gate.Namespace,
+	}, &bundle); err != nil {
+		return nil, fmt.Errorf("load bundle %s: %w", bundleName, err)
+	}
+
+	now := r.now()
+
+	bundleCtx := map[string]interface{}{
+		"type":    bundle.Spec.Type,
+		"version": extractVersion(&bundle),
+		"provenance": map[string]interface{}{
+			"author":    "",
+			"commitSHA": "",
+			"ciRunURL":  "",
+		},
+		"intent": map[string]interface{}{
+			"targetEnvironment": "",
+		},
+	}
+	if bundle.Spec.Provenance != nil {
+		bundleCtx["provenance"] = map[string]interface{}{
+			"author":    bundle.Spec.Provenance.Author,
+			"commitSHA": bundle.Spec.Provenance.CommitSHA,
+			"ciRunURL":  bundle.Spec.Provenance.CIRunURL,
+		}
+	}
+	if bundle.Spec.Intent != nil {
+		bundleCtx["intent"] = map[string]interface{}{
+			"targetEnvironment": bundle.Spec.Intent.TargetEnvironment,
+		}
+	}
+
+	return map[string]interface{}{
+		"bundle": bundleCtx,
+		"schedule": map[string]interface{}{
+			"isWeekend": now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
+			"hour":      now.Hour(),
+			"dayOfWeek": now.Weekday().String(),
+		},
+		"environment": map[string]interface{}{
+			"name": gate.Labels[labelEnvironment],
+		},
+	}, nil
+}
+
+// patchStatus patches the PolicyGate's status fields.
+func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	ready bool, reason string) error {
+	patch := client.MergeFrom(gate.DeepCopy())
+	now := metav1.NewTime(r.now())
+	gate.Status.Ready = ready
+	gate.Status.Reason = reason
+	gate.Status.LastEvaluatedAt = &now
+	if err := r.Status().Patch(ctx, gate, patch); err != nil {
+		return fmt.Errorf("status patch: %w", err)
+	}
+	return nil
+}
+
+// now returns the current time, using NowFn if set (for testing).
+func (r *Reconciler) now() time.Time {
+	if r.NowFn != nil {
+		return r.NowFn()
+	}
+	return time.Now().UTC()
+}
+
+// SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&kardinalv1alpha1.PolicyGate{}).
+		Complete(r)
+}
+
+// --- helpers ---
+
+// extractVersion returns the version string from a Bundle.
+// For image bundles: first image tag. For config bundles: first 8 chars of commitSHA.
+func extractVersion(bundle *kardinalv1alpha1.Bundle) string {
+	if bundle.Spec.Type == "config" && bundle.Spec.ConfigRef != nil {
+		sha := bundle.Spec.ConfigRef.CommitSHA
+		if len(sha) > 8 {
+			return sha[:8]
+		}
+		return sha
+	}
+	if len(bundle.Spec.Images) > 0 {
+		return bundle.Spec.Images[0].Tag
+	}
+	return ""
+}
+
+// parseRecheckInterval parses a Go duration string, returning defaultRecheckInterval on error.
+func parseRecheckInterval(s string) time.Duration {
+	if s == "" {
+		return defaultRecheckInterval
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return defaultRecheckInterval
+	}
+	return d
+}
