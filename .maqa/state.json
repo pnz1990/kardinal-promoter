@@ -30,11 +30,11 @@
       "pr_merged": false
     },
     "003-dockerfile-and-helm": {
-      "state": "in_progress",
+      "state": "in_review",
       "assigned_to": "ENGINEER-2",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.003-dockerfile-and-helm",
-      "pr_number": null,
+      "pr_number": 10,
       "pr_merged": false
     },
     "004-ci-and-lint": {
