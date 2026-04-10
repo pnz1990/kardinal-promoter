@@ -11,16 +11,27 @@ import (
 // PromotionStep objects are created by the Graph controller — not by users.
 type PromotionStepSpec struct {
 	// PipelineName is the Pipeline this step belongs to.
-	PipelineName string `json:"pipelineName,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	PipelineName string `json:"pipelineName"`
 
 	// BundleName is the Bundle being promoted.
-	BundleName string `json:"bundleName,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	BundleName string `json:"bundleName"`
 
 	// Environment is the environment this step promotes into.
-	Environment string `json:"environment,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	Environment string `json:"environment"`
 
 	// StepType identifies the built-in or custom step to execute.
-	StepType string `json:"stepType,omitempty"`
+	// Examples: git-clone, kustomize-set-image, git-commit, open-pr,
+	//           wait-for-merge, health-check.
+	// +kubebuilder:validation:MinLength=1
+	StepType string `json:"stepType"`
+
+	// Inputs carries step-specific configuration values derived from the
+	// Pipeline and Bundle at graph generation time.
+	// +optional
+	Inputs map[string]string `json:"inputs,omitempty"`
 }
 
 // PromotionStepStatus defines the observed state of a PromotionStep.
@@ -30,9 +41,16 @@ type PromotionStepStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Message provides human-readable detail about the current phase.
+	// +optional
 	Message string `json:"message,omitempty"`
 
+	// Outputs accumulates key/value results from completed steps in the
+	// sequence (e.g. prURL from the open-pr step).
+	// +optional
+	Outputs map[string]string `json:"outputs,omitempty"`
+
 	// Conditions holds status conditions.
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 

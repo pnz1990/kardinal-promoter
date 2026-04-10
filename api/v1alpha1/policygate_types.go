@@ -8,7 +8,6 @@ import (
 )
 
 // PolicyGateSpec defines the desired state of a PolicyGate.
-// Full field definitions are added in Stage 1.
 type PolicyGateSpec struct {
 	// Expression is the CEL expression evaluated to determine if promotion
 	// is allowed. Must evaluate to a boolean.
@@ -16,14 +15,25 @@ type PolicyGateSpec struct {
 	Expression string `json:"expression"`
 
 	// Message is a human-readable explanation shown when the gate blocks.
+	// +optional
 	Message string `json:"message,omitempty"`
 
 	// RecheckInterval is how often to re-evaluate time-based gates.
+	// Uses Go duration format (e.g. "5m", "1h").
 	// +kubebuilder:default="5m"
+	// +optional
 	RecheckInterval string `json:"recheckInterval,omitempty"`
 
-	// SkipPermission controls whether bundles with intent.skip can bypass this gate.
+	// SkipPermission controls whether bundles with intent.skipEnvironments can
+	// bypass this gate. When false, skip requests are denied.
+	// +kubebuilder:default=false
+	// +optional
 	SkipPermission bool `json:"skipPermission,omitempty"`
+
+	// Selector is a label selector for org-level auto-injection: this gate is
+	// automatically applied to any Pipeline whose labels match the selector.
+	// +optional
+	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 }
 
 // PolicyGateStatus defines the observed state of a PolicyGate.
@@ -34,12 +44,15 @@ type PolicyGateStatus struct {
 	Ready bool `json:"ready"`
 
 	// Reason explains the current ready state in human-readable form.
+	// +optional
 	Reason string `json:"reason,omitempty"`
 
 	// LastEvaluatedAt is when the gate was last evaluated.
+	// +optional
 	LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
 
 	// Conditions holds status conditions.
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 

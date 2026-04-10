@@ -20,6 +20,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .spec.paused
+      name: Paused
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -48,9 +51,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              PipelineSpec defines the desired state of a Pipeline.
-              Full field definitions are added in Stage 1.
+            description: PipelineSpec defines the desired state of a Pipeline.
             properties:
               environments:
                 description: Environments lists the promotion path in order.
@@ -68,19 +69,101 @@ spec:
                     branch:
                       description: Branch is the target branch in the GitOps repository.
                       type: string
+                    deliveryDelegate:
+                      description: |-
+                        DeliveryDelegate offloads in-cluster progressive delivery to an external
+                        controller. Supported values: argoRollouts, flagger.
+                      type: string
+                    dependsOn:
+                      description: |-
+                        DependsOn lists names of other environments in this pipeline that must
+                        reach Verified state before this environment can start.
+                      items:
+                        type: string
+                      type: array
+                    gitCredentials:
+                      description: |-
+                        GitCredentials references a Kubernetes Secret with Git credentials used
+                        for cloning and pushing to GitRepo.
+                      properties:
+                        secretName:
+                          description: SecretName is the name of the Secret.
+                          minLength: 1
+                          type: string
+                        secretNamespace:
+                          description: |-
+                            SecretNamespace is the namespace of the Secret.
+                            If empty, the Pipeline's namespace is used.
+                          type: string
+                      required:
+                      - secretName
+                      type: object
                     gitRepo:
                       description: GitRepo is the GitOps repository URL.
+                      type: string
+                    healthAdapter:
+                      description: |-
+                        HealthAdapter selects the health check backend for this environment.
+                        Supported values: deployment, argocd, flux, argoRollouts.
+                      type: string
+                    healthTimeout:
+                      default: 30m
+                      description: |-
+                        HealthTimeout is the maximum time to wait for health checks to pass.
+                        Uses Go duration format (e.g. "30m", "1h").
                       type: string
                     name:
                       description: Name is the environment identifier (e.g. "test",
                         "uat", "prod").
                       minLength: 1
                       type: string
+                    path:
+                      description: |-
+                        Path is the subdirectory within the GitOps repository that contains the
+                        kustomize overlay or Helm values for this environment.
+                      type: string
+                    updateStrategy:
+                      default: kustomize
+                      description: UpdateStrategy selects the manifest update strategy.
+                      enum:
+                      - kustomize
+                      - helm
+                      type: string
                   required:
                   - name
                   type: object
                 minItems: 1
                 type: array
+              paused:
+                default: false
+                description: Paused suspends all promotions in this pipeline when
+                  true.
+                type: boolean
+              policyGates:
+                description: |-
+                  PolicyGates lists org- or team-level PolicyGate references that apply to
+                  every promotion in this pipeline.
+                items:
+                  description: |-
+                    PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
+                    any promotion in this pipeline can proceed.
+                  properties:
+                    name:
+                      description: Name is the PolicyGate resource name.
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: Namespace is the PolicyGate resource namespace.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              shard:
+                description: |-
+                  Shard pins this pipeline to a specific kardinal-controller shard in
+                  distributed mode. Leave empty for single-controller deployments.
+                type: string
             required:
             - environments
             type: object
@@ -145,6 +228,7 @@ spec:
                   type: object
                 type: array
               phase:
+                default: Unknown
                 description: Phase is the overall pipeline phase.
                 enum:
                 - Ready

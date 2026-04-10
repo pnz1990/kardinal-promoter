@@ -1,0 +1,18 @@
+apiVersion: kardinal.io/v1alpha1
+kind: PromotionStep
+metadata:
+  name: nginx-demo-prod-open-pr
+  namespace: default
+  labels:
+    kardinal.io/pipeline: nginx-demo
+    kardinal.io/bundle: nginx-demo-v1
+    kardinal.io/environment: prod
+spec:
+  pipelineName: nginx-demo
+  bundleName: nginx-demo-v1
+  environment: prod
+  stepType: open-pr
+  inputs:
+    repo: "myorg/gitops"
+    branch: "kardinal/promote-nginx-demo-v1-prod"
+    title: "feat(nginx-demo): promote v1.29.0 to prod"
