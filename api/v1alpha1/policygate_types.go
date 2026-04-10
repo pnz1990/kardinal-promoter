@@ -28,11 +28,12 @@ type PolicyGateSpec struct {
 
 // PolicyGateStatus defines the observed state of a PolicyGate.
 type PolicyGateStatus struct {
-	// Result is the most recent evaluation result.
-	// +kubebuilder:validation:Enum=Pass;Fail;Pending
-	Result string `json:"result,omitempty"`
+	// Ready indicates whether the gate is currently allowing promotion.
+	// The Graph propagateWhen expression evaluates status.ready == true.
+	// +kubebuilder:default=false
+	Ready bool `json:"ready"`
 
-	// Reason explains the result in human-readable form.
+	// Reason explains the current ready state in human-readable form.
 	Reason string `json:"reason,omitempty"`
 
 	// LastEvaluatedAt is when the gate was last evaluated.
@@ -45,7 +46,7 @@ type PolicyGateStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=pg
-// +kubebuilder:printcolumn:name="Result",type=string,JSONPath=`.status.result`
+// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PolicyGate is a CEL-powered policy check represented as a node in the

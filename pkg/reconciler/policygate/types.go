@@ -15,10 +15,3 @@ type Reconciler interface {
 	// Reconcile evaluates the PolicyGate CEL expression and updates status.
 	Reconcile(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error
 }
-
-// Result constants for PolicyGate.status.result.
-const (
-	ResultPass    = "Pass"
-	ResultFail    = "Fail"
-	ResultPending = "Pending"
-)

@@ -22,8 +22,9 @@ var GraphGVK = schema.GroupVersionKind{
 // Fields map to the krocodile/experimental Graph CRD schema.
 // See: https://github.com/ellistarn/kro/tree/krocodile/experimental
 type GraphSpec struct {
-	// Resources is the ordered list of resource nodes in the Graph.
-	Resources []GraphNode `json:"resources,omitempty"`
+	// Nodes is the ordered list of resource nodes in the Graph.
+	// (Renamed from Resources in krocodile April 2026.)
+	Nodes []GraphNode `json:"nodes,omitempty"`
 }
 
 // GraphNode represents one resource node in the kro Graph.
