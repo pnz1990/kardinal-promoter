@@ -35,4 +35,6 @@ import (
 	_ "k8s.io/api/core/v1"
 	// Kubernetes API machinery — used by CRD types and reconcilers from Stage 1
 	_ "k8s.io/apimachinery/pkg/apis/meta/v1"
+	// CEL evaluator — used by pkg/cel from Stage 4
+	_ "github.com/google/cel-go/cel"
 )
