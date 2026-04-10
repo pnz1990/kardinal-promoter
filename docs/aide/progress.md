@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-10
+> Last updated: 2026-04-10T17:10Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -14,8 +14,8 @@
 
 | Stage | Title | Status | Notes |
 |---|---|---|---|
-| 0 | Project Skeleton | 🚧 In Progress | Item 001 merged (PR #8). Items 002/003/004 queued. |
-| 1 | CRD Types and Validation | 📋 Planned | Depends on Stage 0 |
+| 0 | Project Skeleton | ✅ Complete | All 4 items merged: PRs #8, #9, #10, #11. Stage 1 queue generating. |
+| 1 | CRD Types and Validation | 🚧 In Progress | Queue 002 generating |
 | 2 | Bundle and Pipeline Reconcilers (No-Op Baseline) | 📋 Planned | Depends on Stage 1 |
 | 3 | Graph Generation and kro Integration | 📋 Planned | Depends on Stage 2 |
 | 4 | PolicyGate CEL Evaluator | 📋 Planned | Depends on Stage 3 |
@@ -42,9 +42,9 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 001 | Go module, directory layout, Makefile | ✅ Complete | #8 merged | pkg/ layout, go.mod, stubs |
-| 002 | kubebuilder CRD scaffold + controller-gen | 📋 Planned | — | Waiting for coordinator assignment |
-| 003 | Dockerfile + Helm chart skeleton | 📋 Planned | — | Waiting for coordinator assignment |
-| 004 | GitHub Actions CI + golangci-lint | 📋 Planned | — | Waiting for coordinator assignment |
+| 002 | kubebuilder CRD scaffold + controller-gen | ✅ Complete | #11 merged | CRD types, controller-gen, samples |
+| 003 | Dockerfile + Helm chart skeleton | ✅ Complete | #10 merged | Multi-stage Dockerfile, chart/ |
+| 004 | GitHub Actions CI + golangci-lint | ✅ Complete | #9 merged | CI pipeline, .golangci.yml |
 
 ---
 

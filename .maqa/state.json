@@ -2,8 +2,8 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T15:20:37Z",
-  "current_queue": "queue-001",
+  "last_updated": "2026-04-10T17:15:52Z",
+  "current_queue": "queue-002",
   "last_sm_review": null,
   "last_pm_review": null,
   "batches_since_competitive_analysis": 0,
@@ -48,16 +48,25 @@
       "pr_number": 9,
       "pr_merged": true,
       "dependency_mode": "branch"
+    },
+    "005-crd-types-and-validation": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T15:20:37Z",
-      "cycle": 3
+      "last_seen": "2026-04-10T17:15:52Z",
+      "cycle": 6
     },
     "QA": {
-      "last_seen": null,
-      "cycle": 0
+      "last_seen": "2026-04-10T17:15:00Z",
+      "cycle": 1
     }
   }
 }
