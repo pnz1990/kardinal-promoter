@@ -49,11 +49,14 @@ The krocodile/experimental branch is under active development. The Graph API and
 
 5. **Update our design docs when Graph semantics change.** The sections most likely to drift are design-v2.1.md §3.5 (`readyWhen` vs `propagateWhen`), §3.6 (dependency edge mechanism), spec 01 (Graph CRD schema), and spec 02 (node templates).
 
-Key semantic facts as of 2026-04-09 (verify against krocodile before implementing):
-- `readyWhen` is a **health signal only** — does NOT gate downstream execution
-- `propagateWhen` is the **data-flow gate** — blocks dependents when unsatisfied
+Key semantic facts as of 2026-04-10 (verify against krocodile before implementing):
+- `readyWhen` = health signal (UI, `kubectl get graph`) — does NOT block downstream
+- `propagateWhen` = data-flow gate — DOES block downstream when unsatisfied
 - `spec.nodes` (not `spec.resources`) is the field name for the node list
-- `Contribute` template shape allows writing partial state to resources owned by another actor
+- `graphs.kro.run` remains the API group for Graph CRDs (unchanged)
+- `experimental.kro.run` is the API group for RGD and user-defined kind CRDs (not used by kardinal-promoter)
+- Bug fix (2026-04-10 commit `94a24fa5`): `dep.ready()` in `readyWhen` was not re-evaluating after dep became ready — now fixed. Our `propagateWhen` usage is unaffected.
+- Bug fix (2026-04-10 commit `1b0ce353`): double-dispatch race in DAG coordinator — now fixed in krocodile. Pin krocodile at or after this commit.
 
 ## Goals and Objectives
 
