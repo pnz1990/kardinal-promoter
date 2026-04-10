@@ -22,11 +22,11 @@
       "assigned_at": "2026-04-10T04:09:53Z"
     },
     "002-kubebuilder-scaffold": {
-      "state": "in_progress",
+      "state": "in_review",
       "assigned_to": "ENGINEER-1",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.002-kubebuilder-scaffold",
-      "pr_number": null,
+      "pr_number": 11,
       "pr_merged": false
     },
     "003-dockerfile-and-helm": {
