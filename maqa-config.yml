@@ -5,7 +5,7 @@
 mode: "standalone"
 
 # ── Agent files ───────────────────────────────────────────────────────────────
-agents_path: "~/.kardinal/agents"
+agents_path: "~/.otherness/agents"
 
 # ── Test runner ───────────────────────────────────────────────────────────────
 test_command: "go test ./... -race -count=1 -timeout 120s"
