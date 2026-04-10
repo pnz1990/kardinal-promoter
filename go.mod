@@ -2,6 +2,8 @@ module github.com/kardinal-promoter/kardinal-promoter
 
 go 1.25.0
 
+toolchain go1.25.9
+
 require (
 	github.com/google/cel-go v0.28.0
 	github.com/rs/zerolog v1.35.0
