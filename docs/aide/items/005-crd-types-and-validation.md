@@ -29,25 +29,29 @@ No controller logic. Schema artifacts only.
 
 ### 1. `Pipeline` CRD type — complete all fields in `api/v1alpha1/pipeline_types.go`
 
+`spec.git` (top-level, shared by all environments):
+- `url` (string, required — GitOps repo URL)
+- `branch` (string — default branch)
+- `layout` (enum: `directory|branch`, default: `directory`)
+- `provider` (enum: `github|gitlab`, default: `github`)
+- `secretRef` (object: `name`, `namespace` — reference to Secret with token)
+
 `spec.environments[]`:
 - `name` (required, MinLength=1)
-- `gitRepo` (string, URL)
-- `branch` (string)
-- `path` (string — subdirectory in repo)
+- `path` (string — subdirectory in repo for `layout: directory`)
 - `approvalMode` (enum: `auto|pr-review`, default: `auto`)
 - `updateStrategy` (enum: `kustomize|helm`, default: `kustomize`)
 - `healthAdapter` (string — `deployment|argocd|flux|argoRollouts`)
 - `healthTimeout` (string — duration, default: `30m`)
 - `deliveryDelegate` (string — `argoRollouts|flagger`, optional)
 - `dependsOn` ([]string — names of other environments in this pipeline)
-- `gitCredentials` (object: `secretName`, `secretNamespace`)
+- `shard` (string — for distributed mode agent routing, optional)
 
 `spec.policyGates[]`:
 - `name` (string — reference to PolicyGate name)
 - `namespace` (string — PolicyGate namespace)
 
 `spec.paused` (bool, default: false)
-`spec.shard` (string — for distributed mode, optional)
 
 `status.phase` (enum: `Ready|Degraded|Unknown`, default: `Unknown`)
 `status.conditions[]` (metav1.Condition)
@@ -102,16 +106,34 @@ No controller logic. Schema artifacts only.
 
 ### 4. `PromotionStep` CRD type — complete all fields in `api/v1alpha1/promotionstep_types.go`
 
+**IMPORTANT**: This CRD uses `status.state` (not `status.phase`). The Graph controller
+generates `readyWhen` expressions like `${dev.status.state == "Verified"}`. Using
+`status.phase` instead would break all Graph DAG advancement. See `design-v2.1.md` §3.5
+and every `${env.status.state}` reference in the design.
+
 `spec.pipelineName` (string, required)
 `spec.bundleName` (string, required)
 `spec.environment` (string, required)
 `spec.stepType` (string, required — e.g. `git-clone`, `open-pr`, etc.)
 `spec.inputs` (map[string]string — step inputs from pipeline config)
 
-`status.phase` (enum: `Pending|Running|Succeeded|Failed|Blocked`)
-`status.message` (string)
+`status.state` (enum: `Pending|Promoting|WaitingForMerge|HealthChecking|Verified|Failed`)
+
+  State meanings (from `docs/design/03-promotionstep-reconciler.md`):
+  - `Pending`: created by Graph, not yet picked up by reconciler
+  - `Promoting`: step sequence executing (git-clone through git-push)
+  - `WaitingForMerge`: `open-pr` complete, waiting for PR merge webhook
+  - `HealthChecking`: merged, polling health adapter
+  - `Verified`: health check passed, evidence copied to Bundle
+  - `Failed`: any step or health check failed
+
+`status.currentStepIndex` (int — index into the step sequence; survives reconciler restart for idempotent crash recovery, required by spec 003 FR-002)
+`status.message` (string — human-readable detail about current state)
+`status.prURL` (string — GitHub PR URL, set during WaitingForMerge)
 `status.outputs` (map[string]string — step outputs accumulated across steps)
 `status.conditions[]` (metav1.Condition)
+
+The `+kubebuilder:printcolumn` should reference `.status.state`, not `.status.phase`.
 
 ### 5. Run `make manifests` — regenerate CRD YAML in `config/crd/bases/`
 
@@ -179,6 +201,22 @@ Read `docs/aide/roadmap.md` Stage 1 deliverables carefully — the field list ab
 mirrors it exactly. Cross-reference `docs/design/design-v2.1.md` sections 2.1-2.4
 for field semantics. The scaffold type files have `// Full field definitions are
 added in Stage 1.` comments — replace them with the complete types.
+
+**Three corrections vs the scaffold stubs (do not follow the stubs for these)**:
+
+1. **PromotionStep `status.state` not `status.phase`** — The existing stub has `status.phase`
+   but every design doc, every Graph `readyWhen` CEL expression (`${dev.status.state}`),
+   and spec 003 uses `status.state`. Implement `status.state` and update the
+   `+kubebuilder:printcolumn` annotation accordingly.
+
+2. **PromotionStep enum values** — Correct values are
+   `Pending|Promoting|WaitingForMerge|HealthChecking|Verified|Failed`
+   (not `Pending|Running|Succeeded|Failed|Blocked`).
+
+3. **Pipeline `spec.git` is top-level** — Git configuration is shared across all
+   environments via `spec.git` (url, branch, layout, provider, secretRef).
+   Do NOT put `gitRepo` or `branch` inside `spec.environments[]`.
+   See `docs/design/design-v2.1.md` line 710 and `examples/quickstart/pipeline.yaml`.
 
 Run `make manifests` after each type change to keep the generated CRD YAML in sync.
 The `controller-gen` binary is already installed via the scaffold Makefile.
