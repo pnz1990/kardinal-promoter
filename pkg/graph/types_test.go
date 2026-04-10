@@ -68,3 +68,54 @@ func TestGraphNodeDeepCopyPropagateWhen(t *testing.T) {
 	assert.Equal(t, "expr1", copy.PropagateWhen[0],
 		"DeepCopyInto must not alias PropagateWhen slice")
 }
+
+// TestGraphSpecDeepCopy verifies GraphSpec.DeepCopy handles nil and non-nil.
+func TestGraphSpecDeepCopy(t *testing.T) {
+	// Nil receiver
+	var nilSpec *GraphSpec
+	assert.Nil(t, nilSpec.DeepCopy())
+
+	// Non-nil with nodes
+	original := &GraphSpec{
+		Nodes: []GraphNode{
+			{ID: "node1", PropagateWhen: []string{"expr1"}},
+		},
+	}
+	copied := original.DeepCopy()
+	require.NotNil(t, copied)
+	assert.Equal(t, original.Nodes[0].ID, copied.Nodes[0].ID)
+
+	// Mutate original — copy must not be affected
+	original.Nodes[0].PropagateWhen[0] = "mutated"
+	assert.Equal(t, "expr1", copied.Nodes[0].PropagateWhen[0],
+		"DeepCopy must not alias slice contents")
+}
+
+// TestGraphNodeDeepCopy verifies GraphNode.DeepCopy nil safety.
+func TestGraphNodeDeepCopy(t *testing.T) {
+	var nilNode *GraphNode
+	assert.Nil(t, nilNode.DeepCopy())
+
+	original := &GraphNode{
+		ID:          "gate",
+		ReadyWhen:   []string{"r1"},
+		IncludeWhen: []string{"i1"},
+		ForEach:     "forEach",
+		Template:    map[string]interface{}{"key": "value"},
+	}
+	copied := original.DeepCopy()
+	require.NotNil(t, copied)
+	assert.Equal(t, original.ID, copied.ID)
+	assert.Equal(t, original.ForEach, copied.ForEach)
+	assert.Equal(t, original.ReadyWhen, copied.ReadyWhen)
+	assert.Equal(t, original.IncludeWhen, copied.IncludeWhen)
+	assert.Equal(t, original.Template["key"], copied.Template["key"])
+}
+
+// TestGraphSpecDeepCopyIntoEmptyNodes verifies DeepCopyInto with nil Nodes.
+func TestGraphSpecDeepCopyIntoEmptyNodes(t *testing.T) {
+	original := &GraphSpec{}
+	var out GraphSpec
+	original.DeepCopyInto(&out)
+	assert.Nil(t, out.Nodes)
+}

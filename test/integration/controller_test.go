@@ -121,10 +121,13 @@ func TestControllerIntegration(t *testing.T) {
 			},
 		}
 
-		// Reconcile should succeed and be idempotent
+		// Reconcile should succeed; it returns Requeue:true to immediately
+		// advance the bundle from Available to Promoting on the next cycle.
 		result, err := r.Reconcile(ctx, req)
 		require.NoError(t, err, "BundleReconciler.Reconcile must not return error")
-		assert.Equal(t, ctrl.Result{}, result, "expected empty Result")
+		// Requeue:true is expected — the reconciler signals immediate re-queue
+		// after setting Available phase so it can advance to Promoting.
+		assert.True(t, result.Requeue, "expected Requeue:true after Available phase set")
 
 		// Verify within 5 seconds
 		deadline := time.Now().Add(timeout)
