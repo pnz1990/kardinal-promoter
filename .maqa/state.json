@@ -5,8 +5,8 @@
   "last_updated": "2026-04-10T18:28:01Z",
   "current_queue": "queue-003",
   "last_sm_review": null,
-  "last_pm_review": null,
-  "batches_since_competitive_analysis": 0,
+  "last_pm_review": "2026-04-10T18:35:00Z",
+  "batches_since_competitive_analysis": 1,
   "engineer_slots": {
     "ENGINEER-1": "006-controller-manager-and-reconcilers",
     "ENGINEER-2": null,
