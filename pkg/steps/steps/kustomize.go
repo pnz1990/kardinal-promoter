@@ -16,7 +16,6 @@ package steps
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 
@@ -78,22 +77,4 @@ func envSubdir(state *parentsteps.StepState) string {
 		return p
 	}
 	return filepath.Join("environments", state.Environment.Name)
-}
-
-// kustomizeInEnvPath checks if kustomize binary exists in PATH — used in tests.
-func kustomizeInEnvPath() bool {
-	_, err := exec.LookPath("kustomize")
-	return err == nil
-}
-
-// createMinimalKustomization creates a minimal kustomization.yaml for tests.
-func createMinimalKustomization(dir string) error {
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create dir: %w", err)
-	}
-	content := `apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-images: []
-`
-	return os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(content), 0o600)
 }
