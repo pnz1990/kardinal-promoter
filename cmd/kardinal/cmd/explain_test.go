@@ -1,0 +1,144 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cmd
+
+import (
+	"bytes"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+)
+
+func buildExplainScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	_ = v1alpha1.AddToScheme(s)
+	return s
+}
+
+// TestExplain_ShowsStepsAndGates verifies that the explain output contains
+// both PromotionStep and PolicyGate rows with the correct columns.
+func TestExplain_ShowsStepsAndGates(t *testing.T) {
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-prod",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/environment": "prod"},
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "prod",
+			StepType:     "pr-review",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:   "WaitingForMerge",
+			Message: "PR #7 open",
+		},
+	}
+	now := metav1.Now()
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-weekend-deploys",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/environment": "prod"},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend",
+			Message:    "weekend blocked",
+		},
+		Status: v1alpha1.PolicyGateStatus{
+			Ready:           false,
+			Reason:          "isWeekend == true",
+			LastEvaluatedAt: &now,
+		},
+	}
+
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ps, gate).Build()
+
+	var buf bytes.Buffer
+	err := explainOnce(&buf, c, "default", "nginx-demo", "")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "prod")
+	assert.Contains(t, out, "WaitingForMerge")
+	assert.Contains(t, out, "PR #7 open")
+	assert.Contains(t, out, "PolicyGate")
+	assert.Contains(t, out, "no-weekend-deploys")
+	assert.Contains(t, out, "Block")
+}
+
+// TestExplain_FilterByEnv verifies that the envFilter parameter filters output.
+func TestExplain_FilterByEnv(t *testing.T) {
+	testStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-test",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			Environment: "test",
+			StepType:    "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	prodStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-prod",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			Environment: "prod",
+			StepType:    "pr-review",
+		},
+		Status: v1alpha1.PromotionStepStatus{State: "WaitingForMerge"},
+	}
+
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(testStep, prodStep).Build()
+
+	var buf bytes.Buffer
+	err := explainOnce(&buf, c, "default", "nginx-demo", "prod")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "prod")
+	assert.Contains(t, out, "WaitingForMerge")
+	assert.NotContains(t, out, "test")
+	assert.NotContains(t, out, "Verified")
+}
+
+// TestExplain_EmptyOutput verifies graceful output when no steps or gates exist.
+func TestExplain_EmptyOutput(t *testing.T) {
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	var buf bytes.Buffer
+	err := explainOnce(&buf, c, "default", "nginx-demo", "")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "No steps")
+}

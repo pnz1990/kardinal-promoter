@@ -1,4 +1,6 @@
 // Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -19,6 +21,7 @@ package main
 import (
 	"context"
 	"flag"
+	"net/http"
 	"os"
 	"strings"
 
@@ -40,7 +43,12 @@ import (
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
+	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+
+	// Import built-in steps to register them via init().
+	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 var scheme = runtime.NewScheme()
@@ -56,7 +64,10 @@ func main() {
 		zapLogLevel            string
 		metricsBindAddress     string
 		healthProbeBindAddress string
+		webhookBindAddress     string
 		policyNamespaces       string
+		githubToken            string
+		webhookSecret          string
 	)
 
 	flag.BoolVar(&leaderElect, "leader-elect", false,
@@ -67,8 +78,14 @@ func main() {
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
+	flag.StringVar(&webhookBindAddress, "webhook-bind-address", ":8083",
+		"The address the SCM webhook endpoint binds to.")
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
 		"Comma-separated list of namespaces to scan for org-level PolicyGates.")
+	flag.StringVar(&githubToken, "github-token", os.Getenv("GITHUB_TOKEN"),
+		"GitHub personal access token for SCM operations.")
+	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
+		"HMAC secret for validating incoming SCM webhooks.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
@@ -101,6 +118,10 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create manager")
 	}
 
+	// SCM provider (GitHub with token from flag or env).
+	scmProvider := scm.NewGitHubProvider(githubToken, "", webhookSecret)
+	gitClient := scm.NewExecGitClient()
+
 	if err := (&bundlereconciler.Reconciler{
 		Client:     mgr.GetClient(),
 		Translator: newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
@@ -124,6 +145,14 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 
+	if err := (&psreconciler.Reconciler{
+		Client:    mgr.GetClient(),
+		SCM:       scmProvider,
+		GitClient: gitClient,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up health check")
 	}
@@ -131,11 +160,30 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 
+	// Start webhook server in a goroutine.
+	go func() {
+		webhookSrv := newWebhookServer(scmProvider, mgr.GetClient(), logger)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
+		mux.HandleFunc("/webhook/scm/health", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
+		if err := http.ListenAndServe(webhookBindAddress, mux); err != nil {
+			logger.Error().Err(err).Msg("webhook server error")
+		}
+	}()
+
+	// Startup reconciliation: sync WaitingForMerge steps that may have been
+	// merged during controller downtime.
+	go func() {
+		startupReconciliation(ctx, scmProvider, mgr.GetClient(), logger)
+	}()
+
 	logger.Info().Msg("starting kardinal-controller")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
-	_ = ctx // ctx used for future zerolog.Ctx(ctx) calls in reconcilers
 }
 
 // newTranslator constructs the Translator wired with a GraphClient and Builder.
