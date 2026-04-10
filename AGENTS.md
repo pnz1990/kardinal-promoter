@@ -68,9 +68,10 @@ The human never creates queue files, item files, or code. The coordinator genera
 1. `docs/aide/vision.md`
 2. `docs/aide/roadmap.md`
 3. `docs/aide/progress.md`
-4. `.specify/memory/constitution.md` — overrides everything
-5. `docs/aide/team.yml` — your role and rules
-6. Your assigned item: `docs/aide/items/<NNN>.md`
+4. **`docs/aide/definition-of-done.md`** — the 5 journeys. This is what we are building towards.
+5. `.specify/memory/constitution.md` — overrides everything
+6. `docs/aide/team.yml` — your role and rules
+7. Your assigned item: `docs/aide/items/<NNN>.md`
 
 ---
 
@@ -114,6 +115,13 @@ LOOP:
       - go test ./... -race -count=1       full regression suite on main
       If any check fails: post [BATCH QUALITY GATE FAILED] to Issue #1,
       label the failure needs-human, do NOT generate next queue until resolved.
+
+   b. JOURNEY STATUS CHECK (after every batch):
+      - Read docs/aide/definition-of-done.md
+      - For each journey, determine if it now passes end-to-end based on what is merged
+      - Update the Journey Status table at the bottom of definition-of-done.md
+      - If a previously-passing journey now fails (regression): treat as quality gate failure
+      - Post journey status in the [BATCH COMPLETE] report to Issue #1
 
    b. DOC FRESHNESS CHECK (if any user-facing features merged in this batch):
       - For each merged feature: read docs/ pages it affects
@@ -179,11 +187,18 @@ LOOP (one iteration = one item, fully merged):
 3. SELF-VALIDATE (mandatory, no exceptions)
    - /speckit.verify-tasks.run — zero phantom completions required
    - /speckit.verify — all spec acceptance criteria must pass
-   - Manual validation:
-     * Apply relevant examples: kubectl apply -f examples/quickstart/ (or multi-cluster-fleet/)
-     * Verify behavior matches docs/quickstart.md and docs/concepts.md exactly
-     * If anything does not match: fix implementation, re-run tests, re-validate
-     * Capture kubectl output — it goes in the PR body as evidence
+   - Read docs/aide/definition-of-done.md — find which journey your feature contributes to
+   - Run the specific journey steps your feature enables:
+     * Journey 1 (Quickstart): kubectl apply -f examples/quickstart/pipeline.yaml
+       then: kardinal get pipelines, kardinal explain nginx-demo --env prod
+     * Journey 2 (Multi-cluster): kubectl apply -f examples/multi-cluster-fleet/pipeline.yaml
+       then: kardinal get pipelines (must show parallel prod-eu + prod-us)
+     * Journey 3 (Policies): kardinal policy simulate --time "Saturday 3pm" (must return BLOCKED)
+     * Journey 4 (Rollback): kardinal rollback <pipeline> --env <env> (must open PR with kardinal/rollback label)
+     * Journey 5 (CLI): run every CLI command your feature touches, verify output matches docs/cli-reference.md
+   - If a journey step does not produce the documented result: fix, re-test, re-validate
+   - Capture output — it goes in the PR body as journey validation evidence
+   This step is mandatory. A feature that does not advance a journey is not done.
 
 4. PUSH PR
    - Branch is auto-pushed

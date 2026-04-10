@@ -16,6 +16,7 @@ source_of_truth:
   - docs/aide/vision.md
   - docs/aide/roadmap.md
   - docs/aide/progress.md
+  - docs/aide/definition-of-done.md   # THE north star — 5 journeys that define done
   - .specify/memory/constitution.md
   - docs/aide/team.yml
   - AGENTS.md
