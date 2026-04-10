@@ -2,11 +2,11 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T17:26:04Z",
+  "last_updated": "2026-04-10T17:50:51Z",
   "current_queue": "queue-002",
   "last_sm_review": null,
-  "last_pm_review": "2026-04-10T17:50:00Z",
-  "batches_since_competitive_analysis": 1,
+  "last_pm_review": "2026-04-10T18:15:00Z",
+  "batches_since_competitive_analysis": 2,
   "engineer_slots": {
     "ENGINEER-1": "005-crd-types-and-validation",
     "ENGINEER-2": null,
@@ -61,12 +61,12 @@
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T17:26:04Z",
-      "cycle": 11
+      "last_seen": "2026-04-10T17:50:51Z",
+      "cycle": 21
     },
     "QA": {
-      "last_seen": "2026-04-10T17:25:00Z",
-      "cycle": 2
+      "last_seen": "2026-04-10T17:52:00Z",
+      "cycle": 3
     }
   }
 }
