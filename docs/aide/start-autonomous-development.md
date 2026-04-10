@@ -27,8 +27,12 @@ Read this. Open 5 terminal sessions. Step away.
 | 3 | `kardinal-promoter/` | Engineer 2 | `/speckit.maqa.feature` |
 | 4 | `kardinal-promoter/` | Engineer 3 | `/speckit.maqa.feature` |
 | 5 | `kardinal-promoter/` | QA | `/speckit.maqa.qa` |
+| 6 | `kardinal-promoter/` | Scrum Master | `/speckit.maqa.scrummaster` |
+| 7 | `kardinal-promoter/` | Product Manager | `/speckit.maqa.pm` |
 
-All sessions start in the main repo directory. The coordinator creates the worktrees. Engineers automatically cd into their assigned worktree when they pick up a work item (path is written to `.maqa/state.json` by the coordinator).
+All sessions start in the main repo directory. The coordinator creates worktrees for engineers.
+Engineers `cd` into their worktree when picking up work.
+Scrum Master and PM work in the main repo — no worktrees needed.
 
 ---
 
@@ -37,18 +41,19 @@ All sessions start in the main repo directory. The coordinator creates the workt
 ```bash
 export GH_TOKEN=<token-with-repo-and-project-scopes>
 
-# Set your agent identity — every GitHub comment will be prefixed with this
-# Session 1 (Coordinator):
-export AGENT_ID="COORDINATOR"
-# Session 2 (Engineer 1):  export AGENT_ID="ENGINEER-1"
-# Session 3 (Engineer 2):  export AGENT_ID="ENGINEER-2"
-# Session 4 (Engineer 3):  export AGENT_ID="ENGINEER-3"
-# Session 5 (QA):          export AGENT_ID="QA"
+# Session 1:  export AGENT_ID="COORDINATOR"
+# Session 2:  export AGENT_ID="ENGINEER-1"
+# Session 3:  export AGENT_ID="ENGINEER-2"
+# Session 4:  export AGENT_ID="ENGINEER-3"
+# Session 5:  export AGENT_ID="QA"
+# Session 6:  export AGENT_ID="SCRUM-MASTER"
+# Session 7:  export AGENT_ID="PM"
 
 git pull origin main
 ```
 
-All sessions share the same GitHub account. The `AGENT_ID` badge prefixes every issue comment and PR review so you can tell who said what in your notification feed.
+All sessions share the same GitHub account. The `AGENT_ID` badge prefixes every
+comment and PR review so you can tell who said what in your notification feed.
 
 ---
 
@@ -56,12 +61,16 @@ All sessions share the same GitHub account. The `AGENT_ID` badge prefixes every 
 
 | Session | Runs until |
 |---|---|
-| Coordinator | All 20 roadmap stages ✅ Complete |
+| Coordinator | All journeys ✅ Complete |
 | Engineers | No more work assigned + queue exhausted |
-| QA | No open PRs + coordinator posted final [BATCH COMPLETE] |
+| QA | No open PRs + coordinator posted final [PROJECT COMPLETE] |
+| Scrum Master | Coordinator posted [PROJECT COMPLETE] |
+| Product Manager | Coordinator posted [PROJECT COMPLETE] |
 
-All sessions loop continuously. Engineers do not stop between items.
-Engineers own each feature end-to-end: assignment → merge → smoke test → next item.
+All sessions loop or react continuously:
+- Engineers do not stop between items
+- QA polls for new PRs continuously
+- Scrum Master and PM run once per batch (triggered by coordinator [BATCH COMPLETE])
 
 ---
 
@@ -101,6 +110,38 @@ Engineers own each feature end-to-end: assignment → merge → smoke test → n
 3. Posts `request-changes` with file:line references, or `approve`
 4. Re-reviews full diff after every engineer fix commit
 5. Escalates to Issue #1 after 3 failed fix attempts on same issue
+
+---
+
+## What Scrum Master Does (after each batch)
+
+Triggered by coordinator posting `[BATCH COMPLETE]` to Issue #1.
+
+1. Reads `.maqa/state.json` and Issue #1 history — computes flow metrics
+2. Inspects SDLC files: `sdlc.md`, `team.yml`, templates, `AGENTS.md` process sections
+3. Checks: do agents actually follow the documented process?
+4. Opens `sdlc-improvement` Issues for systemic problems
+5. Applies minor fixes (< 10 lines) as direct PRs
+6. Posts `[SDLC REVIEW]` to Issue #1
+
+Does NOT touch: vision, roadmap, journeys, user docs, code.
+
+---
+
+## What Product Manager Does (after each batch)
+
+Triggered by coordinator posting `[BATCH COMPLETE]` to Issue #1.
+
+1. Checks vision alignment: do shipped features match the vision?
+2. Checks journey coverage: are journeys still the right acceptance criteria?
+3. Checks user doc freshness: do docs describe the current product?
+4. Fixes stale user docs directly via PR
+5. Opens `product-gap` Issues for competitor features we're missing
+6. Opens `product-proposal` Issues for improvements (human prioritizes)
+7. Every 3 batches: researches Kargo/GitOps Promoter/Flux releases for gaps
+8. Posts `[PRODUCT REVIEW]` to Issue #1
+
+Does NOT touch: sdlc.md, team.yml, templates, code.
 
 ---
 

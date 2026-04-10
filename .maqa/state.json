@@ -4,6 +4,9 @@
   "initialized": "2026-04-09",
   "last_updated": null,
   "current_queue": null,
+  "last_sm_review": null,
+  "last_pm_review": null,
+  "batches_since_competitive_analysis": 0,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
@@ -11,4 +14,3 @@
   },
   "features": {}
 }
-

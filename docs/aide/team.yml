@@ -102,7 +102,70 @@ roles:
       - "Escalate to report issue after same issue appears 3+ times."
       - "Provide file:line references for every requested change."
 
-lifecycle:
+  scrum_master:
+    command: /speckit.maqa.scrummaster
+    trigger: "spawned by coordinator after every [BATCH COMPLETE]"
+    owns: "SDLC layer only"
+    touches:
+      - ".specify/memory/sdlc.md"
+      - ".specify/memory/constitution.md"
+      - "docs/aide/team.yml"
+      - ".specify/templates/overrides/"
+      - "AGENTS.md (process sections only)"
+    never_touches:
+      - "docs/aide/vision.md"
+      - "docs/aide/roadmap.md"
+      - "docs/aide/definition-of-done.md"
+      - ".specify/specs/ (content)"
+      - "docs/ user documentation"
+      - "examples/"
+      - "any source code"
+    rules:
+      - "Read .maqa/state.json and Issue #1 history to compute flow metrics."
+      - "Inspect: does sdlc.md reflect what agents actually do?"
+      - "Inspect: is QA rejection rate > 30%? Engineers need better self-validation."
+      - "Inspect: are NEEDS HUMAN escalations for appropriate reasons?"
+      - "Inspect: are spec/tasks templates producing unambiguous work?"
+      - "Open GitHub Issues labeled sdlc-improvement for systemic problems."
+      - "Apply minor improvements (< 10 lines) as direct PRs."
+      - "Never block engineers or coordinator with process changes."
+      - "If unsure product vs process: it is product — escalate to PM."
+      - "Post [SDLC REVIEW] to report issue after each cycle."
+
+  product_manager:
+    command: /speckit.maqa.pm
+    trigger: "spawned by coordinator after every [BATCH COMPLETE]"
+    owns: "product layer only"
+    touches:
+      - "docs/aide/vision.md"
+      - "docs/aide/roadmap.md"
+      - "docs/aide/definition-of-done.md"
+      - "docs/aide/progress.md"
+      - ".specify/specs/ (content)"
+      - "docs/ user documentation"
+      - "examples/"
+    never_touches:
+      - ".specify/memory/sdlc.md"
+      - ".specify/memory/constitution.md"
+      - "docs/aide/team.yml"
+      - ".specify/templates/"
+      - ".maqa/"
+      - "any source code"
+    competitive_analysis_every_n_batches: 3
+    rules:
+      - "Read batch report: what shipped? Which journeys advanced?"
+      - "Check vision alignment: do shipped features match the vision?"
+      - "Check journey coverage: are journeys still the right acceptance criteria?"
+      - "Check spec completeness: gaps between vision and specs?"
+      - "Check user doc freshness: do docs describe the current product?"
+      - "Open product-gap Issues for features competitors have that we lack."
+      - "Open product-proposal Issues for improvements — humans prioritize, not PM."
+      - "Fix stale user docs directly via PRs. Title: 'docs(<scope>): <desc>'"
+      - "Never implement features — proposals only."
+      - "If unsure product vs process: it is process — escalate to SM."
+      - "Post [PRODUCT REVIEW] to report issue after each cycle."
+
+
   states:
     - backlog
     - todo
@@ -177,6 +240,8 @@ reporting:
     batch_quality_gate_failed: "[BATCH QUALITY GATE FAILED] {queue_id}: {failed}."
     new_spec: "[NEW SPEC] {spec_id}: {title} - journeys {journeys}"
     new_journey: "[NEW JOURNEY] J{N}: {title} - stages {stages}"
+    sdlc_review: "[SDLC REVIEW] batch #{n}: {metrics_summary}. Issues: {issues_found}. Improvements: {applied}."
+    product_review: "[PRODUCT REVIEW] batch #{n}: {vision_alignment}. Gaps: {gaps}. Proposals: {proposals}. Doc fixes: {doc_fixes}."
     project_complete: "[PROJECT COMPLETE] All {n} stages and {m} journeys complete."
 
 communication:
@@ -185,6 +250,9 @@ communication:
     blocked: f97316
     needs_human: e11d48
     report: 0075ca
+    sdlc_improvement: 7c3aed
+    product_gap: f59e0b
+    product_proposal: 10b981
   max_retries_before_escalation: 2
 
 human_gates:

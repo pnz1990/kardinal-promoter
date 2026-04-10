@@ -28,6 +28,8 @@ review MUST start with the agent's badge.
 | 3 | Engineer 2 | `[🔨 ENGINEER-2]` | `ENGINEER-2` |
 | 4 | Engineer 3 | `[🔨 ENGINEER-3]` | `ENGINEER-3` |
 | 5 | QA | `[🔍 QA]` | `QA` |
+| 6 | Scrum Master | `[🔄 SCRUM-MASTER]` | `SCRUM-MASTER` |
+| 7 | Product Manager | `[📋 PM]` | `PM` |
 
 ```bash
 export AGENT_ID="COORDINATOR"  # change per session
@@ -48,6 +50,37 @@ TEST_COMMAND:   go test ./... -race -count=1 -timeout 120s
 LINT_COMMAND:   go vet ./...
 VULN_COMMAND:   govulncheck ./...
 ```
+
+---
+
+## Scrum Master — Project Context
+
+The SM knows the minimum about kardinal-promoter needed to review the SDLC:
+- It is a Go project. Build: `go build ./...`. Test: `go test ./... -race`. Lint: `go vet ./...`.
+- Engineers use git worktrees at `../kardinal-promoter.<branch>`.
+- The coordinator spawns the SM after every `[BATCH COMPLETE]` report on Issue #1.
+- Competitor for process health reference: how do Kargo and GitOps Promoter teams operate?
+  (they both have active GitHub communities — check issue/PR velocity as a benchmark)
+
+SM must NOT know about: CRD design, kro Graph, PolicyGates, promotion algorithms, CEL.
+
+## Product Manager — Project Context
+
+The PM knows the full product:
+- kardinal-promoter is a Kubernetes promotion controller competing with Kargo and GitOps Promoter.
+- Primary differentiators: DAG pipelines, visible policy gates, PR evidence, GitOps-agnostic.
+- The definition-of-done has 5 journeys. J1 (Quickstart) and J3 (Policies) are the most critical for initial adoption.
+- Key user docs to keep fresh: `docs/quickstart.md`, `docs/concepts.md`, `docs/policy-gates.md`.
+- Competitors to monitor:
+  - Kargo: https://github.com/akuity/kargo/releases (monthly releases)
+  - GitOps Promoter: https://github.com/argoproj-labs/gitops-promoter/releases (weekly releases)
+  - Argo Rollouts: https://github.com/argoproj/argo-rollouts/releases
+  - Flux: https://github.com/fluxcd/flux2/releases
+- Community to monitor for feature requests and pain points:
+  - https://github.com/akuity/kargo/issues (what Kargo users are asking for that we don't have)
+  - https://github.com/argoproj-labs/gitops-promoter/issues
+
+PM must NOT know about: SDLC process, team.yml, sdlc.md, templates, maqa-config.
 
 ---
 
