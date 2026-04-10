@@ -166,14 +166,54 @@ pr_protocol:
   delete_branch_on_merge: true
   pr_template: docs/aide/pr-template.md   # see below
 
-# ── Queue Protocol ─────────────────────────────────────────────────────────────
+# ── Reporting ─────────────────────────────────────────────────────────────────
+reporting:
+  issue_number: 1
+  issue_url: https://github.com/pnz1990/kardinal-promoter/issues/1
+  label: "report"
+
+  # The coordinator posts a comment to issue #1 when:
+  events:
+    - trigger: batch_complete
+      when: all items in the current queue batch reach done or blocked
+      format: |
+        ## [BATCH COMPLETE] Queue {queue_id} — {timestamp}
+
+        **Shipped** ({n} items):
+        - {item_id}: {title} — PR #{pr_number}
+        - ...
+
+        **Blocked** ({n} items):
+        - {item_id}: {title} — reason: {reason} (see issue #{issue_number})
+
+        **Next**: {next_queue_id} will be generated automatically.
+
+    - trigger: item_needs_human
+      when: an agent labels an issue needs-human
+      format: |
+        ## [NEEDS HUMAN] {item_id}: {title} — {timestamp}
+
+        **Agent**: {role} ({feature|qa})
+        **Blocked on**: {reason}
+        **Action required**: Review issue #{issue_number} and remove the needs-human label to unblock.
+
+    - trigger: qa_finding
+      when: QA rejects a PR with a finding worth human attention (security, architecture, spec gap)
+      format: |
+        ## [QA FINDING] {item_id}: {title} — {timestamp}
+
+        **Finding**: {description}
+        **PR**: #{pr_number}
+        **Severity**: {low|medium|high}
+
+  # How to post a report comment
+  post_command: |
+    gh issue comment 1 --body "{report_body}"
 queue_protocol:
   queue_dir: docs/aide/queue/
   items_dir: docs/aide/items/
   batch_size: 10          # items per queue file
-  regenerate_when: empty  # human runs /speckit.aide.create-queue when queue exhausted
-
-# ── Communication Protocol ────────────────────────────────────────────────────
+# ── Queue Protocol ─────────────────────────────────────────────────────────────
 communication:
   # Agents communicate through files, not messages.
   # State changes are written to .maqa/state.json.

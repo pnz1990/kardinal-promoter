@@ -54,7 +54,18 @@ Read these **in order** before doing anything else:
 6. After feature agent completes: check CI via `/speckit.maqa-ci.check`
 7. If CI green: move to In Review, spawn QA agent via `/speckit.maqa.qa`
 8. If QA approves + PR merged: update `.maqa/state.json` → `done`, move card on GitHub Projects
-9. When queue exhausted: update `docs/aide/progress.md`, generate next queue
+9. When queue exhausted: post a `[BATCH COMPLETE]` report to GitHub Issue #1, update `docs/aide/progress.md`, generate next queue and loop
+10. If any item hits `needs-human`: post a `[NEEDS HUMAN]` report to Issue #1, label the blocking issue, continue with other items
+
+**Reporting** — post to https://github.com/pnz1990/kardinal-promoter/issues/1 using:
+```bash
+gh issue comment 1 --body "## [BATCH COMPLETE] ..."
+```
+
+Three report types (formats in `docs/aide/team.yml`):
+- `[BATCH COMPLETE]` — every time a queue batch finishes
+- `[NEEDS HUMAN]` — when an agent is blocked and needs human input
+- `[QA FINDING]` — when QA finds something worth human attention
 
 **Never implement features. Never commit. Return SPAWN blocks only.**
 **The human does not create queue files or item files. You do.**
