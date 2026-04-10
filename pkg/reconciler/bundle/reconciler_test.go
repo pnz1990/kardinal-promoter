@@ -25,6 +25,19 @@ func newScheme() *runtime.Scheme {
 	return s
 }
 
+// mockTranslator is a test double for BundleTranslator.
+type mockTranslator struct {
+	graphName string
+	err       error
+	called    bool
+}
+
+func (m *mockTranslator) Translate(_ context.Context,
+	_ *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) (string, error) {
+	m.called = true
+	return m.graphName, m.err
+}
+
 // TestBundleReconciler_SetsAvailablePhase verifies that a Bundle with an empty
 // status.phase is set to Available after reconciliation.
 func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
@@ -52,7 +65,8 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, ctrl.Result{}, result)
+	// Requeue expected to immediately advance to Promoting
+	assert.True(t, result.Requeue)
 
 	var got kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
@@ -61,43 +75,106 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 	assert.Equal(t, "Available", got.Status.Phase)
 }
 
-// TestBundleReconciler_Idempotent verifies that if a Bundle already has
-// status.phase=Available, reconciliation is a no-op (no error, no extra patch).
-func TestBundleReconciler_Idempotent(t *testing.T) {
-	b := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-v1",
-			Namespace: "default",
+// TestBundleReconciler_AvailableToPromoting verifies that an Available Bundle
+// with a Translator triggers graph creation and advances to Promoting.
+func TestBundleReconciler_AvailableToPromoting(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+			},
 		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
 		Spec: kardinalv1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: "nginx-demo",
 		},
-		Status: kardinalv1alpha1.BundleStatus{
-			Phase: "Available",
-		},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(b).
+		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
 
-	r := &bundle.Reconciler{Client: c}
+	translator := &mockTranslator{graphName: "nginx-demo-v1-graph"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
 
-	// First reconcile
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, translator.called, "Translator.Translate must have been called")
+	assert.False(t, result.Requeue, "no requeue after advancing to Promoting")
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
+		Name: "nginx-demo-v1", Namespace: "default",
+	}, &got))
+	assert.Equal(t, "Promoting", got.Status.Phase)
+}
+
+// TestBundleReconciler_TranslationError sets bundle to Failed when Translator errors.
+func TestBundleReconciler_TranslationError(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	translator := &mockTranslator{err: assert.AnError}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
 
-	// Second reconcile
-	_, err = r.Reconcile(context.Background(), ctrl.Request{
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
+		Name: "nginx-demo-v1", Namespace: "default",
+	}, &got))
+	assert.Equal(t, "Failed", got.Status.Phase)
+}
+
+// TestBundleReconciler_NoTranslatorSkipsPromotion verifies that Available
+// bundles are left in place when no Translator is configured.
+func TestBundleReconciler_NoTranslatorSkipsPromotion(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+
+	r := &bundle.Reconciler{Client: c} // no Translator
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
 	})
 	require.NoError(t, err)
+	assert.False(t, result.Requeue)
 
 	// Phase must still be Available
 	var got kardinalv1alpha1.Bundle
@@ -107,8 +184,33 @@ func TestBundleReconciler_Idempotent(t *testing.T) {
 	assert.Equal(t, "Available", got.Status.Phase)
 }
 
-// TestBundleReconciler_NotFound verifies that a missing Bundle returns no error
-// (it was deleted between the event and reconcile).
+// TestBundleReconciler_Idempotent verifies that reconciling an already-Available
+// bundle twice is safe.
+func TestBundleReconciler_Idempotent(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+}
+
+// TestBundleReconciler_NotFound verifies that a missing Bundle returns no error.
 func TestBundleReconciler_NotFound(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).Build()
@@ -119,4 +221,25 @@ func TestBundleReconciler_NotFound(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result)
+}
+
+// TestBundleReconciler_PromotingPhaseIsNoOp verifies that Promoting bundles are skipped.
+func TestBundleReconciler_PromotingPhaseIsNoOp(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+
+	translator := &mockTranslator{graphName: "graph"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.False(t, translator.called, "Translator must NOT be called for Promoting bundles")
 }

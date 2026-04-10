@@ -20,19 +20,25 @@ import (
 	"context"
 	"flag"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
 var scheme = runtime.NewScheme()
@@ -48,6 +54,7 @@ func main() {
 		zapLogLevel            string
 		metricsBindAddress     string
 		healthProbeBindAddress string
+		policyNamespaces       string
 	)
 
 	flag.BoolVar(&leaderElect, "leader-elect", false,
@@ -58,6 +65,8 @@ func main() {
 		"The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081",
 		"The address the probe endpoint binds to.")
+	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
+		"Comma-separated list of namespaces to scan for org-level PolicyGates.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
@@ -90,8 +99,10 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create manager")
 	}
 
-	if err := (&bundlereconciler.Reconciler{Client: mgr.GetClient()}).
-		SetupWithManager(mgr); err != nil {
+	if err := (&bundlereconciler.Reconciler{
+		Client:     mgr.GetClient(),
+		Translator: newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
+	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
 
@@ -112,4 +123,35 @@ func main() {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
 	_ = ctx // ctx used for future zerolog.Ctx(ctx) calls in reconcilers
+}
+
+// newTranslator constructs the Translator wired with a GraphClient and Builder.
+func newTranslator(cfg *rest.Config, k8s sigs_client.Reader,
+	policyNS []string, log zerolog.Logger) *translator.Translator {
+	dynClient, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
+	}
+	graphClient := graphpkg.NewGraphClient(dynClient, log)
+	builder := graphpkg.NewBuilder()
+	return translator.New(graphClient, builder, k8s, policyNS, log)
+}
+
+// splitCSV splits a comma-separated string into a trimmed slice.
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var result []string
+	start := 0
+	for i := 0; i <= len(s); i++ {
+		if i == len(s) || s[i] == ',' {
+			part := strings.TrimSpace(s[start:i])
+			if part != "" {
+				result = append(result, part)
+			}
+			start = i + 1
+		}
+	}
+	return result
 }

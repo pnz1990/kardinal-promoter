@@ -1,0 +1,121 @@
+# graph-expected.yaml
+#
+# This file shows the kro Graph CR that kardinal-promoter generates for the
+# quickstart Pipeline (3-env linear: test → uat → prod) with one PolicyGate
+# (no-weekend-deploys) applied to prod.
+#
+# This is documentation/test evidence — it is NOT applied to a cluster directly.
+# The actual Graph is created by the BundleReconciler via the translator.
+#
+# API group: experimental.kro.run (updated in krocodile commit 48224264, 2026-04-10)
+#
+# Pipeline: nginx-demo (namespace: default)
+# Bundle:   nginx-demo-v1-29-0 (namespace: default)
+# Gates:    no-weekend-deploys (namespace: platform-policies, applies-to: prod)
+
+apiVersion: experimental.kro.run/v1alpha1
+kind: Graph
+metadata:
+  name: nginx-demo-nginx-demo-v1-29-0
+  namespace: default
+  labels:
+    kardinal.io/pipeline: nginx-demo
+    kardinal.io/bundle: nginx-demo-v1-29-0
+  ownerReferences:
+    - apiVersion: kardinal.io/v1alpha1
+      kind: Bundle
+      name: nginx-demo-v1-29-0
+      controller: true
+      # uid: <set at creation time from Bundle.metadata.uid>
+
+spec:
+  nodes:
+
+    # === Node 1: test environment (first in pipeline, no upstream) ===
+    - id: test
+      readyWhen:
+        - ${test.status.state == "Verified"}
+      propagateWhen:
+        - ${test.status.state == "Verified"}
+      template:
+        apiVersion: kardinal.io/v1alpha1
+        kind: PromotionStep
+        metadata:
+          name: nginx-demo-nginx-demo-v1-29-0-test
+          labels:
+            kardinal.io/pipeline: nginx-demo
+            kardinal.io/bundle: nginx-demo-v1-29-0
+            kardinal.io/environment: test
+        spec:
+          pipelineName: nginx-demo
+          bundleName: nginx-demo-v1-29-0
+          environment: test
+          stepType: kustomize-set-image
+
+    # === Node 2: uat environment (depends on test via upstreamVerified) ===
+    - id: uat
+      readyWhen:
+        - ${uat.status.state == "Verified"}
+      propagateWhen:
+        - ${uat.status.state == "Verified"}
+      template:
+        apiVersion: kardinal.io/v1alpha1
+        kind: PromotionStep
+        metadata:
+          name: nginx-demo-nginx-demo-v1-29-0-uat
+          labels:
+            kardinal.io/pipeline: nginx-demo
+            kardinal.io/bundle: nginx-demo-v1-29-0
+            kardinal.io/environment: uat
+        spec:
+          pipelineName: nginx-demo
+          bundleName: nginx-demo-v1-29-0
+          environment: uat
+          stepType: kustomize-set-image
+          upstreamVerified: ${test.status.state}  # creates DAG edge: test → uat
+
+    # === Node 3: PolicyGate — no-weekend-deploys for prod ===
+    # This gate blocks prod promotion on weekends.
+    # propagateWhen: gates data flow to prod PromotionStep.
+    # readyWhen:     health signal for UI (shows pass/fail color).
+    - id: no-weekend-deploys--platform-policies--prod--nginx-demo-v1-29-0
+      readyWhen:
+        - ${no-weekend-deploys--platform-policies--prod--nginx-demo-v1-29-0.status.ready == true}
+      propagateWhen:
+        - ${no-weekend-deploys--platform-policies--prod--nginx-demo-v1-29-0.status.ready == true}
+      template:
+        apiVersion: kardinal.io/v1alpha1
+        kind: PolicyGate
+        metadata:
+          name: no-weekend-deploys--platform-policies--prod--nginx-demo-v1-29-0
+          labels:
+            kardinal.io/gate-template: no-weekend-deploys
+        spec:
+          expression: "!schedule.isWeekend"
+          message: "Production deployments are blocked on weekends"
+          recheckInterval: 5m
+          upstreamEnvironment: ${uat.status.state}  # creates DAG edge: uat → gate
+
+    # === Node 4: prod environment (depends on gate via requiredGates) ===
+    - id: prod
+      readyWhen:
+        - ${prod.status.state == "Verified"}
+      propagateWhen:
+        - ${prod.status.state == "Verified"}
+      template:
+        apiVersion: kardinal.io/v1alpha1
+        kind: PromotionStep
+        metadata:
+          name: nginx-demo-nginx-demo-v1-29-0-prod
+          labels:
+            kardinal.io/pipeline: nginx-demo
+            kardinal.io/bundle: nginx-demo-v1-29-0
+            kardinal.io/environment: prod
+        spec:
+          pipelineName: nginx-demo
+          bundleName: nginx-demo-v1-29-0
+          environment: prod
+          stepType: kustomize-set-image
+          upstreamVerified: ${uat.status.state}   # sequential edge: uat → prod
+          requiredGates:
+            - ${no-weekend-deploys--platform-policies--prod--nginx-demo-v1-29-0.metadata.name}
