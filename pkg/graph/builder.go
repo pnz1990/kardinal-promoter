@@ -109,7 +109,8 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
 	for i, e := range envs {
-		if len(e.DependsOn) > 0 {
+		switch {
+		case len(e.DependsOn) > 0:
 			// Validate dependsOn references
 			for _, dep := range e.DependsOn {
 				if !nameSet[dep] {
@@ -118,10 +119,10 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 				}
 			}
 			deps[e.Name] = e.DependsOn
-		} else if i > 0 {
+		case i > 0:
 			// Default: depends on previous in list
 			deps[e.Name] = []string{envs[i-1].Name}
-		} else {
+		default:
 			deps[e.Name] = nil
 		}
 	}
@@ -517,11 +518,6 @@ func buildPolicyGateNode(
 		templateSpec["upstreamEnvironment"] = fmt.Sprintf("${%s.status.state}", upstreams[0])
 	}
 
-	recheckFreshness := gate.Spec.RecheckInterval
-	if recheckFreshness == "" {
-		recheckFreshness = "5m"
-	}
-
 	return GraphNode{
 		ID: nodeID,
 		Template: map[string]interface{}{
@@ -610,11 +606,12 @@ func bundleVersionSlug(bundleName string) string {
 func slugify(s string) string {
 	var b strings.Builder
 	for _, c := range s {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+		switch {
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-':
 			b.WriteRune(c)
-		} else if c >= 'A' && c <= 'Z' {
+		case c >= 'A' && c <= 'Z':
 			b.WriteRune(c - 'A' + 'a')
-		} else {
+		default:
 			b.WriteRune('-')
 		}
 	}

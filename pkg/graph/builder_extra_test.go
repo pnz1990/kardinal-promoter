@@ -146,8 +146,8 @@ func TestBuilder_GraphAPIVersion(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	assert.Equal(t, "experimental.kro.run/v1alpha1", result.Graph.TypeMeta.APIVersion)
-	assert.Equal(t, "Graph", result.Graph.TypeMeta.Kind)
+	assert.Equal(t, "experimental.kro.run/v1alpha1", result.Graph.APIVersion)
+	assert.Equal(t, "Graph", result.Graph.Kind)
 }
 
 // TestBuilder_SlugifyUppercase verifies that uppercase chars in bundle names

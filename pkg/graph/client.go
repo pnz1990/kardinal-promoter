@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -169,18 +168,7 @@ func isNotFound(err error) bool {
 }
 
 func hasStatusCode(err error, code int) bool {
-	type statusError interface {
-		Status() types.NamespacedName
-		Error() string
-	}
-	// Use error string matching as fallback
-	_ = statusError(nil)
-	// Check via k8s apierrors interface
-	type reasonErr interface {
-		Reason() string
-		Code() int32
-	}
-	// Most robust: check if error wraps a StatusError
+	// Most robust: check if error wraps a StatusError with ErrStatus().Code
 	type statusCodeErr interface {
 		ErrStatus() metav1.Status
 	}
