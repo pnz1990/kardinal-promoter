@@ -1,0 +1,19 @@
+# Copyright 2026 The kardinal-promoter Authors.
+# Licensed under the Apache License, Version 2.0
+apiVersion: v2
+name: kardinal-promoter
+description: A Kubernetes-native promotion controller with DAG pipelines and policy gates
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - kubernetes
+  - promotion
+  - gitops
+  - policy
+home: https://github.com/pnz1990/kardinal-promoter
+sources:
+  - https://github.com/pnz1990/kardinal-promoter
+maintainers:
+  - name: kardinal-promoter authors
+    url: https://github.com/pnz1990/kardinal-promoter

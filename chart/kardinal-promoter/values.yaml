@@ -1,0 +1,73 @@
+# Default values for kardinal-promoter.
+# This is a YAML-formatted file.
+
+# -- Number of controller replicas
+replicaCount: 1
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/pnz1990/kardinal-promoter/controller
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Image tag (defaults to chart appVersion)
+  tag: "latest"
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+
+# -- Override the name of the chart
+nameOverride: ""
+# -- Override the full name of the chart
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Create a ServiceAccount
+  create: true
+  # -- Annotations to add to the ServiceAccount
+  annotations: {}
+  # -- Override the ServiceAccount name
+  name: ""
+
+# -- Annotations to add to the controller Pod
+podAnnotations: {}
+
+# -- Security context for the controller Pod
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Security context for the controller container
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+# -- Controller log level (debug, info, warn, error)
+logLevel: info
+
+service:
+  # -- Metrics port (Prometheus)
+  metricsPort: 8080
+  # -- Health/readiness probe port
+  healthPort: 8081
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# -- Node selector for the controller Pod
+nodeSelector: {}
+
+# -- Tolerations for the controller Pod
+tolerations: []
+
+# -- Affinity rules for the controller Pod
+affinity: {}

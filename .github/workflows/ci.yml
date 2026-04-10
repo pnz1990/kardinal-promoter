@@ -213,6 +213,28 @@ jobs:
         run: bun run build
         working-directory: web
 
+  # ── Helm chart lint (only when chart directory exists) ───────────────────────
+  helm-lint:
+    name: helm lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check if chart exists
+        id: chart_check
+        run: |
+          echo "has_chart=$(test -d chart/kardinal-promoter && echo true || echo false)" >> $GITHUB_OUTPUT
+      - name: Install Helm
+        if: steps.chart_check.outputs.has_chart == 'true'
+        uses: azure/setup-helm@v4
+        with:
+          version: "latest"
+      - name: Lint chart
+        if: steps.chart_check.outputs.has_chart == 'true'
+        run: helm lint chart/kardinal-promoter
+      - name: Template chart
+        if: steps.chart_check.outputs.has_chart == 'true'
+        run: helm template kardinal-promoter chart/kardinal-promoter
+
   # ── Pre-Stage-0 status check (always passes, explains state) ─────────────────
   pre-stage0-notice:
     name: pre-stage0 notice

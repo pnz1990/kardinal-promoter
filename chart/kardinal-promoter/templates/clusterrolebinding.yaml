@@ -1,0 +1,18 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-manager-rolebinding
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kardinal-promoter.fullname" . }}-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kardinal-promoter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

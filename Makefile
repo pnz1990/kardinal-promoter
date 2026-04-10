@@ -12,8 +12,11 @@ BINARY_CLI        = bin/kardinal
 GO                = go
 GOPROXY          ?= https://proxy.golang.org
 
+# Docker image
+IMG ?= kardinal-promoter:dev
+
 .PHONY: all build build-controller build-cli test lint vet generate manifests \
-        install docker-build \
+        install docker-build helm-lint \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
         kind-up kind-down tools help
@@ -61,7 +64,11 @@ install: manifests
 
 ## Docker
 docker-build:
-	docker build -t ghcr.io/pnz1990/kardinal-promoter:dev .
+	docker build -t ${IMG} .
+
+## Helm
+helm-lint:
+	helm lint chart/kardinal-promoter
 
 ## Kind cluster for E2E
 kind-up:
