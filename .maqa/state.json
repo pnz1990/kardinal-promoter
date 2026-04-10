@@ -3,11 +3,11 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T22:17:08Z",
-  "current_queue": "queue-005",
-  "last_sm_review": "2026-04-10T21:08:13Z",
-  "last_pm_review": "2026-04-10T21:10:12Z",
-  "batches_since_competitive_analysis": 4,
+  "last_updated": "2026-04-10T22:21:43Z",
+  "current_queue": "queue-006",
+  "last_sm_review": "2026-04-10T22:19:17Z",
+  "last_pm_review": "2026-04-10T22:21:43Z",
+  "batches_since_competitive_analysis": 0,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
@@ -115,6 +115,24 @@
       "engineer_slots": {
         "STANDALONE": null
       }
+    },
+    "012-scm-and-steps-engine": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
+    },
+    "013-promotionstep-reconciler": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
