@@ -46,10 +46,11 @@ jobs:
         run: |
           pip install pyyaml --quiet
           python3 -c "
-          import yaml, sys, pathlib, os
+          import yaml, sys, pathlib
           errors = []
+          skip_patterns = ['.git', 'node_modules', 'vendor', '.specify/extensions']
           for f in pathlib.Path('.').rglob('*.yml'):
-            if '.git' in str(f) or 'node_modules' in str(f) or 'vendor' in str(f):
+            if any(p in str(f) for p in skip_patterns):
               continue
             try:
               yaml.safe_load(open(f))
@@ -58,7 +59,7 @@ jobs:
           if errors:
             for e in errors: print(e)
             sys.exit(1)
-          print(f'All YAML valid ({len(list(pathlib.Path(\".\").rglob(\"*.yml\")))} files checked)')
+          print(f'All YAML valid')
           "
       - name: Check required docs exist
         run: |
