@@ -13,29 +13,35 @@ spec:
     provider: github
     secretRef:
       name: gitops-creds
-      namespace: default
   environments:
     - name: test
       path: environments/test
-      approvalMode: auto
-      updateStrategy: kustomize
-      healthAdapter: deployment
-      healthTimeout: 30m
+      approval: auto
+      update:
+        strategy: kustomize
+      health:
+        type: deployment
+        timeout: 30m
     - name: uat
       path: environments/uat
-      approvalMode: auto
-      updateStrategy: kustomize
-      healthAdapter: deployment
-      healthTimeout: 30m
+      approval: auto
+      update:
+        strategy: kustomize
+      health:
+        type: deployment
+        timeout: 30m
       dependsOn:
         - test
     - name: prod
       path: environments/prod
-      approvalMode: pr-review
-      updateStrategy: kustomize
-      healthAdapter: argocd
-      healthTimeout: 60m
-      deliveryDelegate: argoRollouts
+      approval: pr-review
+      update:
+        strategy: kustomize
+      health:
+        type: argocd
+        timeout: 60m
+      delivery:
+        delegate: argoRollouts
       dependsOn:
         - uat
       shard: prod-cluster

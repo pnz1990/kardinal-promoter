@@ -20,7 +20,12 @@ import (
 
 // TestPipelineRoundtrip verifies that a fully-populated Pipeline serializes
 // and deserializes correctly via JSON (the format used by the Kubernetes API
-// server).
+// server). Field names match the canonical design docs and examples/:
+//   - spec.git (top-level, not per-environment)
+//   - spec.environments[].approval (not approvalMode)
+//   - spec.environments[].update.strategy (nested)
+//   - spec.environments[].health.type/.timeout (nested)
+//   - spec.environments[].delivery.delegate (nested)
 func TestPipelineRoundtrip(t *testing.T) {
 	original := &v1alpha1.Pipeline{
 		TypeMeta: metav1.TypeMeta{
@@ -44,26 +49,22 @@ func TestPipelineRoundtrip(t *testing.T) {
 			},
 			Environments: []v1alpha1.EnvironmentSpec{
 				{
-					Name:             "test",
-					Path:             "environments/test",
-					ApprovalMode:     "auto",
-					UpdateStrategy:   "kustomize",
-					HealthAdapter:    "deployment",
-					HealthTimeout:    "30m",
-					DeliveryDelegate: "",
-					DependsOn:        []string{},
+					Name:     "test",
+					Path:     "environments/test",
+					Approval: "auto",
+					Update:   v1alpha1.UpdateConfig{Strategy: "kustomize"},
+					Health:   v1alpha1.HealthConfig{Type: "deployment", Timeout: "30m"},
 				},
-				{Name: "uat", ApprovalMode: "auto", UpdateStrategy: "kustomize"},
+				{Name: "uat", Approval: "auto", Update: v1alpha1.UpdateConfig{Strategy: "kustomize"}},
 				{
-					Name:             "prod",
-					Path:             "environments/prod",
-					ApprovalMode:     "pr-review",
-					UpdateStrategy:   "kustomize",
-					HealthAdapter:    "argocd",
-					HealthTimeout:    "60m",
-					DeliveryDelegate: "argoRollouts",
-					DependsOn:        []string{"uat"},
-					Shard:            "prod-cluster",
+					Name:      "prod",
+					Path:      "environments/prod",
+					Approval:  "pr-review",
+					Update:    v1alpha1.UpdateConfig{Strategy: "kustomize"},
+					Health:    v1alpha1.HealthConfig{Type: "argocd", Timeout: "60m"},
+					Delivery:  v1alpha1.DeliveryConfig{Delegate: "argoRollouts"},
+					DependsOn: []string{"uat"},
+					Shard:     "prod-cluster",
 				},
 			},
 			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
@@ -95,17 +96,17 @@ func TestPipelineRoundtrip(t *testing.T) {
 	e0 := got.Spec.Environments[0]
 	assert.Equal(t, "test", e0.Name)
 	assert.Equal(t, "environments/test", e0.Path)
-	assert.Equal(t, "auto", e0.ApprovalMode)
-	assert.Equal(t, "kustomize", e0.UpdateStrategy)
-	assert.Equal(t, "deployment", e0.HealthAdapter)
-	assert.Equal(t, "30m", e0.HealthTimeout)
+	assert.Equal(t, "auto", e0.Approval)
+	assert.Equal(t, "kustomize", e0.Update.Strategy)
+	assert.Equal(t, "deployment", e0.Health.Type)
+	assert.Equal(t, "30m", e0.Health.Timeout)
 
 	e2 := got.Spec.Environments[2]
 	assert.Equal(t, "prod", e2.Name)
-	assert.Equal(t, "pr-review", e2.ApprovalMode)
-	assert.Equal(t, "argocd", e2.HealthAdapter)
-	assert.Equal(t, "60m", e2.HealthTimeout)
-	assert.Equal(t, "argoRollouts", e2.DeliveryDelegate)
+	assert.Equal(t, "pr-review", e2.Approval)
+	assert.Equal(t, "argocd", e2.Health.Type)
+	assert.Equal(t, "60m", e2.Health.Timeout)
+	assert.Equal(t, "argoRollouts", e2.Delivery.Delegate)
 	assert.Equal(t, []string{"uat"}, e2.DependsOn)
 	assert.Equal(t, "prod-cluster", e2.Shard)
 

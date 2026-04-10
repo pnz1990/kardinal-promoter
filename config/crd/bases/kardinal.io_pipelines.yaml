@@ -58,19 +58,24 @@ spec:
                 items:
                   description: EnvironmentSpec defines one environment in a Pipeline.
                   properties:
-                    approvalMode:
+                    approval:
                       default: auto
-                      description: ApprovalMode controls whether promotion requires
-                        a PR review.
+                      description: Approval controls whether promotion into this environment
+                        requires a PR review.
                       enum:
                       - auto
                       - pr-review
                       type: string
-                    deliveryDelegate:
-                      description: |-
-                        DeliveryDelegate offloads in-cluster progressive delivery to an external
-                        controller. Supported values: argoRollouts, flagger.
-                      type: string
+                    delivery:
+                      description: Delivery holds in-cluster progressive delivery
+                        delegation configuration.
+                      properties:
+                        delegate:
+                          description: |-
+                            Delegate offloads in-cluster progressive delivery to an external controller.
+                            Supported values: none, argoRollouts, flagger.
+                          type: string
+                      type: object
                     dependsOn:
                       description: |-
                         DependsOn lists names of other environments in this pipeline that must
@@ -78,17 +83,25 @@ spec:
                       items:
                         type: string
                       type: array
-                    healthAdapter:
-                      description: |-
-                        HealthAdapter selects the health check backend for this environment.
-                        Supported values: deployment, argocd, flux, argoRollouts.
-                      type: string
-                    healthTimeout:
-                      default: 30m
-                      description: |-
-                        HealthTimeout is the maximum time to wait for health checks to pass.
-                        Uses Go duration format (e.g. "30m", "1h").
-                      type: string
+                    health:
+                      description: Health holds the health check configuration for
+                        this environment.
+                      properties:
+                        cluster:
+                          description: Cluster is the kubeconfig Secret name for remote
+                            cluster health checks.
+                          type: string
+                        timeout:
+                          description: |-
+                            Timeout is the maximum time to wait for health checks to pass.
+                            Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+                          type: string
+                        type:
+                          description: |-
+                            Type selects the health check backend.
+                            Supported values: resource, argocd, flux, argoRollouts, flagger.
+                          type: string
+                      type: object
                     name:
                       description: Name is the environment identifier (e.g. "test",
                         "uat", "prod").
@@ -97,20 +110,25 @@ spec:
                     path:
                       description: |-
                         Path is the subdirectory within the GitOps repository for this environment.
-                        Used when spec.git.layout is "directory".
+                        Used when spec.git.layout is "directory". Defaults to "environments/<name>".
                       type: string
                     shard:
                       description: |-
                         Shard pins this environment to a specific kardinal-controller agent shard
                         in distributed mode. Leave empty for single-controller deployments.
                       type: string
-                    updateStrategy:
-                      default: kustomize
-                      description: UpdateStrategy selects the manifest update strategy.
-                      enum:
-                      - kustomize
-                      - helm
-                      type: string
+                    update:
+                      description: Update holds the manifest update configuration
+                        for this environment.
+                      properties:
+                        strategy:
+                          default: kustomize
+                          description: Strategy selects the manifest update strategy.
+                          enum:
+                          - kustomize
+                          - helm
+                          type: string
+                      type: object
                   required:
                   - name
                   type: object
@@ -126,8 +144,10 @@ spec:
                     type: string
                   layout:
                     default: directory
-                    description: Layout controls how environment paths are organized
-                      in the repository.
+                    description: |-
+                      Layout controls how environment paths are organized in the repository.
+                      "directory": environments as subdirectories on one branch (default).
+                      "branch": environments as separate branches.
                     enum:
                     - directory
                     - branch
@@ -155,7 +175,7 @@ spec:
                     - name
                     type: object
                   url:
-                    description: URL is the GitOps repository URL (e.g. https://github.com/myorg/gitops.git).
+                    description: URL is the GitOps repository URL (HTTPS).
                     minLength: 1
                     type: string
                 required:

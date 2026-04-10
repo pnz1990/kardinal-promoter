@@ -34,7 +34,7 @@ type PipelineSpec struct {
 
 // PipelineGit holds the shared GitOps repository configuration for a Pipeline.
 type PipelineGit struct {
-	// URL is the GitOps repository URL (e.g. https://github.com/myorg/gitops.git).
+	// URL is the GitOps repository URL (HTTPS).
 	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url"`
 
@@ -43,6 +43,8 @@ type PipelineGit struct {
 	Branch string `json:"branch,omitempty"`
 
 	// Layout controls how environment paths are organized in the repository.
+	// "directory": environments as subdirectories on one branch (default).
+	// "branch": environments as separate branches.
 	// +kubebuilder:validation:Enum=directory;branch
 	// +kubebuilder:default=directory
 	// +optional
@@ -77,37 +79,27 @@ type EnvironmentSpec struct {
 	Name string `json:"name"`
 
 	// Path is the subdirectory within the GitOps repository for this environment.
-	// Used when spec.git.layout is "directory".
+	// Used when spec.git.layout is "directory". Defaults to "environments/<name>".
 	// +optional
 	Path string `json:"path,omitempty"`
 
-	// ApprovalMode controls whether promotion requires a PR review.
+	// Approval controls whether promotion into this environment requires a PR review.
 	// +kubebuilder:validation:Enum=auto;pr-review
 	// +kubebuilder:default=auto
 	// +optional
-	ApprovalMode string `json:"approvalMode,omitempty"`
+	Approval string `json:"approval,omitempty"`
 
-	// UpdateStrategy selects the manifest update strategy.
-	// +kubebuilder:validation:Enum=kustomize;helm
-	// +kubebuilder:default=kustomize
+	// Update holds the manifest update configuration for this environment.
 	// +optional
-	UpdateStrategy string `json:"updateStrategy,omitempty"`
+	Update UpdateConfig `json:"update,omitempty"`
 
-	// HealthAdapter selects the health check backend for this environment.
-	// Supported values: deployment, argocd, flux, argoRollouts.
+	// Health holds the health check configuration for this environment.
 	// +optional
-	HealthAdapter string `json:"healthAdapter,omitempty"`
+	Health HealthConfig `json:"health,omitempty"`
 
-	// HealthTimeout is the maximum time to wait for health checks to pass.
-	// Uses Go duration format (e.g. "30m", "1h").
-	// +kubebuilder:default="30m"
+	// Delivery holds in-cluster progressive delivery delegation configuration.
 	// +optional
-	HealthTimeout string `json:"healthTimeout,omitempty"`
-
-	// DeliveryDelegate offloads in-cluster progressive delivery to an external
-	// controller. Supported values: argoRollouts, flagger.
-	// +optional
-	DeliveryDelegate string `json:"deliveryDelegate,omitempty"`
+	Delivery DeliveryConfig `json:"delivery,omitempty"`
 
 	// DependsOn lists names of other environments in this pipeline that must
 	// reach Verified state before this environment can start.
@@ -118,6 +110,40 @@ type EnvironmentSpec struct {
 	// in distributed mode. Leave empty for single-controller deployments.
 	// +optional
 	Shard string `json:"shard,omitempty"`
+}
+
+// UpdateConfig holds manifest update strategy configuration.
+type UpdateConfig struct {
+	// Strategy selects the manifest update strategy.
+	// +kubebuilder:validation:Enum=kustomize;helm
+	// +kubebuilder:default=kustomize
+	// +optional
+	Strategy string `json:"strategy,omitempty"`
+}
+
+// HealthConfig holds health check configuration for an environment.
+type HealthConfig struct {
+	// Type selects the health check backend.
+	// Supported values: resource, argocd, flux, argoRollouts, flagger.
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// Timeout is the maximum time to wait for health checks to pass.
+	// Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+
+	// Cluster is the kubeconfig Secret name for remote cluster health checks.
+	// +optional
+	Cluster string `json:"cluster,omitempty"`
+}
+
+// DeliveryConfig holds in-cluster progressive delivery delegation configuration.
+type DeliveryConfig struct {
+	// Delegate offloads in-cluster progressive delivery to an external controller.
+	// Supported values: none, argoRollouts, flagger.
+	// +optional
+	Delegate string `json:"delegate,omitempty"`
 }
 
 // PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
