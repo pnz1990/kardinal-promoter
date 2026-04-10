@@ -20,6 +20,9 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .spec.paused
+      name: Paused
+      type: boolean
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -48,41 +51,168 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              PipelineSpec defines the desired state of a Pipeline.
-              Full field definitions are added in Stage 1.
+            description: PipelineSpec defines the desired state of a Pipeline.
             properties:
               environments:
                 description: Environments lists the promotion path in order.
                 items:
                   description: EnvironmentSpec defines one environment in a Pipeline.
                   properties:
-                    approvalMode:
+                    approval:
                       default: auto
-                      description: ApprovalMode controls whether promotion requires
-                        a PR review.
+                      description: Approval controls whether promotion into this environment
+                        requires a PR review.
                       enum:
                       - auto
                       - pr-review
                       type: string
-                    branch:
-                      description: Branch is the target branch in the GitOps repository.
-                      type: string
-                    gitRepo:
-                      description: GitRepo is the GitOps repository URL.
-                      type: string
+                    delivery:
+                      description: Delivery holds in-cluster progressive delivery
+                        delegation configuration.
+                      properties:
+                        delegate:
+                          description: |-
+                            Delegate offloads in-cluster progressive delivery to an external controller.
+                            Supported values: none, argoRollouts, flagger.
+                          type: string
+                      type: object
+                    dependsOn:
+                      description: |-
+                        DependsOn lists names of other environments in this pipeline that must
+                        reach Verified state before this environment can start.
+                      items:
+                        type: string
+                      type: array
+                    health:
+                      description: Health holds the health check configuration for
+                        this environment.
+                      properties:
+                        cluster:
+                          description: Cluster is the kubeconfig Secret name for remote
+                            cluster health checks.
+                          type: string
+                        timeout:
+                          description: |-
+                            Timeout is the maximum time to wait for health checks to pass.
+                            Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+                          type: string
+                        type:
+                          description: |-
+                            Type selects the health check backend.
+                            Supported values: resource, argocd, flux, argoRollouts, flagger.
+                          type: string
+                      type: object
                     name:
                       description: Name is the environment identifier (e.g. "test",
                         "uat", "prod").
                       minLength: 1
                       type: string
+                    path:
+                      description: |-
+                        Path is the subdirectory within the GitOps repository for this environment.
+                        Used when spec.git.layout is "directory". Defaults to "environments/<name>".
+                      type: string
+                    shard:
+                      description: |-
+                        Shard pins this environment to a specific kardinal-controller agent shard
+                        in distributed mode. Leave empty for single-controller deployments.
+                      type: string
+                    update:
+                      description: Update holds the manifest update configuration
+                        for this environment.
+                      properties:
+                        strategy:
+                          default: kustomize
+                          description: Strategy selects the manifest update strategy.
+                          enum:
+                          - kustomize
+                          - helm
+                          type: string
+                      type: object
                   required:
                   - name
                   type: object
                 minItems: 1
                 type: array
+              git:
+                description: |-
+                  Git holds the shared GitOps repository configuration for all
+                  environments in this pipeline.
+                properties:
+                  branch:
+                    description: Branch is the default base branch for this repository.
+                    type: string
+                  layout:
+                    default: directory
+                    description: |-
+                      Layout controls how environment paths are organized in the repository.
+                      "directory": environments as subdirectories on one branch (default).
+                      "branch": environments as separate branches.
+                    enum:
+                    - directory
+                    - branch
+                    type: string
+                  provider:
+                    default: github
+                    description: Provider is the SCM provider.
+                    enum:
+                    - github
+                    - gitlab
+                    type: string
+                  secretRef:
+                    description: SecretRef references a Kubernetes Secret containing
+                      the SCM token.
+                    properties:
+                      name:
+                        description: Name is the Secret name.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace is the Secret namespace. If empty,
+                          the Pipeline's namespace is used.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  url:
+                    description: URL is the GitOps repository URL (HTTPS).
+                    minLength: 1
+                    type: string
+                required:
+                - url
+                type: object
+              historyLimit:
+                description: HistoryLimit is the number of completed Bundle promotions
+                  to retain.
+                type: integer
+              paused:
+                default: false
+                description: Paused suspends all promotions in this pipeline when
+                  true.
+                type: boolean
+              policyGates:
+                description: |-
+                  PolicyGates lists org- or team-level PolicyGate references that apply to
+                  every promotion in this pipeline.
+                items:
+                  description: |-
+                    PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
+                    any promotion in this pipeline can proceed.
+                  properties:
+                    name:
+                      description: Name is the PolicyGate resource name.
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: Namespace is the PolicyGate resource namespace.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
             required:
             - environments
+            - git
             type: object
           status:
             description: PipelineStatus defines the observed state of a Pipeline.
@@ -145,6 +275,7 @@ spec:
                   type: object
                 type: array
               phase:
+                default: Unknown
                 description: Phase is the overall pipeline phase.
                 enum:
                 - Ready

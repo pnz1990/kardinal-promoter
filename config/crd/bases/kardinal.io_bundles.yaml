@@ -51,20 +51,33 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              BundleSpec defines the desired state of a Bundle.
-              Full field definitions are added in Stage 1.
+            description: BundleSpec defines the desired state of a Bundle.
             properties:
+              configRef:
+                description: |-
+                  ConfigRef points to the GitOps repository commit this Bundle represents
+                  when the bundle type is "config" or "mixed".
+                properties:
+                  commitSHA:
+                    description: CommitSHA is the exact commit SHA for this config
+                      snapshot.
+                    type: string
+                  gitRepo:
+                    description: GitRepo is the GitOps repository URL.
+                    type: string
+                type: object
               images:
                 description: Images lists the container images included in this Bundle.
                 items:
-                  description: ImageRef identifies a container image.
+                  description: ImageRef identifies a container image by repository,
+                    tag, and/or digest.
                   properties:
                     digest:
                       description: Digest is the image digest (sha256:...).
                       type: string
                     repository:
                       description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                      minLength: 1
                       type: string
                     tag:
                       description: Tag is the image tag.
@@ -73,12 +86,52 @@ spec:
                   - repository
                   type: object
                 type: array
+              intent:
+                description: Intent declares optional targeting and skip overrides
+                  for this Bundle.
+                properties:
+                  skipEnvironments:
+                    description: |-
+                      SkipEnvironments lists environment names to exclude from this promotion,
+                      subject to the PolicyGate SkipPermission check.
+                    items:
+                      type: string
+                    type: array
+                  targetEnvironment:
+                    description: |-
+                      TargetEnvironment restricts this Bundle to promoting only up to and
+                      including this environment. Empty means promote through all environments.
+                    type: string
+                type: object
               pipeline:
                 description: Pipeline is the name of the Pipeline this Bundle targets.
                 minLength: 1
                 type: string
+              provenance:
+                description: Provenance carries build metadata for audit and rollback.
+                properties:
+                  author:
+                    description: Author is the committer or triggering actor for this
+                      build.
+                    type: string
+                  ciRunURL:
+                    description: CIRunURL is the URL of the CI run that built this
+                      Bundle.
+                    type: string
+                  commitSHA:
+                    description: CommitSHA is the application source commit that produced
+                      this Bundle.
+                    type: string
+                  rollbackOf:
+                    description: RollbackOf is the name of the Bundle this Bundle
+                      rolls back (if any).
+                    type: string
+                  timestamp:
+                    description: Timestamp is when the bundle was built.
+                    format: date-time
+                    type: string
+                type: object
               type:
-                default: image
                 description: Type classifies the bundle content.
                 enum:
                 - image
@@ -87,6 +140,7 @@ spec:
                 type: string
             required:
             - pipeline
+            - type
             type: object
           status:
             description: BundleStatus defines the observed state of a Bundle.
@@ -146,6 +200,68 @@ spec:
                   - reason
                   - status
                   - type
+                  type: object
+                type: array
+              environments:
+                description: Environments holds per-environment promotion evidence.
+                items:
+                  description: EnvironmentStatus captures per-environment promotion
+                    evidence for a Bundle.
+                  properties:
+                    gateResults:
+                      description: |-
+                        GateResults holds the result of each PolicyGate evaluation for this
+                        environment.
+                      items:
+                        description: GateResult records the outcome of a single PolicyGate
+                          evaluation.
+                        properties:
+                          evaluatedAt:
+                            description: EvaluatedAt is when the gate was evaluated.
+                            format: date-time
+                            type: string
+                          gateName:
+                            description: GateName is the name of the PolicyGate.
+                            type: string
+                          reason:
+                            description: Reason is the human-readable explanation
+                              for the result.
+                            type: string
+                          result:
+                            description: 'Result is the evaluation outcome: "pass"
+                              or "block".'
+                            type: string
+                        required:
+                        - evaluatedAt
+                        - gateName
+                        - result
+                        type: object
+                      type: array
+                    healthCheckedAt:
+                      description: HealthCheckedAt is when the post-merge health check
+                        completed.
+                      format: date-time
+                      type: string
+                    mergedBy:
+                      description: MergedBy is the actor who merged the promotion
+                        PR.
+                      type: string
+                    name:
+                      description: Name is the environment name.
+                      type: string
+                    phase:
+                      description: Phase is the promotion phase for this environment.
+                      type: string
+                    prMergedAt:
+                      description: PRMergedAt is when the promotion PR was merged.
+                      format: date-time
+                      type: string
+                    prURL:
+                      description: PRURL is the URL of the pull request opened for
+                        this promotion.
+                      type: string
+                  required:
+                  - name
                   type: object
                 type: array
               phase:

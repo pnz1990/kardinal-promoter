@@ -17,8 +17,8 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.state
+      name: State
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -55,16 +55,35 @@ spec:
             properties:
               bundleName:
                 description: BundleName is the Bundle being promoted.
+                minLength: 1
                 type: string
               environment:
                 description: Environment is the environment this step promotes into.
+                minLength: 1
                 type: string
+              inputs:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Inputs carries step-specific configuration values derived from the
+                  Pipeline and Bundle at graph generation time.
+                type: object
               pipelineName:
                 description: PipelineName is the Pipeline this step belongs to.
+                minLength: 1
                 type: string
               stepType:
-                description: StepType identifies the built-in or custom step to execute.
+                description: |-
+                  StepType identifies the built-in or custom step to execute.
+                  Examples: git-clone, kustomize-set-image, git-commit, open-pr,
+                            wait-for-merge, health-check.
+                minLength: 1
                 type: string
+            required:
+            - bundleName
+            - environment
+            - pipelineName
+            - stepType
             type: object
           status:
             description: PromotionStepStatus defines the observed state of a PromotionStep.
@@ -126,18 +145,40 @@ spec:
                   - type
                   type: object
                 type: array
+              currentStepIndex:
+                description: |-
+                  CurrentStepIndex is the index into the step sequence that the reconciler
+                  is currently executing. Persisted to etcd for idempotent crash recovery
+                  (spec 003 FR-002).
+                type: integer
               message:
                 description: Message provides human-readable detail about the current
-                  phase.
+                  state.
                 type: string
-              phase:
-                description: Phase is the step execution phase.
+              outputs:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Outputs accumulates key/value results from completed steps in the
+                  sequence (e.g. prURL from the open-pr step).
+                type: object
+              prURL:
+                description: |-
+                  PRURL is the GitHub pull request URL opened for this promotion.
+                  Set when the step enters WaitingForMerge state.
+                type: string
+              state:
+                description: |-
+                  State is the step execution state.
+                  The Graph controller uses readyWhen expressions of the form
+                  ${step.status.state == "Verified"} to advance the promotion DAG.
                 enum:
                 - Pending
-                - Running
-                - Succeeded
+                - Promoting
+                - WaitingForMerge
+                - HealthChecking
+                - Verified
                 - Failed
-                - Blocked
                 type: string
             type: object
         type: object

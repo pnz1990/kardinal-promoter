@@ -11,35 +11,66 @@ import (
 // PromotionStep objects are created by the Graph controller — not by users.
 type PromotionStepSpec struct {
 	// PipelineName is the Pipeline this step belongs to.
-	PipelineName string `json:"pipelineName,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	PipelineName string `json:"pipelineName"`
 
 	// BundleName is the Bundle being promoted.
-	BundleName string `json:"bundleName,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	BundleName string `json:"bundleName"`
 
 	// Environment is the environment this step promotes into.
-	Environment string `json:"environment,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	Environment string `json:"environment"`
 
 	// StepType identifies the built-in or custom step to execute.
-	StepType string `json:"stepType,omitempty"`
+	// Examples: git-clone, kustomize-set-image, git-commit, open-pr,
+	//           wait-for-merge, health-check.
+	// +kubebuilder:validation:MinLength=1
+	StepType string `json:"stepType"`
+
+	// Inputs carries step-specific configuration values derived from the
+	// Pipeline and Bundle at graph generation time.
+	// +optional
+	Inputs map[string]string `json:"inputs,omitempty"`
 }
 
 // PromotionStepStatus defines the observed state of a PromotionStep.
 type PromotionStepStatus struct {
-	// Phase is the step execution phase.
-	// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Blocked
-	Phase string `json:"phase,omitempty"`
+	// State is the step execution state.
+	// The Graph controller uses readyWhen expressions of the form
+	// ${step.status.state == "Verified"} to advance the promotion DAG.
+	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verified;Failed
+	State string `json:"state,omitempty"`
 
-	// Message provides human-readable detail about the current phase.
+	// Message provides human-readable detail about the current state.
+	// +optional
 	Message string `json:"message,omitempty"`
 
+	// CurrentStepIndex is the index into the step sequence that the reconciler
+	// is currently executing. Persisted to etcd for idempotent crash recovery
+	// (spec 003 FR-002).
+	// +optional
+	CurrentStepIndex int `json:"currentStepIndex,omitempty"`
+
+	// PRURL is the GitHub pull request URL opened for this promotion.
+	// Set when the step enters WaitingForMerge state.
+	// +optional
+	PRURL string `json:"prURL,omitempty"`
+
+	// Outputs accumulates key/value results from completed steps in the
+	// sequence (e.g. prURL from the open-pr step).
+	// +optional
+	Outputs map[string]string `json:"outputs,omitempty"`
+
 	// Conditions holds status conditions.
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=ps
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.status.state`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PromotionStep is a controller-internal CRD representing one step in a
