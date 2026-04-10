@@ -24,7 +24,8 @@ rules:
   - apiGroups: ["kardinal.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # kro Graph CRDs (generated promotion DAGs)
-  - apiGroups: ["kro.run"]
-    resources: ["*"]
+  # kro Graph CRDs (generated promotion DAGs) — experimental.kro.run API group
+  # as of krocodile commit 48224264 (2026-04-10). Update when krocodile API group changes.
+  - apiGroups: ["experimental.kro.run"]
+    resources: ["graphs", "graphs/status", "graphrevisions", "graphrevisions/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

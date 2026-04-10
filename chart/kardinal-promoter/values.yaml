@@ -80,3 +80,18 @@ tolerations: []
 
 # -- Affinity rules for the controller Pod
 affinity: {}
+
+# -- krocodile Graph controller dependency.
+# kardinal-promoter requires the krocodile Graph controller to be installed
+# in the cluster. This section documents the required version for reference —
+# installation is handled separately via hack/install-krocodile.sh or make install-krocodile.
+krocodile:
+  # Pinned commit from github.com/ellistarn/kro (krocodile branch).
+  # Update this when intentionally upgrading krocodile.
+  # See hack/install-krocodile.sh for the actual install logic.
+  # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
+  pinnedCommit: "501ea75f"
+  # API group for Graph CRDs (as of commit 48224264, 2026-04-10)
+  apiGroup: "experimental.kro.run"
+  # Namespace where the Graph controller runs
+  namespace: "kro-system"

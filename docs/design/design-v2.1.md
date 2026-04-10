@@ -1441,9 +1441,7 @@ workaround permanently. Workarounds are only acceptable when a contribution woul
 more than one sprint. Every workaround must be labeled with `TODO(contribute-upstream):` in the
 code and an open GitHub issue.
 
-**Breaking change detection:** CI nightly job runs integration tests against the latest krocodile
-commit. If it fails, an issue is filed before the next sprint starts. Never let a krocodile API
-change be discovered during implementation.
+**Breaking change detection:** krocodile is installed at a pinned commit in all test clusters (CI and local kind). When a krocodile update breaks tests, an issue is filed before the next sprint starts. The pinned commit is updated deliberately, not automatically. Never let a krocodile API change be discovered during implementation.
 
 ### Gaps and Proposed Contributions
 

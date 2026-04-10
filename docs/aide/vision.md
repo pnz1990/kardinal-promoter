@@ -45,7 +45,7 @@ The krocodile/experimental branch is under active development. The Graph API and
 
 3. **Contribute upstream rather than work around.** If Graph does not support a capability that kardinal-promoter needs (e.g., native `recheckAfter`, explicit `dependsOn`), open a PR to krocodile first. A contribution that lands upstream eliminates a workaround from our codebase. Workarounds are accepted only when a contribution would block progress for more than one sprint.
 
-4. **Track breaking changes in CI.** Pin the Graph CRD version in our Helm chart. Run a nightly CI job against the latest krocodile commit. If the nightly fails, file a GitHub issue with the breaking change before it blocks a sprint.
+4. **Pin the Graph CRD version in our Helm chart and test infrastructure.** Install krocodile at a specific commit in all test clusters (CI and local kind) to catch breakage early. When krocodile updates break our tests, file a GitHub issue with the breaking change before it blocks a sprint.
 
 5. **Update our design docs when Graph semantics change.** The sections most likely to drift are design-v2.1.md §3.5 (`readyWhen` vs `propagateWhen`), §3.6 (dependency edge mechanism), spec 01 (Graph CRD schema), and spec 02 (node templates).
 
@@ -53,10 +53,9 @@ Key semantic facts as of 2026-04-10 (verify against krocodile before implementin
 - `readyWhen` = health signal (UI, `kubectl get graph`) — does NOT block downstream
 - `propagateWhen` = data-flow gate — DOES block downstream when unsatisfied
 - `spec.nodes` (not `spec.resources`) is the field name for the node list
-- `graphs.kro.run` remains the API group for Graph CRDs (unchanged)
-- `experimental.kro.run` is the API group for RGD and user-defined kind CRDs (not used by kardinal-promoter)
+- `experimental.kro.run` is the API group for Graph CRDs (changed from `kro.run` in krocodile commit `48224264`)
 - Bug fix (2026-04-10 commit `94a24fa5`): `dep.ready()` in `readyWhen` was not re-evaluating after dep became ready — now fixed. Our `propagateWhen` usage is unaffected.
-- Bug fix (2026-04-10 commit `1b0ce353`): double-dispatch race in DAG coordinator — now fixed in krocodile. Pin krocodile at or after this commit.
+- Bug fix (2026-04-10 commit `1b0ce353`): double-dispatch race in DAG coordinator — now fixed in krocodile. **Pinned krocodile commit: `1b0ce353` (minimum required).**
 
 ## Goals and Objectives
 

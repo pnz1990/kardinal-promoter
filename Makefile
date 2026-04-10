@@ -18,6 +18,7 @@ IMG ?= kardinal-promoter:dev
 
 .PHONY: all build build-controller build-cli test test-integration lint vet generate manifests \
         install uninstall docker-build helm-lint \
+        install-krocodile \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
         kind-up kind-down tools help
@@ -82,9 +83,14 @@ helm-lint:
 	helm lint chart/kardinal-promoter
 
 ## Kind cluster for E2E
-kind-up:
+kind-up: ## Create local kind cluster and install krocodile + kardinal-promoter
 	kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
 	kubectl config use-context kind-kardinal-e2e
+	$(MAKE) install-krocodile
+	$(MAKE) install
+
+install-krocodile: ## Build and install the krocodile Graph controller (pinned commit — see hack/install-krocodile.sh)
+	bash hack/install-krocodile.sh
 
 kind-down:
 	kind delete cluster --name kardinal-e2e

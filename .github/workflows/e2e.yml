@@ -1,7 +1,7 @@
 name: E2E Journey Tests
 
-# Runs on-demand or on a schedule — not on every PR (expensive).
-# Triggered when a journey is ready (t.Skip removed) or by the coordinator.
+# Runs on-demand or when triggered by the coordinator after all journeys are implemented.
+# Not on every PR — cluster setup is expensive (~5 min).
 on:
   workflow_dispatch:
     inputs:
@@ -11,9 +11,6 @@ on:
         default: 'all'
         type: choice
         options: ['all', '1', '2', '3', '4', '5']
-  schedule:
-    # Run all journeys nightly at 02:00 UTC
-    - cron: '0 2 * * *'
 
 jobs:
   e2e:
@@ -40,21 +37,27 @@ jobs:
       - name: Create kind cluster
         run: kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
 
-      - name: Install Graph controller
+      - name: Install krocodile Graph controller
         run: |
-          # Install kro Graph controller (experimental)
-          # Placeholder: replace with actual install once Graph is packaged
-          echo "Graph controller install: TBD in Stage 3"
+          # Builds krocodile from the pinned commit, containerises it, loads into kind,
+          # and applies CRDs + RBAC + Deployment. See hack/install-krocodile.sh.
+          KIND_CLUSTER=kardinal-e2e bash hack/install-krocodile.sh
 
       - name: Build and load controller image
         run: |
-          make docker-build
+          make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
 
       - name: Install kardinal-promoter
         run: |
           make install
           kubectl apply -f config/manager/
+
+      - name: Verify both controllers are running
+        run: |
+          kubectl get pods -n kro-system
+          kubectl get pods -n kardinal-system
+          kubectl get crd graphs.experimental.kro.run
 
       - name: Run selected journeys
         run: |

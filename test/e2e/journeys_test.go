@@ -13,10 +13,11 @@ import (
 // creates a Bundle, and the system promotes through test → uat → prod with
 // a PR opened for prod and PolicyGates evaluated correctly.
 //
-// This test is a stub. Implementation is part of Stage 6 (PromotionStep Reconciler)
-// and Stage 10 (PR Evidence). See docs/aide/definition-of-done.md Journey 1.
+// Requires: Stages 0–8 complete (Graph Builder, PolicyGate CEL, PromotionStep
+// Reconciler, SCM/PR, Health Adapters, CLI).
 func TestJourney1Quickstart(t *testing.T) {
-	t.Skip("Journey 1: not yet implemented — requires Stages 0-8")
+	infraClient(t) // skip if no cluster
+	t.Skip("Journey 1: not yet implemented — requires Stages 4-8 (current: Stage 4 in progress)")
 }
 
 // TestJourney2MultiClusterFleet validates docs/aide/definition-of-done.md Journey 2.
@@ -25,10 +26,10 @@ func TestJourney1Quickstart(t *testing.T) {
 // promotes through test → pre-prod → [prod-eu, prod-us] in parallel with
 // Argo Rollouts canary delegation and Argo CD hub-spoke health verification.
 //
-// This test is a stub. Implementation is part of Stage 7 (Health Adapters) and
-// Stage 14 (Distributed Mode). See docs/aide/definition-of-done.md Journey 2.
+// Requires: Stages 0–8, 11, 14 complete.
 func TestJourney2MultiClusterFleet(t *testing.T) {
-	t.Skip("Journey 2: not yet implemented — requires Stages 0-8, 11, 14")
+	infraClient(t)
+	t.Skip("Journey 2: not yet implemented — requires Stages 4-8, 11, 14")
 }
 
 // TestJourney3PolicyGovernance validates docs/aide/definition-of-done.md Journey 3.
@@ -37,10 +38,10 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 // promotion. `kardinal policy simulate --time "Saturday 3pm"` returns BLOCKED.
 // `kardinal explain` shows gate evaluation with current values.
 //
-// This test is a stub. Implementation is part of Stage 4 (PolicyGate CEL Evaluator)
-// and Stage 8 (CLI). See docs/aide/definition-of-done.md Journey 3.
+// Requires: Stages 0–5, 8 complete.
 func TestJourney3PolicyGovernance(t *testing.T) {
-	t.Skip("Journey 3: not yet implemented — requires Stages 0-5, 8")
+	infraClient(t)
+	t.Skip("Journey 3: not yet implemented — requires Stages 4-5, 8")
 }
 
 // TestJourney4Rollback validates docs/aide/definition-of-done.md Journey 4.
@@ -49,10 +50,10 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 // the kardinal/rollback label and the same evidence structure as a forward
 // promotion. After merge, the environment reflects the rolled-back version.
 //
-// This test is a stub. Implementation is part of Stage 13 (Rollback).
-// See docs/aide/definition-of-done.md Journey 4.
+// Requires: Stages 0–7, 13 complete.
 func TestJourney4Rollback(t *testing.T) {
-	t.Skip("Journey 4: not yet implemented — requires Stages 0-7, 13")
+	infraClient(t)
+	t.Skip("Journey 4: not yet implemented — requires Stages 4-7, 13")
 }
 
 // TestJourney5CLI validates docs/aide/definition-of-done.md Journey 5.
@@ -60,8 +61,8 @@ func TestJourney4Rollback(t *testing.T) {
 // Every CLI command in docs/cli-reference.md executes without error and
 // produces output matching the documented format.
 //
-// This test is a stub. Implementation is part of Stage 8 (CLI).
-// See docs/aide/definition-of-done.md Journey 5.
+// Requires: Stages 0–9 complete.
 func TestJourney5CLI(t *testing.T) {
-	t.Skip("Journey 5: not yet implemented — requires Stages 0-9")
+	infraClient(t)
+	t.Skip("Journey 5: not yet implemented — requires Stages 4-9")
 }
