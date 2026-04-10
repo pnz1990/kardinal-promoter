@@ -17,7 +17,13 @@ Source: [ellistarn/kro/tree/krocodile](https://github.com/ellistarn/kro/tree/kro
 > design docs and git log. API and semantics are changing. See Section 17 in design-v2.1.md for
 > the contribution and tracking policy.
 
-The Graph CRD (`kro.run/v1alpha1/Graph`) is namespace-scoped. It defines:
+The Graph CRD (`experimental.kro.run/v1alpha1/Graph`) is namespace-scoped. It defines:
+
+> **API group update (krocodile commit `48224264`, 2026-04-10)**: Graph CRD moved from `kro.run`
+> to `experimental.kro.run` to eliminate CRD conflicts with upstream kro. All GVK/GVR references
+> in this project use `experimental.kro.run`. The `GraphGVK` and `GraphGVR` constants in
+> `pkg/graph/types.go` are authoritative.
+
 
 - **nodes**: A list of resource templates with IDs. Each node has a Kubernetes resource template with `${...}` CEL expressions.
 - **readyWhen**: Per-node CEL expressions that are a **health signal only**. They feed the Graph's aggregated `Ready` condition and the `.ready()` function. **They do NOT gate downstream execution.**
@@ -98,13 +104,9 @@ The kardinal-controller creates a Graph CR using the dynamic client:
 
 ```go
 func (c *GraphClient) Create(ctx context.Context, graph *Graph) error {
-    gvr := schema.GroupVersionResource{
-        Group:    "kro.run",
-        Version:  "v1alpha1",
-        Resource: "graphs",
-    }
+    // GraphGVR is defined in pkg/graph/types.go (experimental.kro.run/v1alpha1/graphs)
     unstructured := toUnstructured(graph)
-    _, err := c.dynamic.Resource(gvr).Namespace(graph.Namespace).Create(ctx, unstructured, metav1.CreateOptions{})
+    _, err := c.dynamic.Resource(GraphGVR).Namespace(graph.Namespace).Create(ctx, unstructured, metav1.CreateOptions{})
     return err
 }
 ```
@@ -184,8 +186,8 @@ The `graph/builder.go` module is tested by constructing Graph specs from test Pi
 - Correct dependency edges (CEL references present)
 - PolicyGate nodes injected in the right position
 - `readyWhen` expressions are correct
-- `includeWhen` correctly handles `intent.skip`
-- `intent.target` limits which nodes are included
+- `includeWhen` correctly handles `intent.skipEnvironments`
+- `intent.targetEnvironment` limits which nodes are included
 
 ### Integration Tests
 

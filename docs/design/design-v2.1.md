@@ -16,7 +16,9 @@ All state lives in Kubernetes CRDs. There is no external database, no dedicated 
 
 ## Relationship to kro and Graph
 
-kro's Graph primitive (`kro.run/v1alpha1/Graph`) is a namespace-scoped CRD that defines a set of nodes with Kubernetes resource templates, CEL expressions for data flow, and dependency inference from those expressions. It supports `readyWhen`, `includeWhen`, `forEach`, `propagateWhen`, and `finalizes` on each node. The Graph controller reconciles the DAG using scoped walks and hash-based change detection. Reference implementation: [ellistarn/kro/tree/krocodile/experimental](https://github.com/ellistarn/kro/tree/krocodile/experimental).
+kro's Graph primitive (`experimental.kro.run/v1alpha1/Graph`) is a namespace-scoped CRD that defines a set of nodes with Kubernetes resource templates, CEL expressions for data flow, and dependency inference from those expressions. It supports `readyWhen`, `includeWhen`, `forEach`, `propagateWhen`, and `finalizes` on each node. The Graph controller reconciles the DAG using scoped walks and hash-based change detection. Reference implementation: [ellistarn/kro/tree/krocodile/experimental](https://github.com/ellistarn/kro/tree/krocodile/experimental).
+
+> **API group note (krocodile commit `48224264`, 2026-04-10)**: Graph CRD moved from `kro.run` to `experimental.kro.run` to eliminate CRD conflicts with upstream kro. Use `experimental.kro.run` in all GVK/GVR references.
 
 Within the kro ecosystem, the relationship is:
 
@@ -811,7 +813,7 @@ Referencing attributes from a later phase causes a CEL evaluation error. The gat
 For a Pipeline `[dev, staging, prod]` with two org prod gates, the controller generates:
 
 ```yaml
-apiVersion: kro.run/v1alpha1
+apiVersion: experimental.kro.run/v1alpha1
 kind: Graph
 metadata:
   name: my-app-v1-29-0
@@ -1353,8 +1355,8 @@ On in-flight failure (PromotionStep `status.state = "Failed"`), Graph stops all 
 | promotionsteps.kardinal.io | get, list, watch, create, update | Step lifecycle |
 | policygates.kardinal.io | get, list, watch | Controller reads. Create/update restricted to platform-policies namespace via RBAC. |
 | bundles.kardinal.io | get, list, watch, create, update, delete | Bundle management |
-| graphs.kro.run | get, list, watch, create, update, delete | Graph lifecycle |
-| graphrevisions.internal.kro.run | get, list, watch | Revision tracking |
+| graphs.experimental.kro.run | get, list, watch, create, update, delete | Graph lifecycle |
+| graphrevisions.experimental.kro.run | get, list, watch | Revision tracking |
 | deployments.apps | get, list, watch | Health (resource adapter) |
 | applications.argoproj.io | get, list, watch | Health (argocd adapter) |
 | kustomizations.kustomize.toolkit.fluxcd.io | get, list, watch | Health (flux adapter) |
