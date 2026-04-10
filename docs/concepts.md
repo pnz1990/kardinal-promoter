@@ -29,9 +29,27 @@ kubectl apply -f bundle.yaml
 | Failed | A promotion step or health check failed |
 | Superseded | Replaced by a newer Bundle |
 
-### Bundle types
+### Bundle supersession
 
-Bundles have a `type` field that determines what artifacts they carry:
+When a new Bundle is created while a previous Bundle is still promoting through the
+same Pipeline, the older Bundle is **superseded**:
+
+- The older Bundle's status transitions to `Superseded`
+- Its in-progress PromotionSteps are cancelled
+- Its kro Graph is deleted (PromotionStep CRs cascade-deleted)
+- Open PRs are commented on but not automatically closed
+
+Supersession is tracked independently by Bundle type. A new `image` Bundle does not
+supersede an in-flight `config` Bundle, and vice versa.
+
+```bash
+kardinal get bundles my-app
+# BUNDLE     PHASE       ENV      AGE
+# v1.29.0    Superseded  uat      10m    (superseded by v1.30.0)
+# v1.30.0    Promoting   prod     3m
+```
+
+### Bundle types
 
 - **`image`** (default): References container image tags. The promotion updates image references in manifests using `kustomize-set-image` or `helm-set-image`.
 - **`config`**: References a Git commit SHA from a configuration repository. The promotion merges that commit's changes into each environment directory. This supports promoting configuration changes (resource limits, env vars, feature flags) independently from image changes.
@@ -331,3 +349,76 @@ spec:
 ```
 
 When a new image tag or Git commit is discovered, a Bundle of the appropriate type (`image` or `config`) is created automatically.
+
+## Rendered Manifests
+
+In the **rendered manifests** pattern, Kustomize (or Helm) templates are executed at
+promotion time and the rendered plain YAML is committed to Git. Argo CD and Flux sync
+from the rendered output, not from the source templates.
+
+This is the standard pattern for large Argo CD deployments because:
+- PR reviewers see exact YAML diffs, not template changes
+- Argo CD never runs `kustomize build` on every reconciliation cycle (significant performance gain at scale)
+- CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
+
+Enable this pattern by setting `renderManifests: true` on an environment and using
+`layout: branch` in `spec.git`:
+
+```yaml
+spec:
+  git:
+    layout: branch
+    sourceBranch: main     # DRY templates live here
+    branchPrefix: env/     # rendered manifests go to env/dev, env/staging, env/prod
+  environments:
+    - name: prod
+      approval: pr-review
+      renderManifests: true
+```
+
+See [Rendered Manifests](rendered-manifests.md) for a complete guide including
+Argo CD ApplicationSet configuration and CODEOWNERS integration.
+
+## Advanced Patterns
+
+### Multi-tenant self-service
+
+Use Argo CD ApplicationSets to auto-provision a Pipeline CRD for each new team
+service. A developer commits a folder to a platform repository and receives a
+complete promotion pipeline without platform team intervention. Org-level PolicyGates
+are inherited automatically.
+
+### Feature branch and ephemeral environments
+
+Use `intent.target: staging` to create Bundles that stop at staging, not prod.
+Use `intent.skip` with SkipPermission PolicyGates for hotfixes. Use ApplicationSet
+pull-request generators for fully isolated ephemeral Pipelines per PR.
+
+### Repository strategies
+
+`layout: directory` (one branch, environments as directories) works well for small
+teams and monorepos. `layout: branch` (environments as separate branches) works well
+for multi-repo and rendered-manifest workflows.
+
+See [Advanced Patterns](advanced-patterns.md) for detailed guidance on all of these.
+
+## Key Anti-Patterns
+
+### Pseudo-GitOps
+
+Some tools shortcut promotion by patching `spec.source.targetRevision` on an Argo CD
+Application directly, without writing to Git. This breaks the GitOps contract: Git is
+no longer the source of truth. kardinal-promoter never mutates GitOps tool CRDs.
+All promotions write to Git first.
+
+### `approval: auto` for production environments
+
+`approval: auto` pushes directly to the target branch without a PR. Use this only for
+dev and staging environments. Production should always use `approval: pr-review` so a
+human reviewer confirms the diff and gate compliance before the change lands.
+
+### Missing `historyLimit`
+
+The default `historyLimit: 20` retains 20 Bundles per Pipeline. In high-frequency
+pipelines (multiple deployments per day), reduce this to `5`. The Git audit trail in
+GitHub is permanent regardless — only the CRD state in etcd is bounded.
