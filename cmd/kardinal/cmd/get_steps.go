@@ -49,6 +49,5 @@ func runGetSteps(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("list promotion steps: %w", err)
 	}
 
-	FormatStepsTable(cmd.OutOrStdout(), steps.Items)
-	return nil
+	return FormatStepsTable(cmd.OutOrStdout(), steps.Items)
 }

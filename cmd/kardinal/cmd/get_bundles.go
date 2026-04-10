@@ -64,6 +64,5 @@ func runGetBundles(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	FormatBundleTable(cmd.OutOrStdout(), bundles.Items)
-	return nil
+	return FormatBundleTable(cmd.OutOrStdout(), bundles.Items)
 }

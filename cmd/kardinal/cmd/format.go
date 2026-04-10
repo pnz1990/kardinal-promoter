@@ -39,48 +39,64 @@ func HumanAge(t time.Time) string {
 }
 
 // FormatPipelineTable writes a tabwriter-formatted table of pipelines to w.
-func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline) {
+func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "PIPELINE\tPHASE\tENVIRONMENTS\tPAUSED\tAGE")
+	if _, err := fmt.Fprintln(tw, "PIPELINE\tPHASE\tENVIRONMENTS\tPAUSED\tAGE"); err != nil {
+		return fmt.Errorf("write pipeline table header: %w", err)
+	}
 	for _, p := range pipelines {
 		phase := p.Status.Phase
 		if phase == "" {
 			phase = "Unknown"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%v\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%d\t%v\t%s\n",
 			p.Name,
 			phase,
 			len(p.Spec.Environments),
 			p.Spec.Paused,
 			HumanAge(p.CreationTimestamp.Time),
-		)
+		); err != nil {
+			return fmt.Errorf("write pipeline row: %w", err)
+		}
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush pipeline table: %w", err)
+	}
+	return nil
 }
 
 // FormatBundleTable writes a tabwriter-formatted table of bundles to w.
-func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) {
+func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "BUNDLE\tTYPE\tPHASE\tAGE")
+	if _, err := fmt.Fprintln(tw, "BUNDLE\tTYPE\tPHASE\tAGE"); err != nil {
+		return fmt.Errorf("write bundle table header: %w", err)
+	}
 	for _, b := range bundles {
 		phase := b.Status.Phase
 		if phase == "" {
 			phase = "Unknown"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
 			b.Name,
 			b.Spec.Type,
 			phase,
 			HumanAge(b.CreationTimestamp.Time),
-		)
+		); err != nil {
+			return fmt.Errorf("write bundle row: %w", err)
+		}
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush bundle table: %w", err)
+	}
+	return nil
 }
 
 // FormatStepsTable writes a tabwriter-formatted table of promotion steps to w.
-func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) {
+func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE")
+	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE"); err != nil {
+		return fmt.Errorf("write steps table header: %w", err)
+	}
 	for _, s := range steps {
 		state := s.Status.State
 		if state == "" {
@@ -90,12 +106,17 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) {
 		if msg == "" {
 			msg = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
 			s.Spec.Environment,
 			s.Spec.StepType,
 			state,
 			msg,
-		)
+		); err != nil {
+			return fmt.Errorf("write step row: %w", err)
+		}
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush steps table: %w", err)
+	}
+	return nil
 }

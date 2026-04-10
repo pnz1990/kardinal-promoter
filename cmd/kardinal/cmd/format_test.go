@@ -50,7 +50,7 @@ func TestFormatPipelineTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	cmd.FormatPipelineTable(&buf, pipelines)
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines))
 	out := buf.String()
 
 	assert.Contains(t, out, "PIPELINE")
@@ -83,7 +83,7 @@ func TestFormatBundleTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	cmd.FormatBundleTable(&buf, bundles)
+	require.NoError(t, cmd.FormatBundleTable(&buf, bundles))
 	out := buf.String()
 
 	assert.Contains(t, out, "BUNDLE")
@@ -129,7 +129,7 @@ func TestFormatStepsTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	cmd.FormatStepsTable(&buf, steps)
+	require.NoError(t, cmd.FormatStepsTable(&buf, steps))
 	out := buf.String()
 
 	assert.Contains(t, out, "ENVIRONMENT")

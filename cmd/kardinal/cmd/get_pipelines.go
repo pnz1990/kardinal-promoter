@@ -59,6 +59,5 @@ func runGetPipelines(cmd *cobra.Command, args []string) error {
 		items = filtered
 	}
 
-	FormatPipelineTable(cmd.OutOrStdout(), items)
-	return nil
+	return FormatPipelineTable(cmd.OutOrStdout(), items)
 }
