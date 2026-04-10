@@ -2,11 +2,11 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T17:16:36Z",
+  "last_updated": "2026-04-10T17:26:04Z",
   "current_queue": "queue-002",
   "last_sm_review": null,
-  "last_pm_review": null,
-  "batches_since_competitive_analysis": 0,
+  "last_pm_review": "2026-04-10T17:50:00Z",
+  "batches_since_competitive_analysis": 1,
   "engineer_slots": {
     "ENGINEER-1": "005-crd-types-and-validation",
     "ENGINEER-2": null,
@@ -50,23 +50,23 @@
       "dependency_mode": "branch"
     },
     "005-crd-types-and-validation": {
-      "state": "assigned",
+      "state": "in_review",
       "assigned_to": "ENGINEER-1",
       "assigned_at": "2026-04-10T17:16:36Z",
       "worktree_path": "../kardinal-promoter.005-crd-types-and-validation",
-      "pr_number": null,
+      "pr_number": 19,
       "pr_merged": false,
       "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T17:16:36Z",
-      "cycle": 7
+      "last_seen": "2026-04-10T17:26:04Z",
+      "cycle": 11
     },
     "QA": {
-      "last_seen": "2026-04-10T17:15:00Z",
-      "cycle": 1
+      "last_seen": "2026-04-10T17:25:00Z",
+      "cycle": 2
     }
   }
 }
