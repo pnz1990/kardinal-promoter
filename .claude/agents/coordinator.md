@@ -101,12 +101,13 @@ LOOP:
    - in_progress → no action (engineer confirmed pickup)
    - in_review → board sync handles card move; check QA heartbeat
    - in_review >20 min, CI green, no QA review → trigger QA dead-session alert
-   - done → move card to Done, set engineer_slots[SLOT]=null, assign next item IMMEDIATELY
+   - done → move card to Done, set engineer_slots[SLOT]=null, close the item Issue (gh issue close <N>), assign next item IMMEDIATELY
    - blocked → move card to Blocked, post [NEEDS HUMAN] on Issue #1
 
    ENGINEER MERGE FALLBACK: if PR has QA LGTM + CI green + no engineer merge >30 min:
      gh pr merge <N> --squash --delete-branch --repo pnz1990/kardinal-promoter
      Set state=done in state.json
+     Close the item Issue: gh issue close <item-issue-number> --repo pnz1990/kardinal-promoter
      Post: "[🎯 COORDINATOR] Engineer session ended after QA LGTM. Merging PR #N as fallback."
 
 6. When all queue items are done or blocked — BATCH AUDIT:

@@ -105,6 +105,7 @@ LOOP:
    /speckit.worktree.clean
    Write to state.json: features[id].state = "done", pr_merged = true
    Post on item Issue: "[🔨 ENGINEER-N] Merged in PR #<N>. Feature complete."
+   Close the item Issue: gh issue close <item-issue-number> --repo pnz1990/kardinal-promoter
 
 8. SMOKE TEST ON MAIN:
    git checkout main && git pull
