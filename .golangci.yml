@@ -1,0 +1,35 @@
+run:
+  timeout: 5m
+  # Only lint files tracked in the module
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - gocritic
+  disable:
+    # Too noisy for early development
+    - exhaustive
+    - wrapcheck
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/kardinal-promoter/kardinal-promoter
+
+issues:
+  exclude-rules:
+    # errcheck is too noisy in test files (t.Log, defer file.Close, etc.)
+    - path: _test\.go
+      linters:
+        - errcheck
+  # Don't limit the number of issues per linter
+  max-issues-per-linter: 0
+  max-same-issues: 0

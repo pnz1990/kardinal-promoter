@@ -131,6 +131,23 @@ jobs:
             exit 1
           fi
 
+  # ── golangci-lint (only when go.mod exists) ─────────────────────────────────
+  golangci-lint:
+    name: golangci-lint
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61
+
   # ── Security scan (only when go.mod exists) ──────────────────────────────────
   govulncheck:
     name: govulncheck
