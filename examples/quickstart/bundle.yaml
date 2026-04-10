@@ -14,7 +14,7 @@ spec:
   images:
     - repository: ghcr.io/<your-username>/nginx-demo
       tag: "1.29.0"
-      digest: sha256:replace-with-actual-digest
+      digest: "sha256:replace-with-actual-digest"
   provenance:
     commitSHA: "abc123def456"
     ciRunURL: "https://github.com/<your-username>/nginx-demo/actions/runs/12345"

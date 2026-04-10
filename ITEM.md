@@ -1,184 +1,172 @@
-# Item 005: Complete CRD Types, Validation Markers, Generated YAML, and Roundtrip Tests
+# Item 006: Controller Manager, BundleReconciler, and PipelineReconciler
 
-> **Queue**: queue-002 (Stage 1)
-> **Branch**: `005-crd-types-and-validation`
-> **Depends on**: 001, 002, 003, 004 (all Stage 0 items — foundation complete)
+> **Queue**: queue-003 (Stage 2)
+> **Branch**: `006-controller-manager-and-reconcilers`
+> **Depends on**: 005 (merged — CRD types complete)
 > **Dependency mode**: merged
-> **Assignable**: immediately (all deps done)
-> **Contributes to**: All journeys (type system foundation)
+> **Assignable**: immediately
+> **Contributes to**: All journeys (controller foundation)
 
 ---
 
 ## Goal
 
-The scaffold from Stage 0 created stub Go types with partial fields. This item
-completes them with all roadmap-specified fields, OpenAPI validation markers, generated
-CRD YAML, sample manifests, and roundtrip JSON marshal/unmarshal tests.
+Wire the full controller-runtime Manager in `cmd/kardinal-controller/main.go` and
+implement two reconcilers: `BundleReconciler` (sets `status.phase = Available` on new
+Bundles) and `PipelineReconciler` (sets `status.conditions` on new Pipelines, validates
+environment names).
 
-No controller logic. Schema artifacts only.
+No real promotion logic. Establishes the reconciler loop, status patching via the
+`status` subresource with optimistic locking, and structured zerolog logging.
 
 ---
 
 ## Spec Reference
 
-`docs/aide/roadmap.md` — Stage 1: CRD Types and Validation
+`docs/aide/roadmap.md` — Stage 2: Bundle and Pipeline Reconcilers (No-Op Baseline)
+`docs/design/design-v2.1.md` — Architecture section
 
 ---
 
 ## Deliverables
 
-### 1. `Pipeline` CRD type — complete all fields in `api/v1alpha1/pipeline_types.go`
+### 1. `cmd/kardinal-controller/main.go` — full Manager setup
 
-`spec.environments[]`:
-- `name` (required, MinLength=1)
-- `gitRepo` (string, URL)
-- `branch` (string)
-- `path` (string — subdirectory in repo)
-- `approvalMode` (enum: `auto|pr-review`, default: `auto`)
-- `updateStrategy` (enum: `kustomize|helm`, default: `kustomize`)
-- `healthAdapter` (string — `deployment|argocd|flux|argoRollouts`)
-- `healthTimeout` (string — duration, default: `30m`)
-- `deliveryDelegate` (string — `argoRollouts|flagger`, optional)
-- `dependsOn` ([]string — names of other environments in this pipeline)
-- `gitCredentials` (object: `secretName`, `secretNamespace`)
+Replace the Stage 0 stub with a working controller-runtime Manager:
 
-`spec.policyGates[]`:
-- `name` (string — reference to PolicyGate name)
-- `namespace` (string — PolicyGate namespace)
+```go
+// Wire:
+// - controller-runtime Manager with leader election via Kubernetes Lease
+// - Health probe endpoint on :8081 (/healthz + /readyz)
+// - Metrics endpoint on :8080
+// - Configurable log level via --zap-log-level flag (zerolog level)
+// - Register BundleReconciler and PipelineReconciler with the Manager
+// - Signal handling (SIGTERM/SIGINT → graceful shutdown)
+```
 
-`spec.paused` (bool, default: false)
-`spec.shard` (string — for distributed mode, optional)
+Required flags:
+- `--leader-elect` (bool, default false)
+- `--zap-log-level` (string, default "info"; values: "debug", "info", "warn", "error")
+- `--metrics-bind-address` (string, default ":8080")
+- `--health-probe-bind-address` (string, default ":8081")
 
-`status.phase` (enum: `Ready|Degraded|Unknown`, default: `Unknown`)
-`status.conditions[]` (metav1.Condition)
+Use `github.com/rs/zerolog` for logging. Inject logger into context via `zerolog.Ctx(ctx)`.
+Do NOT use `fmt.Println` or `log.Printf`.
 
-### 2. `Bundle` CRD type — complete all fields in `api/v1alpha1/bundle_types.go`
+### 2. `pkg/reconciler/bundle/reconciler.go` — BundleReconciler
 
-`spec.type` (enum: `image|config|mixed`, required)
-`spec.pipeline` (string, required)
-`spec.images[]`:
-- `repository` (required)
-- `tag` (string)
-- `digest` (string — sha256:...)
+```go
+// BundleReconciler watches Bundle objects.
+// On each reconcile:
+// 1. Get the Bundle
+// 2. If status.phase is empty, set it to Available
+// 3. Patch status via status subresource (use client.MergeFrom + client.Status().Patch)
+// 4. Emit structured log event: bundle name, type, target Pipeline
+// 5. Return reconcile.Result{}
+//
+// Error handling: wrap all errors with fmt.Errorf("context: %w", err)
+// Idempotency: if phase is already set, skip patching (no-op)
+```
 
-`spec.configRef`:
-- `gitRepo` (string)
-- `commitSHA` (string)
+Create: `pkg/reconciler/bundle/reconciler.go`
 
-`spec.provenance`:
-- `commitSHA` (string)
-- `ciRunURL` (string)
-- `author` (string)
-- `timestamp` (metav1.Time)
-- `rollbackOf` (string — name of Bundle this rolls back)
+### 3. `pkg/reconciler/pipeline/reconciler.go` — PipelineReconciler
 
-`spec.intent`:
-- `targetEnvironment` (string — promote only to this env, optional)
-- `skipEnvironments` ([]string)
+```go
+// PipelineReconciler watches Pipeline objects.
+// On each reconcile:
+// 1. Get the Pipeline
+// 2. Validate: all environment names are unique; all dependsOn references name
+//    environments in the same Pipeline
+// 3. If validation fails: set status.conditions = [{type: Ready, status: False,
+//    reason: ValidationFailed, message: <error>}]
+// 4. If validation passes: set status.conditions = [{type: Ready, status: False,
+//    reason: Initializing, message: "Pipeline initialized, awaiting first Bundle"}]
+// 5. Patch status via status subresource
+// 6. Emit structured log event: pipeline name, environment count
+// 7. Return reconcile.Result{}
+//
+// Idempotency: if conditions are already correct, skip patching
+```
 
-`status.phase` (enum: `Available|Promoting|Verified|Failed|Superseded`)
-`status.conditions[]` (metav1.Condition)
-`status.environments[]` — per-environment evidence:
-- `name` (string)
-- `phase` (string)
-- `prURL` (string)
-- `prMergedAt` (*metav1.Time)
-- `mergedBy` (string)
-- `healthCheckedAt` (*metav1.Time)
-- `gateResults[]` (object: `gateName`, `result`, `reason`, `evaluatedAt`)
+Create: `pkg/reconciler/pipeline/reconciler.go`
 
-### 3. `PolicyGate` CRD type — complete all fields in `api/v1alpha1/policygate_types.go`
+### 4. Unit tests (TDD — write tests first)
 
-`spec.expression` (string, required, MinLength=1)
-`spec.message` (string)
-`spec.recheckInterval` (string, default: `5m`)
-`spec.skipPermission` (bool, default: false)
-`spec.selector` (metav1.LabelSelector — for org-level auto-injection)
+`pkg/reconciler/bundle/reconciler_test.go`:
+- `TestBundleReconciler_SetsAvailablePhase`: creates a Bundle with empty phase, reconciles, verifies phase=Available
+- `TestBundleReconciler_Idempotent`: Bundle already has phase=Available, reconcile is a no-op (no status patch called)
+- Table-driven, use `testify/assert` and `testify/require`
+- Use `sigs.k8s.io/controller-runtime/pkg/client/fake` for the fake client
 
-`status.ready` (bool, default: false)
-`status.reason` (string)
-`status.lastEvaluatedAt` (*metav1.Time)
-`status.conditions[]` (metav1.Condition)
+`pkg/reconciler/pipeline/reconciler_test.go`:
+- `TestPipelineReconciler_SetsInitializingCondition`: new Pipeline with 3 envs, reconciles, verifies Ready=False/Initializing
+- `TestPipelineReconciler_DuplicateEnvironmentNames`: Pipeline with duplicate env names gets ValidationFailed condition
+- `TestPipelineReconciler_DependsOnNonExistentEnv`: Pipeline with bad dependsOn gets ValidationFailed condition
+- `TestPipelineReconciler_Idempotent`: already has correct conditions, reconcile is no-op
+- Table-driven
 
-### 4. `PromotionStep` CRD type — complete all fields in `api/v1alpha1/promotionstep_types.go`
+### 5. `go test ./pkg/reconciler/...` must pass
 
-`spec.pipelineName` (string, required)
-`spec.bundleName` (string, required)
-`spec.environment` (string, required)
-`spec.stepType` (string, required — e.g. `git-clone`, `open-pr`, etc.)
-`spec.inputs` (map[string]string — step inputs from pipeline config)
+All tests green before opening PR.
 
-`status.phase` (enum: `Pending|Running|Succeeded|Failed|Blocked`)
-`status.message` (string)
-`status.outputs` (map[string]string — step outputs accumulated across steps)
-`status.conditions[]` (metav1.Condition)
+### 6. Update `examples/quickstart/pipeline.yaml` and `examples/quickstart/bundle.yaml`
 
-### 5. Run `make manifests` — regenerate CRD YAML in `config/crd/bases/`
-
-The generated YAML must reflect all new fields. Run `make manifests` and commit
-the updated CRD YAML alongside the type changes.
-
-### 6. Update `config/samples/` — add complete sample manifests for each CRD
-
-Each sample must use all required fields and demonstrate a realistic minimal config.
-
-- `config/samples/kardinal_v1alpha1_pipeline.yaml` — 3-environment pipeline (test/uat/prod)
-- `config/samples/kardinal_v1alpha1_bundle.yaml` — image bundle targeting the sample pipeline
-- `config/samples/kardinal_v1alpha1_policygate.yaml` — no-weekend-deploys gate
-- `config/samples/kardinal_v1alpha1_promotionstep.yaml` — sample step (internal, not user-created)
-
-### 7. Add roundtrip JSON marshal/unmarshal tests in `api/v1alpha1/types_test.go`
-
-For each CRD type: marshal to JSON, unmarshal back, assert deep equality.
-Tests must use `testify/assert` and `testify/require`.
+Ensure the quickstart examples use the correct field names from Stage 1 CRD types.
+If the files already use correct names, no change needed. Verify with `kubectl apply --dry-run=client`.
 
 ---
 
-## Acceptance Criteria (from roadmap Stage 1)
+## Acceptance Criteria (from roadmap Stage 2)
 
-- [ ] All new fields present in Go types with correct json tags and kubebuilder markers
-- [ ] `make manifests` regenerates CRD YAML without diff (idempotent)
-- [ ] `make build` still passes (no compile errors)
-- [ ] `go test ./api/... -race` passes (all roundtrip tests green)
-- [ ] `go vet ./...` passes with no new warnings
-- [ ] Generated CRD YAML would pass `kubectl apply --dry-run=server` (document in PR body)
-- [ ] Sample manifests in `config/samples/` use all required fields
-- [ ] Copyright header `// Copyright 2026 The kardinal-promoter Authors.` on all modified files
-- [ ] No banned filenames (`util.go`, `helpers.go`, `common.go`)
+- [ ] Controller builds and starts (`go build ./cmd/kardinal-controller/`)
+- [ ] `BundleReconciler` sets `status.phase = Available` on a newly created Bundle (verified in test)
+- [ ] `PipelineReconciler` sets `status.conditions[0].type = Ready` on a new Pipeline (verified in test)
+- [ ] `PipelineReconciler` rejects Pipelines with duplicate environment names (test)
+- [ ] `PipelineReconciler` rejects Pipelines where `dependsOn` references non-existent envs (test)
+- [ ] All reconcilers are idempotent: running twice produces no extra patches (test)
+- [ ] `go test ./pkg/reconciler/... -race` passes
+- [ ] `go vet ./...` passes
+- [ ] `make build` produces `bin/kardinal-controller`
+- [ ] Copyright header on all new files
+- [ ] No banned filenames
 
 ---
 
 ## Journey Contribution
 
-This item advances all journeys — it provides the type system every other item depends on.
-Without complete types, no subsequent stage can implement correct field access.
+This item begins the path toward J1 (Quickstart) by creating the controller that
+reacts to Bundle creation. After Stage 2, J1 step 4 (`kubectl apply -f pipeline.yaml`)
+will result in a Pipeline with `Ready=False` conditions visible via kubectl.
 
-Journey validation step from definition-of-done.md that this unlocks (partial):
+Journey validation step for PR body:
 ```bash
-kubectl apply -f config/crd/bases/  # installs CRDs without error
-kubectl apply -f config/samples/    # creates valid objects
+# Run the reconciler tests and show output
+go test ./pkg/reconciler/... -race -v 2>&1 | tail -30
 ```
-
-Include the output of these two commands in the PR body as journey validation evidence.
 
 ---
 
 ## Anti-patterns to Avoid
 
 - Do NOT add `util.go`, `helpers.go`, or `common.go`
+- Do NOT import `kro` in go.mod
+- Do NOT use `fmt.Println` — use `zerolog.Ctx(ctx)`
 - Do NOT mutate Deployments/Services directly
-- Do NOT add `kro` to go.mod
-- Use `fmt.Errorf("context: %w", err)` — no bare errors
-- Use zerolog via `zerolog.Ctx(ctx)` — no fmt.Println
+- Use `fmt.Errorf("context: %w", err)` for all error wrapping
+- Every reconciler must be idempotent — safe to re-run after crash
 
 ---
 
 ## Notes for Engineer
 
-Read `docs/aide/roadmap.md` Stage 1 deliverables carefully — the field list above
-mirrors it exactly. Cross-reference `docs/design/design-v2.1.md` sections 2.1-2.4
-for field semantics. The scaffold type files have `// Full field definitions are
-added in Stage 1.` comments — replace them with the complete types.
+The existing `pkg/reconciler/policygate/` and `pkg/reconciler/promotionstep/` packages
+are stubs from Stage 0. Do NOT modify them — they are for Stages 4 and 6.
 
-Run `make manifests` after each type change to keep the generated CRD YAML in sync.
-The `controller-gen` binary is already installed via the scaffold Makefile.
+Create NEW packages: `pkg/reconciler/bundle/` and `pkg/reconciler/pipeline/`.
+
+The controller-runtime fake client (`sigs.k8s.io/controller-runtime/pkg/client/fake`)
+is already in go.mod from the Stage 0 scaffold. Use `fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).Build()`.
+
+For status patching: use `r.Status().Patch(ctx, obj, patch)` NOT `r.Update()`.
+Status is a subresource — regular Update will not persist status fields.
