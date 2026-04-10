@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-10T21:30Z
+> Last updated: 2026-04-10T22:30Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -18,11 +18,11 @@
 | 1 | CRD Types and Validation | ✅ Complete | Item 005 merged: PR #19. All 4 CRD types complete. |
 | 2 | Bundle and Pipeline Reconcilers (No-Op Baseline) | ✅ Complete | Items 006/007 merged: PRs #23, #24. Controller manager, BundleReconciler, PipelineReconciler, Helm chart, integration tests. |
 | 3 | Graph Generation and kro Integration | ✅ Complete | Items 008/009 merged: PRs #27, #29. GraphClient, Builder, Translator, BundleReconciler extension, 30+ tests. |
-| 4 | PolicyGate CEL Evaluator | 📋 Planned | Depends on Stage 3 |
+| 4 | PolicyGate CEL Evaluator | ✅ Complete | Item 010 merged: PR #31. CEL environment, evaluator, PolicyGate reconciler with time-based gates. |
 | 5 | Git Operations and GitHub PR Flow | 📋 Planned | Depends on Stage 3 |
 | 6 | PromotionStep Reconciler and Full Promotion Loop | 📋 Planned | Depends on Stage 4 + 5 |
 | 7 | Health Adapters | 📋 Planned | Depends on Stage 6 |
-| 8 | CLI | 📋 Planned | Depends on Stage 2 |
+| 8 | CLI | 🚧 In Progress | Item 011 merged: PR #37. cobra + version/get commands. Full CLI (explain, policy, create, etc.) pending. |
 | 9 | Embedded React UI | 📋 Planned | Depends on Stage 7 |
 | 10 | PR Evidence, Labels, and Webhook Reliability | 📋 Planned | Depends on Stage 6 |
 | 11 | GitHub Actions Integration and `kardinal init` | 📋 Planned | Depends on Stage 8 |
@@ -74,6 +74,22 @@
 
 ---
 
+## Stage 4 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 010 | PolicyGate CEL evaluator + PolicyGate reconciler | ✅ Complete | #31 merged | CEL env, evaluator, reconciler, time-based + soak gates |
+
+---
+
+## Stage 8 Item Breakdown (partial)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 011 | CLI foundation: cobra + version/get commands | ✅ Complete | #37 merged | kardinal version, get pipelines/bundles/steps |
+
+---
+
 ## Spec Status
 
 | Spec | Title | Status | Notes |
@@ -81,7 +97,7 @@
 | 001 | Graph Integration Layer | ✅ Complete | PRs #25, #27. GraphNode types, PropagateWhen, experimental.kro.run API group, GraphClient |
 | 002 | Pipeline-to-Graph Translator | ✅ Complete | PR #29. Full translation algorithm Steps 1-7, 27 unit tests |
 | 003 | PromotionStep Reconciler | 📋 Planned | Design doc: docs/design/03-promotionstep-reconciler.md |
-| 004 | PolicyGate Reconciler | 📋 Planned | Design doc: docs/design/04-policygate-reconciler.md |
+| 004 | PolicyGate Reconciler | ✅ Complete | PR #31. CEL environment, evaluator, PolicyGate reconciler, time-based/soak gates |
 | 005 | Health Adapters | 📋 Planned | Design doc: docs/design/05-health-adapters.md |
 | 006 | kardinal-ui | 📋 Planned | Design doc: docs/design/06-kardinal-ui.md |
 | 007 | Distributed Architecture | 📋 Planned | Design doc: docs/design/07-distributed-architecture.md |
