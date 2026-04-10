@@ -1,10 +1,11 @@
 # kardinal-promoter Makefile
 
 # Tools
-CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
-GOLANGCI_LINT  ?= $(LOCALBIN)/golangci-lint
-GOVULNCHECK    ?= $(LOCALBIN)/govulncheck
-LOCALBIN       ?= $(shell pwd)/bin
+CONTROLLER_GEN         ?= $(LOCALBIN)/controller-gen
+CONTROLLER_GEN_VERSION ?= v0.17.3
+GOLANGCI_LINT          ?= $(LOCALBIN)/golangci-lint
+GOVULNCHECK            ?= $(LOCALBIN)/govulncheck
+LOCALBIN               ?= $(shell pwd)/bin
 
 # Build
 BINARY_CONTROLLER = bin/kardinal-controller
@@ -55,8 +56,8 @@ generate: $(CONTROLLER_GEN)
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 manifests: $(CONTROLLER_GEN)
-	$(CONTROLLER_GEN) crd paths="./..." output:crd:artifacts:config=config/crd/bases
-	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./..." output:rbac:artifacts:config=config/rbac
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./api/..." output:rbac:artifacts:config=config/rbac
 
 ## Install CRDs into current cluster
 install: manifests
@@ -108,7 +109,7 @@ $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 $(CONTROLLER_GEN): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-tools/cmd/controller-gen@latest
+	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
 $(GOLANGCI_LINT): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest

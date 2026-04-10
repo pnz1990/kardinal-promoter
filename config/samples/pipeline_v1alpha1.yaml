@@ -1,0 +1,19 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: nginx-demo
+  namespace: default
+spec:
+  environments:
+    - name: test
+      gitRepo: https://github.com/myorg/gitops.git
+      branch: main
+      approvalMode: auto
+    - name: uat
+      gitRepo: https://github.com/myorg/gitops.git
+      branch: main
+      approvalMode: auto
+    - name: prod
+      gitRepo: https://github.com/myorg/gitops.git
+      branch: main
+      approvalMode: pr-review

@@ -1,0 +1,12 @@
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-weekend-deploys
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+spec:
+  expression: "!schedule.isWeekend"
+  message: "Production deployments are blocked on weekends"
+  recheckInterval: "5m"
