@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // TestPipelineRoundtrip verifies that Pipeline serializes and deserializes
