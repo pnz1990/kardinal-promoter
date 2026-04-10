@@ -1,0 +1,11 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Bundle
+metadata:
+  name: nginx-demo-v1
+  namespace: default
+spec:
+  type: image
+  pipeline: nginx-demo
+  images:
+    - repository: ghcr.io/nginx/nginx
+      tag: "1.29.0"
