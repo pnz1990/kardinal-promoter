@@ -3,16 +3,17 @@
 **Feature Branch**: `[###-feature-name]`
 **Created**: [DATE]
 **Status**: Draft
-**Depends on**: [list of spec IDs this depends on]
+**Depends on**: [list of spec IDs this depends on, or "nothing"]
 **Design doc**: `docs/design/[corresponding design doc].md`
 **Constitution ref**: `.specify/memory/constitution.md`
-**Contributes to journey(s)**: [J1/J2/J3/J4/J5 from docs/aide/definition-of-done.md]
+**Contributes to journey(s)**: [J1/J2/J3/... from docs/aide/definition-of-done.md]
 
 ---
 
 ## Context
 
-[2-3 sentences explaining why this feature exists and what problem it solves for kardinal-promoter users or the system. Reference the vision doc if relevant.]
+[2-3 sentences: why this feature exists and what problem it solves.
+Reference the vision or roadmap stage if relevant.]
 
 **Not in scope here**: [What is explicitly excluded from this spec.]
 
@@ -22,26 +23,23 @@
 
 ### User Story 1 — [Brief Title] (Priority: P1)
 
-[Describe the user journey. For system components (reconcilers, adapters), the "user" is the reconciler loop or another component.]
+[Describe the user journey. For system components, the "user" is the component
+that consumes this feature.]
 
-**Why this priority**: [Value delivered and why it is first.]
+**Why this priority**: [Value delivered.]
 
-**Independent Test**: [How this can be validated independently. For Go components: specific test command, e.g., `go test ./pkg/reconciler/promotionstep/... -run TestPendingToPromoting`]
+**Independent Test**: [Exact test command and test function name.]
 
 **Acceptance Scenarios**:
 
-1. **Given** [initial CRD state or system state], **When** [action or event], **Then** [expected CRD status change or system behavior]
+1. **Given** [initial state], **When** [action], **Then** [expected outcome]
 2. **Given** [initial state], **When** [action], **Then** [expected outcome]
 
 ---
 
 ### User Story 2 — [Brief Title] (Priority: P2)
 
-[Describe the user journey.]
-
-**Why this priority**: [Explanation.]
-
-**Independent Test**: [Test command or validation method.]
+**Independent Test**: [Test command.]
 
 **Acceptance Scenarios**:
 
@@ -52,52 +50,45 @@
 ### Edge Cases
 
 - What happens when [boundary condition]?
-- What happens when the Graph controller is down?
-- What happens when the reconciler restarts mid-execution?
-- How does the system handle [error scenario]?
+- What happens on crash and restart (idempotency)?
+- What happens when a dependency is unavailable?
 
 ---
 
 ## Requirements
 
-### Functional Requirements
+- **FR-001**: [Capability using MUST/SHOULD/MAY]
+- **FR-002**: [Capability]
+- **FR-003**: Every handler/reconciler MUST be idempotent
 
-- **FR-001**: [Specific capability using MUST/SHOULD/MAY]
-- **FR-002**: [Specific capability]
-- **FR-003**: [Idempotency requirement — every reconciler operation MUST be idempotent]
-
-### Go Package Structure
+### Package / Module Structure
 
 ```
-pkg/
-  [package-name]/
-    [file].go           # [what it does]
-    [file]_test.go      # unit tests
+[language-appropriate package layout for this feature]
 ```
 
 ### Key Interfaces and Types
 
-[List the Go interfaces this feature implements or consumes from `docs/design/[spec].md`]
+[List the interfaces or types this feature implements or consumes.]
 
 ### Integration Points
 
-- Reads from: [which CRDs or packages this reads]
-- Writes to: [which CRDs or packages this writes]
-- Calls into: [which other packages]
+- Reads from: [dependencies]
+- Writes to: [outputs]
+- Calls into: [other modules]
 
 ---
 
 ## Success Criteria
 
-- **SC-001**: `go test ./pkg/[package]/... -race` passes
+- **SC-001**: `[test command]` passes with zero failures
 - **SC-002**: All acceptance scenarios pass
-- **SC-003**: No new `util.go`, `helpers.go`, or `common.go` files
-- **SC-004**: Apache 2.0 copyright header on every new `.go` file
+- **SC-003**: No banned filenames (see AGENTS.md)
+- **SC-004**: Copyright header on every new source file
 - **SC-005**: [Feature-specific measurable outcome]
 
 ---
 
 ## Assumptions
 
-- kro Graph controller is available in the cluster
-- [Other assumptions specific to this feature]
+- [What must be true for this spec to be implementable]

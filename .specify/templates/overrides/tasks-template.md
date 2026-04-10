@@ -1,15 +1,16 @@
 # Tasks: [FEATURE NAME]
 
-**Input**: `.specify/specs/[NNN-feature-name]/spec.md` + `docs/design/[corresponding design doc].md`
-**Prerequisites**: spec.md required
+**Input**: `.specify/specs/[NNN-feature-name]/spec.md`
 **Feature Branch**: `[NNN-feature-name]`
-**Constitution ref**: `.specify/memory/constitution.md`
+**Test command**: `[PROJECT.test_command]`
+**Lint command**: `[PROJECT.lint_command]`
 
-**Go standards**: Apache 2.0 headers on all new files, `fmt.Errorf("context: %w", err)` for errors, zerolog for logging, table-driven tests with `testify`, `go test -race`.
+**Standards**: Copyright header on all new source files. No banned filenames (see AGENTS.md).
+Idempotent handlers. Conventional Commits.
 
-## Format: `[ID] [P?] [Story] Description — file: path/to/file.go`
+## Format: `[ID] [P?] [Story] Description — file: path/to/file`
 
-- **[P]**: Can run in parallel (independent files, no data dependency)
+- **[P]**: Can run in parallel (no shared state)
 - Include exact file paths in every task
 - Test tasks PRECEDE implementation tasks (TDD)
 - Run `/speckit.verify-tasks.run` after marking tasks complete
@@ -18,50 +19,50 @@
 
 ## Phase 1: Setup
 
-**Purpose**: [What this phase establishes. E.g., "Copyright headers, Go module additions, CRD type registration."]
-**Checkpoint**: `go build ./...` and `go vet ./...` pass with zero errors.
+**Purpose**: Create package/module skeleton. No logic yet.
+**Checkpoint**: `[PROJECT.build_command]` succeeds with zero errors.
 
-- [ ] T001 Create `pkg/[package]/[file].go` with Apache 2.0 header and package declaration — file: `pkg/[package]/[file].go`
-- [ ] T002 [P] Add types to `pkg/[package]/types.go` — file: `pkg/[package]/types.go`
+- [ ] T001 Create `[package/module]` with copyright header and package declaration — file: `[path]`
+- [ ] T002 [P] Add type/interface definitions — file: `[path]`
 
 ---
 
 ## Phase 2: Tests First (TDD — write before implementation)
 
-**Purpose**: Red phase. Write all tests, verify they fail with the right errors.
-**Checkpoint**: `go test ./pkg/[package]/... -run TestXxx` fails with "not implemented" or compile errors.
+**Purpose**: Red phase. Tests fail with "not implemented" or compile errors.
+**Checkpoint**: Tests compile but fail.
 
-- [ ] T003 Write unit test for [function]: [what it tests] — file: `pkg/[package]/[file]_test.go`
-- [ ] T004 [P] Write unit test for [edge case] — file: `pkg/[package]/[file]_test.go`
+- [ ] T003 Write unit test for [function]: [what it tests] — file: `[test file path]`
+- [ ] T004 [P] Write unit test for [edge case] — file: `[test file path]`
 
 ---
 
 ## Phase 3: Implementation
 
 **Purpose**: Green phase. Implement to make tests pass.
-**Checkpoint**: `go test ./pkg/[package]/... -race` passes.
+**Checkpoint**: `[PROJECT.test_command]` passes with zero failures.
 
-- [ ] T005 Implement [function]: [what it does] — file: `pkg/[package]/[file].go`
-- [ ] T006 [P] Implement [function]: [what it does] — file: `pkg/[package]/[file].go`
+- [ ] T005 Implement [function]: [what it does] — file: `[path]`
+- [ ] T006 [P] Implement [function]: [what it does] — file: `[path]`
 
 ---
 
 ## Phase 4: Integration
 
-**Purpose**: Wire implementation into the controller and validate end-to-end.
-**Checkpoint**: `go test ./... -race` passes. Acceptance scenarios from spec validated.
+**Purpose**: Wire into the main system. Validate end-to-end.
+**Checkpoint**: Full test suite passes. Acceptance scenarios from spec validated.
 
-- [ ] T007 Register [component] in controller setup — file: `internal/controller/setup.go`
-- [ ] T008 Write integration test using envtest — file: `pkg/[package]/integration_test.go`
+- [ ] T007 Register [component] in system setup — file: `[setup file path]`
+- [ ] T008 Write integration test — file: `[integration test path]`
 
 ---
 
 ## Phase 5: Journey Validation
 
-**Purpose**: Confirm this feature advances the journey(s) listed in the spec header.
-**Checkpoint**: The relevant journey steps in `docs/aide/definition-of-done.md` produce the documented output.
+**Purpose**: Confirm this feature advances the journeys listed in the spec header.
+**Checkpoint**: Relevant journey steps in `docs/aide/definition-of-done.md` produce documented output.
 
-- [ ] T009 Run the relevant journey steps from docs/aide/definition-of-done.md and capture output
-- [ ] T010 Run `/speckit.verify-tasks.run` — zero phantom completions
-- [ ] T011 Run `/speckit.verify` — all acceptance criteria pass
-- [ ] T012 Journey validation output added to PR body as evidence
+- [ ] T009 Run relevant journey steps and capture output
+- [ ] T010 `/speckit.verify-tasks.run` — zero phantom completions
+- [ ] T011 `/speckit.verify` — all acceptance criteria pass
+- [ ] T012 Journey output added to PR body as evidence

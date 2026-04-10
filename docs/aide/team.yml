@@ -1,157 +1,140 @@
-# kardinal-promoter — Autonomous Team Configuration
+# Autonomous Team Configuration
 #
-# WORKFLOW:
-#   Human:       defines vision + roadmap → checks board → unblocks escalations
-#   Coordinator: generates queue → creates items → assigns engineers → tracks state → reports
-#   Engineer:    TDD → self-validate → push PR → monitor CI → respond to QA → merge → smoke test
-#   QA:          continuous PR watcher → full checklist → re-review after fixes → escalate
+# GENERIC AND REUSABLE across projects.
+# Project-specific values are in AGENTS.md and docs/aide/definition-of-done.md.
 #
 # Human NEVER creates queue files, item files, or code.
 # Coordinator generates all artifacts autonomously.
 
 version: "1.1"
 
-# ── Source of Truth ─────────────────────────────────────────────────────────
 source_of_truth:
   - docs/aide/vision.md
   - docs/aide/roadmap.md
   - docs/aide/progress.md
-  - docs/aide/definition-of-done.md   # THE north star — 5 journeys that define done
+  - docs/aide/definition-of-done.md
   - .specify/memory/constitution.md
+  - .specify/memory/sdlc.md
   - docs/aide/team.yml
   - AGENTS.md
 
-# ── Roles ────────────────────────────────────────────────────────────────────
 roles:
 
   coordinator:
     command: /speckit.maqa.coordinator
     loop: continuous
-    stop_condition: all 20 roadmap stages complete
+    stop_condition: "all journeys in definition-of-done.md are passing"
     consistency_audit:
       runs: "after every batch (before generating next queue)"
       commands:
         - "/speckit.analyze"
         - "/speckit.memorylint.run"
-        - "go build ./..."
-        - "govulncheck ./..."
-        - "go test ./... -race -count=1"
-      on_failure: "post [BATCH QUALITY GATE FAILED] to Issue #1, label needs-human, do NOT generate next queue until human resolves"
+        - "PROJECT.build_command"
+        - "PROJECT.test_command"
+        - "PROJECT.vuln_command"
+      on_failure: "post [BATCH QUALITY GATE FAILED] to report issue, label needs-human, stop queue"
     doc_freshness:
-      runs: "after any batch with user-facing features merged"
-      check: "docs/ pages affected by merged features match the implementation"
-      on_discrepancy: "open GitHub Issue labeled doc-gap, include in next queue"
+      runs: "after any batch with user-facing features"
+      on_discrepancy: "open GitHub Issue labeled doc-gap, add to next queue"
     spec_traceability:
       runs: "after each feature merges"
-      check: "every FR-NNN in spec.md has a corresponding test in the codebase"
-      method: "grep for FR identifier in test files"
-      on_missing: "open GitHub Issue labeled missing-test, include in next queue"
+      on_missing: "open GitHub Issue labeled missing-test, add to next queue"
     dynamic_expansion:
-      runs: "after every batch, and whenever a gap is discovered"
-      spec_expansion:
-        triggers:
-          - "merged feature reveals edge cases not covered by existing specs"
-          - "journey test fails because a behaviour is unspecified"
-          - "design docs describe something not yet in any spec"
-        how: "create .specify/specs/NNN-name/ with spec.md + tasks.md, update constitution + progress.md"
-        report: "post [NEW SPEC] to Issue #1"
-      journey_expansion:
-        triggers:
-          - "new user-facing capability merged not covered by existing journeys"
-          - "roadmap adds a stage with a new user workflow"
-          - "a journey passes and a richer scenario is now testable"
-        how: "add journey to definition-of-done.md, stub test to journeys_test.go, make target, update spec journey refs"
-        report: "post [NEW JOURNEY] to Issue #1"
+      spec_triggers:
+        - "merged feature reveals edge cases not in existing specs"
+        - "journey test fails due to unspecified behavior"
+        - "design docs describe something not in any spec"
+      journey_triggers:
+        - "new user-facing capability not covered by existing journeys"
+        - "roadmap stage introduces new user workflow"
+      how_spec: "create .specify/specs/NNN-name/spec.md + tasks.md, update constitution + progress.md"
+      how_journey: "add journey to definition-of-done.md, add test stub, add make target"
+      report: "[NEW SPEC] / [NEW JOURNEY] on report issue"
     rules:
-      - Never implement features. Never commit. Never push. Never merge.
-      - Do not assign an item if its Depends-on items are not state=done.
-      - Keep max 3 items in in_progress or in_review simultaneously.
-      - When an item is blocked, continue assigning others.
-      - Post [BATCH COMPLETE] to Issue #1 after each queue batch (include audit summary).
-      - Post [NEEDS HUMAN] to Issue #1 when any item hits needs-human.
-      - Never skip the consistency audit. Never generate next queue if audit fails.
-      - Generate next queue automatically when current queue exhausts and audit passes.
+      - "Never implement features. Never commit. Never push. Never merge."
+      - "Engineers merge their own PRs."
+      - "Do not assign if Depends-on items are not done."
+      - "Never generate next queue if audit failed."
+      - "Never skip the batch audit."
+      - "Post [BATCH COMPLETE] with journey status after every batch."
 
   engineer:
     command: /speckit.maqa.feature
     loop: continuous
-    stop_condition: coordinator marks slot idle or needs-human after 2 retries
     owns_feature_e2e: true
     merge_owner: true
+    stop_condition: "no more work assigned + queue exhausted"
     rules:
-      - Work ONLY in the assigned worktree. Never touch main repo during implementation.
-      - TDD strict: test file before implementation file, always.
-      - Manually validate against examples/ before pushing. Include kubectl output in PR.
-      - Monitor CI every 3 minutes after push. Fix red CI before waiting for QA.
-      - Poll QA review every 5 minutes. Fix all requested changes before re-pushing.
-      - Merge PR yourself after QA approves AND CI is green.
-      - Run go build ./... on main after merge (smoke test). Open hotfix issue if it fails.
-      - Clean up worktree after merge via /speckit.worktree.clean.
-      - Max 2 retries on any blocker before escalating to needs-human.
-      - Never add a Go module dependency without labeling the issue needs-human first.
+      - "Work ONLY in the assigned worktree."
+      - "TDD: test file before implementation file, always."
+      - "Run relevant journey steps from definition-of-done.md before pushing."
+      - "Capture journey output and include in PR body."
+      - "Monitor CI every 3 min after push. Fix red before waiting for QA."
+      - "Poll QA review every 5 min. Fix all changes before re-pushing."
+      - "Merge PR after QA approves AND CI green."
+      - "Run PROJECT.build_command on main after merge (smoke test)."
+      - "Clean up worktree after merge via /speckit.worktree.clean"
+      - "Max 2 retries before escalating to needs-human."
+      - "New external dependency requires needs-human label first."
 
   qa:
     command: /speckit.maqa.qa
     loop: continuous
     poll_interval: 2m
-    stop_condition: no open PRs AND final [BATCH COMPLETE] posted
+    stop_condition: "no open PRs AND [PROJECT COMPLETE] posted"
     re_review_policy: full_diff_every_time
+    checklist:
+      - "Every Given/When/Then from spec.md is implemented"
+      - "Every FR-NNN has real code (not stub)"
+      - "PR body includes journey validation output"
+      - "PR body includes /speckit.verify-tasks.run output"
+      - "CI lint passes (PROJECT.lint_command)"
+      - "Copyright header on all new source files"
+      - "No banned filenames (see AGENTS.md)"
+      - "Correct error handling pattern (see AGENTS.md)"
+      - "Idempotency for every new handler/reconciler"
+      - "Project anti-patterns absent (see AGENTS.md)"
+      - "docs/ consistent with implementation"
+      - "examples/ produce documented behavior"
+      - "Feature advances at least one journey"
     rules:
-      - Review every PR labeled kardinal that has new commits since last review.
-      - Never approve based on partial re-review. Always re-read the full diff.
-      - Every checklist item must pass. Fail one = request-changes.
-      - Provide file:line references for every issue raised.
-      - Escalate to [QA FINDING] on Issue #1 after same issue appears 3+ times.
-      - Post severity on findings: low | medium | high.
+      - "Never approve based on partial re-review."
+      - "Escalate to report issue after same issue appears 3+ times."
+      - "Provide file:line references for every requested change."
 
-# ── Work Item Lifecycle ──────────────────────────────────────────────────────
 lifecycle:
   states:
-    - backlog     # in queue, dependencies not met
-    - todo        # ready to start, coordinator assigned
-    - in_progress # engineer working (TDD → self-validate → PR)
-    - in_review   # PR open, CI green, QA reviewing
-    - done        # PR merged by engineer, smoke test passed
-
+    - backlog
+    - todo
+    - in_progress
+    - in_review
+    - done
   merge_owner: engineer
   state_file: .maqa/state.json
-
   state_machine:
-    "backlog -> todo": "coordinator validates all dependencies are done"
+    "backlog -> todo": "coordinator validates dependencies are done"
     "todo -> in_progress": "coordinator assigns and creates worktree"
-    "in_progress -> in_review": "engineer passes tests, self-validates, CI green, PR open"
+    "in_progress -> in_review": "engineer validates, CI green, PR open"
     "in_review -> in_progress": "QA requests changes"
     "in_review -> done": "QA approves + CI green + engineer merges + smoke test passes"
-    "in_progress -> backlog": "engineer blocked after 2 retries"
+    "in_progress -> backlog": "blocked after 2 retries"
 
-# ── Dependency Enforcement ───────────────────────────────────────────────────
 dependencies:
   enforcement: strict
-  check: coordinator reads spec.md Depends-on field, verifies state=done in state.json
   parallel_ok: true
 
-# ── CI Gate ──────────────────────────────────────────────────────────────────
 ci_gate:
   config: maqa-ci/ci-config.yml
-  provider: github_actions
-  workflow: ci.yml
-  required_jobs:
-    - build        # go vet, go test -race, go build, headers, banned files
-    - go-sum-integrity
   block_on_red: true
   timeout_minutes: 20
 
-# ── Branch Protection (enforced at GitHub repo level) ────────────────────────
 branch_protection:
   branch: main
   require_pr: true
-  required_approvals: 1       # QA agent approval
+  required_approvals: 1
   dismiss_stale_reviews: true
   allow_force_pushes: false
-  allow_deletions: false
-  # Note: CI required_status_checks added when first CI run completes
 
-# ── PR Protocol ──────────────────────────────────────────────────────────────
 pr_protocol:
   base_branch: main
   require_ci: true
@@ -159,94 +142,65 @@ pr_protocol:
   merge_method: squash
   delete_branch_on_merge: true
   template: docs/aide/pr-template.md
-  required_in_pr_body:
+  required_in_body:
     - item_id
     - spec_reference
     - acceptance_criteria_checked
-    - go_test_output
+    - test_output
     - verify_tasks_output
-    - kubectl_validation_output
+    - journey_validation_output
 
-# ── State File ───────────────────────────────────────────────────────────────
+worktrees:
+  base: ".."
+  naming: "<PROJECT_NAME>.<feature-branch>"
+  create_command: /speckit.worktree.create
+  clean_command: /speckit.worktree.clean
+
 state:
   file: .maqa/state.json
-  write_strategy: atomic     # write to .maqa/state.json.tmp, then rename
-  # Multiple agents write state. To prevent corruption:
-  # Each agent reads the file, modifies only its own item's state,
-  # writes back atomically. Agents poll; they do not hold locks.
+  write_strategy: atomic
 
-# ── Queue Protocol ───────────────────────────────────────────────────────────
 queue:
   dir: docs/aide/queue/
   items_dir: docs/aide/items/
   batch_size: 10
-  naming: queue-NNN.md  (001, 002, ...)
-  coordinator_generates: true  # human never creates queue files
-
-# ── Worktree Convention ──────────────────────────────────────────────────────
-worktrees:
-  base: ..   # sibling of the main repo directory
-  naming: kardinal-promoter.<feature-branch>
-  # Example: ../kardinal-promoter.001-graph-integration
-  create_command: /speckit.worktree.create
-  clean_command: /speckit.worktree.clean
-  engineer_reads_path_from: .maqa/state.json  # coordinator writes worktree_path per item
-
-# ── Reporting ────────────────────────────────────────────────────────────────
+  coordinator_generates: true
 
 reporting:
-  issue_number: 1
-  issue_url: "https://github.com/pnz1990/kardinal-promoter/issues/1"
+  issue_number: "see AGENTS.md"
+  issue_url: "see AGENTS.md"
   label: report
-  post_command: "gh issue comment 1 --body '{body}'"
   events:
-    batch_complete: "[BATCH COMPLETE] {queue_id} - {timestamp}: {done_count} shipped, {blocked_count} blocked. Journeys: {journey_status}"
-    needs_human: "[NEEDS HUMAN] {item_id} - {timestamp}: {agent} blocked on {reason}. Review issue #{issue} and remove needs-human label."
-    qa_finding: "[QA FINDING] {item_id} PR#{pr} {severity}: {file}:{line} - {description}"
-    batch_quality_gate_failed: "[BATCH QUALITY GATE FAILED] {queue_id}: {failed_checks}. Label needs-human removed will unblock."
-    new_spec: "[NEW SPEC] {spec_id}: {title} - contributes to {journeys}"
-    new_journey: "[NEW JOURNEY] J{N}: {title} - requires stages {stages}"
+    batch_complete: "[BATCH COMPLETE] {queue_id}: {done} shipped, {blocked} blocked. Journeys: {journey_status}"
+    needs_human: "[NEEDS HUMAN] {item_id}: {agent} blocked. See issue #{issue}."
+    qa_finding: "[QA FINDING] {item_id} PR#{pr} {severity}: {file}:{line} - {desc}"
+    batch_quality_gate_failed: "[BATCH QUALITY GATE FAILED] {queue_id}: {failed}."
+    new_spec: "[NEW SPEC] {spec_id}: {title} - journeys {journeys}"
+    new_journey: "[NEW JOURNEY] J{N}: {title} - stages {stages}"
     project_complete: "[PROJECT COMPLETE] All {n} stages and {m} journeys complete."
 
-# ── Communication Protocol ───────────────────────────────────────────────────
 communication:
   state_file: .maqa/state.json
   labels:
-    blocked: "f97316"       # orange — dependency not met
-    needs_human: "e11d48"   # red — human decision required
-    report: "0075ca"        # blue — coordinator progress reports
+    blocked: f97316
+    needs_human: e11d48
+    report: 0075ca
   max_retries_before_escalation: 2
 
-# ── Human-in-the-Loop Gates ─────────────────────────────────────────────────
 human_gates:
-  - type: new_go_dependency
-    description: Adding any entry to go.mod require block
-    action: label needs-human, write the module name and why it's needed
-
-  - type: crd_api_change
-    description: Any change to CRD field names, types, or required fields not in the spec
-    action: label needs-human, describe the divergence from spec
-
-  - type: go_interface_change
-    description: Changing an interface signature in pkg/ that other packages depend on
-    action: label needs-human, describe impact
-
+  - type: new_external_dependency
+    description: "Adding any new external package/library not already in use"
+  - type: api_contract_change
+    description: "Changing a public interface or API contract not in the spec"
   - type: spec_contradiction
-    description: Spec says X but user docs/examples require Y
-    action: label needs-human, quote both sources exactly
-
+    description: "Spec says X but user docs/examples require Y"
   - type: unexplained_test_failure
-    description: Tests fail in CI with no clear cause after 2 fix attempts
-    action: label needs-human, paste full CI log
-
+    description: "Tests fail in CI with no clear cause after 2 fix attempts"
   - type: security_finding
-    description: QA identifies a potential security vulnerability
-    action: label needs-human, high severity [QA FINDING] on Issue #1
+    description: "QA identifies a potential security vulnerability"
 
-# ── Board ────────────────────────────────────────────────────────────────────
 board:
   provider: github-projects
-  url: "https://github.com/users/pnz1990/projects/1"
   config: maqa-github-projects/github-projects-config.yml
   columns:
     todo: "Todo"
