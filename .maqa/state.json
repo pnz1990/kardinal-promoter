@@ -2,11 +2,11 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T19:57:39Z",
+  "last_updated": "2026-04-10T20:07:57Z",
   "current_queue": null,
   "last_sm_review": null,
-  "last_pm_review": "2026-04-10T20:00:00Z",
-  "batches_since_competitive_analysis": 2,
+  "last_pm_review": "2026-04-10T20:15:00Z",
+  "batches_since_competitive_analysis": 3,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
@@ -79,12 +79,12 @@
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T19:57:39Z",
-      "cycle": 63
+      "last_seen": "2026-04-10T20:07:57Z",
+      "cycle": 67
     },
     "QA": {
-      "last_seen": "2026-04-10T19:57:05Z",
-      "cycle": 35
+      "last_seen": "2026-04-10T20:09:18Z",
+      "cycle": 38
     }
   }
 }
