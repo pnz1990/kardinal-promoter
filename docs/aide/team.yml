@@ -59,9 +59,11 @@ roles:
       - "Assign next item IMMEDIATELY when a slot frees — do not wait for the whole batch to finish."
       - "Never generate next queue if audit failed."
       - "Never skip the batch audit."
-      - "Post [BATCH COMPLETE] with journey status after every batch."
+      - "Post [BATCH COMPLETE] comment AND update Issue #1 body with current-state summary table after every batch."
       - "Write session_heartbeats.COORDINATOR on every poll cycle."
       - "If QA heartbeat >15 min old and item in_review: post dead-session alert on Issue #1 and the PR."
+      - "BOARD SYNC: reconcile state.json → board at the START of every poll cycle (step 0). state.json is always authoritative."
+      - "BOARD CARD ORDER: move card BEFORE writing state.json during assignment. Board must never silently lag state.json."
 
   engineer:
     command: /speckit.maqa.feature
@@ -215,12 +217,12 @@ roles:
       causes silent engineer idle (proven: Night 1, RC-3)."
   state_machine:
     "backlog -> todo": "coordinator validates dependency check (mode: merged=state==done, branch=remote branch exists)"
-    "todo -> assigned": "coordinator: duplicate-assignment guard passes, writes atomically, creates worktree, snapshots ITEM.md, posts comment"
+    "todo -> assigned": "coordinator: duplicate-assignment guard passes, moves board card to In Progress FIRST, then writes atomically, creates worktree, snapshots ITEM.md, posts comment"
     "assigned -> in_progress": "engineer confirms pickup after verifying assigned_to==MY_SLOT"
     "in_progress -> in_review": "engineer validates, CI green, PR open"
     "in_review -> in_progress": "QA requests changes"
     "in_review -> done": "QA approves + CI green + engineer merges IMMEDIATELY + smoke test passes (coordinator fallback if engineer dead >30 min)"
-    "in_progress -> blocked": "blocked after 2 retries"
+    "in_progress -> blocked": "blocked after 2 retries — coordinator moves card to Blocked, posts [NEEDS HUMAN]"
     "assigned -> todo": "stale assignment recovery by coordinator (>20 min, no pickup)"
 
 dependencies:
@@ -274,6 +276,10 @@ reporting:
   issue_number: "see AGENTS.md"
   issue_url: "see AGENTS.md"
   label: report
+  issue_body_update: "After every batch, the coordinator REPLACES the report issue body
+    with a current-state summary table (stage, queue, in-progress, in-review, blocked,
+    open human decisions, SM/PM review dates, journey status). Use:
+    gh issue edit <NUMBER> --body '<table>'. Comments accumulate as history below."
   events:
     batch_complete: "[BATCH COMPLETE] {queue_id}: {done} shipped, {blocked} blocked. Journeys: {journey_status}"
     needs_human: "[NEEDS HUMAN] {item_id}: {agent} blocked. See issue #{issue}."
@@ -311,8 +317,21 @@ human_gates:
 board:
   provider: github-projects
   config: maqa-github-projects/github-projects-config.yml
+  sync_strategy: "state.json is authoritative. Coordinator syncs board → state.json at the
+    START of every poll cycle (step 0 of coordinator loop). Board is never the source of
+    truth — it is a visualization layer only. Drift is self-healing within 2 minutes."
+  card_move_order: "Move card BEFORE writing state.json during assignment (step 4).
+    This ensures board is never silently behind state.json."
   columns:
     todo: "Todo"
     in_progress: "In Progress"
     in_review: "In Review"
     done: "Done"
+    blocked: "Blocked"
+  status_mapping:
+    todo: Todo
+    assigned: "In Progress"
+    in_progress: "In Progress"
+    in_review: "In Review"
+    done: Done
+    blocked: Blocked

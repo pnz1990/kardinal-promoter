@@ -115,6 +115,18 @@ LOOP:
        "[🎯 COORDINATOR] QA session appears down (last seen: <timestamp>).
         PR #N has been in_review <T> min with CI green. QA — please resume."
 
+   BOARD SYNC — on every cycle, reconcile state.json → GitHub Projects board.
+   For each item in state.json, compare its state to the board card's current status.
+   If they differ, move the card to match state.json (state.json is always authoritative):
+     state=todo        → board status: Todo
+     state=assigned    → board status: In Progress
+     state=in_progress → board status: In Progress
+     state=in_review   → board status: In Review
+     state=done        → board status: Done
+     state=blocked     → board status: Blocked
+   This makes the board self-healing: drift from any prior failed card-move is
+   corrected within 2 minutes automatically.
+
 1. Read progress.md + roadmap.md → determine next stage
 
 2. If queue is empty:
@@ -146,32 +158,40 @@ LOOP:
    issue: "[🎯 COORDINATOR] Spec updated on main (commit <sha>). ITEM.md in your
    worktree is unchanged. Rebase only if explicitly requested."
 
-   BEFORE writing state.json, verify BOTH:
-   a. The target engineer slot is null in engineer_slots
-   b. No other slot already has this item-id (duplicate-assignment guard)
-   If either check fails: skip this item, log warning on Issue #1.
+    BEFORE writing state.json, verify BOTH:
+    a. The target engineer slot is null in engineer_slots
+    b. No other slot already has this item-id (duplicate-assignment guard)
+    If either check fails: skip this item, log warning on Issue #1.
 
-   THEN, atomically write to .maqa/state.json:
+    THEN move the GitHub Projects card FIRST (before writing state.json):
+    - Move GitHub Projects card: Todo → In Progress
+    - Set GitHub Projects Team field on the card to the assigned engineer slot
+      (ENGINEER-1/2/3 — see maqa-github-projects/github-projects-config.yml for option IDs)
+    This order ensures the board is never behind state.json. If the session
+    crashes after the card move but before the state.json write, the board
+    will be slightly ahead — which is visible and correctable. The reverse
+    (board behind state.json) is invisible until the next board sync.
+
+    THEN, atomically write to .maqa/state.json:
    - features[id].state       = "assigned"   ← NOT "in_progress"
    - features[id].assigned_to = SLOT
    - features[id].assigned_at = <ISO-8601 now>
    - features[id].worktree_path = <path>
    - engineer_slots[SLOT]     = id
-   THEN (after state.json is written):
-   - /speckit.worktree.create
-   - Move GitHub Projects card: Todo → In Progress
-   - Comment on item Issue: "[BADGE] Assigned <id> to <SLOT>. Worktree: <path>"
-   - Comment on Issue #1 with assignment summary
+    THEN (after state.json is written):
+    - /speckit.worktree.create
+    - Comment on item Issue: "[BADGE] Assigned <id> to <SLOT>. Worktree: <path>"
+    - Comment on Issue #1 with assignment summary
 
 5. Monitor .maqa/state.json every 2 min:
-   - assigned (>10 min old, not yet in_progress) → re-post assignment comment;
-     if still assigned after another 10 min: reset state=todo, clear slot, alert
-   - in_progress → no action needed (engineer confirmed pickup)
-   - in_review → move card to In Review
-   - in_review (>20 min, CI green, no QA review) → trigger QA dead-session alert (step 0)
-   - done → move card to Done, free slot (set engineer_slots[SLOT]=null), assign next
-     unblocked item IMMEDIATELY (do not wait for all queue items to complete)
-   - blocked → post [NEEDS HUMAN] to report issue, continue others
+    - assigned (>10 min old, not yet in_progress) → re-post assignment comment;
+      if still assigned after another 10 min: reset state=todo, clear slot, alert
+    - in_progress → no action needed (engineer confirmed pickup)
+    - in_review → move card to In Review (board sync in step 0 also covers this)
+    - in_review (>20 min, CI green, no QA review) → trigger QA dead-session alert (step 0)
+    - done → move card to Done, free slot (set engineer_slots[SLOT]=null), assign next
+      unblocked item IMMEDIATELY (do not wait for all queue items to complete)
+    - blocked → move card to Blocked, post [NEEDS HUMAN] to report issue, continue others
 
    ENGINEER MERGE FALLBACK: if a PR has QA LGTM + CI green + no engineer merge
    activity for >30 min, coordinator may merge it directly and post:
@@ -189,12 +209,46 @@ LOOP:
    SPEC TRACEABILITY: every FR-NNN has a test
    JOURNEY STATUS: which journeys now pass end-to-end? Update definition-of-done.md table
    DYNAMIC EXPANSION: add new specs/journeys if gaps discovered (see below)
-   If audit passes:
-     - update progress.md
-     - post [BATCH COMPLETE] to report issue
-     - SPAWN SCRUM MASTER: notify Session 6 to run its review cycle
-     - SPAWN PRODUCT MANAGER: notify Session 7 to run its review cycle
-     - go to step 1
+    If audit passes:
+      - update progress.md
+      - UPDATE ISSUE #1 BODY — replace the body of the standing report issue with a
+        current-state summary table. This is the human manager's at-a-glance view.
+        Use: gh issue edit <REPORT_ISSUE_NUMBER> --body "$(cat <<'EOF'
+        ## Current Status — Updated by COORDINATOR, batch #N
+
+        | | |
+        |---|---|
+        | **Stage** | Stage N of M |
+        | **Queue** | queue-NNN |
+        | **Batch** | #N |
+        | **In Progress** | <item-id> (ENGINEER-N) or None |
+        | **In Review** | <item-id> PR #N or None |
+        | **Blocked** | <item-id> or None |
+        | **Open Human Decisions** | <count or None> |
+        | **Last SM Review** | <date or Never> |
+        | **Last PM Review** | <date or Never> |
+
+        ### Journey Status
+        | Journey | Status |
+        |---|---|
+        | J1 Quickstart | ✅ / ❌ Not started |
+        | J2 Multi-cluster | ✅ / ❌ Not started |
+        | J3 Policies | ✅ / ❌ Not started |
+        | J4 Rollback | ✅ / ❌ Not started |
+        | J5 CLI | ✅ / ❌ Not started |
+
+        ### Open Human Decisions
+        <list of [NEEDS HUMAN] items with links, or "None">
+
+        ---
+        *Subscribe to this issue for all team reports. Comments below contain full history.*
+        EOF
+        )"
+        Fill all values from the actual current state.json and definition-of-done.md.
+      - post [BATCH COMPLETE] comment to report issue (comment, not body — body is the summary)
+      - SPAWN SCRUM MASTER: notify Session 6 to run its review cycle
+      - SPAWN PRODUCT MANAGER: notify Session 7 to run its review cycle
+      - go to step 1
    If audit fails: post [BATCH QUALITY GATE FAILED], label needs-human, stop
 
 7. When ALL journeys are ✅: post [PROJECT COMPLETE], exit
