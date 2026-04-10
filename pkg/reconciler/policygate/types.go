@@ -9,9 +9,10 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// Reconciler evaluates PolicyGate CEL expressions and patches gate status.
-// Implemented in Stage 4 (spec 004).
-type Reconciler interface {
-	// Reconcile evaluates the PolicyGate CEL expression and updates status.
-	Reconcile(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error
+// PolicyGateEvaluator is the interface for evaluating a PolicyGate instance.
+// This stub is kept for documentation purposes; the concrete Reconciler implements
+// controller-runtime's reconcile.Reconciler interface directly.
+type PolicyGateEvaluator interface {
+	// Evaluate evaluates the PolicyGate CEL expression and updates status.
+	Evaluate(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) error
 }
