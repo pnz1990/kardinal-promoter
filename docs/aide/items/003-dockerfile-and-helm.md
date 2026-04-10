@@ -2,8 +2,9 @@
 
 > **Queue**: queue-001 (Stage 0)
 > **Branch**: `003-dockerfile-and-helm`
-> **Depends on**: 001-go-module-scaffold (must be `done` in state.json)
-> **Assignable**: after item 001 merged to main
+> **Depends on**: 001-go-module-scaffold
+> **Dependency mode**: `branch` — only requires 001's branch to exist on remote (go.mod must be present); does not require 001 PR to be merged
+> **Assignable**: after 001 branch pushed to remote
 > **Contributes to**: Journey 1 (install via Helm), Journey 7 (multi-tenant install)
 
 ---

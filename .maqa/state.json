@@ -1,8 +1,8 @@
 {
-  "version": "1.1",
+  "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T09:13:17Z",
+  "last_updated": "2026-04-10T14:55:09Z",
   "current_queue": "queue-001",
   "last_sm_review": null,
   "last_pm_review": null,
@@ -19,7 +19,8 @@
       "worktree_path": "../kardinal-promoter.001-go-module-scaffold",
       "pr_number": 8,
       "pr_merged": true,
-      "assigned_at": "2026-04-10T04:09:53Z"
+      "assigned_at": "2026-04-10T04:09:53Z",
+      "dependency_mode": "merged"
     },
     "002-kubebuilder-scaffold": {
       "state": "in_review",
@@ -27,7 +28,8 @@
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.002-kubebuilder-scaffold",
       "pr_number": 11,
-      "pr_merged": false
+      "pr_merged": false,
+      "dependency_mode": "branch"
     },
     "003-dockerfile-and-helm": {
       "state": "in_review",
@@ -35,7 +37,8 @@
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.003-dockerfile-and-helm",
       "pr_number": 10,
-      "pr_merged": false
+      "pr_merged": false,
+      "dependency_mode": "branch"
     },
     "004-ci-and-lint": {
       "state": "in_review",
@@ -43,7 +46,18 @@
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.004-ci-and-lint",
       "pr_number": 9,
-      "pr_merged": false
+      "pr_merged": false,
+      "dependency_mode": "branch"
+    }
+  },
+  "session_heartbeats": {
+    "COORDINATOR": {
+      "last_seen": "2026-04-10T14:55:09Z",
+      "cycle": 0
+    },
+    "QA": {
+      "last_seen": null,
+      "cycle": 0
     }
   }
 }
