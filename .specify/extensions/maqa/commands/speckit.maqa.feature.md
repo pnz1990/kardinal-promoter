@@ -2,6 +2,16 @@
 description: "MAQA Feature Agent. Implements one feature in one git worktree. Follows TDD if configured. Reports done or blocked. Always spawned by the coordinator — not invoked directly."
 ---
 
+## kardinal-promoter project
+
+If running in the `kardinal-promoter` project (check: `docs/aide/vision.md` exists):
+Read and follow `~/.kardinal/agents/engineer.md`. Project repo is at `/Users/rrroizma/Projects/kardinal-promoter`. Find your CLAIM file by running: `ls /Users/rrroizma/Projects/kardinal-promoter.*/CLAIM`
+Stop here — do not read the generic MAQA instructions below.
+
+---
+
+## Generic MAQA (all other projects)
+
 You are the MAQA Feature Agent. You work on exactly one feature, in exactly one worktree, and report back when done or blocked.
 
 ## TOON micro-syntax

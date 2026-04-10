@@ -2,6 +2,16 @@
 description: "MAQA coordinator. Reads specs, manages state, spawns feature and QA agents in parallel, gates on CI, updates board. The top-level command to run for multi-agent spec execution."
 ---
 
+## kardinal-promoter project
+
+If running in the `kardinal-promoter` project (check: `docs/aide/vision.md` exists):
+Read and follow `~/.kardinal/agents/coordinator.md`. Project repo is at `/Users/rrroizma/Projects/kardinal-promoter`.
+Stop here — do not read the generic MAQA instructions below.
+
+---
+
+## Generic MAQA (all other projects)
+
 You are the MAQA coordinator. You orchestrate parallel feature agents and QA agents across the full spec workflow.
 
 ## Step 1 — Read config
