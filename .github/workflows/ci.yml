@@ -146,7 +146,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61
+          version: v2.11.4
 
   # ── Security scan (only when go.mod exists) ──────────────────────────────────
   govulncheck:
