@@ -2,14 +2,14 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T19:20:00Z",
-  "current_queue": "queue-003",
+  "last_updated": "2026-04-10T19:57:39Z",
+  "current_queue": null,
   "last_sm_review": null,
-  "last_pm_review": "2026-04-10T18:35:00Z",
-  "batches_since_competitive_analysis": 1,
+  "last_pm_review": "2026-04-10T20:00:00Z",
+  "batches_since_competitive_analysis": 2,
   "engineer_slots": {
     "ENGINEER-1": null,
-    "ENGINEER-2": "007-helm-chart-controller-deploy",
+    "ENGINEER-2": null,
     "ENGINEER-3": null
   },
   "features": {
@@ -68,23 +68,23 @@
       "dependency_mode": "merged"
     },
     "007-helm-chart-controller-deploy": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "ENGINEER-2",
       "assigned_at": "2026-04-10T18:40:33Z",
       "worktree_path": "../kardinal-promoter.007-helm-chart-controller-deploy",
       "pr_number": 24,
-      "pr_merged": false,
+      "pr_merged": true,
       "dependency_mode": "branch"
     }
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T19:26:04Z",
-      "cycle": 52
+      "last_seen": "2026-04-10T19:57:39Z",
+      "cycle": 63
     },
     "QA": {
-      "last_seen": "2026-04-10T20:26:00Z",
-      "cycle": 24
+      "last_seen": "2026-04-10T19:57:05Z",
+      "cycle": 35
     }
   }
 }
