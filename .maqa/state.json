@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T23:18:42Z",
+  "last_updated": "2026-04-10T23:38:56Z",
   "current_queue": "queue-007",
   "last_sm_review": "2026-04-10T23:15:01Z",
   "last_pm_review": "2026-04-10T23:15:25Z",
@@ -135,20 +135,20 @@
       "dependency_mode": "merged"
     },
     "014-health-adapters": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T23:19:33Z",
+      "worktree_path": "../kardinal-promoter.014-health-adapters",
+      "pr_number": 62,
+      "pr_merged": true,
       "dependency_mode": "merged"
     },
     "015-cli-full": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
+      "state": "in_review",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T23:31:03Z",
+      "worktree_path": "../kardinal-promoter.015-cli-full",
+      "pr_number": 63,
       "pr_merged": false,
       "dependency_mode": "merged"
     },
@@ -172,8 +172,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-10T23:11:13Z",
-      "cycle": 14
+      "last_seen": "2026-04-10T23:19:33Z",
+      "cycle": 15
     }
   }
 }
