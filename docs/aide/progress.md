@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-10T19:45Z
+> Last updated: 2026-04-10T21:30Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -17,7 +17,7 @@
 | 0 | Project Skeleton | ✅ Complete | All 4 items merged: PRs #8, #9, #10, #11. |
 | 1 | CRD Types and Validation | ✅ Complete | Item 005 merged: PR #19. All 4 CRD types complete. |
 | 2 | Bundle and Pipeline Reconcilers (No-Op Baseline) | ✅ Complete | Items 006/007 merged: PRs #23, #24. Controller manager, BundleReconciler, PipelineReconciler, Helm chart, integration tests. |
-| 3 | Graph Generation and kro Integration | 📋 Planned | Depends on Stage 2 |
+| 3 | Graph Generation and kro Integration | ✅ Complete | Items 008/009 merged: PRs #27, #29. GraphClient, Builder, Translator, BundleReconciler extension, 30+ tests. |
 | 4 | PolicyGate CEL Evaluator | 📋 Planned | Depends on Stage 3 |
 | 5 | Git Operations and GitHub PR Flow | 📋 Planned | Depends on Stage 3 |
 | 6 | PromotionStep Reconciler and Full Promotion Loop | 📋 Planned | Depends on Stage 4 + 5 |
@@ -65,12 +65,21 @@
 
 ---
 
+## Stage 3 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 008 | Add PropagateWhen + fix Graph API group (experimental.kro.run) | ✅ Complete | #27 merged | GraphNode.PropagateWhen, GraphGVK/GVR updated, design docs updated |
+| 009 | Graph Builder, GraphClient, Translator, BundleReconciler extension | ✅ Complete | #29 merged | Full translation algorithm, 27 builder tests, 7 reconciler tests |
+
+---
+
 ## Spec Status
 
 | Spec | Title | Status | Notes |
 |---|---|---|---|
-| 001 | Graph Integration Layer | 📋 Planned | Design doc: docs/design/01-graph-integration.md |
-| 002 | Pipeline-to-Graph Translator | 📋 Planned | Design doc: docs/design/02-pipeline-to-graph-translator.md |
+| 001 | Graph Integration Layer | ✅ Complete | PRs #25, #27. GraphNode types, PropagateWhen, experimental.kro.run API group, GraphClient |
+| 002 | Pipeline-to-Graph Translator | ✅ Complete | PR #29. Full translation algorithm Steps 1-7, 27 unit tests |
 | 003 | PromotionStep Reconciler | 📋 Planned | Design doc: docs/design/03-promotionstep-reconciler.md |
 | 004 | PolicyGate Reconciler | 📋 Planned | Design doc: docs/design/04-policygate-reconciler.md |
 | 005 | Health Adapters | 📋 Planned | Design doc: docs/design/05-health-adapters.md |
