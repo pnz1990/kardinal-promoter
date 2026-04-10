@@ -25,7 +25,7 @@ jobs:
       has_web: ${{ steps.check.outputs.has_web }}
       has_e2e: ${{ steps.check.outputs.has_e2e }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Detect project artifacts
         id: check
         run: |
@@ -44,7 +44,7 @@ jobs:
     name: docs-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate YAML files
         run: |
           pip install pyyaml --quiet
@@ -95,7 +95,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -138,7 +138,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -155,7 +155,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           # Use a recent stable patch to ensure stdlib vulns are patched.
@@ -174,7 +174,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -190,7 +190,7 @@ jobs:
       needs.preflight.outputs.has_e2e == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -204,7 +204,7 @@ jobs:
     if: needs.preflight.outputs.has_web == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
         run: bun install
@@ -221,7 +221,7 @@ jobs:
     name: helm lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check if chart exists
         id: chart_check
         run: |
