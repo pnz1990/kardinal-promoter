@@ -53,8 +53,12 @@ func runVersion(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "CLI:        %s\n", cliVer)
-	fmt.Fprintf(cmd.OutOrStdout(), "Controller: %s\n", controllerVer)
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "CLI:        %s\n", cliVer); err != nil {
+		return fmt.Errorf("write version: %w", err)
+	}
+	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Controller: %s\n", controllerVer); err != nil {
+		return fmt.Errorf("write version: %w", err)
+	}
 	return nil
 }
 
