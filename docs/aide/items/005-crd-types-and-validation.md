@@ -39,13 +39,30 @@ No controller logic. Schema artifacts only.
 `spec.environments[]`:
 - `name` (required, MinLength=1)
 - `path` (string — subdirectory in repo for `layout: directory`)
-- `approvalMode` (enum: `auto|pr-review`, default: `auto`)
-- `updateStrategy` (enum: `kustomize|helm`, default: `kustomize`)
-- `healthAdapter` (string — `deployment|argocd|flux|argoRollouts`)
-- `healthTimeout` (string — duration, default: `30m`)
-- `deliveryDelegate` (string — `argoRollouts|flagger`, optional)
+- `approval` (enum: `auto|pr-review`, default: `auto`) — json tag must be `"approval"` not `"approvalMode"`
+- `update.strategy` (enum: `kustomize|helm`, default: `kustomize`) — implement as nested `UpdateConfig` struct with `Strategy` field; json tag `"update"`
+- `health.type` (string — `resource|argocd|flux|argoRollouts|flagger`) — implement as nested `HealthConfig` struct; json tag `"health"`
+- `health.timeout` (string — duration, default: `30m`) — field on `HealthConfig`
+- `health.cluster` (string — kubeconfig Secret name for remote clusters, optional) — field on `HealthConfig`
+- `delivery.delegate` (string — `none|argoRollouts|flagger`, optional) — implement as nested `DeliveryConfig` struct; json tag `"delivery"`
 - `dependsOn` ([]string — names of other environments in this pipeline)
 - `shard` (string — for distributed mode agent routing, optional)
+
+**Field naming rule**: All multi-word environment sub-configs use nested structs matching the YAML shape in `docs/pipeline-reference.md` and `examples/quickstart/pipeline.yaml`. Do NOT use flat camelCase field names (`approvalMode`, `updateStrategy`, `healthAdapter`, `deliveryDelegate`) — these do not match any user doc or example.
+
+Example of correct EnvironmentSpec Go struct:
+```go
+type EnvironmentSpec struct {
+    Name      string         `json:"name"`
+    Path      string         `json:"path,omitempty"`
+    Approval  string         `json:"approval,omitempty"` // auto|pr-review
+    Update    UpdateConfig   `json:"update,omitempty"`
+    Health    HealthConfig   `json:"health,omitempty"`
+    Delivery  DeliveryConfig `json:"delivery,omitempty"`
+    DependsOn []string       `json:"dependsOn,omitempty"`
+    Shard     string         `json:"shard,omitempty"`
+}
+```
 
 `spec.policyGates[]`:
 - `name` (string — reference to PolicyGate name)
@@ -217,6 +234,11 @@ added in Stage 1.` comments — replace them with the complete types.
    environments via `spec.git` (url, branch, layout, provider, secretRef).
    Do NOT put `gitRepo` or `branch` inside `spec.environments[]`.
    See `docs/design/design-v2.1.md` line 710 and `examples/quickstart/pipeline.yaml`.
+
+4. **EnvironmentSpec uses nested structs, not flat camelCase** — The YAML shape in
+   all docs and examples uses `approval:`, `update.strategy:`, `health.type:`,
+   `delivery.delegate:`. Do NOT use flat names like `approvalMode`, `updateStrategy`,
+   `healthAdapter`, `deliveryDelegate`. See Section 1 above for the correct struct layout.
 
 Run `make manifests` after each type change to keep the generated CRD YAML in sync.
 The `controller-gen` binary is already installed via the scaffold Makefile.
