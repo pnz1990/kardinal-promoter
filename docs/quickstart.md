@@ -222,11 +222,12 @@ metadata:
   labels:
     kardinal.io/pipeline: nginx-demo
 spec:
-  artifacts:
-    images:
-      - name: nginx
-        reference: ghcr.io/<your-username>/nginx-demo:1.29.0
-        digest: sha256:replace-with-actual-digest
+  type: image
+  pipeline: nginx-demo
+  images:
+    - repository: ghcr.io/<your-username>/nginx-demo
+      tag: "1.29.0"
+      digest: sha256:replace-with-actual-digest
   provenance:
     commitSHA: "manual-quickstart"
     author: "<your-username>"
@@ -328,9 +329,8 @@ Add a step to your CI pipeline that creates a Bundle after building and pushing 
       -H "Authorization: Bearer ${{ secrets.KARDINAL_TOKEN }}" \
       -d '{
         "pipeline": "nginx-demo",
-        "artifacts": {
-          "images": [{"reference": "ghcr.io/${{ github.repository }}:${{ github.sha }}", "digest": "${{ steps.build.outputs.digest }}"}]
-        },
+        "type": "image",
+        "images": [{"repository": "ghcr.io/${{ github.repository }}", "tag": "${{ github.sha }}", "digest": "${{ steps.build.outputs.digest }}"}],
         "provenance": {
           "commitSHA": "${{ github.sha }}",
           "ciRunURL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",

@@ -14,15 +14,14 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   -H "Content-Type: application/json" \
   -d '{
     "pipeline": "my-app",
-    "artifacts": {
-      "images": [
-        {
-          "name": "my-app",
-          "reference": "ghcr.io/myorg/my-app:1.29.0",
-          "digest": "sha256:a1b2c3d4e5f6..."
-        }
-      ]
-    },
+    "type": "image",
+    "images": [
+      {
+        "repository": "ghcr.io/myorg/my-app",
+        "tag": "1.29.0",
+        "digest": "sha256:a1b2c3d4e5f6..."
+      }
+    ],
     "provenance": {
       "commitSHA": "abc123def456",
       "ciRunURL": "https://github.com/myorg/my-app/actions/runs/12345",
@@ -122,16 +121,17 @@ For teams that prefer a fully declarative approach, the Bundle can be created vi
       labels:
         kardinal.io/pipeline: my-app
     spec:
-      artifacts:
-        images:
-          - name: my-app
-            reference: ghcr.io/${{ github.repository }}:${{ github.sha }}
-            digest: ${{ steps.build.outputs.digest }}
+      type: image
+      pipeline: my-app
+      images:
+        - repository: ghcr.io/${{ github.repository }}
+          tag: "${{ github.sha }}"
+          digest: "${{ steps.build.outputs.digest }}"
       provenance:
         commitSHA: "${{ github.sha }}"
         ciRunURL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         author: "${{ github.actor }}"
-        buildTimestamp: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        timestamp: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     EOF
 ```
 
@@ -197,7 +197,7 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | `commitSHA` | The Git commit that triggered the build | `abc123def456` |
 | `ciRunURL` | URL of the CI run | `https://github.com/.../runs/12345` |
 | `author` | Who or what triggered the build | `engineer-name`, `dependabot[bot]` |
-| `buildTimestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
+| `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
 
 ## Multi-Image Bundles
 
@@ -206,20 +206,19 @@ A Bundle can contain multiple images for applications that deploy multiple conta
 ```json
 {
   "pipeline": "my-app",
-  "artifacts": {
-    "images": [
-      {
-        "name": "api",
-        "reference": "ghcr.io/myorg/my-app-api:1.29.0",
-        "digest": "sha256:aaa..."
-      },
-      {
-        "name": "worker",
-        "reference": "ghcr.io/myorg/my-app-worker:1.29.0",
-        "digest": "sha256:bbb..."
-      }
-    ]
-  }
+  "type": "image",
+  "images": [
+    {
+      "repository": "ghcr.io/myorg/my-app-api",
+      "tag": "1.29.0",
+      "digest": "sha256:aaa..."
+    },
+    {
+      "repository": "ghcr.io/myorg/my-app-worker",
+      "tag": "1.29.0",
+      "digest": "sha256:bbb..."
+    }
+  ]
 }
 ```
 
@@ -236,12 +235,9 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   -d '{
     "pipeline": "my-app",
     "type": "config",
-    "artifacts": {
-      "gitCommit": {
-        "repository": "https://github.com/myorg/app-config",
-        "sha": "abc123def456",
-        "message": "Update resource limits for all environments"
-      }
+    "configRef": {
+      "gitRepo": "https://github.com/myorg/app-config",
+      "commitSHA": "abc123def456"
     },
     "provenance": {
       "commitSHA": "abc123def456",
@@ -260,17 +256,18 @@ When creating a Bundle from CI, you can specify the promotion intent:
 ```json
 {
   "pipeline": "my-app",
-  "artifacts": { ... },
+  "type": "image",
+  "images": [ ... ],
   "provenance": { ... },
   "intent": {
-    "target": "staging"
+    "targetEnvironment": "staging"
   }
 }
 ```
 
-- `target: prod` (default): promote through all environments up to and including prod
-- `target: staging`: stop after staging (useful for testing)
-- `skip: ["staging"]`: skip staging (requires SkipPermission PolicyGate)
+- `targetEnvironment: prod` (default): promote through all environments up to and including prod
+- `targetEnvironment: staging`: stop after staging (useful for testing)
+- `skipEnvironments: ["staging"]`: skip staging (requires SkipPermission PolicyGate)
 
 ## Webhook Endpoint Reference
 

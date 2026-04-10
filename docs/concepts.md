@@ -10,7 +10,7 @@ Bundles are created by your CI pipeline after building and pushing an image. All
 # From CI via webhook
 curl -X POST https://kardinal.example.com/api/v1/bundles \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"pipeline":"my-app","artifacts":{"images":[{"reference":"ghcr.io/myorg/my-app:1.29.0","digest":"sha256:abc..."}]},"provenance":{"commitSHA":"abc123","ciRunURL":"https://...","author":"engineer"}}'
+  -d '{"pipeline":"my-app","type":"image","images":[{"repository":"ghcr.io/myorg/my-app","tag":"1.29.0","digest":"sha256:abc..."}],"provenance":{"commitSHA":"abc123","ciRunURL":"https://...","author":"engineer"}}'
 
 # From CLI
 kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0
@@ -58,22 +58,21 @@ Image Bundle:
 ```yaml
 spec:
   type: image
-  artifacts:
-    images:
-      - name: my-app
-        reference: ghcr.io/myorg/my-app:1.29.0
-        digest: sha256:a1b2c3d4...
+  pipeline: my-app
+  images:
+    - repository: ghcr.io/myorg/my-app
+      tag: "1.29.0"
+      digest: sha256:a1b2c3d4...
 ```
 
 Config Bundle:
 ```yaml
 spec:
   type: config
-  artifacts:
-    gitCommit:
-      repository: https://github.com/myorg/app-config
-      sha: "abc123def456"
-      message: "Update resource limits for all environments"
+  pipeline: my-app
+  configRef:
+    gitRepo: https://github.com/myorg/app-config
+    commitSHA: "abc123def456"
 ```
 
 Both types go through the same Pipeline, same PolicyGates, and same PR flow.
@@ -85,19 +84,19 @@ The `spec.intent` field declares how far the Bundle should be promoted:
 ```yaml
 spec:
   intent:
-    target: prod         # promote through all environments up to and including prod (default)
+    targetEnvironment: prod   # promote through all environments up to and including prod (default)
 ```
 
 ```yaml
 spec:
   intent:
-    target: staging      # stop after staging, do not proceed to prod
+    targetEnvironment: staging  # stop after staging, do not proceed to prod
 ```
 
 ```yaml
 spec:
   intent:
-    skip: [staging]      # skip staging (requires SkipPermission PolicyGate, see PolicyGates)
+    skipEnvironments: [staging]  # skip staging (requires SkipPermission PolicyGate, see PolicyGates)
 ```
 
 ## Pipeline
@@ -390,8 +389,8 @@ are inherited automatically.
 
 ### Feature branch and ephemeral environments
 
-Use `intent.target: staging` to create Bundles that stop at staging, not prod.
-Use `intent.skip` with SkipPermission PolicyGates for hotfixes. Use ApplicationSet
+Use `intent.targetEnvironment: staging` to create Bundles that stop at staging, not prod.
+Use `intent.skipEnvironments` with SkipPermission PolicyGates for hotfixes. Use ApplicationSet
 pull-request generators for fully isolated ephemeral Pipelines per PR.
 
 ### Repository strategies
