@@ -1,6 +1,6 @@
 # How to Start Autonomous Development
 
-This document is the single reference for starting the autonomous team. Read it, run the one command, and step away.
+This document is the single reference for starting the autonomous team. Read it, open the sessions, and step away.
 
 ---
 
@@ -10,14 +10,36 @@ This document is the single reference for starting the autonomous team. Read it,
 - [x] GitHub Projects board: https://github.com/users/pnz1990/projects/1
 - [x] Report issue: https://github.com/pnz1990/kardinal-promoter/issues/1 (subscribe to this)
 - [x] spec-kit v0.6.0 + all extensions installed
-- [x] `maqa-github-projects/github-projects-config.yml` configured with project ID and status field IDs
+- [x] `maqa-github-projects/github-projects-config.yml` configured
 - [x] `maqa-ci/ci-config.yml` configured for GitHub Actions
 - [x] `maqa-config.yml` configured (`go test ./... -race`, TDD, max_parallel: 3)
 - [x] Vision, roadmap, progress, specs, and design docs in place
 
 ---
 
-## Before Starting Each Session
+## The Team
+
+Five OpenCode sessions, five roles. Each session is one agent.
+
+| Session | Directory | Command to run | Role |
+|---|---|---|---|
+| 1 | `kardinal-promoter/` (main) | `/speckit.maqa.coordinator` | Coordinator |
+| 2 | `kardinal-promoter.feat-1/` | `/speckit.maqa.feature` | Engineer 1 |
+| 3 | `kardinal-promoter.feat-2/` | `/speckit.maqa.feature` | Engineer 2 |
+| 4 | `kardinal-promoter.feat-3/` | `/speckit.maqa.feature` | Engineer 3 |
+| 5 | `kardinal-promoter/` (main) | `/speckit.maqa.qa` | QA |
+
+They do not talk to each other directly. They communicate through files and GitHub:
+- Coordinator writes assignments to `.maqa/state.json` and GitHub Issues
+- Engineers read their assignment from `.maqa/state.json`, work in their worktree, push a PR
+- QA watches for open PRs labeled `kardinal`, reviews against spec + user docs
+- Coordinator watches for PR merges and QA decisions, updates the board
+
+---
+
+## Before Starting
+
+In a terminal:
 
 ```bash
 cd /Users/rrroizma/Projects/kardinal-promoter
@@ -27,25 +49,80 @@ git pull origin main
 
 ---
 
-## Start the Autonomous Loop
+## Step 1 — Start the Coordinator (Session 1)
 
-Open a new OpenCode session in the kardinal-promoter directory and run:
+Open an OpenCode session in `kardinal-promoter/` and run:
 
 ```
 /speckit.maqa.coordinator
 ```
 
-That is the only command you need to run. The coordinator will:
-
+The coordinator will:
 1. Read `docs/aide/roadmap.md` and `docs/aide/progress.md`
-2. Generate the next queue of work items (`docs/aide/queue/queue-NNN.md`)
-3. Create detailed item specs (`docs/aide/items/`)
-4. Populate the GitHub Projects board with items in Todo
-5. Spawn up to 3 feature agents in parallel, each in an isolated git worktree
-6. Gate on CI (GitHub Actions must be green)
-7. Spawn the QA agent to review each PR
-8. Merge approved PRs, update the board, update progress
-9. Loop — generate the next queue and repeat until the roadmap is complete
+2. Generate work items (`docs/aide/queue/`, `docs/aide/items/`)
+3. Populate the GitHub Projects board (items appear in Todo)
+4. Write assignments to `.maqa/state.json`
+5. Wait for engineers and QA to pick up work
+
+---
+
+## Step 2 — Start the Engineers (Sessions 2, 3, 4)
+
+For each engineer, create a worktree and open an OpenCode session:
+
+```bash
+# Engineer 1
+/speckit.worktree.create   # coordinator runs this, or you run it manually
+cd ../kardinal-promoter.feat-1
+export GH_TOKEN=<token>
+# open OpenCode session here
+```
+
+In each engineer session, run:
+
+```
+/speckit.maqa.feature
+```
+
+The engineer will:
+1. Read its assignment from `.maqa/state.json`
+2. Read the item file from `docs/aide/items/<item>.md`
+3. Read the spec from `.specify/specs/<feature>/spec.md`
+4. Write tests first, implement, run `go test ./... -race`
+5. Run `/speckit.verify-tasks.run` and `/speckit.verify`
+6. Push branch and open a PR using `docs/aide/pr-template.md`
+7. Report back to coordinator via `.maqa/state.json`
+
+---
+
+## Step 3 — Start QA (Session 5)
+
+Open an OpenCode session in the main `kardinal-promoter/` directory and run:
+
+```
+/speckit.maqa.qa
+```
+
+QA will:
+1. Watch for open PRs labeled `kardinal` on the repo
+2. For each PR: read the diff, check against the spec and user docs
+3. Run `/speckit.verify` against the PR branch
+4. Post a GitHub PR review — approve or request changes with `file:line` references
+5. If a security issue or architecture deviation is found: post `[QA FINDING]` to Issue #1
+
+---
+
+## How PRs Get Merged
+
+When QA approves a PR and CI is green, the coordinator merges it:
+```bash
+gh pr merge <number> --squash --delete-branch
+```
+
+The coordinator then:
+- Updates `.maqa/state.json` → `done`
+- Moves the GitHub Projects card to Done
+- Assigns the next item to the freed engineer
 
 ---
 
@@ -54,39 +131,48 @@ That is the only command you need to run. The coordinator will:
 **Check the board**: https://github.com/users/pnz1990/projects/1
 Cards move: `Todo → In Progress → In Review → Done`
 
-**Subscribe to reports**: https://github.com/pnz1990/kardinal-promoter/issues/1
-The coordinator posts a comment when:
-- A batch completes (`[BATCH COMPLETE]`)
-- An agent is blocked (`[NEEDS HUMAN]`)
-- QA finds something worth attention (`[QA FINDING]`)
+**Read reports**: https://github.com/pnz1990/kardinal-promoter/issues/1
+The coordinator posts:
+- `[BATCH COMPLETE]` — batch finished, summary of what shipped
+- `[NEEDS HUMAN]` — agent blocked, needs a decision
+- `[QA FINDING]` — QA found something worth attention
 
-**Unblock escalations**: Watch for GitHub Issues labeled `needs-human`. Read the comment, make the decision, remove the label. The coordinator resumes automatically.
+**Unblock escalations**: GitHub Issues labeled `needs-human`.
+Read the comment. Make the decision. Remove the label. The coordinator resumes.
 
 **That's it.** You do not create queue files, item files, specs, or code.
 
 ---
 
-## If the Session Disconnects
+## Session Lifecycle
 
-Restart from the same directory:
+| Session | Runs until |
+|---|---|
+| Coordinator | All 20 roadmap stages complete, or every remaining item is `needs-human` |
+| Each Engineer | Coordinator marks their slot idle, or their item hits `needs-human` after 2 retries |
+| QA | No open PRs AND coordinator has posted final `[BATCH COMPLETE]` |
 
-```
-/speckit.maqa.coordinator
-```
+**They do not stop between items.** Engineers immediately pick up the next assignment. QA continuously polls for new PRs. The coordinator continuously generates new queues. The entire project builds itself from Stage 0 to Stage 19 without you restarting anything.
 
-The coordinator reads `.maqa/state.json` to resume from where it left off. No work is lost.
+---
+
+**Coordinator:** Restart in `kardinal-promoter/`, run `/speckit.maqa.coordinator`. It reads `.maqa/state.json` and resumes.
+
+**Engineer:** Restart in the worktree directory, run `/speckit.maqa.feature`. It reads its current assignment and resumes from the current step index (stored in PromotionStep status — no work lost).
+
+**QA:** Restart in `kardinal-promoter/`, run `/speckit.maqa.qa`. It re-scans open PRs.
 
 ---
 
 ## If You Want to Adjust Direction
 
-Edit `docs/aide/vision.md` or `docs/aide/roadmap.md`, then run:
+Edit `docs/aide/vision.md` or `docs/aide/roadmap.md`, then in a session run:
 
 ```
 /speckit.aide.feedback-loop
 ```
 
-This reflects the changes into the next queue generation. Already-in-progress items are not affected.
+Already-in-progress items are not affected. The next queue will reflect the changes.
 
 ---
 
@@ -95,21 +181,22 @@ This reflects the changes into the next queue generation. Already-in-progress it
 | Label | Meaning | Your action |
 |---|---|---|
 | `needs-human` | Agent blocked, needs a decision | Read the issue, answer, remove the label |
-| `blocked` | Item waiting on a dependency | No action needed, coordinator handles it |
+| `blocked` | Item waiting on a dependency | No action — coordinator handles it |
 | `report` | Progress report from coordinator | Read, no action required |
 
 ---
 
 ## Key Files
 
-| File | Purpose |
-|---|---|
-| `docs/aide/vision.md` | Product vision (human-owned) |
-| `docs/aide/roadmap.md` | 20-stage delivery plan (human-owned) |
-| `docs/aide/progress.md` | Stage completion status (coordinator updates) |
-| `docs/aide/team.yml` | Agent roles, rules, reporting config |
-| `docs/aide/queue/` | Work item queues (coordinator generates) |
-| `docs/aide/items/` | Detailed item specs (coordinator generates) |
-| `.maqa/state.json` | Coordinator state (feature lifecycle tracking) |
-| `maqa-config.yml` | Team config (test command, parallelism, board) |
-| `AGENTS.md` | Full agent context (all agents read this) |
+| File | Owner | Purpose |
+|---|---|---|
+| `docs/aide/vision.md` | Human | Product vision |
+| `docs/aide/roadmap.md` | Human | 20-stage delivery plan |
+| `docs/aide/progress.md` | Coordinator | Stage completion status |
+| `docs/aide/team.yml` | Human | Agent roles, rules, reporting |
+| `docs/aide/queue/` | Coordinator | Work item queues (generated) |
+| `docs/aide/items/` | Coordinator | Detailed item specs (generated) |
+| `.maqa/state.json` | Coordinator | Feature lifecycle state |
+| `maqa-config.yml` | Human | Test command, parallelism, board |
+| `AGENTS.md` | Human | Full agent context (all agents read this) |
+| `docs/aide/start-autonomous-development.md` | Human | This file |

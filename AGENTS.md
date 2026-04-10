@@ -46,29 +46,57 @@ Read these **in order** before doing anything else:
 
 ### COORDINATOR — `/speckit.maqa.coordinator`
 
-1. Read `docs/aide/progress.md` + `docs/aide/roadmap.md` to understand what stage to work on next
-2. If `docs/aide/queue/` is empty: generate the next batch of work items by running `/speckit.aide.create-queue`, then `/speckit.aide.create-item` for each item
-3. Populate the GitHub Projects board via `/speckit.maqa-github-projects.populate`
-4. Read `.maqa/state.json` for current feature states
-5. Assign `todo` items to feature agents respecting dependency order (max 3 parallel from `maqa-config.yml`)
-6. After feature agent completes: check CI via `/speckit.maqa-ci.check`
-7. If CI green: move to In Review, spawn QA agent via `/speckit.maqa.qa`
-8. If QA approves + PR merged: update `.maqa/state.json` → `done`, move card on GitHub Projects
-9. When queue exhausted: post a `[BATCH COMPLETE]` report to GitHub Issue #1, update `docs/aide/progress.md`, generate next queue and loop
-10. If any item hits `needs-human`: post a `[NEEDS HUMAN]` report to Issue #1, label the blocking issue, continue with other items
+Runs as a **continuous loop** until all stages in `docs/aide/progress.md` are complete.
 
-**Reporting** — post to https://github.com/pnz1990/kardinal-promoter/issues/1 using:
-```bash
-gh issue comment 1 --body "## [BATCH COMPLETE] ..."
-```
+Loop:
+1. Read `docs/aide/progress.md` + `docs/aide/roadmap.md`
+2. If queue is empty: run `/speckit.aide.create-queue` + `/speckit.aide.create-item` for each item
+3. Run `/speckit.maqa-github-projects.populate` to sync board
+4. Assign `todo` items to available engineers (max 3, respecting dependency order)
+5. As engineers complete items: run `/speckit.maqa-ci.check`, then spawn QA
+6. As QA approves + PRs merge: update `.maqa/state.json` → `done`, move card to Done
+7. When current queue is exhausted: post `[BATCH COMPLETE]` to Issue #1, update `docs/aide/progress.md`, go to step 1
+8. When ALL stages in progress.md are `✅ Complete`: post final `[BATCH COMPLETE]`, exit
 
-Three report types (formats in `docs/aide/team.yml`):
-- `[BATCH COMPLETE]` — every time a queue batch finishes
-- `[NEEDS HUMAN]` — when an agent is blocked and needs human input
-- `[QA FINDING]` — when QA finds something worth human attention
+Stop conditions (only these):
+- All roadmap stages complete
+- Fatal `needs-human` blocking every remaining item with no items runnable in parallel
 
 **Never implement features. Never commit. Return SPAWN blocks only.**
 **The human does not create queue files or item files. You do.**
+
+---
+
+### ENGINEER — `/speckit.maqa.feature`
+
+Runs as a **continuous loop** until told to stop.
+
+Loop:
+1. Read `.maqa/state.json` for an item assigned to this engineer (state: `in_progress`)
+2. If no assignment: poll every 2 minutes until coordinator assigns one
+3. Implement the item (TDD, verify, push PR)
+4. Update `.maqa/state.json` → `in_review`
+5. Go to step 1 (pick up next item)
+
+Stop conditions:
+- Coordinator explicitly marks this engineer's slot as idle with no future work
+- `needs-human` on current item after 2 retries
+
+---
+
+### QA AGENT — `/speckit.maqa.qa`
+
+Runs as a **continuous watch loop** until told to stop.
+
+Loop:
+1. Poll GitHub for open PRs labeled `kardinal` every 2 minutes
+2. For each unreviewed PR: read diff, check against spec + user docs, run `/speckit.verify`
+3. Post approval or request-for-changes
+4. If finding warrants human attention: post `[QA FINDING]` to Issue #1
+5. Go to step 1
+
+Stop conditions:
+- No open PRs AND coordinator has posted `[BATCH COMPLETE]` for the final batch
 
 ### FEATURE AGENT — `/speckit.maqa.feature`
 
