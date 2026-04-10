@@ -190,7 +190,7 @@ None — this is the foundation.
 - `PolicyGateReconciler` that:
   - Watches `PolicyGate` objects referenced in active Graphs
   - On each reconcile, builds `BundleContext` from the owning Bundle's status
-  - Calls `Evaluator.Evaluate` and patches `status.result` and `status.lastEvaluatedAt`
+  - Calls `Evaluator.Evaluate` and patches `status.ready` (bool) and `status.lastEvaluatedAt`
   - Requeues after `spec.recheckInterval` for time-based gates
   - Marks the associated Graph node as passed or blocked
 - Built-in gate templates in `config/samples/gates/`:
@@ -204,8 +204,8 @@ None — this is the foundation.
 
 ### Acceptance Criteria
 
-- Apply `no-weekend-deploys.yaml` gate and a Bundle on a Saturday: `status.result = Fail`, `status.reason` contains "weekend"
-- Apply same gate on a Tuesday: `status.result = Pass` within 5 seconds
+- Apply `no-weekend-deploys.yaml` gate and a Bundle on a Saturday: `status.ready = false`, `status.reason` contains "weekend"
+- Apply same gate on a Tuesday: `status.ready = true` within 5 seconds
 - Gate with `recheckInterval: 1m` re-evaluates without manual trigger
 - `cel.Evaluate` benchmark passes: p99 under 10ms on 1000 iterations
 - Org-level gate in `platform-policies` namespace cannot be removed by patching a Pipeline in another namespace (RBAC test)
