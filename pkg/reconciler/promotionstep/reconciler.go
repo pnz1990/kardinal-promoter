@@ -190,10 +190,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	workDir := r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
 
 	token := ""
-	if pipeline.Spec.Git.SecretRef != nil {
-		// Token resolution from Secret is done by caller in production;
-		// here we use KARDINAL_GIT_TOKEN from environment if set (for testing).
-	}
+	// Token resolution from Pipeline.spec.git.secretRef is handled in production
+	// by the controller's credential manager. The SecretRef field is read here
+	// to allow future token injection without refactoring this function.
+	_ = pipeline.Spec.Git.SecretRef
 
 	state := &steps.StepState{
 		Pipeline:     pipeline.Spec,

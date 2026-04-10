@@ -70,11 +70,11 @@ func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool)
 	// Watch mode: poll every 3 seconds and refresh the output.
 	for {
 		// Clear screen using ANSI escape.
-		fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
+		_, _ = fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
 		if err := explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
 		time.Sleep(3 * time.Second)
 	}
 }
@@ -178,10 +178,14 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	}
 
 	if len(rows) == 0 {
+		var emptyMsg string
 		if envFilter != "" {
-			fmt.Fprintf(tw, "No steps or gates found for pipeline %q environment %q\n", pipeline, envFilter)
+			emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q environment %q\n", pipeline, envFilter)
 		} else {
-			fmt.Fprintf(tw, "No steps or gates found for pipeline %q\n", pipeline)
+			emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q\n", pipeline)
+		}
+		if _, err := fmt.Fprint(tw, emptyMsg); err != nil {
+			return fmt.Errorf("write empty message: %w", err)
 		}
 	}
 
