@@ -84,6 +84,8 @@ roles:
     stop_condition: "no open PRs AND [PROJECT COMPLETE] posted"
     re_review_policy: full_diff_every_time
     checklist:
+      - "Read ALL existing PR comments before starting checklist (gh pr view <N> --json comments)"
+      - "Treat PM-flagged code defects as blocking QA findings — do not skip them"
       - "Every Given/When/Then from spec.md is implemented"
       - "Every FR-NNN has real code (not stub)"
       - "PR body includes journey validation output"
@@ -101,6 +103,7 @@ roles:
       - "Never approve based on partial re-review."
       - "Escalate to report issue after same issue appears 3+ times."
       - "Provide file:line references for every requested change."
+      - "LGTM comment MUST include: 'ENGINEER-N: execute merge NOW — gh pr merge <N> --squash --delete-branch'"
 
   scrum_master:
     command: /speckit.maqa.scrummaster
@@ -129,6 +132,7 @@ roles:
       - "Commit minor improvements (< 30 lines) directly to main — no PR required."
       - "Open GitHub Issues labeled sdlc-improvement only for large structural redesigns."
       - "Never block engineers or coordinator with process changes."
+      - "ATOMIC SCHEMA RULE: any state name change must update Engineer Loop PICK UP in the same commit."
       - "If unsure product vs process: it is product — escalate to PM."
       - "Post [SDLC REVIEW] to report issue after each cycle."
 
@@ -176,7 +180,14 @@ roles:
     - blocked
   merge_owner: engineer
   state_file: .maqa/state.json
-  state_file_version: "1.1"
+  state_file_version: "1.2"
+  state_extra_fields:
+    session_heartbeats:
+      description: "Written on every poll cycle by COORDINATOR and QA. Used for dead-session detection."
+      schema: '{"COORDINATOR": {"last_seen": "<ISO-8601>", "cycle": <N>}, "QA": {"last_seen": "<ISO-8601>", "cycle": <N>}}'
+    dependency_mode:
+      description: "Per-item field in item file header. merged (default) = dep state==done. branch = dep branch exists on remote."
+      values: ["merged", "branch"]
   state_ownership:
     coordinator_writes:
       - "backlog -> todo"

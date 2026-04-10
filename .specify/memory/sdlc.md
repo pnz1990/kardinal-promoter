@@ -44,6 +44,42 @@ Every GitHub comment, issue update, and PR review MUST be prefixed with the
 agent's identity badge (defined in AGENTS.md) so the human can tell who said
 what in their notification feed.
 
+### RESUME PROTOCOL (mandatory — do this before anything else)
+
+Every session MUST read `.maqa/state.json` immediately on startup and check:
+
+```python
+# Pseudo-code — implement in any language
+state = read('.maqa/state.json')
+in_flight = [id for id, item in state['features'].items()
+             if item['state'] in ('assigned','in_progress','in_review')]
+
+if state['current_queue'] and in_flight:
+    # THIS IS A RESUME — do NOT reset state, do NOT regenerate queue
+    post_issue_comment(f"[BADGE] Resuming session. Queue: {state['current_queue']}. "
+                       f"In-flight: {in_flight}. Continuing from current state.")
+    # Coordinator: jump to monitor loop (step 5)
+    # Engineer: check if any item is assigned to MY_AGENT_ID
+    # QA: immediately review any in_review PRs
+```
+
+**Rule**: A session starting with in-flight items is a RESUME, not a fresh start.
+Never reset `state.json`, never re-generate a queue, never re-assign already-assigned items.
+The previous session's work is intact in state.json — pick it up and continue.
+
+### HEARTBEAT (Coordinator and QA only)
+
+On every poll cycle, write to `.maqa/state.json`:
+```json
+"session_heartbeats": {
+  "COORDINATOR": { "last_seen": "<ISO-8601-now>", "cycle": <N> },
+  "QA":          { "last_seen": "<ISO-8601-now>", "cycle": <N> }
+}
+```
+
+Any session that reads a heartbeat older than 15 minutes posts on Issue #1:
+`"[BADGE] [SESSION APPEARS DOWN] <ROLE> last seen <timestamp>. Resuming if applicable."`
+
 ---
 
 ## Reading Order (every agent, every session)
@@ -67,19 +103,51 @@ Read in this exact order before doing anything:
 Runs continuously until all journeys in `definition-of-done.md` are passing.
 
 ```
+STARTUP (before entering loop):
+  Apply RESUME PROTOCOL from "Session Startup" section above.
+  Write session_heartbeats.COORDINATOR = { last_seen: now, cycle: 0 }
+
 LOOP:
 
+0. HEARTBEAT — write session_heartbeats.COORDINATOR.last_seen = now on every cycle
+   Check session_heartbeats.QA.last_seen: if >15 min old AND any item is in_review:
+     Post on Issue #1 AND the in_review PR:
+       "[🎯 COORDINATOR] QA session appears down (last seen: <timestamp>).
+        PR #N has been in_review <T> min with CI green. QA — please resume."
+
 1. Read progress.md + roadmap.md → determine next stage
+
 2. If queue is empty:
+   SPEC GATE (run before generating any items):
+     Wait for PM to post "[📋 PM] SPEC GATE CLEAR" on Issue #1.
+     If no PM session is active, post: "[🎯 COORDINATOR] Requesting PM spec gate check
+     before queue generation. PM — please cross-validate items vs AGENTS.md + design docs."
+     Do NOT generate items until SPEC GATE CLEAR is posted.
+   Then:
    - /speckit.aide.create-queue   → docs/aide/queue/queue-NNN.md
    - /speckit.aide.create-item    → docs/aide/items/NNN-*.md per item
    - /speckit.maqa-github-projects.populate
-3. Validate: all Depends-on items are state=done before assigning
+
+3. Validate dependencies before assigning:
+   For each item, check its dependency_mode (see item file header):
+   - dependency_mode: merged (default) — dep item must have state=done
+   - dependency_mode: branch — dep branch must exist on remote
+     (check: git ls-remote --heads origin <dep-branch>)
+   Only assign items where the dependency check passes.
+
 4. Assign items to engineer slots (max 3 concurrent):
-   BEFORE writing anything, verify BOTH:
+   SPEC SNAPSHOT — before creating the worktree, copy the item file:
+     cp docs/aide/items/<id>.md <worktree-path>/ITEM.md
+   This freezes the spec for the engineer. Main can evolve; ITEM.md cannot.
+   If a breaking spec change lands on main after assignment, comment on the item
+   issue: "[🎯 COORDINATOR] Spec updated on main (commit <sha>). ITEM.md in your
+   worktree is unchanged. Rebase only if explicitly requested."
+
+   BEFORE writing state.json, verify BOTH:
    a. The target engineer slot is null in engineer_slots
-   b. No other slot already has this item-id assigned (duplicate-assignment guard)
-   If either check fails: skip this item and log a warning comment on Issue #1.
+   b. No other slot already has this item-id (duplicate-assignment guard)
+   If either check fails: skip this item, log warning on Issue #1.
+
    THEN, atomically write to .maqa/state.json:
    - features[id].state       = "assigned"   ← NOT "in_progress"
    - features[id].assigned_to = SLOT
@@ -91,13 +159,22 @@ LOOP:
    - Move GitHub Projects card: Todo → In Progress
    - Comment on item Issue: "[BADGE] Assigned <id> to <SLOT>. Worktree: <path>"
    - Comment on Issue #1 with assignment summary
+
 5. Monitor .maqa/state.json every 2 min:
    - assigned (>10 min old, not yet in_progress) → re-post assignment comment;
      if still assigned after another 10 min: reset state=todo, clear slot, alert
    - in_progress → no action needed (engineer confirmed pickup)
    - in_review → move card to In Review
-   - done → move card to Done, free slot (set engineer_slots[SLOT]=null), assign next item
+   - in_review (>20 min, CI green, no QA review) → trigger QA dead-session alert (step 0)
+   - done → move card to Done, free slot (set engineer_slots[SLOT]=null), assign next
+     unblocked item IMMEDIATELY (do not wait for all queue items to complete)
    - blocked → post [NEEDS HUMAN] to report issue, continue others
+
+   ENGINEER MERGE FALLBACK: if a PR has QA LGTM + CI green + no engineer merge
+   activity for >30 min, coordinator may merge it directly and post:
+     "[🎯 COORDINATOR] Engineer session appears ended after QA LGTM. Merging PR #N
+      on behalf of <SLOT> per fallback rule. Setting state=done."
+
 6. When all queue items are done or blocked:
    BATCH AUDIT (before generating next queue):
    - /speckit.analyze               spec ↔ tasks ↔ implementation consistency
@@ -116,6 +193,7 @@ LOOP:
      - SPAWN PRODUCT MANAGER: notify Session 7 to run its review cycle
      - go to step 1
    If audit fails: post [BATCH QUALITY GATE FAILED], label needs-human, stop
+
 7. When ALL journeys are ✅: post [PROJECT COMPLETE], exit
 
 DYNAMIC EXPANSION (coordinator does this, no human needed):
@@ -126,9 +204,11 @@ DYNAMIC EXPANSION (coordinator does this, no human needed):
   Report both via [NEW SPEC] / [NEW JOURNEY] on report issue
 
 RULES:
-- Never implement features. Never commit. Never push. Never merge.
-- Engineers merge their own PRs.
-- Never assign if Depends-on items are not done.
+- Never implement features. Never commit. Never push. Never merge (except engineer
+  fallback merge described in step 5 above).
+- Engineers merge their own PRs (coordinator fallback: only when session clearly ended).
+- Never assign if dependency check fails (mode: merged or mode: branch).
+- Assign next item IMMEDIATELY when a slot frees — do not wait for the full batch.
 - Never generate next queue if audit failed.
 - Never skip the batch audit.
 - Spawn Scrum Master and PM after every successful batch.
@@ -141,20 +221,34 @@ RULES:
 Owns each feature end-to-end from assignment through merged PR.
 
 ```
+STARTUP: Apply RESUME PROTOCOL. Check if any item has:
+  features[id].assigned_to == MY_AGENT_ID AND state == "assigned"
+If yes: that is your item. Go to step 1 immediately — do not wait.
+
 LOOP (one feature per iteration):
 
 1. PICK UP
    Poll .maqa/state.json every 2 min for an item where:
      features[id].assigned_to == MY_AGENT_ID
-     features[id].state       == "assigned"          ← must be "assigned", not "todo"
+     features[id].state       == "assigned"   ← must be "assigned", not "todo"
    If no such item exists: wait and re-poll. Do NOT self-select from the queue.
-   Read: worktree_path from state.json
+   Read: worktree_path from state.json.
    Wait up to 2 min for the worktree to be created by coordinator, then:
    cd into worktree: cd <worktree_path>
+
+   SPEC FRESHNESS CHECK (before writing any code):
+   - git pull origin main (sync latest)
+   - Run: git log origin/main --oneline -5  (check for recent spec changes)
+   - Read: ITEM.md from the worktree root (this is the frozen spec — do not read
+     docs/aide/items/ from main, which may have diverged)
+   - Run: gh issue view <item-issue-number> (check for pre-implementation alerts
+     from PM, coordinator, or QA posted after the spec was written)
+   - If any alert describes a blocking change: incorporate it before writing code
+
    CONFIRM PICKUP — write to .maqa/state.json atomically:
      features[id].state = "in_progress"
    Post on item Issue: "[BADGE] Confirmed pickup of <id>. Starting implementation."
-   Read: docs/aide/items/<item>.md → .specify/specs/<feature>/spec.md
+   Read: ITEM.md → .specify/specs/<feature>/spec.md
         → tasks.md → docs/design/<feature>.md → examples/ → docs/
 
 2. IMPLEMENT (TDD — strict order)
@@ -183,11 +277,15 @@ LOOP (one feature per iteration):
    Do NOT proceed until ALL checks green
 
 6. RESPOND TO QA
-   Poll PR for reviews every 5 min: gh pr view <pr-number> --json reviews
+   Poll PR comments and reviews every 5 min:
+     gh pr view <pr-number> --json reviews,comments
+   Read ALL existing comments before each poll cycle — PM or coordinator may
+   have posted blocking findings that QA will also flag.
    If QA requests changes: fix all issues (file:line references), push, go to 5
-   If QA approves AND CI green: proceed to 7
+   If QA approves AND CI green: proceed to step 7 IMMEDIATELY in the same cycle.
+   Do NOT wait for the next poll. Do NOT wait for a coordinator signal.
 
-7. MERGE
+7. MERGE — THIS STEP IS MANDATORY. DO NOT EXIT THE SESSION BEFORE IT COMPLETES.
    gh pr merge <pr-number> --squash --delete-branch
    /speckit.worktree.clean
    Set .maqa/state.json item state = done
@@ -218,6 +316,11 @@ LOOP:
 
 1. Poll every 2 min: gh pr list --label <project-pr-label> --state open
 2. For each PR with new commits since last review:
+   BEFORE running the checklist, read ALL existing PR comments:
+     gh pr view <N> --json comments --jq '.comments[] | {author:.author.login, body:.body}'
+   Treat any PM-flagged code defects or coordinator warnings as blocking QA issues,
+   equivalent to findings you would raise yourself. Do not start the checklist
+   until all prior comments are read and understood.
    Read full diff
    Read: docs/aide/items/<item>.md, .specify/specs/<feature>/spec.md
    Run: /speckit.verify on the branch
@@ -236,7 +339,8 @@ LOOP:
    □ examples/ YAML applies cleanly
    □ Journey the feature contributes to is one step closer to passing
 3. POST REVIEW
-   PASS: gh pr review <N> --approve --body "[BADGE] LGTM. All criteria satisfied."
+   PASS: gh pr review <N> --approve --body "[BADGE] LGTM. All criteria satisfied.
+         ENGINEER-<N>: execute merge NOW — gh pr merge <PR-number> --squash --delete-branch"
    FAIL: gh pr review <N> --request-changes --body "[BADGE] ## Changes Required\n<file:line issues>"
 4. After requesting changes: poll PR every 5 min for new commits
    Re-review FULL diff on every new commit (not just delta)
@@ -302,6 +406,12 @@ INSPECTION CYCLE:
 3. APPLY IMPROVEMENTS
    The Scrum Master commits directly to main — no PR required.
    
+   ATOMIC SCHEMA RULE: Any change to state machine state names in this file
+   MUST update the Engineer Loop's pickup polling condition in the same commit.
+   The two must always be consistent:
+     sdlc.md Engineer Loop "state == X" ←→ what coordinator writes in step 4
+   Changing one without the other causes silent engineer idle (proven by Night 1).
+   
    For minor changes (< 30 lines, no structural redesign):
      Edit the file(s), then:
        git add <files>
@@ -330,6 +440,9 @@ RULES:
 - Never block the coordinator or engineers
 - Commit directly to main — no PR required. Minor fixes go straight in.
 - Large structural redesigns require a GitHub Issue first (human acknowledgement).
+- ATOMIC SCHEMA RULE: any change to a state name in the state machine MUST update
+  the Engineer Loop PICK UP polling condition in the same commit. The SM owns both.
+  A state schema change without a simultaneous PICK UP update is a breaking change.
 - If unsure whether something is product or process: it is product → escalate to PM
 ```
 
@@ -489,12 +602,16 @@ from the queue; assignment is always performed by the Coordinator.
 
 ```json
 {
-  "version": "1.1",
+  "version": "1.2",
   "current_queue": "queue-001",
   "engineer_slots": {
     "ENGINEER-1": "<item-id or null>",
     "ENGINEER-2": "<item-id or null>",
     "ENGINEER-3": "<item-id or null>"
+  },
+  "session_heartbeats": {
+    "COORDINATOR": { "last_seen": "<ISO-8601>", "cycle": 0 },
+    "QA":          { "last_seen": "<ISO-8601>", "cycle": 0 }
   },
   "last_sm_review": null,
   "last_pm_review": null,
@@ -505,6 +622,7 @@ from the queue; assignment is always performed by the Coordinator.
       "assigned_to": "ENGINEER-1",
       "assigned_at": "<ISO-8601 timestamp set by coordinator>",
       "worktree_path": "../<project>.<feature-branch>",
+      "dependency_mode": "merged | branch",
       "pr_number": null,
       "pr_merged": false
     }
