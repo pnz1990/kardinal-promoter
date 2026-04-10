@@ -1,242 +1,247 @@
 # kardinal-promoter — Autonomous Team Configuration
-# This file defines the roles, responsibilities, and coordination protocol
-# for the autonomous agent team. Agents read this to understand their role
-# and what to pick up next.
 #
 # WORKFLOW:
-#   Human:       defines vision + roadmap → checks GitHub Projects board → unblocks escalations
-#   Coordinator: reads progress.md + roadmap.md → generates queue → creates items →
-#                assigns to feature agents → gates on CI → spawns QA → updates board
-#   Feature:     TDD in isolated worktree → verify → push PR
-#   QA:          reviews PR → approve or reject
+#   Human:       defines vision + roadmap → checks board → unblocks escalations
+#   Coordinator: generates queue → creates items → assigns engineers → tracks state → reports
+#   Engineer:    TDD → self-validate → push PR → monitor CI → respond to QA → merge → smoke test
+#   QA:          continuous PR watcher → full checklist → re-review after fixes → escalate
 #
-# The human NEVER creates queue files, item files, or specs.
-# The coordinator generates all of these autonomously.
+# Human NEVER creates queue files, item files, or code.
+# Coordinator generates all artifacts autonomously.
 
-version: "1.0"
+version: "1.1"
 
-# ── Source of Truth (read in this order at session start) ──────────────────────
+# ── Source of Truth ─────────────────────────────────────────────────────────
 source_of_truth:
-  - docs/aide/vision.md          # product vision, features, success criteria
-  - docs/aide/roadmap.md         # staged delivery plan, acceptance criteria
-  - docs/aide/progress.md        # what is done / in progress / planned
-  - .specify/memory/constitution.md  # non-negotiable principles
-  - docs/aide/team.yml           # this file
-  - AGENTS.md                    # full agent context and command reference
+  - docs/aide/vision.md
+  - docs/aide/roadmap.md
+  - docs/aide/progress.md
+  - .specify/memory/constitution.md
+  - docs/aide/team.yml
+  - AGENTS.md
 
-# ── Roles ──────────────────────────────────────────────────────────────────────
+# ── Roles ────────────────────────────────────────────────────────────────────
 roles:
 
   coordinator:
-    description: >
-      Orchestrates the team. Reads progress.md and the current queue, assigns
-      work items to feature agents, tracks state in .maqa/state.json, gates on
-      CI, and spawns the QA agent after each feature agent completes.
     command: /speckit.maqa.coordinator
-    reads:
-      - docs/aide/progress.md
-      - docs/aide/queue/          # current active queue file
-      - .maqa/state.json          # persistent state (created on first run)
-      - maqa-config.yml
-    writes:
-      - .maqa/state.json
+    loop: continuous
+    stop_condition: all 20 roadmap stages complete
     rules:
-      - Never implement features. Never commit or push. Return SPAWN blocks only.
-      - Respect max_parallel from maqa-config.yml (default 3).
-      - Gate on CI before spawning QA (MAQA CI extension).
-      - If a feature agent is blocked, log reason and continue with others.
-      - After all queue items are done, update docs/aide/progress.md.
+      - Never implement features. Never commit. Never push. Never merge.
+      - Do not assign an item if its Depends-on items are not state=done.
+      - Keep max 3 items in in_progress or in_review simultaneously.
+      - When an item is blocked, continue assigning others.
+      - Post [BATCH COMPLETE] to Issue #1 after each queue batch.
+      - Post [NEEDS HUMAN] to Issue #1 when any item hits needs-human.
+      - Generate next queue automatically when current queue exhausts.
 
-  feature:
-    description: >
-      Implements one work item in an isolated git worktree. Works backwards from
-      the spec, user documentation, and examples. Writes tests first (TDD mode).
-      Pushes a PR with the spec item as the PR description.
+  engineer:
     command: /speckit.maqa.feature
-    reads:
-      - docs/aide/items/<assigned-item>.md  # detailed work item spec
-      - .specify/specs/<feature>/spec.md    # feature specification
-      - .specify/specs/<feature>/tasks.md   # task checklist
-      - docs/design/<feature>.md            # technical implementation spec
-      - docs/aide/vision.md                 # product context
-      - AGENTS.md                           # Go standards, architecture
-      - .specify/memory/constitution.md     # non-negotiable principles
-      - examples/                           # working examples as acceptance tests
-      - docs/quickstart.md                  # user docs as acceptance criteria
-    writes:
-      - code in assigned worktree
-      - .specify/specs/<feature>/tasks.md   # tick tasks as completed
+    loop: continuous
+    stop_condition: coordinator marks slot idle or needs-human after 2 retries
+    owns_feature_e2e: true
+    merge_owner: true
     rules:
-      - Work ONLY in the assigned worktree. Never touch main repo.
-      - Write tests BEFORE implementation (tdd: true in maqa-config.yml).
-      - Work backwards from docs/ and examples/ — if it is not in the user docs, do not build it.
-      - Run go test ./... -race before marking done.
-      - Run /speckit.verify-tasks.run to confirm no phantom completions.
-      - Run /speckit.verify to validate spec acceptance criteria are met.
-      - Every new .go file needs Apache 2.0 copyright header.
-      - No util.go, helpers.go, common.go.
-      - Every reconciler must be idempotent.
-      - auto_push: true — branch is pushed automatically.
-      - PR title format: "feat(<scope>): <description>"
-      - PR body must use docs/aide/pr-template.md and reference work item + spec.
+      - Work ONLY in the assigned worktree. Never touch main repo during implementation.
+      - TDD strict: test file before implementation file, always.
+      - Manually validate against examples/ before pushing. Include kubectl output in PR.
+      - Monitor CI every 3 minutes after push. Fix red CI before waiting for QA.
+      - Poll QA review every 5 minutes. Fix all requested changes before re-pushing.
+      - Merge PR yourself after QA approves AND CI is green.
+      - Run go build ./... on main after merge (smoke test). Open hotfix issue if it fails.
+      - Clean up worktree after merge via /speckit.worktree.clean.
+      - Max 2 retries on any blocker before escalating to needs-human.
+      - Never add a Go module dependency without labeling the issue needs-human first.
 
   qa:
-    description: >
-      Reviews the feature agent's PR. Validates implementation against the spec,
-      user documentation, and working examples. Runs static analysis. Approves
-      or rejects with specific, actionable feedback.
     command: /speckit.maqa.qa
-    reads:
-      - PR diff and commits
-      - .specify/specs/<feature>/spec.md     # acceptance criteria
-      - docs/design/<feature>.md             # implementation spec
-      - docs/aide/items/<item>.md            # work item definition
-      - docs/                                # user docs as acceptance criteria
-      - examples/                            # working examples
-      - AGENTS.md                            # anti-patterns and standards
-    writes:
-      - PR review comments
-      - PR approval or request-for-changes
-    checks:
-      - All acceptance scenarios from spec.md pass
-      - go vet ./... passes
-      - go test ./... -race passes
-      - No .go file missing Apache 2.0 header
-      - No util.go, helpers.go, common.go created
-      - Error wrapping uses fmt.Errorf("context: %w", err)
-      - Every reconciler has idempotency test
-      - User docs are consistent with implementation (if user-facing)
-      - Examples in examples/ still work with new code
-      - No phantom completions (tasks [x] without implementation)
-      - MAQA CI gate green
+    loop: continuous
+    poll_interval: 2m
+    stop_condition: no open PRs AND final [BATCH COMPLETE] posted
+    re_review_policy: full_diff_every_time
+    rules:
+      - Review every PR labeled kardinal that has new commits since last review.
+      - Never approve based on partial re-review. Always re-read the full diff.
+      - Every checklist item must pass. Fail one = request-changes.
+      - Provide file:line references for every issue raised.
+      - Escalate to [QA FINDING] on Issue #1 after same issue appears 3+ times.
+      - Post severity on findings: low | medium | high.
 
-# ── Work Item Lifecycle ────────────────────────────────────────────────────────
+# ── Work Item Lifecycle ──────────────────────────────────────────────────────
 lifecycle:
   states:
-    - backlog     # in queue, not started
-    - todo        # coordinator assigned, worktree not created yet
-    - in_progress # feature agent working
-    - in_review   # PR open, QA agent reviewing
-    - done        # PR merged, CI green, QA approved
+    - backlog     # in queue, dependencies not met
+    - todo        # ready to start, coordinator assigned
+    - in_progress # engineer working (TDD → self-validate → PR)
+    - in_review   # PR open, CI green, QA reviewing
+    - done        # PR merged by engineer, smoke test passed
 
+  merge_owner: engineer
   state_file: .maqa/state.json
 
-  transitions:
-    backlog -> todo: coordinator assigns based on max_parallel and dependencies
-    todo -> in_progress: feature agent spawned with worktree
-    in_progress -> in_review: feature agent done, CI green, PR opened
-    in_review -> done: QA approves, PR merged
-    in_review -> in_progress: QA rejects, feature agent re-spawned with feedback
-    in_progress -> backlog: feature agent blocked (dependency not met)
+  state_machine:
+    backlog -> todo:       coordinator validates all dependencies are done
+    todo -> in_progress:   coordinator assigns + creates worktree
+    in_progress -> in_review: engineer: tests pass + self-validate + CI green + PR open
+    in_review -> in_progress: QA requests changes
+    in_review -> done:     QA approves + CI green + engineer merges + smoke test passes
+    in_progress -> backlog: engineer blocked after 2 retries
 
-# ── Dependency Rules ───────────────────────────────────────────────────────────
+# ── Dependency Enforcement ───────────────────────────────────────────────────
 dependencies:
-  # Specs must be implemented in dependency order.
-  # The coordinator enforces this via .specify/specs/<feature>/spec.md Depends-on field.
-  enforcement: strict     # never start a feature if its dependencies are not done
-  parallel_ok: true       # features with no shared dependency can run in parallel
+  enforcement: strict
+  check: coordinator reads spec.md Depends-on field, verifies state=done in state.json
+  parallel_ok: true
 
-# ── Board ──────────────────────────────────────────────────────────────────────
-board:
-  provider: github-projects
-  url: https://github.com/users/pnz1990/projects/1
-  config: maqa-github-projects/github-projects-config.yml
-  setup_command: /speckit.maqa-github-projects.setup
-  populate_command: /speckit.maqa-github-projects.populate
-  # Status columns map to lifecycle states:
-  todo_column: "Todo"
-  in_progress_column: "In Progress"
-  in_review_column: "In Review"
-  done_column: "Done"
-
-# ── CI Gate ────────────────────────────────────────────────────────────────────
+# ── CI Gate ──────────────────────────────────────────────────────────────────
 ci_gate:
-  enabled: true
   config: maqa-ci/ci-config.yml
-  block_on_red: true      # never move to in_review if CI is red
+  provider: github_actions
+  workflow: ci.yml
+  required_jobs:
+    - build        # go vet, go test -race, go build, headers, banned files
+    - go-sum-integrity
+  block_on_red: true
   timeout_minutes: 20
-  provider: github_actions  # auto-detected; also supports gitlab_ci, circleci
 
-# ── PR Protocol ────────────────────────────────────────────────────────────────
+# ── Branch Protection (enforced at GitHub repo level) ────────────────────────
+branch_protection:
+  branch: main
+  require_pr: true
+  required_approvals: 1       # QA agent approval
+  dismiss_stale_reviews: true
+  allow_force_pushes: false
+  allow_deletions: false
+  # Note: CI required_status_checks added when first CI run completes
+
+# ── PR Protocol ──────────────────────────────────────────────────────────────
 pr_protocol:
   base_branch: main
   require_ci: true
   require_qa_approval: true
-  squash_merge: true
+  merge_method: squash
   delete_branch_on_merge: true
-  pr_template: docs/aide/pr-template.md   # see below
+  template: docs/aide/pr-template.md
+  required_in_pr_body:
+    - item_id
+    - spec_reference
+    - acceptance_criteria_checked
+    - go_test_output
+    - verify_tasks_output
+    - kubectl_validation_output
 
-# ── Reporting ─────────────────────────────────────────────────────────────────
+# ── State File ───────────────────────────────────────────────────────────────
+state:
+  file: .maqa/state.json
+  write_strategy: atomic     # write to .maqa/state.json.tmp, then rename
+  # Multiple agents write state. To prevent corruption:
+  # Each agent reads the file, modifies only its own item's state,
+  # writes back atomically. Agents poll; they do not hold locks.
+
+# ── Queue Protocol ───────────────────────────────────────────────────────────
+queue:
+  dir: docs/aide/queue/
+  items_dir: docs/aide/items/
+  batch_size: 10
+  naming: queue-NNN.md  (001, 002, ...)
+  coordinator_generates: true  # human never creates queue files
+
+# ── Worktree Convention ──────────────────────────────────────────────────────
+worktrees:
+  base: ..   # sibling of the main repo directory
+  naming: kardinal-promoter.<feature-branch>
+  # Example: ../kardinal-promoter.001-graph-integration
+  create_command: /speckit.worktree.create
+  clean_command: /speckit.worktree.clean
+  engineer_reads_path_from: .maqa/state.json  # coordinator writes worktree_path per item
+
+# ── Reporting ────────────────────────────────────────────────────────────────
 reporting:
   issue_number: 1
   issue_url: https://github.com/pnz1990/kardinal-promoter/issues/1
-  label: "report"
+  label: report
+  post_command: "gh issue comment 1 --body \"{body}\""
 
-  # The coordinator posts a comment to issue #1 when:
   events:
-    - trigger: batch_complete
-      when: all items in the current queue batch reach done or blocked
+
+    batch_complete:
+      trigger: all items in current queue batch reach done or blocked
       format: |
-        ## [BATCH COMPLETE] Queue {queue_id} — {timestamp}
+        ## [BATCH COMPLETE] {queue_id} — {timestamp}
 
-        **Shipped** ({n} items):
-        - {item_id}: {title} — PR #{pr_number}
-        - ...
+        **Shipped** ({done_count}):
+        {for each done item}- {item_id}: {title} — PR #{pr} merged ✅
+        {end}
+        **Blocked** ({blocked_count}):
+        {for each blocked item}- {item_id}: {title} — see issue #{issue}
+        {end}
+        **Progress**: {stages_done}/{stages_total} roadmap stages complete
+        **Next queue**: {next_queue_id} generating now
 
-        **Blocked** ({n} items):
-        - {item_id}: {title} — reason: {reason} (see issue #{issue_number})
-
-        **Next**: {next_queue_id} will be generated automatically.
-
-    - trigger: item_needs_human
-      when: an agent labels an issue needs-human
+    needs_human:
+      trigger: any agent labels an issue needs-human
       format: |
         ## [NEEDS HUMAN] {item_id}: {title} — {timestamp}
 
-        **Agent**: {role} ({feature|qa})
+        **Agent role**: {coordinator|engineer|qa}
         **Blocked on**: {reason}
-        **Action required**: Review issue #{issue_number} and remove the needs-human label to unblock.
+        **Issue**: {issue_url}
+        **Action**: Review the issue, provide the answer, remove the `needs-human` label.
 
-    - trigger: qa_finding
-      when: QA rejects a PR with a finding worth human attention (security, architecture, spec gap)
+    qa_finding:
+      trigger: QA escalates after 3+ failed fix attempts
       format: |
         ## [QA FINDING] {item_id}: {title} — {timestamp}
 
-        **Finding**: {description}
-        **PR**: #{pr_number}
         **Severity**: {low|medium|high}
+        **PR**: #{pr_number}
+        **File**: {file}:{line}
+        **Finding**: {description}
+        **Action required**: {recommended_action}
 
-  # How to post a report comment
-  post_command: |
-    gh issue comment 1 --body "{report_body}"
-queue_protocol:
-  queue_dir: docs/aide/queue/
-  items_dir: docs/aide/items/
-  batch_size: 10          # items per queue file
-# ── Queue Protocol ─────────────────────────────────────────────────────────────
+# ── Communication Protocol ───────────────────────────────────────────────────
 communication:
-  # Agents communicate through files, not messages.
-  # State changes are written to .maqa/state.json.
-  # Blocking issues are written as GitHub Issue comments.
   state_file: .maqa/state.json
-  blocking_label: "blocked"
-  needs_human_label: "needs-human"
-
-  # When an agent is stuck (blocked 2+ times on same item), it labels the
-  # GitHub Issue with "needs-human" and stops. Human reviews and unblocks.
+  labels:
+    blocked: "f97316"       # orange — dependency not met
+    needs_human: "e11d48"   # red — human decision required
+    report: "0075ca"        # blue — coordinator progress reports
   max_retries_before_escalation: 2
 
-# ── Human-in-the-Loop Gates ────────────────────────────────────────────────────
+# ── Human-in-the-Loop Gates ─────────────────────────────────────────────────
 human_gates:
-  # These decisions always require human review. Agents stop and label
-  # the relevant issue/PR with "needs-human" when they encounter these.
-  - type: architectural_change
-    description: Any change to CRD API, Go interfaces, or module structure not in the spec
-  - type: dependency_addition
-    description: Adding a new Go module dependency
-  - type: spec_ambiguity
-    description: Spec contradicts user docs or examples; agent cannot resolve
-  - type: test_failure_unknown
-    description: Tests fail for reasons not explained by the implementation
+  - type: new_go_dependency
+    description: Adding any entry to go.mod require block
+    action: label needs-human, write the module name and why it's needed
+
+  - type: crd_api_change
+    description: Any change to CRD field names, types, or required fields not in the spec
+    action: label needs-human, describe the divergence from spec
+
+  - type: go_interface_change
+    description: Changing an interface signature in pkg/ that other packages depend on
+    action: label needs-human, describe impact
+
+  - type: spec_contradiction
+    description: Spec says X but user docs/examples require Y
+    action: label needs-human, quote both sources exactly
+
+  - type: unexplained_test_failure
+    description: Tests fail in CI with no clear cause after 2 fix attempts
+    action: label needs-human, paste full CI log
+
   - type: security_finding
-    description: QA identifies a potential security issue
+    description: QA identifies a potential security vulnerability
+    action: label needs-human, high severity [QA FINDING] on Issue #1
+
+# ── Board ────────────────────────────────────────────────────────────────────
+board:
+  provider: github-projects
+  url: https://github.com/users/pnz1990/projects/1
+  config: maqa-github-projects/github-projects-config.yml
+  columns:
+    todo: "Todo"
+    in_progress: "In Progress"
+    in_review: "In Review"
+    done: "Done"

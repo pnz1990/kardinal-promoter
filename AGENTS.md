@@ -10,142 +10,221 @@ A Kubernetes-native promotion controller. Go 1.23+ backend + React 19 frontend, 
 
 ## Autonomous Development Model
 
-This project is built 100% by autonomous AI agents. No human writes code. The loop is:
-
 ```
 Human:       defines vision + roadmap → checks GitHub Project board → unblocks escalations
-Coordinator: generates queue → creates items → assigns to feature agents → gates on CI → spawns QA
-Feature:     TDD in isolated worktree → verifies against spec + docs → pushes PR
-QA:          reviews PR against spec + user docs + examples → approves or rejects
-Board:       GitHub Projects (https://github.com/users/pnz1990/projects/1)
+Coordinator: generates queue → creates items → assigns engineers → tracks state → posts reports
+Engineer:    TDD → self-validate against examples → push PR → monitor CI → respond to QA → merge
+QA:          continuous PR watcher → reviews against spec + docs → re-reviews after fixes
+Board:       https://github.com/users/pnz1990/projects/1
+Reports:     https://github.com/pnz1990/kardinal-promoter/issues/1
 ```
 
-The human never creates queue files, item files, or specs. The coordinator does all of that by reading `docs/aide/progress.md` and `docs/aide/roadmap.md`.
-
-The implementation **works backwards** from user documentation and examples:
-- `docs/quickstart.md` and `docs/concepts.md` define what the system must do
-- `examples/quickstart/` and `examples/multi-cluster-fleet/` are acceptance tests
-- If a feature is not in the user docs, it does not exist
+The human never creates queue files, item files, or code. The coordinator generates all artifacts. The engineer owns every feature end-to-end from assignment to merged PR.
 
 ---
 
 ## Reading Order (every agent, every session)
 
-Read these **in order** before doing anything else:
-
-1. `docs/aide/vision.md` — product vision, features, success criteria
-2. `docs/aide/roadmap.md` — staged delivery, acceptance criteria per stage
-3. `docs/aide/progress.md` — what is done / in progress / planned
-4. `.specify/memory/constitution.md` — non-negotiable principles (overrides everything)
-5. `docs/aide/team.yml` — your role, rules, lifecycle
-6. **Your assigned item**: `docs/aide/items/<NNN>.md` or `.specify/specs/<feature>/`
+1. `docs/aide/vision.md`
+2. `docs/aide/roadmap.md`
+3. `docs/aide/progress.md`
+4. `.specify/memory/constitution.md` — overrides everything
+5. `docs/aide/team.yml` — your role and rules
+6. Your assigned item: `docs/aide/items/<NNN>.md`
 
 ---
 
-## Role-Specific Instructions
+## Role Instructions
 
-### COORDINATOR — `/speckit.maqa.coordinator`
+### COORDINATOR
 
-Runs as a **continuous loop** until all stages in `docs/aide/progress.md` are complete.
+Command: `/speckit.maqa.coordinator` — runs as a continuous loop until all 20 roadmap stages complete.
 
-Loop:
-1. Read `docs/aide/progress.md` + `docs/aide/roadmap.md`
-2. If queue is empty: run `/speckit.aide.create-queue` + `/speckit.aide.create-item` for each item
-3. Run `/speckit.maqa-github-projects.populate` to sync board
-4. Assign `todo` items to available engineers (max 3, respecting dependency order)
-5. As engineers complete items: run `/speckit.maqa-ci.check`, then spawn QA
-6. As QA approves + PRs merge: update `.maqa/state.json` → `done`, move card to Done
-7. When current queue is exhausted: post `[BATCH COMPLETE]` to Issue #1, update `docs/aide/progress.md`, go to step 1
-8. When ALL stages in progress.md are `✅ Complete`: post final `[BATCH COMPLETE]`, exit
+```
+LOOP:
+1. Read progress.md + roadmap.md to determine next stage
+2. If queue is empty:
+   - /speckit.aide.create-queue   (generates docs/aide/queue/queue-NNN.md)
+   - /speckit.aide.create-item    (generates docs/aide/items/ for each queue item)
+   - /speckit.maqa-github-projects.populate  (syncs items to GitHub Projects board)
+3. Validate dependency graph: confirm all Depends-on items are done before assigning
+4. Assign todo items to available engineers in .maqa/state.json (max 3 concurrent)
+   Move GitHub Projects card: Todo → In Progress
+5. Monitor .maqa/state.json (poll every 2 min):
+   - state=in_review: move card to In Review
+   - state=done: move card to Done, free engineer slot, assign next item
+   - state=blocked: post [NEEDS HUMAN] to Issue #1, continue with other items
+6. When all queue items are done or blocked:
+   - Update docs/aide/progress.md
+   - Post [BATCH COMPLETE] to Issue #1
+   - Go to step 1 (loop)
+7. When ALL stages in progress.md are ✅ Complete:
+   - Post final [BATCH COMPLETE] report
+   - Exit
 
-Stop conditions (only these):
-- All roadmap stages complete
-- Fatal `needs-human` blocking every remaining item with no items runnable in parallel
-
-**Never implement features. Never commit. Return SPAWN blocks only.**
-**The human does not create queue files or item files. You do.**
+RULES:
+- Never implement features. Never commit. Never push.
+- Engineers merge their own PRs. You never merge.
+- Do not assign an item if its dependencies are not done (state=done in state.json).
+- Continue assigning other items when one is blocked.
+- Keep max 3 items in_progress or in_review at any time.
+```
 
 ---
 
-### ENGINEER — `/speckit.maqa.feature`
+### ENGINEER
 
-Runs as a **continuous loop** until told to stop.
+Command: `/speckit.maqa.feature` — runs as a continuous loop. Owns each feature end-to-end.
 
-Loop:
-1. Read `.maqa/state.json` for an item assigned to this engineer (state: `in_progress`)
-2. If no assignment: poll every 2 minutes until coordinator assigns one
-3. Implement the item (TDD, verify, push PR)
-4. Update `.maqa/state.json` → `in_review`
-5. Go to step 1 (pick up next item)
+```
+LOOP (one iteration = one item, fully merged):
 
-Stop conditions:
-- Coordinator explicitly marks this engineer's slot as idle with no future work
-- `needs-human` on current item after 2 retries
+1. PICK UP
+   - Poll .maqa/state.json every 2 min for an item with my engineer slot assigned
+   - Read docs/aide/items/<item>.md (primary instruction)
+   - Read .specify/specs/<feature>/spec.md (acceptance criteria)
+   - Read .specify/specs/<feature>/tasks.md (task checklist)
+   - Read docs/design/<feature>.md (implementation details)
+   - Read examples/ relevant to this feature
+
+2. IMPLEMENT (TDD — strict order)
+   - Write failing test file FIRST, before any implementation
+   - Implement until go test ./... -race passes
+   - go vet ./... must show zero findings
+   - Tick each task in tasks.md only AFTER its code exists
+   - Never tick a task without the corresponding code (verify-tasks will catch this)
+
+3. SELF-VALIDATE (mandatory, no exceptions)
+   - /speckit.verify-tasks.run — zero phantom completions required
+   - /speckit.verify — all spec acceptance criteria must pass
+   - Manual validation:
+     * Apply relevant examples: kubectl apply -f examples/quickstart/ (or multi-cluster-fleet/)
+     * Verify behavior matches docs/quickstart.md and docs/concepts.md exactly
+     * If anything does not match: fix implementation, re-run tests, re-validate
+     * Capture kubectl output — it goes in the PR body as evidence
+
+4. PUSH PR
+   - Branch is auto-pushed
+   - Open PR using docs/aide/pr-template.md
+   - Title: "feat(<scope>): <description>"  (Conventional Commits)
+   - Body MUST include:
+     * Item ID and spec reference
+     * Acceptance criteria checked (copy from spec.md, check each one)
+     * Output of: go test ./... -race (pass/fail summary)
+     * Output of: /speckit.verify-tasks.run (no phantom completions)
+     * Output of: kubectl apply validation (copy the terminal output)
+   - Set .maqa/state.json item state = in_review
+
+5. MONITOR CI (never leave a red CI unattended)
+   - Poll every 3 min: gh pr checks <pr-number>
+   - If any check is red: read the failure log, fix the code, push a new commit
+   - Do NOT proceed to step 6 until ALL checks are green
+   - If CI is flaky (same check fails 3x with no code change): label PR needs-human, escalate
+
+6. RESPOND TO QA
+   - Poll PR every 5 min: gh pr view <pr-number> --json reviews
+   - If QA requests changes:
+     * Read every comment — they include file:line references
+     * Fix every issue raised
+     * Push a new commit with message: "fix(<scope>): address QA review comments"
+     * Go to step 5 (verify CI is green before QA re-reviews)
+   - If QA approves AND all CI checks are green: proceed to step 7
+
+7. MERGE
+   - gh pr merge <pr-number> --squash --delete-branch
+   - /speckit.worktree.clean (remove this feature's worktree)
+   - Set .maqa/state.json item state = done
+   - Comment on the item's GitHub Issue: "Merged in PR #<N>. Feature complete."
+
+8. SMOKE TEST ON MAIN
+   - git checkout main && git pull
+   - go build ./...  (must succeed — catch regressions before moving on)
+   - If build fails: open a hotfix issue immediately, label needs-human, stop
+
+9. LOOP
+   - Go to step 1
+
+ESCALATION (max 2 retries per issue before escalating):
+- Dependency not done: set state=backlog, label issue blocked, notify coordinator
+- Spec ambiguity: label issue needs-human, write exact question in comment, stop
+- Test failure you cannot explain: label needs-human, paste full failure output, stop
+- New Go module needed: label needs-human (human gate per team.yml), stop
+
+RULES:
+- Work ONLY in the assigned worktree. Never touch main repo during implementation.
+- Every new .go file: Apache 2.0 copyright header
+- No util.go, helpers.go, common.go
+- fmt.Errorf("context: %w", err) for all error wrapping
+- Every reconciler must have an idempotency test
+- No kro import in go.mod (dynamic client only)
+- go.mod changes require needs-human label
+```
 
 ---
 
-### QA AGENT — `/speckit.maqa.qa`
+### QA AGENT
 
-Runs as a **continuous watch loop** until told to stop.
+Command: `/speckit.maqa.qa` — continuous watch loop.
 
-Loop:
-1. Poll GitHub for open PRs labeled `kardinal` every 2 minutes
-2. For each unreviewed PR: read diff, check against spec + user docs, run `/speckit.verify`
-3. Post approval or request-for-changes
-4. If finding warrants human attention: post `[QA FINDING]` to Issue #1
-5. Go to step 1
-
-Stop conditions:
-- No open PRs AND coordinator has posted `[BATCH COMPLETE]` for the final batch
-
-### FEATURE AGENT — `/speckit.maqa.feature`
-
-Work backwards in this exact order:
-1. `docs/aide/items/<assigned>.md` — what to build
-2. `.specify/specs/<feature>/spec.md` — acceptance criteria (Given/When/Then)
-3. `.specify/specs/<feature>/tasks.md` — ordered task checklist
-4. `docs/design/<feature>.md` — technical implementation spec
-5. `docs/quickstart.md` + `docs/concepts.md` — user docs = acceptance criteria
-6. `examples/` — working YAML = contract; your code must produce this behavior
-
-**TDD cycle** (`tdd: true` in `maqa-config.yml`):
 ```
-Write failing test → Implement → go test ./... -race green → tick task → next task
+LOOP:
+
+1. WATCH
+   Poll every 2 min: gh pr list --label kardinal --state open --json number,title,headRefName
+   Track which PRs have been reviewed and which commits triggered re-review
+
+2. REVIEW (for each PR with new commits since last review)
+   Read the full diff: gh pr diff <number>
+   Identify the item: read docs/aide/items/<item>.md
+   Read the spec: .specify/specs/<feature>/spec.md
+   Run: /speckit.verify on the branch
+
+   CHECKLIST (every item must pass — fail any = request-changes):
+   □ Every Given/When/Then from spec.md is implemented and working
+   □ Every FR-NNN has real code (not a stub, not a no-op)
+   □ PR body includes: kubectl validation output (manual test evidence)
+   □ PR body includes: /speckit.verify-tasks.run output (no phantom completions)
+   □ go vet passes (check CI status)
+   □ Apache 2.0 header on every .go file in the diff
+   □ No util.go, helpers.go, common.go in the diff
+   □ fmt.Errorf("context: %w", err) for error wrapping
+   □ Every new reconciler has an idempotency test
+   □ No kro module in go.mod
+   □ examples/ YAML in the PR body confirms manual testing was done
+   □ If user-facing: docs/ match the implementation
+
+3. POST REVIEW
+   PASS all checks:
+     gh pr review <number> --approve \
+       --body "LGTM. All acceptance criteria satisfied. Manual validation confirmed."
+
+   FAIL any check:
+     gh pr review <number> --request-changes --body "
+     ## QA Review — Changes Required
+
+     <one block per issue>
+     **Issue**: <category>
+     **File**: path/to/file.go:<line>
+     **Problem**: <what is wrong>
+     **Required**: <what it must be>
+     </one block per issue>
+     "
+
+4. WAIT AND RE-REVIEW
+   Poll PR every 5 min for new commits after requesting changes
+   On new commit: re-run the full checklist (not just the changed parts)
+   Never approve based on a partial re-review
+
+5. ESCALATE
+   Same issue raised 3+ times across fix attempts:
+     Post [QA FINDING] to Issue #1 with: item ID, file:line, description, severity
+     Label the issue needs-human
+     Continue reviewing other PRs
+
+6. LOOP → step 1
+
+STOP: No open PRs AND coordinator posted final [BATCH COMPLETE]
 ```
-
-**Done criteria** (run all before opening PR):
-```bash
-go test ./... -race          # must pass
-go vet ./...                 # zero findings
-/speckit.verify-tasks.run    # no phantom completions
-/speckit.verify              # spec acceptance criteria met
-```
-
-Then open PR using `docs/aide/pr-template.md`. Branch is auto-pushed (`auto_push: true`).
-
-**Unblocking rules:**
-- If stuck on a dependency (spec not done): move item back to `backlog`, label issue `blocked`, notify coordinator
-- If stuck on ambiguity in spec: label issue `needs-human`, stop, notify
-- If CI is flaky (not your code): retry once, then label `needs-human`
-- Never wait more than 2 retries before escalating
-
-### QA AGENT — `/speckit.maqa.qa`
-
-Review the PR. You do NOT re-run tests (CI does that). You check:
-
-1. Every Given/When/Then from `.specify/specs/<feature>/spec.md` is satisfied
-2. Every FR-NNN from the spec has an implementation
-3. PR diff is consistent with `docs/design/<feature>.md` edge cases
-4. User docs (`docs/`) match what was built (if user-facing behavior changed)
-5. `examples/` YAML still produces correct behavior
-6. Go standards (from constitution — check every .go file in the diff):
-   - Apache 2.0 header present
-   - No `util.go`, `helpers.go`, `common.go`
-   - `fmt.Errorf("context: %w", err)` for error wrapping
-   - Idempotency test for every reconciler
-7. No kro module in `go.mod` (dynamic client only)
-
-**Approve** if all pass. **Request changes** if any fail — provide exact `file:line` references.
 
 ---
 
@@ -156,15 +235,15 @@ User writes: Pipeline CRD + PolicyGate CRDs
 CI creates:  Bundle CRD (via POST /api/v1/bundles)
 
 kardinal-controller:
-  1. Bundle → translator generates kro Graph (per-Bundle, one per Pipeline)
-  2. Graph controller creates PromotionStep + PolicyGate CRs in DAG order
-  3. PromotionStep reconciler: steps → git-clone → kustomize-set-image →
-                                git-commit → open-pr → wait-for-merge → health-check
-  4. PolicyGate reconciler: evaluates CEL → status.ready + lastEvaluatedAt
-  5. Graph advances on readyWhen satisfied
-  6. Failure → Graph stops downstream → rollback PR opened
+  Bundle → translator generates kro Graph (per-Bundle, tailored to intent)
+  Graph controller creates PromotionStep + PolicyGate CRs in DAG order
+  PromotionStep reconciler: git-clone → kustomize-set-image → git-commit →
+                            open-pr → wait-for-merge → health-check
+  PolicyGate reconciler: evaluates CEL → status.ready + lastEvaluatedAt
+  Graph advances on readyWhen satisfied
+  Failure → Graph stops downstream → rollback PR opened
 
-Everything is a CRD. kubectl is sufficient to operate the system.
+All state in etcd. kubectl is sufficient.
 ```
 
 ## Package Layout
@@ -188,100 +267,85 @@ web/
   src/                      # React 19 UI (spec 006)
 ```
 
-## Go Standards (CONSTITUTION — every .go file)
+## Go Standards (non-negotiable, CI enforces)
 
-```
-// Copyright [year] The kardinal-promoter Authors.
+```go
+// Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 ```
 - `fmt.Errorf("context: %w", err)` — no bare errors
 - zerolog via `zerolog.Ctx(ctx)` — no fmt.Println
-- Table-driven tests, `testify/assert` + `require`, `go test -race`
-- `Conventional Commits`: `feat(scope): desc`, `fix(scope): desc`, `test(scope): desc`
-- No `util.go`, `helpers.go`, `common.go`
+- Table-driven tests with `testify/assert` + `require`, `go test -race`
+- Conventional Commits: `feat(scope): desc`, `fix(scope): desc`
+- No `util.go`, `helpers.go`, `common.go` — CI fails on these
 - Every reconciler: idempotent, safe to re-run after crash
+- No kro import in go.mod — use dynamic client only
 
-## Active Commands (the only ones agents need)
+CI additionally checks: Apache 2.0 headers, go.mod tidy, banned filenames.
 
-### AIDE (human-triggered only for vision/roadmap changes)
-```
-/speckit.aide.feedback-loop     reflect, adjust vision/roadmap when something is wrong
-```
+## Active Commands
 
-### AIDE (coordinator runs these, not the human)
-```
-/speckit.aide.create-queue      generate next 10 work items from progress + roadmap
-/speckit.aide.create-item       create detailed spec for a queue item
-```
-
-### MAQA (agent-driven)
-```
-/speckit.maqa.coordinator       orchestrate: assign items, gate CI, spawn QA
-/speckit.maqa.feature           implement one item in isolated worktree
-/speckit.maqa.qa                review PR against spec + docs + examples
-/speckit.maqa-ci.check          check GitHub Actions CI status on branch
-/speckit.maqa-github-projects.setup     one-time: bootstrap GitHub Projects config
-/speckit.maqa-github-projects.populate sync specs → GitHub Project board
-```
-
-### Quality gates (feature agent runs before every PR)
-```
-/speckit.verify-tasks.run       detect phantom completions
-/speckit.verify                 validate spec acceptance criteria
-```
-
-### Worktree (coordinator runs)
-```
-/speckit.worktree.create        spawn isolated worktree for feature branch
-/speckit.worktree.list          list active worktrees
-/speckit.worktree.clean         remove stale/merged worktrees
-```
-
-### Git (feature agent runs)
-```
-/speckit.git.feature            create feature branch + spec directory
-/speckit.git.commit             auto-commit changes
-```
+| Who | Command | Purpose |
+|---|---|---|
+| Human | `/speckit.aide.feedback-loop` | Adjust vision/roadmap |
+| Coordinator | `/speckit.aide.create-queue` | Generate next work batch |
+| Coordinator | `/speckit.aide.create-item` | Create item specs |
+| Coordinator | `/speckit.maqa-github-projects.populate` | Sync board |
+| Coordinator | `/speckit.worktree.create` | Spawn engineer worktrees |
+| Coordinator | `/speckit.worktree.list` | Check active worktrees |
+| Engineer | `/speckit.maqa.feature` | Run the engineer loop |
+| Engineer | `/speckit.verify-tasks.run` | No phantom completions |
+| Engineer | `/speckit.verify` | Spec acceptance criteria |
+| Engineer | `/speckit.worktree.clean` | Remove merged worktree |
+| Engineer | `/speckit.git.commit` | Auto-commit |
+| QA | `/speckit.maqa.qa` | Run the QA loop |
+| All | `/speckit.maqa-ci.check` | Check CI status on branch |
 
 ## Escalation Protocol
 
-When an agent cannot proceed, it MUST:
+Max retries before escalating: **2**
 
-1. Label the GitHub Issue with `blocked` or `needs-human`
-2. Write a comment explaining exactly what is blocking (file, line, question)
-3. Set item state to `blocked` in `.maqa/state.json`
-4. Stop. Do not attempt workarounds.
+An agent that cannot proceed MUST:
+1. Label the GitHub Issue `blocked` or `needs-human`
+2. Write a comment with: what is blocking, which file/line, what decision is needed
+3. Set `.maqa/state.json` item state to `blocked`
+4. Stop. No workarounds.
 
-The human reads the label, resolves it, removes the label, and the coordinator resumes.
+Human reads it, resolves it, removes the label. Coordinator resumes.
 
-**Max retries before escalation: 2** (configured in `docs/aide/team.yml`)
+Human-in-the-loop gates (always escalate):
+- New Go module dependency in go.mod
+- CRD API field change not in the spec
+- Go interface signature change
+- Spec contradicts user docs or examples
+- Test failure that cannot be explained
 
-## Anti-Patterns (QA blocks PRs containing these)
+## Anti-Patterns
 
-| Pattern | Detected by |
+| Pattern | How it's caught |
 |---|---|
-| Task `[x]` without implementation | `/speckit.verify-tasks.run` |
-| Mutating Deployments/Services directly | `/speckit.verify` (spec check) |
-| `import "github.com/ellistarn/kro/..."` in go.mod | QA review |
-| Missing Apache 2.0 header | QA review |
-| `util.go` / `helpers.go` / `common.go` | QA review |
-| CEL evaluation copy-pasted | QA review (single evaluator in `pkg/cel/`) |
-| No idempotency test on reconciler | QA review |
-| Feature not in user docs | `/speckit.verify` (spec check) |
-
----
+| Task [x] without implementation | `/speckit.verify-tasks.run` + QA checklist |
+| Missing manual validation evidence in PR | QA checklist item #3 |
+| Mutating Deployments/Services directly | `/speckit.verify` |
+| kro import in go.mod | CI + QA |
+| Missing Apache 2.0 header | CI `check-headers` job + QA |
+| util.go / helpers.go / common.go | CI `check-banned-filenames` job + QA |
+| No idempotency test on reconciler | QA checklist |
+| Feature not in user docs | `/speckit.verify` |
+| go.mod not tidy | CI `verify-go-mod-tidy` step |
+| No smoke test after merge | Engineer step 8 (go build ./...) |
 
 ## SPECIFY_FEATURE
 
-When running spec-kit commands outside a git branch context:
+When running outside a git branch:
 ```bash
 export SPECIFY_FEATURE=001-graph-integration
 ```
 
 ## Files Agents Must Not Modify
 
-- `docs/aide/vision.md` — human territory
-- `docs/aide/roadmap.md` — human territory
-- `AGENTS.md` — human territory
-- `.specify/memory/constitution.md` — human territory
-- `docs/aide/team.yml` — human territory
+- `docs/aide/vision.md`
+- `docs/aide/roadmap.md`
+- `AGENTS.md`
+- `.specify/memory/constitution.md`
+- `docs/aide/team.yml`

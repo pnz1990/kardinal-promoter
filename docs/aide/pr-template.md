@@ -1,42 +1,61 @@
-# PR: [work item title]
+# PR: [item title]
 
-## Work Item
+## Item Reference
 
-<!-- Link to the work item this PR implements -->
-- Item: `docs/aide/items/<NNN-item-name>.md`
-- Spec: `.specify/specs/<feature>/spec.md`
-- Design doc: `docs/design/<feature>.md`
+- **Item**: `docs/aide/items/<NNN-item-name>.md`
+- **Spec**: `.specify/specs/<feature>/spec.md`
+- **Design doc**: `docs/design/<feature>.md`
 
 ## What this implements
 
-<!-- 2-3 sentences describing what was built and why -->
+<!-- 2-3 sentences: what was built and why -->
 
-## Acceptance criteria checked
+## Acceptance Criteria
 
-<!-- Paste the acceptance scenarios from spec.md and mark each as passing -->
+<!-- Copy every Given/When/Then from spec.md and mark each -->
 
-- [ ] AC-1: Given [...], When [...], Then [...]
-- [ ] AC-2: Given [...], When [...], Then [...]
+- [ ] Given [...], When [...], Then [...]
+- [ ] Given [...], When [...], Then [...]
 
-## Tests
+## Test Output
 
 ```
-go test ./... -race
-# paste output here
+# go test ./... -race (paste output)
+
 ```
 
-## Checklist (agent self-review before opening PR)
+## Phantom Completion Check
+
+```
+# /speckit.verify-tasks.run (paste output — must show zero phantom completions)
+
+```
+
+## Manual Validation
+
+```
+# kubectl apply -f examples/quickstart/ (or multi-cluster-fleet/)
+# paste the full terminal output here
+
+```
+
+**Behavior matches docs/**:
+- [ ] `docs/quickstart.md` step X works as documented
+- [ ] `docs/concepts.md` behavior X is correct
+
+## Pre-merge Checklist (engineer completes before requesting review)
 
 - [ ] `go test ./... -race` passes
-- [ ] `go vet ./...` passes
+- [ ] `go vet ./...` zero findings
+- [ ] `/speckit.verify-tasks.run` zero phantom completions
+- [ ] `/speckit.verify` all acceptance criteria pass
+- [ ] Manual kubectl validation output included above
 - [ ] All new `.go` files have Apache 2.0 copyright header
-- [ ] No `util.go`, `helpers.go`, or `common.go` created
-- [ ] Error wrapping uses `fmt.Errorf("context: %w", err)`
-- [ ] Every reconciler has at least one idempotency test
-- [ ] `/speckit.verify-tasks.run` shows no phantom completions
-- [ ] User docs in `docs/` are consistent with implementation
-- [ ] Examples in `examples/` still work
+- [ ] No `util.go`, `helpers.go`, `common.go` created
+- [ ] No new entry in `go.mod require` block (or needs-human label set)
+- [ ] Every new reconciler has an idempotency test
+- [ ] No kro module import
 
-## QA notes
+## QA Notes
 
-<!-- QA agent fills this in during review -->
+<!-- QA agent fills this section during review -->

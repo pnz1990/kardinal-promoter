@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && exit 1)
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -race -count=1 -timeout 120s
+
+      - name: go build (smoke test)
+        run: go build ./...
+
+      - name: Check Apache 2.0 headers
+        run: |
+          missing=$(grep -rL "Licensed under the Apache License" --include="*.go" . \
+            --exclude-dir=vendor --exclude-dir=.git 2>/dev/null || true)
+          if [ -n "$missing" ]; then
+            echo "Missing Apache 2.0 header in:"
+            echo "$missing"
+            exit 1
+          fi
+
+      - name: Check banned filenames
+        run: |
+          banned=$(find . -name "util.go" -o -name "helpers.go" -o -name "common.go" \
+            | grep -v vendor | grep -v .git || true)
+          if [ -n "$banned" ]; then
+            echo "Banned filenames found:"
+            echo "$banned"
+            exit 1
+          fi
+
+  go-sum-integrity:
+    name: go.sum integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify go.sum
+        run: go mod verify
