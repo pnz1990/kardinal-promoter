@@ -1,12 +1,12 @@
 # MAQA GitHub Projects Configuration
 # Project: https://github.com/users/pnz1990/projects/1
-# Generated: 2026-04-09
-# Updated: 2026-04-10 (added Blocked column, Team field, corrected option IDs)
+# Updated: 2026-04-10 — added Priority, Size, STANDALONE-ENG, date fields
 
 owner: "pnz1990"
 project_number: "1"
 project_id: "PVT_kwHOC22HhM4BUMuc"
 
+# ── Status field ──────────────────────────────────────────────────────────────
 status_field_id: "PVTSSF_lAHOC22HhM4BUMuczhBWhSY"
 todo_option_id: "6b907ee2"
 in_progress_option_id: "a319a29c"
@@ -14,9 +14,36 @@ in_review_option_id: "a28ea749"
 done_option_id: "6b05228e"
 blocked_option_id: "5a260a66"
 
+# ── Team field ────────────────────────────────────────────────────────────────
 team_field_id: "PVTSSF_lAHOC22HhM4BUMuczhBWhac"
-team_engineer1_option_id: "04ec03ca"
-team_engineer2_option_id: "23ad3c53"
-team_engineer3_option_id: "ac0496fe"
+team_engineer1_option_id: "83acb259"
+team_engineer2_option_id: "7eeb1c25"
+team_engineer3_option_id: "e1b7f00a"
+team_standalone_option_id: "ec1b6e4e"
+
+# ── Priority field ────────────────────────────────────────────────────────────
+priority_field_id: "PVTSSF_lAHOC22HhM4BUMuczhBb450"
+priority_critical_option_id: "9203fb5e"
+priority_high_option_id: "ee3fdd47"
+priority_medium_option_id: "0d963b50"
+priority_low_option_id: "d26e2099"
+
+# ── Size field ────────────────────────────────────────────────────────────────
+size_field_id: "PVTSSF_lAHOC22HhM4BUMuczhBb454"
+size_xs_option_id: "55d02415"
+size_s_option_id: "5ba17e5c"
+size_m_option_id: "d45d0990"
+size_l_option_id: "57d87033"
+size_xl_option_id: "4c9c6a03"
+
+# ── Date fields ───────────────────────────────────────────────────────────────
+start_date_field_id: "PVTF_lAHOC22HhM4BUMuczhBWhao"
+target_date_field_id: "PVTF_lAHOC22HhM4BUMuczhBWhas"
+
+# ── Views ─────────────────────────────────────────────────────────────────────
+# monthly_roadmap_view_id: "PVTV_lAHOC22HhM4BUMuczgJ8P4g"
+# quarterly_roadmap_view_id: "PVTV_lAHOC22HhM4BUMuczgJ8P5c"
+# backlog_table_view_id: "PVTV_lAHOC22HhM4BUMuczgJ8P5g"
+# board_view_id: "PVTV_lAHOC22HhM4BUMuczgJ8QWw"
 
 linked_repo: "pnz1990/kardinal-promoter"
