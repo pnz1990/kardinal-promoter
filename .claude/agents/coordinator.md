@@ -87,13 +87,23 @@ LOOP:
 4. Assign items to free engineer slots (max 3 concurrent):
    For each assignable item:
    a. Verify slot is null in engineer_slots AND no other slot holds this item-id
-   b. Copy spec snapshot: cp docs/aide/items/<id>.md <worktree-path>/ITEM.md
-   c. MOVE BOARD CARD FIRST (before writing state.json): Todo → In Progress
+   b. Run /speckit.worktree.create to create the worktree first
+   c. Copy spec snapshot: cp docs/aide/items/<id>.md <worktree-path>/ITEM.md
+   d. Write CLAIM file into the worktree — this is how the engineer learns their identity:
+      cat > <worktree-path>/CLAIM <<EOF
+      AGENT_ID=<SLOT>
+      ITEM_ID=<item-id>
+      ASSIGNED_AT=<ISO-8601-now>
+      COORDINATOR_CYCLE=<current-cycle>
+      EOF
+      This file is the single source of truth for slot identity. The engineer reads
+      it on startup. A session that finds no CLAIM file in its worktree must STOP
+      and alert on Issue #1 — it has no valid assignment.
+   e. MOVE BOARD CARD FIRST (before writing state.json): Todo → In Progress
       Also set Team field on card to the engineer slot name
-   d. Write state.json atomically: state=assigned, assigned_to, assigned_at, worktree_path, engineer_slots
-   e. Run /speckit.worktree.create
-   f. Post on item Issue: "[🎯 COORDINATOR] Assigned <id> to <SLOT>. Worktree: <path>"
-   g. Post assignment summary on Issue #1
+   f. Write state.json atomically: state=assigned, assigned_to, assigned_at, worktree_path, engineer_slots
+   g. Post on item Issue: "[🎯 COORDINATOR] Assigned <id> to <SLOT>. Worktree: <path>"
+   h. Post assignment summary on Issue #1
 
 5. Monitor state.json every 2 min:
    - assigned >10 min, not yet in_progress → re-post assignment comment
