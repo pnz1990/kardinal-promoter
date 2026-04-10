@@ -10,13 +10,13 @@
 
 ## Goal
 
-Run `kubebuilder init` and `kubebuilder create api` to generate the scaffolding for
-three CRDs: `Pipeline`, `Bundle`, `PolicyGate`. Also scaffold the internal
-`PromotionStep` controller-internal type. No Go type fields yet — only the
-kubebuilder-generated stubs and `controller-gen` markers are added here.
+Add kubebuilder scaffolding for the four CRD types: `Pipeline`, `Bundle`, `PolicyGate`,
+`PromotionStep`. The project uses `pkg/` layout (per AGENTS.md), **not** `internal/`.
+Use controller-gen directly rather than `kubebuilder init` (which would overwrite the
+`pkg/` layout with `internal/`).
 
-The actual type fields (spec, status, validation) are implemented in Stage 1
-(queue-002).
+The actual type fields (spec, status, validation) are implemented in Stage 1 (queue-002).
+This item only creates the scaffolded stub types and wires controller-gen.
 
 ---
 
@@ -28,19 +28,22 @@ The actual type fields (spec, status, validation) are implemented in Stage 1
 
 ## Deliverables
 
-1. `kubebuilder init --domain kardinal.io --repo github.com/kardinal-promoter/kardinal-promoter`
-   output committed (PROJECT file, config/default/, config/manager/, etc.)
-2. `kubebuilder create api --group kardinal --version v1alpha1 --kind Pipeline` scaffold
-3. `kubebuilder create api --group kardinal --version v1alpha1 --kind Bundle` scaffold
-4. `kubebuilder create api --group kardinal --version v1alpha1 --kind PolicyGate` scaffold
-5. `kubebuilder create api --group kardinal --version v1alpha1 --kind PromotionStep` scaffold
-   (internal, not user-created; add `+kubebuilder:resource:scope=Namespaced` marker)
-6. `Makefile` updated: `generate` target calls `controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."`,
-   `manifests` target generates CRD YAML to `config/crd/bases/`
-7. `hack/boilerplate.go.txt` with Apache 2.0 header template
-8. `controller-gen` pinned in `Makefile` via `CONTROLLER_GEN_VERSION`
-9. All generated files have Apache 2.0 header (via boilerplate)
-10. `config/samples/` directory with one stub manifest per CRD
+1. Stub Go types in `pkg/` layout:
+   - `pkg/graph/types.go` — stub `Graph`, `GraphSpec`, `GraphNode`, `GraphStatus` types (no kubebuilder markers; Graph is a kro CRD, not ours)
+   - `pkg/reconciler/promotionstep/types.go` — stub `PromotionStep` struct with `+kubebuilder:object:root=true +kubebuilder:subresource:status` markers
+   - `pkg/reconciler/policygate/types.go` — stub `PolicyGate` struct with markers
+   - Create `api/v1alpha1/` directory for user-facing CRD types:
+     - `api/v1alpha1/pipeline_types.go` — stub `Pipeline`, `PipelineSpec`, `PipelineStatus`
+     - `api/v1alpha1/bundle_types.go` — stub `Bundle`, `BundleSpec`, `BundleStatus`
+     - `api/v1alpha1/policygate_types.go` — stub `PolicyGate`, `PolicyGateSpec`, `PolicyGateStatus`
+     - `api/v1alpha1/promotionstep_types.go` — stub `PromotionStep`, `PromotionStepSpec`, `PromotionStepStatus`
+     - `api/v1alpha1/groupversion_info.go` — scheme registration
+2. `Makefile` `generate` target: `$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."`
+3. `Makefile` `manifests` target: `$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases`
+4. `hack/boilerplate.go.txt` with Apache 2.0 header template
+5. `CONTROLLER_GEN_VERSION` pinned in Makefile
+6. All generated files have Apache 2.0 header (via boilerplate)
+7. `config/samples/` directory with one stub manifest per user-facing CRD (Pipeline, Bundle, PolicyGate)
 
 ---
 
