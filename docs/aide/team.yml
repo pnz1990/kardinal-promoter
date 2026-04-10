@@ -4,13 +4,14 @@
 # and what to pick up next.
 #
 # WORKFLOW:
-#   1. Human updates docs/aide/progress.md with new stages to start
-#   2. Human runs /speckit.aide.create-queue to generate next batch of work items
-#   3. Coordinator agent reads this file + queue + progress, assigns items to agents
-#   4. Feature agents pick up items, work in isolated worktrees, push PRs
-#   5. QA agent reviews PRs, validates against spec + user docs + tests
-#   6. CI gate must pass before QA approves
-#   7. Loop back to step 2 when queue is exhausted
+#   Human:       defines vision + roadmap → checks GitHub Projects board → unblocks escalations
+#   Coordinator: reads progress.md + roadmap.md → generates queue → creates items →
+#                assigns to feature agents → gates on CI → spawns QA → updates board
+#   Feature:     TDD in isolated worktree → verify → push PR
+#   QA:          reviews PR → approve or reject
+#
+# The human NEVER creates queue files, item files, or specs.
+# The coordinator generates all of these autonomously.
 
 version: "1.0"
 

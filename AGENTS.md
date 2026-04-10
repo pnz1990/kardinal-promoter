@@ -13,12 +13,14 @@ A Kubernetes-native promotion controller. Go 1.23+ backend + React 19 frontend, 
 This project is built 100% by autonomous AI agents. No human writes code. The loop is:
 
 ```
-Human:       vision + roadmap + queue creation + unblocking escalations
-Coordinator: reads queue → assigns items to feature agents → gates on CI → spawns QA
+Human:       defines vision + roadmap → checks GitHub Project board → unblocks escalations
+Coordinator: generates queue → creates items → assigns to feature agents → gates on CI → spawns QA
 Feature:     TDD in isolated worktree → verifies against spec + docs → pushes PR
 QA:          reviews PR against spec + user docs + examples → approves or rejects
 Board:       GitHub Projects (https://github.com/users/pnz1990/projects/1)
 ```
+
+The human never creates queue files, item files, or specs. The coordinator does all of that by reading `docs/aide/progress.md` and `docs/aide/roadmap.md`.
 
 The implementation **works backwards** from user documentation and examples:
 - `docs/quickstart.md` and `docs/concepts.md` define what the system must do
@@ -44,15 +46,18 @@ Read these **in order** before doing anything else:
 
 ### COORDINATOR — `/speckit.maqa.coordinator`
 
-1. Read `docs/aide/progress.md` + current `docs/aide/queue/queue-NNN.md`
-2. Read `.maqa/state.json` for current feature states
-3. Assign `todo` items to feature agents (max 3 parallel, from `maqa-config.yml`)
-4. After feature agent completes: check CI via `/speckit.maqa-ci.check`
-5. If CI green: move to In Review, spawn QA agent via `/speckit.maqa.qa`
-6. If QA approves + PR merged: update `.maqa/state.json` → `done`, move card on GitHub Projects
-7. When queue exhausted: update `docs/aide/progress.md`, notify human to run `/speckit.aide.create-queue`
+1. Read `docs/aide/progress.md` + `docs/aide/roadmap.md` to understand what stage to work on next
+2. If `docs/aide/queue/` is empty: generate the next batch of work items by running `/speckit.aide.create-queue`, then `/speckit.aide.create-item` for each item
+3. Populate the GitHub Projects board via `/speckit.maqa-github-projects.populate`
+4. Read `.maqa/state.json` for current feature states
+5. Assign `todo` items to feature agents respecting dependency order (max 3 parallel from `maqa-config.yml`)
+6. After feature agent completes: check CI via `/speckit.maqa-ci.check`
+7. If CI green: move to In Review, spawn QA agent via `/speckit.maqa.qa`
+8. If QA approves + PR merged: update `.maqa/state.json` → `done`, move card on GitHub Projects
+9. When queue exhausted: update `docs/aide/progress.md`, generate next queue
 
 **Never implement features. Never commit. Return SPAWN blocks only.**
+**The human does not create queue files or item files. You do.**
 
 ### FEATURE AGENT — `/speckit.maqa.feature`
 
@@ -159,12 +164,15 @@ web/
 
 ## Active Commands (the only ones agents need)
 
-### AIDE (human-driven)
+### AIDE (human-triggered only for vision/roadmap changes)
+```
+/speckit.aide.feedback-loop     reflect, adjust vision/roadmap when something is wrong
+```
+
+### AIDE (coordinator runs these, not the human)
 ```
 /speckit.aide.create-queue      generate next 10 work items from progress + roadmap
 /speckit.aide.create-item       create detailed spec for a queue item
-/speckit.aide.execute-item      implement a single item (human-supervised mode)
-/speckit.aide.feedback-loop     reflect, adjust vision/roadmap/progress
 ```
 
 ### MAQA (agent-driven)
