@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-10T17:16Z
+> Last updated: 2026-04-10T18:30Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -15,8 +15,8 @@
 | Stage | Title | Status | Notes |
 |---|---|---|---|
 | 0 | Project Skeleton | ✅ Complete | All 4 items merged: PRs #8, #9, #10, #11. |
-| 1 | CRD Types and Validation | 🚧 In Progress | Item 005 assigned to ENGINEER-1 (queue-002) |
-| 2 | Bundle and Pipeline Reconcilers (No-Op Baseline) | 📋 Planned | Depends on Stage 1 |
+| 1 | CRD Types and Validation | ✅ Complete | Item 005 merged: PR #19. All 4 CRD types complete. |
+| 2 | Bundle and Pipeline Reconcilers (No-Op Baseline) | 🚧 In Progress | Items 006/007 queued (queue-003) |
 | 3 | Graph Generation and kro Integration | 📋 Planned | Depends on Stage 2 |
 | 4 | PolicyGate CEL Evaluator | 📋 Planned | Depends on Stage 3 |
 | 5 | Git Operations and GitHub PR Flow | 📋 Planned | Depends on Stage 3 |
@@ -52,7 +52,16 @@
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
-| 005 | Complete CRD types, validation markers, generated YAML | 🚧 In Progress | — | Assigned ENGINEER-1, queue-002 |
+| 005 | Complete CRD types, validation markers, generated YAML | ✅ Complete | #19 merged | All 4 CRD types, roundtrip tests |
+
+---
+
+## Stage 2 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 006 | Controller Manager + BundleReconciler + PipelineReconciler | 📋 Planned | — | Waiting for coordinator assignment |
+| 007 | Helm chart controller deployment + RBAC + integration test | 📋 Planned | — | Depends on 006 branch |
 
 ---
 
