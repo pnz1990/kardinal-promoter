@@ -30,11 +30,14 @@ Write your initial heartbeat:
 ```bash
 python3 - <<'EOF'
 import json, datetime
+# Always re-read before writing — never assume the file hasn't changed
 with open('.maqa/state.json', 'r') as f:
     s = json.load(f)
+# Preserve existing cycle count if resuming; reset to 1 only on a truly fresh start
+existing_cycle = s['session_heartbeats']['QA'].get('cycle', 0)
 s['session_heartbeats']['QA'] = {
     'last_seen': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-    'cycle': 1
+    'cycle': existing_cycle + 1
 }
 with open('.maqa/state.json', 'w') as f:
     json.dump(s, f, indent=2)
@@ -56,17 +59,28 @@ Read each of these files before starting the loop:
 
 **This loop does NOT stop after one PR. It does NOT stop when a PR is reviewed. It polls every 2 minutes until the stop condition.**
 
+**CRITICAL — state.json is shared with the coordinator which does atomic full-file rewrites.
+NEVER cache state.json contents between loop cycles. ALWAYS re-read the file immediately
+before writing. A cached copy will silently overwrite the coordinator's changes.**
+
 ```
 LOOP:
 
-1. HEARTBEAT — update session_heartbeats.QA in state.json on every cycle:
-   python3 -c "
+1. HEARTBEAT — re-read state.json fresh, then update only QA fields, then write back:
+   python3 - <<'PYEOF'
    import json, datetime
-   with open('.maqa/state.json','r') as f: s=json.load(f)
-   s['session_heartbeats']['QA']['last_seen'] = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
-   s['session_heartbeats']['QA']['cycle'] = s['session_heartbeats']['QA'].get('cycle',0)+1
-   with open('.maqa/state.json','w') as f: json.dump(s,f,indent=2)
-   "
+   # Re-read every time — coordinator may have rewritten the file since last cycle
+   with open('.maqa/state.json', 'r') as f:
+       s = json.load(f)
+   # Increment from whatever cycle value is currently in the file (not from memory)
+   current_cycle = s['session_heartbeats']['QA'].get('cycle', 0)
+   s['session_heartbeats']['QA'] = {
+       'last_seen': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+       'cycle': current_cycle + 1
+   }
+   with open('.maqa/state.json', 'w') as f:
+       json.dump(s, f, indent=2)
+   PYEOF
 
 2. STOP CHECK — check for project complete:
    gh issue view 1 --repo pnz1990/kardinal-promoter --json comments \
@@ -137,6 +151,7 @@ Exit the loop only when:
 
 ## Rules
 
+- **NEVER cache state.json between loop cycles.** The coordinator does atomic full-file rewrites. Always re-read the file immediately before any write. A stale cached copy will silently overwrite the coordinator's changes.
 - NEVER approve based on a partial review. Re-review the FULL diff on every new commit, not just the delta.
 - NEVER skip CI check before reviewing. A PR with red CI must not be reviewed.
 - ALWAYS include `file:line` references for every requested change.
