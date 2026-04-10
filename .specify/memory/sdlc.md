@@ -15,17 +15,21 @@ Seven concurrent sessions, one role each:
 
 | Session | Role | Agent file | Runs until |
 |---|---|---|---|
-| 1 | Coordinator | `.claude/agents/coordinator.md` | All journeys complete |
-| 2 | Engineer 1 | `.claude/agents/engineer.md` (set AGENT_ID=ENGINEER-1) | No more work + queue empty |
-| 3 | Engineer 2 | `.claude/agents/engineer.md` (set AGENT_ID=ENGINEER-2) | No more work + queue empty |
-| 4 | Engineer 3 | `.claude/agents/engineer.md` (set AGENT_ID=ENGINEER-3) | No more work + queue empty |
-| 5 | QA | `.claude/agents/qa-watcher.md` | No open PRs + [PROJECT COMPLETE] posted |
-| 6 | Scrum Master | `.claude/agents/scrum-master.md` | One-shot per batch (triggered by coordinator) |
-| 7 | Product Manager | `.claude/agents/product-manager.md` | One-shot per batch (triggered by coordinator) |
+| 1 | Coordinator | `~/.kardinal/agents/coordinator.md` | All journeys complete |
+| 2–N | Engineer | `~/.kardinal/agents/engineer.md` | No more work + queue empty |
+| N+1 | QA | `~/.kardinal/agents/qa-watcher.md` | No open PRs + [PROJECT COMPLETE] posted |
+| N+2 | Scrum Master | `~/.kardinal/agents/scrum-master.md` | One-shot per batch (triggered by coordinator) |
+| N+3 | Product Manager | `~/.kardinal/agents/product-manager.md` | One-shot per batch (triggered by coordinator) |
+
+**Agent files live at `~/.kardinal/agents/` — outside the git repo.**
+They are shared by all sessions and all worktrees. Updating a file there takes effect
+immediately on every session's next cycle — no git pull, no rebase required.
+The number of engineer sessions is dynamic: run as many as needed. Each session reads
+its slot identity from the `CLAIM` file the coordinator writes into its worktree.
 
 **Note on `/speckit.maqa.qa`**: this is a one-shot static analysis tool invoked by the coordinator
 for a single feature. It is NOT the same as the QA watcher session. Do not confuse them.
-The QA watcher (`.claude/agents/qa-watcher.md`) is the continuous loop that polls for open PRs.
+The QA watcher (`~/.kardinal/agents/qa-watcher.md`) is the continuous loop that polls for open PRs.
 The one-shot tool (`/speckit.maqa.qa`) runs inline when the coordinator needs a static analysis pass.
 
 All sessions start in the main repository directory. The coordinator creates
@@ -35,7 +39,7 @@ The Scrum Master and Product Manager do not have worktrees. They work in the
 main repository and propose changes via GitHub Issues and PRs.
 
 For Claude Code: open each session, start a new conversation, and run the agent file
-(e.g. `.claude/agents/coordinator.md`) as the initial prompt. The coordinator and
+(e.g. `~/.kardinal/agents/coordinator.md`) as the initial prompt. The coordinator and
 engineers loop continuously. The QA watcher loops continuously. The SM and PM
 are one-shot — each runs once per batch when triggered.
 
