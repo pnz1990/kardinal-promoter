@@ -51,12 +51,17 @@ roles:
       how_journey: "add journey to definition-of-done.md, add test stub, add make target"
       report: "[NEW SPEC] / [NEW JOURNEY] on report issue"
     rules:
-      - "Never implement features. Never commit. Never push. Never merge."
-      - "Engineers merge their own PRs."
-      - "Do not assign if Depends-on items are not done."
+      - "On startup: apply RESUME PROTOCOL — read state.json, if items in-flight resume immediately."
+      - "Never implement features. Never commit. Never push."
+      - "Coordinator may merge a PR only as fallback when engineer session has clearly ended (QA LGTM + CI green + no activity >30 min)."
+      - "Engineers merge their own PRs — coordinator fallback is the exception, not the norm."
+      - "Check dependency_mode per item: merged (default) = dep state==done; branch = dep branch exists on remote."
+      - "Assign next item IMMEDIATELY when a slot frees — do not wait for the whole batch to finish."
       - "Never generate next queue if audit failed."
       - "Never skip the batch audit."
       - "Post [BATCH COMPLETE] with journey status after every batch."
+      - "Write session_heartbeats.COORDINATOR on every poll cycle."
+      - "If QA heartbeat >15 min old and item in_review: post dead-session alert on Issue #1 and the PR."
 
   engineer:
     command: /speckit.maqa.feature
@@ -65,13 +70,17 @@ roles:
     merge_owner: true
     stop_condition: "no more work assigned + queue exhausted"
     rules:
+      - "On startup: apply RESUME PROTOCOL — if item assigned_to==MY_SLOT and state==assigned, pick it up immediately."
       - "Work ONLY in the assigned worktree."
       - "TDD: test file before implementation file, always."
+      - "SPEC FRESHNESS: on pickup, run git pull origin main, then read ITEM.md (frozen spec in worktree root), then gh issue view <item-issue-number> for pre-impl alerts."
+      - "If any Issue alert contradicts ITEM.md: follow the alert."
       - "Run relevant journey steps from definition-of-done.md before pushing."
       - "Capture journey output and include in PR body."
       - "Monitor CI every 3 min after push. Fix red before waiting for QA."
-      - "Poll QA review every 5 min. Fix all changes before re-pushing."
-      - "Merge PR after QA approves AND CI green."
+      - "Poll PR comments AND reviews every 5 min (--json reviews,comments). Read all comments — PM/coordinator flags are blocking."
+      - "When QA posts LGTM: merge IMMEDIATELY in the same poll cycle. Do NOT wait for coordinator signal."
+      - "MERGE IS MANDATORY. Do not exit the session before gh pr merge completes."
       - "Run PROJECT.build_command on main after merge (smoke test)."
       - "Clean up worktree after merge via /speckit.worktree.clean"
       - "Max 2 retries before escalating to needs-human."

@@ -406,12 +406,6 @@ INSPECTION CYCLE:
 3. APPLY IMPROVEMENTS
    The Scrum Master commits directly to main — no PR required.
    
-   ATOMIC SCHEMA RULE: Any change to state machine state names in this file
-   MUST update the Engineer Loop's pickup polling condition in the same commit.
-   The two must always be consistent:
-     sdlc.md Engineer Loop "state == X" ←→ what coordinator writes in step 4
-   Changing one without the other causes silent engineer idle (proven by Night 1).
-   
    For minor changes (< 30 lines, no structural redesign):
      Edit the file(s), then:
        git add <files>
