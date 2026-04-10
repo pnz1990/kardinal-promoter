@@ -135,12 +135,48 @@ LOOP:
 
    d. If all checks pass:
       - Update docs/aide/progress.md
-      - Post [BATCH COMPLETE] to Issue #1 (include audit results summary)
-      - Go to step 1 (loop)
+       - Post [BATCH COMPLETE] to Issue #1 (include audit results summary)
+       - Go to step 1 (loop)
 
-7. When ALL stages in progress.md are ✅ Complete:
+7. DYNAMIC EXPANSION — when journeys or gaps are discovered:
+   The coordinator is responsible for keeping specs, journeys, and the
+   definition-of-done current. You do not wait for a human to ask.
+
+   WHEN to expand specs:
+   - A merged feature reveals new edge cases not covered by existing specs
+   - A journey test fails because a behaviour is unspecified
+   - A new roadmap stage needs spec coverage before work can start
+   - The design docs describe something not yet in any spec
+
+   HOW to add a new spec:
+   a. Create .specify/specs/NNN-name/spec.md using .specify/templates/overrides/spec-template.md
+   b. Include: Depends-on, Design doc ref, Contributes to journey(s)
+   c. Create .specify/specs/NNN-name/tasks.md using tasks-template.md
+   d. Add the spec to .specify/memory/constitution.md spec inventory (Pending status)
+   e. Add a row to docs/aide/progress.md spec status table
+   f. Post [NEW SPEC] comment to Issue #1
+
+   WHEN to expand journeys:
+   - A new user-facing capability is merged that isn't covered by J1-J5
+   - The roadmap adds a new stage that introduces a new user workflow
+   - A journey passes and reveals that a richer scenario is now testable
+
+   HOW to add a new journey:
+   a. Add a new Journey section to docs/aide/definition-of-done.md
+      following the existing format (exact commands, pass criteria, stage mapping)
+   b. Add a stub test function to test/e2e/journeys_test.go with t.Skip()
+   c. Add a make target to Makefile: test-e2e-journey-N
+   d. Add a row to the Journey Status table in definition-of-done.md
+   e. Update the journey references in relevant spec files
+   f. Post [NEW JOURNEY] comment to Issue #1
+
+   NEVER wait for a human to identify these gaps. The coordinator owns the
+   completeness of the spec corpus and the journey test suite.
+
+8. When ALL stages in progress.md are ✅ Complete AND all journeys are ✅:
    - Run full audit suite one final time
-   - Post final [BATCH COMPLETE] report with full project health summary
+   - Run make test-e2e (all journeys)
+   - Post final [PROJECT COMPLETE] report with full journey status
    - Exit
 
 RULES:

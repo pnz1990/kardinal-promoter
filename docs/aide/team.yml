@@ -43,9 +43,25 @@ roles:
       on_discrepancy: "open GitHub Issue labeled doc-gap, include in next queue"
     spec_traceability:
       runs: "after each feature merges"
-      check: every FR-NNN in spec.md has a corresponding test in the codebase
-      method: grep for FR identifier in test files
-      on_missing: open GitHub Issue labeled missing-test, include in next queue
+      check: "every FR-NNN in spec.md has a corresponding test in the codebase"
+      method: "grep for FR identifier in test files"
+      on_missing: "open GitHub Issue labeled missing-test, include in next queue"
+    dynamic_expansion:
+      runs: "after every batch, and whenever a gap is discovered"
+      spec_expansion:
+        triggers:
+          - "merged feature reveals edge cases not covered by existing specs"
+          - "journey test fails because a behaviour is unspecified"
+          - "design docs describe something not yet in any spec"
+        how: "create .specify/specs/NNN-name/ with spec.md + tasks.md, update constitution + progress.md"
+        report: "post [NEW SPEC] to Issue #1"
+      journey_expansion:
+        triggers:
+          - "new user-facing capability merged not covered by existing journeys"
+          - "roadmap adds a stage with a new user workflow"
+          - "a journey passes and a richer scenario is now testable"
+        how: "add journey to definition-of-done.md, stub test to journeys_test.go, make target, update spec journey refs"
+        report: "post [NEW JOURNEY] to Issue #1"
     rules:
       - Never implement features. Never commit. Never push. Never merge.
       - Do not assign an item if its Depends-on items are not state=done.
@@ -177,63 +193,20 @@ worktrees:
   engineer_reads_path_from: .maqa/state.json  # coordinator writes worktree_path per item
 
 # ── Reporting ────────────────────────────────────────────────────────────────
+
 reporting:
   issue_number: 1
   issue_url: "https://github.com/pnz1990/kardinal-promoter/issues/1"
   label: report
-  post_command: "gh issue comment 1 --body \"{body}\""
-
+  post_command: "gh issue comment 1 --body '{body}'"
   events:
-
-    batch_complete:
-      trigger: all items in current queue batch reach done or blocked
-      format: |
-        ## [BATCH COMPLETE] {queue_id} — {timestamp}
-
-        **Shipped** ({done_count}):
-        {for each done item}- {item_id}: {title} — PR #{pr} merged ✅
-        {end}
-        **Blocked** ({blocked_count}):
-        {for each blocked item}- {item_id}: {title} — see issue #{issue}
-        {end}
-        **Progress**: {stages_done}/{stages_total} roadmap stages complete
-        **Next queue**: {next_queue_id} generating now
-
-    needs_human:
-      trigger: any agent labels an issue needs-human
-      format: |
-        ## [NEEDS HUMAN] {item_id}: {title} — {timestamp}
-
-        **Agent role**: {coordinator|engineer|qa}
-        **Blocked on**: {reason}
-        **Issue**: {issue_url}
-        **Action**: Review the issue, provide the answer, remove the `needs-human` label.
-
-    qa_finding:
-      trigger: QA escalates after 3+ failed fix attempts
-      format: |
-        ## [QA FINDING] {item_id}: {title} — {timestamp}
-
-        **Severity**: {low|medium|high}
-        **PR**: #{pr_number}
-        **File**: {file}:{line}
-        **Finding**: {description}
-        **Action required**: {recommended_action}
-
-    batch_quality_gate_failed:
-      trigger: coordinator consistency audit fails after a batch
-      format: |
-        ## [BATCH QUALITY GATE FAILED] {queue_id} — {timestamp}
-
-        **Failed checks**:
-        {for each failed check}- {check_name}: {failure_reason}
-        {end}
-        **Action required**: Fix the issues above and remove the `needs-human` label.
-        Next queue will NOT be generated until this is resolved.
-        **PR**: #{pr_number}
-        **File**: {file}:{line}
-        **Finding**: {description}
-        **Action required**: {recommended_action}
+    batch_complete: "[BATCH COMPLETE] {queue_id} - {timestamp}: {done_count} shipped, {blocked_count} blocked. Journeys: {journey_status}"
+    needs_human: "[NEEDS HUMAN] {item_id} - {timestamp}: {agent} blocked on {reason}. Review issue #{issue} and remove needs-human label."
+    qa_finding: "[QA FINDING] {item_id} PR#{pr} {severity}: {file}:{line} - {description}"
+    batch_quality_gate_failed: "[BATCH QUALITY GATE FAILED] {queue_id}: {failed_checks}. Label needs-human removed will unblock."
+    new_spec: "[NEW SPEC] {spec_id}: {title} - contributes to {journeys}"
+    new_journey: "[NEW JOURNEY] J{N}: {title} - requires stages {stages}"
+    project_complete: "[PROJECT COMPLETE] All {n} stages and {m} journeys complete."
 
 # ── Communication Protocol ───────────────────────────────────────────────────
 communication:

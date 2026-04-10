@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Run tests
+        run: go test ./... -race -count=1 -timeout 120s
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          # Controller
+          GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-X main.version=${VERSION} -X main.commit=${GITHUB_SHA}" \
+            -o dist/kardinal-controller-linux-amd64 \
+            ./cmd/kardinal-controller/
+          GOOS=linux GOARCH=arm64 go build \
+            -ldflags="-X main.version=${VERSION} -X main.commit=${GITHUB_SHA}" \
+            -o dist/kardinal-controller-linux-arm64 \
+            ./cmd/kardinal-controller/
+          # CLI
+          GOOS=linux   GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-linux-amd64   ./cmd/kardinal/
+          GOOS=linux   GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-linux-arm64   ./cmd/kardinal/
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-darwin-amd64  ./cmd/kardinal/
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-darwin-arm64  ./cmd/kardinal/
+          GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-windows-amd64.exe ./cmd/kardinal/
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/pnz1990/kardinal-promoter:${{ env.VERSION }}
+            ghcr.io/pnz1990/kardinal-promoter:latest
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Package Helm chart
+        run: |
+          helm package charts/kardinal-promoter \
+            --version ${VERSION#v} \
+            --app-version ${VERSION} \
+            --destination dist/
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get commits since last tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges | head -20)
+          fi
+          echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+          echo "$COMMITS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: kardinal-promoter ${{ env.VERSION }}
+          body: |
+            ## kardinal-promoter ${{ env.VERSION }}
+
+            ### Changes
+            ${{ env.CHANGELOG }}
+
+            ### Install
+
+            ```bash
+            # CLI
+            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)
+            chmod +x kardinal-*
+            sudo mv kardinal-* /usr/local/bin/kardinal
+            ```
+
+            ```bash
+            # Helm chart
+            helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart --version ${{ env.VERSION }}
+            ```
+
+            ### Docker image
+            ```
+            ghcr.io/pnz1990/kardinal-promoter:${{ env.VERSION }}
+            ```
+          files: dist/*
+          draft: false
+          prerelease: ${{ contains(env.VERSION, '-') }}

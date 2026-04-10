@@ -6,67 +6,148 @@ on:
   pull_request:
     branches: [main]
 
+# Concurrency: cancel in-progress runs for the same PR/branch
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: build
+  # ── Pre-flight: detect what exists ───────────────────────────────────────────
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      has_gomod: ${{ steps.check.outputs.has_gomod }}
+      has_go_sources: ${{ steps.check.outputs.has_go_sources }}
+      has_web: ${{ steps.check.outputs.has_web }}
+      has_e2e: ${{ steps.check.outputs.has_e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect project artifacts
+        id: check
+        run: |
+          echo "has_gomod=$(test -f go.mod && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_go_sources=$(find . -name '*.go' -not -path '*/vendor/*' | head -1 | grep -q . && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_web=$(test -d web/src && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_e2e=$(test -f test/e2e/journeys_test.go && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "---"
+          echo "go.mod: $(test -f go.mod && echo EXISTS || echo MISSING - Stage 0 not yet complete)"
+          echo "Go sources: $(find . -name '*.go' -not -path '*/vendor/*' | wc -l | xargs) files"
+          echo "web/src: $(test -d web/src && echo EXISTS || echo MISSING)"
+          echo "test/e2e: $(test -f test/e2e/journeys_test.go && echo EXISTS || echo MISSING)"
+
+  # ── Docs and YAML lint (always runs) ─────────────────────────────────────────
+  docs-lint:
+    name: docs-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate YAML files
+        run: |
+          pip install pyyaml --quiet
+          python3 -c "
+          import yaml, sys, pathlib, os
+          errors = []
+          for f in pathlib.Path('.').rglob('*.yml'):
+            if '.git' in str(f) or 'node_modules' in str(f) or 'vendor' in str(f):
+              continue
+            try:
+              yaml.safe_load(open(f))
+            except yaml.YAMLError as e:
+              errors.append(f'{f}: {e}')
+          if errors:
+            for e in errors: print(e)
+            sys.exit(1)
+          print(f'All YAML valid ({len(list(pathlib.Path(\".\").rglob(\"*.yml\")))} files checked)')
+          "
+      - name: Check required docs exist
+        run: |
+          required=(
+            "docs/aide/vision.md"
+            "docs/aide/roadmap.md"
+            "docs/aide/progress.md"
+            "docs/aide/definition-of-done.md"
+            "docs/aide/team.yml"
+            "AGENTS.md"
+            ".specify/memory/constitution.md"
+            "maqa-config.yml"
+            "maqa-github-projects/github-projects-config.yml"
+          )
+          missing=()
+          for f in "${required[@]}"; do
+            [ -f "$f" ] || missing+=("$f")
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "Missing required files:"
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          echo "All required docs present"
 
+  # ── Go build + test (only when go.mod exists) ────────────────────────────────
+  build:
+    name: build
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-
       - name: Verify go.mod is tidy
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum || (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && exit 1)
-
+          git diff --exit-code go.mod go.sum || \
+            (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && exit 1)
       - name: go vet
         run: go vet ./...
-
       - name: go test
         run: go test ./... -race -count=1 -timeout 120s
-
-      - name: go build (smoke test)
+      - name: go build
         run: go build ./...
-
       - name: Check Apache 2.0 headers
         run: |
-          missing=$(grep -rL "Licensed under the Apache License" --include="*.go" . \
+          missing=$(grep -rL "Licensed under the Apache License" \
+            --include="*.go" . \
             --exclude-dir=vendor --exclude-dir=.git 2>/dev/null || true)
           if [ -n "$missing" ]; then
-            echo "Missing Apache 2.0 header in:"
+            echo "Missing Apache 2.0 header:"
             echo "$missing"
             exit 1
           fi
-
       - name: Check banned filenames
         run: |
-          banned=$(find . -name "util.go" -o -name "helpers.go" -o -name "common.go" \
+          banned=$(find . \( -name "util.go" -o -name "helpers.go" -o -name "common.go" \) \
             | grep -v vendor | grep -v .git || true)
           if [ -n "$banned" ]; then
-            echo "Banned filenames found:"
+            echo "Banned filenames:"
             echo "$banned"
             exit 1
           fi
 
+  # ── Security scan (only when go.mod exists) ──────────────────────────────────
   govulncheck:
     name: govulncheck
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run govulncheck
-        run: govulncheck ./...
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
+  # ── go.sum integrity (only when go.mod exists) ───────────────────────────────
   go-sum-integrity:
     name: go.sum integrity
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -76,8 +157,13 @@ jobs:
       - name: Verify go.sum
         run: go mod verify
 
-  e2e-journey-stubs:
-    name: e2e journey stubs compile
+  # ── E2E journey stubs compile (only when go.mod + test files exist) ──────────
+  e2e-stubs:
+    name: e2e stubs compile
+    needs: preflight
+    if: |
+      needs.preflight.outputs.has_gomod == 'true' &&
+      needs.preflight.outputs.has_e2e == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,6 +172,41 @@ jobs:
           go-version-file: go.mod
       - name: Compile E2E tests
         run: go test -run ^$ ./test/e2e/... -v
-        # Ensures journey test stubs compile and the t.Skip() runs correctly.
-        # When a journey is implemented, remove its t.Skip() and add make test-e2e-journey-N to CI.
 
+  # ── Frontend build (only when web/src exists) ─────────────────────────────────
+  frontend:
+    name: frontend build
+    needs: preflight
+    if: needs.preflight.outputs.has_web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install
+        working-directory: web
+      - name: Type check
+        run: bun run typecheck
+        working-directory: web
+      - name: Build
+        run: bun run build
+        working-directory: web
+
+  # ── Pre-Stage-0 status check (always passes, explains state) ─────────────────
+  pre-stage0-notice:
+    name: pre-stage0 notice
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Project is pre-Stage-0
+        run: |
+          echo "go.mod does not exist yet."
+          echo "Go-dependent CI jobs are skipped until Stage 0 (Project Skeleton) completes."
+          echo "Docs and YAML validation have already run."
+          echo ""
+          echo "Stage 0 deliverables (will unblock remaining CI jobs):"
+          echo "  - go.mod + go.sum"
+          echo "  - cmd/kardinal-controller/main.go"
+          echo "  - cmd/kardinal/main.go"
+          echo "  - Makefile (already exists)"
