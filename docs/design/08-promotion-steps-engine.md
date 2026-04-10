@@ -24,9 +24,9 @@ pkg/
     steps/
       git_clone.go      # git-clone step
       kustomize.go      # kustomize-set-image step
-      kustomize_build.go # kustomize-build step (Phase 2)
+      kustomize_build.go # kustomize-build step (Phase 1 — Rendered Manifests pattern)
       helm.go           # helm-set-image step (Phase 2)
-      config_merge.go   # config-merge step (see 09)
+      config_merge.go   # config-merge step (Phase 2, see 09)
       git_commit.go     # git-commit step
       git_push.go       # git-push step
       open_pr.go        # open-pr step
@@ -212,9 +212,9 @@ func (s *HelmSetImageStep) Execute(ctx context.Context, state *StepState) (StepR
 }
 ```
 
-### kustomize-build (Phase 2)
+### kustomize-build (Phase 1)
 
-Runs `kustomize build` and writes the rendered output. This supports the Rendered Manifests pattern.
+Runs `kustomize build` and writes the rendered output. This supports the Rendered Manifests pattern (see docs/rendered-manifests.md). Promoted to Phase 1 because Journey 6 (Rendered Manifests) requires it and it is simpler to implement than Helm.
 
 ```go
 func (s *KustomizeBuildStep) Execute(ctx context.Context, state *StepState) (StepResult, error) {

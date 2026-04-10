@@ -204,23 +204,76 @@ Each Bundle gets its own Graph CR. The Graph spec is generated from the Pipeline
 
 Evidence (metrics, gate results, approver, timing) is copied into Bundle `status.environments` at verification time (Step 7 above). When the Graph and its PromotionStep CRs are garbage-collected, the evidence survives on the Bundle. When the Bundle itself is garbage-collected (history limit), the Git PRs remain as the permanent audit trail.
 
-### 3.5 PolicyGate Re-evaluation (recheckAfter Workaround)
+### 3.5 PolicyGate Blocking and re-evaluation — `propagateWhen`, not `readyWhen`
 
-Graph reconciles on Kubernetes watch events, not on timers. A `no-weekend-deploys` PolicyGate that evaluates `!schedule.isWeekend` will set `status.ready = false` on Friday evening. On Monday morning, no cluster state has changed, so no watch event fires and Graph does not re-evaluate the gate.
+> **Critical note (2026-04-09, verified against krocodile/experimental):** The Graph primitive's
+> `readyWhen` is a **health signal only**. It feeds the Graph's aggregated `Ready` condition but
+> does **not** gate downstream execution. Dependents proceed as soon as a node's data is in scope,
+> regardless of `readyWhen`. The field that gates downstream data flow is `propagateWhen`.
+>
+> kardinal-promoter's PolicyGate blocking model therefore uses `propagateWhen` on the upstream
+> PromotionStep (or on the PolicyGate node itself) to hold back the downstream PromotionStep until
+> the gate passes. This is the correct mechanism. `readyWhen` is only used for the UI health signal
+> and the Graph's `Ready` condition rollup.
 
-The Phase 1 workaround: the kardinal-controller's PolicyGate reconciler runs a timer-based re-evaluation loop. For each in-flight PolicyGate instance, it re-evaluates the CEL expression at the configured `recheckInterval` and writes `status.lastEvaluatedAt`. This status write triggers a watch event, which causes Graph to re-check the `readyWhen` expression.
+**How PolicyGate blocking works:**
 
-This is not free. At 50 pipelines with 2 prod gates each, the reconciler writes 100 status updates every 5 minutes (at `recheckInterval: 5m`). This is acceptable for the expected scale (<50 pipelines). At larger scale, Graph should support a native `recheckAfter` hint on nodes (see Section 17).
+The PolicyGate node for environment `prod` is created between the `staging` PromotionStep and the
+`prod` PromotionStep. The `staging` PromotionStep node carries:
 
-The `readyWhen` on each PolicyGate node includes a freshness check:
+```yaml
+propagateWhen:
+  - ${staging.status.state == "Verified"}
+```
+
+This means: once staging is Verified, its data flows to downstream nodes (PolicyGates and prod
+PromotionStep). Until then, downstream nodes wait.
+
+Each PolicyGate node additionally carries `propagateWhen` on itself:
+
+```yaml
+propagateWhen:
+  - ${noWeekendDeploys.status.ready == true}
+  - ${timestamp(noWeekendDeploys.status.lastEvaluatedAt) > now() - duration("10m")}  # freshness
+```
+
+The prod PromotionStep depends on the PolicyGate nodes via CEL references. Because the PolicyGate
+node's `propagateWhen` is unsatisfied, its data does not flow to the prod PromotionStep. The prod
+PromotionStep retains its previous (Pending) state until all gates propagate.
+
+`readyWhen` on the PolicyGate node still exists as a health signal:
 
 ```yaml
 readyWhen:
   - ${noWeekendDeploys.status.ready == true}
-  - ${timestamp(noWeekendDeploys.status.lastEvaluatedAt) > now() - duration("10m")}
 ```
 
-If the kardinal-controller restarts and has not yet re-evaluated a gate, `lastEvaluatedAt` will be stale. Graph treats the gate as not-ready until the controller catches up. This prevents promotions from advancing on stale gate state.
+This feeds the Graph's `Ready` condition — visible in `kubectl get graph` and the kardinal-ui.
+
+**Re-evaluation for time-based gates:**
+
+Graph reconciles on Kubernetes watch events, not timers. A `no-weekend-deploys` gate that evaluates
+`!schedule.isWeekend` will have `status.ready = false` on Friday evening. On Monday morning, no
+cluster state changes, so no watch event fires.
+
+The Phase 1 workaround: the PolicyGate reconciler writes `status.lastEvaluatedAt` at every
+`recheckInterval`. This status write triggers a Graph watch event. Graph re-evaluates the
+`propagateWhen` expression on the PolicyGate node (which includes the freshness check). When the
+gate passes on Monday, `status.ready` becomes `true` and `propagateWhen` is satisfied, so the
+PolicyGate's data propagates to the prod PromotionStep.
+
+At 50 pipelines × 2 gates × `recheckInterval: 5m` = 20 writes/minute. Acceptable at Phase 1 scale.
+
+**Proposed Graph contribution:** Native `recheckAfter` hint on a node so Graph re-evaluates without
+requiring the PolicyGate reconciler to write a status update purely to trigger a watch event. This
+would reduce write overhead at scale. Tracked as a contribution (Section 17).
+
+**Summary of `readyWhen` vs `propagateWhen` in kardinal-promoter:**
+
+| Field | Where used | Purpose |
+|---|---|---|
+| `readyWhen` | PolicyGate nodes, PromotionStep nodes | Health signal for UI and Graph `Ready` condition. Does NOT gate downstream execution. |
+| `propagateWhen` | PromotionStep nodes (upstream data-flow gate), PolicyGate nodes (gate data flow to prod step) | Gates when a node's data flows to dependents. This is what blocks the downstream PromotionStep. |
 
 ### 3.6 Dependency Edges in Generated Graphs
 
@@ -410,8 +463,9 @@ environments:
 |---|---|---|
 | `git-clone` | Clone the GitOps repo from the Git cache | Phase 1 |
 | `kustomize-set-image` | Run `kustomize edit set-image` in the environment directory | Phase 1 |
+| `kustomize-build` | Run `kustomize build` and write rendered output (Rendered Manifests pattern) | Phase 1 |
+| `config-merge` | Apply config-only Bundle's Git commit via cherry-pick or overlay (see Section 3.16) | Phase 2 |
 | `helm-set-image` | Patch image tag in Helm `values.yaml` | Phase 2 |
-| `kustomize-build` | Run `kustomize build` and write rendered output (Rendered Manifests pattern) | Phase 2 |
 | `git-commit` | Commit changes with structured message | Phase 1 |
 | `git-push` | Push to the target branch (for auto approval) | Phase 1 |
 | `open-pr` | Open a PR with promotion evidence | Phase 1 |
@@ -1363,13 +1417,53 @@ Git cache at `/var/cache/kardinal/` uses an emptyDir volume.
 
 ---
 
-## 16. Graph Gaps and Proposed Contributions
+## 16. Graph Gaps, Proposed Contributions, and Tracking Policy
 
-The Graph primitive is under active development. During kardinal-promoter implementation, we expect to identify gaps and contribute fixes upstream.
+### Tracking Policy
+
+The krocodile/experimental branch is under active development. Before implementing any Graph
+integration, check the current state:
+
+```bash
+# Always check recent krocodile commits before Graph work
+gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=20' \
+  --jq '.[] | {sha: .sha[0:8], message: .commit.message[0:80], date: .commit.committer.date}'
+```
+
+Read the design docs at `experimental/docs/design/` — these are the authoritative source for Graph
+semantics. When they disagree with this document, the krocodile docs win.
+
+**Contribution-first policy:** When Graph doesn't support something kardinal-promoter needs,
+contribute upstream instead of writing a workaround. A landed contribution eliminates the
+workaround permanently. Workarounds are only acceptable when a contribution would block progress for
+more than one sprint. Every workaround must be labeled with `TODO(contribute-upstream):` in the
+code and an open GitHub issue.
+
+**Breaking change detection:** CI nightly job runs integration tests against the latest krocodile
+commit. If it fails, an issue is filed before the next sprint starts. Never let a krocodile API
+change be discovered during implementation.
+
+### Gaps and Proposed Contributions
 
 | Gap | Impact on kardinal-promoter | Current workaround | Proposed contribution |
 |---|---|---|---|
-| No timer-based re-evaluation | Time-based PolicyGates (schedule checks, soak time) do not re-evaluate without external stimulus | kardinal-controller runs a timer loop that writes status updates at recheckInterval, triggering Graph watch events | Add `recheckAfter` hint on Graph nodes, similar to RequeueAfter in controller-runtime |
-| No explicit dependsOn on nodes | Dependencies must be created via CEL field references in templates | PromotionStep and PolicyGate specs include fields (`upstreamVerified`, `upstreamEnvironment`, `requiredGates`) that reference upstream nodes. These fields serve reconciler purposes and create edges as a secondary effect. | Add optional `dependsOn` to Graph node spec for structural ordering without requiring data flow |
-| Partial DAG instantiation | Bundle intent.target limits which environments are included | Handled in the Pipeline-to-Graph translation layer (only include nodes up to target) | No Graph change needed |
+| No timer-based re-evaluation | Time-based PolicyGates (schedule checks, soak time) do not re-evaluate without external stimulus | kardinal-controller runs a timer loop that writes `status.lastEvaluatedAt` at `recheckInterval`, triggering Graph watch events via `propagateWhen` | Add `recheckAfter` hint on Graph nodes — similar to `RequeueAfter` in controller-runtime |
+| No explicit `dependsOn` on nodes | Dependencies must be created via CEL field references in templates | PromotionStep and PolicyGate specs include fields (`upstreamVerified`, `upstreamEnvironment`, `requiredGates`) that reference upstream nodes as a secondary effect | Add optional `dependsOn` to Graph node spec for structural ordering without requiring data flow |
+| `readyWhen` does not gate downstream (by design) | PolicyGates must use `propagateWhen` to block downstream steps | Use `propagateWhen` on PolicyGate nodes (this is the correct approach per Graph design) | No Graph change needed — our design docs now correctly use `propagateWhen` |
+| Partial DAG instantiation | Bundle `intent.target` limits which environments are included | Handled in the Pipeline-to-Graph translation layer (only include nodes up to target) | No Graph change needed |
 | Node-level status surface | kardinal-ui needs per-node promotion context beyond Graph readyWhen | Read child CRD status directly (PromotionStep, PolicyGate) | No Graph change needed |
+
+### Semantic Facts (as of 2026-04-09 — verify against krocodile before implementing)
+
+| Feature | Behavior | Verified |
+|---|---|---|
+| `readyWhen` | Health signal only. Feeds Graph `Ready` condition. Does NOT gate downstream. | ✓ |
+| `propagateWhen` | Data-flow gate. Blocks dependents when unsatisfied. Retains previous state. | ✓ |
+| `spec.nodes` | Field name for node list (renamed from `spec.resources` in Apr 2026) | ✓ |
+| `Contribute` template shape | Writes partial state to resource owned by another actor | ✓ |
+| `Watch` template shape | Reads existing resource into scope without managing it | ✓ |
+| `Collection Watch` | Discovers resources by selector, enters array into scope | ✓ |
+| `forEach` | Stamps template per item; re-evaluates only changed items | ✓ |
+| Nested Graphs | Child Graph per item for per-instance isolation | ✓ |
+| `finalizes` | Teardown hook; runs before target resource is deleted | ✓ |
+| `GraphRevision` | Internal CRD tracking applied set and DAG topology. Do not expose to users. | ✓ |

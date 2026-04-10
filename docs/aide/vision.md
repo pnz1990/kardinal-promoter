@@ -28,7 +28,32 @@ kro's Graph primitive (`kro.run/v1alpha1/Graph`) is the core DAG engine. Within 
 
 Building on Graph directly (rather than on RGD) avoids a translation shim. The controller generates a Graph spec whose nodes are exactly the PromotionStep and PolicyGate CRDs that kardinal-promoter needs. No intermediate abstraction, no unused resource-composition semantics.
 
-Reference: [ellistarn/kro/tree/krocodile/experimental](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+Reference: [ellistarn/kro — krocodile branch](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+
+### kro Tracking and Contribution Policy
+
+The krocodile/experimental branch is under active development. The Graph API and semantics are evolving continuously (20+ commits/day observed in early April 2026). Every engineer and coordinator must:
+
+1. **Check the krocodile git log before implementing any Graph integration.** Run:
+   ```bash
+   gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=20' \
+     --jq '.[] | {sha: .sha[0:8], message: .commit.message[0:80], date: .commit.committer.date}'
+   ```
+   Look for changes to `experimental/docs/design/`, `experimental/crds/`, and `experimental/controller/`.
+
+2. **Read the design docs before implementing.** The canonical source of truth for Graph semantics is `experimental/docs/design/` in the krocodile branch, not our own docs. When they disagree, the krocodile docs win.
+
+3. **Contribute upstream rather than work around.** If Graph does not support a capability that kardinal-promoter needs (e.g., native `recheckAfter`, explicit `dependsOn`), open a PR to krocodile first. A contribution that lands upstream eliminates a workaround from our codebase. Workarounds are accepted only when a contribution would block progress for more than one sprint.
+
+4. **Track breaking changes in CI.** Pin the Graph CRD version in our Helm chart. Run a nightly CI job against the latest krocodile commit. If the nightly fails, file a GitHub issue with the breaking change before it blocks a sprint.
+
+5. **Update our design docs when Graph semantics change.** The sections most likely to drift are design-v2.1.md §3.5 (`readyWhen` vs `propagateWhen`), §3.6 (dependency edge mechanism), spec 01 (Graph CRD schema), and spec 02 (node templates).
+
+Key semantic facts as of 2026-04-09 (verify against krocodile before implementing):
+- `readyWhen` is a **health signal only** — does NOT gate downstream execution
+- `propagateWhen` is the **data-flow gate** — blocks dependents when unsatisfied
+- `spec.nodes` (not `spec.resources`) is the field name for the node list
+- `Contribute` template shape allows writing partial state to resources owned by another actor
 
 ## Goals and Objectives
 

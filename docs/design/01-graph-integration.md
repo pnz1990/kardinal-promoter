@@ -10,18 +10,27 @@ This spec defines how kardinal-promoter integrates with kro's Graph primitive. E
 
 ## Graph Primitive Reference
 
-Source: [ellistarn/kro/tree/krocodile/experimental](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+Source: [ellistarn/kro/tree/krocodile](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+
+> **Important — track this branch actively.** krocodile/experimental is under rapid development
+> (20+ commits/day as of 2026-04-09). Before implementing any Graph integration, read the current
+> design docs and git log. API and semantics are changing. See Section 17 in design-v2.1.md for
+> the contribution and tracking policy.
 
 The Graph CRD (`kro.run/v1alpha1/Graph`) is namespace-scoped. It defines:
 
 - **nodes**: A list of resource templates with IDs. Each node has a Kubernetes resource template with `${...}` CEL expressions.
-- **readyWhen**: Per-node CEL expressions that determine when the node is considered ready. Graph aggregates node readiness into overall Graph readiness.
+- **readyWhen**: Per-node CEL expressions that are a **health signal only**. They feed the Graph's aggregated `Ready` condition and the `.ready()` function. **They do NOT gate downstream execution.**
+- **propagateWhen**: Per-node CEL expressions that **gate data flow to dependents**. When unsatisfied, dependents retain their previous state and are not re-evaluated. **This is what blocks downstream nodes.**
 - **includeWhen**: Per-node CEL expressions that conditionally include or exclude a node from the DAG.
 - **forEach**: Stamp out one node per item in a collection.
-- **propagateWhen**: Controls when data changes in one node flow to dependent nodes.
 - **finalizes**: Teardown hooks executed in reverse dependency order during Graph deletion.
 
-Dependency edges are inferred from CEL `${...}` references between nodes. If node B's template contains `${A.status.state}`, B depends on A. Graph resolves the DAG and creates nodes in topological order.
+**Critical distinction for kardinal-promoter:**
+- `readyWhen` = health signal (UI, `kubectl get graph`) — does NOT block downstream
+- `propagateWhen` = data-flow gate — DOES block downstream when unsatisfied
+
+PolicyGate blocking uses `propagateWhen`, not `readyWhen`. See design-v2.1.md Section 3.5.
 
 ## Go Package Structure
 
@@ -53,8 +62,13 @@ type GraphNode struct {
 
 type GraphStatus struct {
     Conditions []metav1.Condition `json:"conditions,omitempty"`
-    // Accepted: the Graph spec is valid
-    // Ready: all included nodes are ready
+    // Accepted: the Graph spec is valid (CEL compiles, DAG is acyclic)
+    // Ready: rollup of node plan states
+    //   True/Ready: all nodes converged
+    //   Unknown/Pending: waiting for upstream data
+    //   Unknown/NotReady: applied but readyWhen not satisfied (health signal)
+    //   False/Error: client request failed (4xx)
+    //   False/Conflict: SSA field ownership contested
 }
 ```
 
@@ -115,7 +129,9 @@ informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 
 Graph status conditions:
 - `Accepted=True`: the Graph spec is valid, nodes are being created.
-- `Ready=True`: all included nodes have their `readyWhen` satisfied.
+- `Ready=True`: all included nodes have their `readyWhen` satisfied (health signal rollup).
+- `Ready=Unknown` with reason `NotReady` or `Pending`: nodes are converging.
+- `Ready=False` with reason `Error` or `Conflict`: nodes require operator action.
 - `Accepted=False`: the Graph spec has errors (invalid CEL, circular dependency).
 
 ## Dependency Edge Creation

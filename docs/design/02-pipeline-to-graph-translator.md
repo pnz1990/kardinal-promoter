@@ -93,7 +93,9 @@ For each environment in the filtered list (in dependency order):
 ```yaml
 - id: <environment-name>
   readyWhen:
-    - ${<environment-name>.status.state == "Verified"}
+    - ${<environment-name>.status.state == "Verified"}   # health signal for UI
+  propagateWhen:
+    - ${<environment-name>.status.state == "Verified"}   # gates downstream data flow
   template:
     apiVersion: kardinal.io/v1alpha1
     kind: PromotionStep
@@ -129,8 +131,10 @@ The `upstreamVerified` field references the upstream environment's status. For t
 ```yaml
 - id: <gate-name>-<environment-name>
   readyWhen:
-    - ${<gate-id>.status.ready == true}
-    - ${timestamp(<gate-id>.status.lastEvaluatedAt) > now() - duration("<recheck-interval * 2>")}
+    - ${<gate-id>.status.ready == true}   # health signal
+  propagateWhen:
+    - ${<gate-id>.status.ready == true}   # gates data flow to prod PromotionStep
+    - ${timestamp(<gate-id>.status.lastEvaluatedAt) > now() - duration("<recheck-interval * 2>")}  # freshness check
   template:
     apiVersion: kardinal.io/v1alpha1
     kind: PolicyGate
@@ -147,6 +151,11 @@ The `upstreamVerified` field references the upstream environment's status. For t
       recheckInterval: <gate.spec.recheckInterval>
       upstreamEnvironment: ${<upstream-env>.status.state}  # creates dependency edge
 ```
+
+> **`propagateWhen` is how PolicyGates block promotion.** Per krocodile/experimental design docs,
+> `readyWhen` is a health signal that does not gate downstream execution. `propagateWhen` controls
+> when a node's data flows to dependents. When `propagateWhen` is unsatisfied on a PolicyGate node,
+> the downstream PromotionStep retains its Pending state. See design-v2.1.md Section 3.5.
 
 ### Step 6: Wire gate edges
 

@@ -70,11 +70,12 @@ None — this is the foundation.
   - `status.phase` (`Available|Promoting|Verified|Failed|Superseded`)
   - `status.environments[]` per-environment evidence (gateResults, approver, mergedAt, healthCheckedAt)
 - `PolicyGate` CRD type with:
-  - `spec.cel` (expression string)
+  - `spec.expression` (CEL expression string)
+  - `spec.message` (human-readable description shown when gate blocks)
   - `spec.recheckInterval`
   - `spec.skipPermission` (bool)
   - `spec.selector` (environment label selector for org-level auto-injection)
-  - `status.lastEvaluatedAt`, `status.result` (`Pass|Fail|Pending`), `status.reason`
+  - `status.lastEvaluatedAt`, `status.ready` (bool), `status.reason`
 - `PromotionStep` CRD type (controller-internal, not user-created) with per-step state and output accumulator
 - All types have `+kubebuilder:validation` markers for required fields, enums, and formats
 - Generated CRD YAML passes `kubectl apply --dry-run=server` against a kind cluster with no errors
@@ -355,7 +356,7 @@ None — this is the foundation.
   - `kardinal resume --pipeline name` — removes pause annotation
   - `kardinal history --pipeline name` — lists Bundle history with phases and timings
   - `kardinal policy list` — lists PolicyGates with current result and last evaluated
-  - `kardinal policy test --gate name --bundle name` — dry-run CEL evaluation, prints reason
+  - `kardinal policy test <file>` — validate CEL syntax, verify context attributes, dry-run against sample context
   - `kardinal policy simulate --bundle name` — runs all gates for a hypothetical Bundle, prints pass/fail table
   - `kardinal diff --bundle name --env name` — shows the Kustomize diff that would be applied
   - `kardinal version` — prints CLI and controller versions
