@@ -40,6 +40,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	celpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
@@ -146,9 +147,10 @@ func main() {
 	}
 
 	if err := (&psreconciler.Reconciler{
-		Client:    mgr.GetClient(),
-		SCM:       scmProvider,
-		GitClient: gitClient,
+		Client:         mgr.GetClient(),
+		SCM:            scmProvider,
+		GitClient:      gitClient,
+		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
@@ -184,6 +186,16 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
+}
+
+// newHealthDetector constructs an AutoDetector for health checking.
+// It creates a dynamic client from the given REST config.
+func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Logger) *healthpkg.AutoDetector {
+	dynClient, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("unable to create dynamic client for health detection")
+	}
+	return healthpkg.NewAutoDetector(k8s, dynClient)
 }
 
 // newTranslator constructs the Translator wired with a GraphClient and Builder.
