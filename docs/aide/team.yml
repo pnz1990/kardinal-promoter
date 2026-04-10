@@ -169,19 +169,35 @@ roles:
   states:
     - backlog
     - todo
+    - assigned
     - in_progress
     - in_review
     - done
     - blocked
   merge_owner: engineer
   state_file: .maqa/state.json
+  state_file_version: "1.1"
+  state_ownership:
+    coordinator_writes:
+      - "backlog -> todo"
+      - "todo -> assigned"
+      - "assigned -> todo (stale recovery after 20 min)"
+      - "done: free slot (set engineer_slots[SLOT]=null)"
+    engineer_writes:
+      - "assigned -> in_progress (confirm pickup only)"
+      - "in_progress -> in_review"
+      - "in_review -> done"
+      - "in_progress -> blocked"
+    note: "Engineers NEVER self-select from the queue. Coordinator is sole assigner."
   state_machine:
     "backlog -> todo": "coordinator validates dependencies are done"
-    "todo -> in_progress": "coordinator assigns and creates worktree"
+    "todo -> assigned": "coordinator: duplicate-assignment guard passes, writes atomically, creates worktree, posts comment"
+    "assigned -> in_progress": "engineer confirms pickup after verifying assigned_to==MY_SLOT"
     "in_progress -> in_review": "engineer validates, CI green, PR open"
     "in_review -> in_progress": "QA requests changes"
     "in_review -> done": "QA approves + CI green + engineer merges + smoke test passes"
-    "in_progress -> backlog": "blocked after 2 retries"
+    "in_progress -> blocked": "blocked after 2 retries"
+    "assigned -> todo": "stale assignment recovery by coordinator (>20 min, no pickup)"
 
 dependencies:
   enforcement: strict

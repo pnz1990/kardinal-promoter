@@ -76,13 +76,27 @@ LOOP:
    - /speckit.maqa-github-projects.populate
 3. Validate: all Depends-on items are state=done before assigning
 4. Assign items to engineer slots (max 3 concurrent):
+   BEFORE writing anything, verify BOTH:
+   a. The target engineer slot is null in engineer_slots
+   b. No other slot already has this item-id assigned (duplicate-assignment guard)
+   If either check fails: skip this item and log a warning comment on Issue #1.
+   THEN, atomically write to .maqa/state.json:
+   - features[id].state       = "assigned"   ← NOT "in_progress"
+   - features[id].assigned_to = SLOT
+   - features[id].assigned_at = <ISO-8601 now>
+   - features[id].worktree_path = <path>
+   - engineer_slots[SLOT]     = id
+   THEN (after state.json is written):
    - /speckit.worktree.create
-   - Write to .maqa/state.json: slot, item_id, state, worktree_path
    - Move GitHub Projects card: Todo → In Progress
-   - Comment on item Issue: "[BADGE] Assigned to <SLOT>. Worktree: <path>"
+   - Comment on item Issue: "[BADGE] Assigned <id> to <SLOT>. Worktree: <path>"
+   - Comment on Issue #1 with assignment summary
 5. Monitor .maqa/state.json every 2 min:
+   - assigned (>10 min old, not yet in_progress) → re-post assignment comment;
+     if still assigned after another 10 min: reset state=todo, clear slot, alert
+   - in_progress → no action needed (engineer confirmed pickup)
    - in_review → move card to In Review
-   - done → move card to Done, free slot, assign next item
+   - done → move card to Done, free slot (set engineer_slots[SLOT]=null), assign next item
    - blocked → post [NEEDS HUMAN] to report issue, continue others
 6. When all queue items are done or blocked:
    BATCH AUDIT (before generating next queue):
@@ -130,10 +144,16 @@ Owns each feature end-to-end from assignment through merged PR.
 LOOP (one feature per iteration):
 
 1. PICK UP
-   Poll .maqa/state.json every 2 min for item assigned to my slot (AGENT_ID)
+   Poll .maqa/state.json every 2 min for an item where:
+     features[id].assigned_to == MY_AGENT_ID
+     features[id].state       == "assigned"          ← must be "assigned", not "todo"
+   If no such item exists: wait and re-poll. Do NOT self-select from the queue.
    Read: worktree_path from state.json
+   Wait up to 2 min for the worktree to be created by coordinator, then:
    cd into worktree: cd <worktree_path>
-   Wait 1 min and re-poll if worktree doesn't exist yet
+   CONFIRM PICKUP — write to .maqa/state.json atomically:
+     features[id].state = "in_progress"
+   Post on item Issue: "[BADGE] Confirmed pickup of <id>. Starting implementation."
    Read: docs/aide/items/<item>.md → .specify/specs/<feature>/spec.md
         → tasks.md → docs/design/<feature>.md → examples/ → docs/
 
@@ -453,22 +473,29 @@ Badges: `[🎯 COORDINATOR]`, `[🔨 ENGINEER-N]`, `[🔍 QA]`, `[🔄 SCRUM-MAS
 
 `.maqa/state.json` — the team's shared state. Written atomically.
 
+**Ownership rule**: the Coordinator is the ONLY agent that writes to
+`engineer_slots` and that advances item state from `todo → assigned` or from
+`assigned → in_progress`. Engineers write ONLY their own narrow transitions:
+`in_progress → in_review` and `in_review → done`. No agent self-selects work
+from the queue; assignment is always performed by the Coordinator.
+
 ```json
 {
-  "version": "1.0",
+  "version": "1.1",
   "current_queue": "queue-001",
   "engineer_slots": {
-    "ENGINEER-1": null,
-    "ENGINEER-2": null,
-    "ENGINEER-3": null
+    "ENGINEER-1": "<item-id or null>",
+    "ENGINEER-2": "<item-id or null>",
+    "ENGINEER-3": "<item-id or null>"
   },
   "last_sm_review": null,
   "last_pm_review": null,
   "batches_since_competitive_analysis": 0,
   "features": {
     "<item-id>": {
-      "state": "in_progress | in_review | done | blocked",
+      "state": "backlog | todo | assigned | in_progress | in_review | done | blocked",
       "assigned_to": "ENGINEER-1",
+      "assigned_at": "<ISO-8601 timestamp set by coordinator>",
       "worktree_path": "../<project>.<feature-branch>",
       "pr_number": null,
       "pr_merged": false
@@ -476,6 +503,38 @@ Badges: `[🎯 COORDINATOR]`, `[🔨 ENGINEER-N]`, `[🔍 QA]`, `[🔄 SCRUM-MAS
   }
 }
 ```
+
+### Assignment lifecycle (prevents parallel work on same item)
+
+```
+todo
+ │
+ │  Coordinator writes atomically:
+ │    features[id].state       = "assigned"
+ │    features[id].assigned_to = "ENGINEER-N"
+ │    features[id].assigned_at = <now>
+ │    engineer_slots[ENGINEER-N] = id
+ │  Then posts GitHub comment: "[BADGE] Assigned <id> to ENGINEER-N. Worktree: <path>"
+ ▼
+assigned
+ │
+ │  Engineer verifies BOTH conditions before starting:
+ │    features[id].assigned_to == MY_AGENT_ID
+ │    features[id].state       == "assigned"
+ │  If either condition is false: wait and re-poll (do NOT start work)
+ │  Engineer writes: features[id].state = "in_progress"
+ ▼
+in_progress  →  in_review  →  done
+```
+
+**Duplicate-assignment guard (Coordinator)**: before writing `assigned`, verify
+`engineer_slots` has no other entry pointing at the same item. If the item is
+already assigned to a different slot, skip it and log a warning to Issue #1.
+
+**Stale-assignment guard (Coordinator)**: if `state == "assigned"` and
+`assigned_at` is > 10 minutes old with no transition to `in_progress`, the
+coordinator re-posts the assignment comment and, after a second 10-minute window,
+sets state back to `todo` and clears the slot (the engineer session may have died).
 
 ---
 
