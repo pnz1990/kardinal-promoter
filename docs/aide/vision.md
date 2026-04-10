@@ -64,10 +64,11 @@ pre-release project — the focus is on shipping working, usable minor versions 
 
 ### Versioning approach
 
-- **Minor versions (`v0.N.0`)** are substantial. Each minor ships meaningful, usable
-  new capability and takes multiple stages to complete. There is no upper bound on minor
-  versions — we may ship `v0.10.0`, `v0.20.0`, etc. as the project evolves. Minor versions
-  are cut when the milestone's open issues reach zero and its associated journeys pass.
+- **Minor versions (`v0.N.0`)** are substantial. Each minor covers many stages and
+  multiple capability areas. Keep minor version numbers low — prefer `v0.2.0`, `v0.3.0`
+  over jumping quickly to `v0.5.0`, `v0.6.0`. There is no upper bound, but progress
+  should feel significant between minors. Minor versions are cut when the milestone's
+  open issues reach zero and its associated journeys pass.
 
 - **Patch versions (`v0.N.P`)** are bug fixes, security patches, and doc corrections.
   Cut them whenever needed — they do not require a full milestone to complete.
@@ -75,19 +76,48 @@ pre-release project — the focus is on shipping working, usable minor versions 
 - **No `v1.0.0` planning.** Do not create a v1.0.0 milestone. When we are genuinely
   production-ready we will decide on GA deliberately, not as a roadmap item.
 
-### Milestone scope per minor
+### Milestone structure — multiple epics per milestone
 
-Milestones should be **small enough to ship in weeks, not months**. A minor milestone
-covers 2-4 stages maximum. If a group of stages would take more than ~6 weeks, split
-it into two milestones. Each milestone must have a clear "what can a user do after this"
-answer — if you can't state it in one sentence, the scope is too large.
+Each milestone should contain **5-7 epics** representing different capability workstreams,
+similar to how kro structures its milestones. This keeps minor version numbers low and
+makes each release feel substantial.
+
+**How to structure epics within a milestone:**
+- Each epic covers one coherent capability area (e.g. "Git operations", "Health adapters",
+  "CLI", "PolicyGate engine") — not one stage
+- Multiple stages may contribute to one epic
+- Epics within the same milestone can be worked in parallel (different queue batches)
+- An epic is closed when all its items are done and its acceptance criteria pass
+- The milestone closes (and release is cut) when ALL epics in it are closed
+
+**Example structure (reference — derive the actual epics from the roadmap):**
+
+```
+v0.2.0 milestone
+├── Epic: Git operations and PR flow (Stage 5)
+├── Epic: Full promotion loop — PromotionStep reconciler (Stage 6)
+├── Epic: Health adapters — k8s native, ArgoCD, Flux (Stage 7)
+├── Epic: CLI — core commands (Stage 8)
+└── Epic: Docs and examples — quickstart working end-to-end
+```
+
+```
+v0.3.0 milestone
+├── Epic: Embedded React UI (Stage 9)
+├── Epic: PR evidence, labels, webhook reliability (Stage 10)
+├── Epic: GitHub Actions integration + kardinal init (Stage 11)
+├── Epic: Helm strategy + config-only promotions (Stage 12)
+└── Epic: Rollback and pause/resume (Stage 13)
+```
 
 ### PM instructions for milestone creation
 
-- Derive milestones from `docs/aide/roadmap.md` stage groupings
+- Derive milestones from `docs/aide/roadmap.md` — group stages into minors with 5-7 epics each
 - Each milestone title is `v0.N.0` (no v1.0.0)
 - Each milestone description states: stages covered, what users can do, which journeys unlock
-- Future milestones beyond the next two get epic issues only (no full specs)
+- Create 5-7 epic issues per milestone — one per capability area, not one per stage
+- Future milestones beyond the next one get epics only (no full item specs)
+- The currently active milestone gets full item specs for the current batch only
 - When cutting a release: use `gh release create`, generate notes from closed issues,
   close the milestone, open the next one, post `[📋 PM] RELEASE: vX.Y.Z` on the report issue
 
