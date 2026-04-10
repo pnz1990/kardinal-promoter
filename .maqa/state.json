@@ -1,8 +1,8 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T04:00:54Z",
+  "last_updated": "2026-04-10T04:09:53Z",
   "current_queue": "queue-001",
   "last_sm_review": null,
   "last_pm_review": null,
@@ -14,11 +14,12 @@
   },
   "features": {
     "001-go-module-scaffold": {
-      "state": "in_progress",
+      "state": "assigned",
       "assigned_to": "ENGINEER-1",
       "worktree_path": "../kardinal-promoter.001-go-module-scaffold",
       "pr_number": null,
-      "pr_merged": false
+      "pr_merged": false,
+      "assigned_at": "2026-04-10T04:09:53Z"
     },
     "002-kubebuilder-scaffold": {
       "state": "backlog",
