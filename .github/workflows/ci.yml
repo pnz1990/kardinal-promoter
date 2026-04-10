@@ -131,6 +131,21 @@ jobs:
             exit 1
           fi
 
+  # ── Integration tests: reconcilers via fake client (no cluster needed) ────────
+  integration:
+    name: integration tests
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run integration tests
+        run: go test ./test/integration/... -tags integration -race -count=1 -timeout 120s
+
   # ── golangci-lint (only when go.mod exists) ─────────────────────────────────
   golangci-lint:
     name: golangci-lint

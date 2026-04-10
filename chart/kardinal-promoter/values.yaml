@@ -49,6 +49,15 @@ securityContext:
 # -- Controller log level (debug, info, warn, error)
 logLevel: info
 
+# -- Enable leader election for controller manager
+leaderElect: true
+
+# -- Address the metrics endpoint binds to
+metricsBindAddress: ":8080"
+
+# -- Address the health probe endpoint binds to
+healthProbeBindAddress: ":8081"
+
 service:
   # -- Metrics port (Prometheus)
   metricsPort: 8080

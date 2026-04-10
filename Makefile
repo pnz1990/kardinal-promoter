@@ -16,8 +16,8 @@ GOPROXY          ?= https://proxy.golang.org
 # Docker image
 IMG ?= kardinal-promoter:dev
 
-.PHONY: all build build-controller build-cli test lint vet generate manifests \
-        install docker-build helm-lint \
+.PHONY: all build build-controller build-cli test test-integration lint vet generate manifests \
+        install uninstall docker-build helm-lint \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
         kind-up kind-down tools help
@@ -36,6 +36,9 @@ build-cli:
 ## Test
 test:
 	$(GO) test ./... -race -count=1 -timeout 120s
+
+test-integration: ## Run integration tests (fake client, no cluster required)
+	$(GO) test ./test/integration/... -tags integration -race -count=1 -timeout 120s
 
 test-cover:
 	$(GO) test ./... -race -coverprofile=coverage.out -covermode=atomic
@@ -59,9 +62,16 @@ manifests: $(CONTROLLER_GEN)
 	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
 	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./api/..." output:rbac:artifacts:config=config/rbac
 
-## Install CRDs into current cluster
-install: manifests
+## Install CRDs and chart into current cluster
+install: manifests ## Install CRDs and chart into current cluster
 	kubectl apply -f config/crd/bases/
+	helm upgrade --install kardinal chart/kardinal-promoter \
+		--namespace kardinal-system --create-namespace
+
+## Remove chart and CRDs from cluster
+uninstall: ## Remove chart from cluster
+	helm uninstall kardinal -n kardinal-system || true
+	kubectl delete -f config/crd/bases/ || true
 
 ## Docker
 docker-build:

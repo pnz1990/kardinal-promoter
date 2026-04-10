@@ -37,7 +37,10 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
+            - --leader-elect={{ .Values.leaderElect }}
             - --zap-log-level={{ .Values.logLevel }}
+            - --metrics-bind-address={{ .Values.metricsBindAddress }}
+            - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
           ports:
             - name: metrics
               containerPort: {{ .Values.service.metricsPort }}
