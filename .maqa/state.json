@@ -2,14 +2,14 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T14:57:30Z",
+  "last_updated": "2026-04-10T15:20:37Z",
   "current_queue": "queue-001",
   "last_sm_review": null,
   "last_pm_review": null,
   "batches_since_competitive_analysis": 0,
   "engineer_slots": {
-    "ENGINEER-1": "002-kubebuilder-scaffold",
-    "ENGINEER-2": "003-dockerfile-and-helm",
+    "ENGINEER-1": null,
+    "ENGINEER-2": null,
     "ENGINEER-3": null
   },
   "features": {
@@ -23,21 +23,21 @@
       "dependency_mode": "merged"
     },
     "002-kubebuilder-scaffold": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "ENGINEER-1",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.002-kubebuilder-scaffold",
       "pr_number": 11,
-      "pr_merged": false,
+      "pr_merged": true,
       "dependency_mode": "branch"
     },
     "003-dockerfile-and-helm": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "ENGINEER-2",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.003-dockerfile-and-helm",
       "pr_number": 10,
-      "pr_merged": false,
+      "pr_merged": true,
       "dependency_mode": "branch"
     },
     "004-ci-and-lint": {
@@ -52,8 +52,8 @@
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T14:57:30Z",
-      "cycle": 2
+      "last_seen": "2026-04-10T15:20:37Z",
+      "cycle": 3
     },
     "QA": {
       "last_seen": null,
