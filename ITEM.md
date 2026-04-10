@@ -1,99 +1,137 @@
-# Item 014: Health Adapters — Deployment, Argo CD, Flux (Stage 7)
+# Item 015: Full CLI — create bundle, policy, rollback, pause/resume (Stage 8 part 2)
 
 > **Queue**: queue-007
-> **Branch**: `014-health-adapters`
+> **Branch**: `015-cli-full`
 > **Depends on**: 013 (merged — PromotionStep reconciler)
 > **Dependency mode**: merged
-> **Assignable**: immediately
-> **Contributes to**: J1, J2 (health verification)
-> **Priority**: HIGH — required for J1 journey to pass
+> **Assignable**: immediately (parallel with 014)
+> **Contributes to**: J3, J4, J5 (CLI workflow journeys)
+> **Priority**: HIGH — J5 journey requires all CLI commands
 
 ---
 
 ## Goal
 
-Replace the health-check stub with real health verification. The controller checks
-Deployment readiness, Argo CD Application health+sync, or Flux Kustomization Ready —
-whichever is present. The PromotionStep reconciler enters HealthChecking and advances
-to Verified only when the health check passes.
+Implement the remaining CLI commands from Stage 8: `create bundle`, `promote`,
+`rollback`, `pause`, `resume`, `policy list`, `policy test`, `policy simulate`,
+`history`, `diff`, `version` (already done). All commands create or read CRDs.
 
-Design spec: `docs/design/05-health-adapters.md`, roadmap Stage 7.
+Design spec: `docs/design/03-promotionstep-reconciler.md` (kardinal explain done),
+roadmap Stage 8.
 
 ---
 
 ## Deliverables
 
-### 1. `pkg/health` package
+### 1. `kardinal create bundle` command
 
+In `cmd/kardinal/cmd/create_bundle.go`:
+```bash
+kardinal create bundle <pipeline> --image <repo:tag> [--type image|config] [--namespace ns]
 ```
-pkg/health/
-  adapter.go          # Adapter interface: Check + Name + Available
-  registry.go         # AutoDetector: checks CRDs on startup, selects adapter
-  resource.go         # DeploymentAdapter: Deployment readiness conditions
-  argocd.go           # ArgoCDAdapter: Application health=Healthy + sync=Synced
-  flux.go             # FluxAdapter: Kustomization Ready condition
-  health_test.go      # Unit tests (table-driven, mock k8s client)
+- Creates a `Bundle` CRD with spec.type=image, spec.images from --image, spec.pipeline from arg
+- Prints: `Bundle <name> created. Tracking at: kardinal get bundles <pipeline>`
+- Accepts multiple --image flags
+
+### 2. `kardinal promote` command
+
+In `cmd/kardinal/cmd/promote.go`:
+```bash
+kardinal promote <pipeline> --env <environment>
 ```
+- Creates a `PromotionStep` CRD with spec.pipelineName, spec.environment, spec.stepType="pr-review"
+- Prints PR URL when available (poll for 10s, then print "Promoting: track with kardinal explain")
 
-**Adapter interface:**
-```go
-type Adapter interface {
-    Check(ctx context.Context, opts CheckOptions) (HealthStatus, error)
-    Name() string
-    Available(ctx context.Context, discoveryClient discovery.DiscoveryInterface) (bool, error)
-}
+### 3. `kardinal rollback` command
 
-type HealthStatus struct {
-    Phase   string  // "Healthy", "Degraded", "Progressing", "Unknown"
-    Message string
-    CheckedAt time.Time
-}
+In `cmd/kardinal/cmd/rollback.go`:
+```bash
+kardinal rollback <pipeline> --env <environment> [--to <bundle-name>] [--emergency]
 ```
+- Lists verified Bundles for the pipeline, finds the most recent one before current
+- Creates a new Bundle with `spec.provenance.rollbackOf` = previous Bundle name
+- If --to is specified, uses that Bundle name
+- Prints: `Rolling back <pipeline> in <env>: PR opened at <url>`
 
-**AutoDetector:**
-- On startup and every 5 minutes, lists installed CRDs
-- Priority: argocd > flux > resource (Deployment)
-- Returns the highest-priority available adapter
+### 4. `kardinal pause` and `kardinal resume`
 
-### 2. Wire health check into PromotionStepReconciler
+In `cmd/kardinal/cmd/pause.go`:
+```bash
+kardinal pause <pipeline>
+```
+- Patches `Pipeline.spec.paused = true`
+- Prints: `Pipeline <name> paused. No new promotions will start.`
 
-In `pkg/reconciler/promotionstep/reconciler.go`, replace the stub health-check step
-dispatch with:
-- `handleHealthChecking` calls `AutoDetector.Select()` then `adapter.Check()`
-- Polls every 10 seconds until Healthy or timeout (default 10m, configurable via `Pipeline.spec.environments[].health.timeout`)
-- On Healthy: set state=Verified, record healthCheckedAt
-- On timeout: set state=Failed, reason="health check timeout"
+```bash
+kardinal resume <pipeline>
+```
+- Patches `Pipeline.spec.paused = false`
+- Prints: `Pipeline <name> resumed.`
 
-### 3. Write health result to Bundle evidence
+### 5. `kardinal policy list`
 
-After health check passes, write `Bundle.status.environments[env].healthCheckedAt`
-(already partially wired in item 013 — complete the timestamp population).
+In `cmd/kardinal/cmd/policy.go`:
+```bash
+kardinal policy list [--pipeline <name>]
+```
+- Lists PolicyGates in namespace
+- Table: NAME | SCOPE | APPLIES-TO | RECHECK | READY | LAST-EVALUATED
 
-### 4. Unit tests
+### 6. `kardinal policy simulate`
 
-- `DeploymentAdapter_Healthy`: mock client returns Deployment with all pods ready
-- `DeploymentAdapter_Degraded`: some pods not ready
-- `ArgoCDAdapter_Healthy`: Application with health=Healthy + sync=Synced
-- `ArgoCDAdapter_Degraded`: Application with health=Degraded
-- `FluxAdapter_Healthy`: Kustomization with Ready condition = True
-- `AutoDetector_SelectsArgoCD`: when ArgoCD CRD present, selects ArgoCDAdapter
-- `AutoDetector_FallsBack`: no ArgoCD/Flux CRDs, falls back to DeploymentAdapter
-- `HealthCheckStep_Timeout`: health check exceeds timeout, returns Failed
+```bash
+kardinal policy simulate --pipeline <name> --env <environment> \
+  [--time "Saturday 3pm"] [--soak-minutes N]
+```
+- Builds a mock CEL context from flags
+- Evaluates each PolicyGate against the mock context using the CEL evaluator
+- Prints:
+  ```
+  RESULT: BLOCKED
+  Blocked by: no-weekend-deploys
+  Message: "Production deployments are blocked on weekends"
+  ```
+  or:
+  ```
+  RESULT: PASS
+  no-weekend-deploys: PASS (Tuesday 10:00 UTC, isWeekend=false)
+  ```
+
+### 7. `kardinal history`
+
+```bash
+kardinal history <pipeline>
+```
+- Lists Bundles for pipeline sorted by creation time, newest first
+- Table: BUNDLE | TYPE | PHASE | CREATED | AGE
+
+### 8. Unit tests
+
+Table-driven tests for all new commands using fake client:
+- `TestCreateBundle_CreatesBundle`
+- `TestRollback_CreatesBundleWithRollbackOf`
+- `TestPause_PatchesPipelinePaused`
+- `TestResume_UnpausesPipeline`
+- `TestPolicyList_ShowsGates`
+- `TestPolicySimulate_BlockedOnWeekend`
+- `TestPolicySimulate_PassOnWeekday`
+- `TestHistory_ListsBundles`
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] `Adapter` interface defined with Check/Name/Available
-- [ ] `DeploymentAdapter` returns Healthy when all pods are ready, Degraded otherwise
-- [ ] `ArgoCDAdapter` returns Healthy when Application health=Healthy AND sync=Synced
-- [ ] `FluxAdapter` returns Healthy when Kustomization Ready condition=True
-- [ ] `AutoDetector` selects adapter by priority: argocd > flux > resource
-- [ ] PromotionStepReconciler `handleHealthChecking` uses the real adapter (not stub)
-- [ ] Health check timeout configurable via Pipeline spec; defaults to 10 minutes
-- [ ] `Bundle.status.environments[env].healthCheckedAt` set after health check passes
+- [ ] `kardinal create bundle <pipeline> --image <repo:tag>` creates a Bundle CRD
+- [ ] `kardinal rollback <pipeline> --env <env>` creates a rollback Bundle with `rollbackOf`
+- [ ] `kardinal pause <pipeline>` patches Pipeline.spec.paused=true
+- [ ] `kardinal resume <pipeline>` patches Pipeline.spec.paused=false
+- [ ] `kardinal policy list` shows PolicyGates with scope, applies-to, recheckInterval
+- [ ] `kardinal policy simulate --time "Saturday 3pm"` returns BLOCKED with reason
+- [ ] `kardinal policy simulate` with all gates passing returns PASS with table
+- [ ] `kardinal history <pipeline>` lists Bundles sorted by age
+- [ ] All commands use `sigs.k8s.io/controller-runtime/pkg/client` to talk to Kubernetes
 - [ ] `go build ./...` passes
-- [ ] `go test ./... -race` passes
+- [ ] `go test ./cmd/kardinal/... -race` passes
 - [ ] `go vet ./...` passes
 - [ ] Copyright headers on all new files
 - [ ] No banned filenames
@@ -102,10 +140,8 @@ After health check passes, write `Bundle.status.environments[env].healthCheckedA
 
 ## Notes
 
-- Use `k8s.io/client-go/discovery` for CRD availability check
-- ArgoCD Application type: `argoproj.io/v1alpha1/Application`
-- Flux Kustomization type: `kustomize.toolkit.fluxcd.io/v1/Kustomization`
-- Use dynamic client for CRD-based resources (ArgoCD, Flux) to avoid hard dependencies
-- Timeout: `Pipeline.spec.environments[].health.timeout` (Go duration string, e.g. "30m")
-- The health-check step in `pkg/steps/steps/health_check.go` remains a stub;
-  the reconciler handles real health via direct adapter call (not step)
+- `kardinal policy simulate` uses `pkg/cel.Evaluator` directly — no controller required
+- Time flag "Saturday 3pm" should be parsed as UTC; use `time.Parse` with flexible format
+- For --soak-minutes: set `bundle.upstreamSoakMinutes` in CEL context
+- `rollbackOf` is already in `BundleProvenance.RollbackOf` (item 005)
+- All commands must match the output format in `docs/cli-reference.md`
