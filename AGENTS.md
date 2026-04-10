@@ -141,6 +141,19 @@ web/
 
 `util.go`, `helpers.go`, `common.go`
 
+## Label Taxonomy
+
+All issues must have labels from each of these groups (read by otherness agents from this file):
+
+| Group | Labels | Applied to |
+|---|---|---|
+| Kind | `kind/enhancement`, `kind/bug`, `kind/chore`, `kind/docs`, `kind/security` | All issues |
+| Area | `area/controller`, `area/graph`, `area/policygate`, `area/cli`, `area/ui`, `area/scm`, `area/health`, `area/api`, `area/test`, `area/docs` | All issues |
+| Priority | `priority/critical`, `priority/high`, `priority/medium`, `priority/low` | All issues |
+| Size | `size/xs`, `size/s`, `size/m`, `size/l`, `size/xl` | Item issues |
+| Type | `epic` | Epic issues only |
+| Workflow | `kardinal` (PR_LABEL), `needs-human`, `blocked` | Set by agents |
+
 ## Anti-Patterns (QA blocks PRs containing these)
 
 | Pattern | Caught by |
