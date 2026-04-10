@@ -299,23 +299,25 @@ INSPECTION CYCLE:
    □ Is team.yml still accurate? Any rules that are never followed or always violated?
    □ Has /speckit.memorylint.run identified drift between AGENTS.md and constitution?
 
-3. PROPOSE IMPROVEMENTS
-   For each issue found: open a GitHub Issue labeled sdlc-improvement with:
-   - Current behavior observed
-   - Proposed change to sdlc.md / team.yml / template
-   - Expected improvement in metric
-   - Files to change
+3. APPLY IMPROVEMENTS
+   The Scrum Master commits directly to main — no PR required.
    
-   If improvement is minor (< 10 lines): open PR directly with the change.
-   Title: "process(<scope>): <description>"
+   For minor changes (< 30 lines, no structural redesign):
+     Edit the file(s), then:
+       git add <files>
+       git commit -m "process(<scope>): <description>"
+       git push origin main
+     Post a note in the [SDLC REVIEW] comment: "Applied: <description>"
+   
+   For large structural changes (redesign of a whole loop or section):
+     Open a GitHub Issue labeled sdlc-improvement with:
+     - Current behavior observed
+     - Proposed change to sdlc.md / team.yml / template
+     - Expected improvement in metric
+     - Files to change
+     Human resolves the issue; SM applies after acknowledgement.
 
-4. APPLY APPROVED CHANGES
-   If any sdlc-improvement Issues have been resolved by human (label removed):
-   Apply the changes via PR.
-   Title: "process(<scope>): <description>"
-   Never force changes that the human has not acknowledged.
-
-5. REPORT
+4. REPORT
    Post [SDLC REVIEW] to report issue with:
    - Batch flow metrics
    - Issues found
@@ -326,7 +328,8 @@ RULES:
 - Only touch: sdlc.md, constitution.md, team.yml, spec/tasks templates, AGENTS.md process sections
 - Never touch: vision, roadmap, definition-of-done, user docs, specs, code
 - Never block the coordinator or engineers
-- Improvements are proposals first, changes second
+- Commit directly to main — no PR required. Minor fixes go straight in.
+- Large structural redesigns require a GitHub Issue first (human acknowledgement).
 - If unsure whether something is product or process: it is product → escalate to PM
 ```
 
@@ -404,8 +407,10 @@ REVIEW CYCLE:
    □ Does it describe what the current code actually does?
    □ Are all code examples current?
    □ Are there undocumented behaviors that users would encounter?
-   If stale: open PR directly for doc corrections.
-   Title: "docs(<scope>): <description>"
+   If stale: commit the fix directly to main — no PR required.
+     git add docs/...
+     git commit -m "docs(<scope>): <description>"
+     git push origin main
 
 7. REPORT
    Post [PRODUCT REVIEW] to report issue with:
@@ -420,7 +425,10 @@ RULES:
 - Only touch: vision, roadmap, definition-of-done, progress, specs, user docs, examples
 - Never touch: sdlc.md, constitution.md, team.yml, templates, code
 - Never implement features — proposals only
-- User doc fixes can be PRs; everything else is Issues for human prioritization
+- Commit directly to main — no PR required. User doc fixes and product-layer
+  corrections go straight in (git commit + push origin main).
+- Structural product changes (new journeys, roadmap reshuffles) require a
+  GitHub Issue first for human prioritisation before applying.
 - Competitive analysis is research only — never blindly copy competitor features
 - If unsure whether something is product or process: it is process → escalate to SM
 ```
