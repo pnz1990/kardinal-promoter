@@ -28,6 +28,18 @@ provides:
       file: "commands/speckit.maqa.qa.md"
       description: "Static analysis quality gate: text, links, security, accessibility (all configurable)."
 
+    - name: "speckit.maqa.scrummaster"
+      file: "commands/speckit.maqa.scrummaster.md"
+      description: "One-shot Scrum Master review after each batch. SDLC health check, flow metrics, minor process improvements."
+
+    - name: "speckit.maqa.pm"
+      file: "commands/speckit.maqa.pm.md"
+      description: "One-shot Product Manager review after each batch. Vision alignment, journey coverage, doc freshness, competitive analysis."
+
+    - name: "speckit.maqa.standalone"
+      file: "commands/speckit.maqa.standalone.md"
+      description: "Single-session mode: one agent plays all roles sequentially (coordinator→engineer→QA→SM→PM). Fully autonomous, one item at a time."
+
     - name: "speckit.maqa.setup"
       file: "commands/speckit.maqa.setup.md"
       description: "One-time Claude Code setup: deploys coordinator/feature/qa as native subagents in .claude/agents/"
