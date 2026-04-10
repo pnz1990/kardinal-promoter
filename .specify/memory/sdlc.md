@@ -13,21 +13,31 @@ project.
 
 Seven concurrent sessions, one role each:
 
-| Session | Role | Command | Runs until |
+| Session | Role | Agent file | Runs until |
 |---|---|---|---|
-| 1 | Coordinator | `/speckit.maqa.coordinator` | All journeys complete |
-| 2 | Engineer 1 | `/speckit.maqa.feature` | No more work + queue empty |
-| 3 | Engineer 2 | `/speckit.maqa.feature` | No more work + queue empty |
-| 4 | Engineer 3 | `/speckit.maqa.feature` | No more work + queue empty |
-| 5 | QA | `/speckit.maqa.qa` | No open PRs + final batch complete |
-| 6 | Scrum Master | `/speckit.maqa.scrummaster` | Project complete |
-| 7 | Product Manager | `/speckit.maqa.pm` | Project complete |
+| 1 | Coordinator | `.claude/agents/coordinator.md` | All journeys complete |
+| 2 | Engineer 1 | `.claude/agents/engineer.md` (set AGENT_ID=ENGINEER-1) | No more work + queue empty |
+| 3 | Engineer 2 | `.claude/agents/engineer.md` (set AGENT_ID=ENGINEER-2) | No more work + queue empty |
+| 4 | Engineer 3 | `.claude/agents/engineer.md` (set AGENT_ID=ENGINEER-3) | No more work + queue empty |
+| 5 | QA | `.claude/agents/qa-watcher.md` | No open PRs + [PROJECT COMPLETE] posted |
+| 6 | Scrum Master | `.claude/agents/scrum-master.md` | One-shot per batch (triggered by coordinator) |
+| 7 | Product Manager | `.claude/agents/product-manager.md` | One-shot per batch (triggered by coordinator) |
+
+**Note on `/speckit.maqa.qa`**: this is a one-shot static analysis tool invoked by the coordinator
+for a single feature. It is NOT the same as the QA watcher session. Do not confuse them.
+The QA watcher (`.claude/agents/qa-watcher.md`) is the continuous loop that polls for open PRs.
+The one-shot tool (`/speckit.maqa.qa`) runs inline when the coordinator needs a static analysis pass.
 
 All sessions start in the main repository directory. The coordinator creates
 worktrees for engineers. Engineers `cd` into their worktree after assignment.
 
 The Scrum Master and Product Manager do not have worktrees. They work in the
 main repository and propose changes via GitHub Issues and PRs.
+
+For Claude Code: open each session, start a new conversation, and run the agent file
+(e.g. `.claude/agents/coordinator.md`) as the initial prompt. The coordinator and
+engineers loop continuously. The QA watcher loops continuously. The SM and PM
+are one-shot — each runs once per batch when triggered.
 
 ---
 
