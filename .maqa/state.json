@@ -3,11 +3,11 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T20:14:29Z",
-  "current_queue": null,
-  "last_sm_review": null,
-  "last_pm_review": "2026-04-10T20:15:00Z",
-  "batches_since_competitive_analysis": 3,
+  "last_updated": "2026-04-10T21:39:41Z",
+  "current_queue": "queue-005",
+  "last_sm_review": "2026-04-10T21:08:13Z",
+  "last_pm_review": "2026-04-10T21:10:12Z",
+  "batches_since_competitive_analysis": 4,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
@@ -76,6 +76,42 @@
       "pr_number": 24,
       "pr_merged": true,
       "dependency_mode": "branch"
+    },
+    "008-graph-types-propagate-when": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T20:27:29Z",
+      "worktree_path": "../kardinal-promoter.008-graph-types-propagate-when",
+      "pr_number": 27,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "009-graph-builder": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T20:39:19Z",
+      "worktree_path": "../kardinal-promoter.009-graph-builder",
+      "pr_number": 29,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "010-policygate-cel": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T21:12:12Z",
+      "worktree_path": "../kardinal-promoter.010-policygate-cel",
+      "pr_number": 31,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "011-cli-foundation": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
@@ -88,8 +124,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": null,
-      "cycle": 0
+      "last_seen": "2026-04-10T21:23:47Z",
+      "cycle": 9
     }
   }
 }
