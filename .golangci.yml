@@ -1,0 +1,38 @@
+version: "2"
+
+linters:
+  # Start from the default set and add/remove specific linters
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - gocritic
+  disable:
+    # Too noisy for early development
+    - exhaustive
+    - wrapcheck
+
+  settings:
+    govet:
+      enable-all: false
+
+  exclusions:
+    rules:
+      # errcheck is too noisy in test files (t.Log, defer file.Close, etc.)
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kardinal-promoter/kardinal-promoter
