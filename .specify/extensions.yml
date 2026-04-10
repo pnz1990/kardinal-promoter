@@ -12,7 +12,7 @@ hooks:
     condition: null
   - extension: memorylint
     command: speckit.memorylint.run
-    enabled: false
+    enabled: true
     optional: true
     prompt: Run MemoryLint to prune out-of-bounds architecture rules and enrich missing
       infrastructure guidelines in AGENTS.md?

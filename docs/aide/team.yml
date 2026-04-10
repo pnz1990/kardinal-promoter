@@ -27,14 +27,34 @@ roles:
     command: /speckit.maqa.coordinator
     loop: continuous
     stop_condition: all 20 roadmap stages complete
+    consistency_audit:
+      runs: after every batch (before generating next queue)
+      commands:
+        - /speckit.analyze          # cross-artifact: spec ↔ tasks ↔ implementation
+        - /speckit.memorylint.run   # AGENTS.md vs constitution drift
+        - go build ./...            # full project compiles
+        - govulncheck ./...         # known CVE scan
+        - go test ./... -race -count=1  # full regression suite on main
+      on_failure: post [BATCH QUALITY GATE FAILED] to Issue #1, label needs-human,
+                  do NOT generate next queue until human resolves
+    doc_freshness:
+      runs: after any batch with user-facing features merged
+      check: docs/ pages affected by merged features match the implementation
+      on_discrepancy: open GitHub Issue labeled doc-gap, include in next queue
+    spec_traceability:
+      runs: after each feature merges
+      check: every FR-NNN in spec.md has a corresponding test in the codebase
+      method: grep for FR identifier in test files
+      on_missing: open GitHub Issue labeled missing-test, include in next queue
     rules:
       - Never implement features. Never commit. Never push. Never merge.
       - Do not assign an item if its Depends-on items are not state=done.
       - Keep max 3 items in in_progress or in_review simultaneously.
       - When an item is blocked, continue assigning others.
-      - Post [BATCH COMPLETE] to Issue #1 after each queue batch.
+      - Post [BATCH COMPLETE] to Issue #1 after each queue batch (include audit summary).
       - Post [NEEDS HUMAN] to Issue #1 when any item hits needs-human.
-      - Generate next queue automatically when current queue exhausts.
+      - Never skip the consistency audit. Never generate next queue if audit fails.
+      - Generate next queue automatically when current queue exhausts and audit passes.
 
   engineer:
     command: /speckit.maqa.feature
@@ -195,6 +215,21 @@ reporting:
         ## [QA FINDING] {item_id}: {title} — {timestamp}
 
         **Severity**: {low|medium|high}
+        **PR**: #{pr_number}
+        **File**: {file}:{line}
+        **Finding**: {description}
+        **Action required**: {recommended_action}
+
+    batch_quality_gate_failed:
+      trigger: coordinator consistency audit fails after a batch
+      format: |
+        ## [BATCH QUALITY GATE FAILED] {queue_id} — {timestamp}
+
+        **Failed checks**:
+        {for each failed check}- {check_name}: {failure_reason}
+        {end}
+        **Action required**: Fix the issues above and remove the `needs-human` label.
+        Next queue will NOT be generated until this is resolved.
         **PR**: #{pr_number}
         **File**: {file}:{line}
         **Finding**: {description}

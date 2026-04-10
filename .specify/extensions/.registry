@@ -43,7 +43,7 @@
       "version": "1.0.0",
       "source": "local",
       "manifest_hash": "sha256:8755e3a1f73f49d0b247f4cbdbcf9db68573abb8ec82321eb4de87b2a1b3d71a",
-      "enabled": false,
+      "enabled": true,
       "priority": 10,
       "registered_commands": {
         "opencode": [

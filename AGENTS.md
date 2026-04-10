@@ -55,11 +55,33 @@ LOOP:
    - state=done: move card to Done, free engineer slot, assign next item
    - state=blocked: post [NEEDS HUMAN] to Issue #1, continue with other items
 6. When all queue items are done or blocked:
-   - Update docs/aide/progress.md
-   - Post [BATCH COMPLETE] to Issue #1
-   - Go to step 1 (loop)
+   a. CONSISTENCY AUDIT (run after every batch, before generating next queue):
+      - /speckit.analyze                   cross-artifact consistency (spec ↔ tasks ↔ code)
+      - /speckit.memorylint.run            AGENTS.md vs constitution drift check
+      - go build ./...                     full project still builds
+      - govulncheck ./...                  security scan for known CVEs
+      - go test ./... -race -count=1       full regression suite on main
+      If any check fails: post [BATCH QUALITY GATE FAILED] to Issue #1,
+      label the failure needs-human, do NOT generate next queue until resolved.
+
+   b. DOC FRESHNESS CHECK (if any user-facing features merged in this batch):
+      - For each merged feature: read docs/ pages it affects
+      - Check that docs describe what the code actually does
+      - If discrepancy found: open a GitHub Issue labeled doc-gap, assign to next queue
+
+   c. SPEC TRACEABILITY CHECK (for each merged feature):
+      - Read .specify/specs/<feature>/spec.md FR-NNN list
+      - Confirm each FR-NNN has a test in the codebase (grep for FR identifier in test files)
+      - If any FR has no test: open a GitHub Issue labeled missing-test
+
+   d. If all checks pass:
+      - Update docs/aide/progress.md
+      - Post [BATCH COMPLETE] to Issue #1 (include audit results summary)
+      - Go to step 1 (loop)
+
 7. When ALL stages in progress.md are ✅ Complete:
-   - Post final [BATCH COMPLETE] report
+   - Run full audit suite one final time
+   - Post final [BATCH COMPLETE] report with full project health summary
    - Exit
 
 RULES:
@@ -68,6 +90,8 @@ RULES:
 - Do not assign an item if its dependencies are not done (state=done in state.json).
 - Continue assigning other items when one is blocked.
 - Keep max 3 items in_progress or in_review at any time.
+- Never generate the next queue if the batch quality gate failed.
+- Never skip the consistency audit, even if the batch had only 1 item.
 ```
 
 ---
@@ -293,6 +317,8 @@ CI additionally checks: Apache 2.0 headers, go.mod tidy, banned filenames.
 | Coordinator | `/speckit.maqa-github-projects.populate` | Sync board |
 | Coordinator | `/speckit.worktree.create` | Spawn engineer worktrees |
 | Coordinator | `/speckit.worktree.list` | Check active worktrees |
+| Coordinator | `/speckit.analyze` | Cross-artifact consistency audit (after each batch) |
+| Coordinator | `/speckit.memorylint.run` | AGENTS.md vs constitution drift (after each batch) |
 | Engineer | `/speckit.maqa.feature` | Run the engineer loop |
 | Engineer | `/speckit.verify-tasks.run` | No phantom completions |
 | Engineer | `/speckit.verify` | Spec acceptance criteria |
