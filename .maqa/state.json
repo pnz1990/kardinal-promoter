@@ -2,7 +2,7 @@
   "version": "1.2",
   "project": "kardinal-promoter",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T14:57:03Z",
+  "last_updated": "2026-04-10T14:57:30Z",
   "current_queue": "queue-001",
   "last_sm_review": null,
   "last_pm_review": null,
@@ -10,7 +10,7 @@
   "engineer_slots": {
     "ENGINEER-1": "002-kubebuilder-scaffold",
     "ENGINEER-2": "003-dockerfile-and-helm",
-    "ENGINEER-3": "004-ci-and-lint"
+    "ENGINEER-3": null
   },
   "features": {
     "001-go-module-scaffold": {
@@ -41,19 +41,19 @@
       "dependency_mode": "branch"
     },
     "004-ci-and-lint": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "ENGINEER-3",
       "assigned_at": "2026-04-10T08:51:53Z",
       "worktree_path": "../kardinal-promoter.004-ci-and-lint",
       "pr_number": 9,
-      "pr_merged": false,
+      "pr_merged": true,
       "dependency_mode": "branch"
     }
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T14:57:03Z",
-      "cycle": 1
+      "last_seen": "2026-04-10T14:57:30Z",
+      "cycle": 2
     },
     "QA": {
       "last_seen": null,
