@@ -1,6 +1,9 @@
 # MAQA — Multi-Agent & Quality Assurance
 # kardinal-promoter configuration
 
+# ── Execution mode ────────────────────────────────────────────────────────────
+mode: "team"
+
 # ── Agent files ───────────────────────────────────────────────────────────────
 agents_path: "~/.kardinal/agents"
 
