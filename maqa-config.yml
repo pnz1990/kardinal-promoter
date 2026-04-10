@@ -2,7 +2,7 @@
 # kardinal-promoter configuration
 
 # ── Execution mode ────────────────────────────────────────────────────────────
-mode: "team"
+mode: "standalone"
 
 # ── Agent files ───────────────────────────────────────────────────────────────
 agents_path: "~/.kardinal/agents"

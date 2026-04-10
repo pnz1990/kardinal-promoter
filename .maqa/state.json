@@ -1,9 +1,9 @@
 {
   "version": "1.2",
   "project": "kardinal-promoter",
-  "mode": "team",
+  "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-10T20:12:18Z",
+  "last_updated": "2026-04-10T20:14:29Z",
   "current_queue": null,
   "last_sm_review": null,
   "last_pm_review": "2026-04-10T20:15:00Z",
@@ -80,8 +80,8 @@
   },
   "session_heartbeats": {
     "COORDINATOR": {
-      "last_seen": "2026-04-10T20:12:18Z",
-      "cycle": 69
+      "last_seen": "2026-04-10T20:14:29Z",
+      "cycle": 70
     },
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
