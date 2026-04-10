@@ -11,21 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package main is the entry point for the kardinal CLI binary.
-// The CLI creates and reads kardinal-promoter CRDs via the Kubernetes API.
-package main
+package cmd
 
-import (
-	"fmt"
-	"os"
+import "github.com/spf13/cobra"
 
-	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
-)
-
-func main() {
-	root := cmd.NewRootCmd()
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+func newGetCmd() *cobra.Command {
+	get := &cobra.Command{
+		Use:   "get",
+		Short: "Display one or more kardinal resources",
 	}
+	get.AddCommand(newGetPipelinesCmd())
+	get.AddCommand(newGetBundlesCmd())
+	get.AddCommand(newGetStepsCmd())
+	return get
 }
