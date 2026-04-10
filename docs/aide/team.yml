@@ -203,19 +203,23 @@ roles:
       - "todo -> assigned"
       - "assigned -> todo (stale recovery after 20 min)"
       - "done: free slot (set engineer_slots[SLOT]=null)"
+      - "in_review -> done (fallback only: engineer dead >30 min after QA LGTM + CI green)"
     engineer_writes:
       - "assigned -> in_progress (confirm pickup only)"
       - "in_progress -> in_review"
-      - "in_review -> done"
+      - "in_review -> done (primary path)"
       - "in_progress -> blocked"
-    note: "Engineers NEVER self-select from the queue. Coordinator is sole assigner."
+    note: "Engineers NEVER self-select from the queue. Coordinator is sole assigner.
+      ATOMIC SCHEMA RULE: any change to a state name here MUST update the Engineer
+      Loop PICK UP polling condition in sdlc.md in the same commit. Violating this
+      causes silent engineer idle (proven: Night 1, RC-3)."
   state_machine:
-    "backlog -> todo": "coordinator validates dependencies are done"
-    "todo -> assigned": "coordinator: duplicate-assignment guard passes, writes atomically, creates worktree, posts comment"
+    "backlog -> todo": "coordinator validates dependency check (mode: merged=state==done, branch=remote branch exists)"
+    "todo -> assigned": "coordinator: duplicate-assignment guard passes, writes atomically, creates worktree, snapshots ITEM.md, posts comment"
     "assigned -> in_progress": "engineer confirms pickup after verifying assigned_to==MY_SLOT"
     "in_progress -> in_review": "engineer validates, CI green, PR open"
     "in_review -> in_progress": "QA requests changes"
-    "in_review -> done": "QA approves + CI green + engineer merges + smoke test passes"
+    "in_review -> done": "QA approves + CI green + engineer merges IMMEDIATELY + smoke test passes (coordinator fallback if engineer dead >30 min)"
     "in_progress -> blocked": "blocked after 2 retries"
     "assigned -> todo": "stale assignment recovery by coordinator (>20 min, no pickup)"
 

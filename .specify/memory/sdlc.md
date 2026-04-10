@@ -122,7 +122,10 @@ LOOP:
      Wait for PM to post "[📋 PM] SPEC GATE CLEAR" on Issue #1.
      If no PM session is active, post: "[🎯 COORDINATOR] Requesting PM spec gate check
      before queue generation. PM — please cross-validate items vs AGENTS.md + design docs."
-     Do NOT generate items until SPEC GATE CLEAR is posted.
+     Timeout: if SPEC GATE CLEAR is not posted within 30 minutes, proceed anyway and log:
+       "[🎯 COORDINATOR] PM spec gate timed out (30 min). Proceeding without gate.
+        PM — run spec validation on the generated items when available."
+     Do NOT wait indefinitely — a dead PM session must not block queue generation.
    Then:
    - /speckit.aide.create-queue   → docs/aide/queue/queue-NNN.md
    - /speckit.aide.create-item    → docs/aide/items/NNN-*.md per item
