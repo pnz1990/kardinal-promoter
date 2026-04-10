@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
@@ -69,7 +70,7 @@ const (
 //	"Promoting"    → "WaitingForMerge": open-pr step completed (prURL in outputs)
 //	"WaitingForMerge" → "HealthChecking": SCM reports PR merged
 //	"WaitingForMerge" → "Failed": PR closed without merge
-//	"HealthChecking" → "Verified": health-check step returns Success
+//	"HealthChecking" → "Verified": health adapter returns Healthy
 //	any → "Failed": any step returns Failed
 //
 // The reconciler persists currentStepIndex to etcd on every step completion so that
@@ -82,6 +83,10 @@ type Reconciler struct {
 
 	// GitClient is the Git operations client.
 	GitClient scm.GitClient
+
+	// HealthDetector selects the health adapter for health checking.
+	// If nil, the health-check step stub (always-success) is used.
+	HealthDetector *health.AutoDetector
 
 	// Shard, when set, causes the reconciler to skip PromotionSteps whose
 	// kardinal.io/shard label does not match this value (distributed mode).
@@ -336,18 +341,125 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 }
 
-// handleHealthChecking runs the health-check step and transitions to Verified or failed.
-// The health-check step is a stub in Stage 6 (real adapters in Stage 7).
+// handleHealthChecking verifies the deployment health using the configured adapter.
+// Uses the real health adapter when HealthDetector is configured; falls back to
+// the stub health-check step when it is nil (for backward compatibility in tests
+// written before Stage 7).
 func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
-	healthStep, err := steps.Lookup("health-check")
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("lookup health-check step: %w", err)
-	}
-
 	pipeline, pipelineErr := r.loadPipeline(ctx, ps)
 	bundle, bundleErr := r.loadBundle(ctx, ps)
 	if pipelineErr != nil || bundleErr != nil {
 		log.Warn().Err(pipelineErr).Err(bundleErr).Msg("failed to load pipeline/bundle for health check")
+	}
+
+	// Use real health adapter if HealthDetector is available.
+	if r.HealthDetector != nil && pipeline != nil {
+		env := findEnv(pipeline, ps.Spec.Environment)
+		healthType := env.Health.Type
+
+		// Parse timeout from environment config; default 10m.
+		timeout := 10 * time.Minute
+		if env.Health.Timeout != "" {
+			if d, err := time.ParseDuration(env.Health.Timeout); err == nil && d > 0 {
+				timeout = d
+			}
+		}
+
+		// Check if we've exceeded the timeout (recorded in step start time via conditions).
+		// If startedAt is set and elapsed > timeout, fail.
+		if ps.Status.Conditions != nil {
+			for _, cond := range ps.Status.Conditions {
+				if cond.Type == "HealthCheckStarted" {
+					elapsed := time.Since(cond.LastTransitionTime.Time)
+					if elapsed > timeout {
+						log.Warn().Dur("elapsed", elapsed).Dur("timeout", timeout).Msg("health check timeout")
+						patch := client.MergeFrom(ps.DeepCopy())
+						ps.Status.State = StateFailed
+						ps.Status.Message = fmt.Sprintf("health check timeout after %s", timeout)
+						if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+							return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
+						}
+						if bundle != nil {
+							_ = r.copyEvidenceToBundle(ctx, ps, bundle)
+						}
+						return ctrl.Result{}, nil
+					}
+				}
+			}
+		}
+
+		// Record health check start time (idempotent — only add if not already there).
+		hasStarted := false
+		for _, c := range ps.Status.Conditions {
+			if c.Type == "HealthCheckStarted" {
+				hasStarted = true
+				break
+			}
+		}
+		if !hasStarted {
+			patch := client.MergeFrom(ps.DeepCopy())
+			ps.Status.Conditions = appendCondition(ps.Status.Conditions,
+				"HealthCheckStarted", metav1.ConditionTrue, "Started", "health check in progress", time.Now())
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch health check start: %w", patchErr)
+			}
+		}
+
+		adapter, err := r.HealthDetector.Select(ctx, healthType)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("select health adapter: %w", err)
+		}
+
+		// Build CheckOptions from pipeline environment config.
+		opts := health.CheckOptions{
+			Type:    healthType,
+			Timeout: timeout,
+			Resource: health.ResourceConfig{
+				Name:      pipeline.Name,
+				Namespace: ps.Spec.Environment,
+				Condition: "Available",
+			},
+			ArgoCD: health.ArgoCDConfig{
+				Name:      pipeline.Name + "-" + ps.Spec.Environment,
+				Namespace: "argocd",
+			},
+			Flux: health.FluxConfig{
+				Name:      pipeline.Name + "-" + ps.Spec.Environment,
+				Namespace: "flux-system",
+			},
+		}
+
+		result, checkErr := adapter.Check(ctx, opts)
+		if checkErr != nil {
+			log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
+			return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
+		}
+
+		if result.Healthy {
+			log.Info().Str("env", ps.Spec.Environment).Str("adapter", adapter.Name()).Msg("health check passed, Verified")
+			now := metav1.NewTime(time.Now().UTC())
+			patch := client.MergeFrom(ps.DeepCopy())
+			ps.Status.State = StateVerified
+			ps.Status.Message = fmt.Sprintf("health check passed via %s: %s", adapter.Name(), result.Reason)
+			ps.Status.Conditions = appendCondition(ps.Status.Conditions, "Verified", metav1.ConditionTrue, "Verified", "promotion complete", now.Time)
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
+			}
+			if bundle != nil {
+				_ = r.copyEvidenceToBundle(ctx, ps, bundle)
+			}
+			return ctrl.Result{}, nil
+		}
+
+		// Not yet healthy — requeue.
+		log.Debug().Str("reason", result.Reason).Str("adapter", adapter.Name()).Msg("health check not yet passed, requeueing")
+		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
+	}
+
+	// Fallback: use the health-check step stub (Stage 6 behavior / tests without HealthDetector).
+	healthStep, err := steps.Lookup("health-check")
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("lookup health-check step: %w", err)
 	}
 
 	var pipelineSpec v1alpha1.PipelineSpec

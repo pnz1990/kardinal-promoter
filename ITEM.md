@@ -1,89 +1,97 @@
-# Item 013: PromotionStep Reconciler — Full Promotion Loop (Stage 6)
+# Item 014: Health Adapters — Deployment, Argo CD, Flux (Stage 7)
 
-> **Queue**: queue-006
-> **Branch**: `013-promotionstep-reconciler`
-> **Depends on**: 012 (merged — SCM + Steps Engine)
+> **Queue**: queue-007
+> **Branch**: `014-health-adapters`
+> **Depends on**: 013 (merged — PromotionStep reconciler)
 > **Dependency mode**: merged
-> **Assignable**: after 012 is merged
-> **Contributes to**: J1, J3, J4, J5 (end-to-end promotion)
-> **Priority**: HIGH — critical path to J1
+> **Assignable**: immediately
+> **Contributes to**: J1, J2 (health verification)
+> **Priority**: HIGH — required for J1 journey to pass
 
 ---
 
 ## Goal
 
-Implement the `PromotionStepReconciler` that watches `PromotionStep` CRDs and
-drives them through the step engine. Wire the full promotion loop end-to-end:
-Bundle → Graph → PromotionSteps → PRs → Verified.
+Replace the health-check stub with real health verification. The controller checks
+Deployment readiness, Argo CD Application health+sync, or Flux Kustomization Ready —
+whichever is present. The PromotionStep reconciler enters HealthChecking and advances
+to Verified only when the health check passes.
 
-Design spec: `docs/design/03-promotionstep-reconciler.md`, roadmap Stage 6.
+Design spec: `docs/design/05-health-adapters.md`, roadmap Stage 7.
 
 ---
 
 ## Deliverables
 
-### 1. `pkg/reconciler/promotionstep/reconciler.go`
+### 1. `pkg/health` package
 
-State machine:
-- `Pending` → `Promoting`: start step engine execution
-- `Promoting` → `WaitingForMerge`: open-pr step completed, prURL stored in status
-- `WaitingForMerge` → `HealthChecking`: wait-for-merge step returned Success
-- `HealthChecking` → `Verified`: health-check step returned Success
-- `Any` → `Failed`: any step returned Failed
+```
+pkg/health/
+  adapter.go          # Adapter interface: Check + Name + Available
+  registry.go         # AutoDetector: checks CRDs on startup, selects adapter
+  resource.go         # DeploymentAdapter: Deployment readiness conditions
+  argocd.go           # ArgoCDAdapter: Application health=Healthy + sync=Synced
+  flux.go             # FluxAdapter: Kustomization Ready condition
+  health_test.go      # Unit tests (table-driven, mock k8s client)
+```
 
-Reconciler behavior:
-- Reads `PromotionStep.spec.stepType` to determine step sequence (via `steps.Defaults`)
-- Calls `Engine.Execute` at current step index
-- Stores outputs in `PromotionStep.status.outputs`
-- Persists `currentStepIndex` in status for crash recovery (idempotent re-runs)
-- Uses `fmt.Errorf("context: %w", err)` — no bare errors
-- Uses `zerolog.Ctx(ctx)` for logging
+**Adapter interface:**
+```go
+type Adapter interface {
+    Check(ctx context.Context, opts CheckOptions) (HealthStatus, error)
+    Name() string
+    Available(ctx context.Context, discoveryClient discovery.DiscoveryInterface) (bool, error)
+}
 
-### 2. Bundle phase machine in `pkg/reconciler/bundle/reconciler.go`
+type HealthStatus struct {
+    Phase   string  // "Healthy", "Degraded", "Progressing", "Unknown"
+    Message string
+    CheckedAt time.Time
+}
+```
 
-Extend existing BundleReconciler to:
-- Watch PromotionStep statuses and aggregate into Bundle phase:
-  - All steps `Verified` → Bundle `Verified`
-  - Any step `Failed` → Bundle `Failed`
-  - Otherwise → Bundle `Promoting`
-- Bundle supersession: when a new Bundle for the same Pipeline is created, older
-  Bundles in `Promoting` are set to `Superseded` and their PromotionSteps deleted
+**AutoDetector:**
+- On startup and every 5 minutes, lists installed CRDs
+- Priority: argocd > flux > resource (Deployment)
+- Returns the highest-priority available adapter
 
-### 3. Webhook endpoint in controller HTTP server
+### 2. Wire health check into PromotionStepReconciler
 
-Add to the controller HTTP server:
-- `POST /webhook/scm` endpoint
-  - Validates `X-Hub-Signature-256` HMAC
-  - On `pull_request` event with `action: closed, merged: true`, reconciles the owning Bundle
-- Startup reconciliation: on controller start, re-list all in-flight PRs and re-check merge status
+In `pkg/reconciler/promotionstep/reconciler.go`, replace the stub health-check step
+dispatch with:
+- `handleHealthChecking` calls `AutoDetector.Select()` then `adapter.Check()`
+- Polls every 10 seconds until Healthy or timeout (default 10m, configurable via `Pipeline.spec.environments[].health.timeout`)
+- On Healthy: set state=Verified, record healthCheckedAt
+- On timeout: set state=Failed, reason="health check timeout"
 
-### 4. `kardinal explain` CLI command
+### 3. Write health result to Bundle evidence
 
-In `cmd/kardinal/cmd/explain.go`:
-- `kardinal explain <pipeline> --env <environment> [--watch]`
-- Lists PromotionSteps + PolicyGates for the pipeline/environment
-- Table columns: ENVIRONMENT | STEP | TYPE | STATE | REASON
-- `--watch` streams updates with ANSI in-place refresh
+After health check passes, write `Bundle.status.environments[env].healthCheckedAt`
+(already partially wired in item 013 — complete the timestamp population).
 
-### 5. Integration test
+### 4. Unit tests
 
-`test/e2e/promotion_loop_test.go`:
-- Kind cluster + mock GitHub server (httptest)
-- Apply Pipeline + Bundle
-- Verify Bundle reaches `Verified` within test timeout
-- Verify idempotency: delete and re-create a PromotionStep, no duplicate PRs
+- `DeploymentAdapter_Healthy`: mock client returns Deployment with all pods ready
+- `DeploymentAdapter_Degraded`: some pods not ready
+- `ArgoCDAdapter_Healthy`: Application with health=Healthy + sync=Synced
+- `ArgoCDAdapter_Degraded`: Application with health=Degraded
+- `FluxAdapter_Healthy`: Kustomization with Ready condition = True
+- `AutoDetector_SelectsArgoCD`: when ArgoCD CRD present, selects ArgoCDAdapter
+- `AutoDetector_FallsBack`: no ArgoCD/Flux CRDs, falls back to DeploymentAdapter
+- `HealthCheckStep_Timeout`: health check exceeds timeout, returns Failed
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] PromotionStepReconciler drives full state machine: Pending → Promoting → WaitingForMerge → HealthChecking → Verified
-- [ ] Bundle phase aggregated from PromotionStep statuses
-- [ ] Bundle supersession: older Bundle set to Superseded when new Bundle created for same Pipeline
-- [ ] Idempotency: re-running reconciler does not duplicate PRs (checked via pr_number in status)
-- [ ] `/webhook/scm` endpoint validates signature and reconciles Bundle
-- [ ] `kardinal explain <pipeline> --env <env>` shows step/gate states
-- [ ] Integration test passes with mock GitHub server
+- [ ] `Adapter` interface defined with Check/Name/Available
+- [ ] `DeploymentAdapter` returns Healthy when all pods are ready, Degraded otherwise
+- [ ] `ArgoCDAdapter` returns Healthy when Application health=Healthy AND sync=Synced
+- [ ] `FluxAdapter` returns Healthy when Kustomization Ready condition=True
+- [ ] `AutoDetector` selects adapter by priority: argocd > flux > resource
+- [ ] PromotionStepReconciler `handleHealthChecking` uses the real adapter (not stub)
+- [ ] Health check timeout configurable via Pipeline spec; defaults to 10 minutes
+- [ ] `Bundle.status.environments[env].healthCheckedAt` set after health check passes
 - [ ] `go build ./...` passes
 - [ ] `go test ./... -race` passes
 - [ ] `go vet ./...` passes
@@ -94,7 +102,10 @@ In `cmd/kardinal/cmd/explain.go`:
 
 ## Notes
 
-- Uses `pkg/steps.Engine` from item 012
-- Webhook secret sourced from environment variable `KARDINAL_WEBHOOK_SECRET`
-- `kardinal explain --watch` can use a simple polling loop (no SSE required)
-- No real GitHub API calls in integration tests — use `httptest.NewServer` mock
+- Use `k8s.io/client-go/discovery` for CRD availability check
+- ArgoCD Application type: `argoproj.io/v1alpha1/Application`
+- Flux Kustomization type: `kustomize.toolkit.fluxcd.io/v1/Kustomization`
+- Use dynamic client for CRD-based resources (ArgoCD, Flux) to avoid hard dependencies
+- Timeout: `Pipeline.spec.environments[].health.timeout` (Go duration string, e.g. "30m")
+- The health-check step in `pkg/steps/steps/health_check.go` remains a stub;
+  the reconciler handles real health via direct adapter call (not step)
