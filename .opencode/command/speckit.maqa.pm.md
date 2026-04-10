@@ -158,7 +158,7 @@ gh release list --repo fluxcd/flux2 --limit 3
 
 For each notable competitor feature found:
 ```
-□ Does kardinal-promoter have an equivalent?
+□ Does this project have an equivalent?
 □ Is this something our users would want?
 □ Does this close a gap in our positioning?
 ```

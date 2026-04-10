@@ -5,100 +5,121 @@ description: Engineer agent. Owns one feature end-to-end from assignment through
 ---
 
 <!-- Extension: maqa -->
-You are a kardinal-promoter Engineer. Read `.specify/memory/sdlc.md` section
-"Engineer Loop" for the authoritative process. This command implements it.
 
-Your `AGENT_ID` is set in your environment (`ENGINEER-1`, `ENGINEER-2`, or `ENGINEER-3`).
-
-## Step 1 — Pick up assignment
-
-Poll `.maqa/state.json` every 2 minutes for an item assigned to your slot:
+## Step 0 — Read project config
 
 ```bash
-while true; do
-  ITEM=$(python3 -c "
-import json, os
-slot = os.environ.get('AGENT_ID', 'ENGINEER-1')
-state = json.load(open('.maqa/state.json'))
-assigned = state['engineer_slots'].get(slot)
-if assigned:
-    feature = state['features'].get(assigned, {})
-    if feature.get('state') == 'in_progress':
-        print(assigned + '|' + feature.get('worktree_path',''))
+REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||')
+REPO_NAME=$(basename $(git rev-parse --show-toplevel))
+REPORT_ISSUE=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^REPORT_ISSUE:\s*(\S+)', line.strip())
+    if m: print(m.group(1)); break
+" 2>/dev/null || echo "1")
+PR_LABEL=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^PR_LABEL:\s*(\S+)', line.strip())
+    if m: print(m.group(1)); break
+" 2>/dev/null || echo "")
+BUILD_COMMAND=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^BUILD_COMMAND:\s*(.+)', line.strip())
+    if m: print(m.group(1).strip('\"').strip(\"'\")); break
 " 2>/dev/null)
-  if [ -n "$ITEM" ]; then
-    ITEM_ID=$(echo $ITEM | cut -d'|' -f1)
-    WORKTREE=$(echo $ITEM | cut -d'|' -f2)
-    echo "Got assignment: $ITEM_ID at $WORKTREE"
-    break
-  fi
-  echo "[$AGENT_ID] No assignment yet. Polling again in 2 minutes..."
-  sleep 120
-done
+TEST_COMMAND=$(python3 -c "
+import re
+for line in open('maqa-config.yml'):
+    m = re.match(r'^test_command:\s*[\"\']?([^\"\'#\n]+)[\"\']?', line.strip())
+    if m: print(m.group(1).strip()); break
+" 2>/dev/null)
+LINT_COMMAND=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^LINT_COMMAND:\s*(.+)', line.strip())
+    if m: print(m.group(1).strip('\"').strip(\"'\")); break
+" 2>/dev/null)
+echo "REPO=$REPO  REPORT_ISSUE=$REPORT_ISSUE  PR_LABEL=$PR_LABEL"
 ```
 
-Once assigned:
+Read and follow `$AGENTS_PATH/engineer.md` (agents_path from maqa-config.yml).
+This command provides the shell-executable implementation of that agent's loop.
+
+## Step 1 — Pick up assignment via CLAIM file
+
 ```bash
-# Wait for worktree if not yet created
-while [ ! -d "$WORKTREE" ]; do
-  echo "Waiting for worktree at $WORKTREE..."
-  sleep 60
-done
+# Find CLAIM file written by coordinator
+CLAIM_FILE=$(ls ../${REPO_NAME}.*/CLAIM 2>/dev/null | head -1)
+if [ -z "$CLAIM_FILE" ]; then
+  echo "No CLAIM file found. No valid assignment. Idling."
+  gh issue comment $REPORT_ISSUE --repo $REPO \
+    --body "[🔨 ENGINEER] Started session but found no CLAIM file. Idling."
+  exit 0
+fi
+
+AGENT_ID=$(grep AGENT_ID $CLAIM_FILE | cut -d= -f2)
+ITEM_ID=$(grep ITEM_ID $CLAIM_FILE | cut -d= -f2)
+WORKTREE=$(dirname $CLAIM_FILE)
+echo "Identity: $AGENT_ID | Item: $ITEM_ID | Worktree: $WORKTREE"
+
+# Claim-check: verify state.json agrees
+python3 - <<EOF
+import json, sys
+s = json.load(open('.maqa/state.json'))
+item = s['features'].get('$ITEM_ID', {})
+if item.get('assigned_to') != '$AGENT_ID':
+    print(f"CONFLICT: {item.get('assigned_to')} owns this item, not $AGENT_ID. STOPPING.")
+    sys.exit(1)
+print(f"CLAIM VALID: state={item['state']}")
+EOF
+```
+
+Once validated:
+```bash
 cd "$WORKTREE"
 git pull origin main 2>/dev/null || true
 
-# Read the item and spec
-cat "../kardinal-promoter/docs/aide/items/${ITEM_ID}"-*.md 2>/dev/null || \
-  ls ../kardinal-promoter/docs/aide/items/ | grep "$ITEM_ID"
-cat "../kardinal-promoter/.specify/specs/"*/spec.md 2>/dev/null | head -60
-cat "../kardinal-promoter/.specify/specs/"*/tasks.md 2>/dev/null | head -80
+# Read item spec
+cat ITEM.md 2>/dev/null || cat "../${REPO_NAME}/docs/aide/items/${ITEM_ID}"*.md
+
+# Confirm pickup
+cd "../${REPO_NAME}"
+python3 -c "
+import json, os
+s = json.load(open('.maqa/state.json'))
+s['features']['$ITEM_ID']['state'] = 'in_progress'
+import os; tmp='.maqa/state.json.tmp'; json.dump(s,open(tmp,'w'),indent=2); os.rename(tmp,'.maqa/state.json')
+"
+gh issue comment $REPORT_ISSUE --repo $REPO \
+  --body "[$AGENT_ID] Confirmed pickup of $ITEM_ID. Starting implementation."
+cd "$WORKTREE"
 ```
 
 ## Step 2 — Implement (TDD)
 
-For each task in tasks.md (Phase 1: setup → Phase 2: tests → Phase 3: implementation):
-
-**Write the test file FIRST** for every implementation task:
+Write the test file FIRST for every implementation task:
 ```bash
 cd "$WORKTREE"
-# Write test, then implement
-go test ./... -race 2>&1 | tail -5
-go vet ./... 2>&1
-```
-
-Tick each task in tasks.md ONLY after the code exists:
-```bash
-# Update tasks.md in main repo (not worktree) — coordinator reads this
-sed -i '' "s/- \[ \] $TASK_ID /- [x] $TASK_ID /" ../kardinal-promoter/.specify/specs/*/tasks.md
+# Write test, then implement, then verify
+eval "$TEST_COMMAND" 2>&1 | tail -5
+eval "$LINT_COMMAND" 2>&1
 ```
 
 ## Step 3 — Self-validate (mandatory)
 
 ```bash
 cd "$WORKTREE"
+eval "$BUILD_COMMAND" && echo "BUILD: PASS" || echo "BUILD: FAIL"
+eval "$TEST_COMMAND" && echo "TESTS: PASS" || echo "TESTS: FAIL"
+eval "$LINT_COMMAND" && echo "LINT: PASS" || echo "LINT: FAIL"
 
-# Quality gates
-go test ./... -race -count=1 -timeout 120s && echo "TESTS: PASS" || echo "TESTS: FAIL"
-go vet ./... && echo "VET: PASS" || echo "VET: FAIL"
-
-# Check for phantom completions
-cd ../kardinal-promoter
+cd "../${REPO_NAME}"
 export SPECIFY_FEATURE="$ITEM_ID"
 # /speckit.verify-tasks.run
 # /speckit.verify
 cd "$WORKTREE"
-
-# Journey validation — find which journeys this feature contributes to
-# (read from spec.md "Contributes to journey(s)" field)
-JOURNEYS=$(grep "Contributes to journey" ../kardinal-promoter/.specify/specs/*/spec.md | head -1)
-echo "This feature contributes to: $JOURNEYS"
-
-# Run relevant journey steps from docs/aide/definition-of-done.md
-# Example for J1 (Quickstart):
-# kubectl apply -f ../kardinal-promoter/examples/quickstart/pipeline.yaml
-# kardinal get pipelines
-# Capture the output to include in PR body
-echo "Journey validation output captured."
 ```
 
 ## Step 4 — Push PR
@@ -109,27 +130,21 @@ git add -A
 git commit -m "feat(${ITEM_ID}): <description from item file>"
 git push -u origin HEAD
 
-# Open PR
-gh pr create \
-  --repo pnz1990/kardinal-promoter \
+PR_NUM=$(gh pr create \
+  --repo $REPO \
   --title "feat(${ITEM_ID}): <description>" \
-  --body "$(cat ../kardinal-promoter/docs/aide/pr-template.md | \
-    sed 's|<NNN-item-name>|'$ITEM_ID'|g')" \
-  --label "kardinal"
+  --body "$(cat ../\${REPO_NAME}/docs/aide/pr-template.md 2>/dev/null)" \
+  --label "$PR_LABEL" \
+  --json number -q '.number' 2>/dev/null || \
+  gh pr list --repo $REPO --head "$(git branch --show-current)" --json number -q '.[0].number')
 
-# Update state.json
-PR_NUM=$(gh pr list --repo pnz1990/kardinal-promoter --head "$(git branch --show-current)" --json number -q '.[0].number')
-
-cd ../kardinal-promoter
+cd "../${REPO_NAME}"
 python3 -c "
 import json, os
-state = json.load(open('.maqa/state.json'))
-state['features']['$ITEM_ID']['state'] = 'in_review'
-state['features']['$ITEM_ID']['pr_number'] = $PR_NUM
-tmp = '.maqa/state.json.tmp'
-json.dump(state, open(tmp,'w'), indent=2)
-os.rename(tmp, '.maqa/state.json')
-print('State updated: in_review, PR #$PR_NUM')
+s = json.load(open('.maqa/state.json'))
+s['features']['$ITEM_ID']['state'] = 'in_review'
+s['features']['$ITEM_ID']['pr_number'] = $PR_NUM
+tmp='.maqa/state.json.tmp'; json.dump(s,open(tmp,'w'),indent=2); os.rename(tmp,'.maqa/state.json')
 "
 cd "$WORKTREE"
 ```
@@ -137,24 +152,17 @@ cd "$WORKTREE"
 ## Step 5 — Monitor CI
 
 ```bash
-PR_NUM=$PR_NUM
 while true; do
-  STATUS=$(gh pr checks $PR_NUM --repo pnz1990/kardinal-promoter 2>&1)
+  STATUS=$(gh pr checks $PR_NUM --repo $REPO 2>&1)
   if echo "$STATUS" | grep -q "fail"; then
     echo "CI RED. Reading failure..."
-    gh run view --log-failed --repo pnz1990/kardinal-promoter 2>&1 | head -50
-    echo "Fixing CI failure..."
-    # Fix the issue, then:
-    git add -A
-    git commit -m "fix(${ITEM_ID}): fix CI failure"
-    git push
+    gh run view --log-failed --repo $REPO 2>&1 | head -50
+    git add -A && git commit -m "fix(${ITEM_ID}): fix CI failure" && git push
     sleep 60
-  elif echo "$STATUS" | grep -q "pass\|success"; then
-    echo "CI GREEN."
-    break
+  elif echo "$STATUS" | grep -qE "pass|success"; then
+    echo "CI GREEN."; break
   else
-    echo "CI pending..."
-    sleep 180
+    echo "CI pending..."; sleep 180
   fi
 done
 ```
@@ -163,23 +171,16 @@ done
 
 ```bash
 while true; do
-  REVIEW=$(gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json reviews -q '.reviews[-1].state' 2>/dev/null)
+  REVIEW=$(gh pr view $PR_NUM --repo $REPO --json reviews -q '.reviews[-1].state' 2>/dev/null)
   if [ "$REVIEW" = "APPROVED" ]; then
-    echo "QA APPROVED."
-    break
+    echo "QA APPROVED."; break
   elif [ "$REVIEW" = "CHANGES_REQUESTED" ]; then
-    echo "QA requested changes. Reading comments..."
-    gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json reviews -q '.reviews[-1].body'
-    gh pr diff $PR_NUM --repo pnz1990/kardinal-promoter | head -100
-    echo "Fixing QA issues..."
-    # Fix all file:line issues from QA review
-    git add -A
-    git commit -m "fix(${ITEM_ID}): address QA review comments"
-    git push
-    # Loop back to CI monitoring (Step 5) before QA re-reviews
+    echo "QA requested changes."
+    gh pr view $PR_NUM --repo $REPO --json reviews -q '.reviews[-1].body'
+    gh pr diff $PR_NUM --repo $REPO | head -100
+    git add -A && git commit -m "fix(${ITEM_ID}): address QA review" && git push
   else
-    echo "Waiting for QA review... ($REVIEW)"
-    sleep 300
+    echo "Waiting for QA... ($REVIEW)"; sleep 300
   fi
 done
 ```
@@ -188,41 +189,35 @@ done
 
 ```bash
 cd "$WORKTREE"
-gh pr merge $PR_NUM --repo pnz1990/kardinal-promoter --squash --delete-branch
+gh pr merge $PR_NUM --repo $REPO --squash --delete-branch
 
-# Clean up worktree
-cd ../kardinal-promoter
+cd "../${REPO_NAME}"
 git worktree remove "$WORKTREE" --force 2>/dev/null || true
 
-# Update state.json
 python3 -c "
 import json, os
-slot = os.environ.get('AGENT_ID', 'ENGINEER-1')
-state = json.load(open('.maqa/state.json'))
-state['features']['$ITEM_ID']['state'] = 'done'
-state['features']['$ITEM_ID']['pr_merged'] = True
-state['engineer_slots'][slot] = None
-tmp = '.maqa/state.json.tmp'
-json.dump(state, open(tmp,'w'), indent=2)
-os.rename(tmp, '.maqa/state.json')
-print('State: done. Slot freed.')
+s = json.load(open('.maqa/state.json'))
+s['features']['$ITEM_ID']['state'] = 'done'
+s['features']['$ITEM_ID']['pr_merged'] = True
+s['engineer_slots']['$AGENT_ID'] = None
+tmp='.maqa/state.json.tmp'; json.dump(s,open(tmp,'w'),indent=2); os.rename(tmp,'.maqa/state.json')
 "
 
-# Comment on item issue
-ISSUE_NUM=$(gh issue list --repo pnz1990/kardinal-promoter --search "$ITEM_ID" --json number -q '.[0].number' 2>/dev/null)
-[ -n "$ISSUE_NUM" ] && gh issue comment $ISSUE_NUM --body "[$AGENT_ID_BADGE] Merged in PR #$PR_NUM. Feature complete."
+ISSUE_NUM=$(gh issue list --repo $REPO --search "$ITEM_ID" --json number -q '.[0].number' 2>/dev/null)
+[ -n "$ISSUE_NUM" ] && gh issue comment $ISSUE_NUM --repo $REPO \
+  --body "[$AGENT_ID] Merged PR #$PR_NUM. Feature complete." && \
+  gh issue close $ISSUE_NUM --repo $REPO
 ```
 
 ## Step 8 — Smoke test on main
 
 ```bash
 git checkout main && git pull
-go build ./... && echo "SMOKE TEST: PASS" || {
-  echo "SMOKE TEST: FAIL — opening hotfix issue"
-  gh issue create \
-    --repo pnz1990/kardinal-promoter \
-    --title "hotfix: go build failed after merging $ITEM_ID" \
-    --body "[$AGENT_ID_BADGE] Build broke after merging PR #$PR_NUM for $ITEM_ID. Immediate fix required." \
+eval "$BUILD_COMMAND" && echo "SMOKE TEST: PASS" || {
+  echo "SMOKE TEST: FAIL"
+  gh issue create --repo $REPO \
+    --title "hotfix: build failed after merging $ITEM_ID" \
+    --body "[$AGENT_ID] Build broke after merging PR #$PR_NUM for $ITEM_ID." \
     --label "needs-human"
 }
 ```
@@ -235,21 +230,17 @@ Go to Step 1 and pick up the next assignment.
 
 If blocked after 2 retries:
 ```bash
-# Set state to blocked
+cd "../${REPO_NAME}"
 python3 -c "
 import json, os
-slot = os.environ.get('AGENT_ID', 'ENGINEER-1')
-state = json.load(open('.maqa/state.json'))
-state['features']['$ITEM_ID']['state'] = 'blocked'
-state['engineer_slots'][slot] = None
-tmp = '.maqa/state.json.tmp'
-json.dump(state, open(tmp,'w'), indent=2)
-os.rename(tmp, '.maqa/state.json')
+s = json.load(open('.maqa/state.json'))
+s['features']['$ITEM_ID']['state'] = 'blocked'
+s['engineer_slots']['$AGENT_ID'] = None
+tmp='.maqa/state.json.tmp'; json.dump(s,open(tmp,'w'),indent=2); os.rename(tmp,'.maqa/state.json')
 "
-
-ISSUE_NUM=$(gh issue list --repo pnz1990/kardinal-promoter --search "$ITEM_ID" --json number -q '.[0].number' 2>/dev/null)
-if [ -n "$ISSUE_NUM" ]; then
-  gh issue comment $ISSUE_NUM --body "[$AGENT_ID_BADGE] BLOCKED after 2 retries. Reason: <exact reason>. Decision needed: <exact question>."
-  gh issue edit $ISSUE_NUM --add-label "needs-human"
-fi
+ISSUE_NUM=$(gh issue list --repo $REPO --search "$ITEM_ID" --json number -q '.[0].number' 2>/dev/null)
+[ -n "$ISSUE_NUM" ] && \
+  gh issue comment $ISSUE_NUM --repo $REPO \
+    --body "[$AGENT_ID] BLOCKED after 2 retries. <exact reason>. Decision needed: <exact question>." && \
+  gh issue edit $ISSUE_NUM --repo $REPO --add-label "needs-human"
 ```

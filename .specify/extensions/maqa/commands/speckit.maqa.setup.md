@@ -37,7 +37,7 @@ the latest version. Create them at your `agents_path`:
 - `product-manager.md` — one-shot product review
 - `standalone.md`  — single session, all roles sequentially
 
-See `~/.kardinal/agents/` in the kardinal-promoter project for reference implementations.
+See the reference implementations in your agents_path directory (configured in maqa-config.yml).
 
 ## Done
 

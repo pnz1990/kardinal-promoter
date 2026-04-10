@@ -15,13 +15,13 @@ Seven concurrent sessions, one role each:
 
 | Session | Role | Agent file | Runs until |
 |---|---|---|---|
-| 1 | Coordinator | `~/.kardinal/agents/coordinator.md` | All journeys complete |
-| 2–N | Engineer | `~/.kardinal/agents/engineer.md` | No more work + queue empty |
-| N+1 | QA | `~/.kardinal/agents/qa-watcher.md` | No open PRs + [PROJECT COMPLETE] posted |
-| N+2 | Scrum Master | `~/.kardinal/agents/scrum-master.md` | One-shot per batch (triggered by coordinator) |
-| N+3 | Product Manager | `~/.kardinal/agents/product-manager.md` | One-shot per batch (triggered by coordinator) |
+| 1 | Coordinator | `<agents_path>/coordinator.md` | All journeys complete |
+| 2–N | Engineer | `<agents_path>/engineer.md` | No more work + queue empty |
+| N+1 | QA | `<agents_path>/qa-watcher.md` | No open PRs + [PROJECT COMPLETE] posted |
+| N+2 | Scrum Master | `<agents_path>/scrum-master.md` | One-shot per batch (triggered by coordinator) |
+| N+3 | Product Manager | `<agents_path>/product-manager.md` | One-shot per batch (triggered by coordinator) |
 
-**Agent files live at `~/.kardinal/agents/` — outside the git repo.**
+**Agent files live at `<agents_path>/` — outside the git repo.**
 They are shared by all sessions and all worktrees. Updating a file there takes effect
 immediately on every session's next cycle — no git pull, no rebase required.
 The number of engineer sessions is dynamic: run as many as needed. Each session reads
@@ -29,7 +29,7 @@ its slot identity from the `CLAIM` file the coordinator writes into its worktree
 
 **Note on `/speckit.maqa.qa`**: this is a one-shot static analysis tool invoked by the coordinator
 for a single feature. It is NOT the same as the QA watcher session. Do not confuse them.
-The QA watcher (`~/.kardinal/agents/qa-watcher.md`) is the continuous loop that polls for open PRs.
+The QA watcher (`<agents_path>/qa-watcher.md`) is the continuous loop that polls for open PRs.
 The one-shot tool (`/speckit.maqa.qa`) runs inline when the coordinator needs a static analysis pass.
 
 All sessions start in the main repository directory. The coordinator creates
@@ -39,7 +39,7 @@ The Scrum Master and Product Manager do not have worktrees. They work in the
 main repository and propose changes via GitHub Issues and PRs.
 
 For Claude Code: open each session, start a new conversation, and run the agent file
-(e.g. `~/.kardinal/agents/coordinator.md`) as the initial prompt. The coordinator and
+(e.g. `<agents_path>/coordinator.md`) as the initial prompt. The coordinator and
 engineers loop continuously. The QA watcher loops continuously. The SM and PM
 are one-shot — each runs once per batch when triggered.
 
@@ -91,7 +91,7 @@ On every poll cycle, write to `.maqa/state.json`:
 }
 ```
 
-Any session that reads a heartbeat older than 15 minutes posts on Issue #1:
+Any session that reads a heartbeat older than 15 minutes posts on the report issue:
 `"[BADGE] [SESSION APPEARS DOWN] <ROLE> last seen <timestamp>. Resuming if applicable."`
 
 ---
@@ -125,7 +125,7 @@ LOOP:
 
 0. HEARTBEAT — write session_heartbeats.COORDINATOR.last_seen = now on every cycle
    Check session_heartbeats.QA.last_seen: if >15 min old AND any item is in_review:
-     Post on Issue #1 AND the in_review PR:
+     Post on the report issue AND the in_review PR:
        "[🎯 COORDINATOR] QA session appears down (last seen: <timestamp>).
         PR #N has been in_review <T> min with CI green. QA — please resume."
 
@@ -133,7 +133,7 @@ LOOP:
 
 2. If queue is empty:
    SPEC GATE (run before generating any items):
-     Wait for PM to post "[📋 PM] SPEC GATE CLEAR" on Issue #1.
+     Wait for PM to post "[📋 PM] SPEC GATE CLEAR" on the report issue.
      If no PM session is active, post: "[🎯 COORDINATOR] Requesting PM spec gate check
      before queue generation. PM — please cross-validate items vs AGENTS.md + design docs."
      Timeout: if SPEC GATE CLEAR is not posted within 30 minutes, proceed anyway and log:
@@ -163,7 +163,7 @@ LOOP:
    BEFORE writing state.json, verify BOTH:
    a. The target engineer slot is null in engineer_slots
    b. No other slot already has this item-id (duplicate-assignment guard)
-   If either check fails: skip this item, log warning on Issue #1.
+   If either check fails: skip this item, log warning on the report issue.
 
    THEN, atomically write to .maqa/state.json:
    - features[id].state       = "assigned"   ← NOT "in_progress"
@@ -175,7 +175,7 @@ LOOP:
    - /speckit.worktree.create
    - Move GitHub Projects card: Todo → In Progress
    - Comment on item Issue: "[BADGE] Assigned <id> to <SLOT>. Worktree: <path>"
-   - Comment on Issue #1 with assignment summary
+   - Comment on the report issue with assignment summary
 
 5. Monitor .maqa/state.json every 2 min:
    - assigned (>10 min old, not yet in_progress) → re-post assignment comment;
@@ -385,7 +385,7 @@ READS (SDLC layer — the only files this role touches):
   AGENTS.md                        → process sections only (not product/architecture)
   .maqa/state.json                 → flow metrics (cycle times, retry counts)
   docs/aide/queue/                 → queue health (items blocked vs done)
-  Issue #1 history                 → NEEDS HUMAN frequency, QA rejection rates
+  report issue history                 → NEEDS HUMAN frequency, QA rejection rates
 
 DOES NOT READ OR MODIFY (product layer):
   docs/aide/vision.md
@@ -397,7 +397,7 @@ DOES NOT READ OR MODIFY (product layer):
 
 INSPECTION CYCLE:
 
-1. FLOW ANALYSIS — read .maqa/state.json and Issue #1 history
+1. FLOW ANALYSIS — read .maqa/state.json and report issue history
    Compute for this batch:
    - Average time per item (todo → done)
    - QA rejection rate (% of PRs that needed changes)
@@ -407,7 +407,7 @@ INSPECTION CYCLE:
 
 2. SDLC HEALTH CHECKS
    □ Does sdlc.md accurately reflect what the team actually does?
-     (compare to Issue #1 reports — do agents follow the documented process?)
+     (compare to report issue history — do agents follow the documented process?)
    □ Are engineer self-validation steps catching issues before QA?
      (if QA rejection rate > 30%: engineers are not self-validating enough)
    □ Are NEEDS HUMAN escalations for the right reasons?
@@ -476,7 +476,7 @@ READS (product layer — the only files this role touches):
   .specify/specs/                  → feature specifications
   docs/ user documentation         → quickstart, concepts, CLI reference, etc.
   examples/                        → working examples as acceptance tests
-  Issue #1 history                 → [BATCH COMPLETE] reports, QA findings
+  report issue history                 → [BATCH COMPLETE] reports, QA findings
 
 DOES NOT READ OR MODIFY (SDLC layer):
   .specify/memory/sdlc.md
@@ -666,7 +666,7 @@ in_progress  →  in_review  →  done
 
 **Duplicate-assignment guard (Coordinator)**: before writing `assigned`, verify
 `engineer_slots` has no other entry pointing at the same item. If the item is
-already assigned to a different slot, skip it and log a warning to Issue #1.
+already assigned to a different slot, skip it and log a warning to the report issue.
 
 **Stale-assignment guard (Coordinator)**: if `state == "assigned"` and
 `assigned_at` is > 10 minutes old with no transition to `in_progress`, the

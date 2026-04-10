@@ -1,49 +1,72 @@
 ---
-description: QA agent. Continuous PR watcher for kardinal-promoter. Reviews every
-  PR labeled 'kardinal' against the spec, user docs, examples, and journey definition.
-  Re-reviews after every engineer fix. Loops until project complete.
+description: QA agent. Continuous PR watcher. Reviews every PR with the project
+  label against spec, user docs, examples, and journey definition. Re-reviews after
+  every engineer fix. Loops until project complete.
 ---
 
 <!-- Extension: maqa -->
-You are the kardinal-promoter QA Agent. Read `.specify/memory/sdlc.md` section
-"QA Loop" for the authoritative process. This command implements it.
 
-## Step 0 — Read context
+## Step 0 — Read project config
 
 ```bash
-git pull origin main
-cat .specify/memory/sdlc.md
-cat docs/aide/team.yml | grep -A 30 "  qa:"
-cat AGENTS.md | grep -A 5 "Anti-Patterns"
-cat docs/aide/definition-of-done.md | head -50
+REPO=$(git remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||;s|\.git$||')
+REPORT_ISSUE=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^REPORT_ISSUE:\s*(\S+)', line.strip())
+    if m: print(m.group(1)); break
+" 2>/dev/null || echo "1")
+PR_LABEL=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^PR_LABEL:\s*(\S+)', line.strip())
+    if m: print(m.group(1)); break
+" 2>/dev/null || echo "")
+LINT_COMMAND=$(python3 -c "
+import re
+for line in open('AGENTS.md'):
+    m = re.match(r'^LINT_COMMAND:\s*(.+)', line.strip())
+    if m: print(m.group(1).strip('\"').strip(\"'\")); break
+" 2>/dev/null)
+
+# Read project-specific QA rules from AGENTS.md
+# (copyright format, banned filenames, anti-patterns, code standards)
+echo "REPO=$REPO  REPORT_ISSUE=$REPORT_ISSUE  PR_LABEL=$PR_LABEL"
+cat AGENTS.md | grep -A 20 "Go Standards\|Anti-Patterns\|Banned Filenames\|Code Standards" 2>/dev/null || true
 ```
+
+Read `.specify/memory/sdlc.md` section "QA Loop" for the authoritative process.
 
 ## Step 1 — Poll for open PRs
 
 ```bash
+git pull origin main
+cat .specify/memory/sdlc.md
+cat AGENTS.md | grep -A 5 "Anti-Patterns"
+cat docs/aide/definition-of-done.md | head -50
+
 while true; do
   OPEN_PRS=$(gh pr list \
-    --repo pnz1990/kardinal-promoter \
-    --label kardinal \
+    --repo $REPO \
+    --label "$PR_LABEL" \
     --state open \
     --json number,title,headRefName,updatedAt \
     2>/dev/null)
-  
-  COUNT=$(echo "$OPEN_PRS" | python3 -c "import json,sys; prs=json.load(sys.stdin); print(len(prs))")
-  
+
+  COUNT=$(echo "$OPEN_PRS" | python3 -c "import json,sys; prs=json.load(sys.stdin); print(len(prs))" 2>/dev/null || echo "0")
+
   if [ "$COUNT" -gt 0 ]; then
-    echo "Found $COUNT open PRs with kardinal label. Reviewing..."
+    echo "Found $COUNT open PRs. Reviewing..."
     echo "$OPEN_PRS"
     break
   fi
-  
-  # Check if project is complete
-  if gh issue view 1 --repo pnz1990/kardinal-promoter --comments 2>/dev/null | grep -q "\[PROJECT COMPLETE\]"; then
+
+  if gh issue view $REPORT_ISSUE --repo $REPO --comments 2>/dev/null | grep -q "\[PROJECT COMPLETE\]"; then
     echo "Project complete. QA session ending."
     exit 0
   fi
-  
-  echo "[🔍 QA] No open PRs. Polling again in 2 minutes..."
+
+  echo "[🔍 QA] No open PRs. Polling in 2 minutes..."
   sleep 120
 done
 ```
@@ -55,143 +78,104 @@ For each open PR:
 ```bash
 PR_NUM=<number from Step 1>
 
-# Read full diff
-gh pr diff $PR_NUM --repo pnz1990/kardinal-promoter
+# Read full diff and PR body
+gh pr diff $PR_NUM --repo $REPO
+gh pr view $PR_NUM --repo $REPO --json body,title,headRefName
 
-# Read PR body
-gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json body,title,headRefName
-
-# Identify the feature from branch name
-BRANCH=$(gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json headRefName -q '.headRefName')
+# Identify item from branch name
+BRANCH=$(gh pr view $PR_NUM --repo $REPO --json headRefName -q '.headRefName')
 ITEM_ID=$(echo $BRANCH | sed 's/[^0-9]*\([0-9]*-[^/]*\).*/\1/')
 
 # Read spec and item
-cat .specify/specs/*/spec.md 2>/dev/null | head -100   # find matching spec
-cat docs/aide/items/${ITEM_ID}*.md 2>/dev/null || echo "No item file found for $ITEM_ID"
+cat .specify/specs/*/spec.md 2>/dev/null | head -100
+cat docs/aide/items/${ITEM_ID}*.md 2>/dev/null
 
-# Run verify
 export SPECIFY_FEATURE="$ITEM_ID"
 # /speckit.verify
 ```
 
-**Full checklist** — every item must pass (fail any = request-changes):
+**Full checklist** — read project-specific rules from AGENTS.md, then check:
 
 ```
 □ 1. Every Given/When/Then from spec.md has a real implementation (not a stub)
 □ 2. Every FR-NNN in spec.md has corresponding code
-□ 3. PR body includes journey validation output (kubectl output, kardinal command output)
+□ 3. PR body includes journey validation output
 □ 4. PR body includes /speckit.verify-tasks.run output (zero phantom completions)
-□ 5. CI is green: gh pr checks $PR_NUM --repo pnz1990/kardinal-promoter
-□ 6. Apache 2.0 header on ALL new .go files in the diff
-□ 7. No util.go, helpers.go, or common.go in the diff
-□ 8. fmt.Errorf("context: %w", err) used for all error wrapping
-□ 9. Idempotency test exists for every new reconciler
-□ 10. No kro module import in go.mod diff
-□ 11. User docs consistent with implementation (if user-facing feature)
-□ 12. examples/ YAML applies cleanly (if relevant to this feature)
-□ 13. Feature advances at least one journey in definition-of-done.md
+□ 5. CI is green: gh pr checks $PR_NUM --repo $REPO
+□ 6. All project code standards from AGENTS.md satisfied (copyright, error handling, logging)
+□ 7. No banned filenames from AGENTS.md in the diff
+□ 8. No forbidden imports/patterns from AGENTS.md anti-patterns list
+□ 9. User docs consistent with implementation (if user-facing feature)
+□ 10. examples/ YAML applies cleanly (if relevant)
+□ 11. Feature advances at least one journey in definition-of-done.md
 ```
 
 ```bash
-# Check headers on new .go files
-gh pr diff $PR_NUM --repo pnz1990/kardinal-promoter | grep "^+++ b/.*\.go" | \
-  while read f; do
-    FILE=${f#"+++ b/"}
-    if [ -f "$FILE" ]; then
-      head -3 "$FILE" | grep -q "Apache License" || echo "MISSING HEADER: $FILE"
-    fi
-  done
-
-# Check banned filenames
-gh pr diff $PR_NUM --repo pnz1990/kardinal-promoter | grep "^+++ b/" | \
-  grep -E "util\.go|helpers\.go|common\.go" && echo "BANNED FILENAME FOUND"
-
-# Check kro import
-gh pr diff $PR_NUM --repo pnz1990/kardinal-promoter | grep "^+" | \
-  grep "ellistarn/kro" && echo "KRO IMPORT FOUND"
+# Check banned filenames (read list from AGENTS.md)
+BANNED=$(python3 -c "
+import re
+lines = open('AGENTS.md').read()
+m = re.search(r'Banned Filenames.*?\n(.*?)\n\n', lines, re.DOTALL)
+if m:
+    for f in re.findall(r'\`([^\']+\.go)\`', m.group(1)): print(f)
+" 2>/dev/null)
+for BANNED_FILE in $BANNED; do
+  gh pr diff $PR_NUM --repo $REPO | grep "^+++ b/" | grep "$BANNED_FILE" && \
+    echo "BANNED FILENAME: $BANNED_FILE"
+done
 ```
 
 ## Step 3 — Post review
 
 **If all checks pass:**
 ```bash
-gh pr review $PR_NUM \
-  --repo pnz1990/kardinal-promoter \
-  --approve \
-  --body "[🔍 QA] LGTM. All acceptance criteria satisfied. Journey validation confirmed. CI green."
+gh pr review $PR_NUM --repo $REPO --approve \
+  --body "[🔍 QA] LGTM. All acceptance criteria satisfied. CI green."
 ```
 
 **If any check fails:**
 ```bash
-gh pr review $PR_NUM \
-  --repo pnz1990/kardinal-promoter \
-  --request-changes \
-  --body "[🔍 QA] ## QA Review — Changes Required
+gh pr review $PR_NUM --repo $REPO --request-changes \
+  --body "[🔍 QA] ## Changes Required
 
-$(for each issue found:)
-**Issue**: <category>
-**File**: path/to/file.go:<line>
-**Problem**: <exact description of what is wrong>
-**Required**: <exactly what it must be>
-
-$(end for)"
+<for each issue: file:line — exact description>"
 ```
 
 ## Step 4 — Wait for engineer fix and re-review
 
-After requesting changes:
-
 ```bash
-LAST_REVIEW_COMMIT=$(gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json commits -q '.commits[-1].oid')
-
+LAST_COMMIT=$(gh pr view $PR_NUM --repo $REPO --json commits -q '.commits[-1].oid')
 while true; do
-  CURRENT_COMMIT=$(gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json commits -q '.commits[-1].oid')
-  
-  if [ "$CURRENT_COMMIT" != "$LAST_REVIEW_COMMIT" ]; then
-    echo "New commit detected. Re-reviewing full PR diff..."
-    LAST_REVIEW_COMMIT=$CURRENT_COMMIT
-    # Go back to Step 2 for this PR (full re-review, not just delta)
-    break
+  CURRENT=$(gh pr view $PR_NUM --repo $REPO --json commits -q '.commits[-1].oid')
+  if [ "$CURRENT" != "$LAST_COMMIT" ]; then
+    echo "New commit. Re-reviewing full diff..."
+    LAST_COMMIT=$CURRENT
+    break  # go back to Step 2
   fi
-  
-  # Check if PR was closed without merge
-  STATE=$(gh pr view $PR_NUM --repo pnz1990/kardinal-promoter --json state -q '.state')
-  if [ "$STATE" = "CLOSED" ]; then
-    echo "PR $PR_NUM closed without merge. Moving on."
-    break
-  fi
-  
+  STATE=$(gh pr view $PR_NUM --repo $REPO --json state -q '.state')
+  [ "$STATE" = "CLOSED" ] && echo "PR closed." && break
   sleep 300
 done
 ```
 
 ## Step 5 — Escalate if needed
 
-If the same issue appears 3+ times across fix attempts:
+If the same issue appears 3+ times:
 
 ```bash
-gh issue create \
-  --repo pnz1990/kardinal-promoter \
+gh issue create --repo $REPO \
   --title "QA Finding: <description>" \
   --body "[🔍 QA] ## [QA FINDING]
-
-**Severity**: medium
-**PR**: #$PR_NUM
-**Item**: $ITEM_ID
-**File**: path/to/file.go:<line>
-**Finding**: <exact description — this has appeared 3+ times>
-**Recommended action**: <what the human should decide or specify>" \
+Severity: medium | PR: #$PR_NUM | Item: $ITEM_ID
+File: path/to/file:<line>
+Finding: <exact description — appeared 3+ times>
+Recommended action: <what human should decide>" \
   --label "needs-human"
 
-gh issue comment 1 \
-  --repo pnz1990/kardinal-promoter \
-  --body "[🔍 QA] ## [QA FINDING] $ITEM_ID PR#$PR_NUM — $(date -u +%Y-%m-%dT%H:%M)
-
-Severity: medium
-Same issue raised 3 times without resolution. Human review required.
-See: <issue URL>"
+gh issue comment $REPORT_ISSUE --repo $REPO \
+  --body "[🔍 QA] ## [QA FINDING] $ITEM_ID PR#$PR_NUM — same issue 3x. Human review required."
 ```
 
 ## Step 6 — Loop
 
-Go to Step 1 and poll for the next open PR.
+Go to Step 1.
