@@ -172,6 +172,7 @@ roles:
     - in_progress
     - in_review
     - done
+    - blocked
   merge_owner: engineer
   state_file: .maqa/state.json
   state_machine:
