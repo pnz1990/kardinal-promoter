@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T16:45Z
+> Last updated: 2026-04-11T17:35Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -184,6 +184,17 @@
 | 029 | Fix FormatPipelineTable per-environment columns | ✅ Complete | #128 merged | PIPELINE BUNDLE ENV... AGE format, union columns, PromotionStep state lookup |
 | 030 | Fix kardinal explain zero PolicyGates label mismatch | ✅ Complete | #129 merged | Add pipeline/bundle/env labels to PolicyGate node templates in builder.go |
 | 031 | Show CEL expression + current value in kardinal explain | ✅ Complete | #129 merged | EXPRESSION column added to explain output; Step rows show '-' |
+
+---
+
+## Workshop 1 Execution (queue-015)
+
+| Item | Title | Status | Notes |
+|---|---|---|---|
+| 032 | Workshop 1 execution on live kind cluster | ✅ Complete | All pass criteria met. 12 bugs fixed. PROD Verified. v0.2.0 released. |
+| fix | OpenPR 422 when PR already exists | ✅ Complete | commit 9a54ea0 |
+| fix | Helm chart missing GITHUB_TOKEN | ✅ Complete | commit 9a54ea0 |
+| fix | krocodile hash precision | ✅ Complete | commit 9a54ea0 (pinned to 9c18aa34) |
 
 ---
 

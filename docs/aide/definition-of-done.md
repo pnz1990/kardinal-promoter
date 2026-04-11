@@ -30,30 +30,47 @@ closes epic #123 with the results. Only then does work on Workshop 2 scope begin
 - [x] `kardinal explain <pipeline> --env <env>` shows active PolicyGates (PR #129)
 - [x] `kardinal explain` shows CEL expression and current value (PR #129)
 - [x] Item 026 merged — kind cluster E2E infrastructure in place
-- [ ] `examples/quickstart/pipeline.yaml` applies cleanly (verify on kind cluster)
+- [x] `examples/quickstart/pipeline.yaml` applies cleanly (verified on kind cluster)
 
 ### Workshop 1 Execution Gate (epic #123 / milestone `workshop-1-executed`)
 
-After the checklist above is complete, the coordinator assigns an item to execute
-the workshop (see epic #123 for the exact steps). The epic closes only when:
-1. Agent ran every step on a live kind cluster
-2. Agent posted full terminal output on issue #123
-3. Agent posted `[WORKSHOP 1 EXECUTED]` on Issue #1
-4. All pass criteria were met
+✅ **COMPLETE** — Workshop 1 executed end-to-end on live kind cluster (2026-04-11).
 
-**Coordinator: do NOT generate a queue for Workshop 2 scope while epic #123 is open.
-If you are about to generate items for argoRollouts, GitLab, multi-cluster, or distributed
-mode while #123 is still open: stop and post `[NEEDS HUMAN]` instead.**
+1. ✅ Agent ran every step on a live kind cluster
+2. ✅ Agent posted full terminal output on issue #123
+3. ✅ Agent posted `[WORKSHOP 1 EXECUTED]` on Issue #1
+4. ✅ All pass criteria were met — v0.2.0 released
+
+**Epic #123 closed. Workshop 2 scope may now proceed.**
 
 ---
 
-## How to Use This Document
+## Graph Purity Gate (milestone v0.2.1)
+
+**After Workshop 1 executes, the team's sole objective is graph purity.** See `docs/design/11-graph-purity-tech-debt.md`.
+
+### Hard rule: no new logic leaks (enforced now, permanently)
+
+A PR introduces a logic leak if it contains ANY of:
+- `time.Now()` or `time.Since()` called outside a CRD status write
+- An external HTTP call (GitHub API, Prometheus, webhook) in a reconciler's hot path
+- A cross-CRD status mutation (reconciler for CRD A writing to CRD B's status)
+- A decision whose result is NOT written to the reconciler's own CRD status
+- `pkg/cel` imported outside `pkg/reconciler/policygate`
+- An in-memory struct passing state between reconcile iterations
+- `exec.Command()` or `os.Exec()` in a reconciler
+
+**QA must block such PRs immediately with `[NEEDS HUMAN]`.** The engineer must escalate and get explicit human approval before any such pattern is merged. This is not negotiable. There are no exceptions beyond the documented transitional workaround in `docs/design/10-graph-first-architecture.md`.
+
+### How to Use This Document
 
 **Engineers**: Before writing a single line of code, read the journey your feature contributes to.
 Understand what the user will type and what they expect to see. Build backwards from that.
+**Also read `docs/design/11-graph-purity-tech-debt.md`** — if your feature touches a package with known leaks, do not add new ones.
 
 **QA**: After every PR, ask: "Does this bring us closer to passing the journeys below?"
 If a PR passes unit tests but moves us away from a journey, it fails QA.
+**Also check: does this PR introduce any of the logic leak patterns listed above?** If yes: block.
 
 **Coordinator**: After each batch completes, verify which journeys now pass end-to-end.
 Update the journey status table at the bottom of this file.
@@ -490,9 +507,9 @@ Updated by the coordinator after each batch.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | 🔄 Code Complete | 2026-04-11 | All stages (0-13) code complete. Kind cluster E2E workflow added (PR #111). J1 kind test added. |
+| 1: Quickstart | ✅ Verified | 2026-04-11 | Workshop 1 executed end-to-end on live kind cluster. All 10 pass criteria met. v0.2.0 released. |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
-| 3: Policy governance | 🔄 In Progress | 2026-04-11 | Fake-client + kind cluster tests added. kind_test.go verifies PolicyGate exists in cluster. |
+| 3: Policy governance | 🔄 In Progress | 2026-04-11 | Fake-client + kind cluster tests added. No-weekend and soak gates verified on cluster. |
 | 4: Rollback | 🔄 In Progress | 2026-04-11 | Auto-rollback + manual rollback + pause/resume all complete (Stage 13). |
 | 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented. CLI binary version output verified. |
 | 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build implemented (PR #82). |
