@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-10T23:15Z
+> Last updated: 2026-04-11T00:10Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -21,10 +21,10 @@
 | 4 | PolicyGate CEL Evaluator | ✅ Complete | Item 010 merged: PR #31. CEL environment, evaluator, PolicyGate reconciler with time-based gates. |
 | 5 | Git Operations and GitHub PR Flow | ✅ Complete | Item 012 merged: PR #57. SCMProvider, GitClient, steps engine, 7 built-in steps, PR template. |
 | 6 | PromotionStep Reconciler and Full Promotion Loop | ✅ Complete | Item 013 merged: PR #58. Full state machine, Bundle supersession, webhook, kardinal explain. |
-| 7 | Health Adapters | 📋 Planned | Depends on Stage 6 |
-| 8 | CLI | 🚧 In Progress | Items 011/013 merged: PRs #37, #58. version, get, explain commands. Full CLI (policy, create, etc.) pending. |
+| 7 | Health Adapters | ✅ Complete | Item 014 merged: PR #62. DeploymentAdapter, ArgoCDAdapter, FluxAdapter, AutoDetector, remote kubeconfig. |
+| 8 | CLI | ✅ Complete | Items 011/015 merged: PRs #37, #63. Full CLI: version, get, explain, create bundle, rollback, pause/resume, policy list/simulate, history. |
 | 9 | Embedded React UI | 📋 Planned | Depends on Stage 7 |
-| 10 | PR Evidence, Labels, and Webhook Reliability | 📋 Planned | Depends on Stage 6 |
+| 10 | PR Evidence, Labels, and Webhook Reliability | ✅ Complete | Item 016 merged: PR #64. Full evidence tables, AddLabelsToPR, EnsureLabels, label application in open-pr step. |
 | 11 | GitHub Actions Integration and `kardinal init` | 📋 Planned | Depends on Stage 8 |
 | 12 | Helm Strategy and Config-Only Promotions | 📋 Planned | Depends on Stage 6 |
 | 13 | Rollback and Pause/Resume | 📋 Planned | Depends on Stage 6 |
@@ -98,11 +98,28 @@
 
 ---
 
-## Stage 8 Item Breakdown (partial)
+## Stage 7 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 014 | Health Adapters — Deployment, Argo CD, Flux | ✅ Complete | #62 merged | Adapter interface, DeploymentAdapter, ArgoCDAdapter, FluxAdapter, AutoDetector, remote kubeconfig |
+
+---
+
+## Stage 8 Item Breakdown
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 011 | CLI foundation: cobra + version/get commands | ✅ Complete | #37 merged | kardinal version, get pipelines/bundles/steps |
+| 015 | Full CLI — create bundle, policy, rollback, pause/resume, history | ✅ Complete | #63 merged | create bundle, rollback, pause, resume, policy list/simulate, history |
+
+---
+
+## Stage 10 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 016 | PR Evidence, Labels, Webhook Reliability | ✅ Complete | #64 merged | Full 3-table PR body, AddLabelsToPR interface+impl, EnsureLabels, label application |
 
 ---
 
