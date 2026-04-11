@@ -279,14 +279,25 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 
 	switch result.Status {
 	case steps.StepPending:
-		// A step is pending (e.g., wait-for-merge). Persist index and transition to WaitingForMerge.
+		// A step is pending (e.g., open-pr step returns Pending while waiting).
+		// Transition to WaitingForMerge. Also patch the PRStatus CRD with PR data
+		// so the PRStatusReconciler can start polling GitHub.
 		ps.Status.State = StateWaitingForMerge
-		if prURL, ok := state.Outputs["prURL"]; ok && prURL != "" {
+		prURL := ""
+		if u, ok := state.Outputs["prURL"]; ok && u != "" {
+			prURL = u
 			ps.Status.PRURL = prURL
 		}
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch waiting-for-merge: %w", patchErr)
+		}
+		// Patch the PRStatus CRD spec so PRStatusReconciler can poll it.
+		// This is idempotent — if prStatusRef is not set, skip gracefully.
+		if ps.Spec.PRStatusRef != "" && prURL != "" {
+			if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
+				log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
+			}
 		}
 		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 
@@ -321,53 +332,56 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 }
 
-// handleWaitingForMerge checks PR status and advances to HealthChecking or Failed.
+// handleWaitingForMerge checks the PRStatus CRD (written by PRStatusReconciler)
+// instead of polling GitHub directly. This eliminates the PS-4 logic leak.
+//
+// Architecture: the open-pr step created a PRStatus CR and set spec.prURL/prNumber/repo.
+// The PRStatusReconciler polls GitHub and writes status.merged/open.
+// This reconciler simply reads the CRD status — no GitHub API call here.
 func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
-	if r.SCM == nil {
-		log.Warn().Msg("no SCM configured, cannot check PR status")
+	prStatusName := ps.Spec.PRStatusRef
+	if prStatusName == "" {
+		// PRStatusRef not yet set (old PromotionStep before this feature, or
+		// Graph hasn't propagated the value yet). Fall back to requeue to wait
+		// for the Graph to populate the field.
+		log.Warn().Msg("prStatusRef not set — waiting for Graph to populate")
 		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 	}
 
-	prNumStr := ps.Status.Outputs["prNumber"]
-	if prNumStr == "" {
-		// Fall back to extracting from PRURL if available.
-		prNumStr = extractPRNumber(ps.Status.PRURL)
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{Name: prStatusName, Namespace: ps.Namespace}, &prs); err != nil {
+		if apierrors.IsNotFound(err) {
+			// PRStatus not yet created by open-pr step — requeue.
+			log.Debug().Str("prStatusRef", prStatusName).Msg("PRStatus not found yet, requeueing")
+			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("get prstatus %s: %w", prStatusName, err)
 	}
 
-	if prNumStr == "" {
-		log.Warn().Msg("no prNumber in outputs, cannot check merge status")
-		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
-	}
-
-	prNum, err := strconv.Atoi(prNumStr)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("invalid prNumber %q: %w", prNumStr, err)
-	}
-
-	repo := extractRepo(ps.Status.PRURL)
-	merged, open, err := r.SCM.GetPRStatus(ctx, repo, prNum)
-	if err != nil {
-		log.Error().Err(err).Msg("get PR status failed")
-		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
-	}
-
-	if merged {
-		log.Info().Int("pr", prNum).Msg("PR merged, advancing to HealthChecking")
+	if prs.Status.Merged {
+		log.Info().
+			Str("prStatusRef", prStatusName).
+			Int("prNumber", prs.Spec.PRNumber).
+			Msg("PRStatus reports merged — advancing to HealthChecking")
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.State = StateHealthChecking
-		ps.Status.Message = fmt.Sprintf("PR #%d merged", prNum)
+		ps.Status.Message = fmt.Sprintf("PR #%d merged (via PRStatus CRD)", prs.Spec.PRNumber)
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch health-checking: %w", patchErr)
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if !open {
-		log.Info().Int("pr", prNum).Msg("PR closed without merge, failing")
+	if prs.Status.LastCheckedAt != nil && !prs.Status.Open && !prs.Status.Merged {
+		// PR closed without merge
+		log.Info().
+			Str("prStatusRef", prStatusName).
+			Int("prNumber", prs.Spec.PRNumber).
+			Msg("PRStatus reports PR closed without merge — failing")
 		bundle, _ := r.loadBundle(ctx, ps)
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.State = StateFailed
-		ps.Status.Message = fmt.Sprintf("PR #%d was closed without merging", prNum)
+		ps.Status.Message = fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber)
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed on closed PR: %w", patchErr)
 		}
@@ -377,7 +391,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{}, nil
 	}
 
-	// Still open — requeue.
+	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.
 	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 }
 
@@ -648,6 +662,48 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data
+// from the open-pr step outputs. This is idempotent: if the PRStatus already has
+// a prURL set, it is a no-op.
+func (r *Reconciler) patchPRStatusSpec(ctx context.Context, ps *v1alpha1.PromotionStep, outputs map[string]string) error {
+	var prs v1alpha1.PRStatus
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      ps.Spec.PRStatusRef,
+		Namespace: ps.Namespace,
+	}, &prs); err != nil {
+		return fmt.Errorf("get prstatus %s: %w", ps.Spec.PRStatusRef, err)
+	}
+
+	// Idempotent: already has PR data — skip.
+	if prs.Spec.PRURL != "" {
+		return nil
+	}
+
+	prURL := outputs["prURL"]
+	prNumStr := outputs["prNumber"]
+	if prURL == "" {
+		return nil
+	}
+
+	prNum := 0
+	if prNumStr != "" {
+		if n, err := strconv.Atoi(prNumStr); err == nil {
+			prNum = n
+		}
+	}
+	repo := extractRepo(prURL)
+
+	patch := client.MergeFrom(prs.DeepCopy())
+	prs.Spec.PRURL = prURL
+	prs.Spec.PRNumber = prNum
+	prs.Spec.Repo = repo
+
+	if err := r.Patch(ctx, &prs, patch); err != nil {
+		return fmt.Errorf("patch prstatus spec %s: %w", ps.Spec.PRStatusRef, err)
+	}
+	return nil
+}
+
 // --- helpers ---
 
 func (r *Reconciler) loadPipeline(ctx context.Context, ps *v1alpha1.PromotionStep) (*v1alpha1.Pipeline, error) {
@@ -720,19 +776,6 @@ func extractRepo(prURL string) string {
 		return ""
 	}
 	return parts[0] + "/" + parts[1]
-}
-
-// extractPRNumber parses the PR number from a GitHub PR URL.
-// e.g. "https://github.com/owner/repo/pull/42" → "42"
-func extractPRNumber(prURL string) string {
-	if prURL == "" {
-		return ""
-	}
-	parts := strings.Split(prURL, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return ""
 }
 
 // maybeCreateAutoRollback creates a rollback Bundle if one doesn't already exist

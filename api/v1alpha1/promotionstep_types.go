@@ -48,6 +48,13 @@ type PromotionStepSpec struct {
 	// before this PromotionStep can be promoted. Set by the Graph controller via CEL.
 	// +optional
 	RequiredGates []string `json:"requiredGates,omitempty"`
+
+	// PRStatusRef is the name of the companion PRStatus CRD in the same namespace.
+	// Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference.
+	// The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub
+	// directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path.
+	// +optional
+	PRStatusRef string `json:"prStatusRef,omitempty"`
 }
 
 // PromotionStepStatus defines the observed state of a PromotionStep.

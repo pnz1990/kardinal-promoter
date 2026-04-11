@@ -46,6 +46,7 @@ import (
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	prstatusrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
@@ -140,9 +141,8 @@ func main() {
 	gitClient := scm.NewExecGitClient()
 
 	if err := (&bundlereconciler.Reconciler{
-		Client:      mgr.GetClient(),
-		Translator:  newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
-		SCMProvider: scmProvider,
+		Client:     mgr.GetClient(),
+		Translator: newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -177,6 +177,13 @@ func main() {
 		Provider: metriccheckrecon.NewPrometheusProvider(),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up MetricCheckReconciler")
+	}
+
+	if err := (&prstatusrecon.Reconciler{
+		Client: mgr.GetClient(),
+		SCM:    scmProvider,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up PRStatusReconciler")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

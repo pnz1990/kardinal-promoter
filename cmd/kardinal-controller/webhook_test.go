@@ -63,32 +63,29 @@ func webhookScheme() *runtime.Scheme {
 	return s
 }
 
-// TestWebhook_AdvancesPromotionStep_OnMerge verifies that a merged PR webhook
-// transitions a WaitingForMerge PromotionStep to HealthChecking.
-func TestWebhook_AdvancesPromotionStep_OnMerge(t *testing.T) {
-	ps := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-wfm", Namespace: "default"},
-		Spec: v1alpha1.PromotionStepSpec{
-			PipelineName: "nginx-demo",
-			BundleName:   "bundle-1",
-			Environment:  "prod",
-			StepType:     "pr-review",
+// TestWebhook_MarksPRStatusMerged_OnMerge verifies that a merged PR webhook
+// marks the matching PRStatus CRD as merged. The PromotionStep is NOT advanced
+// directly — that's the PRStatusReconciler's job (WH-1 elimination).
+func TestWebhook_MarksPRStatusMerged_OnMerge(t *testing.T) {
+	// PRStatus for PR #42 — not yet merged.
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+		Spec: v1alpha1.PRStatusSpec{
+			PRURL:    "https://github.com/owner/repo/pull/42",
+			PRNumber: 42,
+			Repo:     "owner/repo",
 		},
-		Status: v1alpha1.PromotionStepStatus{
-			State: "WaitingForMerge",
-			PRURL: "https://github.com/owner/repo/pull/42",
-			Outputs: map[string]string{
-				"prNumber": "42",
-				"prURL":    "https://github.com/owner/repo/pull/42",
-			},
+		Status: v1alpha1.PRStatusStatus{
+			Open:   true,
+			Merged: false,
 		},
 	}
 
 	s := webhookScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(ps).
-		WithStatusSubresource(ps).
+		WithObjects(prs).
+		WithStatusSubresource(prs).
 		Build()
 
 	mockSCM := &mockSCMProvider{
@@ -112,9 +109,12 @@ func TestWebhook_AdvancesPromotionStep_OnMerge(t *testing.T) {
 	handler(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)
 
-	var updated v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-wfm", Namespace: "default"}, &updated))
-	assert.Equal(t, "HealthChecking", updated.Status.State)
+	// PRStatus CRD should be marked merged.
+	var updatedPRS v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "prstatus-bundle-1-prod", Namespace: "default"}, &updatedPRS))
+	assert.True(t, updatedPRS.Status.Merged, "PRStatus.status.merged should be true after webhook")
+	assert.False(t, updatedPRS.Status.Open, "PRStatus.status.open should be false after merge")
+	assert.NotNil(t, updatedPRS.Status.LastCheckedAt, "PRStatus.status.lastCheckedAt should be set")
 }
 
 // TestWebhook_RejectsInvalidSignature verifies that a webhook with an invalid
@@ -141,18 +141,19 @@ func TestWebhook_RejectsInvalidSignature(t *testing.T) {
 
 // TestWebhook_IgnoresNonMergeEvents verifies that non-merge events are no-ops.
 func TestWebhook_IgnoresNonMergeEvents(t *testing.T) {
-	ps := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-wfm", Namespace: "default"},
-		Status: v1alpha1.PromotionStepStatus{
-			State:   "WaitingForMerge",
-			Outputs: map[string]string{"prNumber": "42"},
-			PRURL:   "https://github.com/owner/repo/pull/42",
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-test", Namespace: "default"},
+		Spec: v1alpha1.PRStatusSpec{
+			PRURL:    "https://github.com/owner/repo/pull/42",
+			PRNumber: 42,
+			Repo:     "owner/repo",
 		},
+		Status: v1alpha1.PRStatusStatus{Open: true},
 	}
 
 	s := webhookScheme()
 	c := fake.NewClientBuilder().
-		WithScheme(s).WithObjects(ps).WithStatusSubresource(ps).Build()
+		WithScheme(s).WithObjects(prs).WithStatusSubresource(prs).Build()
 
 	mockSCM := &mockSCMProvider{
 		event: scm.WebhookEvent{
@@ -171,10 +172,10 @@ func TestWebhook_IgnoresNonMergeEvents(t *testing.T) {
 	handler(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)
 
-	// Step state should be unchanged.
-	var updated v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-wfm", Namespace: "default"}, &updated))
-	assert.Equal(t, "WaitingForMerge", updated.Status.State)
+	// PRStatus should be unchanged.
+	var updated v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "prstatus-test", Namespace: "default"}, &updated))
+	assert.False(t, updated.Status.Merged, "PRStatus.status.merged should remain false for non-merge events")
 }
 
 // TestWebhookHealth_ReturnsOK verifies that GET /webhook/scm/health returns 200
