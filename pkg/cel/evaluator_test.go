@@ -184,3 +184,81 @@ func TestEvaluator_Benchmark(t *testing.T) {
 	assert.Less(t, avgNs, int64(10*time.Millisecond),
 		"average CEL evaluation must be under 10ms, got %v", time.Duration(avgNs))
 }
+
+// buildMetricsCtx builds a CEL context that includes the metrics and upstream variables.
+func buildMetricsCtx(t time.Time) map[string]interface{} {
+	base := buildScheduleCtx(t)
+	base["metrics"] = map[string]interface{}{
+		"error_rate": map[string]interface{}{
+			"value":  "0.005",
+			"result": "Pass",
+		},
+	}
+	base["upstream"] = map[string]interface{}{
+		"uat": map[string]interface{}{
+			"soakMinutes": int64(45),
+		},
+	}
+	return base
+}
+
+// TestEvaluator_MetricsContext_PassWhenResultPass verifies metrics["name"].result == "Pass" works.
+func TestEvaluator_MetricsContext_PassWhenResultPass(t *testing.T) {
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	ctx := buildMetricsCtx(time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC))
+	pass, _, err := eval.Evaluate(`metrics["error_rate"].result == "Pass"`, ctx)
+	require.NoError(t, err)
+	assert.True(t, pass)
+}
+
+// TestEvaluator_MetricsContext_BlockWhenResultFail verifies metrics["name"].result == "Fail" blocks.
+func TestEvaluator_MetricsContext_BlockWhenResultFail(t *testing.T) {
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	ctx := buildMetricsCtx(time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC))
+	// Override to Fail
+	ctx["metrics"] = map[string]interface{}{
+		"error_rate": map[string]interface{}{
+			"value":  "0.05",
+			"result": "Fail",
+		},
+	}
+	pass, _, err := eval.Evaluate(`metrics["error_rate"].result == "Pass"`, ctx)
+	require.NoError(t, err)
+	assert.False(t, pass)
+}
+
+// TestEvaluator_UpstreamContext_SoakMinutesPass verifies upstream["uat"].soakMinutes >= 30 passes.
+func TestEvaluator_UpstreamContext_SoakMinutesPass(t *testing.T) {
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	ctx := buildMetricsCtx(time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC))
+	// 45 minutes soak
+	pass, _, err := eval.Evaluate(`upstream["uat"].soakMinutes >= 30`, ctx)
+	require.NoError(t, err)
+	assert.True(t, pass)
+}
+
+// TestEvaluator_UpstreamContext_SoakMinutesBlock verifies upstream["uat"].soakMinutes >= 30 blocks when < 30.
+func TestEvaluator_UpstreamContext_SoakMinutesBlock(t *testing.T) {
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	ctx := buildMetricsCtx(time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC))
+	ctx["upstream"] = map[string]interface{}{
+		"uat": map[string]interface{}{
+			"soakMinutes": int64(10),
+		},
+	}
+	pass, _, err := eval.Evaluate(`upstream["uat"].soakMinutes >= 30`, ctx)
+	require.NoError(t, err)
+	assert.False(t, pass)
+}

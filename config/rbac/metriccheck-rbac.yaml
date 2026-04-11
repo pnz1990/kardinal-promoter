@@ -1,0 +1,37 @@
+# metriccheck-rbac.yaml — ClusterRole for MetricCheck CRD management.
+# The kardinal-controller needs get/list/watch/update/patch permissions
+# on MetricCheck objects to run the MetricCheckReconciler.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kardinal-metriccheck-manager
+  labels:
+    app.kubernetes.io/name: kardinal-promoter
+    app.kubernetes.io/component: controller
+rules:
+  - apiGroups:
+      - kardinal.io
+    resources:
+      - metricchecks
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - kardinal.io
+    resources:
+      - metricchecks/status
+    verbs:
+      - get
+      - update
+      - patch
+  - apiGroups:
+      - kardinal.io
+    resources:
+      - metricchecks/finalizers
+    verbs:
+      - update

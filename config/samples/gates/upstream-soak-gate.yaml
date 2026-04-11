@@ -1,0 +1,22 @@
+# upstream-soak-gate.yaml — Upstream soak time gate.
+# Blocks promotion to prod if the bundle has not soaked in UAT for at least 30 minutes.
+#
+# The PolicyGate reconciler computes upstream["uat"].soakMinutes from the
+# Bundle.status.environments[uat].healthCheckedAt timestamp. No MetricCheck
+# object is required — this context is derived from Bundle CRD status directly.
+#
+# Usage:
+#   kubectl apply -f config/samples/gates/upstream-soak-gate.yaml
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: staging-soak-30m
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+spec:
+  # Gate passes when the bundle has been health-checked in UAT for >= 30 minutes.
+  expression: 'upstream["uat"].soakMinutes >= 30'
+  message: "Must soak in UAT for 30 minutes before promoting to prod"
+  recheckInterval: 2m

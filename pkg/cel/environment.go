@@ -19,8 +19,10 @@ func NewCELEnvironment() (*cel.Env, error) {
 		cel.Variable("bundle", cel.DynType),
 		cel.Variable("schedule", cel.DynType),
 		cel.Variable("environment", cel.DynType),
-		// Phase 2+ (not populated in Phase 1, but declared to avoid compile errors)
+		// Phase 2+: metrics context from MetricCheck CRD status (populated by PolicyGate reconciler)
 		cel.Variable("metrics", cel.DynType),
+		// Phase 2+: upstream soak times per environment (populated by PolicyGate reconciler)
+		cel.Variable("upstream", cel.DynType),
 		cel.Variable("previousBundle", cel.DynType),
 	)
 	if err != nil {

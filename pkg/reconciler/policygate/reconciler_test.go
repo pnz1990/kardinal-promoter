@@ -281,3 +281,211 @@ func TestPolicyGateReconciler_Idempotent(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "idem-gate", Namespace: "default"}, &got))
 	assert.True(t, got.Status.Ready)
 }
+
+// makeMetricCheck builds a MetricCheck with a given status result.
+func makeMetricCheck(name, ns, lastValue, result string) *kardinalv1alpha1.MetricCheck {
+	return &kardinalv1alpha1.MetricCheck{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: kardinalv1alpha1.MetricCheckSpec{
+			Provider:      "prometheus",
+			PrometheusURL: "http://prometheus:9090",
+			Query:         `error_rate`,
+			Threshold:     kardinalv1alpha1.MetricThreshold{Value: 0.01, Operator: "lt"},
+		},
+		Status: kardinalv1alpha1.MetricCheckStatus{
+			LastValue: lastValue,
+			Result:    result,
+		},
+	}
+}
+
+// makeBundleWithEnvironments builds a Bundle with environment statuses for soak-time tests.
+func makeBundleWithEnvironments(name, ns string, envs []kardinalv1alpha1.EnvironmentStatus) *kardinalv1alpha1.Bundle {
+	b := makeBundle(name, ns)
+	b.Status.Environments = envs
+	return b
+}
+
+// TestPolicyGateReconciler_MetricsContext_PassWhenMetricPasses verifies that
+// metrics.<name>.result == "Pass" makes a gate expression pass.
+func TestPolicyGateReconciler_MetricsContext_PassWhenMetricPasses(t *testing.T) {
+	mc := makeMetricCheck("error-rate", "default", "0.005", "Pass")
+	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1",
+		`metrics["error-rate"].result == "Pass"`, "1m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle, mc).
+		WithStatusSubresource(gate, mc).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "metric-gate", Namespace: "default"}, &got))
+	assert.True(t, got.Status.Ready, "gate must be ready when MetricCheck result is Pass")
+}
+
+// TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails verifies that
+// metrics.<name>.result == "Fail" causes the gate expression to fail.
+func TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails(t *testing.T) {
+	mc := makeMetricCheck("error-rate", "default", "0.05", "Fail")
+	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1",
+		`metrics["error-rate"].result == "Pass"`, "1m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle, mc).
+		WithStatusSubresource(gate, mc).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "metric-gate", Namespace: "default"}, &got))
+	assert.False(t, got.Status.Ready, "gate must be blocked when MetricCheck result is Fail")
+}
+
+// TestPolicyGateReconciler_UpstreamSoakContext_Passes verifies that
+// upstream["uat"].soakMinutes >= 30 passes when bundle has been health-checked for > 30 min.
+func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
+	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	healthCheckedAt := metav1.NewTime(now.Add(-45 * time.Minute)) // 45 minutes ago
+
+	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
+		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt},
+	})
+	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+		`upstream["uat"].soakMinutes >= 30`, "2m")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate, bundle).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return now },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+	assert.True(t, got.Status.Ready, "gate must pass when uat has soaked for 45 min (>= 30 threshold)")
+}
+
+// TestPolicyGateReconciler_UpstreamSoakContext_Blocks verifies that
+// upstream["uat"].soakMinutes >= 30 blocks when bundle has only soaked 10 min.
+func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
+	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	healthCheckedAt := metav1.NewTime(now.Add(-10 * time.Minute)) // only 10 minutes ago
+
+	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
+		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt},
+	})
+	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+		`upstream["uat"].soakMinutes >= 30`, "2m")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate, bundle).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return now },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+	assert.False(t, got.Status.Ready, "gate must block when uat has only soaked for 10 min (< 30 threshold)")
+}
+
+// TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked verifies
+// soakMinutes is 0 when HealthCheckedAt is nil.
+func TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked(t *testing.T) {
+	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
+		{Name: "uat", Phase: "Promoting"}, // no HealthCheckedAt
+	})
+	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+		`upstream["uat"].soakMinutes >= 30`, "2m")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate, bundle).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+	assert.False(t, got.Status.Ready, "gate must block when uat has not been health-checked (soakMinutes=0)")
+}
