@@ -17,11 +17,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -36,11 +38,16 @@ const (
 	maxWebhookBody = 1 << 20
 )
 
+// webhookEventsTotal counts the number of webhook events processed since startup.
+// Uses sync/atomic for lock-free increment; full Prometheus metrics are in Stage 19.
+var webhookEventsTotal int64
+
 // webhookServer is an HTTP server that handles incoming SCM webhook events.
 type webhookServer struct {
-	scm    scm.SCMProvider
-	client client.Client
-	log    zerolog.Logger
+	scm               scm.SCMProvider
+	client            client.Client
+	log               zerolog.Logger
+	webhookConfigured bool
 }
 
 // newWebhookServer constructs a webhookServer with the given SCM provider and k8s client.
@@ -49,6 +56,17 @@ func newWebhookServer(scmProvider scm.SCMProvider, k8s client.Client, log zerolo
 		scm:    scmProvider,
 		client: k8s,
 		log:    log,
+	}
+}
+
+// newWebhookServerWithConfig constructs a webhookServer and records whether a webhook
+// secret is configured (for the /webhook/scm/health response).
+func newWebhookServerWithConfig(scmProvider scm.SCMProvider, k8s client.Client, log zerolog.Logger, webhookConfigured bool) *webhookServer {
+	return &webhookServer{
+		scm:               scmProvider,
+		client:            k8s,
+		log:               log,
+		webhookConfigured: webhookConfigured,
 	}
 }
 
@@ -76,6 +94,9 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			return
 		}
 
+		// Count every successfully parsed event.
+		atomic.AddInt64(&webhookEventsTotal, 1)
+
 		s.log.Info().
 			Str("event_type", event.EventType).
 			Str("action", event.Action).
@@ -99,6 +120,24 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// HealthHandler returns an http.HandlerFunc for GET /webhook/scm/health.
+// Responds with 200 OK and a JSON body indicating webhook configuration status
+// and the number of webhook events processed since startup.
+func (s *webhookServer) HealthHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		resp := map[string]interface{}{
+			"status":            "ok",
+			"webhookConfigured": s.webhookConfigured,
+			"eventsProcessed":   atomic.LoadInt64(&webhookEventsTotal),
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			s.log.Error().Err(err).Msg("failed to encode health response")
+		}
 	}
 }
 
@@ -151,61 +190,6 @@ func (s *webhookServer) reconcileMergedPR(ctx context.Context, event scm.Webhook
 			Msg("advanced promotionstep to HealthChecking via webhook")
 	}
 	return nil
-}
-
-// startupReconciliation checks all WaitingForMerge PromotionSteps and re-syncs PR status.
-// Called once on controller startup to recover state from controller downtime.
-func startupReconciliation(ctx context.Context, scmProvider scm.SCMProvider, k8s client.Client, log zerolog.Logger) {
-	var psList v1alpha1.PromotionStepList
-	if err := k8s.List(ctx, &psList); err != nil {
-		log.Error().Err(err).Msg("startup reconciliation: failed to list promotionsteps")
-		return
-	}
-
-	for i := range psList.Items {
-		ps := &psList.Items[i]
-		if ps.Status.State != "WaitingForMerge" {
-			continue
-		}
-		prNumStr := ps.Status.Outputs["prNumber"]
-		if prNumStr == "" {
-			prNumStr = extractPRNumberFromURL(ps.Status.PRURL)
-		}
-		if prNumStr == "" {
-			continue
-		}
-		prNum, err := strconv.Atoi(prNumStr)
-		if err != nil {
-			continue
-		}
-		repo := extractRepoFromURL(ps.Status.PRURL)
-		if repo == "" {
-			continue
-		}
-
-		merged, open, err := scmProvider.GetPRStatus(ctx, repo, prNum)
-		if err != nil {
-			log.Warn().Err(err).Str("promotionstep", ps.Name).Msg("startup reconciliation: failed to get PR status")
-			continue
-		}
-		if merged {
-			patch := client.MergeFrom(ps.DeepCopy())
-			ps.Status.State = "HealthChecking"
-			ps.Status.Message = "PR merged during controller downtime (startup reconciliation)"
-			if patchErr := k8s.Status().Patch(ctx, ps, patch); patchErr != nil {
-				log.Error().Err(patchErr).Str("promotionstep", ps.Name).Msg("startup reconciliation: patch failed")
-			} else {
-				log.Info().Str("promotionstep", ps.Name).Msg("startup reconciliation: advanced to HealthChecking")
-			}
-		} else if !open {
-			patch := client.MergeFrom(ps.DeepCopy())
-			ps.Status.State = "Failed"
-			ps.Status.Message = "PR closed without merge (detected during startup reconciliation)"
-			if patchErr := k8s.Status().Patch(ctx, ps, patch); patchErr != nil {
-				log.Error().Err(patchErr).Str("promotionstep", ps.Name).Msg("startup reconciliation: patch failed")
-			}
-		}
-	}
 }
 
 // extractPRNumberFromURL parses the PR number from a GitHub PR URL.
