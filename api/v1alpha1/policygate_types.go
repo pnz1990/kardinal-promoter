@@ -34,6 +34,12 @@ type PolicyGateSpec struct {
 	// automatically applied to any Pipeline whose labels match the selector.
 	// +optional
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
+
+	// UpstreamEnvironment is set by the kro Graph controller via CEL expression
+	// substitution. It carries the resolved state of the upstream PromotionStep
+	// that must be Verified before this gate is evaluated.
+	// +optional
+	UpstreamEnvironment string `json:"upstreamEnvironment,omitempty"`
 }
 
 // PolicyGateStatus defines the observed state of a PolicyGate.
