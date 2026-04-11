@@ -146,7 +146,7 @@ Bundle my-app-v1-29-0-1712567890 created.
 
 ### kardinal promote
 
-Manually trigger promotion of the latest available Bundle to a specific environment. Normally promotion is automatic, but this command is useful for debugging or for environments that require manual triggering.
+Manually trigger promotion by creating a Bundle targeting a specific environment. The Bundle flows through all upstream environments before reaching the target environment. PolicyGates and approval mode apply as configured.
 
 ```bash
 kardinal promote <pipeline> --env <environment>
@@ -159,10 +159,8 @@ kardinal promote my-app --env prod
 
 Output:
 ```
-Promoting my-app to prod: v1.28.0 -> v1.29.0
-  Metric gate passed (staging success-rate: 99.7%)
-  PR #144 opened: https://github.com/myorg/gitops-repo/pull/144
-  Merge PR #144 to complete promotion (gate: pr-review)
+Promoting my-app to prod: bundle my-app-x7k2p created
+Track with: kardinal get bundles my-app
 ```
 
 ### kardinal explain
