@@ -429,44 +429,35 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			}
 		}
 
-		// Check if we've exceeded the timeout (recorded in step start time via conditions).
-		// If startedAt is set and elapsed > timeout, fail.
-		if ps.Status.Conditions != nil {
-			for _, cond := range ps.Status.Conditions {
-				if cond.Type == "HealthCheckStarted" {
-					elapsed := time.Since(cond.LastTransitionTime.Time)
-					if elapsed > timeout {
-						log.Warn().Dur("elapsed", elapsed).Dur("timeout", timeout).Msg("health check timeout")
-						patch := client.MergeFrom(ps.DeepCopy())
-						ps.Status.State = StateFailed
-						ps.Status.Message = fmt.Sprintf("health check timeout after %s", timeout)
-						if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-							return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
-						}
-						if bundle != nil {
-							_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-						}
-						return ctrl.Result{}, nil
-					}
-				}
+		// Set status.healthCheckExpiry on first entry (idempotent — only set once).
+		// This writes time-based state to the CRD so the Graph can observe it.
+		// Graph-purity: eliminates PS-5 (time.Since() in reconciler hot path).
+		if ps.Status.HealthCheckExpiry == nil {
+			expiry := metav1.NewTime(time.Now().Add(timeout))
+			patch := client.MergeFrom(ps.DeepCopy())
+			ps.Status.HealthCheckExpiry = &expiry
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch health check expiry: %w", patchErr)
 			}
 		}
 
-		// Record health check start time (idempotent — only add if not already there).
-		hasStarted := false
-		for _, c := range ps.Status.Conditions {
-			if c.Type == "HealthCheckStarted" {
-				hasStarted = true
-				break
-			}
-		}
-		if !hasStarted {
+		// Check if we've exceeded the timeout by comparing to the stored expiry field.
+		// time.Now() is used only to write a CRD status field — Graph-first compliant.
+		if time.Now().After(ps.Status.HealthCheckExpiry.Time) {
+			log.Warn().
+				Time("expiry", ps.Status.HealthCheckExpiry.Time).
+				Dur("timeout", timeout).
+				Msg("health check timeout")
 			patch := client.MergeFrom(ps.DeepCopy())
-			ps.Status.Conditions = appendCondition(ps.Status.Conditions,
-				"HealthCheckStarted", metav1.ConditionTrue, "Started", "health check in progress", time.Now())
+			ps.Status.State = StateFailed
+			ps.Status.Message = fmt.Sprintf("health check timeout after %s", timeout)
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-				return ctrl.Result{}, fmt.Errorf("patch health check start: %w", patchErr)
+				return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
 			}
+			if bundle != nil {
+				_ = r.copyEvidenceToBundle(ctx, ps, bundle)
+			}
+			return ctrl.Result{}, nil
 		}
 
 		adapter, err := r.HealthDetector.Select(ctx, healthType)

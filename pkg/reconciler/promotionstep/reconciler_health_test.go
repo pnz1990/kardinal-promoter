@@ -18,6 +18,7 @@ package promotionstep_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -463,4 +464,224 @@ func TestAutoRollback_Idempotent(t *testing.T) {
 	}
 	assert.Equal(t, 0, rollbacks,
 		"PromotionStep reconciler must NOT create rollback bundles — RollbackPolicyReconciler is responsible")
+}
+
+// TestHealthCheckExpiry_SetOnFirstEntry verifies that status.healthCheckExpiry is written
+// to the PromotionStep CRD on the first reconcile in HealthChecking state.
+// This field is the Graph-observable replacement for the time.Since() timeout check (PS-5).
+func TestHealthCheckExpiry_SetOnFirstEntry(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "5m"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-expiry-set", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State: "HealthChecking",
+			// HealthCheckExpiry is nil — first entry
+		},
+	}
+	// Deployment is not yet healthy so we stay in HealthChecking (not Verified).
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps, deploy).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	before := metav1.Now()
+	_, err := rec.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-expiry-set", Namespace: "default"},
+	})
+	after := metav1.Now()
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-expiry-set", Namespace: "default"}, &updated))
+
+	require.NotNil(t, updated.Status.HealthCheckExpiry, "healthCheckExpiry must be set on first entry")
+
+	// Expiry must be ≈ now + 5m (allow small clock drift).
+	expiry := updated.Status.HealthCheckExpiry.Time
+	minExpiry := before.Add(4 * time.Minute)
+	maxExpiry := after.Add(6 * time.Minute)
+	assert.True(t, expiry.After(minExpiry), "expiry should be at least now+4m (was: %s)", expiry)
+	assert.True(t, expiry.Before(maxExpiry), "expiry should be at most now+6m (was: %s)", expiry)
+}
+
+// TestHealthCheckExpiry_TimeoutFails verifies that when healthCheckExpiry is in the past,
+// the PromotionStep transitions to Failed.
+func TestHealthCheckExpiry_TimeoutFails(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "5m"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// HealthCheckExpiry is already in the past — timeout has been reached.
+	pastExpiry := metav1.NewTime(metav1.Now().Add(-1 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-expiry-past", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:             "HealthChecking",
+			HealthCheckExpiry: &pastExpiry,
+		},
+	}
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps, deploy).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := rec.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-expiry-past", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-expiry-past", Namespace: "default"}, &updated))
+	assert.Equal(t, "Failed", updated.Status.State, "health check timeout must transition to Failed")
+	assert.Contains(t, updated.Status.Message, "timeout")
+}
+
+// TestHealthCheckExpiry_Idempotent verifies that if healthCheckExpiry is already set,
+// the reconciler does NOT overwrite it on subsequent reconciles.
+func TestHealthCheckExpiry_Idempotent(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "5m"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// HealthCheckExpiry is already set (simulates a restart after first entry).
+	fixedExpiry := metav1.NewTime(metav1.Now().Add(8 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-expiry-idem", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:             "HealthChecking",
+			HealthCheckExpiry: &fixedExpiry,
+		},
+	}
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps, deploy).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	// Reconcile twice — expiry must remain unchanged.
+	for i := 0; i < 2; i++ {
+		_, err := rec.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "step-expiry-idem", Namespace: "default"},
+		})
+		require.NoError(t, err)
+	}
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-expiry-idem", Namespace: "default"}, &updated))
+	require.NotNil(t, updated.Status.HealthCheckExpiry)
+	assert.Equal(t, fixedExpiry.Time.UTC().Truncate(time.Second),
+		updated.Status.HealthCheckExpiry.Time.UTC().Truncate(time.Second),
+		"healthCheckExpiry must not be overwritten on subsequent reconciles")
+	// State must still be HealthChecking (expiry is in the future, deployment unhealthy).
+	assert.Equal(t, "HealthChecking", updated.Status.State)
 }
