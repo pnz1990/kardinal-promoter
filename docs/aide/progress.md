@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T05:22Z
+> Last updated: 2026-04-11T05:45Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -174,6 +174,16 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 028 | Custom Promotion Steps via HTTP Webhook | ✅ Complete | #124 merged | CustomWebhookStep, registry fallback, StepSpec/WebhookConfig in Pipeline, 10 tests, example server |
+
+---
+
+## Workshop 1 Parity Items (queue-014)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 029 | Fix FormatPipelineTable per-environment columns | ✅ Complete | #128 merged | PIPELINE BUNDLE ENV... AGE format, union columns, PromotionStep state lookup |
+| 030 | Fix kardinal explain zero PolicyGates label mismatch | ✅ Complete | #129 merged | Add pipeline/bundle/env labels to PolicyGate node templates in builder.go |
+| 031 | Show CEL expression + current value in kardinal explain | ✅ Complete | #129 merged | EXPRESSION column added to explain output; Step rows show '-' |
 
 ---
 

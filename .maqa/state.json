@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T05:21:03Z",
-  "current_queue": "queue-013",
+  "last_updated": "2026-04-11T05:50:35Z",
+  "current_queue": "queue-014",
   "last_sm_review": "2026-04-11T05:23:41Z",
   "last_pm_review": "2026-04-11T05:24:48Z",
   "batches_since_competitive_analysis": 0,
@@ -273,6 +273,31 @@
       "engineer_slots": {
         "STANDALONE": null
       }
+    },
+    "029-pipeline-table-columns": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "worktree_path": "../kardinal-promoter.029-pipeline-table-columns",
+      "pr_number": 128,
+      "pr_merged": true,
+      "dependency_mode": "merged",
+      "assigned_at": "2026-04-11T05:27:56Z"
+    },
+    "030-explain-policygate-labels": {
+      "state": "done",
+      "assigned_to": null,
+      "worktree_path": null,
+      "pr_number": 129,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "031-explain-cel-expression": {
+      "state": "done",
+      "assigned_to": null,
+      "worktree_path": null,
+      "pr_number": 129,
+      "pr_merged": true,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {

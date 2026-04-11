@@ -26,11 +26,11 @@ closes epic #123 with the results. Only then does work on Workshop 2 scope begin
 
 ### Workshop 1 Parity Checklist (code must pass before execution attempt)
 
-- [ ] `kardinal get pipelines` shows per-environment status columns (issue #115)
-- [ ] `kardinal explain <pipeline> --env <env>` shows active PolicyGates (issue #116)
-- [ ] `kardinal explain` shows CEL expression and current value (issue #117)
-- [ ] Item 026 merged — kind cluster E2E infrastructure in place
-- [ ] `examples/quickstart/pipeline.yaml` applies cleanly
+- [x] `kardinal get pipelines` shows per-environment status columns (PR #128)
+- [x] `kardinal explain <pipeline> --env <env>` shows active PolicyGates (PR #129)
+- [x] `kardinal explain` shows CEL expression and current value (PR #129)
+- [x] Item 026 merged — kind cluster E2E infrastructure in place
+- [ ] `examples/quickstart/pipeline.yaml` applies cleanly (verify on kind cluster)
 
 ### Workshop 1 Execution Gate (epic #123 / milestone `workshop-1-executed`)
 
