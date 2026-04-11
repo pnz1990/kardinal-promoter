@@ -26,36 +26,38 @@ package steps
 //
 // Use DefaultSequenceForBundle for type-aware routing.
 func DefaultSequence(approvalMode string) []string {
-	return DefaultSequenceForBundle(approvalMode, "", "")
+	return DefaultSequenceForBundle(approvalMode, "", "", "")
 }
 
 // DefaultSequenceForBundle returns the default step sequence based on approval mode,
-// bundle type, and update strategy. Callers should prefer this over DefaultSequence.
+// bundle type, update strategy, and layout. Callers should prefer this over DefaultSequence.
 //
 // bundleType: "image" | "config" | "mixed" | "" (defaults to image behaviour)
 // updateStrategy: "kustomize" | "helm" | "" (defaults to kustomize)
+// layout: "directory" | "branch" | "" (defaults to directory)
 //
 // Routing rules:
 //   - config bundle → git-clone, config-merge, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
-func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy string) []string {
-	var updateStep string
+func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout string) []string {
+	var updateSteps []string
 	switch {
 	case bundleType == "config":
-		updateStep = "config-merge"
+		updateSteps = []string{"config-merge"}
 	case updateStrategy == "helm":
-		updateStep = "helm-set-image"
+		updateSteps = []string{"helm-set-image"}
+	case layout == "branch":
+		// Rendered manifests: run kustomize-set-image then kustomize-build.
+		// kustomize-build renders the overlay to a file; git-commit picks it up.
+		updateSteps = []string{"kustomize-set-image", "kustomize-build"}
 	default:
-		updateStep = "kustomize-set-image"
+		updateSteps = []string{"kustomize-set-image"}
 	}
 
-	base := []string{
-		"git-clone",
-		updateStep,
-		"git-commit",
-		"git-push",
-	}
+	base := append([]string{"git-clone"}, updateSteps...)
+	base = append(base, "git-commit", "git-push")
 	if approvalMode == "pr-review" {
 		base = append(base, "open-pr", "wait-for-merge")
 	}

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -319,7 +320,7 @@ func TestDefaultSequence_PRReview(t *testing.T) {
 // TestDefaultSequenceForBundle_ConfigBundle verifies that config bundles use config-merge
 // instead of kustomize-set-image.
 func TestDefaultSequenceForBundle_ConfigBundle(t *testing.T) {
-	seq := parentsteps.DefaultSequenceForBundle("auto", "config", "")
+	seq := parentsteps.DefaultSequenceForBundle("auto", "config", "", "")
 	assert.Contains(t, seq, "config-merge", "config bundle must use config-merge")
 	assert.NotContains(t, seq, "kustomize-set-image", "config bundle must not use kustomize-set-image")
 	assert.NotContains(t, seq, "helm-set-image", "config bundle must not use helm-set-image")
@@ -327,7 +328,7 @@ func TestDefaultSequenceForBundle_ConfigBundle(t *testing.T) {
 
 // TestDefaultSequenceForBundle_HelmStrategy verifies that helm update strategy uses helm-set-image.
 func TestDefaultSequenceForBundle_HelmStrategy(t *testing.T) {
-	seq := parentsteps.DefaultSequenceForBundle("auto", "image", "helm")
+	seq := parentsteps.DefaultSequenceForBundle("auto", "image", "helm", "")
 	assert.Contains(t, seq, "helm-set-image", "helm strategy must use helm-set-image")
 	assert.NotContains(t, seq, "kustomize-set-image", "helm strategy must not use kustomize-set-image")
 	assert.NotContains(t, seq, "config-merge", "image+helm must not use config-merge")
@@ -335,7 +336,7 @@ func TestDefaultSequenceForBundle_HelmStrategy(t *testing.T) {
 
 // TestDefaultSequenceForBundle_KustomizeDefault verifies that default (no type, no strategy) is kustomize.
 func TestDefaultSequenceForBundle_KustomizeDefault(t *testing.T) {
-	seq := parentsteps.DefaultSequenceForBundle("auto", "", "")
+	seq := parentsteps.DefaultSequenceForBundle("auto", "", "", "")
 	assert.Contains(t, seq, "kustomize-set-image", "default must use kustomize-set-image")
 }
 
@@ -344,6 +345,65 @@ func TestDefaultSequenceForBundle_BackwardsCompat(t *testing.T) {
 	seq := parentsteps.DefaultSequence("auto")
 	assert.Contains(t, seq, "kustomize-set-image",
 		"DefaultSequence (no type/strategy) must still use kustomize-set-image")
+}
+
+// TestDefaultSequenceForBundle_BranchLayout verifies that layout:branch inserts kustomize-build.
+func TestDefaultSequenceForBundle_BranchLayout(t *testing.T) {
+	seq := parentsteps.DefaultSequenceForBundle("auto", "image", "kustomize", "branch")
+	assert.Contains(t, seq, "kustomize-set-image", "branch layout must include kustomize-set-image")
+	assert.Contains(t, seq, "kustomize-build", "branch layout must include kustomize-build")
+	// kustomize-build must come after kustomize-set-image
+	setIdx, buildIdx := -1, -1
+	for i, s := range seq {
+		if s == "kustomize-set-image" {
+			setIdx = i
+		}
+		if s == "kustomize-build" {
+			buildIdx = i
+		}
+	}
+	assert.Greater(t, buildIdx, setIdx, "kustomize-build must come after kustomize-set-image")
+}
+
+// TestDefaultSequenceForBundle_BranchLayoutPRReview verifies pr-review with layout:branch.
+func TestDefaultSequenceForBundle_BranchLayoutPRReview(t *testing.T) {
+	seq := parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "branch")
+	assert.Contains(t, seq, "kustomize-build")
+	assert.Contains(t, seq, "open-pr")
+	assert.Contains(t, seq, "wait-for-merge")
+}
+
+// TestKustomizeBuild_NotInPath verifies that kustomize-build returns a helpful error
+// when kustomize is not in PATH.
+func TestKustomizeBuild_NotInPath(t *testing.T) {
+	// This test only runs when kustomize is NOT in PATH.
+	if _, err := exec.LookPath("kustomize"); err == nil {
+		t.Skip("kustomize is in PATH — skipping not-in-path test")
+	}
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "environments", "prod")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+
+	state := &parentsteps.StepState{
+		WorkDir:     dir,
+		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
+		Bundle:      v1alpha1.BundleSpec{Type: "image"},
+		Outputs:     map[string]string{},
+	}
+
+	step, err := parentsteps.Lookup("kustomize-build")
+	require.NoError(t, err)
+
+	result, execErr := step.Execute(context.Background(), state)
+	assert.Equal(t, parentsteps.StepFailed, result.Status)
+	assert.NotNil(t, execErr)
+	assert.Contains(t, result.Message, "kustomize")
+}
+
+// TestKustomizeBuild_Registered verifies the kustomize-build step is registered.
+func TestKustomizeBuild_Registered(t *testing.T) {
+	_, err := parentsteps.Lookup("kustomize-build")
+	require.NoError(t, err, "kustomize-build must be registered in the step registry")
 }
 
 func TestOpenPRStep_AppliesLabels(t *testing.T) {

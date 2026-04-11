@@ -166,7 +166,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		bundleType = bundle.Spec.Type
 	}
 
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy)
+	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -204,7 +204,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if bundle != nil {
 		bundleType = bundle.Spec.Type
 	}
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy)
+	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
 	eng := steps.NewEngine(seq)
 
 	workDir := r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
