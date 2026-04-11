@@ -6,6 +6,30 @@
 
 ---
 
+## ⚠️ Current Gate: Workshop 1 Execution (epic #123)
+
+**The coordinator must not generate queues for Workshop 2 scope until epic #123
+(milestone `workshop-1-executed`) is closed.**
+
+### Phase A — Fix the three code gaps (assign immediately):
+1. Issue #115 — `kardinal get pipelines` per-env columns
+2. Issue #116 — `kardinal explain` label mismatch
+3. Issue #117 — `kardinal explain` CEL expression display
+
+### Phase B — Complete kind cluster E2E (item 026, in progress)
+
+### Phase C — Execute the workshop (coordinator assigns this as an item):
+The standalone agent runs every step in epic #123 on a live kind cluster.
+Records terminal output. Posts `[WORKSHOP 1 EXECUTED]` on Issue #1.
+Closes epic #123. Closes milestone `workshop-1-executed`.
+
+### Phase D — Workshop 2 scope begins:
+Only after #123 is closed. Coordinator may then generate queues for:
+#118 (argoRollouts adapter), #119 (promote command), #120 (GitLab),
+#121 (shard routing), #122 (delegate field).
+
+---
+
 ## Stage 0: Project Skeleton
 
 **Goal:** Establish the Go module, directory layout, build tooling, and CI scaffolding so that every subsequent stage has a working build baseline and nowhere to step on each other.

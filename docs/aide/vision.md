@@ -4,6 +4,30 @@
 > Status: Active
 > License: Apache 2.0
 
+## ⚠️ Immediate Goal: Execute Workshop 1
+
+**The standalone agent must execute this workshop end-to-end on a live kind cluster:**
+
+> https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo
+
+This is tracked as GitHub epic #123 / milestone `workshop-1-executed`. That milestone
+closes ONLY when the agent has run every workshop step, recorded the actual terminal
+output on issue #123, and confirmed every step produced the documented result.
+
+The agent does this itself — it is not a human task. The coordinator assigns the
+workshop execution as an item once code gaps #115, #116, #117 are merged.
+
+**Agents: do not plan or implement Workshop 2 scope (Argo Rollouts, multi-cluster,
+GitLab, distributed mode) until epic #123 is closed. If the coordinator generates a
+queue with Workshop 2 items while #123 is open, post `[NEEDS HUMAN]`.**
+
+The three code gaps blocking Workshop 1 execution:
+- #115: `kardinal get pipelines` per-environment columns
+- #116: `kardinal explain` label mismatch (shows zero PolicyGates)
+- #117: `kardinal explain` missing CEL expression display
+
+---
+
 ## Project Overview
 
 kardinal-promoter is a Kubernetes-native promotion controller that moves versioned artifact bundles through environment pipelines using Git pull requests as the approval mechanism, with policy gates expressed as CEL and represented as visible nodes in the promotion DAG.

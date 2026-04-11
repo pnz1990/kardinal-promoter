@@ -7,6 +7,46 @@
 
 ---
 
+## ⚠️ IMMEDIATE FOCUS: Workshop 1 Parity Gate
+
+**Do not advance to new stages until Workshop 1 has been executed end-to-end on a live kind cluster.**
+
+The immediate goal of every agent is to make the following workshop executable, then execute it:
+
+> **AWS Platform Engineering on EKS — Production Deploy section**
+> https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo
+
+A user (or the agent itself) must be able to follow this workshop using kardinal-promoter
+instead of Kargo. Every step must produce the documented output. Every CLI command must work
+exactly as described in `docs/cli-reference.md`.
+
+**The standalone agent is responsible for executing the workshop once code is ready.**
+Not a human. The agent runs `make kind-up`, follows every step, records the output, and
+closes epic #123 with the results. Only then does work on Workshop 2 scope begin.
+
+### Workshop 1 Parity Checklist (code must pass before execution attempt)
+
+- [ ] `kardinal get pipelines` shows per-environment status columns (issue #115)
+- [ ] `kardinal explain <pipeline> --env <env>` shows active PolicyGates (issue #116)
+- [ ] `kardinal explain` shows CEL expression and current value (issue #117)
+- [ ] Item 026 merged — kind cluster E2E infrastructure in place
+- [ ] `examples/quickstart/pipeline.yaml` applies cleanly
+
+### Workshop 1 Execution Gate (epic #123 / milestone `workshop-1-executed`)
+
+After the checklist above is complete, the coordinator assigns an item to execute
+the workshop (see epic #123 for the exact steps). The epic closes only when:
+1. Agent ran every step on a live kind cluster
+2. Agent posted full terminal output on issue #123
+3. Agent posted `[WORKSHOP 1 EXECUTED]` on Issue #1
+4. All pass criteria were met
+
+**Coordinator: do NOT generate a queue for Workshop 2 scope while epic #123 is open.
+If you are about to generate items for argoRollouts, GitLab, multi-cluster, or distributed
+mode while #123 is still open: stop and post `[NEEDS HUMAN]` instead.**
+
+---
+
 ## How to Use This Document
 
 **Engineers**: Before writing a single line of code, read the journey your feature contributes to.
