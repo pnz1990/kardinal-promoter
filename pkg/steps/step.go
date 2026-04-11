@@ -101,6 +101,11 @@ type StepState struct {
 
 	// UpstreamEnvironments holds verification evidence from upstream environments.
 	UpstreamEnvironments []v1alpha1.EnvironmentStatus
+
+	// Inputs holds step-specific configuration values from PromotionStep.Spec.Inputs.
+	// Custom webhook steps read their configuration (webhook.url, webhook.timeoutSeconds,
+	// webhook.secretRef.name, webhook.authorization) from this map.
+	Inputs map[string]string
 }
 
 // Step is a single unit of promotion work.

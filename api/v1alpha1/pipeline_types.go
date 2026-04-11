@@ -125,6 +125,12 @@ type EnvironmentSpec struct {
 	// +kubebuilder:default=directory
 	// +optional
 	Layout string `json:"layout,omitempty"`
+
+	// Steps overrides the default step sequence for this environment.
+	// If empty, the default sequence is used (see DefaultSequenceForBundle).
+	// Steps can include custom webhook steps alongside built-in step names.
+	// +optional
+	Steps []StepSpec `json:"steps,omitempty"`
 }
 
 // AutoRollbackSpec defines the automatic rollback policy for an environment.
@@ -134,6 +140,37 @@ type AutoRollbackSpec struct {
 	// +kubebuilder:default=3
 	// +optional
 	FailureThreshold int `json:"failureThreshold,omitempty"`
+}
+
+// WebhookConfig defines the HTTP webhook endpoint for a custom promotion step.
+type WebhookConfig struct {
+	// URL is the HTTP(S) endpoint to POST to.
+	// +kubebuilder:validation:MinLength=1
+	URL string `json:"url"`
+
+	// TimeoutSeconds is the per-call timeout. Defaults to 300.
+	// +kubebuilder:default=300
+	// +optional
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+
+	// SecretRef references a Kubernetes Secret whose "Authorization" key is
+	// sent as the Authorization header.
+	// +optional
+	SecretRef *SecretRef `json:"secretRef,omitempty"`
+}
+
+// StepSpec declares a custom or built-in step override in a Pipeline environment.
+// When Uses matches a built-in step name the built-in takes precedence.
+// When Uses is an unknown name the Webhook config is required.
+type StepSpec struct {
+	// Uses identifies the step to execute (built-in name or custom name).
+	// +kubebuilder:validation:MinLength=1
+	Uses string `json:"uses"`
+
+	// Webhook configures the HTTP endpoint for custom (non-built-in) steps.
+	// Required when Uses does not match any registered built-in step.
+	// +optional
+	Webhook *WebhookConfig `json:"webhook,omitempty"`
 }
 
 // UpdateConfig holds manifest update strategy configuration.

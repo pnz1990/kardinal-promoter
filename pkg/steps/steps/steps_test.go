@@ -425,10 +425,12 @@ func TestOpenPRStep_AppliesLabels(t *testing.T) {
 	assert.Contains(t, mockSCM.addedLabels, "kardinal/promotion", "kardinal/promotion label must be applied")
 }
 
-func TestLookup_UnknownStep(t *testing.T) {
-	_, err := parentsteps.Lookup("nonexistent-step")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not registered")
+func TestLookup_UnknownStep_FallsBackToCustom(t *testing.T) {
+	// Unknown step names now return a CustomWebhookStep (not an error).
+	// The custom step will fail at execution time if webhook.url is missing.
+	step, err := parentsteps.Lookup("nonexistent-step")
+	require.NoError(t, err, "unknown step names must not error — they become custom webhook steps")
+	assert.Equal(t, "nonexistent-step", step.Name())
 }
 
 func TestEngine_ExecuteFrom_AllSteps(t *testing.T) {
