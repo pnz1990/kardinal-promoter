@@ -277,3 +277,89 @@ func TestAutoDetector_PreferredByType(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "resource", adapter.Name())
 }
+
+// TestArgoRolloutsAdapter_Healthy verifies that a Rollout with phase=Healthy
+// is reported as Healthy.
+func TestArgoRolloutsAdapter_Healthy(t *testing.T) {
+	rollout := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Rollout",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase":   "Healthy",
+				"message": "all replicas up to date",
+			},
+		},
+	}
+	rollout.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "argoproj.io",
+		Version: "v1alpha1",
+		Kind:    "Rollout",
+	})
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), rollout)
+
+	adapter := health.NewArgoRolloutsAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoRollouts: health.ArgoRolloutsConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Healthy")
+}
+
+// TestArgoRolloutsAdapter_Degraded verifies that a Degraded Rollout is Unhealthy.
+func TestArgoRolloutsAdapter_Degraded(t *testing.T) {
+	rollout := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Rollout",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase":   "Degraded",
+				"message": "image pull failed",
+			},
+		},
+	}
+	rollout.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), rollout)
+
+	adapter := health.NewArgoRolloutsAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoRollouts: health.ArgoRolloutsConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Degraded")
+}
+
+// TestArgoRolloutsAdapter_NotFound verifies that a missing Rollout returns Unhealthy.
+func TestArgoRolloutsAdapter_NotFound(t *testing.T) {
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+
+	adapter := health.NewArgoRolloutsAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoRollouts: health.ArgoRolloutsConfig{Name: "missing", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "not found")
+}
+
+// TestAutoDetector_ArgoRolloutsType verifies that explicit "argoRollouts" type returns
+// an ArgoRolloutsAdapter.
+func TestAutoDetector_ArgoRolloutsType(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+
+	adapter, err := detector.Select(context.Background(), "argoRollouts")
+	require.NoError(t, err)
+	assert.Equal(t, "argoRollouts", adapter.Name())
+}

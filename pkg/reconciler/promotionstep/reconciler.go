@@ -467,6 +467,10 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 				Name:      pipeline.Name + "-" + ps.Spec.Environment,
 				Namespace: "flux-system",
 			},
+			ArgoRollouts: health.ArgoRolloutsConfig{
+				Name:      pipeline.Name,
+				Namespace: ps.Spec.Environment,
+			},
 		}
 
 		result, checkErr := adapter.Check(ctx, opts)

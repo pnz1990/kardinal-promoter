@@ -107,7 +107,7 @@ health:
 | Suspended | Fail after timeout |
 | Not found | Retry for 60s, then fail |
 
-## Adapter: argoRollouts (Phase 2)
+## Adapter: argoRollouts
 
 Watches an Argo Rollouts Rollout's phase after promotion.
 

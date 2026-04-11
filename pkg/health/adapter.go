@@ -49,7 +49,7 @@ type HealthStatus struct {
 
 // CheckOptions carries the health check configuration for a specific environment.
 type CheckOptions struct {
-	// Type selects the adapter: "resource", "argocd", "flux".
+	// Type selects the adapter: "resource", "argocd", "flux", "argoRollouts".
 	// Empty means auto-detect.
 	Type string
 
@@ -61,6 +61,9 @@ type CheckOptions struct {
 
 	// Flux configuration (for type: flux).
 	Flux FluxConfig
+
+	// ArgoRollouts configuration (for type: argoRollouts).
+	ArgoRollouts ArgoRolloutsConfig
 
 	// Timeout is the maximum time to wait for health. Default: 10 minutes.
 	Timeout time.Duration
@@ -89,6 +92,14 @@ type FluxConfig struct {
 	// Name is the Kustomization name.
 	Name string
 	// Namespace is the Kustomization namespace. Default: "flux-system".
+	Namespace string
+}
+
+// ArgoRolloutsConfig is the health check configuration for an Argo Rollouts Rollout.
+type ArgoRolloutsConfig struct {
+	// Name is the Rollout name. Defaults to pipeline name.
+	Name string
+	// Namespace is the Rollout namespace. Defaults to environment name.
 	Namespace string
 }
 
@@ -295,6 +306,71 @@ func findCondition(conditions []interface{}, condType string) map[string]interfa
 	return nil
 }
 
+// --- ArgoRolloutsAdapter ---
+
+// ArgoRolloutsAdapter checks Argo Rollouts Rollout health status.
+// A Rollout is healthy when status.phase == "Healthy".
+// Uses the dynamic client to avoid a compile-time dependency on the Argo Rollouts SDK.
+type ArgoRolloutsAdapter struct {
+	dynamic dynamic.Interface
+}
+
+// NewArgoRolloutsAdapter constructs an ArgoRolloutsAdapter.
+func NewArgoRolloutsAdapter(dynClient dynamic.Interface) *ArgoRolloutsAdapter {
+	return &ArgoRolloutsAdapter{dynamic: dynClient}
+}
+
+// Name returns "argoRollouts".
+func (a *ArgoRolloutsAdapter) Name() string { return "argoRollouts" }
+
+var argoRolloutsGVR = schema.GroupVersionResource{
+	Group:    "argoproj.io",
+	Version:  "v1alpha1",
+	Resource: "rollouts",
+}
+
+// Check verifies that the Argo Rollouts Rollout is in the Healthy phase.
+func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
+	cfg := opts.ArgoRollouts
+	if cfg.Namespace == "" {
+		cfg.Namespace = "default"
+	}
+	if cfg.Name == "" {
+		return HealthStatus{Healthy: false, Reason: "ArgoRollouts.Name not configured", CheckedAt: time.Now()}, nil
+	}
+
+	rollout, err := a.dynamic.Resource(argoRolloutsGVR).
+		Namespace(cfg.Namespace).
+		Get(ctx, cfg.Name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return HealthStatus{
+				Healthy:   false,
+				Reason:    fmt.Sprintf("Rollout %s/%s not found", cfg.Namespace, cfg.Name),
+				CheckedAt: time.Now(),
+			}, nil
+		}
+		return HealthStatus{}, fmt.Errorf("get rollout %s/%s: %w", cfg.Namespace, cfg.Name, err)
+	}
+
+	phase, _, _ := unstructured.NestedString(rollout.Object, "status", "phase")
+	message, _, _ := unstructured.NestedString(rollout.Object, "status", "message")
+
+	if phase == "Healthy" {
+		reason := "Rollout phase: Healthy"
+		if message != "" {
+			reason += " — " + message
+		}
+		return HealthStatus{Healthy: true, Reason: reason, CheckedAt: time.Now()}, nil
+	}
+
+	reason := fmt.Sprintf("Rollout phase: %s", phase)
+	if message != "" {
+		reason += " — " + message
+	}
+	return HealthStatus{Healthy: false, Reason: reason, CheckedAt: time.Now()}, nil
+}
+
 // --- AutoDetector ---
 
 // AutoDetector selects the appropriate health adapter based on what is available
@@ -317,6 +393,8 @@ func (d *AutoDetector) Select(ctx context.Context, healthType string) (Adapter, 
 		return NewArgoCDAdapter(d.dynamic), nil
 	case "flux":
 		return NewFluxAdapter(d.dynamic), nil
+	case "argoRollouts":
+		return NewArgoRolloutsAdapter(d.dynamic), nil
 	case "resource", "":
 		// Auto-detect: try argocd, then flux, fall back to resource.
 		if healthType == "" {
