@@ -68,10 +68,11 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
 
-	// Step 3: validate skip permissions
-	if err := validateSkipPermissions(input.Pipeline, input.Bundle, input.PolicyGates); err != nil {
-		return nil, err
-	}
+	// Step 3: validate skip permissions — REMOVED from Build().
+	// Skip-permission validation is now done by the caller (Translator.Translate)
+	// before calling Build(), so the result is written to Bundle.status by the
+	// Bundle reconciler (Graph-first: validation result flows through CRD status).
+	// See docs/design/11-graph-purity-tech-debt.md GB-2.
 
 	// Step 4: collect and match PolicyGates by environment
 	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates)
@@ -264,7 +265,14 @@ func removeEnv(envs []string, name string) []string {
 
 // --- Step 3: validate skip permissions ---
 
-func validateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
+// ValidateSkipPermissions checks whether the Bundle's intent to skip environments
+// is permitted by the org-level PolicyGates. Returns an error if any skip is denied.
+//
+// This function was previously called inside Build() which made the check invisible
+// to the Graph. It is now exported so callers (Translator) can call it before Build(),
+// allowing the Bundle reconciler to write the result to Bundle.status (Graph-first).
+// See docs/design/11-graph-purity-tech-debt.md GB-2 (elimination in progress).
+func ValidateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
 	bundle *kardinalv1alpha1.Bundle, allGates []kardinalv1alpha1.PolicyGate) error {
 	if bundle.Spec.Intent == nil {
 		return nil
