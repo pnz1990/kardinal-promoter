@@ -41,6 +41,7 @@ export AGENT_ID="COORDINATOR"  # change per session
 
 ```yaml
 PROJECT_NAME:   kardinal-promoter
+CLI_BINARY:     kardinal
 PR_LABEL:       kardinal
 REPORT_ISSUE:   1
 REPORT_URL:     https://github.com/pnz1990/kardinal-promoter/issues/1
