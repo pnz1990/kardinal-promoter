@@ -1,22 +1,26 @@
 name: E2E Journey Tests
 
-# Runs on-demand or when triggered by the coordinator after all journeys are implemented.
-# Not on every PR — cluster setup is expensive (~5 min).
+# Runs on push to main (to verify all journeys after merge) and on-demand.
+# Not on every PR — cluster setup is expensive (~5-10 min).
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       journey:
-        description: 'Journey to run (1-5, or all)'
+        description: 'Journey to run (1-7, or all)'
         required: true
         default: 'all'
         type: choice
-        options: ['all', '1', '2', '3', '4', '5']
+        options: ['all', '1', '2', '3', '4', '5', '6', '7']
 
 jobs:
   e2e:
     name: e2e journey ${{ github.event.inputs.journey || 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -61,11 +65,12 @@ jobs:
 
       - name: Run selected journeys
         run: |
+          mkdir -p test/e2e/results
           JOURNEY="${{ github.event.inputs.journey || 'all' }}"
           if [ "$JOURNEY" = "all" ]; then
-            go test ./test/e2e/... -v -timeout 25m
+            go test ./test/e2e/... -v -timeout 25m 2>&1 | tee test/e2e/results/e2e-output.txt
           else
-            go test ./test/e2e/... -run "TestJourney${JOURNEY}" -v -timeout 25m
+            go test ./test/e2e/... -run "TestJourney${JOURNEY}" -v -timeout 25m 2>&1 | tee test/e2e/results/e2e-output.txt
           fi
 
       - name: Upload test results
