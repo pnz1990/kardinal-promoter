@@ -1,9 +1,22 @@
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
 import { api } from './api/client'
+import { usePolling } from './usePolling'
 import type { Pipeline, Bundle, GraphResponse } from './types'
+
+const POLL_INTERVAL_MS = 5000
+
+function phaseBadgeColor(phase: string): string {
+  switch (phase) {
+    case 'Verified': return '#22c55e'
+    case 'Promoting': return '#f59e0b'
+    case 'Failed': return '#ef4444'
+    case 'Superseded': return '#94a3b8'
+    default: return '#64748b'
+  }
+}
 
 export function App() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -12,28 +25,52 @@ export function App() {
 
   const [selectedPipeline, setSelectedPipeline] = useState<string | undefined>()
   const [bundles, setBundles] = useState<Bundle[]>([])
+  const [bundleHistoryOpen, setBundleHistoryOpen] = useState(false)
 
   const [graph, setGraph] = useState<GraphResponse | undefined>()
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
-  useEffect(() => {
-    api.listPipelines()
-      .then(setPipelines)
-      .catch(e => setPipelinesError(String(e)))
-      .finally(() => setPipelinesLoading(false))
-  }, [])
+  // Poll pipeline list every 5 seconds.
+  usePolling(async () => {
+    try {
+      const ps = await api.listPipelines()
+      setPipelines(ps)
+      setPipelinesError(undefined)
+    } catch (e) {
+      setPipelinesError(String(e))
+    } finally {
+      setPipelinesLoading(false)
+    }
+  }, POLL_INTERVAL_MS)
+
+  // Refresh bundles + graph for the selected pipeline every 5 seconds.
+  usePolling(async () => {
+    if (!selectedPipeline) return
+    try {
+      const bs = await api.listBundles(selectedPipeline)
+      setBundles(bs)
+      const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
+      if (promoting) {
+        const g = await api.getGraph(promoting.name)
+        setGraph(g)
+        setGraphError(undefined)
+      }
+    } catch (e) {
+      setGraphError(String(e))
+    }
+  }, POLL_INTERVAL_MS, !!selectedPipeline)
 
   const handleSelectPipeline = useCallback((name: string) => {
     setSelectedPipeline(name)
     setGraph(undefined)
     setGraphError(undefined)
     setGraphLoading(true)
+    setBundleHistoryOpen(false)
 
     api.listBundles(name)
       .then(bs => {
         setBundles(bs)
-        // Load graph for the most recent Promoting bundle.
         const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
         if (promoting) {
           return api.getGraph(promoting.name).then(g => setGraph(g))
@@ -90,6 +127,7 @@ export function App() {
           </div>
         ) : (
           <>
+            {/* Pipeline header */}
             <div style={{ marginBottom: '1rem' }}>
               <h1 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.25rem' }}>
                 {activePipeline?.name}
@@ -106,6 +144,66 @@ export function App() {
               )}
             </div>
 
+            {/* Bundle history (collapsible) */}
+            {bundles.length > 0 && (
+              <div style={{ marginBottom: '1rem' }}>
+                <button
+                  onClick={() => setBundleHistoryOpen(o => !o)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#6366f1',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    padding: '0.25rem 0',
+                    fontWeight: 600,
+                  }}
+                  aria-expanded={bundleHistoryOpen}
+                >
+                  {bundleHistoryOpen ? '▾' : '▸'} Bundle history ({bundles.length})
+                </button>
+                {bundleHistoryOpen && (
+                  <ul style={{
+                    listStyle: 'none',
+                    padding: '0.5rem 0',
+                    margin: 0,
+                    borderLeft: '2px solid #1e293b',
+                    paddingLeft: '0.75rem',
+                  }}>
+                    {bundles.map(b => (
+                      <li key={b.name} style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        marginBottom: '0.35rem',
+                        fontSize: '0.8rem',
+                        color: '#cbd5e1',
+                      }}>
+                        <span style={{
+                          background: phaseBadgeColor(b.phase),
+                          color: '#fff',
+                          fontSize: '0.65rem',
+                          padding: '1px 5px',
+                          borderRadius: '9999px',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {b.phase}
+                        </span>
+                        <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{b.name}</span>
+                        {b.provenance?.commitSHA && (
+                          <span style={{ color: '#64748b', fontFamily: 'monospace' }}>
+                            {b.provenance.commitSHA.slice(0, 8)}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {/* DAG */}
             <div style={{
               background: '#1e293b',
               borderRadius: '8px',

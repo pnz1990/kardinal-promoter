@@ -279,6 +279,51 @@ func TestFormatStepsTable(t *testing.T) {
 	assert.Contains(t, out, "no-weekend-deploys")
 }
 
+func TestPolicyGatePhase(t *testing.T) {
+	now := metav1.Now()
+	tests := []struct {
+		name string
+		gate v1alpha1.PolicyGate
+		want string
+	}{
+		{
+			name: "ready=true gives Pass",
+			gate: v1alpha1.PolicyGate{
+				Status: v1alpha1.PolicyGateStatus{
+					Ready:           true,
+					LastEvaluatedAt: &now,
+				},
+			},
+			want: "Pass",
+		},
+		{
+			name: "ready=false with lastEvaluatedAt gives Block",
+			gate: v1alpha1.PolicyGate{
+				Status: v1alpha1.PolicyGateStatus{
+					Ready:           false,
+					LastEvaluatedAt: &now,
+				},
+			},
+			want: "Block",
+		},
+		{
+			name: "ready=false with no lastEvaluatedAt gives Pending",
+			gate: v1alpha1.PolicyGate{
+				Status: v1alpha1.PolicyGateStatus{
+					Ready:           false,
+					LastEvaluatedAt: nil,
+				},
+			},
+			want: "Pending",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, cmd.PolicyGatePhase(tc.gate))
+		})
+	}
+}
+
 func TestHumanAge(t *testing.T) {
 	tests := []struct {
 		name     string
