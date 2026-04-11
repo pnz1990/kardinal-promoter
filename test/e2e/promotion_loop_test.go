@@ -172,7 +172,7 @@ func TestPromotionLoop_AutoApproval(t *testing.T) {
 		if ps.Status.State == "Verified" || ps.Status.State == "Failed" {
 			break
 		}
-		if !result.Requeue && result.RequeueAfter == 0 {
+		if !result.Requeue && result.RequeueAfter == 0 { //nolint:staticcheck
 			// State machine should always requeue when not terminal.
 			break
 		}
@@ -250,7 +250,7 @@ func TestPromotionLoop_PRReview_ViaWebhook(t *testing.T) {
 		if ps.Status.State == "WaitingForMerge" || ps.Status.State == "Failed" || ps.Status.State == "Verified" {
 			break
 		}
-		if !result.Requeue && result.RequeueAfter == 0 {
+		if !result.Requeue && result.RequeueAfter == 0 { //nolint:staticcheck
 			break
 		}
 	}
@@ -360,7 +360,7 @@ func TestPromotionLoop_Idempotency(t *testing.T) {
 		if ps.Status.State == "Verified" || ps.Status.State == "Failed" {
 			break
 		}
-		if !result.Requeue && result.RequeueAfter == 0 {
+		if !result.Requeue && result.RequeueAfter == 0 { //nolint:staticcheck
 			break
 		}
 	}
