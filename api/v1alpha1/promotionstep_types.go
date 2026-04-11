@@ -65,6 +65,12 @@ type PromotionStepStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ConsecutiveHealthFailures tracks the number of consecutive health-check
+	// failures for this step. Reset to 0 on a successful health check.
+	// Used by the auto-rollback policy in the pipeline environment spec.
+	// +optional
+	ConsecutiveHealthFailures int `json:"consecutiveHealthFailures,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -441,6 +441,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			patch := client.MergeFrom(ps.DeepCopy())
 			ps.Status.State = StateVerified
 			ps.Status.Message = fmt.Sprintf("health check passed via %s: %s", adapter.Name(), result.Reason)
+			ps.Status.ConsecutiveHealthFailures = 0 // reset on success
 			ps.Status.Conditions = appendCondition(ps.Status.Conditions, "Verified", metav1.ConditionTrue, "Verified", "promotion complete", now.Time)
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
@@ -451,8 +452,28 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			return ctrl.Result{}, nil
 		}
 
-		// Not yet healthy — requeue.
+		// Not yet healthy — increment failure counter and check auto-rollback threshold.
 		log.Debug().Str("reason", result.Reason).Str("adapter", adapter.Name()).Msg("health check not yet passed, requeueing")
+		patch := client.MergeFrom(ps.DeepCopy())
+		ps.Status.ConsecutiveHealthFailures++
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch consecutive failures: %w", patchErr)
+		}
+
+		// Check auto-rollback threshold.
+		env = findEnv(pipeline, ps.Spec.Environment) // re-evaluate (env was already declared above)
+		if env.AutoRollback != nil && bundle != nil {
+			threshold := env.AutoRollback.FailureThreshold
+			if threshold <= 0 {
+				threshold = 3 // default
+			}
+			if ps.Status.ConsecutiveHealthFailures >= threshold {
+				if rbErr := r.maybeCreateAutoRollback(ctx, log, ps, bundle); rbErr != nil {
+					log.Error().Err(rbErr).Msg("auto-rollback: failed to create rollback bundle")
+				}
+			}
+		}
+
 		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 	}
 
@@ -668,6 +689,61 @@ func extractPRNumber(prURL string) string {
 		return parts[len(parts)-1]
 	}
 	return ""
+}
+
+// maybeCreateAutoRollback creates a rollback Bundle if one doesn't already exist
+// for this PromotionStep. It is idempotent: checks for an existing rollback Bundle
+// before creating a new one.
+func (r *Reconciler) maybeCreateAutoRollback(ctx context.Context, log zerolog.Logger,
+	ps *v1alpha1.PromotionStep, bundle *v1alpha1.Bundle) error {
+	// Check if a rollback Bundle already exists for this original bundle.
+	var existingBundles v1alpha1.BundleList
+	if err := r.List(ctx, &existingBundles, client.InNamespace(ps.Namespace)); err != nil {
+		return fmt.Errorf("list bundles for rollback check: %w", err)
+	}
+	for _, b := range existingBundles.Items {
+		if b.Labels["kardinal.io/rollback"] == "true" &&
+			b.Spec.Provenance != nil &&
+			b.Spec.Provenance.RollbackOf == bundle.Name {
+			log.Debug().Str("existing_rollback", b.Name).Msg("auto-rollback: rollback bundle already exists, skipping")
+			return nil
+		}
+	}
+
+	// Create rollback Bundle with the same images as the current bundle.
+	now := metav1.NewTime(time.Now().UTC())
+	rollbackName := fmt.Sprintf("%s-rollback-%d", bundle.Spec.Pipeline, now.Unix()%100000)
+	rollbackBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rollbackName,
+			Namespace: ps.Namespace,
+			Labels: map[string]string{
+				"kardinal.io/pipeline": bundle.Spec.Pipeline,
+				"kardinal.io/rollback": "true",
+			},
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:     bundle.Spec.Type,
+			Pipeline: bundle.Spec.Pipeline,
+			Images:   bundle.Spec.Images,
+			Provenance: &v1alpha1.BundleProvenance{
+				RollbackOf: bundle.Name,
+				Timestamp:  now,
+				Author:     "kardinal-controller (auto-rollback)",
+			},
+		},
+	}
+
+	if err := r.Create(ctx, rollbackBundle); err != nil {
+		return fmt.Errorf("create rollback bundle: %w", err)
+	}
+
+	log.Info().
+		Str("rollback_bundle", rollbackName).
+		Str("original_bundle", bundle.Name).
+		Int("failures", ps.Status.ConsecutiveHealthFailures).
+		Msg("auto-rollback: created rollback bundle")
+	return nil
 }
 
 // appendCondition appends or updates a metav1.Condition.

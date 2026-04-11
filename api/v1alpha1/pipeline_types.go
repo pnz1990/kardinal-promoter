@@ -110,6 +110,20 @@ type EnvironmentSpec struct {
 	// in distributed mode. Leave empty for single-controller deployments.
 	// +optional
 	Shard string `json:"shard,omitempty"`
+
+	// AutoRollback configures automatic rollback when health checks fail repeatedly.
+	// When not set, automatic rollback is disabled.
+	// +optional
+	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
+}
+
+// AutoRollbackSpec defines the automatic rollback policy for an environment.
+type AutoRollbackSpec struct {
+	// FailureThreshold is the number of consecutive health-check failures
+	// that trigger an automatic rollback Bundle creation. Default: 3.
+	// +kubebuilder:default=3
+	// +optional
+	FailureThreshold int `json:"failureThreshold,omitempty"`
 }
 
 // UpdateConfig holds manifest update strategy configuration.
