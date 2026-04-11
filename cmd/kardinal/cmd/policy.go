@@ -164,7 +164,11 @@ Example:
 func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, env, timeStr string, soakMinutes int) error {
 	ctx := context.Background()
 
-	// Find PolicyGates for this pipeline+environment.
+	// Find PolicyGates in this namespace.
+	// Note: the applies-to label filter below (CLI-3) selects gates scoped to this
+	// environment OR gates with no applies-to restriction (global gates). A pure
+	// server-side label selector cannot express this OR-absent condition in one call,
+	// so the distinction is done client-side. See: docs/design/11-graph-purity-tech-debt.md#CLI-3
 	var gates v1alpha1.PolicyGateList
 	if listErr := c.List(ctx, &gates, sigs_client.InNamespace(ns)); listErr != nil {
 		return fmt.Errorf("list policy gates: %w", listErr)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -65,14 +66,17 @@ func rollbackFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client,
 	rollbackOf := toBundle
 	if rollbackOf == "" {
 		var bundles v1alpha1.BundleList
-		if listErr := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr != nil {
+		if listErr := c.List(ctx, &bundles,
+			sigs_client.InNamespace(ns),
+			sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
+		); listErr != nil {
 			return fmt.Errorf("list bundles: %w", listErr)
 		}
 
 		var latest *v1alpha1.Bundle
 		for i := range bundles.Items {
 			b := &bundles.Items[i]
-			if b.Spec.Pipeline != pipeline || b.Status.Phase != "Verified" {
+			if b.Status.Phase != "Verified" {
 				continue
 			}
 			if latest == nil || b.CreationTimestamp.After(latest.CreationTimestamp.Time) {
@@ -83,6 +87,14 @@ func rollbackFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client,
 			return fmt.Errorf("no Verified bundles found for pipeline %s", pipeline)
 		}
 		rollbackOf = latest.Name
+	}
+
+	// Copy the bundle type from the target bundle so the rollback is type-compatible.
+	// Falls back to "image" if the target bundle cannot be fetched.
+	bundleType := "image"
+	var originalBundle v1alpha1.Bundle
+	if getErr := c.Get(ctx, types.NamespacedName{Name: rollbackOf, Namespace: ns}, &originalBundle); getErr == nil {
+		bundleType = originalBundle.Spec.Type
 	}
 
 	labels := map[string]string{"kardinal.io/rollback": "true"}
@@ -97,7 +109,7 @@ func rollbackFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client,
 			Labels:       labels,
 		},
 		Spec: v1alpha1.BundleSpec{
-			Type:     "image",
+			Type:     bundleType,
 			Pipeline: pipeline,
 			Intent:   &v1alpha1.BundleIntent{TargetEnvironment: envFilter},
 			Provenance: &v1alpha1.BundleProvenance{
