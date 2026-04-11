@@ -103,7 +103,10 @@ func (c *ExecGitClient) Push(ctx context.Context, dir, remote, branch, token str
 		defer func() { _ = runGit(ctx, dir, "remote", "set-url", remote, remoteURL) }()
 	}
 
-	if err := runGit(ctx, dir, "push", remote, branch); err != nil {
+	// Push HEAD to the specified remote branch name.
+	// Using "HEAD:<branch>" allows pushing from the current branch to any
+	// remote branch name regardless of local branch state.
+	if err := runGit(ctx, dir, "push", remote, "HEAD:"+branch); err != nil {
 		return fmt.Errorf("git push %s %s: %w", remote, branch, err)
 	}
 	return nil

@@ -354,7 +354,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		envSpecMap[e.Name] = e
 	}
 
-	bundleSlug := bundleVersionSlug(bundle.Name)
+	bundleSlug := bundleVersionSlug(bundle.Name) // CEL-safe (underscores) — used in node IDs + gateNodeName
+	bundleSlugK8s := slugify(bundle.Name)        // K8s-safe (hyphens) — used in metadata.name only
 	pipelineName := pipeline.Name
 
 	// Filter deps to only include filtered envs
@@ -381,16 +382,17 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		gateNodeIDs := make([]string, 0, len(gates))
 		for _, gate := range gates {
 			gateNodeID := gateNodeName(pipelineName, bundleSlug, gate.Name, gate.Namespace, envName)
+			gateNodeK8s := gateNodeK8sName(bundleSlugK8s, gate.Name, gate.Namespace, envName)
 			gateNodeIDs = append(gateNodeIDs, gateNodeID)
 
-			gateNode := buildPolicyGateNode(gateNodeID, gate, pipelineName, bundle.Name, envName, upstreams)
+			gateNode := buildPolicyGateNode(gateNodeID, gateNodeK8s, gate, pipelineName, bundle.Name, envName, upstreams)
 			nodes = append(nodes, gateNode)
 		}
 
 		// PromotionStep node — node ID must be a valid CEL identifier
 		stepNodeID := celSafeSlug(envName)
 		stepNode := buildPromotionStepNode(
-			pipelineName, bundleSlug, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs,
+			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs,
 		)
 		nodes = append(nodes, stepNode)
 	}
@@ -424,8 +426,10 @@ func filteredDeps(envName string, deps map[string][]string, filteredSet map[stri
 }
 
 // buildPromotionStepNode builds a Graph node for a PromotionStep.
+// nodeID is the CEL-safe identifier (underscores) used in readyWhen/propagateWhen.
+// k8sName is the Kubernetes resource name (hyphens) for metadata.name.
 func buildPromotionStepNode(
-	pipelineName, bundleSlug, envName, nodeID string,
+	pipelineName, bundleSlugK8s, envName, nodeID string,
 	envSpec kardinalv1alpha1.EnvironmentSpec,
 	bundle *kardinalv1alpha1.Bundle,
 	upstreams []string,
@@ -434,9 +438,13 @@ func buildPromotionStepNode(
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
 
+	// Kubernetes resource name uses hyphens (RFC 1123 subdomain); envName may contain
+	// hyphens which are allowed in K8s names.
+	k8sResourceName := fmt.Sprintf("%s-%s-%s", pipelineName, bundleSlugK8s, envName)
+
 	// Build the PromotionStep resource template
 	templateMeta := map[string]interface{}{
-		"name": fmt.Sprintf("%s-%s-%s", pipelineName, bundleSlug, envName),
+		"name": k8sResourceName,
 		"labels": map[string]interface{}{
 			"kardinal.io/pipeline":    pipelineName,
 			"kardinal.io/bundle":      bundle.Name,
@@ -500,14 +508,16 @@ func buildPromotionStepNode(
 }
 
 // buildPolicyGateNode builds a Graph node for a PolicyGate instance.
+// nodeID is the CEL-safe identifier (underscores) used in readyWhen/propagateWhen.
+// k8sName is the Kubernetes resource name (hyphens) for metadata.name.
 func buildPolicyGateNode(
-	nodeID string,
+	nodeID, k8sName string,
 	gate kardinalv1alpha1.PolicyGate,
 	pipelineName, bundleName, envName string,
 	upstreams []string,
 ) GraphNode {
 	templateMeta := map[string]interface{}{
-		"name": nodeID,
+		"name": k8sName, // K8s resource name (RFC 1123 subdomain — hyphens allowed, no underscores)
 		"labels": map[string]interface{}{
 			// These labels allow `kardinal explain` and the PolicyGate reconciler
 			// to query instances by pipeline, bundle, and environment.
@@ -608,9 +618,19 @@ func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string
 	if ns == "" {
 		ns = "default"
 	}
-	// Use celSafeSlug so the ID is valid as a CEL identifier.
+	// Use celSafeSlug so the ID is valid as a CEL identifier (underscores).
 	raw := fmt.Sprintf("%s_%s_%s__%s", gateName, ns, envName, bundleSlug)
 	return celSafeSlug(raw)
+}
+
+// gateNodeK8sName generates the Kubernetes resource name (hyphens, RFC 1123) for a
+// PolicyGate instance. Separate from gateNodeName which returns the CEL-safe ID.
+func gateNodeK8sName(bundleSlugK8s, gateName, gateNS, envName string) string {
+	ns := gateNS
+	if ns == "" {
+		ns = "default"
+	}
+	return slugify(fmt.Sprintf("%s-%s-%s--%s", gateName, ns, envName, bundleSlugK8s))
 }
 
 // bundleVersionSlug returns a slug from the bundle name suitable for node naming.

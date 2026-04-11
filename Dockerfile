@@ -35,13 +35,18 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       -o /bin/kardinal-controller \
       ./cmd/kardinal-controller
 
-# ── Stage 3: final (distroless, nonroot) ─────────────────────────────────────
-FROM gcr.io/distroless/static:nonroot
+# ── Stage 3: runtime with git + kustomize (required for promotion steps) ─────
+FROM alpine:3.19
+
+RUN apk add --no-cache git ca-certificates curl && \
+    KUSTOMIZE_VER=v5.4.3 && \
+    curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VER}/kustomize_${KUSTOMIZE_VER}_linux_amd64.tar.gz" \
+      | tar -xz -C /usr/local/bin kustomize && \
+    adduser -D -u 65532 nonroot
 
 # Copy the binary from the builder stage
 COPY --from=builder /bin/kardinal-controller /bin/kardinal-controller
 
-# Distroless nonroot image runs as UID 65532 (nonroot) by default.
-# No shell, no package manager, minimal attack surface.
+USER 65532:65532
 
 ENTRYPOINT ["/bin/kardinal-controller"]

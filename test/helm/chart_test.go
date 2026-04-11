@@ -166,8 +166,12 @@ func TestDockerfileContent(t *testing.T) {
 
 	content := string(data)
 	assert.Contains(t, content, "golang:1.25", "builder stage must use golang:1.25")
-	assert.Contains(t, content, "distroless", "final stage must use distroless image")
-	assert.Contains(t, content, "nonroot", "final stage must use nonroot variant")
+	// Final stage uses alpine with git+kustomize (required by promotion step engine).
+	// Changed from distroless to alpine to include git and kustomize binaries.
+	assert.Contains(t, content, "alpine", "final stage must use alpine image")
+	assert.Contains(t, content, "65532", "final stage must use nonroot UID 65532")
+	assert.Contains(t, content, "git", "final stage must install git")
+	assert.Contains(t, content, "kustomize", "final stage must install kustomize")
 	assert.Contains(t, content, "kardinal-controller", "must build kardinal-controller binary")
 	assert.Contains(t, content, "ENTRYPOINT", "must set ENTRYPOINT")
 }
