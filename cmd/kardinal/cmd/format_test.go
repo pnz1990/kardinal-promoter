@@ -37,31 +37,168 @@ func TestFormatPipelineTable(t *testing.T) {
 			},
 			Spec: v1alpha1.PipelineSpec{
 				Environments: []v1alpha1.EnvironmentSpec{
-					{Name: "dev"},
+					{Name: "test"},
 					{Name: "uat"},
 					{Name: "prod"},
 				},
-				Paused: false,
 			},
-			Status: v1alpha1.PipelineStatus{
-				Phase: "Ready",
+		},
+	}
+	steps := []v1alpha1.PromotionStep{
+		{
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "nginx-demo",
+				Environment:  "test",
+				BundleName:   "nginx-demo-v1-29-0",
+				StepType:     "health-check",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "nginx-demo",
+				Environment:  "uat",
+				BundleName:   "nginx-demo-v1-29-0",
+				StepType:     "health-check",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Promoting"},
+		},
+		{
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "nginx-demo",
+				Environment:  "prod",
+				BundleName:   "nginx-demo-v1-29-0",
+				StepType:     "health-check",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Pending"},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, steps))
+	out := buf.String()
+
+	// Header must have per-environment columns.
+	assert.Contains(t, out, "PIPELINE")
+	assert.Contains(t, out, "BUNDLE")
+	assert.Contains(t, out, "TEST")
+	assert.Contains(t, out, "UAT")
+	assert.Contains(t, out, "PROD")
+	assert.Contains(t, out, "AGE")
+
+	// Must NOT have old columns.
+	assert.NotContains(t, out, "PHASE")
+	assert.NotContains(t, out, "ENVIRONMENTS")
+	assert.NotContains(t, out, "PAUSED")
+
+	// Row data.
+	assert.Contains(t, out, "nginx-demo")
+	assert.Contains(t, out, "nginx-demo-v1-29-0")
+	assert.Contains(t, out, "Verified")
+	assert.Contains(t, out, "Promoting")
+	assert.Contains(t, out, "Pending")
+}
+
+// TestFormatPipelineTable_NoSteps verifies that an empty step list shows "-" for all env columns.
+func TestFormatPipelineTable_NoSteps(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-pipeline",
+				CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "dev"},
+					{Name: "prod"},
+				},
 			},
 		},
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines))
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
 	out := buf.String()
 
-	assert.Contains(t, out, "PIPELINE")
-	assert.Contains(t, out, "PHASE")
-	assert.Contains(t, out, "ENVIRONMENTS")
-	assert.Contains(t, out, "PAUSED")
-	assert.Contains(t, out, "AGE")
-	assert.Contains(t, out, "nginx-demo")
-	assert.Contains(t, out, "Ready")
-	assert.Contains(t, out, "3")
-	assert.Contains(t, out, "false")
+	assert.Contains(t, out, "DEV")
+	assert.Contains(t, out, "PROD")
+	assert.Contains(t, out, "my-pipeline")
+	// Without steps both env columns and bundle should show "-".
+	// Count occurrences of "-" — at least 3 (bundle + 2 envs).
+	assert.GreaterOrEqual(t, strings.Count(out, "-"), 3)
+}
+
+// TestFormatPipelineTable_MultiPipeline verifies that multiple pipelines with different
+// environments produce a union-column table with "-" for absent environments.
+func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "app-a",
+				CreationTimestamp: metav1.NewTime(now.Add(-10 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "test"},
+					{Name: "prod"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "app-b",
+				CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "test"},
+					{Name: "staging"},
+					{Name: "prod"},
+				},
+			},
+		},
+	}
+	steps := []v1alpha1.PromotionStep{
+		{
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "app-a",
+				Environment:  "test",
+				BundleName:   "app-a-v1-0-0",
+				StepType:     "health-check",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "app-b",
+				Environment:  "staging",
+				BundleName:   "app-b-v2-0-0",
+				StepType:     "health-check",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, steps))
+	out := buf.String()
+
+	// Union columns: TEST, PROD from app-a, STAGING from app-b.
+	assert.Contains(t, out, "TEST")
+	assert.Contains(t, out, "STAGING")
+	assert.Contains(t, out, "PROD")
+
+	// app-a has no staging column — its staging cell should be "-".
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	require.GreaterOrEqual(t, len(lines), 3, "need header + 2 data rows")
+	// Find the app-a row.
+	for _, line := range lines[1:] { // skip header
+		if strings.HasPrefix(strings.TrimSpace(line), "app-a") {
+			assert.Contains(t, line, "-", "app-a row must have '-' for missing staging column")
+		}
+	}
 }
 
 func TestFormatBundleTable(t *testing.T) {
