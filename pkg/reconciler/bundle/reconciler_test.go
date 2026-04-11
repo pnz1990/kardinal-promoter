@@ -6,6 +6,7 @@ package bundle_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,8 +93,8 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	// Requeue expected to immediately advance to Promoting
-	assert.True(t, result.Requeue)
+	// RequeueAfter > 0 means immediate requeue to advance to Promoting.
+	assert.Greater(t, result.RequeueAfter, time.Duration(0))
 
 	var got kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
@@ -138,7 +139,7 @@ func TestBundleReconciler_AvailableToPromoting(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, translator.called, "Translator.Translate must have been called")
-	assert.False(t, result.Requeue, "no requeue after advancing to Promoting")
+	assert.Zero(t, result.RequeueAfter, "no requeue after advancing to Promoting")
 
 	var got kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
@@ -201,7 +202,7 @@ func TestBundleReconciler_NoTranslatorSkipsPromotion(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
 	})
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Zero(t, result.RequeueAfter)
 
 	// Phase must still be Available
 	var got kardinalv1alpha1.Bundle

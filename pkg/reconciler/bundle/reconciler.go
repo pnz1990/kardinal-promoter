@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -107,8 +108,9 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		Str("pipeline", b.Spec.Pipeline).
 		Msg("bundle phase set to Available")
 
-	// Requeue immediately to advance to Promoting
-	return ctrl.Result{Requeue: true}, nil
+	// Requeue immediately to advance to Promoting.
+	// Use RequeueAfter instead of Requeue (Requeue is deprecated).
+	return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 }
 
 // supersedeSiblings finds and marks Promoting bundles for the same Pipeline as Superseded.

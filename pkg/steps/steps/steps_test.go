@@ -316,6 +316,36 @@ func TestDefaultSequence_PRReview(t *testing.T) {
 	assert.Contains(t, seq, "health-check")
 }
 
+// TestDefaultSequenceForBundle_ConfigBundle verifies that config bundles use config-merge
+// instead of kustomize-set-image.
+func TestDefaultSequenceForBundle_ConfigBundle(t *testing.T) {
+	seq := parentsteps.DefaultSequenceForBundle("auto", "config", "")
+	assert.Contains(t, seq, "config-merge", "config bundle must use config-merge")
+	assert.NotContains(t, seq, "kustomize-set-image", "config bundle must not use kustomize-set-image")
+	assert.NotContains(t, seq, "helm-set-image", "config bundle must not use helm-set-image")
+}
+
+// TestDefaultSequenceForBundle_HelmStrategy verifies that helm update strategy uses helm-set-image.
+func TestDefaultSequenceForBundle_HelmStrategy(t *testing.T) {
+	seq := parentsteps.DefaultSequenceForBundle("auto", "image", "helm")
+	assert.Contains(t, seq, "helm-set-image", "helm strategy must use helm-set-image")
+	assert.NotContains(t, seq, "kustomize-set-image", "helm strategy must not use kustomize-set-image")
+	assert.NotContains(t, seq, "config-merge", "image+helm must not use config-merge")
+}
+
+// TestDefaultSequenceForBundle_KustomizeDefault verifies that default (no type, no strategy) is kustomize.
+func TestDefaultSequenceForBundle_KustomizeDefault(t *testing.T) {
+	seq := parentsteps.DefaultSequenceForBundle("auto", "", "")
+	assert.Contains(t, seq, "kustomize-set-image", "default must use kustomize-set-image")
+}
+
+// TestDefaultSequenceForBundle_ConfigBundleBackwardsCompat verifies DefaultSequence still works.
+func TestDefaultSequenceForBundle_BackwardsCompat(t *testing.T) {
+	seq := parentsteps.DefaultSequence("auto")
+	assert.Contains(t, seq, "kustomize-set-image",
+		"DefaultSequence (no type/strategy) must still use kustomize-set-image")
+}
+
 func TestOpenPRStep_AppliesLabels(t *testing.T) {
 	mockSCM := &mockSCMProvider{
 		prURL:    "https://github.com/owner/repo/pull/42",
@@ -589,4 +619,45 @@ func TestConfigMerge_NoConfigRef(t *testing.T) {
 	require.NoError(t, execErr)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
 	assert.Contains(t, result.Message, "no config ref")
+}
+
+// TestConfigMerge_Idempotent verifies that running config-merge twice on the
+// same source produces the same result (no duplicate or corrupted files).
+func TestConfigMerge_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "config-source")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "configmap.yaml"), []byte("data: {key: value}"), 0o644))
+
+	envDir := filepath.Join(dir, "environments", "prod")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+
+	state := &parentsteps.StepState{
+		WorkDir:     dir,
+		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
+		Bundle: v1alpha1.BundleSpec{
+			Type:      "config",
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "abc123", GitRepo: "https://github.com/org/repo"},
+		},
+		Outputs: map[string]string{"configSourceDir": srcDir},
+	}
+
+	step, err := parentsteps.Lookup("config-merge")
+	require.NoError(t, err)
+
+	// Run twice — idempotent.
+	result1, err1 := step.Execute(context.Background(), state)
+	require.NoError(t, err1)
+	assert.Equal(t, parentsteps.StepSuccess, result1.Status)
+
+	result2, err2 := step.Execute(context.Background(), state)
+	require.NoError(t, err2)
+	assert.Equal(t, parentsteps.StepSuccess, result2.Status)
+	assert.Equal(t, result1.Outputs["mergedFiles"], result2.Outputs["mergedFiles"],
+		"second run must merge the same number of files")
+
+	// File content must be correct.
+	data, err := os.ReadFile(filepath.Join(envDir, "configmap.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, "data: {key: value}", string(data))
 }

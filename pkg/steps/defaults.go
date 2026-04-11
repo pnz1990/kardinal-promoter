@@ -14,6 +14,7 @@
 package steps
 
 // DefaultSequence returns the default step sequence for a given approval mode.
+// It uses the kustomize strategy, which is the default update strategy.
 //
 // For "auto" approval mode (no PR review required):
 //
@@ -22,10 +23,36 @@ package steps
 // For "pr-review" approval mode:
 //
 //	git-clone → kustomize-set-image → git-commit → git-push → open-pr → wait-for-merge → health-check
+//
+// Use DefaultSequenceForBundle for type-aware routing.
 func DefaultSequence(approvalMode string) []string {
+	return DefaultSequenceForBundle(approvalMode, "", "")
+}
+
+// DefaultSequenceForBundle returns the default step sequence based on approval mode,
+// bundle type, and update strategy. Callers should prefer this over DefaultSequence.
+//
+// bundleType: "image" | "config" | "mixed" | "" (defaults to image behaviour)
+// updateStrategy: "kustomize" | "helm" | "" (defaults to kustomize)
+//
+// Routing rules:
+//   - config bundle → git-clone, config-merge, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy string) []string {
+	var updateStep string
+	switch {
+	case bundleType == "config":
+		updateStep = "config-merge"
+	case updateStrategy == "helm":
+		updateStep = "helm-set-image"
+	default:
+		updateStep = "kustomize-set-image"
+	}
+
 	base := []string{
 		"git-clone",
-		"kustomize-set-image",
+		updateStep,
 		"git-commit",
 		"git-push",
 	}
