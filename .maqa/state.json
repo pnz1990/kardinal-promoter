@@ -8,6 +8,8 @@
   "last_sm_review": "2026-04-11T04:29:56Z",
   "last_pm_review": "2026-04-11T04:31:29Z",
   "batches_since_competitive_analysis": 3,
+  "batches_since_doc_audit": 0,
+  "batches_since_dead_scan": 0,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
