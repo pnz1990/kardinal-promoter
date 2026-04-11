@@ -71,6 +71,8 @@ func main() {
 		policyNamespaces       string
 		githubToken            string
 		webhookSecret          string
+		scmProviderType        string
+		scmAPIURL              string
 	)
 
 	flag.BoolVar(&leaderElect, "leader-elect", false,
@@ -86,9 +88,13 @@ func main() {
 	flag.StringVar(&policyNamespaces, "policy-namespaces", "platform-policies",
 		"Comma-separated list of namespaces to scan for org-level PolicyGates.")
 	flag.StringVar(&githubToken, "github-token", os.Getenv("GITHUB_TOKEN"),
-		"GitHub personal access token for SCM operations.")
+		"SCM token for API operations (GitHub PAT or GitLab private token).")
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
-		"HMAC secret for validating incoming SCM webhooks.")
+		"Secret for validating incoming SCM webhooks (HMAC for GitHub, plaintext token for GitLab).")
+	flag.StringVar(&scmProviderType, "scm-provider", os.Getenv("KARDINAL_SCM_PROVIDER"),
+		"SCM provider type: \"github\" (default) or \"gitlab\".")
+	flag.StringVar(&scmAPIURL, "scm-api-url", os.Getenv("KARDINAL_SCM_API_URL"),
+		"SCM API base URL override (e.g. for GitHub Enterprise or self-managed GitLab).")
 
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
@@ -126,8 +132,11 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create manager")
 	}
 
-	// SCM provider (GitHub with token from flag or env).
-	scmProvider := scm.NewGitHubProvider(githubToken, "", webhookSecret)
+	// SCM provider — dispatches to GitHub or GitLab based on --scm-provider flag.
+	scmProvider, err := scm.NewProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to create SCM provider")
+	}
 	gitClient := scm.NewExecGitClient()
 
 	if err := (&bundlereconciler.Reconciler{
