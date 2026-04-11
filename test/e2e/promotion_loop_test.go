@@ -313,6 +313,19 @@ func TestPromotionLoop_Idempotency(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-idem", Namespace: "default"},
 		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
 	}
+
+	// PRStatus CRD already merged (simulating PRStatusReconciler having polled)
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-idem", Namespace: "default"},
+		Spec: v1alpha1.PRStatusSpec{
+			PRURL:    "https://github.com/test/repo/pull/99",
+			PRNumber: 99,
+			Repo:     "test/repo",
+		},
+		Status: v1alpha1.PRStatusStatus{Merged: true, Open: false, LastCheckedAt: &now},
+	}
+
 	// Start the step mid-sequence with prURL already set (simulates crash recovery).
 	step := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{Name: "step-idem", Namespace: "default"},
@@ -321,6 +334,7 @@ func TestPromotionLoop_Idempotency(t *testing.T) {
 			BundleName:   "bundle-idem",
 			Environment:  "prod",
 			StepType:     "pr-review",
+			PRStatusRef:  "prstatus-step-idem",
 		},
 		Status: v1alpha1.PromotionStepStatus{
 			State:            "WaitingForMerge",
@@ -334,11 +348,11 @@ func TestPromotionLoop_Idempotency(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, bundle, step).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithObjects(pipeline, bundle, step, prStatus).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.PRStatus{}).
 		Build()
 
-	// PR is already merged.
+	// PR is already merged — SCM not needed for the new WaitingForMerge path.
 	mockSCM := &mockSCMForLoop{prURL: "https://github.com/test/repo/pull/99", prNumber: 99, merged: true}
 	rec := &psrec.Reconciler{
 		Client:    c,

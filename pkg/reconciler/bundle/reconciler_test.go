@@ -18,7 +18,6 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 func newScheme() *runtime.Scheme {
@@ -38,32 +37,6 @@ func (m *mockTranslator) Translate(_ context.Context,
 	_ *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) (string, error) {
 	m.called = true
 	return m.graphName, m.err
-}
-
-// mockSCMProvider is a test double for scm.SCMProvider.
-type mockSCMProvider struct {
-	merged bool
-	open   bool
-	err    error
-	calls  int
-}
-
-func (m *mockSCMProvider) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
-	return "", 0, nil
-}
-func (m *mockSCMProvider) ClosePR(_ context.Context, _ string, _ int) error { return nil }
-func (m *mockSCMProvider) CommentOnPR(_ context.Context, _ string, _ int, _ string) error {
-	return nil
-}
-func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
-	m.calls++
-	return m.merged, m.open, m.err
-}
-func (m *mockSCMProvider) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
-	return scm.WebhookEvent{}, nil
-}
-func (m *mockSCMProvider) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
-	return nil
 }
 
 // TestBundleReconciler_SetsAvailablePhase verifies that a Bundle with an empty
@@ -379,9 +352,11 @@ func TestBundleReconciler_Supersession_IdempotentForSuperseded(t *testing.T) {
 	assert.Equal(t, "Superseded", gotOld.Status.Phase)
 }
 
-// TestStartupReconciliation_RechecksInFlightPRs verifies that Start() re-checks
-// WaitingForMerge PromotionSteps and advances them to HealthChecking when merged.
-func TestStartupReconciliation_RechecksInFlightPRs(t *testing.T) {
+// TestStartupReconciliation_IsNoOp verifies that Start() is a no-op in the
+// PRStatus CRD architecture. WaitingForMerge re-check is now handled by
+// the PRStatusReconciler polling GitHub and the Graph Watch node propagating
+// when status.merged == true. No SCM polling occurs at startup.
+func TestStartupReconciliation_IsNoOp(t *testing.T) {
 	ps := &kardinalv1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{Name: "step-wfm", Namespace: "default"},
 		Spec: kardinalv1alpha1.PromotionStepSpec{
@@ -406,21 +381,21 @@ func TestStartupReconciliation_RechecksInFlightPRs(t *testing.T) {
 		WithStatusSubresource(ps).
 		Build()
 
-	mockSCM := &mockSCMProvider{merged: true, open: false}
-	r := &bundle.Reconciler{Client: c, SCMProvider: mockSCM}
+	// Start() is now a no-op — PRStatus CRD architecture handles polling.
+	r := &bundle.Reconciler{Client: c}
 
 	err := r.Start(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 1, mockSCM.calls, "GetPRStatus must be called once for the WaitingForMerge step")
 
+	// State must be unchanged — Start() no longer mutates PromotionStep status.
 	var updated kardinalv1alpha1.PromotionStep
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-wfm", Namespace: "default"}, &updated))
-	assert.Equal(t, "HealthChecking", updated.Status.State)
-	assert.Contains(t, updated.Status.Message, "startup reconciliation")
+	assert.Equal(t, "WaitingForMerge", updated.Status.State,
+		"Start() must not mutate PromotionStep state — PRStatusReconciler handles polling")
 }
 
 // TestStartupReconciliation_SkipsCompletedBundles verifies that PromotionSteps
-// not in WaitingForMerge state are skipped by startup reconciliation.
+// not in WaitingForMerge state are unaffected by startup.
 func TestStartupReconciliation_SkipsCompletedBundles(t *testing.T) {
 	// Step already succeeded — should NOT be touched.
 	psSucceeded := &kardinalv1alpha1.PromotionStep{
@@ -448,12 +423,11 @@ func TestStartupReconciliation_SkipsCompletedBundles(t *testing.T) {
 		WithStatusSubresource(psSucceeded, psHealthChecking).
 		Build()
 
-	mockSCM := &mockSCMProvider{merged: true, open: false}
-	r := &bundle.Reconciler{Client: c, SCMProvider: mockSCM}
+	// Start() is a no-op; states must be unchanged.
+	r := &bundle.Reconciler{Client: c}
 
 	err := r.Start(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 0, mockSCM.calls, "GetPRStatus must NOT be called for non-WaitingForMerge steps")
 
 	// States must be unchanged.
 	var gotDone kardinalv1alpha1.PromotionStep
@@ -466,11 +440,11 @@ func TestStartupReconciliation_SkipsCompletedBundles(t *testing.T) {
 }
 
 // TestStartupReconciliation_NoSCMProvider verifies that Start() is a no-op
-// when SCMProvider is nil.
+// when SCMProvider is nil (preserved for backward compatibility).
 func TestStartupReconciliation_NoSCMProvider(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &bundle.Reconciler{Client: c} // SCMProvider is nil
+	r := &bundle.Reconciler{Client: c} // no SCMProvider needed
 	err := r.Start(context.Background())
 	require.NoError(t, err)
 }

@@ -389,10 +389,18 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			nodes = append(nodes, gateNode)
 		}
 
-		// PromotionStep node — node ID must be a valid CEL identifier
+		// PRStatus Watch node — created alongside each PromotionStep.
+		// The open-pr step writes this CRD; the PRStatusReconciler updates status.merged.
+		// The PromotionStep spec carries the prStatusRef so it can watch it without polling.
 		stepNodeID := celSafeSlug(envName)
+		prStatusNodeID := prStatusNodeName(bundleSlug, envName)
+		prStatusK8sName := prStatusNodeK8sName(bundleSlugK8s, envName)
+		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName)
+		nodes = append(nodes, prStatusNode)
+
+		// PromotionStep node — node ID must be a valid CEL identifier
 		stepNode := buildPromotionStepNode(
-			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs,
+			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs, prStatusNodeID,
 		)
 		nodes = append(nodes, stepNode)
 	}
@@ -428,12 +436,14 @@ func filteredDeps(envName string, deps map[string][]string, filteredSet map[stri
 // buildPromotionStepNode builds a Graph node for a PromotionStep.
 // nodeID is the CEL-safe identifier (underscores) used in readyWhen/propagateWhen.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
+// prStatusNodeID is the node ID of the companion PRStatus Watch node.
 func buildPromotionStepNode(
 	pipelineName, bundleSlugK8s, envName, nodeID string,
 	envSpec kardinalv1alpha1.EnvironmentSpec,
 	bundle *kardinalv1alpha1.Bundle,
 	upstreams []string,
 	gateNodeIDs []string,
+	prStatusNodeID string,
 ) GraphNode {
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
@@ -461,6 +471,10 @@ func buildPromotionStepNode(
 		"bundleName":   bundle.Name,
 		"environment":  envName,
 		"stepType":     stepType,
+		// prStatusRef points to the companion PRStatus Watch node.
+		// The PromotionStep reconciler reads spec.prStatusRef.name to find the
+		// PRStatus CRD instead of polling GitHub directly (eliminates PS-4, SCM-2).
+		"prStatusRef": fmt.Sprintf("${%s.metadata.name}", prStatusNodeID),
 	}
 
 	// Add upstream reference fields (creates CEL dependency edges)
@@ -552,6 +566,56 @@ func buildPolicyGateNode(
 		},
 		PropagateWhen: []string{
 			fmt.Sprintf(`${%s.status.ready == true}`, nodeID),
+		},
+	}
+}
+
+// buildPRStatusNode builds a Graph Watch node for a PRStatus CRD.
+//
+// The PRStatus CRD is created by the open-pr step at the appropriate point in
+// the promotion sequence. This Graph node watches it and propagates when
+// status.merged == true — replacing the direct GitHub API polling that was
+// previously in handleWaitingForMerge and the wait-for-merge step.
+//
+// Graph-purity: this node is the canonical integration point for PS-4, SCM-2,
+// ST-10, ST-11 (docs/design/11-graph-purity-tech-debt.md).
+func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string) GraphNode {
+	templateMeta := map[string]interface{}{
+		// The name is set at runtime by the open-pr step; the Graph creates a
+		// placeholder. The PRStatus reconciler then updates its status.
+		"name": k8sName,
+		"labels": map[string]interface{}{
+			"kardinal.io/pipeline":    pipelineName,
+			"kardinal.io/bundle":      bundleName,
+			"kardinal.io/environment": envName,
+		},
+	}
+
+	templateSpec := map[string]interface{}{
+		// prURL, prNumber, repo will be written by the open-pr step after the
+		// PR is created. The Graph creates the CRD with empty spec; the step
+		// patches spec once it has the GitHub response.
+		"prURL":    "",
+		"prNumber": 0,
+		"repo":     "",
+	}
+
+	return GraphNode{
+		ID: nodeID,
+		Template: map[string]interface{}{
+			"apiVersion": "kardinal.io/v1alpha1",
+			"kind":       "PRStatus",
+			"metadata":   templateMeta,
+			"spec":       templateSpec,
+		},
+		// ReadyWhen: UI health signal — green when merged.
+		ReadyWhen: []string{
+			fmt.Sprintf(`${%s.status.merged == true}`, nodeID),
+		},
+		// PropagateWhen: blocks downstream PromotionStep from advancing until
+		// the PR is merged. This is the gate that replaces WaitingForMerge polling.
+		PropagateWhen: []string{
+			fmt.Sprintf(`${%s.status.merged == true}`, nodeID),
 		},
 	}
 }
@@ -694,4 +758,20 @@ func sortStrings(s []string) {
 			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
+}
+
+// prStatusNodeName generates the CEL-safe node ID for a PRStatus Watch node.
+// Format: prstatus_<bundleSlug>_<envSlug>
+func prStatusNodeName(bundleSlug, envName string) string {
+	return "prstatus_" + celSafeSlug(bundleSlug) + "_" + celSafeSlug(envName)
+}
+
+// prStatusNodeK8sName generates the Kubernetes resource name (hyphens) for a
+// PRStatus node. Truncated to 63 chars.
+func prStatusNodeK8sName(bundleSlugK8s, envName string) string {
+	raw := fmt.Sprintf("prstatus-%s-%s", bundleSlugK8s, slugify(envName))
+	if len(raw) > 63 {
+		raw = raw[:63]
+	}
+	return raw
 }

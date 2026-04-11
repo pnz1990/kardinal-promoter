@@ -21,8 +21,6 @@ package bundle
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -31,7 +29,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // BundleTranslator is the interface the BundleReconciler uses to translate a
@@ -47,9 +44,6 @@ type Reconciler struct {
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
 	// May be nil in test environments where translation is not needed.
 	Translator BundleTranslator
-	// SCMProvider is used for startup reconciliation to re-check in-flight PR status.
-	// May be nil if startup reconciliation is not needed.
-	SCMProvider scm.SCMProvider
 }
 
 // Reconcile is called whenever a Bundle is created, updated, or deleted.
@@ -223,119 +217,18 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 }
 
 // Start implements manager.Runnable. It is called by controller-runtime after the
-// informer cache is synced, making it safe to List resources. It runs startup
-// reconciliation once: re-checks all WaitingForMerge PromotionSteps to recover
-// state from PRs merged during controller downtime.
+// informer cache is synced. With the PRStatus CRD architecture, startup reconciliation
+// of PR merge state is no longer needed here: the PRStatusReconciler polls GitHub and
+// updates PRStatus.status.merged, and the PromotionStep reconciler reads that CRD.
+//
+// This method is retained as a no-op Runnable to satisfy the manager.Runnable interface
+// without breaking the existing SetupWithManager call.
+//
+// Eliminates BU-3 (docs/design/11-graph-purity-tech-debt.md).
 func (r *Reconciler) Start(ctx context.Context) error {
-	if r.SCMProvider == nil {
-		return nil
-	}
 	log := zerolog.Ctx(ctx).With().Str("component", "startup-reconciliation").Logger()
-
-	var psList kardinalv1alpha1.PromotionStepList
-	if err := r.List(ctx, &psList); err != nil {
-		log.Error().Err(err).Msg("startup reconciliation: failed to list promotionsteps")
-		return nil // non-fatal: don't block manager startup
-	}
-
-	var inFlight int
-	for i := range psList.Items {
-		ps := &psList.Items[i]
-		if ps.Status.State != "WaitingForMerge" {
-			continue
-		}
-		inFlight++
-	}
-	log.Info().Int("in_flight_prs", inFlight).Msg("startup reconciliation: re-checking in-flight PRs")
-
-	for i := range psList.Items {
-		ps := &psList.Items[i]
-		if ps.Status.State != "WaitingForMerge" {
-			continue
-		}
-
-		prNumStr := ps.Status.Outputs["prNumber"]
-		if prNumStr == "" {
-			prNumStr = extractPRNumberFromURL(ps.Status.PRURL)
-		}
-		if prNumStr == "" {
-			continue
-		}
-		prNum, err := strconv.Atoi(prNumStr)
-		if err != nil {
-			continue
-		}
-		repo := extractRepoFromURL(ps.Status.PRURL)
-		if repo == "" {
-			continue
-		}
-
-		merged, open, err := r.SCMProvider.GetPRStatus(ctx, repo, prNum)
-		if err != nil {
-			log.Warn().Err(err).
-				Str("promotionstep", ps.Name).
-				Msg("startup reconciliation: failed to get PR status")
-			continue
-		}
-
-		patch := client.MergeFrom(ps.DeepCopy())
-		if merged {
-			ps.Status.State = "HealthChecking"
-			ps.Status.Message = "PR merged during controller downtime (startup reconciliation)"
-			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-				log.Error().Err(patchErr).
-					Str("promotionstep", ps.Name).
-					Msg("startup reconciliation: patch to HealthChecking failed")
-			} else {
-				log.Info().
-					Str("promotionstep", ps.Name).
-					Int("pr", prNum).
-					Msg("startup reconciliation: advanced to HealthChecking")
-			}
-		} else if !open {
-			ps.Status.State = "Failed"
-			ps.Status.Message = "PR closed without merge (detected during startup reconciliation)"
-			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-				log.Error().Err(patchErr).
-					Str("promotionstep", ps.Name).
-					Msg("startup reconciliation: patch to Failed failed")
-			} else {
-				log.Info().
-					Str("promotionstep", ps.Name).
-					Int("pr", prNum).
-					Msg("startup reconciliation: marked Failed (PR closed without merge)")
-			}
-		}
-	}
+	log.Info().Msg("startup reconciliation: PRStatus CRD architecture active — no polling required")
 	return nil
-}
-
-// extractPRNumberFromURL parses the PR number from a GitHub PR URL.
-func extractPRNumberFromURL(prURL string) string {
-	if prURL == "" {
-		return ""
-	}
-	parts := strings.Split(strings.TrimRight(prURL, "/"), "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return ""
-}
-
-// extractRepoFromURL extracts "owner/repo" from a GitHub PR URL.
-func extractRepoFromURL(prURL string) string {
-	s := strings.TrimPrefix(prURL, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	idx := strings.Index(s, "/")
-	if idx < 0 {
-		return ""
-	}
-	s = s[idx+1:]
-	parts := strings.SplitN(s, "/", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[0] + "/" + parts[1]
 }
 
 // SetupWithManager registers the BundleReconciler with the controller-runtime Manager.

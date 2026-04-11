@@ -198,24 +198,32 @@ func TestPromotingToVerified(t *testing.T) {
 	assert.Equal(t, "Verified", final.Status.State)
 }
 
-// TestWaitingForMerge_AdvancesOnPRMerged verifies WaitingForMerge → HealthChecking on prMerged=true.
+// TestWaitingForMerge_AdvancesOnPRMerged verifies WaitingForMerge → HealthChecking when PRStatus.status.merged=true.
 func TestWaitingForMerge_AdvancesOnPRMerged(t *testing.T) {
 	scheme := buildScheme(t)
 	step := makeStep("step-wfm", "nginx-demo", "bundle-1", "prod")
+	step.Spec.PRStatusRef = "prstatus-step-wfm"
 	step.Status.State = "WaitingForMerge"
 	step.Status.PRURL = "https://github.com/test/repo/pull/5"
 	step.Status.Outputs = map[string]string{"prNumber": "5", "prURL": "https://github.com/test/repo/pull/5"}
 	pipeline := makePipeline("nginx-demo")
 	bundle := makeBundle("bundle-1", "nginx-demo")
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
-		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
-	).WithObjects(step, pipeline, bundle).Build()
+	// PRStatus CRD with status.merged=true (written by PRStatusReconciler)
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-wfm", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/test/repo/pull/5", PRNumber: 5, Repo: "test/repo"},
+		Status:     v1alpha1.PRStatusStatus{Merged: true, Open: false, LastCheckedAt: &now},
+	}
 
-	mockSCMInst := &mockSCM{merged: true, open: false}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PRStatus{},
+	).WithObjects(step, pipeline, bundle, prStatus).Build()
+
 	r := &promotionstep.Reconciler{
 		Client:    c,
-		SCM:       mockSCMInst,
+		SCM:       &mockSCM{},
 		GitClient: &mockGit{},
 		WorkDirFn: func(_, _ string) string { return t.TempDir() },
 	}
@@ -230,23 +238,32 @@ func TestWaitingForMerge_AdvancesOnPRMerged(t *testing.T) {
 	assert.Equal(t, "HealthChecking", updated.Status.State)
 }
 
-// TestWaitingForMerge_StaysOnPROpen verifies that WaitingForMerge stays if PR is still open.
+// TestWaitingForMerge_StaysOnPROpen verifies that WaitingForMerge stays if PRStatus.status.open=true.
 func TestWaitingForMerge_StaysOnPROpen(t *testing.T) {
 	scheme := buildScheme(t)
 	step := makeStep("step-wfm", "nginx-demo", "bundle-1", "prod")
+	step.Spec.PRStatusRef = "prstatus-step-wfm"
 	step.Status.State = "WaitingForMerge"
 	step.Status.PRURL = "https://github.com/test/repo/pull/5"
 	step.Status.Outputs = map[string]string{"prNumber": "5"}
 	pipeline := makePipeline("nginx-demo")
 	bundle := makeBundle("bundle-1", "nginx-demo")
 
+	// PRStatus CRD with status.open=true, not yet merged
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-wfm", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/test/repo/pull/5", PRNumber: 5, Repo: "test/repo"},
+		Status:     v1alpha1.PRStatusStatus{Merged: false, Open: true, LastCheckedAt: &now},
+	}
+
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
-		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
-	).WithObjects(step, pipeline, bundle).Build()
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PRStatus{},
+	).WithObjects(step, pipeline, bundle, prStatus).Build()
 
 	r := &promotionstep.Reconciler{
 		Client:    c,
-		SCM:       &mockSCM{merged: false, open: true},
+		SCM:       &mockSCM{},
 		GitClient: &mockGit{},
 		WorkDirFn: func(_, _ string) string { return t.TempDir() },
 	}
@@ -262,24 +279,32 @@ func TestWaitingForMerge_StaysOnPROpen(t *testing.T) {
 	assert.Equal(t, "WaitingForMerge", updated.Status.State)
 }
 
-// TestWaitingForMerge_FailsOnPRClosed verifies that a closed-without-merge PR transitions to Failed.
+// TestWaitingForMerge_FailsOnPRClosed verifies that PRStatus.status.open=false,merged=false transitions to Failed.
 func TestWaitingForMerge_FailsOnPRClosed(t *testing.T) {
 	scheme := buildScheme(t)
 	step := makeStep("step-wfm", "nginx-demo", "bundle-1", "prod")
+	step.Spec.PRStatusRef = "prstatus-step-wfm"
 	step.Status.State = "WaitingForMerge"
 	step.Status.PRURL = "https://github.com/test/repo/pull/5"
 	step.Status.Outputs = map[string]string{"prNumber": "5"}
 	pipeline := makePipeline("nginx-demo")
 	bundle := makeBundle("bundle-1", "nginx-demo")
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
-		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
-	).WithObjects(step, pipeline, bundle).Build()
+	// PRStatus CRD: PR closed without merge (open=false, merged=false, lastCheckedAt set)
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-wfm", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/test/repo/pull/5", PRNumber: 5, Repo: "test/repo"},
+		Status:     v1alpha1.PRStatusStatus{Merged: false, Open: false, LastCheckedAt: &now},
+	}
 
-	// PR closed without merge: merged=false, open=false
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PRStatus{},
+	).WithObjects(step, pipeline, bundle, prStatus).Build()
+
 	r := &promotionstep.Reconciler{
 		Client:    c,
-		SCM:       &mockSCM{merged: false, open: false},
+		SCM:       &mockSCM{},
 		GitClient: &mockGit{},
 		WorkDirFn: func(_, _ string) string { return t.TempDir() },
 	}

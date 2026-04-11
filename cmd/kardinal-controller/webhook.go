@@ -21,12 +21,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -113,8 +113,11 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 
-		if err := s.reconcileMergedPR(ctx, event); err != nil {
-			s.log.Error().Err(err).Msg("failed to reconcile merged PR")
+		// Graph-purity: the webhook only writes PRStatus CRD status.
+		// Business logic (advancing PromotionStep to HealthChecking) lives in the
+		// PromotionStep reconciler, which watches PRStatus. This eliminates WH-1.
+		if err := s.markPRStatusMerged(ctx, event); err != nil {
+			s.log.Error().Err(err).Msg("failed to mark PRStatus as merged")
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -141,53 +144,52 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 	}
 }
 
-// reconcileMergedPR finds PromotionSteps waiting on the merged PR and advances their status.
-func (s *webhookServer) reconcileMergedPR(ctx context.Context, event scm.WebhookEvent) error {
-	var psList v1alpha1.PromotionStepList
-	// List all PromotionSteps in WaitingForMerge across all namespaces.
-	if err := s.client.List(ctx, &psList); err != nil {
-		return fmt.Errorf("list promotionsteps: %w", err)
+// markPRStatusMerged finds PRStatus CRDs matching the merged PR and sets
+// status.merged = true. The PromotionStep reconciler will detect the change on
+// its next reconcile and advance to HealthChecking.
+//
+// This is the pure version of the old reconcileMergedPR — the webhook now only
+// writes to its own CRD (PRStatus) and does not touch PromotionStep status.
+func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.WebhookEvent) error {
+	var prsList v1alpha1.PRStatusList
+	if err := s.client.List(ctx, &prsList); err != nil {
+		return fmt.Errorf("list prstatuses: %w", err)
 	}
 
-	for i := range psList.Items {
-		ps := &psList.Items[i]
-		if ps.Status.State != "WaitingForMerge" {
+	now := metav1.NewTime(time.Now().UTC())
+	for i := range prsList.Items {
+		prs := &prsList.Items[i]
+
+		// Match by PR number.
+		if prs.Spec.PRNumber != event.PRNumber {
 			continue
-		}
-		// Match by PR number and repo.
-		prNumStr, ok := ps.Status.Outputs["prNumber"]
-		if !ok {
-			prNumStr = extractPRNumberFromURL(ps.Status.PRURL)
-		}
-		if prNumStr == "" {
-			continue
-		}
-		prNum, err := strconv.Atoi(prNumStr)
-		if err != nil || prNum != event.PRNumber {
-			continue
-		}
-		// Check repo match if available.
-		if event.RepoFullName != "" {
-			prRepo := extractRepoFromURL(ps.Status.PRURL)
-			if prRepo != "" && prRepo != event.RepoFullName {
-				continue
-			}
 		}
 
-		// Advance the PromotionStep to HealthChecking.
-		patch := client.MergeFrom(ps.DeepCopy())
-		ps.Status.State = "HealthChecking"
-		ps.Status.Message = fmt.Sprintf("PR #%d merged via webhook", event.PRNumber)
-		if patchErr := s.client.Status().Patch(ctx, ps, patch); patchErr != nil {
+		// Match by repo if available.
+		if event.RepoFullName != "" && prs.Spec.Repo != "" && prs.Spec.Repo != event.RepoFullName {
+			continue
+		}
+
+		// Already marked merged — idempotent skip.
+		if prs.Status.Merged {
+			continue
+		}
+
+		patch := client.MergeFrom(prs.DeepCopy())
+		prs.Status.Merged = true
+		prs.Status.Open = false
+		prs.Status.LastCheckedAt = &now
+
+		if patchErr := s.client.Status().Patch(ctx, prs, patch); patchErr != nil {
 			s.log.Error().Err(patchErr).
-				Str("promotionstep", ps.Name).
-				Msg("failed to patch promotionstep after webhook merge")
-			return fmt.Errorf("patch promotionstep %s: %w", ps.Name, patchErr)
+				Str("prstatus", prs.Name).
+				Msg("failed to mark PRStatus as merged via webhook")
+			return fmt.Errorf("patch prstatus %s: %w", prs.Name, patchErr)
 		}
 		s.log.Info().
-			Str("promotionstep", ps.Name).
+			Str("prstatus", prs.Name).
 			Int("pr", event.PRNumber).
-			Msg("advanced promotionstep to HealthChecking via webhook")
+			Msg("PRStatus marked merged via webhook")
 	}
 	return nil
 }

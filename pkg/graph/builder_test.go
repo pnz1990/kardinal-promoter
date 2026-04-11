@@ -57,7 +57,7 @@ func makePolicyGate(name, ns, appliesTo, expression string) kardinalv1alpha1.Pol
 }
 
 // Test 1: Linear 3-env pipeline, no gates, default intent.
-// Expected: 3 PromotionStep nodes with sequential deps.
+// Expected: 3 PromotionStep + 3 PRStatus Watch nodes = 6 total.
 func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "uat", "prod")
@@ -69,8 +69,9 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 		PolicyGates: nil,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 3, result.NodeCount)
-	assert.Len(t, result.Graph.Spec.Nodes, 3)
+	// 3 envs × (1 PRStatus + 1 PromotionStep) = 6
+	assert.Equal(t, 6, result.NodeCount)
+	assert.Len(t, result.Graph.Spec.Nodes, 6)
 
 	// Verify sequential dependency: uat depends on test, prod depends on uat
 	nodeMap := make(map[string]graph.GraphNode)
@@ -94,7 +95,7 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 }
 
 // Test 2: Linear 3-env with 2 org gates on prod.
-// Expected: 3 PromotionStep + 2 PolicyGate nodes.
+// Expected: 3 PromotionStep + 3 PRStatus Watch + 2 PolicyGate nodes = 8 total.
 func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "uat", "prod")
@@ -111,8 +112,8 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 		PolicyGates: gates,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 5, result.NodeCount, "3 PromotionStep + 2 PolicyGate = 5 nodes")
-	assert.Len(t, result.Graph.Spec.Nodes, 5)
+	assert.Equal(t, 8, result.NodeCount, "3 PromotionStep + 3 PRStatus + 2 PolicyGate = 8 nodes")
+	assert.Len(t, result.Graph.Spec.Nodes, 8)
 
 	// Verify PolicyGate nodes have propagateWhen set
 	for _, n := range result.Graph.Spec.Nodes {
@@ -141,7 +142,8 @@ func TestBuilder_FanOut(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	assert.Equal(t, 4, result.NodeCount)
+	// 4 envs × (1 PRStatus + 1 PromotionStep) = 8
+	assert.Equal(t, 8, result.NodeCount)
 
 	// Both prod nodes must reference staging (using CEL-safe underscore IDs)
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
@@ -163,7 +165,8 @@ func TestBuilder_TargetEnvironment(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	assert.Equal(t, 2, result.NodeCount, "only test and staging nodes")
+	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
+	assert.Equal(t, 4, result.NodeCount, "test and staging envs: 2 PRStatus + 2 PromotionStep")
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	assert.Contains(t, nodeMap, "test")
@@ -286,7 +289,8 @@ func TestBuilder_CustomSteps(t *testing.T) {
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
 	// Just check that the builder doesn't fail; custom steps are populated in PromotionStep spec
-	assert.Equal(t, 2, result.NodeCount)
+	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
+	assert.Equal(t, 4, result.NodeCount)
 }
 
 // Test 9: Config Bundle uses config-merge step type.
@@ -303,7 +307,8 @@ func TestBuilder_ConfigBundle(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	assert.Equal(t, 2, result.NodeCount)
+	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
+	assert.Equal(t, 4, result.NodeCount)
 
 	// Config Bundle nodes should have stepType indicating config-merge
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
@@ -417,6 +422,44 @@ func TestBuilder_OwnerReferences(t *testing.T) {
 	require.Len(t, result.Graph.OwnerReferences, 1)
 	assert.Equal(t, "Bundle", result.Graph.OwnerReferences[0].Kind)
 	assert.Equal(t, "app-v1", result.Graph.OwnerReferences[0].Name)
+}
+
+// Test 15: PRStatus Watch node is generated alongside each PromotionStep.
+func TestBuilder_PRStatusWatchNode(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := makeLinearPipeline("nginx-demo", "test", "prod")
+	bundle := makeBundle("nginx-demo-v1", "nginx-demo")
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+
+	// PRStatus Watch node for "test" env must exist
+	var prStatusTestNode *graph.GraphNode
+	for id, n := range nodeMap {
+		if containsStr(id, "prstatus") && containsStr(id, "test") {
+			n := n
+			prStatusTestNode = &n
+			break
+		}
+	}
+	require.NotNil(t, prStatusTestNode, "PRStatus Watch node for 'test' must be present")
+
+	// Check kind is PRStatus
+	kind, _ := prStatusTestNode.Template["kind"].(string)
+	assert.Equal(t, "PRStatus", kind, "Watch node kind must be PRStatus")
+
+	// Check PropagateWhen references status.merged
+	require.NotEmpty(t, prStatusTestNode.PropagateWhen)
+	assert.Contains(t, prStatusTestNode.PropagateWhen[0], "status.merged == true",
+		"PropagateWhen must gate on status.merged")
+
+	// Check PromotionStep node has prStatusRef referencing the Watch node
+	testStepNode, ok := nodeMap["test"]
+	require.True(t, ok, "PromotionStep node for 'test' must exist")
+	assert.True(t, containsCELRef(testStepNode.Template, "prstatus"),
+		"PromotionStep node must have CEL reference to PRStatus Watch node")
 }
 
 // --- helpers ---
