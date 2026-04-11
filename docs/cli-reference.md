@@ -20,24 +20,33 @@ kardinal version
 
 ### kardinal init
 
-Generate a Pipeline CRD from a simple configuration file.
+Interactive wizard to generate a Pipeline CRD YAML.
 
 ```bash
-kardinal init -f kardinal.yaml
+kardinal init
 ```
 
-Input file format:
-```yaml
-app: my-app
-image: ghcr.io/myorg/my-app
-git:
-  url: https://github.com/myorg/gitops-repo
-  secret: github-token
-environments: [dev, staging, prod]
-prodApproval: pr-review
+The wizard prompts for application name, namespace, environments, Git repository URL, base branch, and update strategy. It generates a `pipeline.yaml` file ready to apply with `kubectl apply -f pipeline.yaml`.
+
+Options:
+- `--stdout`: print generated YAML to stdout instead of writing to a file
+- `--output <file>`, `-o <file>`: write to the specified file (default: `pipeline.yaml`)
+
+Example interactive session:
+
+```bash
+kardinal init
+# Application name [my-app]: nginx-demo
+# Namespace [default]: default
+# Environments (comma-separated) [test,uat,prod]: test,uat,prod
+# Git repository URL: https://github.com/myorg/gitops
+# Base branch [main]: main
+# Update strategy (kustomize/helm) [kustomize]: kustomize
+# Pipeline YAML written to pipeline.yaml
+# Apply with: kubectl apply -f pipeline.yaml
 ```
 
-The command creates a Pipeline CRD and applies it to the cluster. It also prints instructions for creating your first Bundle from CI.
+The last environment automatically gets `approval: pr-review`; earlier environments get `approval: auto`.
 
 ### kardinal get pipelines
 

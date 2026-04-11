@@ -1,110 +1,89 @@
-# Item 016: PR Evidence, Labels, and Webhook Reliability (Stage 10)
+# Item 017: `kardinal init` + Quickstart Working End-to-End (Stage 11 part 1)
 
-> **Queue**: queue-007
-> **Branch**: `016-pr-evidence`
-> **Depends on**: 013 (merged — PromotionStep reconciler + open-pr step)
+> **Queue**: queue-008
+> **Branch**: `017-kardinal-init`
+> **Depends on**: 015 (merged — full CLI), 016 (merged — PR evidence)
 > **Dependency mode**: merged
-> **Assignable**: immediately (parallel with 014 and 015)
-> **Contributes to**: J1, J4 (PR quality + rollback PR structure)
-> **Priority**: MEDIUM — improves J1 PR quality, not on critical path
+> **Assignable**: immediately
+> **Contributes to**: J1 (Quickstart), J5 (CLI workflow)
+> **Priority**: HIGH — closes v0.2.0 Epic #42, enables J1 to pass
 
 ---
 
 ## Goal
 
-Complete the PR evidence feature (F6) with the full structured body, GitHub labels,
-and a robust webhook + startup reconciliation path. The `open-pr` step currently
-opens a PR with a basic body. This item adds the full evidence tables.
+Implement `kardinal init` interactive wizard that generates a Pipeline YAML from
+minimal input and validates it. Update quickstart example and docs to reflect the
+current implementation state so J1 can be demonstrated end-to-end.
 
-Design spec: `docs/design/08-promotion-steps-engine.md` (PR template section),
-roadmap Stage 10.
+Design spec: roadmap Stage 11 (`kardinal init` part), Stage 8 (`kardinal init` deliverable).
 
 ---
 
 ## Deliverables
 
-### 1. Full PR body template in `pkg/scm/pr_template.go`
+### 1. `kardinal init` command
 
-Extend `RenderPRBody` to include all three required tables:
+In `cmd/kardinal/cmd/init.go`:
 
-**Policy gate compliance table:**
-```
-| Gate | Namespace | Result | Reason | Last Evaluated |
-|------|-----------|--------|--------|----------------|
-| no-weekend-deploys | platform-policies | PASS | schedule.isWeekend=false | 2026-04-10T14:00Z |
+```bash
+kardinal init
 ```
 
-**Artifact provenance table:**
-```
-| Image | Tag | Digest | CI Run | Commit SHA | Author |
-|-------|-----|--------|--------|------------|--------|
-| nginx | 1.25 | sha256:... | https://... | abc1234 | alice |
-```
+Interactive prompts:
+1. Application name (e.g., `nginx-demo`)
+2. Namespace (default: `default`)
+3. Environments (comma-separated: `test,uat,prod`)
+4. Git repository URL (e.g., `https://github.com/myorg/gitops`)
+5. Base branch (default: `main`)
+6. Update strategy: `kustomize` or `helm` (default: `kustomize`)
+7. Approval mode for each environment: `auto` or `pr-review` (default: prod=pr-review, others=auto)
 
-**Upstream verification table:**
-```
-| Environment | Health Checked At | Elapsed |
-|-------------|------------------|---------|
-| test | 2026-04-10T14:05Z | 8m |
-| uat | 2026-04-10T14:20Z | 23m |
-```
+Output: writes `pipeline.yaml` to current directory (or stdout with `--stdout`).
 
-The `StepState` already carries `GateResults` and `UpstreamEnvironments` —
-populate these from PromotionStep status before the open-pr step runs.
+The generated Pipeline YAML must:
+- Pass `kubectl apply --dry-run=client` without errors (validated before printing)
+- Include correct spec.environments[] with gitRepo, branch, path, approvalMode fields
+- Include spec.git.credentialsSecretRef pointing to "github-token" Secret
 
-### 2. GitHub label management
+### 2. Update quickstart example
 
-In `pkg/scm/github.go`, add:
-```go
-func (g *GitHubProvider) EnsureLabels(ctx context.Context, repo string, labels []Label) error
-```
-- Creates labels if they don't exist: `kardinal`, `kardinal/promotion`, `kardinal/rollback`, `kardinal/emergency`
-- Called once on controller startup
+In `examples/quickstart/pipeline.yaml`:
+- Ensure all fields match current CRD spec (v1alpha1 fields from items 005+006)
+- Add comments explaining each field
+- Include `spec.paused: false` explicitly
 
-### 3. Label application in `open-pr` step
+In `examples/quickstart/bundle.yaml`:
+- Update to use `kardinal create bundle` syntax as example comment
+- Ensure `spec.pipeline` field matches the pipeline name
 
-In `pkg/steps/steps/open_pr.go`:
-- After OpenPR succeeds, call `SCMProvider.AddLabelsToPR(ctx, repo, prNumber, labels)` 
-- Add to `SCMProvider` interface: `AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error`
-- Apply `kardinal` and `kardinal/promotion` to every promotion PR
+### 3. Update quickstart docs
 
-### 4. Webhook improvements
+In `docs/quickstart.md`:
+- Replace TBD sections with working commands
+- Update step 6 ("Create a Bundle") to use `kardinal create bundle nginx-demo --image ghcr.io/nginx/nginx:1.29.0`
+- Update step 8 to use `kardinal explain nginx-demo --env prod`
+- Add `kardinal init` to the Install section as an alternative to applying YAML directly
+- Ensure all steps 1-10 from definition-of-done.md J1 journey are documented
 
-In `cmd/kardinal-controller/webhook.go`:
-- Add retry with exponential backoff (3 retries, 30s max) on transient errors
-- Add `GET /webhook/scm/health` endpoint (already done in item 013 — verify it works)
-- Add structured logging: `kardinal_webhook_events_total` via a counter variable
+### 4. Unit tests
 
-### 5. Unit tests
-
-- `TestPRTemplate_ContainsAllTables`: verify all 3 tables in rendered body
-- `TestPRTemplate_GateCompliance`: correct pass/fail values per gate
-- `TestPRTemplate_Provenance`: image tag, digest, CI run present
-- `TestEnsureLabels_CreatesIfMissing`: mock GitHub API, verify label creation
-- `TestOpenPR_AppliesLabels`: after PR creation, labels are applied
+In `cmd/kardinal/cmd/init_test.go`:
+- `TestInit_GeneratesValidPipelineYAML`: verify generated YAML has required fields
+- `TestInit_AllEnvironments`: verify all listed environments are in spec.environments
+- `TestInit_DefaultApprovalModes`: last env gets pr-review, others get auto
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] PR body contains policy gate compliance table (gate | result | reason | last-evaluated)
-- [ ] PR body contains artifact provenance table (image | tag | digest | CI run | commit SHA | author)
-- [ ] PR body contains upstream verification table (env | health-checked-at | elapsed)
-- [ ] Labels `kardinal` and `kardinal/promotion` applied to every promotion PR
-- [ ] `EnsureLabels` creates labels on controller startup if missing
-- [ ] `AddLabelsToPR` method added to SCMProvider interface and GitHubProvider
+- [ ] `kardinal init` prompts the user and generates a Pipeline YAML
+- [ ] `kardinal init --stdout` prints to stdout instead of file
+- [ ] Generated YAML has valid apiVersion/kind, spec.environments[], spec.git
+- [ ] `examples/quickstart/pipeline.yaml` uses current CRD field names
+- [ ] `docs/quickstart.md` steps 1-10 match definition-of-done.md J1 exactly
 - [ ] `go build ./...` passes
-- [ ] `go test ./... -race` passes
+- [ ] `go test ./cmd/kardinal/... -race` passes
 - [ ] `go vet ./...` passes
 - [ ] Copyright headers on all new files
 - [ ] No banned filenames
-
----
-
-## Notes
-
-- `pkg/scm/pr_template.go` already has the skeleton — extend the existing RenderPRBody
-- StepState.GateResults and UpstreamEnvironments are already fields in step.go
-- The PromotionStep reconciler should populate these before calling the step engine
-- PR body update on gate re-evaluation (CommentOnPR edit) is deferred to Stage 10 full
-- `AddLabelsToPR` adds: `PATCH /repos/{owner}/{repo}/issues/{issue_number}/labels`

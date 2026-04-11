@@ -25,8 +25,9 @@ test (auto-promote) --> uat (auto-promote) --> prod (PR review required)
 kardinal-promoter requires the kro Graph controller to be available in the cluster.
 
 ```bash
-# Install the Graph controller (if not already present)
-# (instructions TBD based on Graph packaging)
+# Install the Graph controller from the krocodile experimental branch
+# Pin to commit 1b0ce353 (minimum required for propagateWhen fix)
+kubectl apply -f https://raw.githubusercontent.com/ellistarn/kro/1b0ce353/experimental/crds/graph.yaml
 
 # Install kardinal-promoter
 helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
@@ -146,7 +147,27 @@ kubectl create secret generic github-token \
   --from-literal=token=<your-github-pat>
 ```
 
-Then create the Pipeline:
+You can generate a Pipeline YAML using `kardinal init`:
+
+```bash
+kardinal init
+# Application name [my-app]: nginx-demo
+# Namespace [default]: default
+# Environments (comma-separated) [test,uat,prod]: test,uat,prod
+# Git repository URL: https://github.com/<your-username>/kardinal-demo
+# Base branch [main]: main
+# Update strategy (kustomize/helm) [kustomize]: kustomize
+# Pipeline YAML written to pipeline.yaml
+# Apply with: kubectl apply -f pipeline.yaml
+```
+
+Then apply it:
+
+```bash
+kubectl apply -f pipeline.yaml
+```
+
+Or apply `examples/quickstart/pipeline.yaml` directly:
 
 ```bash
 cat <<EOF | kubectl apply -f -

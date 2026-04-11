@@ -70,6 +70,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.AddCommand(newResumeCmd())
 	root.AddCommand(newPolicyCmd())
 	root.AddCommand(newHistoryCmd())
+	root.AddCommand(newInitCmd())
 
 	return root
 }
