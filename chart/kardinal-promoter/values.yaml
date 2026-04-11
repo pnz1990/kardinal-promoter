@@ -81,6 +81,27 @@ tolerations: []
 # -- Affinity rules for the controller Pod
 affinity: {}
 
+# -- GitHub token for SCM operations (opening PRs, detecting merges).
+# Provide either a direct value (not recommended for production) or a secretRef.
+# The secretRef.key defaults to "token".
+# Example:
+#   github:
+#     token: "ghp_..."
+#   OR
+#   github:
+#     secretRef:
+#       name: github-token
+#       namespace: ""  # defaults to Release.Namespace
+#       key: token
+github:
+  # -- Direct token value (use secretRef in production)
+  token: ""
+  # -- Reference to an existing Secret containing the GitHub token
+  secretRef:
+    name: ""
+    namespace: ""
+    key: "token"
+
 # -- krocodile Graph controller dependency.
 # kardinal-promoter requires the krocodile Graph controller to be installed
 # in the cluster. This section documents the required version for reference —
@@ -90,7 +111,7 @@ krocodile:
   # Update this when intentionally upgrading krocodile.
   # See hack/install-krocodile.sh for the actual install logic.
   # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-  pinnedCommit: "501ea75f"
+  pinnedCommit: "9c18aa34"
   # API group for Graph CRDs (as of commit 48224264, 2026-04-10)
   apiGroup: "experimental.kro.run"
   # Namespace where the Graph controller runs

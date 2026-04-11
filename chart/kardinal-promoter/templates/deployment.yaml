@@ -41,6 +41,17 @@ spec:
             - --zap-log-level={{ .Values.logLevel }}
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+          env:
+            {{- if .Values.github.token }}
+            - name: GITHUB_TOKEN
+              value: {{ .Values.github.token | quote }}
+            {{- else if .Values.github.secretRef.name }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.github.secretRef.name }}
+                  key: {{ .Values.github.secretRef.key | default "token" }}
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.service.metricsPort }}

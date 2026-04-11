@@ -16,9 +16,9 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    e205934b (2026-04-11 — redesign graph reconciliation)
+# Last verified:    9c18aa34 (2026-04-11 — fix execution design: trigger terminology, hash precision)
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-e205934b}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-9c18aa34}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 

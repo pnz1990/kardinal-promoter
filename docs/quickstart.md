@@ -29,9 +29,19 @@ kardinal-promoter requires the kro Graph controller to be available in the clust
 # Pin to commit 1b0ce353 (minimum required for propagateWhen fix)
 kubectl apply -f https://raw.githubusercontent.com/ellistarn/kro/1b0ce353/experimental/crds/graph.yaml
 
-# Install kardinal-promoter
+# Install kardinal-promoter with GitHub token for SCM operations
+# Option A: pass the token directly (for development/testing)
 helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
-  --namespace kardinal-system --create-namespace
+  --namespace kardinal-system --create-namespace \
+  --set github.token=$GITHUB_PAT
+
+# Option B: reference an existing Secret (recommended for production)
+kubectl create secret generic kardinal-github-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT
+helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+  --namespace kardinal-system --create-namespace \
+  --set github.secretRef.name=kardinal-github-token
 ```
 
 Verify the installation:

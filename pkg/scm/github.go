@@ -56,6 +56,8 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 }
 
 // OpenPR creates a pull request and returns the PR URL and number.
+// It is idempotent: if a PR already exists for the head branch, it returns the
+// existing PR's URL and number rather than failing with 422.
 func (g *GitHubProvider) OpenPR(ctx context.Context, repo, title, body, head, base string) (string, int, error) {
 	payload := map[string]string{
 		"title": title,
@@ -68,9 +70,45 @@ func (g *GitHubProvider) OpenPR(ctx context.Context, repo, title, body, head, ba
 		HTMLURL string `json:"html_url"`
 	}
 	if err := g.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/pulls", repo), payload, &result); err != nil {
+		// GitHub returns 422 when a PR for this head branch already exists.
+		// In that case, find the existing open PR and return it.
+		if isExistingPRErr(err) {
+			return g.findExistingPR(ctx, repo, head)
+		}
 		return "", 0, fmt.Errorf("open PR %s: %w", repo, err)
 	}
 	return result.HTMLURL, result.Number, nil
+}
+
+// findExistingPR lists open PRs for the repo and finds the one with the matching head branch.
+func (g *GitHubProvider) findExistingPR(ctx context.Context, repo, head string) (string, int, error) {
+	var prs []struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		Head    struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+	}
+	if err := g.do(ctx, http.MethodGet,
+		fmt.Sprintf("/repos/%s/pulls?state=open&per_page=100", repo), nil, &prs); err != nil {
+		return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
+	}
+	for _, pr := range prs {
+		if pr.Head.Ref == head {
+			return pr.HTMLURL, pr.Number, nil
+		}
+	}
+	return "", 0, fmt.Errorf("PR already exists for %s but could not find it in open PRs", head)
+}
+
+// isExistingPRErr returns true when the GitHub API rejected the PR creation with 422
+// because a pull request already exists for the head branch.
+func isExistingPRErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return containsStr(msg, "422") && (containsStr(msg, "already exists") || containsStr(msg, "A pull request"))
 }
 
 // ClosePR closes the pull request without merging.
