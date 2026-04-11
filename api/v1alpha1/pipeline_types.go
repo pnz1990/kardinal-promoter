@@ -13,7 +13,12 @@ type PipelineSpec struct {
 	// environments in this pipeline.
 	Git PipelineGit `json:"git"`
 
-	// Environments lists the promotion path in order.
+	// Environments lists the promotion path.
+	// Sequential ordering (GB-1): when an environment does not specify dependsOn,
+	// it implicitly depends on the previous entry in this list. The first environment
+	// has no upstream dependency. This sequential default means a list of N environments
+	// without dependsOn fields produces a linear chain. Override with dependsOn to
+	// express parallel fan-out or explicit DAG structure.
 	// +kubebuilder:validation:MinItems=1
 	Environments []EnvironmentSpec `json:"environments"`
 
