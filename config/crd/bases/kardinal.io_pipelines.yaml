@@ -66,6 +66,18 @@ spec:
                       - auto
                       - pr-review
                       type: string
+                    autoRollback:
+                      description: |-
+                        AutoRollback configures automatic rollback when health checks fail repeatedly.
+                        When not set, automatic rollback is disabled.
+                      properties:
+                        failureThreshold:
+                          default: 3
+                          description: |-
+                            FailureThreshold is the number of consecutive health-check failures
+                            that trigger an automatic rollback Bundle creation. Default: 3.
+                          type: integer
+                      type: object
                     delivery:
                       description: Delivery holds in-cluster progressive delivery
                         delegation configuration.
@@ -102,6 +114,18 @@ spec:
                             Supported values: resource, argocd, flux, argoRollouts, flagger.
                           type: string
                       type: object
+                    layout:
+                      default: directory
+                      description: |-
+                        Layout configures how the promotion interacts with the Git repo layout.
+                        "directory" (default): env manifests are in a subdirectory of the main branch.
+                        "branch": rendered manifests are committed to a separate env-specific branch.
+                          In this mode the step sequence includes kustomize-build to render templates
+                          before committing to the target branch.
+                      enum:
+                      - directory
+                      - branch
+                      type: string
                     name:
                       description: Name is the environment identifier (e.g. "test",
                         "uat", "prod").
@@ -117,10 +141,80 @@ spec:
                         Shard pins this environment to a specific kardinal-controller agent shard
                         in distributed mode. Leave empty for single-controller deployments.
                       type: string
+                    steps:
+                      description: |-
+                        Steps overrides the default step sequence for this environment.
+                        If empty, the default sequence is used (see DefaultSequenceForBundle).
+                        Steps can include custom webhook steps alongside built-in step names.
+                      items:
+                        description: |-
+                          StepSpec declares a custom or built-in step override in a Pipeline environment.
+                          When Uses matches a built-in step name the built-in takes precedence.
+                          When Uses is an unknown name the Webhook config is required.
+                        properties:
+                          uses:
+                            description: Uses identifies the step to execute (built-in
+                              name or custom name).
+                            minLength: 1
+                            type: string
+                          webhook:
+                            description: |-
+                              Webhook configures the HTTP endpoint for custom (non-built-in) steps.
+                              Required when Uses does not match any registered built-in step.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef references a Kubernetes Secret whose "Authorization" key is
+                                  sent as the Authorization header.
+                                properties:
+                                  name:
+                                    description: Name is the Secret name.
+                                    minLength: 1
+                                    type: string
+                                  namespace:
+                                    description: Namespace is the Secret namespace.
+                                      If empty, the Pipeline's namespace is used.
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              timeoutSeconds:
+                                default: 300
+                                description: TimeoutSeconds is the per-call timeout.
+                                  Defaults to 300.
+                                type: integer
+                              url:
+                                description: URL is the HTTP(S) endpoint to POST to.
+                                minLength: 1
+                                type: string
+                            required:
+                            - url
+                            type: object
+                        required:
+                        - uses
+                        type: object
+                      type: array
                     update:
                       description: Update holds the manifest update configuration
                         for this environment.
                       properties:
+                        helm:
+                          description: |-
+                            Helm holds Helm-specific update configuration.
+                            Used when Strategy is "helm".
+                          properties:
+                            imagePathTemplate:
+                              description: |-
+                                ImagePathTemplate is the YAML dot-path to the image tag in values.yaml.
+                                Example: ".image.tag" updates the `image.tag` key.
+                                If empty, defaults to ".image.tag".
+                              type: string
+                            valuesFile:
+                              description: |-
+                                ValuesFile is the name of the values file to update (relative to the
+                                environment path). Defaults to "values.yaml".
+                              type: string
+                          type: object
                         strategy:
                           default: kustomize
                           description: Strategy selects the manifest update strategy.

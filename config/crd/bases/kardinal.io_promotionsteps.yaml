@@ -145,6 +145,12 @@ spec:
                   - type
                   type: object
                 type: array
+              consecutiveHealthFailures:
+                description: |-
+                  ConsecutiveHealthFailures tracks the number of consecutive health-check
+                  failures for this step. Reset to 0 on a successful health check.
+                  Used by the auto-rollback policy in the pipeline environment spec.
+                type: integer
               currentStepIndex:
                 description: |-
                   CurrentStepIndex is the index into the step sequence that the reconciler

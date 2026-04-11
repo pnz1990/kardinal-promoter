@@ -223,6 +223,9 @@ spec:
                           gateName:
                             description: GateName is the name of the PolicyGate.
                             type: string
+                          gateNamespace:
+                            description: GateNamespace is the namespace of the PolicyGate.
+                            type: string
                           reason:
                             description: Reason is the human-readable explanation
                               for the result.

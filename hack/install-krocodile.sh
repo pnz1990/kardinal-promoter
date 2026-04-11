@@ -35,12 +35,23 @@ echo "[krocodile] Checked out commit ${KROCODILE_COMMIT}."
 
 # ── 2. Build the controller binary ────────────────────────────────────────────
 echo "[krocodile] Building controller binary..."
-# krocodile requires go 1.26+. Use GOTOOLCHAIN=auto to allow Go to download
-# the required toolchain version if needed (network access required in CI).
-# Do NOT set GOTOOLCHAIN=local here — it prevents toolchain downloads.
+# krocodile requires go 1.26+. Detect the best Go binary to use:
+# 1. If KROCODILE_GO is set, use that
+# 2. If /usr/local/go126/bin/go exists (local dev install), use it
+# 3. Fall back to GOTOOLCHAIN=auto which downloads 1.26 if network is available
+GO_BIN="${KROCODILE_GO:-}"
+if [ -z "$GO_BIN" ] && [ -x "/usr/local/go126/bin/go" ]; then
+  GO_BIN="/usr/local/go126/bin/go"
+  echo "[krocodile] Using local Go 1.26: $GO_BIN"
+fi
+if [ -z "$GO_BIN" ]; then
+  GO_BIN="go"
+  echo "[krocodile] Using system Go with GOTOOLCHAIN=auto (will download 1.26+ if needed)"
+fi
 (cd "$TMPDIR/kro" && \
+  GOROOT="$($GO_BIN env GOROOT)" \
   GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -ldflags="-w -s" -o bin/graph-controller ./experimental/cmd/)
+  "$GO_BIN" build -ldflags="-w -s" -o bin/graph-controller ./experimental/cmd/)
 echo "[krocodile] Binary built."
 
 # ── 3. Build a minimal container image ────────────────────────────────────────

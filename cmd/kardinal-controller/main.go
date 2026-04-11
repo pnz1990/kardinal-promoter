@@ -64,7 +64,7 @@ func init() {
 func main() {
 	var (
 		leaderElect            bool
-		zapLogLevel            string
+		zerologLevel           string
 		metricsBindAddress     string
 		healthProbeBindAddress string
 		webhookBindAddress     string
@@ -75,7 +75,7 @@ func main() {
 
 	flag.BoolVar(&leaderElect, "leader-elect", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&zapLogLevel, "zap-log-level", "info",
+	flag.StringVar(&zerologLevel, "log-level", "info",
 		"Log level for zerolog. One of: debug, info, warn, error.")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", ":8080",
 		"The address the metric endpoint binds to.")
@@ -104,7 +104,7 @@ func main() {
 	flag.Parse()
 
 	// Configure zerolog level
-	level, err := zerolog.ParseLevel(zapLogLevel)
+	level, err := zerolog.ParseLevel(zerologLevel)
 	if err != nil {
 		level = zerolog.InfoLevel
 	}
