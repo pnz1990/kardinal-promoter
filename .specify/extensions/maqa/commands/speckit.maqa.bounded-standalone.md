@@ -1,5 +1,5 @@
 ---
-description: "Bounded standalone agent. Reads scope from a BOUNDARY file in the repo root. Multiple sessions can run concurrently on different areas without conflicts. Place a BOUNDARY file before starting (see ~/.otherness/boundaries/ for templates)."
+description: "Bounded standalone agent. Inject boundary fields directly in your prompt — no files needed. Multiple sessions run concurrently on different areas."
 ---
 
 ```bash
@@ -12,3 +12,14 @@ for line in open('maqa-config.yml'):
 ```
 
 Read and follow `$AGENTS_PATH/bounded-standalone.md`.
+
+Inject boundary fields in your prompt after this command (no BOUNDARY file needed):
+
+```
+AGENT_ID=STANDALONE-<NAME>
+SCOPE=<one sentence>
+ALLOWED_AREAS=area/controller,area/cli,...
+ALLOWED_MILESTONES=v0.2.1,...
+ALLOWED_PACKAGES=pkg/reconciler,...
+DENY_PACKAGES=cmd/kardinal,...
+```
