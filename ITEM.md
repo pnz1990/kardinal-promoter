@@ -1,61 +1,47 @@
-# Item 028: Custom Promotion Steps via HTTP Webhook
+# Item 029: Fix FormatPipelineTable Per-Environment Status Columns
 
-> **Stage**: Stage 16 (Custom Promotion Steps via Webhook)
-> **Queue**: queue-013
-> **Priority**: high
-> **Size**: m
-> **Depends on**: 013 (PromotionStep reconciler)
+> **Stage**: Workshop 1 Parity (CLI fix)
+> **Queue**: queue-014
+> **Priority**: critical
+> **Size**: s
+> **Depends on**: 011 (CLI foundation), 013 (PromotionStep reconciler)
 > **dependency_mode**: merged
+> **GitHub issue**: #115
 
 ## Context
 
-Stage 16 allows teams to add custom logic to the promotion sequence via HTTP webhooks.
-Any step `uses:` value not matching a built-in step name is dispatched as an HTTP POST
-to `spec.steps[].webhook.url`.
+`kardinal get pipelines` currently outputs a generic PHASE column:
+```
+PIPELINE         PHASE       ENVIRONMENTS   PAUSED   AGE
+nginx-demo       Promoting   3              false    2m
+```
 
-The webhook contract:
-- POST JSON: `{bundle, environment, inputs, outputs_so_far}`
-- Response JSON: `{result: "pass|fail", outputs: {key: value}, message: string}`
-
-Custom steps must be idempotent: the reconciler may call them multiple times if a
-crash occurs between the call and the status patch.
+The Workshop 1 definition-of-done requires per-environment columns:
+```
+PIPELINE    BUNDLE    TEST       UAT     PROD     AGE
+nginx-demo  v1.29.0  Verified   ...     ...      2m
+```
 
 ## Acceptance Criteria
 
-- Custom step dispatch in `PromotionStepReconciler`:
-  - Any `uses` value not matching a built-in step is treated as custom
-  - Dispatches HTTP POST to `spec.steps[].webhook.url`
-  - Body: `{bundle, environment, inputs, outputs_so_far}`
-  - Response: `{result: "pass|fail", outputs: {}, message: string}`
-  - Timeout: `spec.steps[].webhook.timeoutSeconds` (default 300)
-  - Retry: 3 attempts with 30-second backoff on 5xx errors
-- Webhook authentication: `spec.steps[].webhook.secretRef` — K8s Secret with `Authorization` header
-- Step output accumulator: custom step outputs merged into `PromotionStep.status.outputs`
-- Example server: `examples/custom-step/` with a sample Go HTTP server and Pipeline referencing it
-- Documentation: `docs/custom-steps.md`
-- Tests:
-  - Custom step returning pass: next step receives outputs
-  - Custom step returning fail: PromotionStep → Failed
-  - Webhook timeout: marked Failed with `DeadlineExceeded`
-  - Auth header from Secret: included in request
+- `kardinal get pipelines` output format:
+  - Column 1: PIPELINE (pipeline name)
+  - Column 2: BUNDLE (active bundle version tag, or `-` if none)
+  - Columns 3..N: one column per environment in Pipeline.spec.environments order, showing state (Pending/Promoting/Verified/Failed/Paused or `-`)
+  - Last column: AGE
+- Works with any number of environments (dynamic columns based on pipeline spec)
+- When multiple pipelines exist, all rows aligned to same columns (use the union of all environment names)
+- When bundle tag is unknown: show `-`
+- `kardinal get pipelines --namespace all-ns` (if supported) must also use the new format
 
-## Files to Create/Modify
+## Files to Modify
 
-- `pkg/steps/custom.go` — custom HTTP step implementation (moved to parent pkg)
-- `pkg/steps/steps/custom_test.go` — unit tests with mock HTTP server
-- `pkg/steps/registry.go` — extend Lookup to dispatch unknown steps to custom
-- `api/v1alpha1/pipeline_types.go` — add `WebhookConfig` + `StepSpec` types
-- `examples/custom-step/server.go` — example custom step server
-- `examples/custom-step/pipeline.yaml` — example Pipeline with custom step
-- `docs/custom-steps.md` — documentation
+- `cmd/kardinal/cmd/get.go` — FormatPipelineTable function
+- `cmd/kardinal/cmd/get_test.go` — update/add tests for new format
 
 ## Tasks
 
-- [x] T001 Add `WebhookConfig` to `StepSpec` in pipeline_types.go
-- [x] T002 Write failing tests for custom HTTP step (pass, fail, timeout, auth)
-- [x] T003 Implement `pkg/steps/custom.go` with HTTP dispatch
-- [x] T004 Extend step registry to dispatch unknown step names to custom
-- [x] T005 Write integration test: custom step pass → next step receives outputs
-- [x] T006 Create examples/custom-step/ server and pipeline
-- [x] T007 Create docs/custom-steps.md
-- [x] T008 Verify go test -race passes
+- [x] T001 Read current FormatPipelineTable implementation
+- [x] T002 Write failing test for new column format
+- [x] T003 Implement new per-environment column format
+- [x] T004 Verify go test -race passes
