@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T03:30Z
+> Last updated: 2026-04-11T04:30Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -25,7 +25,7 @@
 | 8 | CLI | ✅ Complete | Items 011/015 merged: PRs #37, #63. Full CLI: version, get, explain, create bundle, rollback, pause/resume, policy list/simulate, history. |
 | 9 | Embedded React UI | ✅ Complete | Item 019 merged: PR #73. React 19 + dagre DAG view, UI API, go:embed, --ui-listen-address flag. |
 | 10 | PR Evidence, Labels, and Webhook Reliability | ✅ Complete | Items 016/018 merged: PRs #64, #69. Full 3-table PR body, labels, startup reconciliation via Runnable, health endpoint with metrics counter. |
-| 11 | GitHub Actions Integration and `kardinal init` | 🔄 In Progress | Item 020 merged: PR #72. Bundle webhook endpoint (/api/v1/bundles) + GitHub Action done. kardinal init (item 017) done. Remaining: E2E test. |
+| 11 | GitHub Actions Integration and `kardinal init` | ✅ Complete | Items 017/020/023 merged: PRs #67, #72, #81. Bundle webhook, GitHub Action, kardinal init, E2E journey tests J1/J3/J4/J5 with fake client. |
 | 12 | Helm Strategy and Config-Only Promotions | ✅ Complete | Item 021 merged: PR #78. helm-set-image, config-merge steps, type-aware sequence routing, Config Bundle supersession, examples/config-promotion/. |
 | 13 | Rollback and Pause/Resume | 🔄 In Progress | Item 022 merged: PR #77. Automatic rollback on health failures (failureThreshold, ConsecutiveHealthFailures). Manual rollback via CLI done (item 015). |
 | 14 | Distributed Mode (Control Plane + Agents) | 📋 Planned | Depends on Stage 6 |
@@ -132,12 +132,13 @@
 
 ---
 
-## Stage 11 Item Breakdown (partial)
+## Stage 11 Item Breakdown
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 017 | kardinal init + Quickstart docs | ✅ Complete | #67 merged | Interactive wizard, Pipeline YAML generation, examples updated |
 | 020 | Bundle Webhook + GitHub Action | ✅ Complete | #72 merged | POST /api/v1/bundles, rate limit, Bearer auth, GitHub Action |
+| 023 | E2E Journey Tests (fake-client) | ✅ Complete | #81 merged | Journey tests J1/J3/J4/J5 with real reconciler + fake K8s client |
 
 ---
 
@@ -146,6 +147,7 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 021 | Helm Strategy + Config-Only Bundle Promotions | ✅ Complete | #78 merged | helm-set-image, config-merge, DefaultSequenceForBundle, type-aware supersession, examples |
+| 024 | Rendered Manifests — branch layout + kustomize-build | ✅ Complete | #82 merged | layout:branch field, kustomize-build step, DefaultSequenceForBundle extended, docs/examples |
 
 ---
 
