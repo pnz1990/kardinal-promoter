@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -223,10 +224,21 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	workDir := r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
 
 	token := ""
-	// Token resolution from Pipeline.spec.git.secretRef is handled in production
-	// by the controller's credential manager. The SecretRef field is read here
-	// to allow future token injection without refactoring this function.
-	_ = pipeline.Spec.Git.SecretRef
+	// Resolve git token from Pipeline.spec.git.secretRef if configured.
+	if secretRef := pipeline.Spec.Git.SecretRef; secretRef != nil && secretRef.Name != "" {
+		ns := secretRef.Namespace
+		if ns == "" {
+			ns = ps.Namespace
+		}
+		var secret corev1.Secret
+		if err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: ns}, &secret); err != nil {
+			log.Warn().Err(err).Str("secret", secretRef.Name).Msg("failed to read git secret — git operations may fail")
+		} else {
+			if t, ok := secret.Data["token"]; ok && len(t) > 0 {
+				token = string(t)
+			}
+		}
+	}
 
 	state := &steps.StepState{
 		Pipeline:     pipeline.Spec,
