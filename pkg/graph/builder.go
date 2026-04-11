@@ -378,7 +378,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			gateNodeID := gateNodeName(pipelineName, bundleSlug, gate.Name, gate.Namespace, envName)
 			gateNodeIDs = append(gateNodeIDs, gateNodeID)
 
-			gateNode := buildPolicyGateNode(gateNodeID, gate, upstreams)
+			gateNode := buildPolicyGateNode(gateNodeID, gate, pipelineName, bundle.Name, envName, upstreams)
 			nodes = append(nodes, gateNode)
 		}
 
@@ -498,11 +498,17 @@ func buildPromotionStepNode(
 func buildPolicyGateNode(
 	nodeID string,
 	gate kardinalv1alpha1.PolicyGate,
+	pipelineName, bundleName, envName string,
 	upstreams []string,
 ) GraphNode {
 	templateMeta := map[string]interface{}{
 		"name": nodeID,
 		"labels": map[string]interface{}{
+			// These labels allow `kardinal explain` and the PolicyGate reconciler
+			// to query instances by pipeline, bundle, and environment.
+			"kardinal.io/pipeline":      pipelineName,
+			"kardinal.io/bundle":        bundleName,
+			"kardinal.io/environment":   envName,
 			"kardinal.io/gate-template": gate.Name,
 		},
 	}
