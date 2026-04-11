@@ -363,3 +363,110 @@ func TestAutoDetector_ArgoRolloutsType(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "argoRollouts", adapter.Name())
 }
+
+// TestFlaggerAdapter_Succeeded verifies that a Canary with phase=Succeeded is Healthy.
+func TestFlaggerAdapter_Succeeded(t *testing.T) {
+	canary := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "flagger.app/v1beta1",
+			"kind":       "Canary",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase": "Succeeded",
+			},
+		},
+	}
+	canary.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "flagger.app",
+		Version: "v1beta1",
+		Kind:    "Canary",
+	})
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Succeeded")
+}
+
+// TestFlaggerAdapter_Failed verifies that a Canary with phase=Failed is Unhealthy.
+func TestFlaggerAdapter_Failed(t *testing.T) {
+	canary := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "flagger.app/v1beta1",
+			"kind":       "Canary",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase": "Failed",
+			},
+		},
+	}
+	canary.SetGroupVersionKind(schema.GroupVersionKind{Group: "flagger.app", Version: "v1beta1", Kind: "Canary"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Failed")
+}
+
+// TestFlaggerAdapter_Progressing verifies that a Canary in Progressing phase is Unhealthy.
+func TestFlaggerAdapter_Progressing(t *testing.T) {
+	canary := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "flagger.app/v1beta1",
+			"kind":       "Canary",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase": "Progressing",
+			},
+		},
+	}
+	canary.SetGroupVersionKind(schema.GroupVersionKind{Group: "flagger.app", Version: "v1beta1", Kind: "Canary"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Progressing")
+}
+
+// TestFlaggerAdapter_NotFound verifies that a missing Canary returns Unhealthy.
+func TestFlaggerAdapter_NotFound(t *testing.T) {
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "missing", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "not found")
+}
+
+// TestAutoDetector_FlaggerType verifies that explicit "flagger" type returns a FlaggerAdapter.
+func TestAutoDetector_FlaggerType(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+
+	adapter, err := detector.Select(context.Background(), "flagger")
+	require.NoError(t, err)
+	assert.Equal(t, "flagger", adapter.Name())
+}
