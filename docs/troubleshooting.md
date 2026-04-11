@@ -35,6 +35,21 @@ Common causes:
 - CI checks failing on the PR
 - PR was accidentally closed (controller will not reopen closed PRs)
 
+**If the PR was merged but the step is still "WaitingForMerge"**: this can happen if the controller was down when the webhook arrived. On next controller restart, startup reconciliation automatically re-checks all in-flight PRs and advances any that were merged during downtime. You can also force a restart:
+
+```bash
+kubectl rollout restart deployment/kardinal-controller -n kardinal-system
+```
+
+To verify webhook connectivity:
+
+```bash
+curl http://kardinal-controller:8083/webhook/scm/health
+# Returns: {"status":"ok","webhookConfigured":true,"eventsProcessed":N}
+```
+
+`webhookConfigured: false` means the `--webhook-secret` flag is not set — GitHub will reject signature validation. Set `KARDINAL_WEBHOOK_SECRET` in your controller deployment.
+
 ### Symptom: PromotionStep stays in "HealthChecking"
 
 The health adapter has not reported the environment as healthy.
