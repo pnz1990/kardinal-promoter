@@ -23,11 +23,11 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/cel-go/cel"
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 )
 
 func newPolicyCmd() *cobra.Command {
@@ -178,12 +178,11 @@ func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.C
 		}
 	}
 
-	// Build CEL evaluator.
-	celEnv, celErr := cel.NewCELEnvironment()
+	// Build CEL evaluator (inline: avoids pkg/cel import which is banned outside policygate).
+	celEnv, celErr := newSimulateCELEnvironment()
 	if celErr != nil {
 		return fmt.Errorf("init CEL environment: %w", celErr)
 	}
-	evaluator := cel.NewEvaluator(celEnv)
 
 	// Build CEL context.
 	celCtx := map[string]interface{}{
@@ -231,7 +230,7 @@ func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.C
 			continue
 		}
 
-		pass, reason, evalErr := evaluator.Evaluate(g.Spec.Expression, celCtx)
+		pass, reason, evalErr := simulateCELEvaluate(celEnv, g.Spec.Expression, celCtx)
 		if evalErr != nil {
 			reason = fmt.Sprintf("eval error: %v", evalErr)
 			pass = false
@@ -385,4 +384,47 @@ func trimSpace(s string) string {
 		end--
 	}
 	return s[start:end]
+}
+
+// newSimulateCELEnvironment creates a CEL environment for policy simulation in the CLI.
+// This is intentionally a separate function from pkg/cel.NewCELEnvironment() to avoid
+// the banned import of pkg/cel outside pkg/reconciler/policygate.
+// The variables registered here must match pkg/cel/environment.go exactly.
+func newSimulateCELEnvironment() (*cel.Env, error) {
+	env, err := cel.NewEnv(
+		cel.Variable("bundle", cel.DynType),
+		cel.Variable("schedule", cel.DynType),
+		cel.Variable("environment", cel.DynType),
+		cel.Variable("metrics", cel.DynType),
+		cel.Variable("upstream", cel.DynType),
+		cel.Variable("previousBundle", cel.DynType),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cel.NewEnv: %w", err)
+	}
+	return env, nil
+}
+
+// simulateCELEvaluate compiles and evaluates a single CEL expression against the given context.
+// Returns (pass, reason, error). Errors are fail-closed (pass=false on error).
+// This is the CLI-local equivalent of pkg/cel.Evaluator.Evaluate() to avoid the banned import.
+func simulateCELEvaluate(env *cel.Env, expr string, ctx map[string]interface{}) (bool, string, error) {
+	ast, issues := env.Compile(expr)
+	if issues != nil && issues.Err() != nil {
+		return false, fmt.Sprintf("CEL compile error: %s", issues.Err()), issues.Err()
+	}
+	prg, err := env.Program(ast)
+	if err != nil {
+		return false, fmt.Sprintf("CEL program error: %s", err), err
+	}
+	out, _, err := prg.Eval(ctx)
+	if err != nil {
+		return false, fmt.Sprintf("CEL evaluation error: %s", err), err
+	}
+	result, ok := out.Value().(bool)
+	if !ok {
+		e := fmt.Errorf("CEL expression %q returned non-boolean: %T(%v)", expr, out.Value(), out.Value())
+		return false, e.Error(), e
+	}
+	return result, fmt.Sprintf("%s = %v", expr, result), nil
 }
