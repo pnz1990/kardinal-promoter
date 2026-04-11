@@ -377,8 +377,10 @@ func TestVerifiedIsTerminal(t *testing.T) {
 	assert.Equal(t, time.Duration(0), result.RequeueAfter)
 }
 
-// TestEvidenceCopiedToBundle verifies that Verified state copies PRURL to Bundle.status.environments.
-func TestEvidenceCopiedToBundle(t *testing.T) {
+// TestEvidenceNotCopiedByPromotionStepReconciler verifies that the PromotionStep reconciler
+// does NOT write evidence to Bundle.status.environments (PS-9 elimination).
+// Evidence sync is now handled by the Bundle reconciler watching PromotionStep changes.
+func TestEvidenceNotCopiedByPromotionStepReconciler(t *testing.T) {
 	scheme := buildScheme(t)
 	step := makeStep("step-hc", "nginx-demo", "bundle-1", "test")
 	step.Status.State = "HealthChecking"
@@ -403,17 +405,12 @@ func TestEvidenceCopiedToBundle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// The PromotionStep reconciler must NOT write to Bundle.status.environments.
+	// The Bundle reconciler (watching PromotionStep events) handles evidence sync.
 	var updatedBundle v1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "bundle-1", Namespace: "default"}, &updatedBundle))
-
-	found := false
-	for _, env := range updatedBundle.Status.Environments {
-		if env.Name == "test" {
-			found = true
-			assert.Equal(t, "https://github.com/test/repo/pull/7", env.PRURL)
-		}
-	}
-	assert.True(t, found, "test environment status should be in bundle")
+	assert.Empty(t, updatedBundle.Status.Environments,
+		"PromotionStep reconciler must NOT write to Bundle.status.environments (PS-9 eliminated; Bundle reconciler handles this)")
 }
 
 // TestShardFiltering verifies that PromotionSteps with non-matching shard labels are skipped.

@@ -15,7 +15,8 @@
 
 // Package bundle implements the BundleReconciler which watches Bundle objects,
 // sets status.phase = Available on newly-created Bundles, triggers the
-// Pipeline-to-Graph translation, and handles Bundle supersession.
+// Pipeline-to-Graph translation, handles Bundle supersession, and syncs
+// per-environment promotion evidence from PromotionStep status.
 package bundle
 
 import (
@@ -25,8 +26,11 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -38,7 +42,8 @@ type BundleTranslator interface {
 }
 
 // Reconciler watches Bundle objects, sets Available phase, triggers translation,
-// and manages Bundle supersession.
+// manages Bundle supersession, and syncs evidence from PromotionStep status
+// into Bundle.status.environments.
 type Reconciler struct {
 	client.Client
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
@@ -46,13 +51,14 @@ type Reconciler struct {
 	Translator BundleTranslator
 }
 
-// Reconcile is called whenever a Bundle is created, updated, or deleted.
+// Reconcile is called whenever a Bundle is created, updated, or deleted,
+// or whenever a PromotionStep for this bundle changes (via the Watch in SetupWithManager).
 //
 // State machine:
 //   - Phase = "" (new Bundle): supersede older Promoting bundles, set to Available
 //   - Phase = "Available" (ready to promote): look up Pipeline, call Translator,
 //     set phase to Promoting
-//   - All other phases: idempotent no-op
+//   - Phase = "Promoting" | "Verified" | "Failed": sync evidence from PromotionStep status
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("bundle", req.Name).
@@ -74,8 +80,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case "Available":
 		return r.handleAvailable(ctx, log, &b)
 	default:
-		log.Debug().Str("phase", b.Status.Phase).Msg("bundle phase already advanced, skipping")
-		return ctrl.Result{}, nil
+		// For Promoting, Verified, Failed: sync evidence from PromotionStep status.
+		// This replaces the cross-CRD write in the PromotionStep reconciler (PS-9).
+		return r.handleSyncEvidence(ctx, log, &b)
 	}
 }
 
@@ -216,6 +223,88 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	return ctrl.Result{}, nil
 }
 
+// handleSyncEvidence reads all PromotionSteps for this Bundle and merges their
+// per-environment state into Bundle.status.environments. This is the Graph-first
+// replacement for the PromotionStep reconciler's copyEvidenceToBundle (PS-9):
+// the Bundle reconciler writes to its own CRD status, not a foreign one.
+//
+// Graph-purity: the PromotionStep reconciler no longer writes to Bundle.status.
+// The Bundle reconciler is triggered by PromotionStep changes via the Watch added
+// in SetupWithManager, so evidence is still propagated promptly.
+func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	var psList kardinalv1alpha1.PromotionStepList
+	if err := r.List(ctx, &psList,
+		client.InNamespace(b.Namespace),
+		client.MatchingLabels{"kardinal.io/bundle": b.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list promotion steps for bundle %s: %w", b.Name, err)
+	}
+
+	if len(psList.Items) == 0 {
+		log.Debug().Msg("no promotion steps found for bundle, nothing to sync")
+		return ctrl.Result{}, nil
+	}
+
+	// Build a map of current environment statuses so we can update idempotently.
+	envMap := make(map[string]kardinalv1alpha1.EnvironmentStatus, len(b.Status.Environments))
+	for _, env := range b.Status.Environments {
+		envMap[env.Name] = env
+	}
+
+	changed := false
+	for _, ps := range psList.Items {
+		envName := ps.Spec.Environment
+		prev := envMap[envName]
+
+		updated := kardinalv1alpha1.EnvironmentStatus{
+			Name:            envName,
+			Phase:           ps.Status.State,
+			PRURL:           ps.Status.PRURL,
+			HealthCheckedAt: prev.HealthCheckedAt, // preserve if already set
+		}
+
+		// Use the prURL from outputs if available (more reliable than status.PRURL).
+		if prURL, ok := ps.Status.Outputs["prURL"]; ok && prURL != "" {
+			updated.PRURL = prURL
+		}
+
+		// Set HealthCheckedAt when step reaches Verified state.
+		// time.Now() is used here inside a CRD status write — Graph-first compliant.
+		if ps.Status.State == "Verified" && prev.HealthCheckedAt == nil {
+			now := metav1.NewTime(time.Now().UTC())
+			updated.HealthCheckedAt = &now
+		}
+
+		// Only mark changed if something actually differs.
+		if prev.Phase != updated.Phase || prev.PRURL != updated.PRURL ||
+			(updated.HealthCheckedAt != nil && prev.HealthCheckedAt == nil) {
+			envMap[envName] = updated
+			changed = true
+		}
+	}
+
+	if !changed {
+		log.Debug().Msg("bundle evidence already up to date")
+		return ctrl.Result{}, nil
+	}
+
+	// Rebuild the environments slice from the updated map.
+	envs := make([]kardinalv1alpha1.EnvironmentStatus, 0, len(envMap))
+	for _, env := range envMap {
+		envs = append(envs, env)
+	}
+
+	patch := client.MergeFrom(b.DeepCopy())
+	b.Status.Environments = envs
+	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch bundle evidence: %w", err)
+	}
+
+	log.Info().Int("environments", len(envs)).Msg("bundle evidence synced from PromotionStep status")
+	return ctrl.Result{}, nil
+}
+
 // Start implements manager.Runnable. It is called by controller-runtime after the
 // informer cache is synced. With the PRStatus CRD architecture, startup reconciliation
 // of PR merge state is no longer needed here: the PRStatusReconciler polls GitHub and
@@ -234,11 +323,33 @@ func (r *Reconciler) Start(ctx context.Context) error {
 // SetupWithManager registers the BundleReconciler with the controller-runtime Manager.
 // It also registers the reconciler as a Runnable so that Start() is called after
 // cache sync to perform startup reconciliation.
+//
+// It adds a Watch on PromotionStep objects: when any PromotionStep for a Bundle
+// changes state (e.g. Verified, Failed), the Bundle is re-queued to sync evidence.
+// This replaces the PromotionStep reconciler's cross-CRD copyEvidenceToBundle write.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.Add(r); err != nil {
 		return fmt.Errorf("add reconciler as runnable: %w", err)
 	}
+
+	// promotionStepMapper maps a PromotionStep change event to a Bundle reconcile request.
+	// It reads the kardinal.io/bundle label set by the Graph builder on PromotionStep nodes.
+	promotionStepMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		bundleName := obj.GetLabels()["kardinal.io/bundle"]
+		if bundleName == "" {
+			return nil
+		}
+		return []reconcile.Request{
+			{NamespacedName: client.ObjectKey{
+				Name:      bundleName,
+				Namespace: obj.GetNamespace(),
+			}},
+		}
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Bundle{}).
+		// Watch PromotionSteps: evidence sync when PS state changes.
+		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(promotionStepMapper)).
 		Complete(r)
 }

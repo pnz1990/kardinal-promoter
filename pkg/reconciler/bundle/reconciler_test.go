@@ -649,3 +649,125 @@ func TestBundleReconciler_PausedIdempotent(t *testing.T) {
 	// Translator must never have been called.
 	assert.False(t, translator.called, "translator must not be called for paused pipeline (idempotent)")
 }
+
+// TestBundleReconciler_SyncEvidenceFromPromotionStep verifies that when a Promoting
+// Bundle is reconciled and a PromotionStep with the matching bundle label exists,
+// the PromotionStep's status is copied into Bundle.status.environments.
+// This replaces the cross-CRD write that was previously in the PromotionStep reconciler (PS-9).
+func TestBundleReconciler_SyncEvidenceFromPromotionStep(t *testing.T) {
+	s := newScheme()
+
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	// PromotionStep for the "test" environment, Verified state.
+	prURL := "https://github.com/test/repo/pull/42"
+	ps := &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-test",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/bundle": "nginx-demo-v1"},
+		},
+		Spec: kardinalv1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "nginx-demo-v1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: kardinalv1alpha1.PromotionStepStatus{
+			State: "Verified",
+			PRURL: prURL,
+			Outputs: map[string]string{
+				"prURL": prURL,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(b, ps).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &updated))
+
+	require.Len(t, updated.Status.Environments, 1, "should have one environment status")
+	env := updated.Status.Environments[0]
+	assert.Equal(t, "test", env.Name)
+	assert.Equal(t, "Verified", env.Phase)
+	assert.Equal(t, prURL, env.PRURL)
+	require.NotNil(t, env.HealthCheckedAt, "HealthCheckedAt must be set when state is Verified")
+}
+
+// TestBundleReconciler_SyncEvidence_Idempotent verifies that syncing evidence twice
+// does not change the HealthCheckedAt timestamp (idempotent).
+func TestBundleReconciler_SyncEvidence_Idempotent(t *testing.T) {
+	s := newScheme()
+
+	fixedTime := metav1.NewTime(time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC))
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase: "Verified",
+			Environments: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", PRURL: "https://github.com/test/repo/pull/42", HealthCheckedAt: &fixedTime},
+			},
+		},
+	}
+	ps := &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-test",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/bundle": "nginx-demo-v1"},
+		},
+		Spec: kardinalv1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "nginx-demo-v1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: kardinalv1alpha1.PromotionStepStatus{
+			State: "Verified",
+			PRURL: "https://github.com/test/repo/pull/42",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(b, ps).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	// Reconcile twice — HealthCheckedAt must remain the fixed value, not be updated.
+	for i := 0; i < 2; i++ {
+		_, err := r.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+		})
+		require.NoError(t, err)
+	}
+
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &updated))
+
+	require.Len(t, updated.Status.Environments, 1)
+	env := updated.Status.Environments[0]
+	require.NotNil(t, env.HealthCheckedAt)
+	assert.Equal(t, fixedTime.UTC(), env.HealthCheckedAt.UTC(),
+		"HealthCheckedAt must not be overwritten on subsequent syncs")
+}
