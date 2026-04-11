@@ -116,7 +116,7 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 
 	// Verify PolicyGate nodes have propagateWhen set
 	for _, n := range result.Graph.Spec.Nodes {
-		if containsStr(n.ID, "no-weekend-deploys") || containsStr(n.ID, "staging-soak-30m") {
+		if containsStr(n.ID, "no_weekend_deploys") || containsStr(n.ID, "staging_soak_30m") {
 			assert.NotEmpty(t, n.PropagateWhen,
 				"PolicyGate node %q must have PropagateWhen set", n.ID)
 		}
@@ -143,11 +143,11 @@ func TestBuilder_FanOut(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 4, result.NodeCount)
 
-	// Both prod nodes must reference staging
+	// Both prod nodes must reference staging (using CEL-safe underscore IDs)
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	assert.True(t, containsCELRef(nodeMap["prod-us"].Template, "staging"),
+	assert.True(t, containsCELRef(nodeMap["prod_us"].Template, "staging"),
 		"prod-us must depend on staging")
-	assert.True(t, containsCELRef(nodeMap["prod-eu"].Template, "staging"),
+	assert.True(t, containsCELRef(nodeMap["prod_eu"].Template, "staging"),
 		"prod-eu must depend on staging")
 }
 
@@ -365,10 +365,10 @@ func TestBuilder_PropagateWhenOnPolicyGates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Find the gate node
+	// Find the gate node (IDs use underscores for CEL safety: "no-weekend" → "no_weekend")
 	var gateNode *graph.GraphNode
 	for i := range result.Graph.Spec.Nodes {
-		if containsStr(result.Graph.Spec.Nodes[i].ID, "no-weekend") {
+		if containsStr(result.Graph.Spec.Nodes[i].ID, "no_weekend") {
 			gateNode = &result.Graph.Spec.Nodes[i]
 			break
 		}

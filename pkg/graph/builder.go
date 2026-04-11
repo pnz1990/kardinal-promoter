@@ -369,7 +369,12 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		envSpec := envSpecMap[envName]
 
 		// Compute upstream deps for this env (filtered to only include surviving envs)
-		upstreams := filteredDeps(envName, deps, filteredSet)
+		// Return as CEL-safe IDs (matching the step node IDs built with celSafeSlug).
+		rawUpstreams := filteredDeps(envName, deps, filteredSet)
+		upstreams := make([]string, len(rawUpstreams))
+		for i, up := range rawUpstreams {
+			upstreams[i] = celSafeSlug(up)
+		}
 
 		// PolicyGate nodes for this environment
 		gates := gatesByEnv[envName]
@@ -382,8 +387,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			nodes = append(nodes, gateNode)
 		}
 
-		// PromotionStep node
-		stepNodeID := envName
+		// PromotionStep node — node ID must be a valid CEL identifier
+		stepNodeID := celSafeSlug(envName)
 		stepNode := buildPromotionStepNode(
 			pipelineName, bundleSlug, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs,
 		)
@@ -593,6 +598,9 @@ func graphNameFrom(pipeline, bundle string) string {
 }
 
 // gateNodeName generates a unique node ID for a PolicyGate instance.
+// The ID is used as both the Kubernetes resource name (metadata.name) and as
+// the CEL variable name in readyWhen/propagateWhen expressions. CEL identifiers
+// must not contain hyphens, so we use underscores.
 // Includes namespace to prevent collisions when same gate name exists in
 // multiple namespaces.
 func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string {
@@ -600,15 +608,18 @@ func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string
 	if ns == "" {
 		ns = "default"
 	}
-	return fmt.Sprintf("%s-%s-%s--%s", gateName, ns, envName, bundleSlug)
+	// Use celSafeSlug so the ID is valid as a CEL identifier.
+	raw := fmt.Sprintf("%s_%s_%s__%s", gateName, ns, envName, bundleSlug)
+	return celSafeSlug(raw)
 }
 
 // bundleVersionSlug returns a slug from the bundle name suitable for node naming.
 func bundleVersionSlug(bundleName string) string {
-	return slugify(bundleName)
+	return celSafeSlug(bundleName)
 }
 
 // slugify replaces characters not valid in Kubernetes names with dashes.
+// Use celSafeSlug for node IDs that appear in CEL expressions.
 func slugify(s string) string {
 	var b strings.Builder
 	for _, c := range s {
@@ -619,6 +630,28 @@ func slugify(s string) string {
 			b.WriteRune(c - 'A' + 'a')
 		default:
 			b.WriteRune('-')
+		}
+	}
+	return b.String()
+}
+
+// celSafeSlug creates an identifier safe for use as a CEL variable name.
+// CEL identifiers follow Go rules: letters, digits, underscores; must not
+// start with a digit. Hyphens and other special chars are replaced with '_'.
+func celSafeSlug(s string) string {
+	var b strings.Builder
+	for i, c := range s {
+		switch {
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9' && i > 0) || c == '_':
+			b.WriteRune(c)
+		case c >= 'A' && c <= 'Z':
+			b.WriteRune(c - 'A' + 'a')
+		case c == '0' && i == 0:
+			// Leading digit — prefix with underscore
+			b.WriteRune('_')
+			b.WriteRune(c)
+		default:
+			b.WriteRune('_')
 		}
 	}
 	return b.String()
