@@ -30,7 +30,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -114,14 +116,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
 	}
 
-	// Shard filtering: skip if labels don't match our shard.
+	// Shard filtering: in sharded mode, SetupWithManager already uses a predicate
+	// to prevent non-matching steps from being enqueued. This secondary guard
+	// handles the edge case where events arrive before the predicate is fully active
+	// (e.g. at startup) or when Shard is set but WithPredicates is not in effect.
+	// Graph-purity: the primary guard is now the controller-runtime predicate.
+	// See SetupWithManager and PS-3 in docs/design/11-graph-purity-tech-debt.md.
 	if r.Shard != "" {
 		stepShard := ps.Labels["kardinal.io/shard"]
 		if stepShard != r.Shard {
 			log.Debug().
 				Str("step_shard", stepShard).
 				Str("our_shard", r.Shard).
-				Msg("shard mismatch, skipping")
+				Msg("shard mismatch: secondary guard — should not normally fire")
 			return ctrl.Result{}, nil
 		}
 	}
@@ -591,10 +598,45 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 }
 
 // SetupWithManager registers the PromotionStep reconciler with controller-runtime.
+// In distributed (sharded) mode, it adds a label-selector predicate so that only
+// PromotionSteps matching the agent's shard label are enqueued. This replaces the
+// silent Go-level skip (PS-3 in docs/design/11-graph-purity-tech-debt.md) with a
+// declarative controller-level filter that is observable via label selectors.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.PromotionStep{}).
-		Complete(r)
+	b := ctrl.NewControllerManagedBy(mgr)
+	if r.Shard != "" {
+		// In sharded mode, filter to only watch PromotionSteps for our shard.
+		// Steps without a shard label are NOT processed by any sharded agent —
+		// they are intended for standalone (non-sharded) controllers.
+		shard := r.Shard
+		b = b.For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(shardMatchPredicate{shard: shard}))
+	} else {
+		b = b.For(&v1alpha1.PromotionStep{})
+	}
+	return b.Complete(r)
+}
+
+// shardMatchPredicate implements sigs.k8s.io/controller-runtime/pkg/predicate.Predicate
+// for shard-based filtering. Eliminates PS-3: shard filtering is now at the watch
+// layer (controller-runtime predicate) rather than inside the reconcile function.
+type shardMatchPredicate struct {
+	shard string
+}
+
+func (p shardMatchPredicate) Create(e event.CreateEvent) bool {
+	return e.Object.GetLabels()["kardinal.io/shard"] == p.shard
+}
+
+func (p shardMatchPredicate) Delete(e event.DeleteEvent) bool {
+	return e.Object.GetLabels()["kardinal.io/shard"] == p.shard
+}
+
+func (p shardMatchPredicate) Update(e event.UpdateEvent) bool {
+	return e.ObjectNew.GetLabels()["kardinal.io/shard"] == p.shard
+}
+
+func (p shardMatchPredicate) Generic(e event.GenericEvent) bool {
+	return e.Object.GetLabels()["kardinal.io/shard"] == p.shard
 }
 
 // patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data
