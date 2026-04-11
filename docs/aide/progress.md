@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T05:30Z
+> Last updated: 2026-04-11T05:22Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -29,8 +29,8 @@
 | 12 | Helm Strategy and Config-Only Promotions | ✅ Complete | Item 021 merged: PR #78. helm-set-image, config-merge steps, type-aware sequence routing, Config Bundle supersession, examples/config-promotion/. |
 | 13 | Rollback and Pause/Resume | ✅ Complete | Items 022/025 merged: PRs #77, #110. Auto-rollback, CLI rollback/pause/resume, reconciler pause enforcement. |
 | 14 | Distributed Mode (Control Plane + Agents) | 📋 Planned | Depends on Stage 6 |
-| 15 | MetricCheck CRD and Upstream Soak Time | 📋 Planned | Depends on Stage 4 |
-| 16 | Custom Promotion Steps via Webhook | 📋 Planned | Depends on Stage 6 |
+| 15 | MetricCheck CRD and Upstream Soak Time | ✅ Complete | Item 027 merged: PR #114. MetricCheck CRD, Prometheus evaluator, CEL soak time context. |
+| 16 | Custom Promotion Steps via Webhook | ✅ Complete | Item 028 merged: PR #124. CustomWebhookStep, registry fallback, 10 tests, example server + Pipeline, docs/custom-steps.md. |
 | 17 | GitLab Support | 📋 Planned | Depends on Stage 5 |
 | 18 | Subscription CRD | 📋 Planned | Depends on Stage 6 |
 | 19 | Security Hardening and Production Readiness | 📋 Planned | Depends on all prior stages |
@@ -158,6 +158,22 @@
 |---|---|---|---|---|
 | 022 | Automatic Rollback on Health Failure | ✅ Complete | #77 merged | AutoRollbackSpec, ConsecutiveHealthFailures, maybeCreateAutoRollback (idempotent) |
 | 025 | Pause/Resume — BundleReconciler + PromotionStepReconciler | ✅ Complete | #110 merged | Pipeline.Spec.Paused enforcement in both reconcilers, idempotency tests, docs updated |
+
+---
+
+## Stage 15 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 027 | MetricCheck CRD + Prometheus Evaluator + CEL soak time | ✅ Complete | #114 merged | MetricCheck CRD, MetricCheckReconciler, PrometheusProvider, CEL metrics + soak context |
+
+---
+
+## Stage 16 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 028 | Custom Promotion Steps via HTTP Webhook | ✅ Complete | #124 merged | CustomWebhookStep, registry fallback, StepSpec/WebhookConfig in Pipeline, 10 tests, example server |
 
 ---
 
