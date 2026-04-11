@@ -3,11 +3,11 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T18:06:56Z",
+  "last_updated": "2026-04-11T18:31:21Z",
   "current_queue": "queue-016",
-  "last_sm_review": "2026-04-11T16:40:53Z",
-  "last_pm_review": "2026-04-11T16:41:13Z",
-  "batches_since_competitive_analysis": 2,
+  "last_sm_review": "2026-04-11T18:30:48Z",
+  "last_pm_review": "2026-04-11T18:31:09Z",
+  "batches_since_competitive_analysis": 3,
   "batches_since_doc_audit": 1,
   "batches_since_dead_scan": 0,
   "engineer_slots": {
@@ -363,13 +363,13 @@
       "pr_merged": true
     },
     "036-prstatuscrd": {
-      "state": "in_progress",
+      "state": "done",
       "assigned_to": "STANDALONE-CORE",
       "assigned_at": "2026-04-11T18:07:53Z",
       "worktree_path": "../kardinal-promoter.036-prstatuscrd",
       "dependency_mode": "merged",
-      "pr_number": null,
-      "pr_merged": false
+      "pr_number": 166,
+      "pr_merged": true
     },
     "037-cli-arch-cleanup": {
       "state": "done",
