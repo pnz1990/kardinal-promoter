@@ -4,6 +4,8 @@
 > Created: 2026-04-10
 > Authors: Architecture session
 
+> **See also**: `docs/design/11-graph-purity-tech-debt.md` — complete catalog of every known logic leak, with GitHub issues and elimination paths. That document is the authoritative index of architecture debt. This document states the principles; that document tracks the violations.
+
 ---
 
 ## Decision

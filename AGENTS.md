@@ -178,6 +178,10 @@ All issues must have labels from each of these groups (read by otherness agents 
 
 The world is a DAG. Everything is a Graph node. See `docs/design/10-graph-first-architecture.md`.
 
+**Complete logic leak catalog with GitHub issues**: `docs/design/11-graph-purity-tech-debt.md`
+This document lists every known place where business logic leaks outside the Graph layer,
+categorized by severity and elimination path. Every new feature must not introduce new leaks.
+
 **Before implementing ANY new feature, answer these questions in order:**
 
 1. Can this be a **Watch node**? (Read an existing K8s resource into Graph scope — no reconciler needed)
