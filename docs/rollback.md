@@ -153,3 +153,25 @@ For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` 
 | Kargo | Re-promote prior Freight to the Stage (AnalysisTemplate verification) |
 | GitOps Promoter | Manual: create a revert PR |
 | Argo Rollouts | Automatic in-cluster rollback on AnalysisRun failure (no cross-env awareness) |
+
+---
+
+## Pause and Resume
+
+During an incident, you may want to stop all in-flight promotions without rolling back.
+
+```bash
+# Pause: hold all promotions at their current state
+kardinal pause my-app
+
+# Resume: allow promotions to continue
+kardinal resume my-app
+```
+
+When a Pipeline is paused (`spec.paused: true`):
+- PromotionSteps already in progress are held at their current state (Promoting, WaitingForMerge, etc.)
+- Open PRs remain open — no new commits are pushed
+- No new Bundles will advance from Available to Promoting
+- All states are preserved in etcd — resume picks up exactly where pause left
+
+After resume, promotions continue automatically from where they paused. No re-trigger is required.
