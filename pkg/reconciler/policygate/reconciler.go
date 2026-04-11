@@ -144,6 +144,19 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		}
 	}
 
+	// Build metrics context: list all MetricChecks in the gate's namespace
+	// and expose them as metrics.<name>.value and metrics.<name>.result.
+	metricsCtx, err := r.buildMetricsContext(ctx, gate.Namespace)
+	if err != nil {
+		// Non-fatal: log and continue with empty metrics context so the gate
+		// evaluates with whatever data is available (fail-closed if expr references metrics).
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to build metrics context, using empty")
+		metricsCtx = map[string]interface{}{}
+	}
+
+	// Build upstream soak context from bundle environment statuses.
+	upstreamCtx := buildUpstreamContext(&bundle, now)
+
 	return map[string]interface{}{
 		"bundle": bundleCtx,
 		"schedule": map[string]interface{}{
@@ -154,7 +167,48 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"environment": map[string]interface{}{
 			"name": gate.Labels[labelEnvironment],
 		},
+		"metrics":  metricsCtx,
+		"upstream": upstreamCtx,
 	}, nil
+}
+
+// buildMetricsContext lists all MetricCheck objects in the given namespace and
+// returns a map suitable for CEL: {"<name>": {"value": <string>, "result": <string>}}.
+// Only MetricCheck objects in the gate's own namespace are included.
+func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string) (map[string]interface{}, error) {
+	var list kardinalv1alpha1.MetricCheckList
+	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil, fmt.Errorf("list metricchecks: %w", err)
+	}
+
+	result := make(map[string]interface{}, len(list.Items))
+	for _, mc := range list.Items {
+		result[mc.Name] = map[string]interface{}{
+			"value":  mc.Status.LastValue,
+			"result": mc.Status.Result,
+		}
+	}
+	return result, nil
+}
+
+// buildUpstreamContext computes per-environment soak minutes from bundle status.
+// Returns a map: {"<envName>": {"soakMinutes": <int64>}}.
+// soakMinutes = minutes since HealthCheckedAt. Zero if not yet health-checked.
+func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle, now time.Time) map[string]interface{} {
+	result := make(map[string]interface{}, len(bundle.Status.Environments))
+	for _, env := range bundle.Status.Environments {
+		soakMinutes := int64(0)
+		if env.HealthCheckedAt != nil && !env.HealthCheckedAt.IsZero() {
+			elapsed := now.Sub(env.HealthCheckedAt.Time)
+			if elapsed > 0 {
+				soakMinutes = int64(elapsed.Minutes())
+			}
+		}
+		result[env.Name] = map[string]interface{}{
+			"soakMinutes": soakMinutes,
+		}
+	}
+	return result
 }
 
 // patchStatus patches the PolicyGate's status fields.

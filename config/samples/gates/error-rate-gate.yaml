@@ -1,0 +1,49 @@
+# error-rate-gate.yaml — Prometheus-backed error rate gate.
+# Blocks promotion to prod if the HTTP error rate is >= 1%.
+#
+# The MetricCheckReconciler queries Prometheus every 30 seconds, evaluates
+# the threshold, and writes status.result to this CRD.
+# The PolicyGate CEL expression reads metrics["error-rate"].result.
+#
+# Usage:
+#   kubectl apply -f config/samples/gates/error-rate-gate.yaml
+#
+# Prerequisites:
+#   - Prometheus accessible at http://prometheus-operated.monitoring.svc:9090
+#   - A metric named 'http_requests_errors_total' exposed by the target service
+apiVersion: kardinal.io/v1alpha1
+kind: MetricCheck
+metadata:
+  name: error-rate
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: kardinal-promoter
+spec:
+  provider: prometheus
+  prometheusURL: http://prometheus-operated.monitoring.svc:9090
+  # PromQL: percentage of HTTP 5xx responses over the last 5 minutes.
+  query: >-
+    sum(rate(http_requests_errors_total[5m]))
+    /
+    sum(rate(http_requests_total[5m]))
+  # Gate passes when error rate is strictly below 1%.
+  threshold:
+    value: 0.01
+    operator: lt
+  interval: 30s
+---
+# PolicyGate template that references the MetricCheck above.
+# The Graph controller instantiates this template per-bundle per-environment.
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: error-rate-gate
+  namespace: default
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+spec:
+  # Gate passes when the MetricCheck "error-rate" reports Pass.
+  expression: 'metrics["error-rate"].result == "Pass"'
+  message: "HTTP error rate must be below 1% before promoting to prod"
+  recheckInterval: 30s
