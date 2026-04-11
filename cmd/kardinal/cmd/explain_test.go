@@ -87,6 +87,9 @@ func TestExplain_ShowsStepsAndGates(t *testing.T) {
 	assert.Contains(t, out, "PolicyGate")
 	assert.Contains(t, out, "no-weekend-deploys")
 	assert.Contains(t, out, "Block")
+	// CEL expression must be shown (#117).
+	assert.Contains(t, out, "!schedule.isWeekend", "CEL expression must be shown in EXPRESSION column")
+	assert.Contains(t, out, "EXPRESSION", "output header must include EXPRESSION column")
 }
 
 // TestExplain_FilterByEnv verifies that the envFilter parameter filters output.
@@ -141,4 +144,33 @@ func TestExplain_EmptyOutput(t *testing.T) {
 
 	out := buf.String()
 	assert.Contains(t, out, "No steps")
+}
+
+// TestExplain_UnevaluatedGateExpression verifies that a PolicyGate not yet evaluated
+// shows its CEL expression and "-" as reason.
+func TestExplain_UnevaluatedGateExpression(t *testing.T) {
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "staging-soak-30m",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/environment": "prod"},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "bundle.upstreamSoakMinutes >= 30",
+			Message:    "soak time required",
+		},
+		// No status set = not yet evaluated
+	}
+
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
+
+	var buf bytes.Buffer
+	err := explainOnce(&buf, c, "default", "nginx-demo", "")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "staging-soak-30m")
+	assert.Contains(t, out, "bundle.upstreamSoakMinutes >= 30", "CEL expression must be shown")
+	assert.Contains(t, out, "Pending", "unevaluated gate must show Pending state")
 }

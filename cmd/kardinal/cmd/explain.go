@@ -104,6 +104,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		name        string
 		state       string
 		reason      string
+		expression  string // CEL expression for PolicyGate rows (empty for Step rows)
 	}
 
 	var rows []explainRow
@@ -126,6 +127,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 			name:        s.Spec.StepType,
 			state:       state,
 			reason:      reason,
+			expression:  "-",
 		})
 	}
 
@@ -144,12 +146,17 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		if reason == "" {
 			reason = "-"
 		}
+		expr := g.Spec.Expression
+		if expr == "" {
+			expr = "-"
+		}
 		rows = append(rows, explainRow{
 			environment: env,
 			kind:        "PolicyGate",
 			name:        g.Name,
 			state:       gateState,
 			reason:      reason,
+			expression:  expr,
 		})
 	}
 
@@ -166,12 +173,12 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	})
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tTYPE\tNAME\tSTATE\tREASON"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.kind, row.name, row.state, row.reason,
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.environment, row.kind, row.name, row.state, row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
