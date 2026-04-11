@@ -171,12 +171,12 @@
       "dependency_mode": "merged"
     },
     "018-startup-reconciliation": {
-      "state": "todo",
+      "state": "done",
       "assigned_to": null,
       "assigned_at": null,
       "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "pr_number": 69,
+      "pr_merged": true,
       "dependency_mode": "merged"
     }
   },
@@ -190,8 +190,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-10T23:40:00Z",
-      "cycle": 16
+      "last_seen": "2026-04-11T01:07:03Z",
+      "cycle": 17
     }
   }
 }

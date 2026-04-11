@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T00:10Z
+> Last updated: 2026-04-11T01:10Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -24,7 +24,7 @@
 | 7 | Health Adapters | ✅ Complete | Item 014 merged: PR #62. DeploymentAdapter, ArgoCDAdapter, FluxAdapter, AutoDetector, remote kubeconfig. |
 | 8 | CLI | ✅ Complete | Items 011/015 merged: PRs #37, #63. Full CLI: version, get, explain, create bundle, rollback, pause/resume, policy list/simulate, history. |
 | 9 | Embedded React UI | 📋 Planned | Depends on Stage 7 |
-| 10 | PR Evidence, Labels, and Webhook Reliability | ✅ Complete | Item 016 merged: PR #64. Full evidence tables, AddLabelsToPR, EnsureLabels, label application in open-pr step. |
+| 10 | PR Evidence, Labels, and Webhook Reliability | ✅ Complete | Items 016/018 merged: PRs #64, #69. Full 3-table PR body, labels, startup reconciliation via Runnable, health endpoint with metrics counter. |
 | 11 | GitHub Actions Integration and `kardinal init` | 📋 Planned | Depends on Stage 8 |
 | 12 | Helm Strategy and Config-Only Promotions | 📋 Planned | Depends on Stage 6 |
 | 13 | Rollback and Pause/Resume | 📋 Planned | Depends on Stage 6 |
@@ -120,6 +120,7 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 016 | PR Evidence, Labels, Webhook Reliability | ✅ Complete | #64 merged | Full 3-table PR body, AddLabelsToPR interface+impl, EnsureLabels, label application |
+| 018 | Startup Reconciliation + Webhook Health Endpoint | ✅ Complete | #69 merged | Start(ctx) Runnable, atomic event counter, JSON health endpoint, 5 new tests |
 
 ---
 

@@ -450,11 +450,11 @@ Updated by the coordinator after each batch.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | ❌ Not started | — | Requires Stages 0-8 |
+| 1: Quickstart | 🔄 In Progress | 2026-04-11 | Stages 0-10 complete. Missing: Stage 9 (UI), Stage 11 (GitHub Action + kardinal init). E2E not run. |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
-| 3: Policy governance | ❌ Not started | — | Requires Stages 0-5 |
-| 4: Rollback | ❌ Not started | — | Requires Stages 0-7, 10 |
-| 5: CLI workflow | ❌ Not started | — | Requires Stages 0-9 |
+| 3: Policy governance | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. kardinal policy simulate implemented. E2E not run. |
+| 4: Rollback | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. kardinal rollback implemented. E2E not run. |
+| 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented (Stages 0-8). Output format not E2E verified. |
 | 6: Rendered manifests | ❌ Not started | — | Requires Stages 0-6 (kustomize-build step) |
 | 7: Multi-tenant self-service | ❌ Not started | — | Requires Stages 0-4 (Pipeline CRD + PolicyGate injection) |
 
