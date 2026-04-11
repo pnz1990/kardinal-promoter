@@ -5,9 +5,9 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-11T03:19:17Z",
   "current_queue": "queue-010",
-  "last_sm_review": "2026-04-11T01:49:05Z",
-  "last_pm_review": "2026-04-11T01:50:02Z",
-  "batches_since_competitive_analysis": 0,
+  "last_sm_review": "2026-04-11T03:21:29Z",
+  "last_pm_review": "2026-04-11T03:24:08Z",
+  "batches_since_competitive_analysis": 1,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,

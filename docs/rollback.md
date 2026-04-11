@@ -49,6 +49,30 @@ For environments where emergency rollbacks should not require PR review, configu
 
 kardinal-promoter triggers automatic rollback in two scenarios:
 
+### Consecutive health-check failures (configurable threshold)
+
+The most common automatic rollback scenario. Configure per environment:
+
+```yaml
+spec:
+  environments:
+    - name: prod
+      autoRollback:
+        failureThreshold: 3   # default: 3 consecutive failures
+```
+
+**How it works:**
+
+1. The `PromotionStep` reconciler tracks `status.consecutiveHealthFailures` during `HealthChecking`.
+2. On each failed health check the counter increments. On success it resets to 0.
+3. When `consecutiveHealthFailures >= failureThreshold`, the controller automatically creates a rollback Bundle with:
+   - `spec.provenance.rollbackOf: <original bundle name>`
+   - Label `kardinal.io/rollback: "true"`
+4. The rollback Bundle runs through the same promotion flow (same gates, same PR flow).
+5. **Idempotent**: if a rollback Bundle already exists for the original Bundle, no duplicate is created.
+
+Omit `spec.environments[].autoRollback` to disable automatic rollback for an environment.
+
 ### Health timeout
 
 If a PromotionStep does not reach `Verified` within the configured `health.timeout` (default: 10m), the step is marked as `Failed`. The controller creates a rollback Bundle for the affected environment.
@@ -57,7 +81,7 @@ If a PromotionStep does not reach `Verified` within the configured `health.timeo
 
 If a delegated rollout (Argo Rollouts or Flagger) reports a `Degraded` or `Failed` status, the PromotionStep is marked as `Failed`. The controller creates a rollback Bundle.
 
-In both cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node).
+In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node).
 
 ## What Happens in Git
 
