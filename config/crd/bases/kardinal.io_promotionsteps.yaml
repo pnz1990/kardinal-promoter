@@ -72,12 +72,30 @@ spec:
                 description: PipelineName is the Pipeline this step belongs to.
                 minLength: 1
                 type: string
+              requiredGates:
+                description: |-
+                  RequiredGates holds the names of PolicyGate instances that must be ready
+                  before this PromotionStep can be promoted. Set by the Graph controller via CEL.
+                items:
+                  type: string
+                type: array
               stepType:
                 description: |-
                   StepType identifies the built-in or custom step to execute.
                   Examples: git-clone, kustomize-set-image, git-commit, open-pr,
                             wait-for-merge, health-check.
                 minLength: 1
+                type: string
+              upstreamVerified:
+                description: |-
+                  UpstreamVerified carries the resolved state of the primary upstream PromotionStep.
+                  Set by the kro Graph controller via CEL expression substitution.
+                  Example: "Verified" when the upstream test environment finished successfully.
+                type: string
+              upstreamVerified2:
+                description: |-
+                  UpstreamVerified2 carries the resolved state of a secondary upstream PromotionStep
+                  (for fan-in scenarios with multiple upstreams).
                 type: string
             required:
             - bundleName

@@ -29,3 +29,15 @@ rules:
   - apiGroups: ["experimental.kro.run"]
     resources: ["graphs", "graphs/status", "graphrevisions", "graphrevisions/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Deployments — required by the Deployment health adapter to check rollout status.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  # ArgoCDApplications — required by the ArgoCD health adapter (optional).
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch"]
+  # Flux Kustomizations — required by the Flux health adapter (optional).
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list", "watch"]

@@ -32,6 +32,22 @@ type PromotionStepSpec struct {
 	// Pipeline and Bundle at graph generation time.
 	// +optional
 	Inputs map[string]string `json:"inputs,omitempty"`
+
+	// UpstreamVerified carries the resolved state of the primary upstream PromotionStep.
+	// Set by the kro Graph controller via CEL expression substitution.
+	// Example: "Verified" when the upstream test environment finished successfully.
+	// +optional
+	UpstreamVerified string `json:"upstreamVerified,omitempty"`
+
+	// UpstreamVerified2 carries the resolved state of a secondary upstream PromotionStep
+	// (for fan-in scenarios with multiple upstreams).
+	// +optional
+	UpstreamVerified2 string `json:"upstreamVerified2,omitempty"`
+
+	// RequiredGates holds the names of PolicyGate instances that must be ready
+	// before this PromotionStep can be promoted. Set by the Graph controller via CEL.
+	// +optional
+	RequiredGates []string `json:"requiredGates,omitempty"`
 }
 
 // PromotionStepStatus defines the observed state of a PromotionStep.
