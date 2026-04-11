@@ -208,8 +208,9 @@ func TestHealthCheckingWithRealAdapter_NotHealthy(t *testing.T) {
 	assert.Equal(t, "HealthChecking", updated.Status.State)
 }
 
-// TestAutoRollback_TriggersAfterThreshold verifies that after failureThreshold
-// consecutive health-check failures a rollback Bundle is created.
+// TestAutoRollback_TriggersAfterThreshold verifies that after reaching the failure
+// threshold, the PromotionStep reconciler increments consecutiveHealthFailures but
+// does NOT create a rollback Bundle — that is now the RollbackPolicyReconciler's job.
 func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 	s := healthTestScheme(t)
 	threshold := 3
@@ -231,7 +232,7 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 			},
 		},
 	}
-	// Bundle with images so we can create a rollback bundle.
+	// Bundle with images.
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
 		Spec: v1alpha1.BundleSpec{
@@ -241,7 +242,7 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 		},
 		Status: v1alpha1.BundleStatus{Phase: "Promoting"},
 	}
-	// PromotionStep already at threshold-1 failures; next failure should trigger rollback.
+	// PromotionStep already at threshold-1 failures; next failure increments counter.
 	ps := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{Name: "step-hc-ar", Namespace: "default"},
 		Spec: v1alpha1.PromotionStepSpec{
@@ -252,7 +253,7 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 		},
 		Status: v1alpha1.PromotionStepStatus{
 			State:                     "HealthChecking",
-			ConsecutiveHealthFailures: threshold - 1, // one more → trigger
+			ConsecutiveHealthFailures: threshold - 1, // one more → increment to threshold
 		},
 	}
 	// Deployment still not healthy.
@@ -286,30 +287,25 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The step should remain HealthChecking (not Failed) — auto-rollback creates a new Bundle.
+	// The step should remain HealthChecking — auto-rollback is now via RollbackPolicyReconciler.
 	var updatedPS v1alpha1.PromotionStep
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-hc-ar", Namespace: "default"}, &updatedPS))
-	// Counter incremented.
-	assert.Equal(t, threshold, updatedPS.Status.ConsecutiveHealthFailures)
+	// Counter incremented — this is what RollbackPolicyReconciler watches.
+	assert.Equal(t, threshold, updatedPS.Status.ConsecutiveHealthFailures,
+		"consecutiveHealthFailures must be incremented to threshold")
 
-	// A rollback Bundle should have been created.
+	// The PromotionStep reconciler must NOT create rollback bundles anymore.
+	// The RollbackPolicyReconciler handles this when it detects the threshold.
 	var bundleList v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList))
-	// There should be a rollback bundle (in addition to the original).
-	var rollbackBundles []v1alpha1.Bundle
 	for _, b := range bundleList.Items {
-		if b.Labels["kardinal.io/rollback"] == "true" {
-			rollbackBundles = append(rollbackBundles, b)
-		}
+		assert.NotEqual(t, "true", b.Labels["kardinal.io/rollback"],
+			"PromotionStep reconciler must NOT create rollback bundles — use RollbackPolicyReconciler")
 	}
-	require.Len(t, rollbackBundles, 1, "exactly one rollback bundle should be created")
-	rb := rollbackBundles[0]
-	require.NotNil(t, rb.Spec.Provenance, "rollback bundle must have provenance")
-	assert.Equal(t, "bundle-1", rb.Spec.Provenance.RollbackOf)
 }
 
 // TestAutoRollback_DoesNotTriggerBeforeThreshold verifies that below the threshold
-// no rollback Bundle is created.
+// no rollback Bundle is created and consecutiveHealthFailures is incremented.
 func TestAutoRollback_DoesNotTriggerBeforeThreshold(t *testing.T) {
 	s := healthTestScheme(t)
 
@@ -381,8 +377,9 @@ func TestAutoRollback_DoesNotTriggerBeforeThreshold(t *testing.T) {
 	}
 }
 
-// TestAutoRollback_Idempotent verifies that reconciling twice after threshold
-// creates only one rollback Bundle.
+// TestAutoRollback_Idempotent verifies that the PromotionStep reconciler
+// increments consecutiveHealthFailures but never creates rollback Bundles.
+// The RollbackPolicyReconciler is responsible for rollback creation and idempotency.
 func TestAutoRollback_Idempotent(t *testing.T) {
 	s := healthTestScheme(t)
 
@@ -455,7 +452,7 @@ func TestAutoRollback_Idempotent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Exactly one rollback bundle should exist.
+	// No rollback bundles should be created by the PromotionStep reconciler.
 	var bundleList v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList))
 	var rollbacks int
@@ -464,5 +461,6 @@ func TestAutoRollback_Idempotent(t *testing.T) {
 			rollbacks++
 		}
 	}
-	assert.Equal(t, 1, rollbacks, "exactly one rollback bundle should exist even after multiple reconciles")
+	assert.Equal(t, 0, rollbacks,
+		"PromotionStep reconciler must NOT create rollback bundles — RollbackPolicyReconciler is responsible")
 }
