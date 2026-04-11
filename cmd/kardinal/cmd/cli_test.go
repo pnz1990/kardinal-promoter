@@ -62,13 +62,9 @@ func TestCreateBundle_CreatesBundle(t *testing.T) {
 func TestRollback_CreatesBundleWithRollbackOf(t *testing.T) {
 	s := cliTestScheme(t)
 	verifiedBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-v1",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
-		},
-		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status: v1alpha1.BundleStatus{Phase: "Verified"},
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle).WithStatusSubresource(verifiedBundle).Build()
 
@@ -305,15 +301,11 @@ func TestPolicySimulate_EnvSpecificGateExcluded(t *testing.T) {
 // copies Type from the original Verified bundle, not hardcoding "image" (CLI-5 fix).
 func TestRollback_CopiesTypeFromOriginalBundle(t *testing.T) {
 	s := cliTestScheme(t)
-	// Verified bundle with type=config — must include pipeline label so rollbackFn List finds it.
+	// Verified bundle with type=config; no special label needed — rollbackFn filters by Spec.Pipeline.
 	verifiedBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-cfg-v1",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
-		},
-		Spec:   v1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
-		Status: v1alpha1.BundleStatus{Phase: "Verified"},
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-cfg-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle).WithStatusSubresource(verifiedBundle).Build()
 

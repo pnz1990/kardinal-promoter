@@ -65,18 +65,18 @@ func rollbackFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client,
 
 	rollbackOf := toBundle
 	if rollbackOf == "" {
+		// List all bundles in the namespace and filter by Spec.Pipeline.
+		// A label selector is not used here because bundles created by the CLI
+		// may not carry the kardinal.io/pipeline label; Spec.Pipeline is authoritative.
 		var bundles v1alpha1.BundleList
-		if listErr := c.List(ctx, &bundles,
-			sigs_client.InNamespace(ns),
-			sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
-		); listErr != nil {
+		if listErr := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr != nil {
 			return fmt.Errorf("list bundles: %w", listErr)
 		}
 
 		var latest *v1alpha1.Bundle
 		for i := range bundles.Items {
 			b := &bundles.Items[i]
-			if b.Status.Phase != "Verified" {
+			if b.Spec.Pipeline != pipeline || b.Status.Phase != "Verified" {
 				continue
 			}
 			if latest == nil || b.CreationTimestamp.After(latest.CreationTimestamp.Time) {
