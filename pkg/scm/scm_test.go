@@ -186,7 +186,7 @@ func TestRenderPRBody(t *testing.T) {
 		GateResults: []v1alpha1.GateResult{
 			{GateName: "no-weekend-deploys", Result: "pass", Reason: "weekday"},
 		},
-		UpstreamEnvironments: []v1alpha1.EnvironmentStatus{
+		UpstreamEnvironments: []scm.PRBodyUpstreamEnv{
 			{Name: "test", Phase: "Verified"},
 			{Name: "uat", Phase: "Verified"},
 		},
@@ -302,7 +302,7 @@ func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 		GateResults: []v1alpha1.GateResult{
 			{GateName: "no-weekend-deploys", GateNamespace: "platform-policies", Result: "pass", Reason: "weekday", EvaluatedAt: evalTime},
 		},
-		UpstreamEnvironments: []v1alpha1.EnvironmentStatus{
+		UpstreamEnvironments: []scm.PRBodyUpstreamEnv{
 			{Name: "test", Phase: "Verified"},
 			{Name: "uat", Phase: "Verified"},
 		},
@@ -551,6 +551,32 @@ func TestGitLabProvider_APIError(t *testing.T) {
 }
 
 // ─── NewProvider factory tests ────────────────────────────────────────────────
+
+// TestRenderPRBody_ElapsedPrecomputed verifies that upstream environment elapsed
+// time is pre-computed by the caller and rendered verbatim from PRBodyUpstreamEnv.Elapsed.
+// This eliminates SCM-4: time.Since() called inside PR template execution.
+func TestRenderPRBody_ElapsedPrecomputed(t *testing.T) {
+	healthCheckedAt := metav1.NewTime(time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC))
+	data := scm.PRBody{
+		PipelineName: "nginx-demo",
+		Environment:  "prod",
+		BundleName:   "nginx-demo-v1-29-0",
+		Bundle:       v1alpha1.BundleSpec{Type: "image"},
+		UpstreamEnvironments: []scm.PRBodyUpstreamEnv{
+			{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, Elapsed: "45m"},
+			{Name: "test", Phase: "Verified", HealthCheckedAt: nil, Elapsed: ""},
+		},
+	}
+
+	body, err := scm.RenderPRBody(data)
+	require.NoError(t, err)
+
+	// Pre-computed elapsed must appear verbatim — no time.Since in template
+	assert.Contains(t, body, "45m", "pre-computed elapsed must appear in PR body")
+	assert.Contains(t, body, "uat")
+	assert.Contains(t, body, "test")
+	assert.Contains(t, body, "Upstream Verification")
+}
 
 func TestNewProvider_GitHub(t *testing.T) {
 	p, err := scm.NewProvider("github", "token", "https://api.github.com", "")

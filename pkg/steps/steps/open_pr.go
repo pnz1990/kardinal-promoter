@@ -16,7 +16,9 @@ package steps
 import (
 	"context"
 	"fmt"
+	"time"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -58,7 +60,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		BundleName:           state.BundleName,
 		Bundle:               state.Bundle,
 		GateResults:          state.GateResults,
-		UpstreamEnvironments: state.UpstreamEnvironments,
+		UpstreamEnvironments: buildPRBodyUpstreamEnvs(state.UpstreamEnvironments),
 		Pipeline:             state.Pipeline,
 	})
 	if err != nil {
@@ -107,4 +109,24 @@ func extractRepo(url string) string {
 		}
 	}
 	return url
+}
+
+// buildPRBodyUpstreamEnvs converts []v1alpha1.EnvironmentStatus to []scm.PRBodyUpstreamEnv,
+// pre-computing the elapsed time for each environment at call time rather than at
+// template render time. This eliminates SCM-4: time.Since() inside PR template execution.
+func buildPRBodyUpstreamEnvs(envs []v1alpha1.EnvironmentStatus) []scm.PRBodyUpstreamEnv {
+	now := time.Now().UTC()
+	result := make([]scm.PRBodyUpstreamEnv, 0, len(envs))
+	for _, env := range envs {
+		e := scm.PRBodyUpstreamEnv{
+			Name:            env.Name,
+			Phase:           env.Phase,
+			HealthCheckedAt: env.HealthCheckedAt,
+		}
+		if env.HealthCheckedAt != nil && !env.HealthCheckedAt.IsZero() {
+			e.Elapsed = scm.FormatElapsed(env.HealthCheckedAt.Time, now)
+		}
+		result = append(result, e)
+	}
+	return result
 }
