@@ -41,21 +41,21 @@ crash occurs between the call and the status patch.
 
 ## Files to Create/Modify
 
-- `pkg/steps/steps/custom.go` — custom HTTP step implementation
+- `pkg/steps/custom.go` — custom HTTP step implementation (moved to parent pkg)
 - `pkg/steps/steps/custom_test.go` — unit tests with mock HTTP server
 - `pkg/steps/registry.go` — extend Lookup to dispatch unknown steps to custom
-- `api/v1alpha1/pipeline_types.go` — add `WebhookConfig` to `StepSpec`
+- `api/v1alpha1/pipeline_types.go` — add `WebhookConfig` + `StepSpec` types
 - `examples/custom-step/server.go` — example custom step server
 - `examples/custom-step/pipeline.yaml` — example Pipeline with custom step
 - `docs/custom-steps.md` — documentation
 
 ## Tasks
 
-- [ ] T001 Add `WebhookConfig` to `StepSpec` in pipeline_types.go
-- [ ] T002 Write failing tests for custom HTTP step (pass, fail, timeout, auth)
-- [ ] T003 Implement `pkg/steps/steps/custom.go` with HTTP dispatch
-- [ ] T004 Extend step registry to dispatch unknown step names to custom
-- [ ] T005 Write integration test: custom step pass → next step receives outputs
-- [ ] T006 Create examples/custom-step/ server and pipeline
-- [ ] T007 Create docs/custom-steps.md
-- [ ] T008 Verify go test -race passes
+- [x] T001 Add `WebhookConfig` to `StepSpec` in pipeline_types.go
+- [x] T002 Write failing tests for custom HTTP step (pass, fail, timeout, auth)
+- [x] T003 Implement `pkg/steps/custom.go` with HTTP dispatch
+- [x] T004 Extend step registry to dispatch unknown step names to custom
+- [x] T005 Write integration test: custom step pass → next step receives outputs
+- [x] T006 Create examples/custom-step/ server and pipeline
+- [x] T007 Create docs/custom-steps.md
+- [x] T008 Verify go test -race passes
