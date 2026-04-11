@@ -176,3 +176,42 @@ func TestWebhook_IgnoresNonMergeEvents(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-wfm", Namespace: "default"}, &updated))
 	assert.Equal(t, "WaitingForMerge", updated.Status.State)
 }
+
+// TestWebhookHealth_ReturnsOK verifies that GET /webhook/scm/health returns 200
+// with a JSON body containing status, webhookConfigured, and eventsProcessed fields.
+func TestWebhookHealth_ReturnsOK(t *testing.T) {
+	s := webhookScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	server := newWebhookServerWithConfig(&mockSCMProvider{}, c, zerolog.Nop(), true)
+	handler := server.HealthHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/webhook/scm/health", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	body := w.Body.String()
+	assert.Contains(t, body, `"status"`)
+	assert.Contains(t, body, `"webhookConfigured"`)
+	assert.Contains(t, body, `"eventsProcessed"`)
+}
+
+// TestWebhookHealth_ReflectsWebhookUnconfigured verifies that the health endpoint
+// returns webhookConfigured=false when no secret is set.
+func TestWebhookHealth_ReflectsWebhookUnconfigured(t *testing.T) {
+	s := webhookScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	server := newWebhookServerWithConfig(&mockSCMProvider{}, c, zerolog.Nop(), false)
+	handler := server.HealthHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/webhook/scm/health", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"webhookConfigured":false`)
+}

@@ -19,7 +19,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"net/http"
 	"os"
@@ -101,9 +100,6 @@ func main() {
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 
-	// Inject zerolog into controller-runtime log context
-	ctx := logger.WithContext(context.Background())
-
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -124,8 +120,9 @@ func main() {
 	gitClient := scm.NewExecGitClient()
 
 	if err := (&bundlereconciler.Reconciler{
-		Client:     mgr.GetClient(),
-		Translator: newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
+		Client:      mgr.GetClient(),
+		Translator:  newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
+		SCMProvider: scmProvider,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -164,22 +161,14 @@ func main() {
 
 	// Start webhook server in a goroutine.
 	go func() {
-		webhookSrv := newWebhookServer(scmProvider, mgr.GetClient(), logger)
+		webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
 		mux := http.NewServeMux()
 		mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
-		mux.HandleFunc("/webhook/scm/health", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
+		mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
 		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
 		if err := http.ListenAndServe(webhookBindAddress, mux); err != nil {
 			logger.Error().Err(err).Msg("webhook server error")
 		}
-	}()
-
-	// Startup reconciliation: sync WaitingForMerge steps that may have been
-	// merged during controller downtime.
-	go func() {
-		startupReconciliation(ctx, scmProvider, mgr.GetClient(), logger)
 	}()
 
 	logger.Info().Msg("starting kardinal-controller")
