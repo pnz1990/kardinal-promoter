@@ -35,18 +35,11 @@ echo "[krocodile] Checked out commit ${KROCODILE_COMMIT}."
 
 # ── 2. Build the controller binary ────────────────────────────────────────────
 echo "[krocodile] Building controller binary..."
-# Patch go.mod to build with local toolchain if needed
-LOCAL_GO_VERSION=$(GOTOOLCHAIN=local go version 2>/dev/null | awk '{print $3}' | sed 's/go//')
-REQUIRED_VERSION=$(grep '^go ' "$TMPDIR/kro/go.mod" | awk '{print $2}')
-if [ -n "$LOCAL_GO_VERSION" ] && [ -n "$REQUIRED_VERSION" ]; then
-  # Compare: if local < required, patch go.mod
-  if printf '%s\n%s' "$LOCAL_GO_VERSION" "$REQUIRED_VERSION" | sort -V | head -1 | grep -q "^${LOCAL_GO_VERSION}$"; then
-    sed -i.bak "s/^go ${REQUIRED_VERSION}/go ${LOCAL_GO_VERSION}/" "$TMPDIR/kro/go.mod"
-    echo "[krocodile] Patched go.mod: go ${REQUIRED_VERSION} → ${LOCAL_GO_VERSION}"
-  fi
-fi
+# krocodile requires go 1.26+. Use GOTOOLCHAIN=auto to allow Go to download
+# the required toolchain version if needed (network access required in CI).
+# Do NOT set GOTOOLCHAIN=local here — it prevents toolchain downloads.
 (cd "$TMPDIR/kro" && \
-  GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  GOTOOLCHAIN=auto CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -ldflags="-w -s" -o bin/graph-controller ./experimental/cmd/)
 echo "[krocodile] Binary built."
 

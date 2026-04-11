@@ -19,8 +19,9 @@ jobs:
     name: e2e journey ${{ github.event.inputs.journey || 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      GOTOOLCHAIN: local
+    # Note: GOTOOLCHAIN is NOT set at job level. The krocodile install step needs
+    # GOTOOLCHAIN=auto to download go1.26+ for building the krocodile controller.
+    # Our own build steps set GOTOOLCHAIN=local explicitly.
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -48,11 +49,15 @@ jobs:
           KIND_CLUSTER=kardinal-e2e bash hack/install-krocodile.sh
 
       - name: Build and load controller image
+        env:
+          GOTOOLCHAIN: local
         run: |
           make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
 
       - name: Install kardinal-promoter
+        env:
+          GOTOOLCHAIN: local
         run: |
           make install
           kubectl apply -f config/manager/
@@ -64,6 +69,8 @@ jobs:
           kubectl get crd graphs.experimental.kro.run
 
       - name: Run selected journeys
+        env:
+          GOTOOLCHAIN: local
         run: |
           mkdir -p test/e2e/results
           JOURNEY="${{ github.event.inputs.journey || 'all' }}"
