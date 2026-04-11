@@ -125,6 +125,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
+	// Pause check: if the Pipeline is paused, hold all non-terminal states.
+	// This allows in-flight PRs to remain open without advancing further.
+	if ps.Status.State != StateVerified && ps.Status.State != StateFailed {
+		pipeline, pipelineErr := r.loadPipeline(ctx, &ps)
+		if pipelineErr == nil && pipeline.Spec.Paused {
+			log.Info().
+				Str("pipeline", ps.Spec.PipelineName).
+				Str("state", ps.Status.State).
+				Msg("pipeline is paused — holding PromotionStep")
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+	}
+
 	switch ps.Status.State {
 	case StatePending, StatePendingExplicit:
 		return r.handlePending(ctx, log, &ps)

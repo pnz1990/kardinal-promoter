@@ -212,7 +212,8 @@ Flags:
 
 ### kardinal pause
 
-Pause all promotion activity for a Pipeline by injecting a PolicyGate with `expression: "false"`.
+Pause all promotion activity for a Pipeline by setting `spec.paused: true`.
+In-flight PromotionSteps are held at their current state; new promotions will not start.
 
 ```bash
 kardinal pause <pipeline>
@@ -220,15 +221,12 @@ kardinal pause <pipeline>
 
 Output:
 ```
-Pipeline my-app paused.
-  PolicyGate "freeze-1712567890" created with expression: "false"
-  All in-flight promotions will be blocked at the next gate evaluation.
-  Run "kardinal resume my-app" to remove the freeze.
+Pipeline my-app paused. No new promotions will start.
 ```
 
 ### kardinal resume
 
-Resume a paused Pipeline by deleting the freeze PolicyGate.
+Resume a paused Pipeline by setting `spec.paused: false`.
 
 ```bash
 kardinal resume <pipeline>

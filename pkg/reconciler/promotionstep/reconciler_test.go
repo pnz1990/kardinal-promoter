@@ -505,3 +505,90 @@ func TestStepIndex_OutputsAccumulated(t *testing.T) {
 	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "step-out", Namespace: "default"}, &final))
 	assert.Equal(t, "Verified", final.Status.State)
 }
+
+// TestPausedPipeline_BlocksPromotionStep verifies that a paused Pipeline causes the
+// PromotionStep reconciler to hold (not advance state) and requeue.
+func TestPausedPipeline_BlocksPromotionStep(t *testing.T) {
+	scheme := buildScheme(t)
+
+	pausedPipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Paused: true,
+			Git:    v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto"},
+			},
+		},
+	}
+	step := makeStep("step-paused", "nginx-demo", "bundle-1", "test")
+	step.Status.State = "Promoting"
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pausedPipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-paused", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Must requeue to re-check the pause state.
+	assert.Greater(t, result.RequeueAfter, time.Duration(0), "must requeue when pipeline is paused")
+
+	// Step must NOT have advanced from Promoting.
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-paused", Namespace: "default"}, &updated))
+	assert.Equal(t, "Promoting", updated.Status.State,
+		"step must stay at Promoting when pipeline is paused; got %s", updated.Status.State)
+}
+
+// TestPausedPipeline_IdempotentOnMultipleReconciles verifies that reconciling a paused
+// pipeline multiple times does not change the PromotionStep state (idempotent).
+func TestPausedPipeline_IdempotentOnMultipleReconciles(t *testing.T) {
+	scheme := buildScheme(t)
+
+	pausedPipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Paused: true,
+			Git:    v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto"},
+			},
+		},
+	}
+	step := makeStep("step-paused-idem", "nginx-demo", "bundle-1", "test")
+	step.Status.State = "Promoting"
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pausedPipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-paused-idem", Namespace: "default"}}
+	for i := 0; i < 3; i++ {
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err, "reconcile %d should not error", i)
+	}
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &updated))
+	assert.Equal(t, "Promoting", updated.Status.State,
+		"step must stay at Promoting after 3 reconciles of paused pipeline")
+}

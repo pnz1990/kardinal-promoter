@@ -550,3 +550,128 @@ func TestBundleReconciler_ConfigBundleSupersededByNewConfigBundle(t *testing.T) 
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-config-v2", Namespace: "default"}, &gotNew))
 	assert.Equal(t, "Available", gotNew.Status.Phase)
 }
+
+// TestBundleReconciler_PausedPipeline verifies that a paused Pipeline blocks
+// an Available Bundle from advancing to Promoting.
+func TestBundleReconciler_PausedPipeline(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Paused: true,
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+			},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	translator := &mockTranslator{graphName: "graph-1"}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Translator must NOT be called — pipeline is paused.
+	assert.False(t, translator.called, "translator must not be called when pipeline is paused")
+	// Must requeue to re-check pause state.
+	assert.Greater(t, result.RequeueAfter, time.Duration(0), "must requeue to poll pause state")
+
+	// Bundle must remain Available (not advance to Promoting).
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &got))
+	assert.Equal(t, "Available", got.Status.Phase, "bundle must stay Available when pipeline is paused")
+}
+
+// TestBundleReconciler_ResumedPipeline verifies that a non-paused Pipeline allows
+// an Available Bundle to advance to Promoting.
+func TestBundleReconciler_ResumedPipeline(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Paused: false,
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+			},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	translator := &mockTranslator{graphName: "graph-1"}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Translator MUST be called when pipeline is not paused.
+	assert.True(t, translator.called, "translator must be called when pipeline is not paused")
+
+	// Bundle must advance to Promoting.
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &got))
+	assert.Equal(t, "Promoting", got.Status.Phase, "bundle must advance to Promoting when pipeline is not paused")
+}
+
+// TestBundleReconciler_PausedIdempotent verifies that reconciling a paused pipeline
+// multiple times does not change state (idempotent).
+func TestBundleReconciler_PausedIdempotent(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Paused:       true,
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	translator := &mockTranslator{graphName: "graph-1"}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}}
+
+	// Reconcile twice.
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	// Bundle must still be Available after two reconciles.
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &got))
+	assert.Equal(t, "Available", got.Status.Phase, "bundle must stay Available after idempotent reconcile of paused pipeline")
+	// Translator must never have been called.
+	assert.False(t, translator.called, "translator must not be called for paused pipeline (idempotent)")
+}
