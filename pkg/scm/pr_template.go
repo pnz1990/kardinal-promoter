@@ -19,8 +19,46 @@ import (
 	"text/template"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
+
+// PRBodyUpstreamEnv holds per-environment upstream verification evidence for the
+// PR body template. Elapsed is pre-computed by the caller (not derived at render time)
+// to eliminate time.Since() calls inside template execution (SCM-4 logic leak).
+type PRBodyUpstreamEnv struct {
+	// Name is the environment name.
+	Name string
+	// Phase is the PromotionStep phase (e.g. "Verified").
+	Phase string
+	// HealthCheckedAt is the timestamp the environment was last health-checked.
+	// Nil means not yet health-checked.
+	HealthCheckedAt *metav1.Time
+	// Elapsed is a pre-computed human-readable elapsed time since HealthCheckedAt.
+	// Computed by the caller at the time the PR body is rendered, not by the template.
+	// Empty string is rendered as "—" in the table.
+	Elapsed string
+}
+
+// FormatElapsed formats a duration as a human-readable elapsed time string
+// (e.g. "45m", "2h30m", "3d"). Used by callers to pre-compute PRBodyUpstreamEnv.Elapsed
+// before calling RenderPRBody.
+func FormatElapsed(since time.Time, now time.Time) string {
+	d := now.Sub(since)
+	if d < 0 {
+		d = -d
+	}
+	minutes := int(d.Minutes())
+	if minutes < 60 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	hours := int(d.Hours())
+	if hours < 24 {
+		return fmt.Sprintf("%dh%dm", hours, minutes%60)
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
 
 // PRBody holds the data used to render the PR body template.
 type PRBody struct {
@@ -43,29 +81,12 @@ type PRBody struct {
 	GateResults []v1alpha1.GateResult
 
 	// UpstreamEnvironments holds verification evidence for upstream environments.
-	UpstreamEnvironments []v1alpha1.EnvironmentStatus
+	// Each entry includes a pre-computed Elapsed string to avoid time.Since in
+	// template execution (SCM-4 logic leak fix).
+	UpstreamEnvironments []PRBodyUpstreamEnv
 }
 
-// elapsedSince returns a human-readable elapsed time string since t.
-func elapsedSince(t time.Time) string {
-	d := time.Since(t)
-	if d < 0 {
-		d = -d
-	}
-	minutes := int(d.Minutes())
-	if minutes < 60 {
-		return fmt.Sprintf("%dm", minutes)
-	}
-	hours := int(d.Hours())
-	if hours < 24 {
-		return fmt.Sprintf("%dh%dm", hours, minutes%60)
-	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
-}
-
-var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMap{
-	"elapsed": elapsedSince,
-}).Parse(`
+var prBodyTemplate = template.Must(template.New("pr-body").Parse(`
 <!-- kardinal-promoter auto-generated PR -->
 ## Promotion: {{.BundleName}} → {{.PipelineName}}/{{.Environment}}
 
@@ -94,7 +115,7 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 | Environment | Health Checked At | Elapsed |
 |---|---|---|
 {{- range .UpstreamEnvironments}}
-| {{.Name}} | {{if .HealthCheckedAt}}{{.HealthCheckedAt.UTC.Format "2006-01-02T15:04Z"}}{{else}}—{{end}} | {{if .HealthCheckedAt}}{{elapsed .HealthCheckedAt.Time}}{{else}}—{{end}} |
+| {{.Name}} | {{if .HealthCheckedAt}}{{.HealthCheckedAt.UTC.Format "2006-01-02T15:04Z"}}{{else}}—{{end}} | {{if .Elapsed}}{{.Elapsed}}{{else}}—{{end}} |
 {{- else}}
 | _(none)_ | — | — |
 {{- end}}
