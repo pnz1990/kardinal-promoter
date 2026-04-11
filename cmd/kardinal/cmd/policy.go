@@ -96,14 +96,7 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 		if recheck == "" {
 			recheck = "5m"
 		}
-		ready := "unknown"
-		if g.Status.LastEvaluatedAt != nil {
-			if g.Status.Ready {
-				ready = "Pass"
-			} else {
-				ready = "Block"
-			}
-		}
+		ready := PolicyGatePhase(g)
 		lastEval := "-"
 		if g.Status.LastEvaluatedAt != nil {
 			lastEval = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
