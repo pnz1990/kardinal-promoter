@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T01:10Z
+> Last updated: 2026-04-11T01:50Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -23,9 +23,9 @@
 | 6 | PromotionStep Reconciler and Full Promotion Loop | ✅ Complete | Item 013 merged: PR #58. Full state machine, Bundle supersession, webhook, kardinal explain. |
 | 7 | Health Adapters | ✅ Complete | Item 014 merged: PR #62. DeploymentAdapter, ArgoCDAdapter, FluxAdapter, AutoDetector, remote kubeconfig. |
 | 8 | CLI | ✅ Complete | Items 011/015 merged: PRs #37, #63. Full CLI: version, get, explain, create bundle, rollback, pause/resume, policy list/simulate, history. |
-| 9 | Embedded React UI | 📋 Planned | Depends on Stage 7 |
+| 9 | Embedded React UI | ✅ Complete | Item 019 merged: PR #73. React 19 + dagre DAG view, UI API, go:embed, --ui-listen-address flag. |
 | 10 | PR Evidence, Labels, and Webhook Reliability | ✅ Complete | Items 016/018 merged: PRs #64, #69. Full 3-table PR body, labels, startup reconciliation via Runnable, health endpoint with metrics counter. |
-| 11 | GitHub Actions Integration and `kardinal init` | 📋 Planned | Depends on Stage 8 |
+| 11 | GitHub Actions Integration and `kardinal init` | 🔄 In Progress | Item 020 merged: PR #72. Bundle webhook endpoint (/api/v1/bundles) + GitHub Action done. kardinal init (item 017) done. Remaining: E2E test. |
 | 12 | Helm Strategy and Config-Only Promotions | 📋 Planned | Depends on Stage 6 |
 | 13 | Rollback and Pause/Resume | 📋 Planned | Depends on Stage 6 |
 | 14 | Distributed Mode (Control Plane + Agents) | 📋 Planned | Depends on Stage 6 |
@@ -121,6 +121,23 @@
 |---|---|---|---|---|
 | 016 | PR Evidence, Labels, Webhook Reliability | ✅ Complete | #64 merged | Full 3-table PR body, AddLabelsToPR interface+impl, EnsureLabels, label application |
 | 018 | Startup Reconciliation + Webhook Health Endpoint | ✅ Complete | #69 merged | Start(ctx) Runnable, atomic event counter, JSON health endpoint, 5 new tests |
+
+---
+
+## Stage 9 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 019 | Embedded React UI (Stage 9) | ✅ Complete | #73 merged | React 19 + dagre DAG view, PipelineList, NodeDetail, UI API, go:embed |
+
+---
+
+## Stage 11 Item Breakdown (partial)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 017 | kardinal init + Quickstart docs | ✅ Complete | #67 merged | Interactive wizard, Pipeline YAML generation, examples updated |
+| 020 | Bundle Webhook + GitHub Action | ✅ Complete | #72 merged | POST /api/v1/bundles, rate limit, Bearer auth, GitHub Action |
 
 ---
 

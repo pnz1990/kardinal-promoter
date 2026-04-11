@@ -180,21 +180,21 @@
       "dependency_mode": "merged"
     },
     "019-embedded-react-ui": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:15:07Z",
+      "worktree_path": "../kardinal-promoter.019-embedded-react-ui",
+      "pr_number": 73,
+      "pr_merged": true,
       "dependency_mode": "merged"
     },
     "020-bundle-webhook": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:15:07Z",
+      "worktree_path": "../kardinal-promoter.020-bundle-webhook",
+      "pr_number": 72,
+      "pr_merged": true,
       "dependency_mode": "merged"
     }
   },
@@ -208,8 +208,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T01:14:37Z",
-      "cycle": 18
+      "last_seen": "2026-04-11T01:44:20Z",
+      "cycle": 20
     }
   }
 }
