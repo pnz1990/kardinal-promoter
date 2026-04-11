@@ -217,7 +217,9 @@ func TestBuilder_SkipEnvironments_WithPermission(t *testing.T) {
 }
 
 // Test 6: intent.skipEnvironments = [staging] without SkipPermission.
-// Expected: error (SkipDenied).
+// ValidateSkipPermissions must return an error; Build must succeed (check moved outside Build).
+// Graph-purity: GB-2 eliminated — skip-permission check is no longer inside Build(),
+// it is called by the Translator and the result flows through Bundle.status.
 func TestBuilder_SkipEnvironments_WithoutPermission(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "staging", "prod")
@@ -237,14 +239,23 @@ func TestBuilder_SkipEnvironments_WithoutPermission(t *testing.T) {
 		},
 		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "true"},
 	}
+	gates := []kardinalv1alpha1.PolicyGate{orgGate}
 
-	_, err := b.Build(graph.BuildInput{
-		Pipeline:    pipeline,
-		Bundle:      bundle,
-		PolicyGates: []kardinalv1alpha1.PolicyGate{orgGate},
-	})
+	// ValidateSkipPermissions must return an error — skip is denied.
+	// The Translator calls this before Build() and returns the error to the Bundle reconciler.
+	err := graph.ValidateSkipPermissions(pipeline, bundle, gates)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "skip denied", "error must mention skip denied")
+
+	// Build itself must succeed — the skip-environment is filtered out by filterByIntent.
+	// The caller (Translator) is responsible for preventing Build from being called
+	// when ValidateSkipPermissions fails.
+	_, buildErr := b.Build(graph.BuildInput{
+		Pipeline:    pipeline,
+		Bundle:      bundle,
+		PolicyGates: gates,
+	})
+	require.NoError(t, buildErr, "Build must succeed when skip check has been separated out")
 }
 
 // Test 7: Shard label on prod environment.

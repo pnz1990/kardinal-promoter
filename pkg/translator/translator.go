@@ -65,6 +65,15 @@ func (t *Translator) Translate(ctx context.Context,
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
 
+	// Validate skip permissions before building the Graph.
+	// The result of this check flows into Bundle.status via the Bundle reconciler
+	// (which sets phase=Failed if Translate returns an error). This makes the
+	// skip-permission decision observable via CRD status rather than invisible
+	// inside graph.Builder. Eliminates GB-2 from 11-graph-purity-tech-debt.md.
+	if err := graph.ValidateSkipPermissions(pipeline, bundle, gates); err != nil {
+		return "", fmt.Errorf("translator.Translate: skip permission denied: %w", err)
+	}
+
 	// Build Graph spec
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:    pipeline,
