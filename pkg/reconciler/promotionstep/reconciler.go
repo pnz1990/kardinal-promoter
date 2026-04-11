@@ -273,7 +273,6 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed state: %w", patchErr)
 		}
-		_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		return ctrl.Result{}, nil
 	}
 
@@ -337,7 +336,6 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed: %w", patchErr)
 		}
-		_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		return ctrl.Result{}, nil
 	}
 }
@@ -388,15 +386,11 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			Str("prStatusRef", prStatusName).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("PRStatus reports PR closed without merge — failing")
-		bundle, _ := r.loadBundle(ctx, ps)
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.State = StateFailed
 		ps.Status.Message = fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber)
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed on closed PR: %w", patchErr)
-		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -454,9 +448,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
 			}
-			if bundle != nil {
-				_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-			}
 			return ctrl.Result{}, nil
 		}
 
@@ -504,9 +495,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			ps.Status.Conditions = appendCondition(ps.Status.Conditions, "Verified", metav1.ConditionTrue, "Verified", "promotion complete", now.Time)
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
-			}
-			if bundle != nil {
-				_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 			}
 			return ctrl.Result{}, nil
 		}
@@ -561,9 +549,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health): %w", patchErr)
 		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -578,9 +563,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
 		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-		}
 		return ctrl.Result{}, nil
 
 	case steps.StepPending:
@@ -592,9 +574,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health): %w", patchErr)
-		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -609,41 +588,6 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 		return ctrl.Result{}, fmt.Errorf("patch state %s: %w", state, err)
 	}
 	return ctrl.Result{Requeue: true}, nil
-}
-
-// copyEvidenceToBundle writes per-environment evidence into Bundle.status.environments.
-// This persists audit data beyond the PromotionStep's lifetime.
-func (r *Reconciler) copyEvidenceToBundle(ctx context.Context, ps *v1alpha1.PromotionStep, bundle *v1alpha1.Bundle) error {
-	envStatus := v1alpha1.EnvironmentStatus{
-		Name:  ps.Spec.Environment,
-		Phase: ps.Status.State,
-		PRURL: ps.Status.PRURL,
-	}
-	if prURL, ok := ps.Status.Outputs["prURL"]; ok && prURL != "" {
-		envStatus.PRURL = prURL
-	}
-	if ps.Status.State == StateVerified {
-		now := metav1.NewTime(time.Now().UTC())
-		envStatus.HealthCheckedAt = &now
-	}
-
-	patch := client.MergeFrom(bundle.DeepCopy())
-	updated := false
-	for i, env := range bundle.Status.Environments {
-		if env.Name == ps.Spec.Environment {
-			bundle.Status.Environments[i] = envStatus
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		bundle.Status.Environments = append(bundle.Status.Environments, envStatus)
-	}
-
-	if err := r.Status().Patch(ctx, bundle, patch); err != nil {
-		return fmt.Errorf("patch bundle evidence for env %s: %w", ps.Spec.Environment, err)
-	}
-	return nil
 }
 
 // SetupWithManager registers the PromotionStep reconciler with controller-runtime.
