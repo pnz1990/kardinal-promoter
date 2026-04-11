@@ -30,14 +30,14 @@ The agent will parse these fields from the conversation context. No BOUNDARY fil
 
 ## Pre-defined boundaries (copy and paste)
 
-**Refactor (graph purity, v0.2.1):**
+**Refactor (existing code cleanup — NO new CRDs, v0.2.1):**
 ```
 AGENT_ID=STANDALONE-REFACTOR
-SCOPE=Graph purity refactor — eliminate logic leaks from docs/design/11-graph-purity-tech-debt.md (v0.2.1, krocodile-independent only)
-ALLOWED_AREAS=area/controller,area/health,area/scm,area/graph,area/policygate
+SCOPE=Graph purity refactor — fix existing logic leaks in health/scm/steps/policygate/bundle (no new CRDs, no PromotionStep)
+ALLOWED_AREAS=area/health,area/scm,area/policygate
 ALLOWED_MILESTONES=v0.2.1
-ALLOWED_PACKAGES=pkg/reconciler,pkg/health,pkg/scm,pkg/steps,pkg/graph,pkg/translator,api/v1alpha1
-DENY_PACKAGES=cmd/kardinal,web/src
+ALLOWED_PACKAGES=pkg/health,pkg/scm,pkg/steps,pkg/reconciler/policygate,pkg/reconciler/bundle,pkg/reconciler/metriccheck
+DENY_PACKAGES=cmd/kardinal,web/src,api/v1alpha1,pkg/reconciler/promotionstep,pkg/graph,pkg/translator
 ```
 
 **CLI and UI:**
@@ -50,17 +50,17 @@ ALLOWED_PACKAGES=cmd/kardinal,web/src,web/embed.go
 DENY_PACKAGES=pkg/reconciler,pkg/graph,pkg/translator,api/v1alpha1
 ```
 
-**Core features (new CRDs, Graph integration):**
+**Core features (new CRDs + PromotionStep reconciler, v0.2.1 and v0.4.0):**
 ```
 AGENT_ID=STANDALONE-CORE
-SCOPE=Core features — new CRDs (PRStatus, RollbackPolicy), Graph integration, reconcilers
-ALLOWED_AREAS=area/controller,area/graph,area/policygate,area/api
+SCOPE=Core features — new CRDs (PRStatus, RollbackPolicy, SoakTimer), PromotionStep reconciler fixes, Graph/translator
+ALLOWED_AREAS=area/controller,area/graph,area/api
 ALLOWED_MILESTONES=v0.2.1,v0.4.0
-ALLOWED_PACKAGES=pkg/reconciler,pkg/graph,pkg/translator,api/v1alpha1,config/crd,config/rbac
-DENY_PACKAGES=cmd/kardinal,web/src,pkg/scm
+ALLOWED_PACKAGES=pkg/reconciler/promotionstep,pkg/reconciler/bundle,pkg/graph,pkg/translator,api/v1alpha1,config/crd,config/rbac
+DENY_PACKAGES=cmd/kardinal,web/src,pkg/scm,pkg/reconciler/policygate
 ```
 
-**Extension points (SCM, health adapters):**
+**Extension points (SCM, health adapters, v0.4.0):**
 ```
 AGENT_ID=STANDALONE-EXTENSIONS
 SCOPE=Extension points — new SCM providers (GitLab, Forgejo), health adapters (argoRollouts), update strategies

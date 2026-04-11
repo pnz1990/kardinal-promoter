@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T18:05:02Z",
+  "last_updated": "2026-04-11T18:06:56Z",
   "current_queue": "queue-016",
   "last_sm_review": "2026-04-11T16:40:53Z",
   "last_pm_review": "2026-04-11T16:41:13Z",
@@ -17,8 +17,8 @@
   },
   "bounded_sessions": {
     "STANDALONE-REFACTOR": {
-      "last_seen": null,
-      "cycle": 0,
+      "last_seen": "2026-04-11T18:06:56Z",
+      "cycle": 1,
       "scope": "Graph purity refactor",
       "current_item": null
     },
@@ -29,16 +29,16 @@
       "current_item": null
     },
     "STANDALONE-CORE": {
-      "last_seen": null,
-      "cycle": 0,
-      "scope": "Core features",
-      "current_item": null
+      "last_seen": "2026-04-11T18:05:58Z",
+      "cycle": 1,
+      "scope": "Core features \u2014 new CRDs (PRStatus, RollbackPolicy), Graph integration, reconcilers",
+      "current_item": "036-prstatuscrd"
     },
     "STANDALONE-EXTENSIONS": {
-      "last_seen": null,
-      "cycle": 0,
+      "last_seen": "2026-04-11T18:07:46Z",
+      "cycle": 1,
       "scope": "Extension points",
-      "current_item": null
+      "current_item": "037-gitlab-scm-provider"
     }
   },
   "features": {
@@ -363,10 +363,28 @@
       "pr_merged": true
     },
     "036-prstatuscrd": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
+      "state": "in_progress",
+      "assigned_to": "STANDALONE-CORE",
+      "assigned_at": "2026-04-11T18:07:53Z",
+      "worktree_path": "../kardinal-promoter.036-prstatuscrd",
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "037-cli-arch-cleanup": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "assigned_at": "2026-04-11T18:08:07Z",
+      "worktree_path": "../kardinal-promoter.037-cli-arch-cleanup",
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "037-gitlab-scm-provider": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-EXTENSIONS",
+      "assigned_at": "2026-04-11T18:11:31Z",
+      "worktree_path": "../kardinal-promoter.037-gitlab-scm-provider",
       "dependency_mode": "merged",
       "pr_number": null,
       "pr_merged": false
@@ -382,8 +400,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T18:05:02Z",
-      "cycle": 31
+      "last_seen": "2026-04-11T18:07:50Z",
+      "cycle": 32
     }
   }
 }
