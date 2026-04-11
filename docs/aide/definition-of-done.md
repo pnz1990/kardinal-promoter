@@ -450,12 +450,12 @@ Updated by the coordinator after each batch.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | 🔄 Code Complete | 2026-04-11 | All stages (0-11) code complete. E2E journey tests (J1) pass with fake client (PR #81). Kind cluster E2E needed to mark ✅. |
+| 1: Quickstart | 🔄 Code Complete | 2026-04-11 | All stages (0-13) code complete. Kind cluster E2E workflow added (PR #111). J1 kind test added. |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
-| 3: Policy governance | 🔄 In Progress | 2026-04-11 | E2E journey tests (J3) pass with fake client: weekend gate blocks, weekday passes, simulate verified (PR #81). Kind cluster needed. |
-| 4: Rollback | 🔄 In Progress | 2026-04-11 | E2E journey tests (J4) pass with fake client: auto-rollback Bundle created on health failure (PR #81). Kind cluster needed. |
-| 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented. TestJourney5CLI skips when binary not built; passes with built binary. |
-| 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build step implemented (PR #82). TestDefaultSequenceForBundle_BranchLayout passes. Kind cluster E2E needed. |
+| 3: Policy governance | 🔄 In Progress | 2026-04-11 | Fake-client + kind cluster tests added. kind_test.go verifies PolicyGate exists in cluster. |
+| 4: Rollback | 🔄 In Progress | 2026-04-11 | Auto-rollback + manual rollback + pause/resume all complete (Stage 13). |
+| 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented. CLI binary version output verified. |
+| 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build implemented (PR #82). |
 | 7: Multi-tenant self-service | ❌ Not started | — | Requires Stages 0-4 (Pipeline CRD + PolicyGate injection) |
 
 ---
