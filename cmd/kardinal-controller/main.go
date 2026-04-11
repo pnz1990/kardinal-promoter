@@ -20,6 +20,7 @@ package main
 
 import (
 	"flag"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -46,6 +47,7 @@ import (
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
@@ -90,6 +92,10 @@ func main() {
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
 		"Bearer token for authenticating POST /api/v1/bundles requests.")
+
+	var uiListenAddress string
+	flag.StringVar(&uiListenAddress, "ui-listen-address", ":8082",
+		"The address the embedded kardinal-ui HTTP server binds to.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
@@ -179,6 +185,25 @@ func main() {
 		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
 		if err := http.ListenAndServe(webhookBindAddress, mux); err != nil {
 			logger.Error().Err(err).Msg("webhook server error")
+		}
+	}()
+
+	// Start embedded UI server in a goroutine.
+	go func() {
+		uiMux := http.NewServeMux()
+		// Register read-only UI API routes.
+		uiAPI := newUIAPIServer(mgr.GetClient(), logger)
+		uiAPI.RegisterRoutes(uiMux)
+		// Serve the embedded React app at /ui/.
+		distFS, err := fs.Sub(web.Assets, "dist")
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
+		} else {
+			uiMux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(distFS))))
+		}
+		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
+		if err := http.ListenAndServe(uiListenAddress, uiMux); err != nil {
+			logger.Error().Err(err).Msg("UI server error")
 		}
 	}()
 

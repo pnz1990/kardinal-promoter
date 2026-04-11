@@ -6,6 +6,9 @@ vendor/
 dist/
 bin/
 out/
+# Exception: web/dist is committed for go:embed to work during Go builds
+!web/dist/
+!web/dist/**
 
 # Research (local only — not committed)
 research/
