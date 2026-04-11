@@ -72,8 +72,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	recheckInterval := parseRecheckInterval(gate.Spec.RecheckInterval)
 
-	// Build CEL context
-	celCtx, err := r.buildContext(ctx, &gate, bundleName)
+	// Build CEL context. bundleVersion is returned separately so it can be
+	// written to status.reason, making the evaluated bundle version CRD-observable
+	// (PG-6: extractVersion result was previously invisible to the Graph).
+	celCtx, bundleVersion, err := r.buildContext(ctx, &gate, bundleName)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to build CEL context, setting gate to blocked")
 		if patchErr := r.patchStatus(ctx, &gate, false,
@@ -95,6 +97,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
+	// Prefix reason with bundle version so it is CRD-observable without a
+	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
+	// field addition for a dedicated status.bundleVersion field).
+	if bundleVersion != "" {
+		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
+	}
+
 	log.Info().
 		Bool("ready", pass).
 		Str("reason", reason).
@@ -109,21 +118,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // buildContext constructs the Phase 1 CEL context for gate evaluation.
+// It also returns the bundle version string (second return value) so the caller
+// can write it to status.reason — making the version CRD-observable (PG-6 partial fix).
 func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
-	bundleName string) (map[string]interface{}, error) {
+	bundleName string) (map[string]interface{}, string, error) {
 	var bundle kardinalv1alpha1.Bundle
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      bundleName,
 		Namespace: gate.Namespace,
 	}, &bundle); err != nil {
-		return nil, fmt.Errorf("load bundle %s: %w", bundleName, err)
+		return nil, "", fmt.Errorf("load bundle %s: %w", bundleName, err)
 	}
 
 	now := r.now()
+	version := extractVersion(&bundle)
 
 	bundleCtx := map[string]interface{}{
 		"type":    bundle.Spec.Type,
-		"version": extractVersion(&bundle),
+		"version": version,
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",
@@ -171,7 +183,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		},
 		"metrics":  metricsCtx,
 		"upstream": upstreamCtx,
-	}, nil
+	}, version, nil
 }
 
 // buildMetricsContext lists all MetricCheck objects in the given namespace and
