@@ -30,6 +30,14 @@ type PipelineSpec struct {
 	// HistoryLimit is the number of completed Bundle promotions to retain.
 	// +optional
 	HistoryLimit int `json:"historyLimit,omitempty"`
+
+	// PolicyNamespaces lists additional namespaces to scan for org-level PolicyGates.
+	// The pipeline's own namespace is always included. When unset, the controller
+	// defaults to "platform-policies". Setting this field makes the namespace list
+	// explicit in the Pipeline spec rather than hardcoded in the controller.
+	// Eliminates TR-2 from docs/design/11-graph-purity-tech-debt.md.
+	// +optional
+	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
 }
 
 // PipelineGit holds the shared GitOps repository configuration for a Pipeline.

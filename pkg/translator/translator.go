@@ -104,12 +104,23 @@ func (t *Translator) Translate(ctx context.Context,
 
 // collectGates lists PolicyGates from all policy namespaces and the pipeline's namespace.
 // De-duplicates by name+namespace.
+//
+// Policy namespace resolution (TR-2 elimination — docs/design/11-graph-purity-tech-debt.md):
+// If pipeline.spec.policyNamespaces is set, use those namespaces instead of the
+// controller-wide default (t.policyNS). This makes the policy namespace list
+// explicit in the Pipeline spec rather than hardcoded in the controller.
 func (t *Translator) collectGates(ctx context.Context,
 	pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, error) {
 	seen := make(map[string]bool)
 	var gates []kardinalv1alpha1.PolicyGate
 
-	namespaces := append([]string(nil), t.policyNS...)
+	// Use Pipeline.spec.policyNamespaces when set; fall back to controller-wide default.
+	baseNS := t.policyNS
+	if len(pipeline.Spec.PolicyNamespaces) > 0 {
+		baseNS = pipeline.Spec.PolicyNamespaces
+	}
+
+	namespaces := append([]string(nil), baseNS...)
 	// Add pipeline namespace if not already included
 	pipelineNS := pipeline.Namespace
 	alreadyIncluded := false
