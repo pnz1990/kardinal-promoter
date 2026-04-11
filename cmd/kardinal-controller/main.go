@@ -87,6 +87,10 @@ func main() {
 	flag.StringVar(&webhookSecret, "webhook-secret", os.Getenv("KARDINAL_WEBHOOK_SECRET"),
 		"HMAC secret for validating incoming SCM webhooks.")
 
+	var bundleToken string
+	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
+		"Bearer token for authenticating POST /api/v1/bundles requests.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -162,9 +166,16 @@ func main() {
 	// Start webhook server in a goroutine.
 	go func() {
 		webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
+		bundleAPIToken := bundleToken
 		mux := http.NewServeMux()
 		mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 		mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+		// Bundle API endpoint — only mounted if a token is configured.
+		if bundleAPIToken != "" {
+			bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, "default", logger)
+			mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
+			logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
+		}
 		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
 		if err := http.ListenAndServe(webhookBindAddress, mux); err != nil {
 			logger.Error().Err(err).Msg("webhook server error")

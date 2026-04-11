@@ -54,13 +54,12 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
 
       - name: Create Bundle
-        uses: kardinal-dev/create-bundle-action@v1
+        uses: ./.github/actions/create-bundle
         with:
           pipeline: my-app
           image: ghcr.io/${{ github.repository }}:${{ github.sha }}
           digest: ${{ steps.build.outputs.digest }}
           kardinal-url: https://kardinal.example.com
-          token: ${{ secrets.KARDINAL_TOKEN }}
 ```
 
 The GitHub Action wraps the webhook call with proper error handling and retry logic.
@@ -149,11 +148,9 @@ kubectl create secret generic kardinal-ci-token \
   --from-literal=token=$(openssl rand -hex 32)
 ```
 
-The token value is used in the `Authorization: Bearer <token>` header.
+The token is passed to the controller via the `--bundle-api-token` flag or the `KARDINAL_BUNDLE_TOKEN` environment variable. The endpoint is only activated when this flag is set.
 
-Additionally, the webhook endpoint validates an HMAC signature if the `X-Kardinal-Signature` header is present. This provides an additional layer of verification that the request was not tampered with in transit.
-
-Rate limiting: 100 requests per minute per Pipeline (configurable).
+Rate limiting: 60 requests per minute per token.
 
 ### kubectl access
 

@@ -1,0 +1,119 @@
+name: 'Create Kardinal Bundle'
+description: 'Creates a kardinal-promoter Bundle from a CI pipeline to trigger promotion.'
+author: 'kardinal-promoter'
+
+inputs:
+  pipeline:
+    description: 'Name of the kardinal Pipeline to promote'
+    required: true
+  type:
+    description: 'Bundle type: image, config, or mixed'
+    required: false
+    default: 'image'
+  images:
+    description: 'Newline-separated list of image references (repository:tag or repository@digest)'
+    required: false
+  namespace:
+    description: 'Kubernetes namespace of the Pipeline'
+    required: false
+    default: 'default'
+  kardinal-url:
+    description: 'Base URL of the kardinal-promoter controller (e.g. https://kardinal.example.com)'
+    required: true
+
+outputs:
+  bundle-name:
+    description: 'Name of the created Bundle CRD'
+  bundle-namespace:
+    description: 'Namespace of the created Bundle CRD'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Create Bundle
+      shell: bash
+      env:
+        KARDINAL_TOKEN: ${{ env.KARDINAL_TOKEN }}
+      run: |
+        set -euo pipefail
+
+        PIPELINE="${{ inputs.pipeline }}"
+        BUNDLE_TYPE="${{ inputs.type }}"
+        NAMESPACE="${{ inputs.namespace }}"
+        KARDINAL_URL="${{ inputs.kardinal-url }}"
+        IMAGES_INPUT="${{ inputs.images }}"
+
+        if [ -z "$KARDINAL_TOKEN" ]; then
+          echo "::error::KARDINAL_TOKEN environment variable is not set."
+          exit 1
+        fi
+
+        # Build images JSON array from newline-separated input.
+        IMAGES_JSON="[]"
+        if [ -n "$IMAGES_INPUT" ]; then
+          IMAGES_JSON="["
+          FIRST=true
+          while IFS= read -r img; do
+            [ -z "$img" ] && continue
+            # Parse repository:tag or repository@digest
+            if echo "$img" | grep -q "@"; then
+              REPO=$(echo "$img" | cut -d@ -f1)
+              DIGEST=$(echo "$img" | cut -d@ -f2)
+              ENTRY="{\"repository\":\"$REPO\",\"digest\":\"$DIGEST\"}"
+            elif echo "$img" | grep -q ":"; then
+              REPO=$(echo "$img" | rev | cut -d: -f2- | rev)
+              TAG=$(echo "$img" | rev | cut -d: -f1 | rev)
+              ENTRY="{\"repository\":\"$REPO\",\"tag\":\"$TAG\"}"
+            else
+              ENTRY="{\"repository\":\"$img\"}"
+            fi
+            if [ "$FIRST" = "true" ]; then
+              IMAGES_JSON="${IMAGES_JSON}${ENTRY}"
+              FIRST=false
+            else
+              IMAGES_JSON="${IMAGES_JSON},${ENTRY}"
+            fi
+          done <<< "$IMAGES_INPUT"
+          IMAGES_JSON="${IMAGES_JSON}]"
+        fi
+
+        # Build provenance from GitHub Actions environment.
+        PROVENANCE_JSON="{
+          \"commitSHA\": \"${GITHUB_SHA:-}\",
+          \"ciRunURL\": \"${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-0}\",
+          \"author\": \"${GITHUB_ACTOR:-}\"
+        }"
+
+        # Build request body.
+        BODY="{
+          \"pipeline\": \"$PIPELINE\",
+          \"type\": \"$BUNDLE_TYPE\",
+          \"namespace\": \"$NAMESPACE\",
+          \"images\": $IMAGES_JSON,
+          \"provenance\": $PROVENANCE_JSON
+        }"
+
+        echo "Creating Bundle for pipeline '$PIPELINE' in namespace '$NAMESPACE'..."
+
+        RESPONSE=$(curl -sf \
+          -X POST \
+          -H "Authorization: Bearer $KARDINAL_TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "$BODY" \
+          "${KARDINAL_URL}/api/v1/bundles" 2>&1) || {
+          echo "::error::Failed to create Bundle. curl exit code: $?"
+          echo "::error::Response: $RESPONSE"
+          exit 1
+        }
+
+        BUNDLE_NAME=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['name'])" 2>/dev/null || echo "")
+        BUNDLE_NS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['namespace'])" 2>/dev/null || echo "")
+
+        if [ -z "$BUNDLE_NAME" ]; then
+          echo "::error::Bundle creation failed. Response: $RESPONSE"
+          exit 1
+        fi
+
+        echo "Bundle created: $BUNDLE_NAME in namespace $BUNDLE_NS"
+        echo "bundle-name=$BUNDLE_NAME" >> "$GITHUB_OUTPUT"
+        echo "bundle-namespace=$BUNDLE_NS" >> "$GITHUB_OUTPUT"
