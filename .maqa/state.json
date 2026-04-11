@@ -38,7 +38,7 @@
       "last_seen": "2026-04-11T18:07:46Z",
       "cycle": 1,
       "scope": "Extension points",
-      "current_item": "037-gitlab-scm-provider"
+      "current_item": null
     }
   },
   "features": {
@@ -372,22 +372,22 @@
       "pr_merged": false
     },
     "037-cli-arch-cleanup": {
-      "state": "assigned",
+      "state": "done",
       "assigned_to": "STANDALONE-CLI-UI",
-      "assigned_at": "2026-04-11T18:08:07Z",
-      "worktree_path": "../kardinal-promoter.037-cli-arch-cleanup",
+      "assigned_at": "2026-04-11T18:10:00Z",
+      "worktree_path": null,
       "dependency_mode": "merged",
-      "pr_number": null,
-      "pr_merged": false
+      "pr_number": 164,
+      "pr_merged": true
     },
     "037-gitlab-scm-provider": {
-      "state": "assigned",
+      "state": "done",
       "assigned_to": "STANDALONE-EXTENSIONS",
       "assigned_at": "2026-04-11T18:11:31Z",
       "worktree_path": "../kardinal-promoter.037-gitlab-scm-provider",
       "dependency_mode": "merged",
-      "pr_number": null,
-      "pr_merged": false
+      "pr_number": 165,
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
@@ -400,8 +400,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T18:07:50Z",
-      "cycle": 32
+      "last_seen": "2026-04-11T18:28:21Z",
+      "cycle": 33
     }
   }
 }
