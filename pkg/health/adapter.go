@@ -457,10 +457,16 @@ func NewAutoDetector(k8s sigs_client.Client, dynClient dynamic.Interface) *AutoD
 	return &AutoDetector{k8s: k8s, dynamic: dynClient}
 }
 
-// Select returns the best available adapter for the given health type.
-// If healthType is empty, auto-detects based on installed CRDs.
-func (d *AutoDetector) Select(ctx context.Context, healthType string) (Adapter, error) {
+// Select returns the adapter for the given health type.
+// healthType must be one of: "resource", "argocd", "flux", "argoRollouts", "flagger".
+// An empty or unknown healthType returns an error — health.type must be
+// explicitly configured in Pipeline.spec.environments[*].health.type.
+// Silent fallback (auto-detection via CRD probing) is removed to prevent
+// misconfiguration being silently masked (HE-4 in docs/design/11-graph-purity-tech-debt.md).
+func (d *AutoDetector) Select(_ context.Context, healthType string) (Adapter, error) {
 	switch healthType {
+	case "resource":
+		return NewDeploymentAdapter(d.k8s), nil
 	case "argocd":
 		return NewArgoCDAdapter(d.dynamic), nil
 	case "flux":
@@ -469,30 +475,13 @@ func (d *AutoDetector) Select(ctx context.Context, healthType string) (Adapter, 
 		return NewArgoRolloutsAdapter(d.dynamic), nil
 	case "flagger":
 		return NewFlaggerAdapter(d.dynamic), nil
-	case "resource", "":
-		// Auto-detect: try argocd, then flux, fall back to resource.
-		if healthType == "" {
-			if crdAvailable(ctx, d.dynamic, "applications.argoproj.io") {
-				return NewArgoCDAdapter(d.dynamic), nil
-			}
-			if crdAvailable(ctx, d.dynamic, "kustomizations.kustomize.toolkit.fluxcd.io") {
-				return NewFluxAdapter(d.dynamic), nil
-			}
-		}
-		return NewDeploymentAdapter(d.k8s), nil
+	case "":
+		return nil, fmt.Errorf(
+			"health.type is required in Pipeline spec environments: " +
+				"set health.type to one of [resource, argocd, flux, argoRollouts, flagger]")
 	default:
-		return NewDeploymentAdapter(d.k8s), nil
+		return nil, fmt.Errorf(
+			"unknown health.type %q: must be one of [resource, argocd, flux, argoRollouts, flagger]",
+			healthType)
 	}
-}
-
-// crdAvailable checks whether a CRD (by plural resource name) is installed in the cluster.
-// It uses the dynamic client to attempt a list of the CRD resource at the apiextensions group.
-func crdAvailable(ctx context.Context, dynClient dynamic.Interface, crdName string) bool {
-	crdGVR := schema.GroupVersionResource{
-		Group:    "apiextensions.k8s.io",
-		Version:  "v1",
-		Resource: "customresourcedefinitions",
-	}
-	_, err := dynClient.Resource(crdGVR).Get(ctx, crdName, metav1.GetOptions{})
-	return err == nil
 }

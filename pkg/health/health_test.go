@@ -254,14 +254,41 @@ func TestFluxAdapter_Progressing(t *testing.T) {
 // TestAutoDetector_SelectsDeploymentWhenNoGitOpsCRDs verifies fallback to Deployment adapter.
 func TestAutoDetector_SelectsDeploymentWhenNoGitOpsCRDs(t *testing.T) {
 	s := buildScheme(t)
-	// No ArgoCD or Flux CRDs
+	// No ArgoCD or Flux CRDs — but explicit "resource" type is provided
 	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
 	detector := health.NewAutoDetector(c, dynClient)
-	adapter, err := detector.Select(context.Background(), "")
+	adapter, err := detector.Select(context.Background(), "resource")
 	require.NoError(t, err)
 	assert.Equal(t, "resource", adapter.Name())
+}
+
+// TestAutoDetector_EmptyTypeReturnsError verifies that an empty health type
+// returns an error instead of silently auto-detecting. Operators must configure
+// health.type explicitly in Pipeline spec to prevent misconfiguration.
+func TestAutoDetector_EmptyTypeReturnsError(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+	_, err := detector.Select(context.Background(), "")
+	require.Error(t, err, "empty health type must return error — health.type must be explicit in Pipeline spec")
+	assert.Contains(t, err.Error(), "health.type")
+}
+
+// TestAutoDetector_UnknownTypeReturnsError verifies that an unknown health type
+// returns an error rather than silently falling back to Deployment.
+func TestAutoDetector_UnknownTypeReturnsError(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+	_, err := detector.Select(context.Background(), "unknownType")
+	require.Error(t, err, "unknown health type must return error")
+	assert.Contains(t, err.Error(), "unknownType")
 }
 
 // TestAutoDetector_PreferredByType verifies explicit type selection.
