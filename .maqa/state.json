@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T04:27:36Z",
-  "current_queue": "queue-012",
+  "last_updated": "2026-04-11T04:33:40Z",
+  "current_queue": "queue-013",
   "last_sm_review": "2026-04-11T04:29:56Z",
   "last_pm_review": "2026-04-11T04:31:29Z",
   "batches_since_competitive_analysis": 3,
@@ -251,6 +251,24 @@
       "worktree_path": "../kardinal-promoter.026-kind-e2e",
       "pr_number": 111,
       "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "027-metriccheck-crd": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:33:40Z",
+      "worktree_path": "../kardinal-promoter.027-metriccheck-crd",
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
+    },
+    "028-custom-steps": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:33:40Z",
+      "worktree_path": "../kardinal-promoter.028-custom-steps",
+      "pr_number": null,
+      "pr_merged": false,
       "dependency_mode": "merged"
     }
   },
