@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T04:00:38Z",
-  "current_queue": "queue-011",
+  "last_updated": "2026-04-11T04:10:49Z",
+  "current_queue": "queue-012",
   "last_sm_review": "2026-04-11T04:07:04Z",
   "last_pm_review": "2026-04-11T04:08:21Z",
   "batches_since_competitive_analysis": 2,
@@ -231,6 +231,24 @@
       "worktree_path": "../kardinal-promoter.024-rendered-manifests",
       "pr_number": 82,
       "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "025-pause-resume": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:10:49Z",
+      "worktree_path": "../kardinal-promoter.025-pause-resume",
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
+    },
+    "026-kind-e2e": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:10:49Z",
+      "worktree_path": "../kardinal-promoter.026-kind-e2e",
+      "pr_number": null,
+      "pr_merged": false,
       "dependency_mode": "merged"
     }
   },
