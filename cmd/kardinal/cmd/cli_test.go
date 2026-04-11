@@ -232,6 +232,128 @@ func TestHistory_ListsBundles(t *testing.T) {
 	assert.Contains(t, out, "nginx-demo-v2")
 }
 
+// TestPolicySimulate_GlobalGateAppliedToAllEnvs verifies that gates without applies-to
+// are included in simulation regardless of environment (CLI-3 fix).
+func TestPolicySimulate_GlobalGateAppliedToAllEnvs(t *testing.T) {
+	s := cliTestScheme(t)
+	// Gate with NO applies-to label — should apply to every env.
+	globalGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "global-freeze",
+			Namespace: "default",
+			Labels:    map[string]string{},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend",
+			Message:    "Global freeze on weekends",
+		},
+	}
+	// Gate with applies-to=prod — should NOT apply when env=staging.
+	prodGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "prod-only",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/applies-to": "prod"},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend",
+			Message:    "Prod-only gate",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(globalGate, prodGate).Build()
+
+	// Simulate for staging on a Saturday — global gate should block, prod gate should be excluded.
+	var buf bytes.Buffer
+	err := policySimulateFn(&buf, c, "default", "nginx-demo", "staging", "Saturday 3pm", 0)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "global-freeze", "global gate (no applies-to) must be evaluated")
+	assert.NotContains(t, out, "prod-only", "prod-only gate must not appear for staging env")
+	assert.Contains(t, out, "BLOCKED")
+}
+
+// TestPolicySimulate_EnvSpecificGateExcluded verifies that applies-to gates are
+// excluded when the env does not match (CLI-3: applies-to label check in simulate loop).
+func TestPolicySimulate_EnvSpecificGateExcluded(t *testing.T) {
+	s := cliTestScheme(t)
+	stagingGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "staging-gate",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/applies-to": "staging"},
+		},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(stagingGate).Build()
+
+	// Simulate for prod — staging gate must not appear.
+	var buf bytes.Buffer
+	err := policySimulateFn(&buf, c, "default", "nginx-demo", "prod", "Saturday 3pm", 0)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.NotContains(t, out, "staging-gate", "staging gate must be excluded for prod env")
+	assert.Contains(t, out, "PASS", "no applicable gates means PASS")
+}
+
+// TestRollback_CopiesTypeFromOriginalBundle verifies that the rollback bundle
+// copies Type from the original Verified bundle, not hardcoding "image" (CLI-5 fix).
+func TestRollback_CopiesTypeFromOriginalBundle(t *testing.T) {
+	s := cliTestScheme(t)
+	// Verified bundle with type=config; no special label needed — rollbackFn filters by Spec.Pipeline.
+	verifiedBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-cfg-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle).WithStatusSubresource(verifiedBundle).Build()
+
+	var buf bytes.Buffer
+	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
+	require.NoError(t, err)
+
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	require.Len(t, bundles.Items, 2)
+
+	var rb *v1alpha1.Bundle
+	for i := range bundles.Items {
+		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
+			rb = &bundles.Items[i]
+		}
+	}
+	require.NotNil(t, rb)
+	assert.Equal(t, "config", rb.Spec.Type, "rollback bundle must copy type from the original bundle")
+	assert.Equal(t, "nginx-demo-cfg-v1", rb.Spec.Provenance.RollbackOf)
+}
+
+// TestRollback_CopiesTypeWhenExplicitToBundle verifies type is copied when --to is specified.
+func TestRollback_CopiesTypeWhenExplicitToBundle(t *testing.T) {
+	s := cliTestScheme(t)
+	targetBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-mixed-v3", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "mixed", Pipeline: "nginx-demo"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(targetBundle).Build()
+
+	var buf bytes.Buffer
+	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "nginx-demo-mixed-v3", false)
+	require.NoError(t, err)
+
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+
+	var rb *v1alpha1.Bundle
+	for i := range bundles.Items {
+		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
+			rb = &bundles.Items[i]
+		}
+	}
+	require.NotNil(t, rb)
+	assert.Equal(t, "mixed", rb.Spec.Type, "rollback bundle must copy type from target bundle")
+}
+
 // TestSplitImageRef verifies image reference parsing.
 func TestSplitImageRef(t *testing.T) {
 	tests := []struct {
