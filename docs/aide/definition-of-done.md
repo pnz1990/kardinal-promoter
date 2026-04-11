@@ -450,7 +450,7 @@ Updated by the coordinator after each batch.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | 🔄 In Progress | 2026-04-11 | Stages 0-10 complete. Missing: Stage 9 (UI), Stage 11 (GitHub Action + kardinal init). E2E not run. |
+| 1: Quickstart | 🔄 Code Complete | 2026-04-11 | All stages (0-11) code complete. E2E test on kind cluster needed to mark ✅. |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
 | 3: Policy governance | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. kardinal policy simulate implemented. E2E not run. |
 | 4: Rollback | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. kardinal rollback implemented. E2E not run. |
