@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T01:50Z
+> Last updated: 2026-04-11T03:30Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -26,8 +26,8 @@
 | 9 | Embedded React UI | ✅ Complete | Item 019 merged: PR #73. React 19 + dagre DAG view, UI API, go:embed, --ui-listen-address flag. |
 | 10 | PR Evidence, Labels, and Webhook Reliability | ✅ Complete | Items 016/018 merged: PRs #64, #69. Full 3-table PR body, labels, startup reconciliation via Runnable, health endpoint with metrics counter. |
 | 11 | GitHub Actions Integration and `kardinal init` | 🔄 In Progress | Item 020 merged: PR #72. Bundle webhook endpoint (/api/v1/bundles) + GitHub Action done. kardinal init (item 017) done. Remaining: E2E test. |
-| 12 | Helm Strategy and Config-Only Promotions | 📋 Planned | Depends on Stage 6 |
-| 13 | Rollback and Pause/Resume | 📋 Planned | Depends on Stage 6 |
+| 12 | Helm Strategy and Config-Only Promotions | ✅ Complete | Item 021 merged: PR #78. helm-set-image, config-merge steps, type-aware sequence routing, Config Bundle supersession, examples/config-promotion/. |
+| 13 | Rollback and Pause/Resume | 🔄 In Progress | Item 022 merged: PR #77. Automatic rollback on health failures (failureThreshold, ConsecutiveHealthFailures). Manual rollback via CLI done (item 015). |
 | 14 | Distributed Mode (Control Plane + Agents) | 📋 Planned | Depends on Stage 6 |
 | 15 | MetricCheck CRD and Upstream Soak Time | 📋 Planned | Depends on Stage 4 |
 | 16 | Custom Promotion Steps via Webhook | 📋 Planned | Depends on Stage 6 |
@@ -138,6 +138,22 @@
 |---|---|---|---|---|
 | 017 | kardinal init + Quickstart docs | ✅ Complete | #67 merged | Interactive wizard, Pipeline YAML generation, examples updated |
 | 020 | Bundle Webhook + GitHub Action | ✅ Complete | #72 merged | POST /api/v1/bundles, rate limit, Bearer auth, GitHub Action |
+
+---
+
+## Stage 12 Item Breakdown
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 021 | Helm Strategy + Config-Only Bundle Promotions | ✅ Complete | #78 merged | helm-set-image, config-merge, DefaultSequenceForBundle, type-aware supersession, examples |
+
+---
+
+## Stage 13 Item Breakdown (partial)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 022 | Automatic Rollback on Health Failure | ✅ Complete | #77 merged | AutoRollbackSpec, ConsecutiveHealthFailures, maybeCreateAutoRollback (idempotent) |
 
 ---
 

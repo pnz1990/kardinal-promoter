@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T00:13:30Z",
+  "last_updated": "2026-04-11T03:19:17Z",
   "current_queue": "queue-010",
   "last_sm_review": "2026-04-11T01:49:05Z",
   "last_pm_review": "2026-04-11T01:50:02Z",
@@ -198,21 +198,21 @@
       "dependency_mode": "merged"
     },
     "021-helm-config-promotions": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:53:31Z",
+      "worktree_path": "../kardinal-promoter.021-helm-config-promotions",
+      "pr_number": 78,
+      "pr_merged": true,
       "dependency_mode": "merged"
     },
     "022-auto-rollback": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:53:31Z",
+      "worktree_path": "../kardinal-promoter.022-auto-rollback",
+      "pr_number": 77,
+      "pr_merged": true,
       "dependency_mode": "merged"
     }
   },
@@ -226,8 +226,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T01:52:42Z",
-      "cycle": 21
+      "last_seen": "2026-04-11T03:01:35Z",
+      "cycle": 23
     }
   }
 }

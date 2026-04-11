@@ -453,7 +453,7 @@ Updated by the coordinator after each batch.
 | 1: Quickstart | 🔄 Code Complete | 2026-04-11 | All stages (0-11) code complete. E2E test on kind cluster needed to mark ✅. |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
 | 3: Policy governance | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. kardinal policy simulate implemented. E2E not run. |
-| 4: Rollback | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. kardinal rollback implemented. E2E not run. |
+| 4: Rollback | 🔄 In Progress | 2026-04-11 | Stages 0-8, 10 complete. Manual + auto-rollback implemented (Stage 13 partial: items 015, 022). E2E not run. |
 | 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented (Stages 0-8). Output format not E2E verified. |
 | 6: Rendered manifests | ❌ Not started | — | Requires Stages 0-6 (kustomize-build step) |
 | 7: Multi-tenant self-service | ❌ Not started | — | Requires Stages 0-4 (Pipeline CRD + PolicyGate injection) |
