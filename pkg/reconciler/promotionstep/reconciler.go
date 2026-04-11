@@ -279,27 +279,37 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 
 	switch result.Status {
 	case steps.StepPending:
-		// A step is pending (e.g., open-pr step returns Pending while waiting).
-		// Transition to WaitingForMerge. Also patch the PRStatus CRD with PR data
-		// so the PRStatusReconciler can start polling GitHub.
-		ps.Status.State = StateWaitingForMerge
-		prURL := ""
-		if u, ok := state.Outputs["prURL"]; ok && u != "" {
-			prURL = u
+		prURL, hasPRURL := state.Outputs["prURL"]
+		if hasPRURL && prURL != "" {
+			// The open-pr step (or similar) has opened a PR and is waiting for merge.
+			// Transition to WaitingForMerge so the PRStatusReconciler can take over.
+			ps.Status.State = StateWaitingForMerge
 			ps.Status.PRURL = prURL
+			ps.Status.Message = result.Message
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch waiting-for-merge: %w", patchErr)
+			}
+			// Patch the PRStatus CRD spec so PRStatusReconciler can poll it.
+			// This is idempotent — if prStatusRef is not set, skip gracefully.
+			if ps.Spec.PRStatusRef != "" {
+				if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
+					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
+				}
+			}
+			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
+
+		// No prURL — this is a non-blocking retry (e.g. custom webhook 5xx backoff).
+		// Stay in Promoting state; use the step's requested RequeueAfter duration if set.
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-			return ctrl.Result{}, fmt.Errorf("patch waiting-for-merge: %w", patchErr)
+			return ctrl.Result{}, fmt.Errorf("patch promoting retry: %w", patchErr)
 		}
-		// Patch the PRStatus CRD spec so PRStatusReconciler can poll it.
-		// This is idempotent — if prStatusRef is not set, skip gracefully.
-		if ps.Spec.PRStatusRef != "" && prURL != "" {
-			if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
-				log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
-			}
+		requeue := result.RequeueAfter
+		if requeue == 0 {
+			return ctrl.Result{Requeue: true}, nil
 		}
-		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		return ctrl.Result{RequeueAfter: requeue}, nil
 
 	case steps.StepSuccess:
 		if nextIdx >= len(seq) {
