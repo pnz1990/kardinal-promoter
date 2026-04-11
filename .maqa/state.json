@@ -20,25 +20,37 @@
       "last_seen": "2026-04-11T18:52:48Z",
       "cycle": 2,
       "scope": "Graph purity refactor",
-      "current_item": "039-graph-purity-batch-a"
+      "current_item": "039-graph-purity-batch-a",
+      "name": "Refactor Agent",
+      "progress_issue": "",
+      "last_report_at": ""
     },
     "STANDALONE-CLI-UI": {
       "last_seen": null,
       "cycle": 0,
       "scope": "CLI and UI",
-      "current_item": null
+      "current_item": null,
+      "name": "Cli Ui Agent",
+      "progress_issue": "",
+      "last_report_at": ""
     },
     "STANDALONE-CORE": {
       "last_seen": "2026-04-11T18:52:40Z",
       "cycle": 2,
       "scope": "Core features \u2014 new CRDs (PRStatus, RollbackPolicy), Graph integration, reconcilers",
-      "current_item": null
+      "current_item": null,
+      "name": "Core Agent",
+      "progress_issue": "",
+      "last_report_at": ""
     },
     "STANDALONE-EXTENSIONS": {
       "last_seen": "2026-04-11T18:07:46Z",
       "cycle": 1,
       "scope": "Extension points",
-      "current_item": null
+      "current_item": null,
+      "name": "Extensions Agent",
+      "progress_issue": "",
+      "last_report_at": ""
     }
   },
   "features": {
