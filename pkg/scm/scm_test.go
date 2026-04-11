@@ -555,16 +555,14 @@ func TestGitLabProvider_APIError(t *testing.T) {
 func TestNewProvider_GitHub(t *testing.T) {
 	p, err := scm.NewProvider("github", "token", "https://api.github.com", "")
 	require.NoError(t, err)
+	// require.NotNil also verifies the interface is non-nil.
 	require.NotNil(t, p)
-	// Must implement SCMProvider interface.
-	var _ scm.SCMProvider = p
 }
 
 func TestNewProvider_GitLab(t *testing.T) {
 	p, err := scm.NewProvider("gitlab", "token", "https://gitlab.com", "")
 	require.NoError(t, err)
 	require.NotNil(t, p)
-	var _ scm.SCMProvider = p
 }
 
 func TestNewProvider_Unknown(t *testing.T) {
