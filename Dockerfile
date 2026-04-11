@@ -1,7 +1,16 @@
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
 
-# ── Stage 1: builder ──────────────────────────────────────────────────────────
+# ── Stage 1: UI builder ───────────────────────────────────────────────────────
+FROM node:22-alpine AS ui-builder
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --silent
+COPY web/ ./
+RUN npm run build
+
+# ── Stage 2: Go builder ───────────────────────────────────────────────────────
 FROM golang:1.25-alpine AS builder
 
 # Install git (needed by go modules for VCS stamping)
@@ -16,6 +25,9 @@ RUN go mod download
 # Copy source
 COPY . .
 
+# Copy compiled UI assets from ui-builder stage
+COPY --from=ui-builder /web/dist ./web/dist
+
 # Build the controller binary — CGO disabled for a fully static binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build \
@@ -23,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       -o /bin/kardinal-controller \
       ./cmd/kardinal-controller
 
-# ── Stage 2: final (distroless, nonroot) ──────────────────────────────────────
+# ── Stage 3: final (distroless, nonroot) ─────────────────────────────────────
 FROM gcr.io/distroless/static:nonroot
 
 # Copy the binary from the builder stage
