@@ -454,6 +454,82 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
 	assert.False(t, got.Status.Ready, "gate must block when uat has only soaked for 10 min (< 30 threshold)")
 }
 
+// TestPolicyGateReconciler_MetricsContext_NamespaceIsolation verifies that
+// buildMetricsContext only includes MetricChecks from the gate's own namespace.
+// A MetricCheck in a different namespace must not appear in the metrics context.
+func TestPolicyGateReconciler_MetricsContext_NamespaceIsolation(t *testing.T) {
+	mcSameNS := makeMetricCheck("error-rate", "default", "0.005", "Pass")
+	// MetricCheck in a different namespace — must NOT appear in metrics context
+	mcOtherNS := makeMetricCheck("error-rate", "other-ns", "0.999", "Fail")
+	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1",
+		`metrics["error-rate"].result == "Pass"`, "1m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle, mcSameNS, mcOtherNS).
+		WithStatusSubresource(gate, mcSameNS, mcOtherNS).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "metric-gate", Namespace: "default"}, &got))
+	// Must pass — the "default" namespace MetricCheck has result=Pass
+	// If it had picked up the "other-ns" one (Fail), this would fail
+	assert.True(t, got.Status.Ready, "gate must pass using only same-namespace MetricChecks")
+}
+
+// TestPolicyGateReconciler_MetricsContext_EmptyWhenNoMetricChecks verifies that
+// a gate not referencing metrics can still evaluate when no MetricChecks exist.
+func TestPolicyGateReconciler_MetricsContext_EmptyWhenNoMetricChecks(t *testing.T) {
+	gate := makeGateInstance("no-metric-gate", "default", "nginx-demo-v1",
+		`!schedule.isWeekend`, "5m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+	// No MetricCheck objects created
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate).
+		Build()
+
+	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return tuesday },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "no-metric-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "no-metric-gate", Namespace: "default"}, &got))
+	assert.True(t, got.Status.Ready, "schedule gate must pass on weekday even with empty metrics context")
+}
+
 // TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked verifies
 // soakMinutes is 0 when HealthCheckedAt is nil.
 func TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked(t *testing.T) {
