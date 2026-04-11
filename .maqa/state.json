@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T00:03:22Z",
+  "last_updated": "2026-04-11T00:13:30Z",
   "current_queue": "queue-008",
   "last_sm_review": "2026-04-11T00:00:49Z",
   "last_pm_review": "2026-04-11T00:03:22Z",
@@ -162,12 +162,12 @@
       "dependency_mode": "merged"
     },
     "017-kardinal-init": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree_path": null,
-      "pr_number": null,
-      "pr_merged": false,
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T00:04:05Z",
+      "worktree_path": "../kardinal-promoter.017-kardinal-init",
+      "pr_number": 67,
+      "pr_merged": true,
       "dependency_mode": "merged"
     },
     "018-startup-reconciliation": {
