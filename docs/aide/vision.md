@@ -57,6 +57,35 @@ Key semantic facts as of 2026-04-10 (verify against krocodile before implementin
 - Bug fix (2026-04-10 commit `94a24fa5`): `dep.ready()` in `readyWhen` was not re-evaluating after dep became ready — now fixed. Our `propagateWhen` usage is unaffected.
 - Bug fix (2026-04-10 commit `1b0ce353`): double-dispatch race in DAG coordinator — now fixed in krocodile. **Pinned krocodile commit: `1b0ce353` (minimum required).**
 
+### Graph-First: The Core Architectural Commitment
+
+**The world is a DAG. Everything in kardinal-promoter is a derivation of the krocodile Graph primitive.**
+
+This is not aspirational. It is the governing constraint on every implementation decision.
+See `docs/design/10-graph-first-architecture.md` for the full decision record.
+
+The layer model:
+```
+L1: krocodile Graph API       — universal DAG primitive, CEL evaluation
+L2: kardinal APIs             — PromotionStep, PolicyGate, Bundle, Pipeline CRDs
+                                All expressed as Graph Watch or Owned nodes
+L3: kardinal customer APIs    — Pipeline and PolicyGate definitions
+```
+
+**If a feature cannot be expressed as a Graph node** (Watch node, Owned node, or CEL
+extension on the Graph environment), that is a signal krocodile is missing a primitive
+that should be contributed upstream. Agents must STOP and escalate to human. No logic
+may leak outside the Graph layer without explicit human approval.
+
+**Pending upstream contributions that will eliminate current workarounds:**
+1. `recheckAfter` on Graph nodes — eliminates the PolicyGate reconciler for time-based gates
+2. Explicit `dependsOn` edges — eliminates data-flow-as-dependency hacks
+
+**Known transitional exception (must not grow):**
+- `pkg/cel/` — the standalone PolicyGate CEL evaluator. Exists because krocodile lacks
+  `recheckAfter`. Must be deleted once `recheckAfter` is contributed upstream.
+  See `docs/design/10-graph-first-architecture.md` §Known Exceptions.
+
 ## Release and Versioning Philosophy
 
 **GA (`v1.0.0`) is not a near-term goal.** Do not plan for or reference GA. We are a

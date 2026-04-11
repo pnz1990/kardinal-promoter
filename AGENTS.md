@@ -166,6 +166,28 @@ All issues must have labels from each of these groups (read by otherness agents 
 | No idempotency test on reconciler | QA |
 | Feature not in user docs | `/speckit.verify` |
 | go.mod not tidy | CI |
+| **Business logic evaluated outside a Graph node or reconciler that writes to CRD status** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **New usage of `pkg/cel` outside `pkg/reconciler/policygate`** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **Reconciler that makes decisions based on fields not written to its own CRD status** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **CEL FunctionBinding that makes HTTP calls or external I/O** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **Dependency between components expressed as in-memory state, not CRD fields** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **Bypassing Graph for "simple" promotion cases** | **QA — Graph-first violation → NEEDS HUMAN** |
+
+## Graph-First Architecture (read before implementing any new feature)
+
+The world is a DAG. Everything is a Graph node. See `docs/design/10-graph-first-architecture.md`.
+
+**Before implementing ANY new feature, answer these questions in order:**
+
+1. Can this be a **Watch node**? (Read an existing K8s resource into Graph scope — no reconciler needed)
+2. Can this be an **Owned node** whose reconciler writes `status.ready`? (Graph watches the status)
+3. Can this be a **CEL library extension** on the Graph environment? (Stateless, cheap, synchronous only)
+
+If none apply: **STOP. Post `[NEEDS HUMAN]` with the architectural question.**
+Do not implement a workaround. Do not reference `pkg/cel` in new code.
+
+The only permitted exception is `pkg/cel/` in `pkg/reconciler/policygate` — documented as a
+transitional workaround in `docs/design/10-graph-first-architecture.md`. It must not grow.
 
 ## Journey Self-Validation Commands (Engineer step 3)
 

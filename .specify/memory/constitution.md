@@ -100,6 +100,35 @@ and `docs/aide/definition-of-done.md`.
 When starting a new project, copy the SDLC files (listed in sdlc.md) and replace
 only the project-specific context.
 
+## XII. Graph-First: No Logic Outside the DAG
+
+**Everything in this project is a derivation of the krocodile Graph primitive.
+This is an absolute constraint. No exceptions without explicit human approval.**
+
+The correct architecture:
+- Business logic lives in Kubernetes CRD status fields
+- The Graph reads those status fields via `readyWhen` / `propagateWhen` CEL expressions
+- No logic is evaluated outside the Graph layer at steady state
+
+**When an agent encounters a feature that appears to require logic outside the Graph:**
+
+1. **STOP immediately.** Do not implement a workaround.
+2. Ask: can this be a Watch node? Can this be an Owned node whose reconciler writes
+   to `status.ready`? Can this be a CEL library extension on the Graph environment?
+3. If none apply: **post `[NEEDS HUMAN]` with the architectural question.** Do not
+   proceed until a human provides explicit approval of the exception.
+
+**The only permitted exception is `pkg/cel/`** — a transitional workaround documented
+in `docs/design/10-graph-first-architecture.md`. It must not grow. New code must not
+reference it outside `pkg/reconciler/policygate`. It will be deleted after the
+`recheckAfter` upstream contribution to krocodile lands.
+
+Any agent that implements logic outside the Graph layer without prior human approval
+is in violation of this constitution. QA must block such PRs regardless of whether
+the implementation is otherwise correct.
+
+Reference: `docs/design/10-graph-first-architecture.md`
+
 ---
 
 ## Architecture Reference
