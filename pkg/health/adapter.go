@@ -430,20 +430,15 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 	}
 
 	phase, _, _ := unstructured.NestedString(canary.Object, "status", "phase")
-	message, _, _ := unstructured.NestedString(canary.Object, "status", "canaryWeight")
-	statusMessage, _, _ := unstructured.NestedString(canary.Object, "status", "failedChecks")
+	statusMsg, _, _ := unstructured.NestedString(canary.Object, "status", "lastTransitionTime")
 
 	if phase == "Succeeded" {
-		reason := "Canary phase: Succeeded"
-		return HealthStatus{Healthy: true, Reason: reason, CheckedAt: time.Now()}, nil
+		return HealthStatus{Healthy: true, Reason: "Canary phase: Succeeded", CheckedAt: time.Now()}, nil
 	}
 
 	reason := fmt.Sprintf("Canary phase: %s", phase)
-	if message != "" {
-		reason += fmt.Sprintf(" (canaryWeight: %s)", message)
-	}
-	if statusMessage != "" {
-		reason += fmt.Sprintf(" failedChecks: %s", statusMessage)
+	if statusMsg != "" {
+		reason += fmt.Sprintf(" (lastTransition: %s)", statusMsg)
 	}
 	return HealthStatus{Healthy: false, Reason: reason, CheckedAt: time.Now()}, nil
 }
