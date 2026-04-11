@@ -147,7 +147,7 @@ func TestPendingToPromoting(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"},
 	})
 	require.NoError(t, err)
-	assert.True(t, result.Requeue || result.RequeueAfter > 0, "should requeue after pending→promoting")
+	assert.True(t, result.RequeueAfter > 0, "should requeue after pending→promoting")
 
 	var updated v1alpha1.PromotionStep
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-test", Namespace: "default"}, &updated))
@@ -188,7 +188,7 @@ func TestPromotingToVerified(t *testing.T) {
 		if s.Status.State == "Verified" || s.Status.State == "Failed" {
 			break
 		}
-		if !result.Requeue && result.RequeueAfter == 0 {
+		if result.RequeueAfter == 0 {
 			break
 		}
 	}
@@ -348,7 +348,6 @@ func TestVerifiedIsTerminal(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "step-done", Namespace: "default"},
 	})
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
 	assert.Equal(t, time.Duration(0), result.RequeueAfter)
 }
 
@@ -415,7 +414,7 @@ func TestShardFiltering(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "step-shard", Namespace: "default"},
 	})
 	require.NoError(t, err)
-	assert.False(t, result.Requeue)
+	assert.Equal(t, time.Duration(0), result.RequeueAfter)
 
 	// State should remain empty (untouched)
 	var s v1alpha1.PromotionStep
@@ -496,7 +495,7 @@ func TestStepIndex_OutputsAccumulated(t *testing.T) {
 		if s.Status.State == "Verified" || s.Status.State == "Failed" {
 			break
 		}
-		if !result.Requeue && result.RequeueAfter == 0 {
+		if result.RequeueAfter == 0 {
 			break
 		}
 	}
