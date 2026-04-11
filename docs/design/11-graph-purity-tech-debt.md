@@ -6,6 +6,34 @@
 
 ---
 
+## Agent Instructions
+
+**Read this document at the start of every queue generation. It overrides any other scope.**
+
+### What to work on now (milestone `v0.2.1`)
+
+Fix every logic leak in the **FIXABLE WITHOUT KROCODILE** section below. These are issues in milestone `v0.2.1`. The coordinator must prioritize these as the next queue after Workshop 1 execution is confirmed.
+
+**Recommended order:**
+1. **Issue #133** (PRStatus CRD) — eliminates 6 GitHub API call paths at once. Highest ROI.
+2. **Issue #137** (CLI imports pkg/cel) — removes banned `pkg/cel` usage from CLI.
+3. **Issue #131** (MetricCheck Watch nodes) — removes cross-CRD aggregation from PolicyGate.
+4. **Issue #139** (Pipeline.Spec.Paused) — one fix in two places.
+5. **Issue #155** (PolicyGate three-way state, MetricCheck CEL expression) — small, clean.
+6. Remaining issues in any order.
+
+### What NOT to work on (blocked on krocodile)
+
+Issues #130, #132, #136, #138 require upstream krocodile changes. Do not implement workarounds for these. Do not start them. They are labeled `blocked-on-krocodile`.
+
+### Hard rule: no new logic leaks
+
+**Any PR that introduces logic outside the Graph layer (a new `time.Now()`, a new external HTTP call in a reconciler, a new cross-CRD mutation, a new CEL evaluation outside `pkg/reconciler/policygate`) requires explicit human approval before merging.**
+
+QA must block such PRs with `[NEEDS HUMAN]`. Engineers must not implement them. This is Constitution Article XII.
+
+---
+
 ## The Vision
 
 In a perfectly pure architecture, kardinal-promoter is **pure YAML** from the user's perspective. No custom Go logic exists except:
@@ -22,13 +50,76 @@ Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, con
 
 ## One Permitted Exception (Transitional)
 
-`pkg/cel/` is a documented transitional workaround. See `docs/design/10-graph-first-architecture.md` §Known Exceptions. It must not grow.
+`pkg/cel/` is a documented transitional workaround. See `docs/design/10-graph-first-architecture.md` §Known Exceptions. It must not grow. It will be deleted once `recheckAfter` lands in krocodile.
 
 ---
 
-## Logic Leak Catalog
+## Fixable Without Krocodile (Milestone v0.2.1)
 
-Every item below is a place where business logic lives outside the Graph layer. Each has a GitHub issue tracking its elimination. The table is the authoritative index — the issues contain implementation details.
+41 of the 57 cataloged leaks can be eliminated without any krocodile changes. These are in milestone `v0.2.1`.
+
+### CRITICAL (fix first)
+
+| ID | Issue | Description | Fix Approach |
+|---|---|---|---|
+| CEL-2 / PG-2 | #131 | `buildMetricsContext()` aggregates MetricCheck CRDs in Go | Create MetricCheck Watch node; remove Go aggregation |
+| PS-4 / SCM-2 / ST-10 / ST-11 / BU-3 / WH-1 | #133 | GitHub API `GetPRStatus()` in 5 code paths | New `PRStatus` CRD + reconciler; Watch node replaces all 5 |
+| PS-6 / PS-7 | #134 | Auto-rollback threshold in Go; Bundle created from PromotionStep reconciler | New `RollbackPolicy` CRD; threshold is Watch node condition |
+| ST-3 / ST-4 | #135 | CustomWebhookStep blocks reconciler with `time.After` | Replace blocking retries with `ctrl.Result{RequeueAfter}` |
+| CLI-1 / CLI-2 / CLI-3 | #137 | CLI imports `pkg/cel`; schedule.isWeekend computed client-side | Server-side simulation API; remove `pkg/cel` from CLI |
+
+### HIGH
+
+| ID | Issue | Description | Fix Approach |
+|---|---|---|---|
+| PG-3 | #133 | `buildUpstreamContext()` soakMinutes via `time.Since` | Add `status.soakMinutes` to PromotionStep; Watch node reads it |
+| PS-2 / BU-2 | #139 | `Pipeline.Spec.Paused` in two reconcilers | Single freeze-gate pattern (already exists); remove Go checks |
+| PS-5 | #140 | Health check timeout via `time.Since` | Add `status.healthCheckExpiry` to PromotionStep |
+| PS-9 | #141 | `copyEvidenceToBundle()` cross-CRD mutation | Invert: Bundle reconciler reads PromotionStep status |
+| HE-4 | #143 | `AutoDetector` CRD probing at runtime | Remove AutoDetector; require explicit `health.type` |
+| ST-5 / ST-6 | #144 | `exec.Command("kustomize")` in reconcile path | Use `kyaml`/`sigs.k8s.io/kustomize` library; no binary deps |
+| ST-7 / ST-8 / ST-9 / SCM-5 | #144 | `git` host-local operations | Use `go-git` library; no shell-out; add `status.workdir` |
+| GB-2 | #145 | `validateSkipPermissions()` at Graph-build time in Go | Move to Graph `includeWhen` expression |
+| BU-1 / BU-4 | #146 | `supersedeSiblings()` in Go loop | Dedicated supersession reconciler watching Pipeline.status |
+| WH-1 / WH-2 | #147 | Reconciler work in HTTP handler; triplicated URL parsing | Webhook only writes PRStatus CRD; consolidate URL parsing |
+
+### MEDIUM
+
+| ID | Issue | Description | Fix Approach |
+|---|---|---|---|
+| PG-5 / PG-6 | #148 | Template/instance distinction; extractVersion() not in CRD | Write results to CRD status fields |
+| PS-3 | #149 | Shard filtering silent skip in Go | Use label selector on controller; add to CRD spec |
+| PS-8 / HE-5 | #143 | Hardcoded naming conventions; live CRD probe on hot path | Move to Pipeline spec; cache at startup |
+| GB-1 | #150 | Sequential default not in Pipeline spec | Add `sequentialDefault: true` field |
+| TR-1 / TR-2 | #151 | `collectGates()` namespace aggregation; `policyNS` hardcoded | Add `policyNamespaces` to Pipeline spec |
+| CLI-3 / CLI-4 / CLI-5 | #152 | Gate filtering reimplemented; rollback assumes image type | Use server API; read type from CRD |
+| BU-4 / WH-2 | #153 | Type-aware supersession; triplicated URL parsing | Explicit in spec; shared function |
+
+### LOW
+
+| ID | Issue | Description | Fix Approach |
+|---|---|---|---|
+| SCM-3 / SCM-4 | #154 | `EnsureLabels` on hot path; `time.Since` in template | Setup reconciler; pre-computed CRD field |
+| CLI-7 / MC-1 | #155 | PolicyGate three-way state in CLI; threshold Go enum | Add `status.phase` to PolicyGate; CEL expression field |
+
+---
+
+## Blocked on Krocodile (Do Not Touch)
+
+These issues require upstream contributions to krocodile. They are labeled `blocked-on-krocodile`. Do not implement workarounds.
+
+| ID | Issue | What krocodile must provide |
+|---|---|---|
+| CEL-1 / PG-1 / PG-4 | #130 | `recheckAfter` primitive + `schedule` CEL library in krocodile DefaultEnvironment |
+| PS-1 / ST-1 / ST-2 | #132 | Large node counts + step-level CRDs + `dependsOn` edges |
+| HE-1 / HE-2 / HE-3 | #136 | Verify `ShapeWatch` for external K8s resources in krocodile; if not present, contribute it |
+| PG-4 / GB-5 | #138 | `recheckAfter` + explicit `dependsOn` edges — upstream PR to krocodile |
+
+---
+
+## Logic Leak Catalog (full, for reference)
+
+Every item below is a place where business logic lives outside the Graph layer. Each has a GitHub issue tracking its elimination.
 
 ### CRITICAL — Eliminate before v1.0
 

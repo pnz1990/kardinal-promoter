@@ -21,6 +21,36 @@ workshop execution as an item once code gaps #115, #116, #117 are merged.
 GitLab, distributed mode) until epic #123 is closed. If the coordinator generates a
 queue with Workshop 2 items while #123 is open, post `[NEEDS HUMAN]`.**
 
+---
+
+## ⚠️ Second Objective: Graph Purity (milestone v0.2.1)
+
+**After Workshop 1 is executed, the team's second objective is eliminating all logic leaks that do NOT require krocodile changes.**
+
+This is milestone `v0.2.1`. See `docs/design/11-graph-purity-tech-debt.md` for the full list and agent instructions. 41 leaks are fixable in kardinal alone. Start with issue #133 (PRStatus CRD — eliminates 6 API call paths).
+
+Issues blocked on krocodile (#130, #132, #136, #138) must NOT be worked on. They are labeled `blocked-on-krocodile`.
+
+**No new logic leaks are permitted going forward.** Any new `time.Now()`, external HTTP call, or cross-CRD mutation in a reconciler requires explicit human approval before implementation. QA must block such PRs.
+
+---
+
+## Project Overview
+
+
+> https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo
+
+This is tracked as GitHub epic #123 / milestone `workshop-1-executed`. That milestone
+closes ONLY when the agent has run every workshop step, recorded the actual terminal
+output on issue #123, and confirmed every step produced the documented result.
+
+The agent does this itself — it is not a human task. The coordinator assigns the
+workshop execution as an item once code gaps #115, #116, #117 are merged.
+
+**Agents: do not plan or implement Workshop 2 scope (Argo Rollouts, multi-cluster,
+GitLab, distributed mode) until epic #123 is closed. If the coordinator generates a
+queue with Workshop 2 items while #123 is open, post `[NEEDS HUMAN]`.**
+
 The three code gaps blocking Workshop 1 execution:
 - #115: `kardinal get pipelines` per-environment columns
 - #116: `kardinal explain` label mismatch (shows zero PolicyGates)

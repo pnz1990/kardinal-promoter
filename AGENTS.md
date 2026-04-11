@@ -173,10 +173,11 @@ All issues must have labels from each of these groups (read by otherness agents 
 | **CEL FunctionBinding that makes HTTP calls or external I/O** | **QA — Graph-first violation → NEEDS HUMAN** |
 | **Dependency between components expressed as in-memory state, not CRD fields** | **QA — Graph-first violation → NEEDS HUMAN** |
 | **Bypassing Graph for "simple" promotion cases** | **QA — Graph-first violation → NEEDS HUMAN** |
-
-## Graph-First Architecture (read before implementing any new feature)
-
-The world is a DAG. Everything is a Graph node. See `docs/design/10-graph-first-architecture.md`.
+| **`time.Now()` or `time.Since()` called outside a CRD status write** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **External HTTP call (GitHub API, Prometheus, webhook) in reconciler hot path** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **Cross-CRD status mutation (reconciler for CRD A writing to CRD B's status)** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **`exec.Command()` or subprocess in reconciler** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **In-memory struct passing state between reconcile iterations** | **QA — Graph-first violation → NEEDS HUMAN** |
 
 **Complete logic leak catalog with GitHub issues**: `docs/design/11-graph-purity-tech-debt.md`
 This document lists every known place where business logic leaks outside the Graph layer,
