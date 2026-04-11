@@ -1,9 +1,9 @@
 {
-  "version": "1.2",
+  "version": "1.3",
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T17:27:17Z",
+  "last_updated": "2026-04-11T17:50:01Z",
   "current_queue": "queue-016",
   "last_sm_review": "2026-04-11T16:40:53Z",
   "last_pm_review": "2026-04-11T16:41:13Z",
@@ -14,6 +14,12 @@
     "ENGINEER-1": null,
     "ENGINEER-2": null,
     "ENGINEER-3": null
+  },
+  "bounded_sessions": {
+    "STANDALONE-REFACTOR": {"last_seen": null, "cycle": 0, "scope": "Graph purity refactor", "current_item": null},
+    "STANDALONE-CLI-UI":   {"last_seen": null, "cycle": 0, "scope": "CLI and UI", "current_item": null},
+    "STANDALONE-CORE":     {"last_seen": null, "cycle": 0, "scope": "Core features", "current_item": null},
+    "STANDALONE-EXTENSIONS": {"last_seen": null, "cycle": 0, "scope": "Extension points", "current_item": null}
   },
   "features": {
     "001-go-module-scaffold": {
@@ -308,6 +314,42 @@
       "dependency_mode": "merged",
       "assigned_at": "2026-04-11T05:54:08Z",
       "notes": "Full execution completed 2026-04-11. All pass criteria met. 12 bugs fixed. PR #1 merged. v0.2.0 released."
+    },
+    "033-promote-command": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T17:31:50Z",
+      "worktree_path": "../kardinal-promoter.033-promote-command",
+      "dependency_mode": "merged",
+      "pr_number": 160,
+      "pr_merged": true
+    },
+    "034-fix-cel-import-ban": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T17:41:52Z",
+      "worktree_path": "../kardinal-promoter.034-fix-cel-import-ban",
+      "dependency_mode": "merged",
+      "pr_number": 162,
+      "pr_merged": true
+    },
+    "035-argo-rollouts-adapter": {
+      "state": "in_progress",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T17:50:01Z",
+      "worktree_path": "../kardinal-promoter.035-argo-rollouts-adapter",
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "036-prstatuscrd": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
     }
   },
   "session_heartbeats": {
