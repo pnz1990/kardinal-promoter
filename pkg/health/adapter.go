@@ -357,7 +357,7 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 	message, _, _ := unstructured.NestedString(rollout.Object, "status", "message")
 
 	if phase == "Healthy" {
-		reason := fmt.Sprintf("Rollout phase: Healthy")
+		reason := "Rollout phase: Healthy"
 		if message != "" {
 			reason += " — " + message
 		}
