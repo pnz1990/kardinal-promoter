@@ -4,7 +4,7 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-11T00:13:30Z",
-  "current_queue": "queue-009",
+  "current_queue": "queue-010",
   "last_sm_review": "2026-04-11T01:49:05Z",
   "last_pm_review": "2026-04-11T01:50:02Z",
   "batches_since_competitive_analysis": 0,
@@ -196,6 +196,24 @@
       "pr_number": 72,
       "pr_merged": true,
       "dependency_mode": "merged"
+    },
+    "021-helm-config-promotions": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
+    },
+    "022-auto-rollback": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
@@ -208,8 +226,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T01:44:20Z",
-      "cycle": 20
+      "last_seen": "2026-04-11T01:52:42Z",
+      "cycle": 21
     }
   }
 }
