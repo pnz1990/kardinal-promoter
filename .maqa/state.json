@@ -405,7 +405,8 @@
       "worktree_path": "../kardinal-promoter.039-ui-polish-and-cli7",
       "dependency_mode": "merged",
       "pr_number": 170,
-      "pr_merged": false
+      "pr_merged": false,
+      "notes": "PAUSED for restart. PR #170 open, CI in progress (build/lint/integration pending). QA diff review complete \u2014 no issues found. Next step: wait for all CI green, then QA LGTM comment, then merge. bun.lock committed to worktree (CI uses bun install). State: in_review."
     },
     "039-graph-purity-batch-a": {
       "state": "in_progress",
@@ -426,8 +427,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T18:28:21Z",
-      "cycle": 33
+      "last_seen": "2026-04-11T18:53:02Z",
+      "cycle": 34
     }
   }
 }
