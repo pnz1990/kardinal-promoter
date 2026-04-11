@@ -705,13 +705,24 @@ func gateNodeK8sName(bundleSlugK8s, gateName, gateNS, envName string) string {
 	return slugify(fmt.Sprintf("%s-%s-%s--%s", gateName, ns, envName, bundleSlugK8s))
 }
 
-// bundleVersionSlug returns a slug from the bundle name suitable for node naming.
+// bundleVersionSlug returns a CEL-safe slug from the bundle name for use in node IDs.
+//
+// Dual-slug convention (GB-3/GB-4 in docs/design/11-graph-purity-tech-debt.md):
+//   - celSafeSlug / bundleVersionSlug → underscores, valid CEL identifiers
+//     Used in: node IDs, readyWhen/propagateWhen CEL expressions, gateNodeName
+//   - slugify → hyphens, valid Kubernetes resource names
+//     Used in: metadata.name fields only
+//
+// Always use celSafeSlug for IDs appearing in CEL expressions.
+// Always use slugify for Kubernetes resource names.
 func bundleVersionSlug(bundleName string) string {
 	return celSafeSlug(bundleName)
 }
 
 // slugify replaces characters not valid in Kubernetes names with dashes.
-// Use celSafeSlug for node IDs that appear in CEL expressions.
+// Produces kebab-case (hyphens) suitable for metadata.name fields.
+// Do NOT use for CEL expression identifiers — use celSafeSlug instead.
+// See dual-slug convention in bundleVersionSlug doc comment.
 func slugify(s string) string {
 	var b strings.Builder
 	for _, c := range s {
@@ -730,6 +741,7 @@ func slugify(s string) string {
 // celSafeSlug creates an identifier safe for use as a CEL variable name.
 // CEL identifiers follow Go rules: letters, digits, underscores; must not
 // start with a digit. Hyphens and other special chars are replaced with '_'.
+// See dual-slug convention in bundleVersionSlug doc comment.
 func celSafeSlug(s string) string {
 	var b strings.Builder
 	for i, c := range s {
