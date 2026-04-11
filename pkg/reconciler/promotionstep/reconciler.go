@@ -156,7 +156,17 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		approvalMode = "auto"
 	}
 
-	seq := steps.DefaultSequence(approvalMode)
+	// Load bundle to determine type (image vs config) for step sequence routing.
+	bundle, bundleErr := r.loadBundle(ctx, ps)
+	bundleType := ""
+	updateStrategy := env.Update.Strategy
+	if bundleErr != nil {
+		log.Warn().Err(bundleErr).Msg("could not load bundle for sequence routing; using default kustomize sequence")
+	} else if bundle != nil {
+		bundleType = bundle.Spec.Type
+	}
+
+	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -189,7 +199,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if approvalMode == "" {
 		approvalMode = "auto"
 	}
-	seq := steps.DefaultSequence(approvalMode)
+	updateStrategy := env.Update.Strategy
+	bundleType := ""
+	if bundle != nil {
+		bundleType = bundle.Spec.Type
+	}
+	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy)
 	eng := steps.NewEngine(seq)
 
 	workDir := r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)

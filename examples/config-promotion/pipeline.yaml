@@ -1,0 +1,28 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: platform-config
+  namespace: default
+spec:
+  git:
+    url: https://github.com/myorg/platform-config
+    branch: main
+    provider: github
+    secretRef:
+      name: github-token
+  environments:
+    - name: dev
+      path: environments/dev
+      approval: auto
+      health:
+        type: resource
+    - name: staging
+      path: environments/staging
+      approval: auto
+      health:
+        type: resource
+    - name: prod
+      path: environments/prod
+      approval: pr-review
+      health:
+        type: argocd

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -107,12 +108,15 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		Str("pipeline", b.Spec.Pipeline).
 		Msg("bundle phase set to Available")
 
-	// Requeue immediately to advance to Promoting
-	return ctrl.Result{Requeue: true}, nil
+	// Requeue immediately to advance to Promoting.
+	// Use RequeueAfter instead of Requeue (Requeue is deprecated).
+	return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 }
 
 // supersedeSiblings finds and marks Promoting bundles for the same Pipeline as Superseded.
 // It is idempotent: already-superseded bundles are skipped.
+// Type-aware: image bundles only supersede image bundles; config bundles only supersede
+// config bundles. This allows image and config promotions to coexist independently.
 func (r *Reconciler) supersedeSiblings(ctx context.Context, log zerolog.Logger,
 	newBundle *kardinalv1alpha1.Bundle) error {
 	var bundles kardinalv1alpha1.BundleList
@@ -129,6 +133,10 @@ func (r *Reconciler) supersedeSiblings(ctx context.Context, log zerolog.Logger,
 			continue
 		}
 		if sibling.Spec.Pipeline != newBundle.Spec.Pipeline {
+			continue
+		}
+		// Only supersede bundles of the same type (image vs config independence).
+		if sibling.Spec.Type != newBundle.Spec.Type {
 			continue
 		}
 		// Only supersede bundles that are actively promoting.
