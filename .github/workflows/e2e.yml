@@ -56,11 +56,8 @@ jobs:
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
 
       - name: Install kardinal-promoter
-        env:
-          GOTOOLCHAIN: local
         run: |
           make install
-          kubectl apply -f config/manager/
 
       - name: Verify both controllers are running
         run: |

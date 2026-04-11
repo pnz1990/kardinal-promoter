@@ -33,6 +33,14 @@ Thumbs.db
 *.out
 coverage.txt
 
+# Compiled binaries in repo root (standalone agent sometimes builds here)
+kardinal-controller
+kardinal
+
+# Worktree artifacts that must not land in main repo root
+CLAIM
+ITEM.md
+
 # Misc
 *.log
 .claude/agents/

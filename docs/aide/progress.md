@@ -195,8 +195,8 @@
 | 002 | Pipeline-to-Graph Translator | ✅ Complete | PR #29. Full translation algorithm Steps 1-7, 27 unit tests |
 | 003 | PromotionStep Reconciler | ✅ Complete | PR #58. Full state machine, Bundle supersession, webhook endpoint, evidence copy. |
 | 004 | PolicyGate Reconciler | ✅ Complete | PR #31. CEL environment, evaluator, PolicyGate reconciler, time-based/soak gates. |
-| 005 | Health Adapters | 📋 Planned | Design doc: docs/design/05-health-adapters.md |
-| 006 | kardinal-ui | 📋 Planned | Design doc: docs/design/06-kardinal-ui.md |
+| 005 | Health Adapters | ✅ Complete | PR #62. Deployment, ArgoCD, Flux adapters. AutoDetector. |
+| 006 | kardinal-ui | ✅ Complete | PR #73. Embedded React UI via go:embed, DAG visualisation, gate status panel. |
 | 007 | Distributed Architecture | 📋 Planned | Design doc: docs/design/07-distributed-architecture.md |
 | 008 | Promotion Steps Engine | ✅ Complete | PR #57. SCMProvider, GitClient, Engine, 7 built-in steps, DefaultSequence. |
-| 009 | Config-Only Promotions | 📋 Planned | Design doc: docs/design/09-config-only-promotions.md |
+| 009 | Config-Only Promotions | ✅ Complete | PR #75. Helm strategy, config-only Bundle type, kustomize-set-image step. |

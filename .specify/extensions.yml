@@ -160,7 +160,7 @@ hooks:
     condition: null
   - extension: ship
     command: speckit.ship.run
-    enabled: true
+    enabled: false
     optional: true
     prompt: Ship this feature?
     description: Runs pre-flight checks, syncs branches, generates changelog, and
@@ -168,7 +168,7 @@ hooks:
     condition: null
   - extension: cleanup
     command: speckit.cleanup.run
-    enabled: true
+    enabled: false
     optional: true
     prompt: Run cleanup to review implementation changes and identify tech debt?
     description: Post-implementation quality gate
@@ -182,7 +182,7 @@ hooks:
     condition: null
   - extension: review
     command: speckit.review.run
-    enabled: true
+    enabled: false
     optional: true
     prompt: Run PR review on implemented changes?
     description: Comprehensive review after implementation

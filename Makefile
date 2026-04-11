@@ -99,6 +99,12 @@ install-krocodile: ## Build and install the krocodile Graph controller (pinned c
 kind-down:
 	kind delete cluster --name kardinal-e2e
 
+e2e-setup: ## Convenience: create kind cluster + install krocodile + kardinal (same as kind-up but more verbose output)
+	bash hack/e2e-setup.sh
+
+e2e-teardown: ## Convenience: tear down the e2e kind cluster
+	bash hack/e2e-teardown.sh
+
 ## E2E Tests — each journey maps to docs/aide/definition-of-done.md
 # These are the acceptance tests. The project is complete when all pass.
 
