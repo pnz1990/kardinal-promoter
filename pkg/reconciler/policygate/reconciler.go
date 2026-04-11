@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
@@ -234,9 +236,44 @@ func (r *Reconciler) now() time.Time {
 }
 
 // SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
+// It adds a Watch on MetricCheck objects so that when any MetricCheck in a namespace
+// changes (status updated by the MetricCheckReconciler), all PolicyGates in that
+// same namespace are queued for re-evaluation. This is the controller-runtime
+// equivalent of a "Watch node" — the PolicyGate reconciler reacts to MetricCheck
+// status changes rather than waiting for recheckInterval alone.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// metricCheckMapper enqueues all PolicyGates in the same namespace as the
+	// changed MetricCheck. This ensures PolicyGates with metrics.* expressions
+	// are re-evaluated immediately when a MetricCheck result changes.
+	metricCheckMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var gateList kardinalv1alpha1.PolicyGateList
+		if err := r.List(ctx, &gateList, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0, len(gateList.Items))
+		for _, gate := range gateList.Items {
+			// Only enqueue instance gates (those with a bundle label) —
+			// templates have no bundle label and are always skipped by Reconcile.
+			if gate.Labels[labelBundle] == "" {
+				continue
+			}
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      gate.Name,
+					Namespace: gate.Namespace,
+				},
+			})
+		}
+		return reqs
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.PolicyGate{}).
+		// Watch MetricCheck objects: when a MetricCheck status changes (Pass/Fail),
+		// all PolicyGates in the same namespace are re-evaluated immediately.
+		// This replaces the polling-only model with an event-driven one,
+		// moving toward the Graph-first Watch node architecture.
+		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(metricCheckMapper)).
 		Complete(r)
 }
 
