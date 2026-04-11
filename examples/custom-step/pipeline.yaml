@@ -1,0 +1,45 @@
+# Pipeline with custom step: version-gate
+# This Pipeline adds a custom HTTP webhook step before the standard promotion steps.
+# The custom step runs before git-clone so it can reject pre-release images early.
+#
+# To use: apply this Pipeline, then deploy the example server from server.go.
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: nginx-demo-with-version-gate
+  namespace: default
+spec:
+  appName: nginx-demo
+  git:
+    url: https://github.com/myorg/gitops-repo
+    secretRef:
+      name: github-token
+  environments:
+    - name: test
+      approval: auto
+      update:
+        strategy: kustomize
+    - name: uat
+      approval: auto
+      update:
+        strategy: kustomize
+    - name: prod
+      approval: pr-review
+      update:
+        strategy: kustomize
+      # Override the default step sequence to inject the version gate BEFORE
+      # git operations. The custom step can short-circuit the promotion early.
+      steps:
+        - uses: my-team/version-gate
+          webhook:
+            url: http://custom-step-server.custom-steps.svc.cluster.local/step
+            timeoutSeconds: 30
+            secretRef:
+              name: custom-step-token
+        - uses: git-clone
+        - uses: kustomize-set-image
+        - uses: git-commit
+        - uses: git-push
+        - uses: open-pr
+        - uses: wait-for-merge
+        - uses: health-check
