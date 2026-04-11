@@ -79,6 +79,8 @@ kardinal-promoter reads from the source branch, runs `kustomize-set-image` then
 
 ## Pipeline Configuration
 
+Configure `layout: branch` on each environment that should use the rendered manifests pattern:
+
 ```yaml
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
@@ -87,87 +89,53 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
+    branch: source       # DRY source branch where overlays live
     provider: github
     secretRef: { name: github-token }
-    layout: branch               # environments are separate branches
-    sourceBranch: main           # where the DRY templates live (default: spec.git.branch)
-    branchPrefix: env/           # rendered branches are env/dev, env/staging, env/prod
 
   environments:
     - name: dev
+      path: overlays/dev          # overlay path within the source branch
       approval: auto
-      steps:
-        - uses: git-clone
-          config:
-            branch: main               # check out source
-        - uses: kustomize-set-image
-        - uses: kustomize-build        # render to plain YAML
-        - uses: git-commit
-          config:
-            branch: env/dev            # commit rendered output to env branch
-        - uses: git-push
-        - uses: health-check
+      layout: branch              # use rendered manifests branch layout
+      health:
+        type: resource
 
     - name: staging
+      path: overlays/staging
       approval: auto
-      steps:
-        - uses: git-clone
-          config:
-            branch: main
-        - uses: kustomize-set-image
-        - uses: kustomize-build
-        - uses: git-commit
-          config:
-            branch: env/staging-incoming    # staging branch from feature branch
-        - uses: git-push
-        - uses: open-pr
-          config:
-            base: env/staging               # PR: env/staging-incoming -> env/staging
-        - uses: wait-for-merge
-        - uses: health-check
+      layout: branch
+      health:
+        type: argocd
 
     - name: prod
+      path: overlays/prod
       approval: pr-review
-      steps:
-        - uses: git-clone
-          config:
-            branch: main
-        - uses: kustomize-set-image
-        - uses: kustomize-build
-        - uses: git-commit
-          config:
-            branch: env/prod-incoming
-        - uses: git-push
-        - uses: open-pr
-          config:
-            base: env/prod
-        - uses: wait-for-merge
-        - uses: health-check
+      layout: branch
+      health:
+        type: argocd
 ```
+
+When `layout: branch` is set, the default step sequence becomes:
+
+```
+git-clone → kustomize-set-image → kustomize-build → git-commit → git-push
+         → [open-pr → wait-for-merge]  # for pr-review environments
+         → health-check
+```
+
+The `kustomize-build` step:
+1. Runs `kustomize build <env.path>` in the cloned working directory
+2. Writes the rendered YAML to `rendered-<env>.yaml` in the work directory
+3. Stores the path in `Outputs["renderedManifestPath"]` for subsequent steps
+
+The `git-commit` step picks up the rendered manifest file and commits it to the
+environment branch (`env/<name>` by convention).
+
+See `examples/rendered-manifests/` for a complete working example.
 
 When the `branchPrefix` field is set, the default step sequence auto-infers the branch
 names. Manual `steps` configuration is only needed for non-standard naming schemes.
-
-### Shorthand: auto-inferred rendered manifest steps
-
-For the common case, specify `renderManifests: true` on the environment instead of
-writing out the full step sequence:
-
-```yaml
-environments:
-  - name: prod
-    approval: pr-review
-    renderManifests: true       # enables kustomize-build + branch layout automatically
-    health:
-      type: argocd
-      argocd: { name: my-app-prod }
-```
-
-When `renderManifests: true` is set:
-1. The step sequence is: `git-clone (source branch)` → `kustomize-set-image` →
-   `kustomize-build` → `git-commit (env/<name>-incoming)` → `git-push` →
-   `open-pr (base: env/<name>)` → `wait-for-merge` → `health-check`
-2. The `git.branchPrefix` field determines the branch naming scheme.
 
 ## Argo CD Configuration
 

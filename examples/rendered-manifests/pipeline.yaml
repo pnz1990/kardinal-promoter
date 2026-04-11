@@ -1,0 +1,33 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: rendered-demo
+  namespace: default
+spec:
+  git:
+    url: https://github.com/myorg/gitops-repo
+    branch: source
+    provider: github
+    secretRef:
+      name: github-token
+  environments:
+    - name: dev
+      # Source branch: "source" (from spec.git.branch)
+      # Target branch: "env/dev" (created automatically by git-clone in branch layout)
+      path: overlays/dev
+      approval: auto
+      layout: branch
+      health:
+        type: resource
+    - name: staging
+      path: overlays/staging
+      approval: auto
+      layout: branch
+      health:
+        type: argocd
+    - name: prod
+      path: overlays/prod
+      approval: pr-review
+      layout: branch
+      health:
+        type: argocd

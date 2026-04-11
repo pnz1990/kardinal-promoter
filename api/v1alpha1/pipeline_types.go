@@ -115,6 +115,16 @@ type EnvironmentSpec struct {
 	// When not set, automatic rollback is disabled.
 	// +optional
 	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
+
+	// Layout configures how the promotion interacts with the Git repo layout.
+	// "directory" (default): env manifests are in a subdirectory of the main branch.
+	// "branch": rendered manifests are committed to a separate env-specific branch.
+	//   In this mode the step sequence includes kustomize-build to render templates
+	//   before committing to the target branch.
+	// +kubebuilder:validation:Enum=directory;branch
+	// +kubebuilder:default=directory
+	// +optional
+	Layout string `json:"layout,omitempty"`
 }
 
 // AutoRollbackSpec defines the automatic rollback policy for an environment.
