@@ -136,12 +136,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		if envFilter != "" && env != envFilter {
 			continue
 		}
-		gateState := "Pending"
-		if g.Status.Ready {
-			gateState = "Pass"
-		} else if g.Status.LastEvaluatedAt != nil {
-			gateState = "Block"
-		}
+		gateState := policyGatePhase(g)
 		reason := g.Status.Reason
 		if reason == "" {
 			reason = "-"

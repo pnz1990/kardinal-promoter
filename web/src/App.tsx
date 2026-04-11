@@ -1,9 +1,21 @@
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
-import { useState, useEffect, useCallback } from 'react'
+// Polls every 5 seconds per spec 006 (usePolling hook).
+import { useState, useCallback } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
+import { usePolling } from './hooks/usePolling'
 import { api } from './api/client'
 import type { Pipeline, Bundle, GraphResponse } from './types'
+
+function phaseBadgeColor(phase: string): string {
+  switch (phase) {
+    case 'Verified': return '#22c55e'
+    case 'Promoting': return '#f59e0b'
+    case 'Failed': return '#ef4444'
+    case 'Superseded': return '#94a3b8'
+    default: return '#64748b'
+  }
+}
 
 export function App() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -17,30 +29,48 @@ export function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
-  useEffect(() => {
+  // Poll pipeline list every 5 seconds (spec 006).
+  usePolling(useCallback(() => {
     api.listPipelines()
-      .then(setPipelines)
-      .catch(e => setPipelinesError(String(e)))
-      .finally(() => setPipelinesLoading(false))
-  }, [])
+      .then(ps => {
+        setPipelines(ps)
+        setPipelinesLoading(false)
+        setPipelinesError(undefined)
+      })
+      .catch(e => {
+        setPipelinesError(String(e))
+        setPipelinesLoading(false)
+      })
+  }, []), { intervalMs: 5000 })
 
-  const handleSelectPipeline = useCallback((name: string) => {
-    setSelectedPipeline(name)
-    setGraph(undefined)
-    setGraphError(undefined)
-    setGraphLoading(true)
-
-    api.listBundles(name)
+  // Poll bundles + graph for the selected pipeline every 5 seconds.
+  usePolling(useCallback(() => {
+    if (!selectedPipeline) return
+    api.listBundles(selectedPipeline)
       .then(bs => {
         setBundles(bs)
         // Load graph for the most recent Promoting bundle.
         const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
         if (promoting) {
-          return api.getGraph(promoting.name).then(g => setGraph(g))
+          setGraphLoading(true)
+          return api.getGraph(promoting.name)
+            .then(g => {
+              setGraph(g)
+              setGraphError(undefined)
+            })
+            .catch(e => setGraphError(String(e)))
+            .finally(() => setGraphLoading(false))
         }
       })
       .catch(e => setGraphError(String(e)))
-      .finally(() => setGraphLoading(false))
+  }, [selectedPipeline]), { intervalMs: 5000, active: !!selectedPipeline })
+
+  const handleSelectPipeline = useCallback((name: string) => {
+    setSelectedPipeline(name)
+    setGraph(undefined)
+    setGraphError(undefined)
+    setBundles([])
+    setGraphLoading(true)
   }, [])
 
   const activePipeline = pipelines.find(p => p.name === selectedPipeline)
@@ -119,6 +149,43 @@ export function App() {
                 error={graphError}
               />
             </div>
+
+            {/* Bundle history — shown when more than one bundle exists */}
+            {bundles.length > 1 && (
+              <div style={{ marginTop: '1.5rem' }}>
+                <div style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 600, marginBottom: '0.5rem' }}>
+                  BUNDLE HISTORY
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {bundles.map(b => (
+                    <div
+                      key={b.name}
+                      style={{
+                        background: '#1e293b',
+                        borderRadius: '6px',
+                        padding: '0.6rem 0.75rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '0.8rem',
+                      }}
+                    >
+                      <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{b.name}</span>
+                      <span style={{
+                        background: phaseBadgeColor(b.phase),
+                        color: '#fff',
+                        fontSize: '0.7rem',
+                        padding: '2px 6px',
+                        borderRadius: '9999px',
+                        fontWeight: 600,
+                      }}>
+                        {b.phase}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
       </main>
