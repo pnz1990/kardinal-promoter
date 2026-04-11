@@ -16,9 +16,9 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    501ea75f (2026-04-10 — latest as of initial setup)
+# Last verified:    e205934b (2026-04-11 — redesign graph reconciliation)
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-501ea75f}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-e205934b}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 
@@ -29,14 +29,24 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "[krocodile] Cloning krocodile..."
-git clone --quiet --no-tags --depth=1000 "$KROCODILE_REPO" "$TMPDIR/kro" 2>/dev/null
+git clone --quiet --no-tags --depth=10 "$KROCODILE_REPO" "$TMPDIR/kro" -b krocodile 2>/dev/null
 git -C "$TMPDIR/kro" checkout --quiet "$KROCODILE_COMMIT"
 echo "[krocodile] Checked out commit ${KROCODILE_COMMIT}."
 
 # ── 2. Build the controller binary ────────────────────────────────────────────
 echo "[krocodile] Building controller binary..."
+# Patch go.mod to build with local toolchain if needed
+LOCAL_GO_VERSION=$(GOTOOLCHAIN=local go version 2>/dev/null | awk '{print $3}' | sed 's/go//')
+REQUIRED_VERSION=$(grep '^go ' "$TMPDIR/kro/go.mod" | awk '{print $2}')
+if [ -n "$LOCAL_GO_VERSION" ] && [ -n "$REQUIRED_VERSION" ]; then
+  # Compare: if local < required, patch go.mod
+  if printf '%s\n%s' "$LOCAL_GO_VERSION" "$REQUIRED_VERSION" | sort -V | head -1 | grep -q "^${LOCAL_GO_VERSION}$"; then
+    sed -i.bak "s/^go ${REQUIRED_VERSION}/go ${LOCAL_GO_VERSION}/" "$TMPDIR/kro/go.mod"
+    echo "[krocodile] Patched go.mod: go ${REQUIRED_VERSION} → ${LOCAL_GO_VERSION}"
+  fi
+fi
 (cd "$TMPDIR/kro" && \
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -ldflags="-w -s" -o bin/graph-controller ./experimental/cmd/)
 echo "[krocodile] Binary built."
 
