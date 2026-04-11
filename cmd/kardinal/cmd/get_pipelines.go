@@ -39,11 +39,19 @@ func runGetPipelines(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("get pipelines: %w", err)
 	}
 
-	var pipelines v1alpha1.PipelineList
+	ctx := context.Background()
 	opts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
 
-	if err := client.List(context.Background(), &pipelines, opts...); err != nil {
+	var pipelines v1alpha1.PipelineList
+	if err := client.List(ctx, &pipelines, opts...); err != nil {
 		return fmt.Errorf("list pipelines: %w", err)
+	}
+
+	// Fetch PromotionSteps in the same namespace for per-environment status columns.
+	var promotionSteps v1alpha1.PromotionStepList
+	if err := client.List(ctx, &promotionSteps, opts...); err != nil {
+		// Non-fatal: fall back to empty step list (env columns will show "-").
+		promotionSteps.Items = nil
 	}
 
 	// If a specific name was given, filter.
@@ -59,5 +67,5 @@ func runGetPipelines(cmd *cobra.Command, args []string) error {
 		items = filtered
 	}
 
-	return FormatPipelineTable(cmd.OutOrStdout(), items)
+	return FormatPipelineTable(cmd.OutOrStdout(), items, promotionSteps.Items)
 }

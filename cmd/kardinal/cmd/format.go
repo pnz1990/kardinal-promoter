@@ -17,6 +17,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -39,26 +40,97 @@ func HumanAge(t time.Time) string {
 }
 
 // FormatPipelineTable writes a tabwriter-formatted table of pipelines to w.
-func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline) error {
+// steps is the list of PromotionSteps in the same namespace; it is used to
+// derive per-environment status and the active bundle version for each pipeline.
+// If steps is nil or empty the environment columns will show "-".
+func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep) error {
+	// Build a lookup: pipeline → environment → (state, bundleName)
+	type envState struct {
+		state      string
+		bundleName string
+	}
+	// pipelineEnvMap[pipelineName][envName] = envState
+	pipelineEnvMap := make(map[string]map[string]envState)
+	for _, s := range steps {
+		pipe := s.Spec.PipelineName
+		env := s.Spec.Environment
+		if pipe == "" || env == "" {
+			continue
+		}
+		if _, ok := pipelineEnvMap[pipe]; !ok {
+			pipelineEnvMap[pipe] = make(map[string]envState)
+		}
+		state := s.Status.State
+		if state == "" {
+			state = "Pending"
+		}
+		pipelineEnvMap[pipe][env] = envState{
+			state:      state,
+			bundleName: s.Spec.BundleName,
+		}
+	}
+
+	// Collect all environment names in spec order across all pipelines so that
+	// when multiple pipelines are printed their columns align.
+	// We preserve spec-order per pipeline and use the union across all.
+	envOrder := make([]string, 0)
+	envSeen := make(map[string]bool)
+	for _, p := range pipelines {
+		for _, e := range p.Spec.Environments {
+			if !envSeen[e.Name] {
+				envSeen[e.Name] = true
+				envOrder = append(envOrder, e.Name)
+			}
+		}
+	}
+
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PIPELINE\tPHASE\tENVIRONMENTS\tPAUSED\tAGE"); err != nil {
+
+	// Build header: PIPELINE BUNDLE <ENV1> <ENV2> ... AGE
+	header := "PIPELINE\tBUNDLE"
+	for _, env := range envOrder {
+		header += "\t" + strings.ToUpper(env)
+	}
+	header += "\tAGE"
+	if _, err := fmt.Fprintln(tw, header); err != nil {
 		return fmt.Errorf("write pipeline table header: %w", err)
 	}
+
 	for _, p := range pipelines {
-		phase := p.Status.Phase
-		if phase == "" {
-			phase = "Unknown"
+		// Determine active bundle version.
+		// Use the bundle name from any PromotionStep for this pipeline, preferring
+		// the most-advanced (Verified) environment's bundle name.
+		bundleDisplay := "-"
+		if envMap, ok := pipelineEnvMap[p.Name]; ok {
+			// Prefer Verified env bundle, else take any non-empty bundle name.
+			for _, est := range envMap {
+				if est.bundleName != "" && bundleDisplay == "-" {
+					bundleDisplay = est.bundleName
+				}
+				if est.state == "Verified" && est.bundleName != "" {
+					bundleDisplay = est.bundleName
+				}
+			}
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%d\t%v\t%s\n",
-			p.Name,
-			phase,
-			len(p.Spec.Environments),
-			p.Spec.Paused,
-			HumanAge(p.CreationTimestamp.Time),
-		); err != nil {
+
+		// Build the row.
+		row := fmt.Sprintf("%s\t%s", p.Name, bundleDisplay)
+		for _, env := range envOrder {
+			state := "-"
+			if envMap, ok := pipelineEnvMap[p.Name]; ok {
+				if est, ok := envMap[env]; ok {
+					state = est.state
+				}
+			}
+			row += "\t" + state
+		}
+		row += "\t" + HumanAge(p.CreationTimestamp.Time)
+
+		if _, err := fmt.Fprintln(tw, row); err != nil {
 			return fmt.Errorf("write pipeline row: %w", err)
 		}
 	}
+
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush pipeline table: %w", err)
 	}
