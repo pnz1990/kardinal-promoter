@@ -119,6 +119,25 @@ type UpdateConfig struct {
 	// +kubebuilder:default=kustomize
 	// +optional
 	Strategy string `json:"strategy,omitempty"`
+
+	// Helm holds Helm-specific update configuration.
+	// Used when Strategy is "helm".
+	// +optional
+	Helm *HelmUpdateConfig `json:"helm,omitempty"`
+}
+
+// HelmUpdateConfig holds Helm-specific update strategy configuration.
+type HelmUpdateConfig struct {
+	// ImagePathTemplate is the YAML dot-path to the image tag in values.yaml.
+	// Example: ".image.tag" updates the `image.tag` key.
+	// If empty, defaults to ".image.tag".
+	// +optional
+	ImagePathTemplate string `json:"imagePathTemplate,omitempty"`
+
+	// ValuesFile is the name of the values file to update (relative to the
+	// environment path). Defaults to "values.yaml".
+	// +optional
+	ValuesFile string `json:"valuesFile,omitempty"`
 }
 
 // HealthConfig holds health check configuration for an environment.

@@ -113,6 +113,8 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 
 // supersedeSiblings finds and marks Promoting bundles for the same Pipeline as Superseded.
 // It is idempotent: already-superseded bundles are skipped.
+// Type-aware: image bundles only supersede image bundles; config bundles only supersede
+// config bundles. This allows image and config promotions to coexist independently.
 func (r *Reconciler) supersedeSiblings(ctx context.Context, log zerolog.Logger,
 	newBundle *kardinalv1alpha1.Bundle) error {
 	var bundles kardinalv1alpha1.BundleList
@@ -129,6 +131,10 @@ func (r *Reconciler) supersedeSiblings(ctx context.Context, log zerolog.Logger,
 			continue
 		}
 		if sibling.Spec.Pipeline != newBundle.Spec.Pipeline {
+			continue
+		}
+		// Only supersede bundles of the same type (image vs config independence).
+		if sibling.Spec.Type != newBundle.Spec.Type {
 			continue
 		}
 		// Only supersede bundles that are actively promoting.

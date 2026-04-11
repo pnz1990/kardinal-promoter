@@ -1,0 +1,17 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Bundle
+metadata:
+  name: platform-config-abc123
+  namespace: default
+  labels:
+    kardinal.io/pipeline: platform-config
+spec:
+  type: config
+  pipeline: platform-config
+  configRef:
+    gitRepo: https://github.com/myorg/platform-config
+    commitSHA: abc123def456789012345678901234567890abcd
+  provenance:
+    commitSHA: abc123def456
+    ciRunURL: https://github.com/myorg/platform-config/actions/runs/12345
+    author: platform-engineer

@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -421,4 +423,170 @@ func TestEngine_ExecuteFrom_StepFailed(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, parentsteps.StepFailed, result.Status)
 	assert.Contains(t, fmt.Sprintf("%v", err), "git-clone")
+}
+
+// ─── Helm set image tests ────────────────────────────────────────────────────
+
+// TestHelmSetImage_UpdatesTagInValues verifies that helm-set-image writes the
+// correct image tag to values.yaml.
+func TestHelmSetImage_UpdatesTagInValues(t *testing.T) {
+	dir := t.TempDir()
+	// Create environment dir and values.yaml.
+	envDir := filepath.Join(dir, "environments", "prod")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "values.yaml"), []byte("image:\n  tag: \"1.28.0\"\n"), 0o644))
+
+	state := &parentsteps.StepState{
+		WorkDir: dir,
+		Environment: v1alpha1.EnvironmentSpec{
+			Name:   "prod",
+			Update: v1alpha1.UpdateConfig{Strategy: "helm"},
+		},
+		Bundle: v1alpha1.BundleSpec{
+			Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}},
+		},
+		Outputs: map[string]string{},
+	}
+
+	step, err := parentsteps.Lookup("helm-set-image")
+	require.NoError(t, err)
+
+	result, execErr := step.Execute(context.Background(), state)
+	require.NoError(t, execErr)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, "1.29.0", result.Outputs["imageTag"])
+
+	// Verify values.yaml was updated.
+	raw, err := os.ReadFile(filepath.Join(envDir, "values.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "1.29.0")
+	assert.NotContains(t, string(raw), "1.28.0")
+}
+
+// TestHelmSetImage_CustomPath verifies that a custom imagePathTemplate is respected.
+func TestHelmSetImage_CustomPath(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "environments", "staging")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "values.yaml"), []byte("app:\n  version: \"old\"\n"), 0o644))
+
+	state := &parentsteps.StepState{
+		WorkDir: dir,
+		Environment: v1alpha1.EnvironmentSpec{
+			Name: "staging",
+			Update: v1alpha1.UpdateConfig{
+				Strategy: "helm",
+				Helm:     &v1alpha1.HelmUpdateConfig{ImagePathTemplate: ".app.version"},
+			},
+		},
+		Bundle: v1alpha1.BundleSpec{
+			Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/app", Tag: "v2.0.0"}},
+		},
+		Outputs: map[string]string{},
+	}
+
+	step, err := parentsteps.Lookup("helm-set-image")
+	require.NoError(t, err)
+
+	result, execErr := step.Execute(context.Background(), state)
+	require.NoError(t, execErr)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+
+	raw, err := os.ReadFile(filepath.Join(envDir, "values.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "v2.0.0")
+}
+
+// TestHelmSetImage_Idempotent verifies that running the step twice produces the same result.
+func TestHelmSetImage_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	envDir := filepath.Join(dir, "environments", "test")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "values.yaml"), []byte("image:\n  tag: \"1.28.0\"\n"), 0o644))
+
+	state := &parentsteps.StepState{
+		WorkDir:     dir,
+		Environment: v1alpha1.EnvironmentSpec{Name: "test", Update: v1alpha1.UpdateConfig{Strategy: "helm"}},
+		Bundle:      v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}}},
+		Outputs:     map[string]string{},
+	}
+
+	step, err := parentsteps.Lookup("helm-set-image")
+	require.NoError(t, err)
+
+	// Run twice.
+	_, err = step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	result, err := step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+
+	raw, err := os.ReadFile(filepath.Join(envDir, "values.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "1.29.0")
+}
+
+// ─── Config merge tests ──────────────────────────────────────────────────────
+
+// TestConfigMerge_AppliesOverlay verifies that config-merge copies files from
+// the config source directory to the environment directory.
+func TestConfigMerge_AppliesOverlay(t *testing.T) {
+	dir := t.TempDir()
+	// Config source: a file we want to copy.
+	srcDir := filepath.Join(dir, "config-source")
+	require.NoError(t, os.MkdirAll(srcDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "configmap.yaml"), []byte("data: {key: new-value}"), 0o644))
+
+	// Environment dir exists but doesn't have the file yet.
+	envDir := filepath.Join(dir, "environments", "prod")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+
+	state := &parentsteps.StepState{
+		WorkDir:     dir,
+		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
+		Bundle: v1alpha1.BundleSpec{
+			Type: "config",
+			ConfigRef: &v1alpha1.ConfigRef{
+				CommitSHA: "abc123def456",
+				GitRepo:   "https://github.com/org/repo",
+			},
+		},
+		Outputs: map[string]string{
+			"configSourceDir": srcDir,
+		},
+	}
+
+	step, err := parentsteps.Lookup("config-merge")
+	require.NoError(t, err)
+
+	result, execErr := step.Execute(context.Background(), state)
+	require.NoError(t, execErr)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, "1", result.Outputs["mergedFiles"])
+
+	// Verify file was copied to env dir.
+	destFile := filepath.Join(envDir, "configmap.yaml")
+	data, err := os.ReadFile(destFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "new-value")
+}
+
+// TestConfigMerge_NoConfigRef verifies that config-merge is a no-op when
+// Bundle.configRef is nil.
+func TestConfigMerge_NoConfigRef(t *testing.T) {
+	dir := t.TempDir()
+	state := &parentsteps.StepState{
+		WorkDir:     dir,
+		Environment: v1alpha1.EnvironmentSpec{Name: "prod"},
+		Bundle:      v1alpha1.BundleSpec{Type: "image"}, // no ConfigRef
+		Outputs:     map[string]string{},
+	}
+
+	step, err := parentsteps.Lookup("config-merge")
+	require.NoError(t, err)
+
+	result, execErr := step.Execute(context.Background(), state)
+	require.NoError(t, execErr)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Contains(t, result.Message, "no config ref")
 }
