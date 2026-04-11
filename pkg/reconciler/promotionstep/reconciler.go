@@ -778,19 +778,6 @@ func extractRepo(prURL string) string {
 	return parts[0] + "/" + parts[1]
 }
 
-// extractPRNumber parses the PR number from a GitHub PR URL.
-// e.g. "https://github.com/owner/repo/pull/42" → "42"
-func extractPRNumber(prURL string) string {
-	if prURL == "" {
-		return ""
-	}
-	parts := strings.Split(prURL, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return ""
-}
-
 // maybeCreateAutoRollback creates a rollback Bundle if one doesn't already exist
 // for this PromotionStep. It is idempotent: checks for an existing rollback Bundle
 // before creating a new one.

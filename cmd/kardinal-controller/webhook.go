@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -192,32 +191,4 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 			Msg("PRStatus marked merged via webhook")
 	}
 	return nil
-}
-
-// extractPRNumberFromURL parses the PR number from a GitHub PR URL.
-func extractPRNumberFromURL(prURL string) string {
-	if prURL == "" {
-		return ""
-	}
-	parts := strings.Split(strings.TrimRight(prURL, "/"), "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-	return ""
-}
-
-// extractRepoFromURL extracts "owner/repo" from a GitHub PR URL.
-func extractRepoFromURL(prURL string) string {
-	s := strings.TrimPrefix(prURL, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	idx := strings.Index(s, "/")
-	if idx < 0 {
-		return ""
-	}
-	s = s[idx+1:]
-	parts := strings.SplitN(s, "/", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[0] + "/" + parts[1]
 }
