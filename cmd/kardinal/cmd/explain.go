@@ -107,10 +107,47 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		expression  string // CEL expression for PolicyGate rows (empty for Step rows)
 	}
 
+	// Determine the active bundle per environment using the same priority logic
+	// as FormatPipelineTable and FormatStepsTable: most-active state wins; within
+	// same priority, most recently created step wins. This ensures we show only
+	// the current promotion state, not rows from all superseded bundles.
+	type envBest struct {
+		bundleName string
+		priority   int
+		createdAt  time.Time
+	}
+	activeBundleByEnv := make(map[string]envBest)
+	for _, s := range steps.Items {
+		env := s.Spec.Environment
+		if envFilter != "" && env != envFilter {
+			continue
+		}
+		state := s.Status.State
+		if state == "" {
+			state = "Pending"
+		}
+		priority := stepStatePriority(state)
+		existing, ok := activeBundleByEnv[env]
+		if !ok ||
+			priority > existing.priority ||
+			(priority == existing.priority && s.CreationTimestamp.After(existing.createdAt)) {
+			activeBundleByEnv[env] = envBest{
+				bundleName: s.Spec.BundleName,
+				priority:   priority,
+				createdAt:  s.CreationTimestamp.Time,
+			}
+		}
+	}
+
 	var rows []explainRow
 
 	for _, s := range steps.Items {
-		if envFilter != "" && s.Spec.Environment != envFilter {
+		env := s.Spec.Environment
+		if envFilter != "" && env != envFilter {
+			continue
+		}
+		// Only show the step for the active bundle in this environment.
+		if best, ok := activeBundleByEnv[env]; ok && s.Spec.BundleName != best.bundleName {
 			continue
 		}
 		state := s.Status.State
@@ -135,6 +172,15 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		env := g.Labels["kardinal.io/environment"]
 		if envFilter != "" && env != envFilter {
 			continue
+		}
+		// Only show gates for the active bundle in this environment.
+		// PolicyGates carry a kardinal.io/bundle label set by the graph builder (since PR #258).
+		// Gates without this label (e.g. from older deployments) are shown for all bundles.
+		gateBundle := g.Labels["kardinal.io/bundle"]
+		if gateBundle != "" {
+			if best, ok := activeBundleByEnv[env]; ok && gateBundle != best.bundleName {
+				continue
+			}
 		}
 		gateState := PolicyGatePhase(g)
 		reason := g.Status.Reason

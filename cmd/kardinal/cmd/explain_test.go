@@ -18,6 +18,7 @@ package cmd
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -173,4 +174,77 @@ func TestExplain_UnevaluatedGateExpression(t *testing.T) {
 	assert.Contains(t, out, "staging-soak-30m")
 	assert.Contains(t, out, "bundle.upstreamSoakMinutes >= 30", "CEL expression must be shown")
 	assert.Contains(t, out, "Pending", "unevaluated gate must show Pending state")
+}
+
+// TestExplain_ShowsOnlyActiveBundleRows verifies that when multiple bundles have
+// PromotionSteps and PolicyGates, only the active bundle's rows are shown (#267).
+func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
+	now := metav1.Now()
+	old := metav1.NewTime(now.Add(-1 * time.Hour))
+
+	// Old bundle: Verified in prod.
+	oldStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "old-prod",
+			Namespace:         "default",
+			CreationTimestamp: old,
+			Labels:            map[string]string{"kardinal.io/pipeline": "my-app", "kardinal.io/environment": "prod"},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "my-app", Environment: "prod", BundleName: "old-bundle", StepType: "old-step"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	oldGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "old-gate",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "my-app",
+				"kardinal.io/environment": "prod",
+				"kardinal.io/bundle":      "old-bundle",
+			},
+		},
+		Spec:   v1alpha1.PolicyGateSpec{Expression: "true"},
+		Status: v1alpha1.PolicyGateStatus{Ready: true, LastEvaluatedAt: &now},
+	}
+
+	// New bundle: Promoting in prod (higher priority).
+	newStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "new-prod",
+			Namespace:         "default",
+			CreationTimestamp: now,
+			Labels:            map[string]string{"kardinal.io/pipeline": "my-app", "kardinal.io/environment": "prod"},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "my-app", Environment: "prod", BundleName: "new-bundle", StepType: "new-step"},
+		Status: v1alpha1.PromotionStepStatus{State: "Promoting"},
+	}
+	newGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "new-gate",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "my-app",
+				"kardinal.io/environment": "prod",
+				"kardinal.io/bundle":      "new-bundle",
+			},
+		},
+		Spec:   v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+		Status: v1alpha1.PolicyGateStatus{Ready: false, LastEvaluatedAt: &now},
+	}
+
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(oldStep, oldGate, newStep, newGate).Build()
+
+	var buf bytes.Buffer
+	err := explainOnce(&buf, c, "default", "my-app", "")
+	require.NoError(t, err)
+
+	out := buf.String()
+	// New bundle's step and gate should appear.
+	assert.Contains(t, out, "new-step", "active bundle step must be shown")
+	assert.Contains(t, out, "new-gate", "active bundle gate must be shown")
+	assert.Contains(t, out, "Promoting", "active bundle step state must be shown")
+	// Old bundle's step and gate should NOT appear.
+	assert.NotContains(t, out, "old-step", "superseded bundle step must not appear")
+	assert.NotContains(t, out, "old-gate", "superseded bundle gate must not appear")
 }
