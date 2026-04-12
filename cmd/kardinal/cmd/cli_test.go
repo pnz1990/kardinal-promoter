@@ -18,6 +18,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -558,4 +559,98 @@ func TestVersionOutput_ThreeLines(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPolicyTest_ValidExpression verifies that a gate with valid CEL is reported PASS.
+func TestPolicyTest_ValidExpression(t *testing.T) {
+	// Write a temp YAML file with a valid PolicyGate.
+	content := `apiVersion: promotions.kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: allow-all
+spec:
+  expression: "true"
+`
+	tmpFile := t.TempDir() + "/gate.yaml"
+	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
+
+	var buf bytes.Buffer
+	err := policyTestFn(&buf, tmpFile)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "allow-all")
+	assert.Contains(t, out, "Syntax: valid")
+	assert.Contains(t, out, "PASS")
+}
+
+// TestPolicyTest_InvalidExpression verifies that a gate with invalid CEL is reported INVALID.
+func TestPolicyTest_InvalidExpression(t *testing.T) {
+	content := `apiVersion: promotions.kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: bad-gate
+spec:
+  expression: "schedule.notExistingFn()"
+`
+	tmpFile := t.TempDir() + "/bad.yaml"
+	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
+
+	var buf bytes.Buffer
+	// Should not return error — validation errors are printed inline.
+	err := policyTestFn(&buf, tmpFile)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "bad-gate")
+	// Either INVALID syntax or ERROR evaluation (CEL may compile but fail at eval).
+	assert.True(t,
+		contains(out, "INVALID") || contains(out, "ERROR") || contains(out, "FAIL"),
+		"output should show validation failure: %s", out)
+}
+
+// TestPolicyTest_WeekendExpression verifies schedule.isWeekend expression evaluates.
+func TestPolicyTest_WeekendExpression(t *testing.T) {
+	content := `apiVersion: promotions.kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-weekend
+spec:
+  expression: "!schedule.isWeekend"
+`
+	tmpFile := t.TempDir() + "/weekend.yaml"
+	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
+
+	var buf bytes.Buffer
+	err := policyTestFn(&buf, tmpFile)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "no-weekend")
+	assert.Contains(t, out, "Syntax: valid")
+	// Result is either PASS or FAIL depending on current day — either is valid.
+	assert.True(t,
+		contains(out, "PASS") || contains(out, "FAIL"),
+		"output should show PASS or FAIL: %s", out)
+}
+
+// TestPolicyTest_MissingFile verifies error on missing file.
+func TestPolicyTest_MissingFile(t *testing.T) {
+	var buf bytes.Buffer
+	err := policyTestFn(&buf, "/nonexistent/path/gate.yaml")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonexistent")
+}
+
+// contains is a helper for multi-assertion checks.
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+			return false
+		}())
 }
