@@ -49,7 +49,7 @@ func runGetSteps(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("list promotion steps: %w", err)
 	}
 
-		out := cmd.OutOrStdout()
+	out := cmd.OutOrStdout()
 	switch OutputFormat() {
 	case "json":
 		return WriteJSON(out, steps.Items)
