@@ -358,6 +358,27 @@ The agent uses kardinal as a customer would. It does NOT mock anything.
 For multi-cluster scenarios (J2): use `make setup-multi-cluster-env` which sets up
 kind for pre-prod and the `krombat` EKS cluster for prod.
 
+### CRITICAL: Use the real test repos, not nginx
+
+**ALWAYS use these repos for testing — never nginx, never placeholder images:**
+
+| Repo | Purpose | Image |
+|---|---|---|
+| `github.com/pnz1990/kardinal-test-app` | The application being promoted | `ghcr.io/pnz1990/kardinal-test-app:sha-<7chars>` |
+| `github.com/pnz1990/kardinal-demo` | The GitOps target repo (environment branches) | Pipeline `repoURL` points here |
+
+```bash
+# Get the REAL latest image — do not use nginx or :latest
+LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+echo "Using image: $TEST_IMAGE"
+
+# Pipeline must reference kardinal-demo as the git repo
+# The pipeline.yaml repoURL should point to https://github.com/pnz1990/kardinal-demo
+```
+
+If you find yourself using `nginx` or any other placeholder image in tests, STOP and switch to `kardinal-test-app`. The point is to validate with a real application that reflects real-world usage.
+
 ### Setup (before running scenarios)
 
 ```bash
@@ -369,6 +390,8 @@ LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
 # Apply Pipeline and PolicyGates
+# IMPORTANT: pipeline.yaml repoURL must point to https://github.com/pnz1990/kardinal-demo
+# kardinal-demo has the environment branches (env/test, env/uat, env/prod)
 kubectl apply -f examples/quickstart/pipeline.yaml
 kubectl apply -f examples/quickstart/policy-gates.yaml
 kubectl create secret generic github-token \

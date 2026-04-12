@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   git:
-    url: https://github.com/<your-username>/kardinal-demo
+    url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
     provider: github
