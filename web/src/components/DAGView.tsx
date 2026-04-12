@@ -16,6 +16,10 @@ interface Props {
   highlightNodeIds?: Set<string>
   /** Bundle name — passed to NodeDetail to fetch step detail. */
   bundleName?: string
+  /** Pipeline name — passed to NodeDetail for the promote button. */
+  pipelineName?: string
+  /** Namespace of the pipeline. Defaults to 'default'. */
+  namespace?: string
 }
 
 const NODE_WIDTH = 180
@@ -52,7 +56,7 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
   })
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundleName }: Props) {
+export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundleName, pipelineName, namespace }: Props) {
   const [selected, setSelected] = useState<GraphNode | null>(null)
 
   if (loading) {
@@ -159,7 +163,13 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
         })}
       </svg>
 
-      <NodeDetail node={selected} onClose={() => setSelected(null)} bundleName={bundleName} />
+      <NodeDetail
+        node={selected}
+        onClose={() => setSelected(null)}
+        bundleName={bundleName}
+        pipelineName={pipelineName}
+        namespace={namespace}
+      />
     </div>
   )
 }

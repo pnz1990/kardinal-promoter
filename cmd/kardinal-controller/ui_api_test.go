@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -268,4 +269,83 @@ func TestUIAPI_GateStatusFields(t *testing.T) {
 	var gateList v1alpha1.PolicyGateList
 	require.NoError(t, c.List(context.Background(), &gateList))
 	assert.Empty(t, gateList.Items)
+}
+
+// TestUIAPI_Promote_CreatesBundleForEnvironment verifies that POST /api/v1/ui/promote
+// creates a Bundle targeting the specified environment.
+func TestUIAPI_Promote_CreatesBundleForEnvironment(t *testing.T) {
+	s := uiScheme()
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod"},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"pipeline": "nginx-demo", "environment": "prod", "namespace": "default"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/promote", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, "promote must return 201 Created")
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp["bundle"], "response must include bundle name")
+
+	// Verify the Bundle was created.
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	require.Len(t, bundles.Items, 1, "one bundle must be created")
+	b := bundles.Items[0]
+	assert.Equal(t, "nginx-demo", b.Spec.Pipeline)
+	assert.Equal(t, "prod", b.Spec.Intent.TargetEnvironment)
+}
+
+// TestUIAPI_Promote_RejectsMissingPipeline verifies that a promote request for
+// a nonexistent pipeline returns 404.
+func TestUIAPI_Promote_RejectsMissingPipeline(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"pipeline": "does-not-exist", "environment": "prod"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/promote", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code, "unknown pipeline must return 404")
+}
+
+// TestUIAPI_Promote_RejectsUnknownEnvironment verifies that a promote request for
+// an environment not in the pipeline spec returns 400.
+func TestUIAPI_Promote_RejectsUnknownEnvironment(t *testing.T) {
+	s := uiScheme()
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"pipeline": "nginx-demo", "environment": "nonexistent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/promote", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "unknown env must return 400")
 }

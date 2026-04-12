@@ -12,10 +12,26 @@ async function get<T>(path: string): Promise<T> {
   return resp.json() as Promise<T>
 }
 
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const resp = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    const text = await resp.text()
+    throw new Error(`API error ${resp.status}: ${text || resp.statusText}`)
+  }
+  return resp.json() as Promise<T>
+}
+
 export const api = {
   listPipelines: () => get<Pipeline[]>('/pipelines'),
   listBundles: (pipelineName: string) => get<Bundle[]>(`/pipelines/${pipelineName}/bundles`),
   getGraph: (bundleName: string) => get<GraphResponse>(`/bundles/${bundleName}/graph`),
   getSteps: (bundleName: string) => get<PromotionStep[]>(`/bundles/${bundleName}/steps`),
   listGates: () => get<PolicyGate[]>('/gates'),
+  /** Trigger a new promotion for the given pipeline+environment (UI promote button). */
+  promote: (pipeline: string, environment: string, namespace = 'default') =>
+    post<{ bundle: string; message: string }>('/promote', { pipeline, environment, namespace }),
 }

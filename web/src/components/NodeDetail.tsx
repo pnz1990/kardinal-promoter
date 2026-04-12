@@ -11,6 +11,10 @@ interface Props {
   onClose: () => void
   /** Bundle name — needed to fetch detailed step data. */
   bundleName?: string
+  /** Pipeline name — needed for the promote action. */
+  pipelineName?: string
+  /** Namespace of the pipeline. Defaults to 'default'. */
+  namespace?: string
 }
 
 /** Format an ISO timestamp to a human-readable string. */
@@ -118,13 +122,31 @@ function StepProgress({ step }: { step: PromotionStep }) {
   )
 }
 
-export function NodeDetail({ node, onClose, bundleName }: Props) {
+export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default' }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
   const [stepLoading, setStepLoading] = useState(false)
+  const [promoteState, setPromoteState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [promoteMessage, setPromoteMessage] = useState<string | null>(null)
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
   const isActiveState = node && ['Running', 'Promoting', 'WaitingForMerge', 'HealthChecking'].includes(node.state)
+
+  /** Trigger a new promotion for this environment. */
+  function handlePromote() {
+    if (!pipelineName || !node?.environment) return
+    setPromoteState('loading')
+    setPromoteMessage(null)
+    api.promote(pipelineName, node.environment, namespace)
+      .then(res => {
+        setPromoteState('success')
+        setPromoteMessage(`Bundle ${res.bundle} created`)
+      })
+      .catch((err: unknown) => {
+        setPromoteState('error')
+        setPromoteMessage(err instanceof Error ? err.message : 'Promote failed')
+      })
+  }
 
   // Fetch step detail when a PromotionStep node is selected and bundle is known.
   useEffect(() => {
@@ -200,6 +222,48 @@ export function NodeDetail({ node, onClose, bundleName }: Props) {
       <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
         <strong style={{ color: '#cbd5e1' }}>Environment:</strong> {node.environment}
       </div>
+
+      {/* Promote button — shown on PromotionStep nodes when a pipeline is known */}
+      {isPromotionStep && pipelineName && node.environment && (
+        <div style={{ marginBottom: '0.75rem' }}>
+          <button
+            onClick={handlePromote}
+            disabled={promoteState === 'loading'}
+            title={`Promote ${pipelineName} to ${node.environment}`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.35rem 0.8rem',
+              background: promoteState === 'success' ? '#166534' : promoteState === 'error' ? '#7f1d1d' : '#4f46e5',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: promoteState === 'loading' ? 'wait' : 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 500,
+              opacity: promoteState === 'loading' ? 0.7 : 1,
+            }}
+          >
+            <span>▶</span>
+            <span>
+              {promoteState === 'loading' ? 'Promoting…'
+                : promoteState === 'success' ? 'Promoted!'
+                : promoteState === 'error' ? 'Failed'
+                : `Promote to ${node.environment}`}
+            </span>
+          </button>
+          {promoteMessage && (
+            <div style={{
+              marginTop: '0.3rem',
+              fontSize: '0.7rem',
+              color: promoteState === 'error' ? '#fca5a5' : '#86efac',
+            }}>
+              {promoteMessage}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* PromotionStep: step progress log */}
       {isPromotionStep && stepLoading && (
