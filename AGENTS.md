@@ -9,6 +9,37 @@ embedded via `go:embed`. All state in Kubernetes CRDs. No external database.
 
 ---
 
+## UI/CLI Inspiration Source — kro-ui
+
+When working on `web/src/` or `cmd/kardinal/`, read the kro-ui project at
+`../kro-ui/` for UI patterns and inspiration. kro-ui is a production React
+dashboard for kro (our underlying DAG engine) and contains directly applicable
+patterns for kardinal's embedded UI:
+
+**Highly applicable kro-ui features to adapt for kardinal:**
+- **DAG visualization** (`web/src/components/`) — interactive node graph with
+  per-node health states (alive/reconciling/degraded/error/pending). Adapt for
+  the promotion DAG (each node = one environment promotion step).
+- **6-state health chips** — Ready/Degraded/Reconciling/Pending/Error/Unknown
+  with color coding. Adapt for Bundle.status and PromotionStep.status display.
+- **CEL expression display** — YAML tab shows CEL expressions highlighted.
+  Adapt for `kardinal explain` and the PolicyGate detail panel.
+- **Live polling with "refreshed X ago"** — 5s polling with staleness indicator.
+  Already partially in kardinal's `usePolling.ts` — compare against kro-ui's
+  implementation for improvements.
+- **Instance spec diff** — compare two instances field-by-field. Adapt for
+  comparing two Bundle versions or two PromotionStep states.
+- **Error aggregation** — cross-instance error grouping with affected count.
+  Adapt for surfacing recurring promotion failures across environments.
+- **Compile-error banner** — count of errors with one-click filter. Adapt for
+  showing PolicyGates that are blocking prod with a one-click "show blocked" filter.
+
+**Do not copy kro-ui code verbatim** — adapt the patterns. kardinal's domain
+is promotions/bundles/gates, not RGDs/instances/RBAC. Read kro-ui for ideas,
+implement for kardinal's concepts.
+
+---
+
 ## SDLC Process
 
 The team process lives in `.specify/memory/sdlc.md` — read it.
