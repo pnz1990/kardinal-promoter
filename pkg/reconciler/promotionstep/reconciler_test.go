@@ -528,15 +528,18 @@ func TestStepIndex_OutputsAccumulated(t *testing.T) {
 	assert.Equal(t, "Verified", final.Status.State)
 }
 
-// TestPausedPipeline_BlocksPromotionStep verifies that a paused Pipeline causes the
-// PromotionStep reconciler to hold (not advance state) and requeue.
-func TestPausedPipeline_BlocksPromotionStep(t *testing.T) {
+// TestPausedPipeline_ReconcilerNolongerChecksSpecPaused documents the PS-2 fix:
+// the PromotionStep reconciler no longer reads Pipeline.Spec.Paused.
+// Pause enforcement is now via the freeze PolicyGate (Graph-visible).
+// A "Promoting" step with a paused pipeline will now attempt to advance (and the
+// freeze gate in the Graph prevents the Graph node from being triggered in prod).
+func TestPausedPipeline_ReconcilerNolongerChecksSpecPaused(t *testing.T) {
 	scheme := buildScheme(t)
 
 	pausedPipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{
-			Paused: true,
+			Paused: true, // Note: reconciler no longer checks this (PS-2 fix)
 			Git:    v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
 			Environments: []v1alpha1.EnvironmentSpec{
 				{Name: "test", Approval: "auto"},
@@ -558,59 +561,19 @@ func TestPausedPipeline_BlocksPromotionStep(t *testing.T) {
 		WorkDirFn: func(_, _ string) string { return t.TempDir() },
 	}
 
-	result, err := r.Reconcile(context.Background(), ctrl.Request{
+	// After the PS-2 fix: reconciler proceeds normally — it does NOT hold because
+	// of Spec.Paused. The Graph-layer freeze gate (not the reconciler) enforces pause.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "step-paused", Namespace: "default"},
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "reconciler must not error — it ignores Spec.Paused (PS-2 fix)")
 
-	// Must requeue to re-check the pause state.
-	assert.Greater(t, result.RequeueAfter, time.Duration(0), "must requeue when pipeline is paused")
-
-	// Step must NOT have advanced from Promoting.
+	// Step advances (or stays at Promoting after attempting git clone — SCM mock returns success).
+	// The key point: the reconciler no longer holds due to Spec.Paused.
 	var updated v1alpha1.PromotionStep
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-paused", Namespace: "default"}, &updated))
-	assert.Equal(t, "Promoting", updated.Status.State,
-		"step must stay at Promoting when pipeline is paused; got %s", updated.Status.State)
-}
-
-// TestPausedPipeline_IdempotentOnMultipleReconciles verifies that reconciling a paused
-// pipeline multiple times does not change the PromotionStep state (idempotent).
-func TestPausedPipeline_IdempotentOnMultipleReconciles(t *testing.T) {
-	scheme := buildScheme(t)
-
-	pausedPipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
-		Spec: v1alpha1.PipelineSpec{
-			Paused: true,
-			Git:    v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
-			Environments: []v1alpha1.EnvironmentSpec{
-				{Name: "test", Approval: "auto"},
-			},
-		},
-	}
-	step := makeStep("step-paused-idem", "nginx-demo", "bundle-1", "test")
-	step.Status.State = "Promoting"
-	bundle := makeBundle("bundle-1", "nginx-demo")
-
-	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
-		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
-	).WithObjects(step, pausedPipeline, bundle).Build()
-
-	r := &promotionstep.Reconciler{
-		Client:    c,
-		SCM:       &mockSCM{},
-		GitClient: &mockGit{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
-	}
-
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-paused-idem", Namespace: "default"}}
-	for i := 0; i < 3; i++ {
-		_, err := r.Reconcile(context.Background(), req)
-		require.NoError(t, err, "reconcile %d should not error", i)
-	}
-
-	var updated v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &updated))
-	assert.Equal(t, "Promoting", updated.Status.State,
-		"step must stay at Promoting after 3 reconciles of paused pipeline")
+	// State changes from "Promoting" (the reconciler ran the step) — not stuck.
+	// The exact new state depends on mock SCM behavior; what matters is it advanced.
+	assert.NotEqual(t, "Promoting", updated.Status.State,
+		"step must have advanced — Spec.Paused no longer blocks in reconciler (PS-2 fix)")
 }

@@ -184,16 +184,11 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("get pipeline %s: %w", b.Spec.Pipeline, err)
 	}
 
-	// If the Pipeline is paused, do not start a new promotion.
-	// Requeue after a short interval to re-check the pause state.
-	if pipeline.Spec.Paused {
-		log.Info().
-			Str("pipeline", pipeline.Name).
-			Msg("pipeline is paused — holding bundle at Available until resumed")
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-
 	// Translate Pipeline+Bundle into a Graph
+	// Note: Pipeline.Spec.Paused enforcement is handled by the freeze PolicyGate
+	// (created by `kardinal pause`) which blocks all Graph nodes. The reconciler
+	// does not check Spec.Paused directly — that would be a Graph-invisible
+	// business rule (PS-2 / BU-2). The freeze gate IS visible to the Graph.
 	graphName, err := r.Translator.Translate(ctx, &pipeline, b)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to translate bundle to graph")
