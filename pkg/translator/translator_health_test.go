@@ -1,0 +1,441 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package translator
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+)
+
+// makeTestGraph builds a minimal Graph with one PromotionStep node per environment.
+// Mirrors the convention used by graph.Builder: node ID = celSafeSlug(envName).
+func makeTestGraph(envNames ...string) *graph.Graph {
+	g := &graph.Graph{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-graph", Namespace: "default"},
+	}
+	for _, name := range envNames {
+		g.Spec.Nodes = append(g.Spec.Nodes, graph.GraphNode{
+			ID: celSafeSlug(name),
+			Template: map[string]interface{}{
+				"apiVersion": "kardinal.io/v1alpha1",
+				"kind":       "PromotionStep",
+				"metadata":   map[string]interface{}{"name": "test-" + name},
+				"spec":       map[string]interface{}{"environment": name},
+			},
+			ReadyWhen: []string{
+				`${` + celSafeSlug(name) + `.status.state == "Verified"}`,
+			},
+			PropagateWhen: []string{
+				`${` + celSafeSlug(name) + `.status.state == "Verified"}`,
+			},
+		})
+	}
+	return g
+}
+
+// makePipeline builds a minimal Pipeline with the given environments.
+func makePipeline(name string, envs []kardinalv1alpha1.EnvironmentSpec) *kardinalv1alpha1.Pipeline {
+	return &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: envs},
+	}
+}
+
+// TestInjectHealthWatchNodes_NoHealthType verifies that environments without
+// health.type do not produce Watch nodes.
+func TestInjectHealthWatchNodes_NoHealthType(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "test"},
+		{Name: "prod"},
+	})
+	g := makeTestGraph("test", "prod")
+	originalCount := len(g.Spec.Nodes)
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 0, injected, "no Watch nodes should be injected when health.type is empty")
+	assert.Len(t, g.Spec.Nodes, originalCount, "node count must not change")
+}
+
+// TestInjectHealthWatchNodes_Resource verifies that health.type=resource injects
+// a ShapeWatch node for apps/v1 Deployment.
+func TestInjectHealthWatchNodes_Resource(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+	})
+	g := makeTestGraph("prod")
+	originalStepCount := len(g.Spec.Nodes)
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+	assert.Len(t, g.Spec.Nodes, originalStepCount+1, "one Watch node added")
+
+	// Find the health Watch node
+	var watchNode *graph.GraphNode
+	for i := range g.Spec.Nodes {
+		if strings.HasPrefix(g.Spec.Nodes[i].ID, "health_") {
+			watchNode = &g.Spec.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, watchNode, "health Watch node must exist")
+
+	// Node ID follows "health_<envSlug>" pattern
+	assert.Equal(t, "health_prod", watchNode.ID)
+
+	// Template must be identity-only (ShapeWatch auto-detection):
+	// Only apiVersion, kind, metadata.name/namespace
+	tmpl := watchNode.Template
+	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
+	assert.Equal(t, "Deployment", tmpl["kind"])
+	md := tmpl["metadata"].(map[string]interface{})
+	assert.Equal(t, "nginx", md["name"], "deployment name = pipeline name")
+	assert.Equal(t, "prod", md["namespace"], "deployment namespace = env name")
+
+	// Template must NOT have spec or other fields (would make it ShapeOwns/ShapeContribute)
+	_, hasSpec := tmpl["spec"]
+	assert.False(t, hasSpec, "identity-only template must not have spec field")
+	for k := range tmpl {
+		assert.Contains(t, []string{"apiVersion", "kind", "metadata"}, k,
+			"identity-only template must only have apiVersion/kind/metadata")
+	}
+	for k := range md {
+		assert.Contains(t, []string{"name", "namespace"}, k,
+			"metadata must only have name/namespace for ShapeWatch detection")
+	}
+
+	// ReadyWhen must reference the actual node ID (not the placeholder "healthNode")
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], "health_prod", "readyWhen must reference node ID")
+	assert.NotContains(t, watchNode.ReadyWhen[0], "healthNode", "placeholder must be substituted")
+	assert.Contains(t, watchNode.ReadyWhen[0], "Available", "readyWhen checks Available condition")
+}
+
+// TestInjectHealthWatchNodes_ArgoCD verifies health.type=argocd Watch node.
+func TestInjectHealthWatchNodes_ArgoCD(t *testing.T) {
+	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},
+	})
+	g := makeTestGraph("prod")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	watchNode := findHealthNode(g, "prod")
+	require.NotNil(t, watchNode)
+
+	tmpl := watchNode.Template
+	assert.Equal(t, "argoproj.io/v1alpha1", tmpl["apiVersion"])
+	assert.Equal(t, "Application", tmpl["kind"])
+	md := tmpl["metadata"].(map[string]interface{})
+	assert.Equal(t, "myapp-prod", md["name"], "application name = pipeline + env")
+	assert.Equal(t, "argocd", md["namespace"])
+
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], "Healthy")
+	assert.Contains(t, watchNode.ReadyWhen[0], "Synced")
+}
+
+// TestInjectHealthWatchNodes_Flux verifies health.type=flux Watch node.
+func TestInjectHealthWatchNodes_Flux(t *testing.T) {
+	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "staging", Health: kardinalv1alpha1.HealthConfig{Type: "flux"}},
+	})
+	g := makeTestGraph("staging")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	watchNode := findHealthNode(g, "staging")
+	require.NotNil(t, watchNode)
+
+	tmpl := watchNode.Template
+	assert.Equal(t, "kustomize.toolkit.fluxcd.io/v1", tmpl["apiVersion"])
+	assert.Equal(t, "Kustomization", tmpl["kind"])
+	md := tmpl["metadata"].(map[string]interface{})
+	assert.Equal(t, "myapp-staging", md["name"])
+	assert.Equal(t, "flux-system", md["namespace"])
+
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], "Ready")
+}
+
+// TestInjectHealthWatchNodes_ArgoRollouts verifies health.type=argoRollouts Watch node.
+func TestInjectHealthWatchNodes_ArgoRollouts(t *testing.T) {
+	pipeline := makePipeline("rollouts-demo", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod-eu", Health: kardinalv1alpha1.HealthConfig{Type: "argoRollouts"}},
+	})
+	g := makeTestGraph("prod-eu")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	watchNode := findHealthNode(g, "prod-eu")
+	require.NotNil(t, watchNode)
+	assert.Equal(t, "health_prod_eu", watchNode.ID, "hyphens in env name become underscores")
+
+	tmpl := watchNode.Template
+	assert.Equal(t, "argoproj.io/v1alpha1", tmpl["apiVersion"])
+	assert.Equal(t, "Rollout", tmpl["kind"])
+	md := tmpl["metadata"].(map[string]interface{})
+	assert.Equal(t, "rollouts-demo", md["name"])
+	assert.Equal(t, "prod-eu", md["namespace"])
+}
+
+// TestInjectHealthWatchNodes_Flagger verifies health.type=flagger Watch node.
+func TestInjectHealthWatchNodes_Flagger(t *testing.T) {
+	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "flagger"}},
+	})
+	g := makeTestGraph("prod")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	watchNode := findHealthNode(g, "prod")
+	require.NotNil(t, watchNode)
+
+	tmpl := watchNode.Template
+	assert.Equal(t, "flagger.app/v1beta1", tmpl["apiVersion"])
+	assert.Equal(t, "Canary", tmpl["kind"])
+	assert.Contains(t, watchNode.ReadyWhen[0], "Succeeded")
+}
+
+// TestInjectHealthWatchNodes_MultipleEnvs verifies multiple environments each get
+// their own Watch node.
+func TestInjectHealthWatchNodes_MultipleEnvs(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "test"}, // no health
+		{Name: "uat", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}}, // has health
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},  // has health
+	})
+	g := makeTestGraph("test", "uat", "prod")
+	originalCount := len(g.Spec.Nodes)
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 2, injected, "test has no health.type, uat and prod do")
+	assert.Len(t, g.Spec.Nodes, originalCount+2)
+
+	uatNode := findHealthNode(g, "uat")
+	require.NotNil(t, uatNode)
+	assert.Equal(t, "health_uat", uatNode.ID)
+
+	prodNode := findHealthNode(g, "prod")
+	require.NotNil(t, prodNode)
+	assert.Equal(t, "health_prod", prodNode.ID)
+}
+
+// TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated verifies that the
+// companion PromotionStep node's readyWhen gains the health Watch condition.
+func TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+	})
+	g := makeTestGraph("prod")
+
+	// Capture original readyWhen
+	var origReadyWhen []string
+	for _, node := range g.Spec.Nodes {
+		if node.ID == "prod" {
+			origReadyWhen = append(origReadyWhen, node.ReadyWhen...)
+			break
+		}
+	}
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	// Find the PromotionStep node
+	var stepNode *graph.GraphNode
+	for i := range g.Spec.Nodes {
+		if g.Spec.Nodes[i].ID == "prod" {
+			stepNode = &g.Spec.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, stepNode)
+
+	// readyWhen must have grown by 1 (health condition appended)
+	assert.Len(t, stepNode.ReadyWhen, len(origReadyWhen)+1,
+		"PromotionStep readyWhen should gain one health condition")
+
+	// The new condition must reference the health Watch node ID
+	newCond := stepNode.ReadyWhen[len(stepNode.ReadyWhen)-1]
+	assert.Contains(t, newCond, "health_prod", "new readyWhen condition must reference health node ID")
+	assert.Contains(t, newCond, "Available", "resource readyWhen checks Available condition")
+}
+
+// TestInjectHealthWatchNodes_PropagateWhenUnchanged verifies that propagateWhen
+// is NOT modified — the PromotionStep reconciler still gates downstream.
+func TestInjectHealthWatchNodes_PropagateWhenUnchanged(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+	})
+	g := makeTestGraph("prod")
+
+	var origPropagateWhen []string
+	for _, node := range g.Spec.Nodes {
+		if node.ID == "prod" {
+			origPropagateWhen = append(origPropagateWhen, node.PropagateWhen...)
+			break
+		}
+	}
+
+	_, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+
+	var stepNode *graph.GraphNode
+	for i := range g.Spec.Nodes {
+		if g.Spec.Nodes[i].ID == "prod" {
+			stepNode = &g.Spec.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, stepNode)
+
+	assert.Equal(t, origPropagateWhen, stepNode.PropagateWhen,
+		"propagateWhen must NOT be modified — reconciler still gates downstream")
+}
+
+// TestInjectHealthWatchNodes_NilGraph handles nil input gracefully.
+func TestInjectHealthWatchNodes_NilGraph(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+	})
+	injected, err := injectHealthWatchNodes(pipeline, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, injected, "nil graph must return 0 without error")
+}
+
+// TestInjectHealthWatchNodes_NilPipeline handles nil pipeline gracefully.
+func TestInjectHealthWatchNodes_NilPipeline(t *testing.T) {
+	g := makeTestGraph("prod")
+	injected, err := injectHealthWatchNodes(nil, g)
+	require.NoError(t, err)
+	assert.Equal(t, 0, injected, "nil pipeline must return 0 without error")
+}
+
+// TestInjectHealthWatchNodes_UnknownHealthType skips unknown types without error.
+func TestInjectHealthWatchNodes_UnknownHealthType(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "unknown-type"}},
+	})
+	g := makeTestGraph("prod")
+	originalCount := len(g.Spec.Nodes)
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 0, injected, "unknown health type is skipped silently")
+	assert.Len(t, g.Spec.Nodes, originalCount, "node count unchanged for unknown type")
+}
+
+// TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly verifies that the emitted Watch
+// node template conforms to krocodile's ShapeWatch detection requirement:
+// only apiVersion, kind, metadata.name/namespace — no spec or other fields.
+func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
+	tests := []struct {
+		name       string
+		healthType string
+	}{
+		{"resource", "resource"},
+		{"argocd", "argocd"},
+		{"flux", "flux"},
+		{"argoRollouts", "argoRollouts"},
+		{"flagger", "flagger"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: tc.healthType}},
+			})
+			g := makeTestGraph("prod")
+
+			_, err := injectHealthWatchNodes(pipeline, g)
+			require.NoError(t, err)
+
+			watchNode := findHealthNode(g, "prod")
+			require.NotNil(t, watchNode, "health Watch node must exist for type %s", tc.healthType)
+
+			tmpl := watchNode.Template
+
+			// Only allowed top-level keys: apiVersion, kind, metadata
+			for k := range tmpl {
+				assert.Contains(t, []string{"apiVersion", "kind", "metadata"}, k,
+					"ShapeWatch template must only have apiVersion/kind/metadata, got: %s", k)
+			}
+
+			// metadata must only have name/namespace
+			md, ok := tmpl["metadata"].(map[string]interface{})
+			require.True(t, ok, "metadata must be a map")
+			for k := range md {
+				assert.Contains(t, []string{"name", "namespace"}, k,
+					"metadata must only have name/namespace for ShapeWatch, got: %s", k)
+			}
+
+			// apiVersion and kind must be present
+			assert.NotEmpty(t, tmpl["apiVersion"])
+			assert.NotEmpty(t, tmpl["kind"])
+			assert.NotEmpty(t, md["name"])
+			assert.NotEmpty(t, md["namespace"])
+		})
+	}
+}
+
+// TestCelSafeSlug verifies celSafeSlug produces CEL-valid identifiers.
+func TestCelSafeSlug(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"prod", "prod"},
+		{"prod-eu", "prod_eu"},
+		{"prod-eu-2", "prod_eu_2"},
+		{"PROD", "prod"},
+		{"0prod", "_0prod"},
+		{"my.env", "my_env"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, celSafeSlug(tc.input))
+		})
+	}
+}
+
+// findHealthNode finds the health Watch node for a given environment in the graph.
+func findHealthNode(g *graph.Graph, envName string) *graph.GraphNode {
+	target := "health_" + celSafeSlug(envName)
+	for i := range g.Spec.Nodes {
+		if g.Spec.Nodes[i].ID == target {
+			return &g.Spec.Nodes[i]
+		}
+	}
+	return nil
+}
