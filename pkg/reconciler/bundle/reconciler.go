@@ -15,8 +15,9 @@
 
 // Package bundle implements the BundleReconciler which watches Bundle objects,
 // sets status.phase = Available on newly-created Bundles, triggers the
-// Pipeline-to-Graph translation, handles Bundle supersession, and syncs
-// per-environment promotion evidence from PromotionStep status.
+// Pipeline-to-Graph translation, handles Bundle self-supersession (BU-1/BU-4 fix:
+// each bundle detects a newer sibling and supersedes itself, avoiding cross-CRD
+// mutations), and syncs per-environment promotion evidence from PromotionStep status.
 package bundle
 
 import (
@@ -55,8 +56,8 @@ type Reconciler struct {
 // or whenever a PromotionStep for this bundle changes (via the Watch in SetupWithManager).
 //
 // State machine:
-//   - Phase = "" (new Bundle): supersede older Promoting bundles, set to Available
-//   - Phase = "Available" (ready to promote): look up Pipeline, call Translator,
+//   - Phase = "" (new Bundle): set to Available; each bundle self-supersedes if a newer same-type bundle exists
+//   - Phase = "Available" (ready to promote): check self-supersession; look up Pipeline, call Translator,
 //     set phase to Promoting
 //   - Phase = "Promoting" | "Verified" | "Failed": sync evidence from PromotionStep status
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -78,6 +79,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case "":
 		return r.handleNew(ctx, log, &b)
 	case "Available":
+		// Check self-supersession before attempting to promote.
+		if superseded, err := r.isSuperseededByNewer(ctx, &b); err != nil {
+			log.Warn().Err(err).Msg("failed to check for newer bundle (non-fatal)")
+		} else if superseded {
+			return r.markSuperseded(ctx, log, &b)
+		}
 		return r.handleAvailable(ctx, log, &b)
 	default:
 		// For Promoting, Verified, Failed: sync evidence from PromotionStep status.
@@ -87,15 +94,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // handleNew sets the phase to Available on a newly-created Bundle.
-// It also supersedes any older Bundles in Promoting state for the same Pipeline.
+// Supersession of older bundles is no longer done here (BU-1 fix). Each bundle
+// is responsible for superseding itself when it detects a newer bundle exists.
 func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
-	// Supersession: mark older Promoting bundles for the same Pipeline as Superseded.
-	if supersErr := r.supersedeSiblings(ctx, log, b); supersErr != nil {
-		// Non-fatal: log and continue. The new bundle must still become Available.
-		log.Warn().Err(supersErr).Msg("failed to supersede sibling bundles (non-fatal)")
-	}
-
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Available"
 
@@ -114,50 +116,53 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	return ctrl.Result{RequeueAfter: time.Millisecond}, nil
 }
 
-// supersedeSiblings finds and marks Promoting bundles for the same Pipeline as Superseded.
-// It is idempotent: already-superseded bundles are skipped.
-// Type-aware: image bundles only supersede image bundles; config bundles only supersede
-// config bundles. This allows image and config promotions to coexist independently.
-func (r *Reconciler) supersedeSiblings(ctx context.Context, log zerolog.Logger,
-	newBundle *kardinalv1alpha1.Bundle) error {
+// isSuperseededByNewer returns true if there is a newer Bundle for the same
+// pipeline and type that is not yet Superseded or Failed. This implements
+// self-supersession: each bundle checks if it should yield to a newer sibling,
+// writing only to its own status (BU-1 / BU-4 fix — no cross-CRD mutations).
+func (r *Reconciler) isSuperseededByNewer(ctx context.Context, b *kardinalv1alpha1.Bundle) (bool, error) {
 	var bundles kardinalv1alpha1.BundleList
-	if err := r.List(ctx, &bundles,
-		client.InNamespace(newBundle.Namespace),
-	); err != nil {
-		return fmt.Errorf("list bundles: %w", err)
+	if err := r.List(ctx, &bundles, client.InNamespace(b.Namespace)); err != nil {
+		return false, fmt.Errorf("list bundles for supersession check: %w", err)
 	}
 
 	for i := range bundles.Items {
 		sibling := &bundles.Items[i]
-		// Skip self and bundles targeting a different Pipeline.
-		if sibling.Name == newBundle.Name {
+		if sibling.Name == b.Name {
 			continue
 		}
-		if sibling.Spec.Pipeline != newBundle.Spec.Pipeline {
+		if sibling.Spec.Pipeline != b.Spec.Pipeline {
 			continue
 		}
-		// Only supersede bundles of the same type (image vs config independence).
-		if sibling.Spec.Type != newBundle.Spec.Type {
+		// Type-aware: image bundles are only superseded by image bundles, etc.
+		if sibling.Spec.Type != b.Spec.Type {
 			continue
 		}
-		// Only supersede bundles that are actively promoting.
-		if sibling.Status.Phase != "Promoting" && sibling.Status.Phase != "Available" {
+		// Skip terminal or already-superseded siblings.
+		if sibling.Status.Phase == "Superseded" || sibling.Status.Phase == "Failed" || sibling.Status.Phase == "Verified" {
 			continue
 		}
-
-		patch := client.MergeFrom(sibling.DeepCopy())
-		sibling.Status.Phase = "Superseded"
-		if patchErr := r.Status().Patch(ctx, sibling, patch); patchErr != nil {
-			log.Error().Err(patchErr).Str("sibling", sibling.Name).Msg("failed to supersede bundle")
-			return fmt.Errorf("supersede bundle %s: %w", sibling.Name, patchErr)
+		// A sibling that is not terminal and was created after us means we are superseded.
+		if sibling.CreationTimestamp.After(b.CreationTimestamp.Time) {
+			return true, nil
 		}
-
-		log.Info().
-			Str("superseded", sibling.Name).
-			Str("by", newBundle.Name).
-			Msg("bundle superseded")
 	}
-	return nil
+	return false, nil
+}
+
+// markSuperseded sets this bundle's status.phase to "Superseded" (self-supersession).
+func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	patch := client.MergeFrom(b.DeepCopy())
+	b.Status.Phase = "Superseded"
+	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch bundle status Superseded: %w", err)
+	}
+	log.Info().
+		Str("pipeline", b.Spec.Pipeline).
+		Str("type", b.Spec.Type).
+		Msg("bundle superseded by newer bundle (self-supersession)")
+	return ctrl.Result{}, nil
 }
 
 // handleAvailable triggers Graph creation and advances phase to Promoting.
@@ -184,16 +189,11 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, fmt.Errorf("get pipeline %s: %w", b.Spec.Pipeline, err)
 	}
 
-	// If the Pipeline is paused, do not start a new promotion.
-	// Requeue after a short interval to re-check the pause state.
-	if pipeline.Spec.Paused {
-		log.Info().
-			Str("pipeline", pipeline.Name).
-			Msg("pipeline is paused — holding bundle at Available until resumed")
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-
 	// Translate Pipeline+Bundle into a Graph
+	// Note: Pipeline.Spec.Paused enforcement is handled by the freeze PolicyGate
+	// (created by `kardinal pause`) which blocks all Graph nodes. The reconciler
+	// does not check Spec.Paused directly — that would be a Graph-invisible
+	// business rule (PS-2 / BU-2). The freeze gate IS visible to the Graph.
 	graphName, err := r.Translator.Translate(ctx, &pipeline, b)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to translate bundle to graph")
@@ -262,6 +262,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			Phase:           ps.Status.State,
 			PRURL:           ps.Status.PRURL,
 			HealthCheckedAt: prev.HealthCheckedAt, // preserve if already set
+			SoakMinutes:     prev.SoakMinutes,     // will be updated below if HealthCheckedAt is set
 		}
 
 		// Use the prURL from outputs if available (more reliable than status.PRURL).
@@ -276,9 +277,22 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			updated.HealthCheckedAt = &now
 		}
 
+		// Update SoakMinutes if HealthCheckedAt is set.
+		// This is the PG-3 fix: soakMinutes is now a CRD field written by the
+		// BundleReconciler (owns Bundle status), so the PolicyGate reconciler can
+		// read it without calling time.Since() in its hot path.
+		// time.Now() here is inside a CRD status write — Graph-first compliant.
+		if updated.HealthCheckedAt != nil {
+			elapsed := time.Now().UTC().Sub(updated.HealthCheckedAt.UTC())
+			if elapsed > 0 {
+				updated.SoakMinutes = int64(elapsed.Minutes())
+			}
+		}
+
 		// Only mark changed if something actually differs.
 		if prev.Phase != updated.Phase || prev.PRURL != updated.PRURL ||
-			(updated.HealthCheckedAt != nil && prev.HealthCheckedAt == nil) {
+			(updated.HealthCheckedAt != nil && prev.HealthCheckedAt == nil) ||
+			updated.SoakMinutes != prev.SoakMinutes {
 			envMap[envName] = updated
 			changed = true
 		}

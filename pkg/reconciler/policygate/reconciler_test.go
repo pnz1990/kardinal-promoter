@@ -377,13 +377,16 @@ func TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails(t *testing.T) 
 }
 
 // TestPolicyGateReconciler_UpstreamSoakContext_Passes verifies that
-// upstream["uat"].soakMinutes >= 30 passes when bundle has been health-checked for > 30 min.
+// upstream["uat"].soakMinutes >= 30 passes when bundle.status.environments[uat].soakMinutes >= 30.
+// After the PG-3 fix, soakMinutes is read from Bundle.status (written by BundleReconciler),
+// not computed via time.Since() in the PolicyGate reconciler.
 func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
 	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
 	healthCheckedAt := metav1.NewTime(now.Add(-45 * time.Minute)) // 45 minutes ago
 
 	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
-		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt},
+		// SoakMinutes=45 is written by BundleReconciler; PolicyGate reads it (PG-3 fix).
+		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 45},
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`upstream["uat"].soakMinutes >= 30`, "2m")
@@ -416,13 +419,14 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
 }
 
 // TestPolicyGateReconciler_UpstreamSoakContext_Blocks verifies that
-// upstream["uat"].soakMinutes >= 30 blocks when bundle has only soaked 10 min.
+// upstream["uat"].soakMinutes >= 30 blocks when bundle.status.environments[uat].soakMinutes < 30.
 func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
 	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
 	healthCheckedAt := metav1.NewTime(now.Add(-10 * time.Minute)) // only 10 minutes ago
 
 	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
-		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt},
+		// SoakMinutes=10 written by BundleReconciler; PolicyGate reads it (PG-3 fix).
+		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 10},
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`upstream["uat"].soakMinutes >= 30`, "2m")

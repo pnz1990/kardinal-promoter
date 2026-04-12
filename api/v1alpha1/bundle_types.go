@@ -140,6 +140,14 @@ type EnvironmentStatus struct {
 	// +optional
 	HealthCheckedAt *metav1.Time `json:"healthCheckedAt,omitempty"`
 
+	// SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt.
+	// Written by the BundleReconciler as part of its own CRD status write.
+	// The PolicyGate reconciler reads this field from Bundle.status.environments
+	// to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates
+	// the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix).
+	// +optional
+	SoakMinutes int64 `json:"soakMinutes,omitempty"`
+
 	// GateResults holds the result of each PolicyGate evaluation for this
 	// environment.
 	// +optional

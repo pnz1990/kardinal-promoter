@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -87,7 +88,8 @@ func TestRollback_CreatesBundleWithRollbackOf(t *testing.T) {
 	assert.Equal(t, "prod", rb.Spec.Intent.TargetEnvironment)
 }
 
-// TestPause_PatchesPipelinePaused verifies that pauseFn patches Pipeline.spec.paused=true.
+// TestPause_PatchesPipelinePaused verifies that pauseFn patches Pipeline.spec.paused=true
+// and creates a freeze PolicyGate (Graph-observable pause enforcement, PS-2 / BU-2 fix).
 func TestPause_PatchesPipelinePaused(t *testing.T) {
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
@@ -107,9 +109,35 @@ func TestPause_PatchesPipelinePaused(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo", Namespace: "default"}, &updated))
 	assert.True(t, updated.Spec.Paused)
 	assert.Contains(t, buf.String(), "paused")
+
+	// Freeze gate must have been created.
+	var gate v1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "freeze-nginx-demo", Namespace: "default"}, &gate))
+	assert.Equal(t, "false", gate.Spec.Expression, "freeze gate must always evaluate to false")
+	assert.Equal(t, "true", gate.Labels["kardinal.io/freeze"])
 }
 
-// TestResume_UnpausesPipeline verifies that resumeFn patches Pipeline.spec.paused=false.
+// TestPause_Idempotent verifies that pauseFn is safe to call multiple times
+// (AlreadyExists on the freeze gate is silently swallowed).
+func TestPause_Idempotent(t *testing.T) {
+	s := cliTestScheme(t)
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git:          v1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
+
+	var buf bytes.Buffer
+	require.NoError(t, pauseFn(&buf, c, "default", "nginx-demo"))
+	// Second call must succeed without error (gate already exists).
+	require.NoError(t, pauseFn(&buf, c, "default", "nginx-demo"), "second pauseFn must be idempotent")
+}
+
+// TestResume_UnpausesPipeline verifies that resumeFn patches Pipeline.spec.paused=false
+// and deletes the freeze PolicyGate (PS-2 / BU-2 fix).
 func TestResume_UnpausesPipeline(t *testing.T) {
 	s := cliTestScheme(t)
 	pipeline := &v1alpha1.Pipeline{
@@ -120,7 +148,11 @@ func TestResume_UnpausesPipeline(t *testing.T) {
 			Paused:       true,
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
+	freezeGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "freeze-nginx-demo", Namespace: "default"},
+		Spec:       v1alpha1.PolicyGateSpec{Expression: "false"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, freezeGate).Build()
 
 	var buf bytes.Buffer
 	err := resumeFn(&buf, c, "default", "nginx-demo")
@@ -130,6 +162,30 @@ func TestResume_UnpausesPipeline(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo", Namespace: "default"}, &updated))
 	assert.False(t, updated.Spec.Paused)
 	assert.Contains(t, buf.String(), "resumed")
+
+	// Freeze gate must have been deleted.
+	var gate v1alpha1.PolicyGate
+	err = c.Get(context.Background(), types.NamespacedName{Name: "freeze-nginx-demo", Namespace: "default"}, &gate)
+	assert.True(t, apierrors.IsNotFound(err), "freeze gate must be deleted on resume")
+}
+
+// TestResume_Idempotent verifies that resumeFn is safe when the freeze gate is absent
+// (e.g. manual deletion or first resume after an older-format pause).
+func TestResume_Idempotent(t *testing.T) {
+	s := cliTestScheme(t)
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git:          v1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}},
+			Paused:       true,
+		},
+	}
+	// No freeze gate in the cluster — should still succeed.
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
+
+	var buf bytes.Buffer
+	require.NoError(t, resumeFn(&buf, c, "default", "nginx-demo"), "resumeFn must succeed even if freeze gate is absent")
 }
 
 // TestPolicyList_ShowsGates verifies that policyListFn shows PolicyGate rows.
