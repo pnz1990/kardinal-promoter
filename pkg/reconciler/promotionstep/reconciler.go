@@ -134,6 +134,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
+	// Orphan guard: if the parent Bundle no longer exists, self-delete this
+	// PromotionStep to stop the infinite reconcile error loop (#248).
+	// This handles the case where a Bundle was deleted manually (e.g. during
+	// development or testing) while its PromotionSteps are still present.
+	// Graph-first: we delete our OWN resource (PromotionStep), not anyone else's.
+	if ps.Spec.BundleName != "" {
+		var parentBundle v1alpha1.Bundle
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      ps.Spec.BundleName,
+			Namespace: ps.Namespace,
+		}, &parentBundle); err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info().
+					Str("bundle", ps.Spec.BundleName).
+					Msg("parent bundle not found — self-deleting orphaned PromotionStep")
+				if delErr := r.Delete(ctx, &ps); delErr != nil && !apierrors.IsNotFound(delErr) {
+					return ctrl.Result{}, fmt.Errorf("delete orphaned promotionstep: %w", delErr)
+				}
+				return ctrl.Result{}, nil
+			}
+			// Transient error — requeue to retry later.
+			return ctrl.Result{}, fmt.Errorf("check parent bundle %s: %w", ps.Spec.BundleName, err)
+		}
+	}
+
 	switch ps.Status.State {
 	case StatePending, StatePendingExplicit:
 		return r.handlePending(ctx, log, &ps)

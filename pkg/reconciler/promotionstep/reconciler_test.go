@@ -748,3 +748,92 @@ func TestShardIsolation_TwoShards(t *testing.T) {
 	assert.Equal(t, "Promoting", us.Status.State,
 		"US step must be in Promoting after US reconciler ran")
 }
+
+// TestOrphanGuard_SelfDeletesWhenBundleGone verifies that when the parent Bundle
+// no longer exists (e.g. deleted manually), the PromotionStep self-deletes
+// instead of entering an infinite error loop (#248).
+func TestOrphanGuard_SelfDeletesWhenBundleGone(t *testing.T) {
+	s := buildScheme(t)
+
+	// Create a PromotionStep with spec.bundleName pointing to a non-existent bundle.
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "orphaned-step",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-pipeline",
+			BundleName:   "deleted-bundle",
+			Environment:  "test",
+		},
+	}
+	pipeline := makePipeline("my-pipeline")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(step, pipeline).
+		WithStatusSubresource(step).
+		Build()
+
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "orphaned-step", Namespace: "default"},
+	})
+	require.NoError(t, err, "orphan guard must not return an error")
+
+	// The PromotionStep must be deleted.
+	var got v1alpha1.PromotionStep
+	err = c.Get(context.Background(), types.NamespacedName{Name: "orphaned-step", Namespace: "default"}, &got)
+	require.Error(t, err, "orphaned PromotionStep must be self-deleted")
+	// controller-runtime fake returns a NotFound-like error for deleted objects.
+	_ = got
+}
+
+// TestOrphanGuard_NoDeleteWhenBundleExists verifies that when the parent Bundle
+// exists the reconciler proceeds normally (no self-deletion).
+func TestOrphanGuard_NoDeleteWhenBundleExists(t *testing.T) {
+	s := buildScheme(t)
+
+	bundle := makeBundle("existing-bundle", "my-pipeline")
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "normal-step",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-pipeline",
+			BundleName:   "existing-bundle",
+			Environment:  "test",
+		},
+	}
+	pipeline := makePipeline("my-pipeline")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(step, bundle, pipeline).
+		WithStatusSubresource(step).
+		Build()
+
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "normal-step", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// The PromotionStep must still exist and have been processed (state = Promoting).
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "normal-step", Namespace: "default"}, &got))
+	assert.Equal(t, "Promoting", got.Status.State, "step must advance to Promoting when bundle exists")
+}
