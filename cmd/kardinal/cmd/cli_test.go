@@ -374,3 +374,23 @@ func TestSplitImageRef(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicyList_ShowsPendingState verifies that unevaluated gates show "Pending".
+func TestPolicyList_ShowsPendingState(t *testing.T) {
+	s := cliTestScheme(t)
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "unevaluated-gate",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+		// Status zero-value: no LastEvaluatedAt
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
+
+	var buf bytes.Buffer
+	err := policyListFn(&buf, c, "default", "")
+	require.NoError(t, err)
+
+	assert.Contains(t, buf.String(), "Pending", "unevaluated gate must show Pending")
+}
