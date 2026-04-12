@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/api/client.ts","./src/components/dagview.tsx","./src/components/nodedetail.tsx","./src/components/pipelinelist.tsx","./src/hooks/usepolling.ts"],"version":"5.7.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/usepolling.ts","./src/userefreshindicator.ts","./src/api/client.ts","./src/components/dagview.tsx","./src/components/nodedetail.tsx","./src/components/pipelinelist.tsx","./src/hooks/usepolling.ts"],"version":"5.7.3"}
