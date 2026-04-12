@@ -24,16 +24,23 @@ import (
 )
 
 func newGetBundlesCmd() *cobra.Command {
-	return &cobra.Command{
+	var activeOnly bool
+
+	cmd := &cobra.Command{
 		Use:     "bundles [pipeline]",
 		Aliases: []string{"bundle"},
 		Short:   "List Bundles, optionally filtered by pipeline name",
 		Args:    cobra.MaximumNArgs(1),
-		RunE:    runGetBundles,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGetBundles(cmd, args, activeOnly)
+		},
 	}
+	cmd.Flags().BoolVar(&activeOnly, "active", false,
+		"Show only active bundles (Promoting/Verified/Failed — excludes Superseded)")
+	return cmd
 }
 
-func runGetBundles(cmd *cobra.Command, args []string) error {
+func runGetBundles(cmd *cobra.Command, args []string, activeOnly bool) error {
 	client, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get bundles: %w", err)
@@ -64,13 +71,25 @@ func runGetBundles(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Apply --active filter if requested: exclude Superseded bundles.
+	items := bundles.Items
+	if activeOnly {
+		filtered := items[:0]
+		for _, b := range items {
+			if b.Status.Phase != "Superseded" {
+				filtered = append(filtered, b)
+			}
+		}
+		items = filtered
+	}
+
 	out := cmd.OutOrStdout()
 	switch OutputFormat() {
 	case "json":
-		return WriteJSON(out, bundles.Items)
+		return WriteJSON(out, items)
 	case "yaml":
-		return WriteYAML(out, bundles.Items)
+		return WriteYAML(out, items)
 	default:
-		return FormatBundleTable(out, bundles.Items)
+		return FormatBundleTable(out, items)
 	}
 }
