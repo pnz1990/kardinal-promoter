@@ -101,6 +101,15 @@ type PromotionStepStatus struct {
 	// Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
 	// +optional
 	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
+
+	// WorkDir is the working directory on the controller node used for git operations
+	// (clone, commit, push) and kustomize builds. Persisted to etcd so that a restarted
+	// controller can re-use the same directory and resume in-flight git work.
+	// ST-7/ST-8/ST-9 short-term mitigation: the workdir path is made observable via
+	// CRD status, enabling crash-recovery without re-cloning.
+	// Long-term: git operations become Kubernetes Jobs (owned nodes in the Graph).
+	// +optional
+	WorkDir string `json:"workDir,omitempty"`
 }
 
 // +kubebuilder:object:root=true
