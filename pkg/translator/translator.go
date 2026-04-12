@@ -6,12 +6,14 @@ package translator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 )
 
 // Translator handles the full pipeline-to-graph creation flow:
@@ -89,6 +91,26 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("graph", result.Graph.Name).
 		Msg("graph spec built")
 
+	// Inject health Watch nodes for each environment that has health.type configured.
+	// HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md:
+	// The translator emits krocodile ShapeWatch nodes (identity-only template:
+	// apiVersion+kind+metadata.name) for health verification so the Graph can
+	// observe real K8s resource health without the PromotionStep reconciler
+	// calling health adapters on the hot path.
+	//
+	// Each health Watch node:
+	//   - Has an identity-only template → krocodile auto-detects it as ShapeWatch
+	//   - Has a readyWhen expression evaluating the K8s resource's health status
+	//   - Updates the companion PromotionStep node's readyWhen to surface
+	//     real-resource health in the Graph's UI signal
+	if injected, injErr := injectHealthWatchNodes(pipeline, result.Graph); injErr != nil {
+		// Non-fatal: log and continue without Watch nodes rather than failing the promotion.
+		// The PromotionStep reconciler's Go adapter path remains as a fallback.
+		log.Warn().Err(injErr).Msg("health Watch node injection failed — continuing without Watch nodes")
+	} else if injected > 0 {
+		log.Debug().Int("healthNodes", injected).Msg("health Watch nodes injected into Graph")
+	}
+
 	// Create the Graph CR
 	if err := t.graphClient.Create(ctx, result.Graph); err != nil {
 		return "", fmt.Errorf("translator.Translate: create graph: %w", err)
@@ -100,6 +122,160 @@ func (t *Translator) Translate(ctx context.Context,
 		Msg("translation complete: graph created")
 
 	return result.Graph.Name, nil
+}
+
+// injectHealthWatchNodes post-processes the Graph spec to add krocodile ShapeWatch
+// nodes for each environment with a configured health.type.
+//
+// This is the translator-layer implementation of HE-1, HE-2, HE-3 from
+// docs/design/11-graph-purity-tech-debt.md. ShapeWatch nodes exist in krocodile
+// (confirmed HEAD commit 8ac56202) — they are auto-detected by krocodile when a
+// node template contains only apiVersion, kind, and metadata.name/namespace.
+//
+// For each environment env with health.type set:
+//  1. Build a WatchNodeSpec from pkg/health.WatchNodeTemplate
+//  2. Build the Graph node ID: "health_<envSlug>"
+//  3. Append a ShapeWatch node to the Graph spec
+//  4. Update the PromotionStep node's readyWhen to include the health condition
+//     (UI signal: the Graph shows the step as "ready" only when the K8s resource
+//     is also healthy — not just when the reconciler set state=Verified)
+//
+// Returns the count of injected Watch nodes.
+func injectHealthWatchNodes(
+	pipeline *kardinalv1alpha1.Pipeline,
+	g *graph.Graph,
+) (int, error) {
+	if pipeline == nil || g == nil {
+		return 0, nil
+	}
+
+	// Build a name→spec index for fast PromotionStep node lookup.
+	// Node IDs for PromotionStep nodes follow the celSafeSlug(envName) convention
+	// used by builder.go. We match them by ID prefix.
+	stepNodeByEnv := make(map[string]int, len(pipeline.Spec.Environments))
+	for i, node := range g.Spec.Nodes {
+		for _, env := range pipeline.Spec.Environments {
+			if node.ID == celSafeSlug(env.Name) {
+				stepNodeByEnv[env.Name] = i
+				break
+			}
+		}
+	}
+
+	injected := 0
+	for _, env := range pipeline.Spec.Environments {
+		if env.Health.Type == "" {
+			continue // no health check configured for this env
+		}
+
+		// Build the resource name. We use the same convention as the PromotionStep
+		// reconciler's handleHealthChecking: pipeline.Name + "-" + env.Name for
+		// argocd/flux, and pipeline.Name for resource/argoRollouts/flagger.
+		opts := healthOptsForEnv(pipeline.Name, env)
+
+		spec, err := health.WatchNodeTemplate(env.Health.Type, opts)
+		if err != nil {
+			// Unknown health type — skip this env rather than failing the whole promotion.
+			continue
+		}
+
+		nodeID := "health_" + celSafeSlug(env.Name)
+
+		// Substitute the "healthNode" placeholder in ReadyWhen with the actual node ID.
+		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
+
+		// Build an identity-only template so krocodile detects it as ShapeWatch.
+		// ShapeWatch detection (experimental/controller/types.go): only apiVersion,
+		// kind, metadata.name, optionally metadata.namespace.
+		watchNode := graph.GraphNode{
+			ID: nodeID,
+			Template: map[string]interface{}{
+				"apiVersion": spec.APIVersion,
+				"kind":       spec.Kind,
+				"metadata": map[string]interface{}{
+					"name":      spec.Name,
+					"namespace": spec.Namespace,
+				},
+			},
+			ReadyWhen: []string{readyWhen},
+		}
+		g.Spec.Nodes = append(g.Spec.Nodes, watchNode)
+
+		// Update the companion PromotionStep node's readyWhen to also include the
+		// health Watch node condition. This makes the Graph's UI signal reflect the
+		// real K8s resource health, not only the reconciler's state field.
+		//
+		// Note: propagateWhen is intentionally left unchanged — the PromotionStep
+		// reconciler still gates downstream via state==Verified. The Watch node
+		// readyWhen is a UI signal only (Graph UI shows amber vs green).
+		if idx, ok := stepNodeByEnv[env.Name]; ok {
+			g.Spec.Nodes[idx].ReadyWhen = append(
+				g.Spec.Nodes[idx].ReadyWhen,
+				readyWhen,
+			)
+		}
+
+		injected++
+	}
+	return injected, nil
+}
+
+// healthOptsForEnv builds the health.CheckOptions for a given environment using
+// the same name conventions as the PromotionStep reconciler's handleHealthChecking.
+//
+// Convention (matches promotionstep/reconciler.go handleHealthChecking):
+//   - resource: Deployment name = pipeline.Name, namespace = env.Name
+//   - argocd:   Application name = pipeline.Name + "-" + env.Name, namespace = "argocd"
+//   - flux:     Kustomization name = pipeline.Name + "-" + env.Name, namespace = "flux-system"
+//   - argoRollouts: Rollout name = pipeline.Name, namespace = env.Name
+//   - flagger:  Canary name = pipeline.Name, namespace = env.Name
+func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec) health.CheckOptions {
+	return health.CheckOptions{
+		Type: env.Health.Type,
+		Resource: health.ResourceConfig{
+			Name:      pipelineName,
+			Namespace: env.Name,
+			Condition: "Available",
+		},
+		ArgoCD: health.ArgoCDConfig{
+			Name:      pipelineName + "-" + env.Name,
+			Namespace: "argocd",
+		},
+		Flux: health.FluxConfig{
+			Name:      pipelineName + "-" + env.Name,
+			Namespace: "flux-system",
+		},
+		ArgoRollouts: health.ArgoRolloutsConfig{
+			Name:      pipelineName,
+			Namespace: env.Name,
+		},
+		Flagger: health.FlaggerConfig{
+			Name:      pipelineName,
+			Namespace: env.Name,
+		},
+	}
+}
+
+// celSafeSlug produces an identifier safe for use in CEL expressions.
+// Mirrors graph.celSafeSlug exactly — must be kept in sync.
+// Hyphens and other non-alphanumeric chars become underscores; uppercase → lowercase.
+// A leading digit gets a prefixed underscore.
+func celSafeSlug(s string) string {
+	var b strings.Builder
+	for i, c := range s {
+		switch {
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9' && i > 0) || c == '_':
+			b.WriteRune(c)
+		case c >= 'A' && c <= 'Z':
+			b.WriteRune(c - 'A' + 'a')
+		case c == '0' && i == 0:
+			b.WriteRune('_')
+			b.WriteRune(c)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
 }
 
 // collectGates lists PolicyGates from all policy namespaces and the pipeline's namespace.
