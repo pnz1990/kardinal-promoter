@@ -5,9 +5,19 @@ import { DAGView } from './components/DAGView'
 import { HealthChip } from './components/HealthChip'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
+import { useRefreshIndicator } from './useRefreshIndicator'
 import type { Pipeline, Bundle, GraphResponse } from './types'
 
 const POLL_INTERVAL_MS = 5000
+
+/** Format elapsed seconds into a human-readable staleness string. */
+function formatElapsed(seconds: number | null): string {
+  if (seconds === null) return 'Loading...'
+  if (seconds < 5) return 'just now'
+  if (seconds < 60) return `${seconds}s ago`
+  const mins = Math.floor(seconds / 60)
+  return `${mins}m ago`
+}
 
 export function App() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -22,12 +32,16 @@ export function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
+  // Refresh indicator: tracks last successful poll for the staleness indicator.
+  const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()
+
   // Poll pipeline list every 5 seconds.
   usePolling(async () => {
     try {
       const ps = await api.listPipelines()
       setPipelines(ps)
       setPipelinesError(undefined)
+      onPollSuccess()
     } catch (e) {
       setPipelinesError(String(e))
     } finally {
@@ -74,6 +88,14 @@ export function App() {
   const activePipeline = pipelines.find(p => p.name === selectedPipeline)
   const activeBundle = bundles.find(b => b.phase === 'Promoting') ?? bundles[0]
 
+  // Determine staleness indicator color.
+  const staleness = elapsedSeconds ?? 0
+  const indicatorColor = pipelinesError
+    ? '#f59e0b'  // amber on error
+    : staleness > 15
+    ? '#f59e0b'  // amber when stale > 15s
+    : '#64748b'  // default muted
+
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       {/* Sidebar */}
@@ -89,12 +111,30 @@ export function App() {
         <div style={{
           padding: '1rem',
           borderBottom: '1px solid #1e293b',
-          fontWeight: 700,
-          fontSize: '0.9rem',
-          color: '#6366f1',
-          letterSpacing: '0.05em',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
         }}>
-          KARDINAL
+          <span style={{
+            fontWeight: 700,
+            fontSize: '0.9rem',
+            color: '#6366f1',
+            letterSpacing: '0.05em',
+          }}>
+            KARDINAL
+          </span>
+          {/* Staleness indicator */}
+          <span
+            title={pipelinesError ? `Error: ${pipelinesError}` : 'Last updated'}
+            style={{
+              fontSize: '0.65rem',
+              color: indicatorColor,
+              fontVariantNumeric: 'tabular-nums',
+            }}
+            aria-label={`Data ${formatElapsed(elapsedSeconds)}`}
+          >
+            {pipelinesError ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
+          </span>
         </div>
         <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#475569', fontWeight: 600 }}>
           PIPELINES
