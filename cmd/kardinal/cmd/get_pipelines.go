@@ -24,30 +24,40 @@ import (
 )
 
 func newGetPipelinesCmd() *cobra.Command {
-	return &cobra.Command{
+	var allNamespaces bool
+
+	cmd := &cobra.Command{
 		Use:     "pipelines [name]",
 		Aliases: []string{"pipeline"},
 		Short:   "List Pipelines",
 		Args:    cobra.MaximumNArgs(1),
-		RunE:    runGetPipelines,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGetPipelines(cmd, args, allNamespaces)
+		},
 	}
+	cmd.Flags().BoolVarP(&allNamespaces, "all-namespaces", "A", false,
+		"List pipelines across all namespaces (adds NAMESPACE column)")
+	return cmd
 }
 
-func runGetPipelines(cmd *cobra.Command, args []string) error {
+func runGetPipelines(cmd *cobra.Command, args []string, allNamespaces bool) error {
 	client, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get pipelines: %w", err)
 	}
 
 	ctx := context.Background()
-	opts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
+	var opts []sigs_client.ListOption
+	if !allNamespaces {
+		opts = append(opts, sigs_client.InNamespace(ns))
+	}
 
 	var pipelines v1alpha1.PipelineList
 	if err := client.List(ctx, &pipelines, opts...); err != nil {
 		return fmt.Errorf("list pipelines: %w", err)
 	}
 
-	// Fetch PromotionSteps in the same namespace for per-environment status columns.
+	// Fetch PromotionSteps in the same namespace(s) for per-environment status columns.
 	var promotionSteps v1alpha1.PromotionStepList
 	if err := client.List(ctx, &promotionSteps, opts...); err != nil {
 		// Non-fatal: fall back to empty step list (env columns will show "-").
@@ -74,6 +84,6 @@ func runGetPipelines(cmd *cobra.Command, args []string) error {
 	case "yaml":
 		return WriteYAML(out, items)
 	default:
-		return FormatPipelineTable(out, items, promotionSteps.Items)
+		return FormatPipelineTableWithOptions(out, items, promotionSteps.Items, allNamespaces)
 	}
 }
