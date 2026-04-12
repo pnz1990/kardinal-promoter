@@ -93,6 +93,9 @@ export function App() {
   const activePipeline = pipelines.find(p => p.name === selectedPipeline)
   const activeBundle = bundles.find(b => b.phase === 'Promoting') ?? bundles[0]
 
+  // Derive current namespace from the first loaded pipeline.
+  const currentNamespace = pipelines[0]?.namespace
+
   // Determine staleness indicator color.
   const staleness = elapsedSeconds ?? 0
   const indicatorColor = pipelinesError
@@ -156,8 +159,21 @@ export function App() {
             {pipelinesError ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
           </span>
         </div>
-        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#475569', fontWeight: 600 }}>
-          PIPELINES
+        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#475569', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>PIPELINES</span>
+          {currentNamespace && (
+            <span style={{
+              fontSize: '0.65rem',
+              color: '#334155',
+              background: '#1e293b',
+              borderRadius: '4px',
+              padding: '1px 5px',
+              fontWeight: 400,
+              fontFamily: 'monospace',
+            }} title={`Namespace: ${currentNamespace}`}>
+              {currentNamespace}
+            </span>
+          )}
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           <PipelineList
@@ -173,8 +189,19 @@ export function App() {
       {/* Main area */}
       <main style={{ flex: 1, overflow: 'auto', padding: '1.5rem', background: '#0f172a' }}>
         {!selectedPipeline ? (
-          <div style={{ color: '#475569', padding: '2rem' }}>
-            Select a pipeline to view its promotion status.
+          <div style={{ color: '#475569', padding: '3rem 2rem', textAlign: 'center' }}>
+            {pipelines.length > 0 ? (
+              <>
+                <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>←</div>
+                <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+                  Select a pipeline to view its promotion DAG.
+                </p>
+              </>
+            ) : (
+              <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+                Apply a pipeline to get started.
+              </p>
+            )}
           </div>
         ) : (
           <>
