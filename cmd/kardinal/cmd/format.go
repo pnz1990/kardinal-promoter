@@ -22,8 +22,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	sigsyaml "sigs.k8s.io/yaml"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // HumanAge returns a human-readable age string for the given creation time.
