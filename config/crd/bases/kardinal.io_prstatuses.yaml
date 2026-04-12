@@ -1,0 +1,113 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: prstatuses.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: PRStatus
+    listKind: PRStatusList
+    plural: prstatuses
+    shortNames:
+    - prs
+    singular: prstatus
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.merged
+      name: Merged
+      type: boolean
+    - jsonPath: .status.open
+      name: Open
+      type: boolean
+    - jsonPath: .spec.prNumber
+      name: PR
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          PRStatus is a controller-internal CRD that tracks the merge state of a GitHub
+          pull request, making it observable by the krocodile Graph via a Watch node.
+
+          Architecture: PromotionStep open-pr step creates a PRStatus CR. The
+          PRStatusReconciler polls GitHub (or receives webhook events) and writes
+          status.merged. The Graph Watch node propagates when status.merged == true,
+          replacing the previous polling loop in handleWaitingForMerge.
+
+          Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 from
+          docs/design/11-graph-purity-tech-debt.md.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              PRStatusSpec defines the desired state of a PRStatus object.
+              PRStatus objects are created by the PromotionStep reconciler's open-pr step,
+              and updated by the PRStatus reconciler via polling or webhook events.
+            properties:
+              prNumber:
+                description: |-
+                  PRNumber is the pull request number (numeric ID within the repo).
+                  Set by the open-pr step after the PR is created. Zero in the placeholder.
+                type: integer
+              prURL:
+                description: |-
+                  PRURL is the full GitHub pull request URL.
+                  Example: https://github.com/owner/repo/pull/42
+                  Set by the open-pr step after the PR is created. Empty in the placeholder.
+                type: string
+              repo:
+                description: |-
+                  Repo is the "owner/repo" slug identifying the GitHub repository.
+                  Example: acme/my-service
+                  Set by the open-pr step after the PR is created. Empty in the placeholder.
+                type: string
+            type: object
+          status:
+            description: |-
+              PRStatusStatus holds the observed state of the pull request.
+              Written exclusively by the PRStatusReconciler.
+            properties:
+              lastCheckedAt:
+                description: LastCheckedAt records the timestamp of the most recent
+                  SCM API poll.
+                format: date-time
+                type: string
+              merged:
+                description: |-
+                  Merged is true when the pull request has been merged.
+                  The Graph Watch node uses this field: readyWhen: ${prStatus.status.merged == true}
+                type: boolean
+              open:
+                description: |-
+                  Open is true when the pull request is still open (not merged, not closed).
+                  Set to false when the PR is closed or merged.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
