@@ -4,7 +4,7 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-12T02:56:28Z",
-  "current_queue": null,
+  "current_queue": "queue-019",
   "last_sm_review": "2026-04-11T18:30:48Z",
   "last_pm_review": "2026-04-11T18:31:09Z",
   "batches_since_competitive_analysis": 3,
@@ -451,15 +451,43 @@
       "state": "done",
       "assigned_to": "STANDALONE-CLI-UI",
       "pr_number": 207,
-      "pr_merged": true,
-      "dependency_mode": "merged"
+      "pr_merged": true
     },
     "201-cli-version-graph": {
       "state": "done",
       "assigned_to": "STANDALONE-CLI-UI",
       "pr_number": 206,
-      "pr_merged": true,
-      "dependency_mode": "merged"
+      "pr_merged": true
+    },
+    "204-ui-cel-expression": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 215,
+      "pr_merged": true
+    },
+    "205-ui-blocked-banner": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 216,
+      "pr_merged": true
+    },
+    "202-ui-staleness": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 214,
+      "pr_merged": true
+    },
+    "203-ui-health-chip": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 211,
+      "pr_merged": true
+    },
+    "199-cli-diff-command": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "pr_number": 212,
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
@@ -472,8 +500,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-12T02:32:27Z",
-      "cycle": 1
+      "last_seen": "2026-04-12T04:25:13Z",
+      "cycle": 2
     }
   },
   "handoff": {
