@@ -94,11 +94,11 @@ func rollbackFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client,
 			}
 		}
 		if latestStep == nil {
-			return fmt.Errorf("no Verified PromotionStep found for pipeline %s env %s", pipeline, envFilter)
+			return fmt.Errorf("no verified PromotionStep found for pipeline %s env %s", pipeline, envFilter)
 		}
 		rollbackOf = latestStep.Spec.BundleName
 		if rollbackOf == "" {
-			return fmt.Errorf("Verified PromotionStep for %s/%s has no bundleName", pipeline, envFilter)
+			return fmt.Errorf("verified PromotionStep for %s/%s has no bundleName", pipeline, envFilter)
 		}
 	}
 
