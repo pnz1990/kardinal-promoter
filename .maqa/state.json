@@ -31,8 +31,8 @@
       "name": "CLI Agent",
       "scope": "CLI and UI \u2014 kardinal commands, output formatting, policy simulate, embedded React UI",
       "current_item": null,
-      "progress_issue": "173",
-      "last_report_at": "2026-04-11T19:18:14Z"
+      "progress_issue": "224",
+      "last_report_at": "2026-04-12T04:42:58Z"
     },
     "STANDALONE-CORE": {
       "last_seen": "2026-04-11T20:35:25Z",
@@ -52,6 +52,15 @@
       "current_item": null,
       "progress_issue": "174",
       "last_report_at": "2026-04-12T02:52:13Z"
+    },
+    "STANDALONE-UI-CLI": {
+      "name": "UI-CLI Agent",
+      "last_seen": "2026-04-12T04:40:48Z",
+      "cycle": 1,
+      "scope": "UI and CLI \u2014 feature parity with Kargo UI gitops promoter",
+      "current_item": null,
+      "progress_issue": "173",
+      "last_report_at": ""
     }
   },
   "features": {
@@ -500,6 +509,12 @@
       "assigned_to": "STANDALONE",
       "pr_number": 222,
       "pr_merged": true
+    },
+    "220-promotionstep-coverage": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "pr_number": 223,
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
@@ -512,8 +527,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-12T04:36:20Z",
-      "cycle": 3
+      "last_seen": "2026-04-12T04:43:44Z",
+      "cycle": 4
     }
   },
   "handoff": {
