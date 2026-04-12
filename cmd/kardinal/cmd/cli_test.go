@@ -757,7 +757,8 @@ spec:
 	assert.Contains(t, out, "PASS")
 }
 
-// TestPolicyTest_InvalidExpression verifies that a gate with invalid CEL is reported INVALID.
+// TestPolicyTest_InvalidExpression verifies that a gate with invalid CEL
+// returns a non-nil error (for CI gating) and shows INVALID in output.
 func TestPolicyTest_InvalidExpression(t *testing.T) {
 	content := `apiVersion: promotions.kardinal.io/v1alpha1
 kind: PolicyGate
@@ -770,13 +771,12 @@ spec:
 	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
 
 	var buf bytes.Buffer
-	// Should not return error — validation errors are printed inline.
+	// Syntax errors return non-nil error for CI gating.
 	err := policyTestFn(&buf, tmpFile)
-	require.NoError(t, err)
+	require.Error(t, err, "CEL syntax error must return non-nil error")
 
 	out := buf.String()
 	assert.Contains(t, out, "bad-gate")
-	// Either INVALID syntax or ERROR evaluation (CEL may compile but fail at eval).
 	assert.True(t,
 		contains(out, "INVALID") || contains(out, "ERROR") || contains(out, "FAIL"),
 		"output should show validation failure: %s", out)
