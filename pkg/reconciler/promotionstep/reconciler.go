@@ -420,6 +420,25 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		env := findEnv(pipeline, ps.Spec.Environment)
 		healthType := env.Health.Type
 
+		// Delivery delegation: when env.Delivery.Delegate is set, override the health
+		// adapter type with the delegate type. This allows using ArgoRollouts or Flagger
+		// for progressive delivery without requiring a separate health.type setting.
+		// The delegate value maps directly to a health adapter type.
+		if env.Delivery.Delegate != "" && env.Delivery.Delegate != "none" {
+			delegateType := env.Delivery.Delegate
+			log.Info().
+				Str("env", ps.Spec.Environment).
+				Str("delegate", delegateType).
+				Msg("delivery.delegate is set — overriding health adapter type for delegation")
+			healthType = delegateType
+			// Update the step message immediately to show delegation is active.
+			patch := client.MergeFrom(ps.DeepCopy())
+			ps.Status.Message = fmt.Sprintf("delegated to %s", delegateType)
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				log.Warn().Err(patchErr).Msg("failed to patch delegation message (non-fatal)")
+			}
+		}
+
 		// Parse timeout from environment config; default 10m.
 		timeout := 10 * time.Minute
 		if env.Health.Timeout != "" {
