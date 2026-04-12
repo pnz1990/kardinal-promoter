@@ -559,3 +559,86 @@ func TestVersionOutput_ThreeLines(t *testing.T) {
 		})
 	}
 }
+
+// TestDiff_ShowsImageTagDifference verifies that diffFn shows tag differences.
+func TestDiff_ShowsImageTagDifference(t *testing.T) {
+	s := cliTestScheme(t)
+	b1 := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-28-0", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "nginx-demo",
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/myorg/my-app", Tag: "1.28.0", Digest: "sha256:def456"},
+			},
+			Provenance: &v1alpha1.BundleProvenance{
+				CommitSHA: "def456abc",
+				Author:    "dependabot[bot]",
+			},
+		},
+	}
+	b2 := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-29-0", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "nginx-demo",
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/myorg/my-app", Tag: "1.29.0", Digest: "sha256:abc123"},
+			},
+			Provenance: &v1alpha1.BundleProvenance{
+				CommitSHA: "abc123def",
+				Author:    "engineer-name",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b1, b2).Build()
+
+	var buf bytes.Buffer
+	err := diffFn(&buf, c, "default", "nginx-demo-v1-28-0", "nginx-demo-v1-29-0")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "ghcr.io/myorg/my-app", "should show image repository")
+	assert.Contains(t, out, "1.28.0", "should show bundle-a tag")
+	assert.Contains(t, out, "1.29.0", "should show bundle-b tag")
+	assert.Contains(t, out, "engineer-name", "should show author difference")
+	assert.Contains(t, out, "ARTIFACT", "should have ARTIFACT header column")
+}
+
+// TestDiff_NoDifferences verifies diff output when bundles have no images (empty diff).
+func TestDiff_NoDifferences(t *testing.T) {
+	s := cliTestScheme(t)
+	b1 := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-config-a", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "config",
+			Pipeline: "nginx-demo",
+			// No images — pure config bundle
+			Provenance: &v1alpha1.BundleProvenance{
+				CommitSHA: "abc123",
+				Author:    "bot",
+			},
+		},
+	}
+	b2 := b1.DeepCopy()
+	b2.Name = "nginx-demo-config-b"
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b1, b2).Build()
+
+	var buf bytes.Buffer
+	err := diffFn(&buf, c, "default", "nginx-demo-config-a", "nginx-demo-config-b")
+	require.NoError(t, err)
+
+	// Identical config bundles with same commit/author produce no diff rows.
+	assert.Contains(t, buf.String(), "no differences", "identical config bundles should show no diff")
+}
+
+// TestDiff_BundleNotFound verifies error on missing bundle.
+func TestDiff_BundleNotFound(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	var buf bytes.Buffer
+	err := diffFn(&buf, c, "default", "nonexistent-a", "nonexistent-b")
+	assert.Error(t, err, "should return error for missing bundle")
+	assert.Contains(t, err.Error(), "nonexistent-a", "error should mention the missing bundle")
+}
