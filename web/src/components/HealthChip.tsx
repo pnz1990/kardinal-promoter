@@ -1,10 +1,11 @@
-// components/HealthChip.tsx — Reusable health state chip with 6-state color coding.
+// components/HealthChip.tsx — Reusable health state chip with 7-state color coding.
 //
 // Adapts the kro-ui health chip pattern (Ready/Degraded/Reconciling/Pending/Error/Unknown)
-// to kardinal's promotion states. All ad-hoc phaseBadgeColor and nodeColor functions
-// should be replaced with HealthChip or healthChipColors() calls.
+// to kardinal's promotion states, plus a Paused state for suspended pipelines.
+// All ad-hoc phaseBadgeColor and nodeColor functions should be replaced with
+// HealthChip or healthChipColors() calls.
 
-/** The 6 canonical health chip states. */
+/** The 7 canonical health chip states. */
 export type HealthState =
   | 'Ready'         // Succeeded / Verified / Pass — green
   | 'Reconciling'   // Running / WaitingForMerge / HealthChecking / Promoting — amber
@@ -12,6 +13,7 @@ export type HealthState =
   | 'Pending'       // Pending / Available (not yet started) — slate
   | 'Unknown'       // Superseded / unknown — gray
   | 'Degraded'      // Partial failure (reserved for future use) — orange
+  | 'Paused'        // Pipeline paused (spec.paused=true) — indigo
 
 /** Maps a kardinal promotion/gate state string to a HealthState. */
 export function kardinalStateToHealth(state: string, nodeType?: string): HealthState {
@@ -42,7 +44,11 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       return 'Pending'
     case 'Superseded':
       return 'Unknown'
+    case 'Paused':
+      return 'Paused'
     default:
+      // Handle common backend variations: "Paused" via condition reason
+      if (state.toLowerCase() === 'paused') return 'Paused'
       return 'Unknown'
   }
 }
@@ -60,6 +66,8 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
       return { bg: '#1e293b', text: '#94a3b8', border: '#475569' }
     case 'Degraded':
       return { bg: '#7c2d12', text: '#fb923c', border: '#f97316' }
+    case 'Paused':
+      return { bg: '#1e1b4b', text: '#a5b4fc', border: '#6366f1' }
     case 'Unknown':
     default:
       return { bg: '#1e293b', text: '#64748b', border: '#334155' }
