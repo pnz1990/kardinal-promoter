@@ -1,25 +1,10 @@
 // components/NodeDetail.tsx — Detail panel shown when a DAG node is clicked.
 import type { GraphNode } from '../types'
+import { HealthChip } from './HealthChip'
 
 interface Props {
   node: GraphNode | null
   onClose: () => void
-}
-
-function stateColor(state: string, nodeType: string): string {
-  if (nodeType === 'PolicyGate') {
-    switch (state) {
-      case 'Pass': return '#22c55e'
-      case 'Fail': return '#ef4444'
-      default: return '#94a3b8'
-    }
-  }
-  switch (state) {
-    case 'Succeeded': return '#22c55e'
-    case 'Running': case 'WaitingForMerge': case 'HealthChecking': return '#f59e0b'
-    case 'Failed': return '#ef4444'
-    default: return '#94a3b8'
-  }
 }
 
 export function NodeDetail({ node, onClose }: Props) {
@@ -57,16 +42,7 @@ export function NodeDetail({ node, onClose }: Props) {
       </div>
 
       <div style={{ marginBottom: '0.75rem' }}>
-        <span style={{
-          background: stateColor(node.state, node.type),
-          color: '#fff',
-          fontSize: '0.75rem',
-          padding: '2px 8px',
-          borderRadius: '9999px',
-          fontWeight: 600,
-        }}>
-          {node.state}
-        </span>
+        <HealthChip state={node.state} nodeType={node.type} size="md" />
       </div>
 
       <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
