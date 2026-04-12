@@ -61,14 +61,30 @@ func TestCreateBundle_CreatesBundle(t *testing.T) {
 }
 
 // TestRollback_CreatesBundleWithRollbackOf verifies rollback bundle creation.
+// The rollback command now queries PromotionStep history (not Bundle.Phase) to find
+// the last Verified bundle for the target environment (#264).
 func TestRollback_CreatesBundleWithRollbackOf(t *testing.T) {
 	s := cliTestScheme(t)
+	// Original bundle is Superseded (normal in production after multiple deploys).
 	verifiedBundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
 		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
+		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle).WithStatusSubresource(verifiedBundle).Build()
+	// Verified PromotionStep for prod — this is what rollback now uses.
+	prodStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v1-prod",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "nginx-demo",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", Environment: "prod", BundleName: "nginx-demo-v1"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle, prodStep).WithStatusSubresource(verifiedBundle, prodStep).Build()
 
 	var buf bytes.Buffer
 	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
@@ -426,13 +442,26 @@ func TestPolicySimulate_EnvSpecificGateExcluded(t *testing.T) {
 // copies Type from the original Verified bundle, not hardcoding "image" (CLI-5 fix).
 func TestRollback_CopiesTypeFromOriginalBundle(t *testing.T) {
 	s := cliTestScheme(t)
-	// Verified bundle with type=config; no special label needed — rollbackFn filters by Spec.Pipeline.
+	// Bundle is Superseded (realistic production state).
 	verifiedBundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-cfg-v1", Namespace: "default"},
 		Spec:       v1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
+		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle).WithStatusSubresource(verifiedBundle).Build()
+	// Verified PromotionStep points to this bundle.
+	prodStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-cfg-v1-prod",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "nginx-demo",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", Environment: "prod", BundleName: "nginx-demo-cfg-v1"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle, prodStep).WithStatusSubresource(verifiedBundle, prodStep).Build()
 
 	var buf bytes.Buffer
 	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
@@ -477,6 +506,58 @@ func TestRollback_CopiesTypeWhenExplicitToBundle(t *testing.T) {
 	}
 	require.NotNil(t, rb)
 	assert.Equal(t, "mixed", rb.Spec.Type, "rollback bundle must copy type from target bundle")
+}
+
+// TestRollback_WorksWhenAllBundlesSuperseded verifies that rollback succeeds even when
+// all Bundle objects have Phase=Superseded — the realistic production state (#264).
+func TestRollback_WorksWhenAllBundlesSuperseded(t *testing.T) {
+	s := cliTestScheme(t)
+	// All bundles are Superseded (as in production after multiple deploys).
+	oldBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-old", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
+	}
+	newBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-new", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
+	}
+	// Old bundle has a Verified prod step; new bundle is still Promoting.
+	oldProdStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-old-prod",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Now(),
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "nginx-demo",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", Environment: "prod", BundleName: "nginx-demo-old"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(oldBundle, newBundle, oldProdStep).
+		WithStatusSubresource(oldBundle, newBundle, oldProdStep).
+		Build()
+
+	var buf bytes.Buffer
+	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
+	require.NoError(t, err, "rollback must succeed even when all bundles are Superseded")
+
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+
+	var rb *v1alpha1.Bundle
+	for i := range bundles.Items {
+		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
+			rb = &bundles.Items[i]
+		}
+	}
+	require.NotNil(t, rb, "rollback bundle must be created")
+	assert.Equal(t, "nginx-demo-old", rb.Spec.Provenance.RollbackOf,
+		"rollback must target the bundle with the most recent Verified prod PromotionStep")
 }
 
 // TestSplitImageRef verifies image reference parsing.
