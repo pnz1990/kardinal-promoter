@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -111,6 +112,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/pipelines/", s.handlePipelinesSubpath)
 	mux.HandleFunc("/api/v1/ui/bundles/", s.handleBundleSubresource)
 	mux.HandleFunc("/api/v1/ui/gates", s.handleGates)
+	mux.HandleFunc("/api/v1/ui/promote", s.handlePromote)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -326,4 +328,93 @@ func pipelinePhase(p *v1alpha1.Pipeline) string {
 		}
 	}
 	return "Initializing"
+}
+
+// handlePromote handles POST /api/v1/ui/promote — creates a Bundle targeting the
+// given pipeline and environment, triggering a new promotion. This is the UI
+// equivalent of `kardinal promote <pipeline> --env <env>`.
+//
+// Request body (JSON):
+//
+//	{"pipeline": "nginx-demo", "environment": "prod", "namespace": "default"}
+//
+// Response (JSON on success):
+//
+//	{"bundle": "nginx-demo-abc123", "message": "promotion started"}
+func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Pipeline    string `json:"pipeline"`
+		Environment string `json:"environment"`
+		Namespace   string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Pipeline == "" || req.Environment == "" {
+		http.Error(w, "pipeline and environment are required", http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	// Verify the pipeline exists.
+	var pl v1alpha1.Pipeline
+	if err := s.client.Get(r.Context(), client.ObjectKey{Name: req.Pipeline, Namespace: ns}, &pl); err != nil {
+		http.Error(w, "pipeline not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify the environment exists in the pipeline.
+	found := false
+	for _, e := range pl.Spec.Environments {
+		if e.Name == req.Environment {
+			found = true
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "environment not found in pipeline", http.StatusBadRequest)
+		return
+	}
+
+	// Create a Bundle targeting the specified environment (same as CLI promote).
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: req.Pipeline + "-",
+			Namespace:    ns,
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: req.Pipeline,
+			Intent: &v1alpha1.BundleIntent{
+				TargetEnvironment: req.Environment,
+			},
+		},
+	}
+	if err := s.client.Create(r.Context(), bundle); err != nil {
+		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Str("env", req.Environment).Msg("ui: create promote bundle")
+		http.Error(w, "failed to create bundle", http.StatusInternalServerError)
+		return
+	}
+
+	s.log.Info().
+		Str("bundle", bundle.Name).
+		Str("pipeline", req.Pipeline).
+		Str("env", req.Environment).
+		Msg("ui: promote triggered")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"bundle":  bundle.Name,
+		"message": "promotion started — track with kardinal get bundles " + req.Pipeline,
+	})
 }

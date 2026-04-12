@@ -292,6 +292,8 @@ export function App() {
                 error={graphError}
                 highlightNodeIds={highlightIds}
                 bundleName={activeBundle?.name}
+                pipelineName={selectedPipeline}
+                namespace={activePipeline?.namespace ?? 'default'}
               />
             </div>
           </>
