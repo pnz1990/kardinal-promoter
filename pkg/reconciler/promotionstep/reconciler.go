@@ -20,6 +20,7 @@ package promotionstep
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -143,7 +144,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case StateHealthChecking:
 		return r.handleHealthChecking(ctx, log, &ps)
 	case StateVerified, StateFailed:
-		// Terminal states — nothing to do.
+		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
+		r.cleanWorkDir(log, &ps)
 		return ctrl.Result{}, nil
 	default:
 		log.Warn().Str("state", ps.Status.State).Msg("unknown state, resetting to Pending")
@@ -185,6 +187,10 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	ps.Status.State = StatePromoting
 	ps.Status.CurrentStepIndex = 0
 	ps.Status.Message = fmt.Sprintf("initialized with %d steps", len(seq))
+	// Persist workDir to status (ST-7/ST-8/ST-9 short-term mitigation):
+	// a restarted controller reads this field instead of recomputing the path,
+	// enabling crash-recovery without re-cloning.
+	ps.Status.WorkDir = r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pending→promoting: %w", err)
 	}
@@ -215,7 +221,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
 	eng := steps.NewEngine(seq)
 
-	workDir := r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
+	// Use persisted workDir if available (crash recovery — ST-7/ST-8 mitigation).
+	// On a fresh run status.WorkDir will be empty; use the computed default.
+	workDir := ps.Status.WorkDir
+	if workDir == "" {
+		workDir = r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
+	}
 
 	token := ""
 	// Resolve git token from Pipeline.spec.git.secretRef if configured.
@@ -698,6 +709,22 @@ func (r *Reconciler) workDir(pipelineName, bundleName string) string {
 	}
 	// Default: use a temp directory per pipeline+bundle combination.
 	return "/tmp/kardinal/" + pipelineName + "/" + bundleName
+}
+
+// cleanWorkDir removes the working directory on disk when a PromotionStep reaches
+// a terminal state (Verified or Failed). This ensures host-local git state does not
+// accumulate across promotions (ST-7/ST-8 short-term mitigation).
+// The cleanup is best-effort — failure to remove the directory is logged but not fatal.
+func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep) {
+	dir := ps.Status.WorkDir
+	if dir == "" {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Warn().Err(err).Str("workDir", dir).Msg("cleanWorkDir: failed to remove working directory")
+	} else {
+		log.Debug().Str("workDir", dir).Msg("cleanWorkDir: removed working directory")
+	}
 }
 
 // findEnv returns the EnvironmentSpec for the named environment, or empty spec if not found.

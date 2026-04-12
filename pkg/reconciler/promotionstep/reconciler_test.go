@@ -17,6 +17,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -576,4 +577,80 @@ func TestPausedPipeline_ReconcilerNolongerChecksSpecPaused(t *testing.T) {
 	// The exact new state depends on mock SCM behavior; what matters is it advanced.
 	assert.NotEqual(t, "Promoting", updated.Status.State,
 		"step must have advanced — Spec.Paused no longer blocks in reconciler (PS-2 fix)")
+}
+
+// TestWorkDir_PersistedToStatus verifies that status.workDir is written when a step
+// transitions from Pending to Promoting. This is the ST-7/ST-8 short-term mitigation:
+// after a controller restart, the reconciler reads status.workDir instead of recomputing
+// the path, enabling crash-recovery without re-cloning.
+func TestWorkDir_PersistedToStatus(t *testing.T) {
+	scheme := buildScheme(t)
+	pipeline := makePipeline("nginx-demo")
+	step := makeStep("step-1", "nginx-demo", "bundle-1", "test")
+	// Step is Pending (empty state) — will transition to Promoting on first reconcile.
+	step.Status.State = ""
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	expectedWorkDir := t.TempDir()
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return expectedWorkDir },
+	}
+
+	// First reconcile: Pending → Promoting, workDir should be persisted.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-1", Namespace: "default"}, &updated))
+	assert.Equal(t, expectedWorkDir, updated.Status.WorkDir,
+		"status.workDir must be persisted on Pending→Promoting transition (ST-7/ST-8 mitigation)")
+}
+
+// TestWorkDir_CleanedUpOnVerified verifies that the working directory is removed from disk
+// when a PromotionStep reaches the Verified terminal state.
+func TestWorkDir_CleanedUpOnVerified(t *testing.T) {
+	scheme := buildScheme(t)
+	pipeline := makePipeline("nginx-demo")
+	step := makeStep("step-terminal", "nginx-demo", "bundle-1", "test")
+	// Put step in Verified terminal state with a workDir that exists.
+	workDir := t.TempDir()
+	step.Status.State = "Verified"
+	step.Status.WorkDir = workDir
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	// Create a marker file in the workDir to confirm it exists before cleanup.
+	markerFile := workDir + "/marker.txt"
+	require.NoError(t, os.WriteFile(markerFile, []byte("test"), 0o644))
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return workDir },
+	}
+
+	// Reconcile the terminal step — should trigger cleanup.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-terminal", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// WorkDir should no longer exist on disk.
+	_, statErr := os.Stat(workDir)
+	assert.True(t, os.IsNotExist(statErr),
+		"working directory must be removed when step reaches terminal state (Verified)")
 }
