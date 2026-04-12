@@ -160,6 +160,10 @@ func TestBundleReconciler_TranslationError(t *testing.T) {
 // TestBundleReconciler_NoTranslatorSkipsPromotion verifies that Available
 // bundles are left in place when no Translator is configured.
 func TestBundleReconciler_NoTranslatorSkipsPromotion(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
 	b := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
@@ -168,7 +172,7 @@ func TestBundleReconciler_NoTranslatorSkipsPromotion(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().
-		WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+		WithScheme(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
 
 	r := &bundle.Reconciler{Client: c} // no Translator
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -349,6 +353,15 @@ func TestBundleReconciler_NewBundleBecomesAvailableWithoutSupersedingSiblings(t 
 // TestBundleReconciler_Supersession_DifferentPipeline verifies that bundles for
 // different pipelines are NOT superseded (self-supersession check).
 func TestBundleReconciler_Supersession_DifferentPipeline(t *testing.T) {
+	// Both pipelines must exist so bundles are not self-deleted (#270).
+	otherPipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-pipeline", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
+	nginxPipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
 	otherPipelineBundle := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "other-pipeline-v1",
@@ -371,7 +384,7 @@ func TestBundleReconciler_Supersession_DifferentPipeline(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(otherPipelineBundle, newerNginxBundle).
+		WithObjects(otherPipeline, nginxPipeline, otherPipelineBundle, newerNginxBundle).
 		WithStatusSubresource(otherPipelineBundle, newerNginxBundle).
 		Build()
 
@@ -552,9 +565,13 @@ func TestBundleReconciler_ConfigBundleDoesNotSupersedeImageBundle(t *testing.T) 
 	}
 
 	sch := newScheme()
+	nginxPipeline2 := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
 	c := fake.NewClientBuilder().
 		WithScheme(sch).
-		WithObjects(imagBundle, configBundle).
+		WithObjects(nginxPipeline2, imagBundle, configBundle).
 		WithStatusSubresource(imagBundle, configBundle).
 		Build()
 
@@ -824,4 +841,78 @@ func TestBundleReconciler_SyncEvidence_Idempotent(t *testing.T) {
 	require.NotNil(t, env.HealthCheckedAt)
 	assert.Equal(t, fixedTime.UTC(), env.HealthCheckedAt.UTC(),
 		"HealthCheckedAt must not be overwritten on subsequent syncs")
+}
+
+// TestBundleReconciler_OrphanGuard_SelfDeletesWhenPipelineGone verifies that when the
+// parent Pipeline no longer exists, the Bundle self-deletes to avoid orphaned resources (#270).
+// This mirrors the PromotionStep orphan guard (#248).
+func TestBundleReconciler_OrphanGuard_SelfDeletesWhenPipelineGone(t *testing.T) {
+	// Bundle references a pipeline that does not exist.
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-bundle", Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "deleted-pipeline",
+		},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-bundle", Namespace: "default"},
+	})
+	require.NoError(t, err, "orphan guard must not return an error")
+
+	// Bundle must have been deleted.
+	var got kardinalv1alpha1.Bundle
+	err = c.Get(context.Background(),
+		types.NamespacedName{Name: "my-bundle", Namespace: "default"}, &got)
+	require.Error(t, err, "orphaned Bundle must be self-deleted")
+}
+
+// TestBundleReconciler_OrphanGuard_NoDeleteWhenPipelineExists verifies that when the
+// parent Pipeline exists, the reconciler proceeds normally.
+func TestBundleReconciler_OrphanGuard_NoDeleteWhenPipelineExists(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-pipeline", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-bundle", Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "my-pipeline",
+		},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-bundle", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Bundle must still exist (no self-deletion).
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-bundle", Namespace: "default"}, &got),
+		"Bundle must not be deleted when Pipeline exists")
 }

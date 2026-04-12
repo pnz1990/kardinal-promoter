@@ -168,25 +168,33 @@ func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 // handleAvailable triggers Graph creation and advances phase to Promoting.
 func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
-	if r.Translator == nil {
-		// No translator configured (test mode / early stage).
-		log.Debug().Msg("translator not configured, skipping graph creation")
-		return ctrl.Result{}, nil
-	}
-
-	// Look up the Pipeline
+	// Look up the Pipeline FIRST (before translator check) so that orphaned bundles
+	// are cleaned up even when the translator is not configured (#270).
 	var pipeline kardinalv1alpha1.Pipeline
 	if err := r.Get(ctx, client.ObjectKey{
 		Name:      b.Spec.Pipeline,
 		Namespace: b.Namespace,
 	}, &pipeline); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Warn().
+			// Pipeline has been deleted. Self-delete this Bundle to avoid orphaned
+			// resources (#270). This mirrors the PromotionStep orphan guard (#248):
+			// we delete our OWN resource (Bundle) when its parent is gone.
+			// Graph-first: no cross-CRD mutation — we only delete the Bundle itself.
+			log.Info().
 				Str("pipeline", b.Spec.Pipeline).
-				Msg("pipeline not found for bundle")
+				Msg("parent pipeline not found — self-deleting orphaned Bundle")
+			if delErr := r.Delete(ctx, b); delErr != nil && !apierrors.IsNotFound(delErr) {
+				return ctrl.Result{}, fmt.Errorf("delete orphaned bundle: %w", delErr)
+			}
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get pipeline %s: %w", b.Spec.Pipeline, err)
+	}
+
+	if r.Translator == nil {
+		// No translator configured (test mode / early stage).
+		log.Debug().Msg("translator not configured, skipping graph creation")
+		return ctrl.Result{}, nil
 	}
 
 	// Translate Pipeline+Bundle into a Graph
