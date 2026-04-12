@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-12T01:50:48Z",
+  "last_updated": "2026-04-12T02:56:28Z",
   "current_queue": null,
   "last_sm_review": "2026-04-11T18:30:48Z",
   "last_pm_review": "2026-04-11T18:31:09Z",
@@ -45,13 +45,13 @@
       "scope_complete": true
     },
     "STANDALONE-EXTENSIONS": {
-      "last_seen": null,
-      "cycle": 4,
       "name": "Extensions Agent",
-      "scope": "Extension points \u2014 GitLab SCM provider, ArgoRollouts health adapter, update strategies",
+      "last_seen": null,
+      "cycle": 6,
+      "scope": "Extension points \u2014 translator migration for Watch nodes (HE-1/2/3), remaining v0.4.0 scm/health",
       "current_item": null,
       "progress_issue": "174",
-      "last_report_at": "2026-04-11T19:36:14Z"
+      "last_report_at": "2026-04-12T02:52:13Z"
     }
   },
   "features": {
@@ -403,31 +403,49 @@
       "pr_merged": true
     },
     "038-rollbackpolicycrd": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "STANDALONE-REFACTOR",
       "assigned_at": "2026-04-11T18:34:45Z",
       "worktree_path": "../kardinal-promoter.038-rollbackpolicycrd",
       "dependency_mode": "merged",
       "pr_number": 169,
-      "pr_merged": false
+      "pr_merged": true
     },
     "039-ui-polish-and-cli7": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "STANDALONE-CLI-UI",
       "assigned_at": "2026-04-11T18:45:50Z",
       "worktree_path": "../kardinal-promoter.039-ui-polish-and-cli7",
       "dependency_mode": "merged",
       "pr_number": 170,
-      "pr_merged": false,
+      "pr_merged": true,
       "notes": "PAUSED for restart. PR #170 open, CI in progress (build/lint/integration pending). QA diff review complete \u2014 no issues found. Next step: wait for all CI green, then QA LGTM comment, then merge. bun.lock committed to worktree (CI uses bun install). State: in_review."
     },
     "039-graph-purity-batch-a": {
-      "state": "in_progress",
+      "state": "done",
       "assigned_to": "STANDALONE-REFACTOR",
       "worktree_path": "../kardinal-promoter.039-graph-purity-batch-a",
-      "pr_number": null,
-      "pr_merged": false,
+      "pr_number": 193,
+      "pr_merged": true,
       "dependency_mode": "merged"
+    },
+    "044-exec-command-library": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T02:46:00Z",
+      "worktree_path": "../kardinal-promoter.044-exec-command-library",
+      "dependency_mode": "merged",
+      "pr_number": 195,
+      "pr_merged": true
+    },
+    "121-shard-routing": {
+      "state": "in_review",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T02:56:28Z",
+      "worktree_path": "../kardinal-promoter.121-shard-routing",
+      "dependency_mode": "merged",
+      "pr_number": 196,
+      "pr_merged": false
     }
   },
   "session_heartbeats": {
@@ -440,8 +458,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": null,
-      "cycle": 0
+      "last_seen": "2026-04-12T02:32:27Z",
+      "cycle": 1
     }
   },
   "handoff": {

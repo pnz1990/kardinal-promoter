@@ -138,8 +138,8 @@ Every item below is a place where business logic lives outside the Graph layer. 
 | ST-3 | `pkg/steps/custom.go:91` | `CustomWebhookStep.Execute()` makes live HTTP POST with blocking retries inside reconciler | EXTERNAL_API | #135 |
 | ST-4 | `pkg/steps/custom.go:130` | `time.After(retryBackoff)` blocking sleep inside reconcile loop | TIME + EXTERNAL_API | #135 |
 | HE-1 | `pkg/health/adapter.go:139` | `DeploymentAdapter` reads Deployment — should be a Watch node | RESOURCE_ATTR | #136 |
-| HE-2 | `pkg/health/adapter.go:180` | `ArgoCDAdapter` reads Application — should be a Watch node | RESOURCE_ATTR | #136 |
-| HE-3 | `pkg/health/adapter.go:238` | `FluxAdapter` reads Kustomization — should be a Watch node | RESOURCE_ATTR | #136 |
+| HE-2 | `pkg/health/adapter.go:180` | `ArgoCDAdapter` reads Application — should be a Watch node | RESOURCE_ATTR | ✅ RESOLVED — PR #194 |
+| HE-3 | `pkg/health/adapter.go:238` | `FluxAdapter` reads Kustomization — should be a Watch node | RESOURCE_ATTR | ✅ RESOLVED — PR #194 |
 | SCM-2 | `pkg/scm/github.go:97` | `GetPRStatus()` decision should be a `PRStatus` CRD with Watch node | EXTERNAL_API | #133 |
 | CLI-1 | `cmd/kardinal/policy.go:182` | CLI imports `pkg/cel` — banned outside `pkg/reconciler/policygate` | CEL_DUPLICATE | #137 |
 | CLI-2 | `cmd/kardinal/policy.go:174` | CLI computes `schedule.isWeekend` client-side, duplicating PolicyGate reconciler logic | TIME + CEL_DUPLICATE | #137 |
