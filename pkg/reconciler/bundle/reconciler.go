@@ -86,9 +86,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return r.markSuperseded(ctx, log, &b)
 		}
 		return r.handleAvailable(ctx, log, &b)
+	case "Superseded", "Verified":
+		// Terminal or stable states — only sync evidence; the pipeline check in
+		// handleAvailable is not needed (the bundle has already been promoted or dropped).
+		return r.handleSyncEvidence(ctx, log, &b)
 	default:
-		// For Promoting, Verified, Failed: sync evidence from PromotionStep status.
-		// This replaces the cross-CRD write in the PromotionStep reconciler (PS-9).
+		// For Promoting, Failed: sync evidence from PromotionStep status.
+		// Also check if the parent pipeline was deleted — self-delete to avoid orphan.
+		// This extends the orphan guard from handleAvailable to all active phases.
+		if b.Spec.Pipeline != "" {
+			var pl kardinalv1alpha1.Pipeline
+			if err := r.Get(ctx, client.ObjectKey{
+				Name:      b.Spec.Pipeline,
+				Namespace: b.Namespace,
+			}, &pl); err != nil {
+				if apierrors.IsNotFound(err) {
+					log.Info().
+						Str("pipeline", b.Spec.Pipeline).
+						Str("phase", b.Status.Phase).
+						Msg("parent pipeline deleted — self-deleting orphaned Bundle")
+					if delErr := r.Delete(ctx, &b); delErr != nil && !apierrors.IsNotFound(delErr) {
+						return ctrl.Result{}, fmt.Errorf("delete orphaned bundle: %w", delErr)
+					}
+					return ctrl.Result{}, nil
+				}
+				// Transient error — still sync evidence on best-effort basis.
+				log.Warn().Err(err).Msg("failed to check parent pipeline (non-fatal), continuing sync")
+			}
+		}
 		return r.handleSyncEvidence(ctx, log, &b)
 	}
 }
