@@ -446,6 +446,20 @@
       "dependency_mode": "merged",
       "pr_number": 196,
       "pr_merged": false
+    },
+    "200-cli-history-format": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 207,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "201-cli-version-graph": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 206,
+      "pr_merged": true,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
