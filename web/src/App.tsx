@@ -1,8 +1,9 @@
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
 import { HealthChip } from './components/HealthChip'
+import { BlockedBanner } from './components/BlockedBanner'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -34,6 +35,9 @@ export function App() {
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
   const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()
+
+  // Blocked gate filter state.
+  const [showBlockedOnly, setShowBlockedOnly] = useState(false)
 
   // Poll pipeline list every 5 seconds.
   usePolling(async () => {
@@ -72,6 +76,7 @@ export function App() {
     setGraphError(undefined)
     setGraphLoading(true)
     setBundleHistoryOpen(false)
+    setShowBlockedOnly(false)
 
     api.listBundles(name)
       .then(bs => {
@@ -95,6 +100,21 @@ export function App() {
     : staleness > 15
     ? '#f59e0b'  // amber when stale > 15s
     : '#64748b'  // default muted
+
+  // Compute blocked PolicyGate node IDs from the graph.
+  const blockedGateIds = useMemo<Set<string>>(() => {
+    if (!graph) return new Set()
+    const ids = new Set<string>()
+    for (const node of graph.nodes) {
+      if (node.type === 'PolicyGate' && (node.state === 'Block' || node.state === 'Fail')) {
+        ids.add(node.id)
+      }
+    }
+    return ids
+  }, [graph])
+
+  // When showBlockedOnly is active, pass the blocked IDs to DAGView for highlight.
+  const highlightIds = showBlockedOnly ? blockedGateIds : undefined
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
@@ -175,6 +195,13 @@ export function App() {
               )}
             </div>
 
+            {/* Blocked PolicyGate banner */}
+            <BlockedBanner
+              blockedCount={blockedGateIds.size}
+              highlightActive={showBlockedOnly}
+              onToggleHighlight={() => setShowBlockedOnly(v => !v)}
+            />
+
             {/* Bundle history (collapsible) */}
             {bundles.length > 0 && (
               <div style={{ marginBottom: '1rem' }}>
@@ -236,6 +263,7 @@ export function App() {
                 edges={graph?.edges ?? []}
                 loading={graphLoading}
                 error={graphError}
+                highlightNodeIds={highlightIds}
               />
             </div>
           </>
