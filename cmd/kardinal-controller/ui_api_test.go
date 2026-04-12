@@ -349,3 +349,77 @@ func TestUIAPI_Promote_RejectsUnknownEnvironment(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code, "unknown env must return 400")
 }
+
+// TestUIAPI_ValidateCEL_ValidExpression verifies that a valid CEL expression returns valid=true.
+func TestUIAPI_ValidateCEL_ValidExpression(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"expression": "!schedule.isWeekend"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/validate-cel", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, true, resp["valid"], "valid expression must return valid=true")
+}
+
+// TestUIAPI_ValidateCEL_InvalidExpression verifies that a malformed CEL expression
+// returns valid=false with an error message.
+func TestUIAPI_ValidateCEL_InvalidExpression(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"expression": "this is not valid CEL @@@"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/validate-cel", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["valid"], "invalid expression must return valid=false")
+	assert.NotEmpty(t, resp["error"], "error message must be provided")
+}
+
+// TestUIAPI_ValidateCEL_KroFunctionsAvailable verifies that kro CEL library functions
+// (lists.*, random.*) are available in the expression validator.
+func TestUIAPI_ValidateCEL_KroFunctionsAvailable(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	tests := []struct {
+		expression string
+		wantValid  bool
+	}{
+		{`lists.setAtIndex([1,2,3], 0, 99)[0] == 99`, true},
+		{`!schedule.isWeekend`, true},
+		{`bundle.upstreamSoakMinutes >= 30`, true},
+		{`upstream.uat.soakMinutes >= 30`, true},
+	}
+	for _, tc := range tests {
+		// Use json.Marshal to correctly encode expression strings with special chars.
+		bodyMap := map[string]string{"expression": tc.expression}
+		bodyBytes, err := json.Marshal(bodyMap)
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/validate-cel", strings.NewReader(string(bodyBytes)))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "expression: %s", tc.expression)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, tc.wantValid, resp["valid"], "expression: %s", tc.expression)
+	}
+}

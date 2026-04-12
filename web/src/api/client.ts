@@ -34,4 +34,7 @@ export const api = {
   /** Trigger a new promotion for the given pipeline+environment (UI promote button). */
   promote: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ bundle: string; message: string }>('/promote', { pipeline, environment, namespace }),
+  /** Validate a CEL expression using the server-side kro CEL environment. */
+  validateCEL: (expression: string) =>
+    post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),
 }
