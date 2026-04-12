@@ -92,6 +92,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.handleSyncEvidence(ctx, log, &b)
 	default:
 		// For Promoting, Failed: sync evidence from PromotionStep status.
+		// Also check supersession for Promoting phase — a newer bundle of the same
+		// type may have started Promoting while this one was in-flight (#281).
+		if b.Status.Phase == "Promoting" {
+			if superseded, err := r.isSuperseededByNewer(ctx, &b); err != nil {
+				log.Warn().Err(err).Msg("failed to check for newer bundle during Promoting (non-fatal)")
+			} else if superseded {
+				return r.markSuperseded(ctx, log, &b)
+			}
+		}
 		// Also check if the parent pipeline was deleted — self-delete to avoid orphan.
 		// This extends the orphan guard from handleAvailable to all active phases.
 		if b.Spec.Pipeline != "" {

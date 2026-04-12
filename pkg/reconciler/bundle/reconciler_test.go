@@ -922,3 +922,52 @@ func TestBundleReconciler_OrphanGuard_NoDeleteWhenPipelineExists(t *testing.T) {
 		types.NamespacedName{Name: "my-bundle", Namespace: "default"}, &got),
 		"Bundle must not be deleted when Pipeline exists")
 }
+
+// TestBundleReconciler_PromotingBundleSupersededByNewerPromoting verifies that a
+// bundle in Promoting phase is superseded when a newer bundle is also Promoting (#281).
+func TestBundleReconciler_PromotingBundleSupersededByNewerPromoting(t *testing.T) {
+	s := newScheme()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}}},
+	}
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	newT := time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)
+	oldBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-old",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: old},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	newBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-new",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: newT},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, oldBundle, newBundle).
+		WithStatusSubresource(oldBundle, newBundle).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-old", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "nginx-demo-old", Namespace: "default"}, &updated))
+	assert.Equal(t, "Superseded", updated.Status.Phase,
+		"old Promoting bundle must be superseded when newer Promoting bundle exists")
+}
