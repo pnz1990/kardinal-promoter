@@ -262,6 +262,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			Phase:           ps.Status.State,
 			PRURL:           ps.Status.PRURL,
 			HealthCheckedAt: prev.HealthCheckedAt, // preserve if already set
+			SoakMinutes:     prev.SoakMinutes,     // will be updated below if HealthCheckedAt is set
 		}
 
 		// Use the prURL from outputs if available (more reliable than status.PRURL).
@@ -276,9 +277,22 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			updated.HealthCheckedAt = &now
 		}
 
+		// Update SoakMinutes if HealthCheckedAt is set.
+		// This is the PG-3 fix: soakMinutes is now a CRD field written by the
+		// BundleReconciler (owns Bundle status), so the PolicyGate reconciler can
+		// read it without calling time.Since() in its hot path.
+		// time.Now() here is inside a CRD status write — Graph-first compliant.
+		if updated.HealthCheckedAt != nil {
+			elapsed := time.Now().UTC().Sub(updated.HealthCheckedAt.UTC())
+			if elapsed > 0 {
+				updated.SoakMinutes = int64(elapsed.Minutes())
+			}
+		}
+
 		// Only mark changed if something actually differs.
 		if prev.Phase != updated.Phase || prev.PRURL != updated.PRURL ||
-			(updated.HealthCheckedAt != nil && prev.HealthCheckedAt == nil) {
+			(updated.HealthCheckedAt != nil && prev.HealthCheckedAt == nil) ||
+			updated.SoakMinutes != prev.SoakMinutes {
 			envMap[envName] = updated
 			changed = true
 		}

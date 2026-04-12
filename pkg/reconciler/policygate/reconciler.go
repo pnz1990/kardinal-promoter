@@ -169,7 +169,8 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	}
 
 	// Build upstream soak context from bundle environment statuses.
-	upstreamCtx := buildUpstreamContext(&bundle, now)
+	// SoakMinutes is read from Bundle.status.environments[*].soakMinutes (PG-3 fix).
+	upstreamCtx := buildUpstreamContext(&bundle)
 
 	return map[string]interface{}{
 		"bundle": bundleCtx,
@@ -205,21 +206,16 @@ func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string) (map[st
 	return result, nil
 }
 
-// buildUpstreamContext computes per-environment soak minutes from bundle status.
+// buildUpstreamContext reads per-environment soak minutes from bundle status.
 // Returns a map: {"<envName>": {"soakMinutes": <int64>}}.
-// soakMinutes = minutes since HealthCheckedAt. Zero if not yet health-checked.
-func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle, now time.Time) map[string]interface{} {
+// soakMinutes is read from Bundle.status.environments[*].soakMinutes which is
+// written by the BundleReconciler as a CRD status field (PG-3 fix: eliminates
+// time.Since() from PolicyGate reconciler hot path).
+func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle) map[string]interface{} {
 	result := make(map[string]interface{}, len(bundle.Status.Environments))
 	for _, env := range bundle.Status.Environments {
-		soakMinutes := int64(0)
-		if env.HealthCheckedAt != nil && !env.HealthCheckedAt.IsZero() {
-			elapsed := now.Sub(env.HealthCheckedAt.Time)
-			if elapsed > 0 {
-				soakMinutes = int64(elapsed.Minutes())
-			}
-		}
 		result[env.Name] = map[string]interface{}{
-			"soakMinutes": soakMinutes,
+			"soakMinutes": env.SoakMinutes,
 		}
 	}
 	return result
