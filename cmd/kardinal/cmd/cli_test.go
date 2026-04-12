@@ -654,3 +654,57 @@ func contains(s, sub string) bool {
 			return false
 		}())
 }
+
+// TestApprove_PatchesBundleWithLabel verifies that approveFn adds kardinal.io/approved label.
+func TestApprove_PatchesBundleWithLabel(t *testing.T) {
+	s := cliTestScheme(t)
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-29-0", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(bundle).Build()
+
+	var buf bytes.Buffer
+	err := approveFn(&buf, c, "default", "nginx-demo-v1-29-0", "prod")
+	require.NoError(t, err)
+
+	// Verify label was applied.
+	var updated v1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1-29-0", Namespace: "default"}, &updated))
+	assert.Equal(t, "true", updated.Labels["kardinal.io/approved"])
+	assert.Equal(t, "prod", updated.Labels["kardinal.io/approved-for"])
+
+	// Verify output.
+	assert.Contains(t, buf.String(), "nginx-demo-v1-29-0")
+	assert.Contains(t, buf.String(), "approved")
+}
+
+// TestApprove_WithoutEnv verifies approveFn without --env flag.
+func TestApprove_WithoutEnv(t *testing.T) {
+	s := cliTestScheme(t)
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-28-0", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(bundle).Build()
+
+	var buf bytes.Buffer
+	err := approveFn(&buf, c, "default", "nginx-demo-v1-28-0", "")
+	require.NoError(t, err)
+
+	var updated v1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1-28-0", Namespace: "default"}, &updated))
+	assert.Equal(t, "true", updated.Labels["kardinal.io/approved"])
+	assert.Empty(t, updated.Labels["kardinal.io/approved-for"])
+}
+
+// TestApprove_BundleNotFound verifies error when bundle does not exist.
+func TestApprove_BundleNotFound(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	var buf bytes.Buffer
+	err := approveFn(&buf, c, "default", "nonexistent-bundle", "prod")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "nonexistent-bundle")
+}
