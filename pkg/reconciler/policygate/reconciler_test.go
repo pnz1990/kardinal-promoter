@@ -577,6 +577,90 @@ func makeBundleWithImage(name, ns, repo, tag string) *kardinalv1alpha1.Bundle {
 	return b
 }
 
+// TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes verifies that
+// bundle.upstreamSoakMinutes is the max SoakMinutes across all upstream envs.
+// This is the convenience shorthand documented in docs/policy-gates.md and used
+// in examples/quickstart/policy-gates.yaml.
+func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes(t *testing.T) {
+	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	healthCheckedAt := metav1.NewTime(now.Add(-50 * time.Minute))
+
+	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
+		{Name: "test", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 50},
+		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 45},
+	})
+	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+		`bundle.upstreamSoakMinutes >= 30`, "1m")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate, bundle).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return now },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+	assert.True(t, got.Status.Ready,
+		"gate must pass: bundle.upstreamSoakMinutes = max(50,45) = 50 >= 30")
+}
+
+// TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks verifies that
+// bundle.upstreamSoakMinutes blocks when all upstream envs have soak < threshold.
+func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
+	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	healthCheckedAt := metav1.NewTime(now.Add(-10 * time.Minute))
+
+	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
+		{Name: "test", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 5},
+		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 10},
+	})
+	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+		`bundle.upstreamSoakMinutes >= 30`, "1m")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate, bundle).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return now },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+	assert.False(t, got.Status.Ready,
+		"gate must block: bundle.upstreamSoakMinutes = max(5,10) = 10 < 30")
+}
+
 // TestPolicyGateReconciler_StatusReasonContainsVersion verifies that when a bundle
 // has an image tag, the evaluated status.reason includes the bundle version.
 // This makes the routing info (bundle version used for evaluation) CRD-observable

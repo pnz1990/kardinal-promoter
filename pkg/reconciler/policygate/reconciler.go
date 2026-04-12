@@ -172,6 +172,19 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	// SoakMinutes is read from Bundle.status.environments[*].soakMinutes (PG-3 fix).
 	upstreamCtx := buildUpstreamContext(&bundle)
 
+	// bundle.upstreamSoakMinutes is the maximum soak minutes across all verified
+	// upstream environments. It is a convenience shorthand so expressions can write
+	//   bundle.upstreamSoakMinutes >= 30
+	// instead of requiring knowledge of the specific upstream environment name.
+	// Documented in docs/policy-gates.md §CEL context variables.
+	var maxSoakMinutes int64
+	for _, env := range bundle.Status.Environments {
+		if env.SoakMinutes > maxSoakMinutes {
+			maxSoakMinutes = env.SoakMinutes
+		}
+	}
+	bundleCtx["upstreamSoakMinutes"] = maxSoakMinutes
+
 	return map[string]interface{}{
 		"bundle": bundleCtx,
 		"schedule": map[string]interface{}{
