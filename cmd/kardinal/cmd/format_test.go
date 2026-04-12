@@ -378,3 +378,127 @@ func TestOutputFormat_DefaultIsTable(t *testing.T) {
 	// Default global output is "", which means table.
 	assert.Equal(t, "", cmd.OutputFormat())
 }
+
+// TestFormatPipelineTable_PausedBadge verifies that a paused pipeline shows [PAUSED] in the name.
+func TestFormatPipelineTable_PausedBadge(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-pipeline",
+				CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Paused: true,
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "test"},
+					{Name: "prod"},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	out := buf.String()
+
+	assert.Contains(t, out, "my-pipeline [PAUSED]", "paused pipeline must show [PAUSED] badge in name")
+}
+
+// TestFormatPipelineTable_NonPausedNoBadge verifies that a non-paused pipeline does NOT show [PAUSED].
+func TestFormatPipelineTable_NonPausedNoBadge(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-pipeline",
+				CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Paused: false,
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "test"},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	out := buf.String()
+
+	assert.NotContains(t, out, "[PAUSED]", "non-paused pipeline must not show [PAUSED] badge")
+}
+
+// TestFormatPipelineTable_ActiveBundlePrefersPromoting verifies that when both a Verified
+// step (old bundle) and a Promoting step (new bundle) exist, the Promoting bundle is shown.
+func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app",
+				CreationTimestamp: metav1.NewTime(now.Add(-1 * time.Hour)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "test"},
+					{Name: "prod"},
+				},
+			},
+		},
+	}
+	// Old bundle: Verified in test, prod; created 1 hour ago.
+	oldTime := metav1.NewTime(now.Add(-1 * time.Hour))
+	// New bundle: Promoting in test; created 30s ago.
+	newTime := metav1.NewTime(now.Add(-30 * time.Second))
+
+	steps := []v1alpha1.PromotionStep{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-old-test",
+				CreationTimestamp: oldTime,
+			},
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "my-app",
+				Environment:  "test",
+				BundleName:   "my-app-old",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-old-prod",
+				CreationTimestamp: oldTime,
+			},
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "my-app",
+				Environment:  "prod",
+				BundleName:   "my-app-old",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-new-test",
+				CreationTimestamp: newTime,
+			},
+			Spec: v1alpha1.PromotionStepSpec{
+				PipelineName: "my-app",
+				Environment:  "test",
+				BundleName:   "my-app-new",
+			},
+			Status: v1alpha1.PromotionStepStatus{State: "Promoting"},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, steps))
+	out := buf.String()
+
+	// The table MUST show the new (Promoting) bundle, not the old (Verified) bundle.
+	assert.Contains(t, out, "my-app-new",
+		"table must show the active Promoting bundle, not the old Verified one")
+	assert.NotContains(t, out, "my-app-old",
+		"the old Verified bundle should not appear when a newer Promoting bundle exists")
+}

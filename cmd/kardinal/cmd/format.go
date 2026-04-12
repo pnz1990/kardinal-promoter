@@ -47,10 +47,35 @@ func HumanAge(t time.Time) string {
 // derive per-environment status and the active bundle version for each pipeline.
 // If steps is nil or empty the environment columns will show "-".
 func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep) error {
-	// Build a lookup: pipeline → environment → (state, bundleName)
+	// stepStatePriority assigns a priority to each PromotionStep state so we can
+	// prefer the most-active step when multiple bundles have steps for the same
+	// pipeline+environment. Higher priority = displayed first.
+	// Active states (Promoting/Pending/WaitingForMerge/HealthChecking) take precedence
+	// over terminal states (Verified/Failed/Superseded).
+	stepStatePriority := func(state string) int {
+		switch state {
+		case "Promoting", "WaitingForMerge", "HealthChecking":
+			return 4
+		case "Pending":
+			return 3
+		case "Failed":
+			return 2
+		case "Verified":
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	// Build a lookup: pipeline → environment → (state, bundleName, createdAt)
+	// When multiple PromotionSteps exist for the same pipeline+env (from different
+	// bundles), prefer the one with the highest state priority, then most recently
+	// created.
 	type envState struct {
 		state      string
 		bundleName string
+		priority   int
+		createdAt  time.Time
 	}
 	// pipelineEnvMap[pipelineName][envName] = envState
 	pipelineEnvMap := make(map[string]map[string]envState)
@@ -67,9 +92,18 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 		if state == "" {
 			state = "Pending"
 		}
-		pipelineEnvMap[pipe][env] = envState{
-			state:      state,
-			bundleName: s.Spec.BundleName,
+		priority := stepStatePriority(state)
+		existing, hasExisting := pipelineEnvMap[pipe][env]
+		// Replace if: higher priority, or same priority + more recent step.
+		if !hasExisting ||
+			priority > existing.priority ||
+			(priority == existing.priority && s.CreationTimestamp.After(existing.createdAt)) {
+			pipelineEnvMap[pipe][env] = envState{
+				state:      state,
+				bundleName: s.Spec.BundleName,
+				priority:   priority,
+				createdAt:  s.CreationTimestamp.Time,
+			}
 		}
 	}
 
@@ -101,23 +135,34 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 
 	for _, p := range pipelines {
 		// Determine active bundle version.
-		// Use the bundle name from any PromotionStep for this pipeline, preferring
-		// the most-advanced (Verified) environment's bundle name.
+		// Pick the bundle name from the highest-priority step across all environments.
+		// This ensures the most-active bundle (Promoting > Verified > Failed) is shown,
+		// not an older superseded bundle that happens to be Verified.
 		bundleDisplay := "-"
+		var bestPriority int
+		var bestCreatedAt time.Time
 		if envMap, ok := pipelineEnvMap[p.Name]; ok {
-			// Prefer Verified env bundle, else take any non-empty bundle name.
 			for _, est := range envMap {
-				if est.bundleName != "" && bundleDisplay == "-" {
-					bundleDisplay = est.bundleName
+				if est.bundleName == "" {
+					continue
 				}
-				if est.state == "Verified" && est.bundleName != "" {
+				if bundleDisplay == "-" ||
+					est.priority > bestPriority ||
+					(est.priority == bestPriority && est.createdAt.After(bestCreatedAt)) {
 					bundleDisplay = est.bundleName
+					bestPriority = est.priority
+					bestCreatedAt = est.createdAt
 				}
 			}
 		}
 
-		// Build the row.
-		row := fmt.Sprintf("%s\t%s", p.Name, bundleDisplay)
+		// Build the row. Append [PAUSED] to the pipeline name when the pipeline
+		// has spec.paused=true so operators immediately see the frozen state.
+		pipelineDisplay := p.Name
+		if p.Spec.Paused {
+			pipelineDisplay = p.Name + " [PAUSED]"
+		}
+		row := fmt.Sprintf("%s\t%s", pipelineDisplay, bundleDisplay)
 		for _, env := range envOrder {
 			state := "-"
 			if envMap, ok := pipelineEnvMap[p.Name]; ok {
