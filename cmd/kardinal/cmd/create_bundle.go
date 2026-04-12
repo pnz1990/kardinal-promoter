@@ -18,6 +18,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,6 +26,12 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
+
+// imageRepoPattern matches valid OCI image repository references.
+// Valid: nginx, docker.io/library/nginx, ghcr.io/org/repo
+// Invalid: "not valid@@@", " ", spaces, multiple colons in unusual positions
+// This is a best-effort check; the full OCI spec is more complex.
+var imageRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$`)
 
 func newCreateCmd() *cobra.Command {
 	create := &cobra.Command{
@@ -69,6 +76,12 @@ func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 	var imageRefs []v1alpha1.ImageRef
 	for _, img := range images {
 		repo, tag := splitImageRef(img)
+		// Validate that the repository portion looks like a valid OCI image reference.
+		// This prevents silently-succeeding bundles with obviously wrong image strings
+		// (e.g. "not-valid-image@@@") that would later fail kustomize-set-image.
+		if repo != "" && !imageRepoPattern.MatchString(repo) {
+			return fmt.Errorf("invalid image repository %q: must match [a-zA-Z0-9][a-zA-Z0-9._-/]* (e.g. ghcr.io/org/image)", repo)
+		}
 		imageRefs = append(imageRefs, v1alpha1.ImageRef{
 			Repository: repo,
 			Tag:        tag,
