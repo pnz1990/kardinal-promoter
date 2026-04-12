@@ -240,12 +240,12 @@ kardinal history <pipeline>
 
 Output:
 ```
-BUNDLE    ACTION     ENV     PR     APPROVER   DURATION   TIMESTAMP
-v1.29.0   promote    dev     --     (auto)     3m         2026-04-09 10:05
-v1.29.0   promote    staging --     (auto)     8m         2026-04-09 10:10
-v1.29.0   promote    prod    #144   alice      15m        2026-04-09 10:20
-v1.28.0   rollback   prod    #140   bob        5m         2026-04-08 16:30
-v1.28.0   promote    prod    #138   alice      12m        2026-04-07 14:00
+BUNDLE                  ACTION    ENV     PR    DURATION   TIMESTAMP
+nginx-demo-v1-29-0      promote   dev     --    3m         2026-04-09 10:05
+nginx-demo-v1-29-0      promote   staging --    8m         2026-04-09 10:10
+nginx-demo-v1-29-0      promote   prod    #144  15m        2026-04-09 10:20
+nginx-demo-v1-28-0      rollback  prod    #140  5m         2026-04-08 16:30
+nginx-demo-v1-28-0      promote   prod    #138  12m        2026-04-07 14:00
 ```
 
 Flags:
