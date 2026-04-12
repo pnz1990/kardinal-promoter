@@ -540,6 +540,7 @@ func policyTestFn(w io.Writer, filename string) error {
 	}
 
 	allPassed := true
+	hasSyntaxError := false
 	for _, g := range gates {
 		name := g.Name
 		if name == "" {
@@ -564,6 +565,7 @@ func policyTestFn(w io.Writer, filename string) error {
 		_, issues := celEnv.Compile(expr)
 		if issues != nil && issues.Err() != nil {
 			allPassed = false
+			hasSyntaxError = true
 			if _, werr := fmt.Fprintf(w, "  Syntax: INVALID — %s\n\n", issues.Err()); werr != nil {
 				return fmt.Errorf("write: %w", werr)
 			}
@@ -577,6 +579,7 @@ func policyTestFn(w io.Writer, filename string) error {
 		pass, reason, evalErr := simulateCELEvaluate(celEnv, expr, defaultCtx)
 		if evalErr != nil {
 			allPassed = false
+			hasSyntaxError = true // eval errors are also syntax-level issues
 			if _, werr := fmt.Fprintf(w, "  Result: ERROR (%s)\n\n", evalErr); werr != nil {
 				return fmt.Errorf("write: %w", werr)
 			}
@@ -593,12 +596,25 @@ func policyTestFn(w io.Writer, filename string) error {
 		}
 	}
 
-	summary := "All gates valid"
-	if !allPassed {
-		summary = "Some gates have validation errors"
+	// Summary: distinguish syntax errors from evaluation failures.
+	// - Syntax errors → error message + exit non-zero (for CI use)
+	// - Evaluation FAIL → informational (gate blocks on current context, not a bug)
+	var summary string
+	switch {
+	case hasSyntaxError:
+		summary = "CEL syntax errors found"
+	case !allPassed:
+		summary = "Some gates would BLOCK with current context (see FAIL results above)"
+	default:
+		summary = "All gates valid and pass current context"
 	}
 	if _, werr := fmt.Fprintf(w, "%s (%d gate(s))\n", summary, len(gates)); werr != nil {
 		return fmt.Errorf("write: %w", werr)
+	}
+	// Return error only for syntax errors (enables CI gating).
+	// Evaluation FAIL is informational — not a test failure.
+	if hasSyntaxError {
+		return fmt.Errorf("CEL syntax errors in %d gate(s)", len(gates))
 	}
 	return nil
 }
