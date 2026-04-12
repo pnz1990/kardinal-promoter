@@ -29,8 +29,13 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "[krocodile] Cloning krocodile..."
-git clone --quiet --no-tags --depth=10 "$KROCODILE_REPO" "$TMPDIR/kro" -b krocodile 2>/dev/null
-git -C "$TMPDIR/kro" checkout --quiet "$KROCODILE_COMMIT"
+git clone --quiet --no-tags --depth=500 "$KROCODILE_REPO" "$TMPDIR/kro" -b krocodile 2>/dev/null || \
+  git clone --quiet "$KROCODILE_REPO" "$TMPDIR/kro" -b krocodile 2>/dev/null
+git -C "$TMPDIR/kro" checkout --quiet "$KROCODILE_COMMIT" 2>/dev/null || {
+  # If shallow clone doesn't have the commit, do a full fetch
+  git -C "$TMPDIR/kro" fetch --unshallow 2>/dev/null || git -C "$TMPDIR/kro" fetch --depth=1000 2>/dev/null
+  git -C "$TMPDIR/kro" checkout --quiet "$KROCODILE_COMMIT"
+}
 echo "[krocodile] Checked out commit ${KROCODILE_COMMIT}."
 
 # ── 2. Build the controller binary ────────────────────────────────────────────
