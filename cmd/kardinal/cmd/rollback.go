@@ -65,28 +65,41 @@ func rollbackFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client,
 
 	rollbackOf := toBundle
 	if rollbackOf == "" {
-		// List all bundles in the namespace and filter by Spec.Pipeline.
-		// A label selector is not used here because bundles created by the CLI
-		// may not carry the kardinal.io/pipeline label; Spec.Pipeline is authoritative.
-		var bundles v1alpha1.BundleList
-		if listErr := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr != nil {
-			return fmt.Errorf("list bundles: %w", listErr)
+		// Find the bundle to roll back to by querying PromotionStep history.
+		// We look for the most recently created PromotionStep that is Verified in the
+		// target environment for this pipeline. This is correct even when all Bundle
+		// objects have Phase=Superseded (which is the normal state after multiple deploys).
+		//
+		// Using PromotionStep instead of Bundle.Phase ensures rollback works in
+		// real-world production scenarios where bundles are always Superseded (#264).
+		var steps v1alpha1.PromotionStepList
+		if listErr := c.List(ctx, &steps,
+			sigs_client.InNamespace(ns),
+			sigs_client.MatchingLabels{
+				"kardinal.io/pipeline":    pipeline,
+				"kardinal.io/environment": envFilter,
+			},
+		); listErr != nil {
+			return fmt.Errorf("list promotion steps: %w", listErr)
 		}
 
-		var latest *v1alpha1.Bundle
-		for i := range bundles.Items {
-			b := &bundles.Items[i]
-			if b.Spec.Pipeline != pipeline || b.Status.Phase != "Verified" {
+		var latestStep *v1alpha1.PromotionStep
+		for i := range steps.Items {
+			s := &steps.Items[i]
+			if s.Status.State != "Verified" {
 				continue
 			}
-			if latest == nil || b.CreationTimestamp.After(latest.CreationTimestamp.Time) {
-				latest = b
+			if latestStep == nil || s.CreationTimestamp.After(latestStep.CreationTimestamp.Time) {
+				latestStep = s
 			}
 		}
-		if latest == nil {
-			return fmt.Errorf("no Verified bundles found for pipeline %s", pipeline)
+		if latestStep == nil {
+			return fmt.Errorf("no verified PromotionStep found for pipeline %s env %s", pipeline, envFilter)
 		}
-		rollbackOf = latest.Name
+		rollbackOf = latestStep.Spec.BundleName
+		if rollbackOf == "" {
+			return fmt.Errorf("verified PromotionStep for %s/%s has no bundleName", pipeline, envFilter)
+		}
 	}
 
 	// Copy the bundle type from the target bundle so the rollback is type-compatible.
