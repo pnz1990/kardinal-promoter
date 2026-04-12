@@ -79,12 +79,10 @@ kardinal get steps <pipeline>
 
 Output:
 ```
-STEP                              TYPE            STATE             ENV
-my-app-v1-29-0-dev                PromotionStep   Verified          dev
-my-app-v1-29-0-staging            PromotionStep   Verified          staging
-my-app-v1-29-0-no-weekend         PolicyGate      Pass              prod
-my-app-v1-29-0-staging-soak       PolicyGate      Pass              prod
-my-app-v1-29-0-prod               PromotionStep   WaitingForMerge   prod
+ENVIRONMENT   STEP-TYPE             STATE             MESSAGE
+dev           kustomize-set-image   Verified          health check passed
+staging       kustomize-set-image   Verified          health check passed
+prod          kustomize-set-image   WaitingForMerge   PR #144 open
 ```
 
 Flags:
@@ -100,14 +98,14 @@ kardinal get bundles <pipeline>
 
 Output:
 ```
-BUNDLE    IMAGES                            DEV        STAGING    PROD         PHASE        AGE
-v1.29.0   ghcr.io/myorg/my-app:1.29.0      Verified   Verified   Promoting    Promoting    2h
-v1.28.0   ghcr.io/myorg/my-app:1.28.0      Verified   Verified   Verified     Verified     1d
-v1.27.0   ghcr.io/myorg/my-app:1.27.0      Verified   Verified   Verified     Superseded   3d
+BUNDLE                   TYPE    PHASE        AGE
+nginx-demo-v1-29-0       image   Promoting    2m
+nginx-demo-v1-28-0       image   Superseded   1d
+nginx-demo-v1-27-0       image   Superseded   3d
 ```
 
 Flags:
-- `--phase <phase>`: filter by phase (`Available`, `Promoting`, `Verified`, `Failed`, `Superseded`)
+- `--active`: show only active bundles (Promoting/Verified/Failed — excludes Superseded)
 - `-o, --output <format>`: output format
 
 ### kardinal create bundle
@@ -262,12 +260,14 @@ kardinal policy list
 
 Output:
 ```
-NAME                  SCOPE   APPLIES-TO     TYPE             EXPRESSION                          NAMESPACE
-no-weekend-deploys    org     prod           gate             !schedule.isWeekend                 platform-policies
-require-staging-soak  org     prod           gate             bundle.upstreamSoakMinutes >= 30    platform-policies
-allow-hotfix-skip     org     staging        skip-permission  bundle.labels.hotfix == true         platform-policies
-extra-review          team    prod           gate             bundle.provenance.author != "bot"   my-team
+NAME                 NAMESPACE           SCOPE   APPLIES-TO   RECHECK   READY     LAST-EVALUATED
+no-weekend-deploys   platform-policies   org     prod         5m        Block     1m ago
+require-uat-soak     platform-policies   org     prod         1m        Block     45s ago
+no-bot-deploys       my-team             team    prod         5m        Pass      2m ago
 ```
+
+Note: shows user-defined template PolicyGates only, not per-bundle Graph instances.
+Add `--pipeline <name>` to filter by pipeline.
 
 ### kardinal policy test
 
