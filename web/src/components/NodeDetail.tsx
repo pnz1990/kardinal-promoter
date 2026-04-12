@@ -127,10 +127,31 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const [stepLoading, setStepLoading] = useState(false)
   const [promoteState, setPromoteState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [promoteMessage, setPromoteMessage] = useState<string | null>(null)
+  const [celValid, setCelValid] = useState<boolean | null>(null)
+  const [celError, setCelError] = useState<string | null>(null)
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
   const isActiveState = node && ['Running', 'Promoting', 'WaitingForMerge', 'HealthChecking'].includes(node.state)
+
+  /** Validate the CEL expression of a PolicyGate node when it is selected. */
+  useEffect(() => {
+    if (!isPolicyGate || !node?.expression) {
+      setCelValid(null)
+      setCelError(null)
+      return
+    }
+    // Validate the expression asynchronously (best effort — UI only).
+    api.validateCEL(node.expression)
+      .then(res => {
+        setCelValid(res.valid)
+        setCelError(res.error ?? null)
+      })
+      .catch(() => {
+        setCelValid(null)
+        setCelError(null)
+      })
+  }, [node?.id, isPolicyGate])
 
   /** Trigger a new promotion for this environment. */
   function handlePromote() {
@@ -280,16 +301,34 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         </div>
       )}
 
-      {/* PolicyGate: CEL expression display */}
+      {/* PolicyGate: CEL expression display with server-side syntax validation */}
       {isPolicyGate && node.expression && (
         <div style={{ marginBottom: '0.75rem' }}>
-          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
-            CEL Expression
-          </h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>
+              CEL Expression
+            </h4>
+            {/* Syntax validity chip — populated by POST /api/v1/ui/validate-cel */}
+            {celValid === true && (
+              <span style={{
+                fontSize: '0.65rem', background: '#14532d', color: '#86efac',
+                borderRadius: '4px', padding: '1px 6px',
+              }}>✓ valid</span>
+            )}
+            {celValid === false && (
+              <span
+                style={{
+                  fontSize: '0.65rem', background: '#7f1d1d', color: '#fca5a5',
+                  borderRadius: '4px', padding: '1px 6px', cursor: 'help',
+                }}
+                title={celError ?? 'syntax error'}
+              >✗ error</span>
+            )}
+          </div>
           <code style={{
             display: 'block',
             background: '#0f172a',
-            border: '1px solid #334155',
+            border: `1px solid ${celValid === false ? '#7f1d1d' : '#334155'}`,
             borderRadius: '4px',
             padding: '0.5rem 0.75rem',
             fontSize: '0.8rem',
@@ -300,6 +339,11 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           }}>
             {node.expression}
           </code>
+          {celValid === false && celError && (
+            <div style={{ fontSize: '0.7rem', color: '#fca5a5', marginTop: '0.25rem' }}>
+              {celError}
+            </div>
+          )}
         </div>
       )}
 
