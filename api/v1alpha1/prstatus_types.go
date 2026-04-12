@@ -23,17 +23,20 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 type PRStatusSpec struct {
 	// PRURL is the full GitHub pull request URL.
 	// Example: https://github.com/owner/repo/pull/42
-	// +kubebuilder:validation:MinLength=1
-	PRURL string `json:"prURL"`
+	// Set by the open-pr step after the PR is created. Empty in the placeholder.
+	// +optional
+	PRURL string `json:"prURL,omitempty"`
 
 	// PRNumber is the pull request number (numeric ID within the repo).
-	// +kubebuilder:validation:Minimum=1
-	PRNumber int `json:"prNumber"`
+	// Set by the open-pr step after the PR is created. Zero in the placeholder.
+	// +optional
+	PRNumber int `json:"prNumber,omitempty"`
 
 	// Repo is the "owner/repo" slug identifying the GitHub repository.
 	// Example: acme/my-service
-	// +kubebuilder:validation:MinLength=1
-	Repo string `json:"repo"`
+	// Set by the open-pr step after the PR is created. Empty in the placeholder.
+	// +optional
+	Repo string `json:"repo,omitempty"`
 }
 
 // PRStatusStatus holds the observed state of the pull request.
