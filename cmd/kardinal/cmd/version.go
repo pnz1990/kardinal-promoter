@@ -29,35 +29,59 @@ var CLIVersion = "v0.1.0-dev"
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the CLI and controller versions",
+		Short: "Print the CLI, controller, and graph versions",
 		RunE:  runVersion,
 	}
 }
 
 func runVersion(cmd *cobra.Command, _ []string) error {
-	cliVer := buildInfoVersion()
 	controllerVer := "unknown"
+	graphVer := ""
 
 	// Best-effort: try to read from the kardinal-version ConfigMap.
 	client, _, err := buildClient()
 	if err == nil {
 		var cm corev1.ConfigMap
-		if err := client.Get(context.Background(),
+		if cmErr := client.Get(context.Background(),
 			types.NamespacedName{
 				Namespace: "kardinal-system",
 				Name:      "kardinal-version",
-			}, &cm); err == nil {
+			}, &cm); cmErr == nil {
 			if v, ok := cm.Data["version"]; ok && v != "" {
 				controllerVer = v
+			}
+			if v, ok := cm.Data["graph"]; ok && v != "" {
+				graphVer = v
 			}
 		}
 	}
 
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "CLI:        %s\n", cliVer); err != nil {
-		return fmt.Errorf("write version: %w", err)
+	return versionFn(cmd.OutOrStdout(), controllerVer, graphVer)
+}
+
+// versionFn is the testable implementation of the version command.
+// It writes CLI, Controller, and Graph version lines to w.
+// controllerVer is the controller version resolved from the ConfigMap ("unknown" if absent).
+// graphVer is the graph engine version from the ConfigMap (empty string when unavailable).
+func versionFn(w interface{ Write([]byte) (int, error) }, controllerVer, graphVer string) error {
+	cliVer := buildInfoVersion()
+
+	if controllerVer == "" {
+		controllerVer = "unknown"
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Controller: %s\n", controllerVer); err != nil {
-		return fmt.Errorf("write version: %w", err)
+	graphDisplay := graphVer
+	if graphDisplay == "" {
+		graphDisplay = "(unknown)"
+	}
+
+	if _, err := fmt.Fprintf(w, "CLI:        %s\n", cliVer); err != nil {
+		return fmt.Errorf("write version cli: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "Controller: %s\n", controllerVer); err != nil {
+		return fmt.Errorf("write version controller: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "Graph:      %s\n", graphDisplay); err != nil {
+		return fmt.Errorf("write version graph: %w", err)
 	}
 	return nil
 }
