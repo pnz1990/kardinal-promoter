@@ -723,3 +723,20 @@ func TestConfigMerge_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "data: {key: value}", string(data))
 }
+
+// TestKustomizeSetImageStep_NoImages verifies that an empty bundle Images list
+// returns StepSuccess with "no images to update" without calling kustomize.
+func TestKustomizeSetImageStep_NoImages(t *testing.T) {
+	step, err := parentsteps.Lookup("kustomize-set-image")
+	require.NoError(t, err, "kustomize-set-image step must be registered")
+
+	state := &parentsteps.StepState{
+		Bundle:  v1alpha1.BundleSpec{Type: "image"}, // no Images → empty
+		WorkDir: t.TempDir(),
+	}
+	result, execErr := step.Execute(context.Background(), state)
+	require.NoError(t, execErr)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, "no images to update", result.Message,
+		"empty images list must return 'no images to update' without calling kustomize")
+}
