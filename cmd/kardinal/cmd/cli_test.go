@@ -627,6 +627,45 @@ func TestPolicyList_ShowsPendingState(t *testing.T) {
 	assert.Contains(t, buf.String(), "Pending", "unevaluated gate must show Pending")
 }
 
+// TestPolicyList_FiltersGraphInstances verifies that Graph-managed per-bundle
+// PolicyGate instances are excluded from policy list (#285).
+func TestPolicyList_FiltersGraphInstances(t *testing.T) {
+	s := cliTestScheme(t)
+	// Template gate — should be shown.
+	templateGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-weekend-deploys",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/scope":      "org",
+				"kardinal.io/applies-to": "prod",
+			},
+		},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+	}
+	// Graph instance with kro label — must be filtered out.
+	instanceGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-weekend-deploys--nginx-demo-v1",
+			Namespace: "default",
+			Labels: map[string]string{
+				"internal.kro.run/graph-name": "nginx-demo-nginx-demo-v1",
+				"kardinal.io/bundle":          "nginx-demo-v1",
+			},
+		},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "true"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(templateGate, instanceGate).Build()
+
+	var buf bytes.Buffer
+	err := policyListFn(&buf, c, "default", "")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "no-weekend-deploys", "template gate must be shown")
+	assert.NotContains(t, out, "nginx-demo-v1", "Graph instance must be filtered out")
+}
+
 // TestVersionOutput_ThreeLines verifies that versionFn outputs CLI, Controller, and Graph lines.
 func TestVersionOutput_ThreeLines(t *testing.T) {
 	tests := []struct {
