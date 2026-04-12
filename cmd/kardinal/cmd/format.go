@@ -209,3 +209,44 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 	}
 	return nil
 }
+
+// HistoryRow represents one row in the history table.
+// Each row corresponds to the final (health-check) PromotionStep for one
+// bundle × environment combination, giving a per-environment promotion record.
+type HistoryRow struct {
+	Bundle    string
+	Action    string // "promote" or "rollback"
+	Env       string
+	PR        string // PR number like "#42" or "--"
+	Approver  string // mergedBy or "(auto)" or "--"
+	Duration  string // human-readable elapsed time from creation to Verified
+	Timestamp string // creation timestamp formatted as "2006-01-02 15:04"
+}
+
+// FormatHistoryTable writes a tabwriter-formatted promotion history table to w.
+// Rows are pre-sorted (caller is responsible for ordering).
+func FormatHistoryTable(w io.Writer, rows []HistoryRow) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "BUNDLE\tACTION\tENV\tPR\tAPPROVER\tDURATION\tTIMESTAMP"); err != nil {
+		return fmt.Errorf("write history table header: %w", err)
+	}
+	for _, r := range rows {
+		pr := r.PR
+		if pr == "" {
+			pr = "--"
+		}
+		approver := r.Approver
+		if approver == "" {
+			approver = "--"
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.Bundle, r.Action, r.Env, pr, approver, r.Duration, r.Timestamp,
+		); err != nil {
+			return fmt.Errorf("write history row: %w", err)
+		}
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush history table: %w", err)
+	}
+	return nil
+}

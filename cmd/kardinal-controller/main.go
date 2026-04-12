@@ -19,6 +19,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io/fs"
 	"net/http"
@@ -111,6 +112,10 @@ func main() {
 		"Shard name for distributed mode. When set, this controller only processes PromotionSteps "+
 			"with a matching kardinal.io/shard label. Leave empty for standalone (single-controller) mode.")
 
+	var controllerVersion string
+	flag.StringVar(&controllerVersion, "controller-version", "v0.1.0-dev",
+		"Controller version string published to the kardinal-version ConfigMap for use by the CLI.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -151,6 +156,12 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to create SCM provider")
 	}
 	gitClient := scm.NewExecGitClient()
+
+	// Publish version ConfigMap so the CLI can display CLI / Controller / Graph versions.
+	if pubErr := publishVersionConfigMap(context.Background(), mgr.GetClient(), controllerVersion); pubErr != nil {
+		// Non-fatal: version display is best-effort.
+		logger.Warn().Err(pubErr).Msg("could not publish kardinal-version ConfigMap")
+	}
 
 	if err := (&bundlereconciler.Reconciler{
 		Client:     mgr.GetClient(),

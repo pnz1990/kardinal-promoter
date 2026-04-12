@@ -16,11 +16,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"runtime/debug"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // CLIVersion is the static CLI version string, overridable at build time via ldflags.
@@ -36,12 +38,26 @@ func newVersionCmd() *cobra.Command {
 
 func runVersion(cmd *cobra.Command, _ []string) error {
 	cliVer := buildInfoVersion()
-	controllerVer := "unknown"
 
 	// Best-effort: try to read from the kardinal-version ConfigMap.
-	client, _, err := buildClient()
-	if err == nil {
+	var k8sClient sigs_client.Client
+	if c, _, err := buildClient(); err == nil {
+		k8sClient = c
+	}
+
+	return versionFn(cmd.OutOrStdout(), k8sClient, cliVer)
+}
+
+// versionFn is the testable implementation of the version command.
+// client may be nil when running outside a cluster (versions will show "unknown").
+func versionFn(w io.Writer, client sigs_client.Client, cliVer string) error {
+	controllerVer := "unknown"
+	graphVer := "unknown"
+
+	if client != nil {
 		var cm corev1.ConfigMap
+		cm.Name = "kardinal-version"
+		cm.Namespace = "kardinal-system"
 		if err := client.Get(context.Background(),
 			types.NamespacedName{
 				Namespace: "kardinal-system",
@@ -50,13 +66,19 @@ func runVersion(cmd *cobra.Command, _ []string) error {
 			if v, ok := cm.Data["version"]; ok && v != "" {
 				controllerVer = v
 			}
+			if v, ok := cm.Data["graph"]; ok && v != "" {
+				graphVer = v
+			}
 		}
 	}
 
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "CLI:        %s\n", cliVer); err != nil {
+	if _, err := fmt.Fprintf(w, "CLI:        %s\n", cliVer); err != nil {
 		return fmt.Errorf("write version: %w", err)
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Controller: %s\n", controllerVer); err != nil {
+	if _, err := fmt.Fprintf(w, "Controller: %s\n", controllerVer); err != nil {
+		return fmt.Errorf("write version: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "Graph:      %s\n", graphVer); err != nil {
 		return fmt.Errorf("write version: %w", err)
 	}
 	return nil

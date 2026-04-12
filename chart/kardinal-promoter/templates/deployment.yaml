@@ -41,6 +41,7 @@ spec:
             - --zap-log-level={{ .Values.logLevel }}
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+            - --controller-version={{ .Chart.AppVersion }}
           env:
             {{- if .Values.github.token }}
             - name: GITHUB_TOKEN

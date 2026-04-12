@@ -3,13 +3,13 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-12T02:56:28Z",
-  "current_queue": null,
-  "last_sm_review": "2026-04-11T18:30:48Z",
-  "last_pm_review": "2026-04-11T18:31:09Z",
-  "batches_since_competitive_analysis": 3,
-  "batches_since_doc_audit": 1,
-  "batches_since_dead_scan": 0,
+  "last_updated": "2026-04-12T03:15:56Z",
+  "current_queue": "queue-019",
+  "last_sm_review": "2026-04-12T03:12:08Z",
+  "last_pm_review": "2026-04-12T03:13:41Z",
+  "batches_since_competitive_analysis": 0,
+  "batches_since_doc_audit": 2,
+  "batches_since_dead_scan": 1,
   "engineer_slots": {
     "ENGINEER-1": null,
     "ENGINEER-2": null,
@@ -52,6 +52,15 @@
       "current_item": null,
       "progress_issue": "174",
       "last_report_at": "2026-04-12T02:52:13Z"
+    },
+    "STANDALONE-UI-CLI": {
+      "name": "UI-CLI Agent",
+      "last_seen": "2026-04-12T03:34:33Z",
+      "cycle": 2,
+      "scope": "UI and CLI \u2014 close all output gaps, improve embedded React UI with patterns from kro-ui (DAG viz, health chips, CEL display, live polling, error aggregation), run product validation every 3 cycles. Also look for inspiration of features and improvements from Kargo UI",
+      "current_item": "199",
+      "progress_issue": "198",
+      "last_report_at": "2026-04-12T03:34:54Z"
     }
   },
   "features": {
@@ -439,13 +448,36 @@
       "pr_merged": true
     },
     "121-shard-routing": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "STANDALONE",
       "assigned_at": "2026-04-12T02:56:28Z",
       "worktree_path": "../kardinal-promoter.121-shard-routing",
       "dependency_mode": "merged",
       "pr_number": 196,
-      "pr_merged": false
+      "pr_merged": true
+    },
+    "122-argo-delegation": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T03:05:49Z",
+      "worktree_path": "../kardinal-promoter.122-argo-delegation",
+      "dependency_mode": "merged",
+      "pr_number": 197,
+      "pr_merged": true
+    },
+    "201-cli-version-graph": {
+      "state": "in_review",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T03:45:16Z",
+      "worktree_path": null,
+      "dependency_mode": "merged"
+    },
+    "200-cli-history-format": {
+      "state": "in_review",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T03:45:16Z",
+      "worktree_path": null,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
@@ -458,8 +490,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-12T02:32:27Z",
-      "cycle": 1
+      "last_seen": "2026-04-12T03:29:47Z",
+      "cycle": 3
     }
   },
   "handoff": {
