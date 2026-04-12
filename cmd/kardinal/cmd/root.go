@@ -35,6 +35,7 @@ var (
 	globalNamespace  string
 	globalKubeconfig string
 	globalContext    string
+	globalOutput     string // output format: "" (table), "json", "yaml"
 )
 
 func init() {
@@ -60,6 +61,8 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 		"Path to kubeconfig file")
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
+	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
+		"Output format: table (default), json, yaml")
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newGetCmd())

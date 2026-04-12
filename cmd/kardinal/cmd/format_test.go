@@ -343,3 +343,38 @@ func TestHumanAge(t *testing.T) {
 		})
 	}
 }
+
+func TestWriteJSON_ProducesValidJSON(t *testing.T) {
+	data := []struct {
+		Name  string `json:"name"`
+		Phase string `json:"phase"`
+	}{
+		{Name: "my-app", Phase: "Promoting"},
+	}
+	var buf bytes.Buffer
+	err := cmd.WriteJSON(&buf, data)
+	require.NoError(t, err)
+	out := buf.String()
+	assert.Contains(t, out, `"name": "my-app"`)
+	assert.Contains(t, out, `"phase": "Promoting"`)
+}
+
+func TestWriteYAML_ProducesValidYAML(t *testing.T) {
+	data := []struct {
+		Name  string `json:"name" yaml:"name"`
+		Phase string `json:"phase" yaml:"phase"`
+	}{
+		{Name: "my-app", Phase: "Verified"},
+	}
+	var buf bytes.Buffer
+	err := cmd.WriteYAML(&buf, data)
+	require.NoError(t, err)
+	out := buf.String()
+	assert.Contains(t, out, "name: my-app")
+	assert.Contains(t, out, "phase: Verified")
+}
+
+func TestOutputFormat_DefaultIsTable(t *testing.T) {
+	// Default global output is "", which means table.
+	assert.Equal(t, "", cmd.OutputFormat())
+}
