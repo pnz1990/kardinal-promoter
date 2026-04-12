@@ -177,7 +177,12 @@ func (r *Reconciler) isSuperseededByNewer(ctx context.Context, b *kardinalv1alph
 			continue
 		}
 		// A sibling that is not terminal and was created after us means we are superseded.
-		if sibling.CreationTimestamp.After(b.CreationTimestamp.Time) {
+		// Tiebreaker: when creation times are equal (same second), the lexicographically
+		// greater bundle name "wins" (newer by convention for rapid-fire creation, #289).
+		siblingTs := sibling.CreationTimestamp.Time
+		bTs := b.CreationTimestamp.Time
+		if siblingTs.After(bTs) ||
+			(siblingTs.Equal(bTs) && sibling.Name > b.Name) {
 			return true, nil
 		}
 	}

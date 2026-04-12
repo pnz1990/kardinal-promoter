@@ -971,3 +971,50 @@ func TestBundleReconciler_PromotingBundleSupersededByNewerPromoting(t *testing.T
 	assert.Equal(t, "Superseded", updated.Status.Phase,
 		"old Promoting bundle must be superseded when newer Promoting bundle exists")
 }
+
+// TestBundleReconciler_SameSecondSupersession verifies same-second tiebreaker (#289).
+func TestBundleReconciler_SameSecondSupersession(t *testing.T) {
+	s := newScheme()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}}},
+	}
+	sameTime := metav1.Time{Time: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+	bundleAaa := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-aaa",
+			Namespace:         "default",
+			CreationTimestamp: sameTime,
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	bundleZzz := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-zzz",
+			Namespace:         "default",
+			CreationTimestamp: sameTime,
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, bundleAaa, bundleZzz).
+		WithStatusSubresource(bundleAaa, bundleZzz).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-aaa", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var aaa kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "nginx-demo-aaa", Namespace: "default"}, &aaa))
+	assert.Equal(t, "Superseded", aaa.Status.Phase,
+		"lexicographically smaller name superseded when timestamps equal")
+}
