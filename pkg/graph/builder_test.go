@@ -538,3 +538,108 @@ func findUpstreamRef(t *testing.T, n graph.GraphNode) string {
 	uv, _ := spec["upstreamVerified"].(string)
 	return uv
 }
+
+// TestBuilder_PolicyGateScopeLabelsPropagate verifies that the scope and applies-to
+// labels from the original PolicyGate template are copied to the instantiated node's
+// metadata.labels. This is needed so `kardinal policy list` can display correct scope.
+func TestBuilder_PolicyGateScopeLabelsPropagate(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := makeLinearPipeline("my-app", "test", "prod")
+	bundle := makeBundle("my-app-v1", "my-app")
+
+	// Org-scoped gate with applies-to=prod.
+	orgGate := kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-weekend-deploys",
+			Namespace: "platform-policies",
+			Labels: map[string]string{
+				"kardinal.io/applies-to": "prod",
+				"kardinal.io/scope":      "org",
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{
+			Expression:      "!schedule.isWeekend",
+			Message:         "blocked on weekends",
+			RecheckInterval: "5m",
+		},
+	}
+
+	result, err := b.Build(graph.BuildInput{
+		Pipeline:    pipeline,
+		Bundle:      bundle,
+		PolicyGates: []kardinalv1alpha1.PolicyGate{orgGate},
+	})
+	require.NoError(t, err)
+
+	// Find the instantiated PolicyGate node.
+	var gateNode *graph.GraphNode
+	for i := range result.Graph.Spec.Nodes {
+		n := result.Graph.Spec.Nodes[i]
+		if containsStr(n.ID, "no_weekend_deploys") {
+			gateNode = &n
+			break
+		}
+	}
+	require.NotNil(t, gateNode, "PolicyGate node must exist")
+
+	// Extract labels from template.metadata.labels.
+	meta, ok := gateNode.Template["metadata"].(map[string]interface{})
+	require.True(t, ok, "template must have metadata")
+	labels, ok := meta["labels"].(map[string]interface{})
+	require.True(t, ok, "metadata must have labels")
+
+	assert.Equal(t, "org", labels["kardinal.io/scope"],
+		"scope label must be propagated from the original gate template")
+	assert.Equal(t, "prod", labels["kardinal.io/applies-to"],
+		"applies-to label must be propagated from the original gate template")
+}
+
+// TestBuilder_PolicyGateScopeDefault verifies that a gate without scope label
+// gets the default 'team' scope propagated.
+func TestBuilder_PolicyGateScopeDefault(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := makeLinearPipeline("my-app", "prod")
+	bundle := makeBundle("my-app-v1", "my-app")
+
+	// Team gate with no scope label.
+	teamGate := kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-gate",
+			Namespace: "my-team",
+			Labels: map[string]string{
+				"kardinal.io/applies-to": "prod",
+				// no kardinal.io/scope label
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{
+			Expression:      "true",
+			Message:         "always pass",
+			RecheckInterval: "5m",
+		},
+	}
+
+	result, err := b.Build(graph.BuildInput{
+		Pipeline:    pipeline,
+		Bundle:      bundle,
+		PolicyGates: []kardinalv1alpha1.PolicyGate{teamGate},
+	})
+	require.NoError(t, err)
+
+	var gateNode *graph.GraphNode
+	for i := range result.Graph.Spec.Nodes {
+		n := result.Graph.Spec.Nodes[i]
+		if containsStr(n.ID, "team_gate") {
+			gateNode = &n
+			break
+		}
+	}
+	require.NotNil(t, gateNode, "PolicyGate node must exist")
+
+	meta, ok := gateNode.Template["metadata"].(map[string]interface{})
+	require.True(t, ok)
+	labels, ok := meta["labels"].(map[string]interface{})
+	require.True(t, ok)
+
+	assert.Equal(t, "team", labels["kardinal.io/scope"],
+		"default scope must be 'team' when label is absent")
+}
