@@ -40,22 +40,49 @@ func runGetSteps(cmd *cobra.Command, args []string) error {
 	}
 
 	pipeline := args[0]
+	ctx := context.Background()
 
 	var steps v1alpha1.PromotionStepList
-	if err := client.List(context.Background(), &steps,
+	if err := client.List(ctx, &steps,
 		sigs_client.InNamespace(ns),
 		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
 	); err != nil {
 		return fmt.Errorf("list promotion steps: %w", err)
 	}
 
+	// Exclude steps from Superseded bundles. A Superseded bundle's steps are
+	// historical and should not appear in the current view. We build a set of
+	// non-Superseded bundle names, then filter steps accordingly.
+	activeBundles := make(map[string]bool)
+	var bundles v1alpha1.BundleList
+	if listErr := client.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr == nil {
+		for _, b := range bundles.Items {
+			if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
+				activeBundles[b.Name] = true
+			}
+		}
+	}
+
+	var activeSteps []v1alpha1.PromotionStep
+	if len(activeBundles) > 0 {
+		for _, s := range steps.Items {
+			bundleName := s.Labels["kardinal.io/bundle"]
+			if bundleName == "" || activeBundles[bundleName] {
+				activeSteps = append(activeSteps, s)
+			}
+		}
+	} else {
+		// Fallback: show all steps if bundle list failed or no active bundles.
+		activeSteps = steps.Items
+	}
+
 	out := cmd.OutOrStdout()
 	switch OutputFormat() {
 	case "json":
-		return WriteJSON(out, steps.Items)
+		return WriteJSON(out, activeSteps)
 	case "yaml":
-		return WriteYAML(out, steps.Items)
+		return WriteYAML(out, activeSteps)
 	default:
-		return FormatStepsTable(out, steps.Items)
+		return FormatStepsTable(out, activeSteps)
 	}
 }
