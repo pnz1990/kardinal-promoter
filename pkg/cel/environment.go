@@ -19,7 +19,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 
-	krolibrary "github.com/kubernetes-sigs/kro/pkg/cel/library"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
 )
 
 // NewCELEnvironment creates a shared CEL environment for PolicyGate expression
@@ -63,12 +63,12 @@ func NewCELEnvironment() (*cel.Env, error) {
 		// kro CEL library extensions — same set used by kro Graph controller
 		// for readyWhen/propagateWhen evaluation. This ensures PolicyGate
 		// expressions can use the same functions as native kro CEL expressions.
-		// Source: github.com/kubernetes-sigs/kro/pkg/cel/library
-		krolibrary.JSON(),
-		krolibrary.Maps(),
-		krolibrary.Lists(),
-		krolibrary.Random(),
-		krolibrary.Omit(),
+		// Inlined from github.com/kubernetes-sigs/kro/pkg/cel/library (Apache 2.0).
+		library.JSON(),
+		library.Maps(),
+		library.Lists(),
+		library.Random(),
+		library.Omit(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cel.NewEnv: %w", err)
