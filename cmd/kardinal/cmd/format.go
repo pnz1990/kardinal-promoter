@@ -15,11 +15,14 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -206,6 +209,36 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 	}
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("flush steps table: %w", err)
+	}
+	return nil
+}
+
+// ─── Output format helpers ────────────────────────────────────────────────────
+
+// OutputFormat returns the global output format flag value, normalised to lower-case.
+// Valid values: "" (table), "json", "yaml".
+func OutputFormat() string {
+	return strings.ToLower(globalOutput)
+}
+
+// WriteJSON serialises v as indented JSON to w.
+func WriteJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return fmt.Errorf("write json: %w", err)
+	}
+	return nil
+}
+
+// WriteYAML serialises v as YAML to w.
+func WriteYAML(w io.Writer, v any) error {
+	data, err := sigsyaml.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal yaml: %w", err)
+	}
+	if _, err := w.Write(data); err != nil {
+		return fmt.Errorf("write yaml: %w", err)
 	}
 	return nil
 }

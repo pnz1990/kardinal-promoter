@@ -67,5 +67,13 @@ func runGetPipelines(cmd *cobra.Command, args []string) error {
 		items = filtered
 	}
 
-	return FormatPipelineTable(cmd.OutOrStdout(), items, promotionSteps.Items)
+	out := cmd.OutOrStdout()
+	switch OutputFormat() {
+	case "json":
+		return WriteJSON(out, items)
+	case "yaml":
+		return WriteYAML(out, items)
+	default:
+		return FormatPipelineTable(out, items, promotionSteps.Items)
+	}
 }

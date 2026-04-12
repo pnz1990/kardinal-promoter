@@ -64,5 +64,13 @@ func runGetBundles(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	return FormatBundleTable(cmd.OutOrStdout(), bundles.Items)
+	out := cmd.OutOrStdout()
+	switch OutputFormat() {
+	case "json":
+		return WriteJSON(out, bundles.Items)
+	case "yaml":
+		return WriteYAML(out, bundles.Items)
+	default:
+		return FormatBundleTable(out, bundles.Items)
+	}
 }
