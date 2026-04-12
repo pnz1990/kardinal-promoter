@@ -30,9 +30,9 @@
       "cycle": 3,
       "name": "CLI Agent",
       "scope": "CLI and UI \u2014 kardinal commands, output formatting, policy simulate, embedded React UI",
-      "current_item": null,
+      "current_item": "205",
       "progress_issue": "173",
-      "last_report_at": "2026-04-11T19:18:14Z"
+      "last_report_at": "2026-04-12T04:15:41Z"
     },
     "STANDALONE-CORE": {
       "last_seen": "2026-04-11T20:35:25Z",

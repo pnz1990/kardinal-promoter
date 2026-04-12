@@ -1,8 +1,9 @@
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
 import { HealthChip } from './components/HealthChip'
+import { BlockedBanner } from './components/BlockedBanner'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -31,6 +32,7 @@ export function App() {
   const [graph, setGraph] = useState<GraphResponse | undefined>()
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
+  const [showingBlocked, setShowingBlocked] = useState(false)
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
   const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()
@@ -87,6 +89,17 @@ export function App() {
 
   const activePipeline = pipelines.find(p => p.name === selectedPipeline)
   const activeBundle = bundles.find(b => b.phase === 'Promoting') ?? bundles[0]
+
+  // Detect blocked PolicyGate nodes for the banner and highlight.
+  const blockedGateNodes = useMemo(() => {
+    if (!graph) return []
+    return graph.nodes.filter(n => n.type === 'PolicyGate' && n.state === 'Fail')
+  }, [graph])
+
+  const highlightNodeIds = useMemo<Set<string> | undefined>(() => {
+    if (!showingBlocked || blockedGateNodes.length === 0) return undefined
+    return new Set(blockedGateNodes.map(n => n.id))
+  }, [showingBlocked, blockedGateNodes])
 
   // Determine staleness indicator color.
   const staleness = elapsedSeconds ?? 0
@@ -231,11 +244,17 @@ export function App() {
               padding: '1rem',
               minHeight: '300px',
             }}>
+              <BlockedBanner
+                blockedCount={blockedGateNodes.length}
+                onShowBlocked={() => setShowingBlocked(s => !s)}
+                showingBlocked={showingBlocked}
+              />
               <DAGView
                 nodes={graph?.nodes ?? []}
                 edges={graph?.edges ?? []}
                 loading={graphLoading}
                 error={graphError}
+                highlightNodeIds={highlightNodeIds}
               />
             </div>
           </>

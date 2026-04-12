@@ -269,3 +269,46 @@ func TestUIAPI_GateStatusFields(t *testing.T) {
 	require.NoError(t, c.List(context.Background(), &gateList))
 	assert.Empty(t, gateList.Items)
 }
+
+// TestUIAPI_GetGraph_PolicyGateNodeIncludesExpression verifies that PolicyGate
+// nodes in the graph response include the CEL expression and lastEvaluatedAt fields.
+func TestUIAPI_GetGraph_PolicyGateNodeIncludesExpression(t *testing.T) {
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploys", Namespace: "default"},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend",
+		},
+		Status: v1alpha1.PolicyGateStatus{
+			Ready:           false,
+			Reason:          "weekend",
+			LastEvaluatedAt: &metav1.Time{Time: metav1.Now().Time},
+		},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/bundles/any-bundle/graph", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp uiGraphResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Find the PolicyGate node.
+	var gateNode *uiGraphNode
+	for i := range resp.Nodes {
+		if resp.Nodes[i].Type == "PolicyGate" {
+			gateNode = &resp.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, gateNode, "PolicyGate node must appear in graph response")
+	assert.Equal(t, "!schedule.isWeekend", gateNode.Expression, "expression must be populated")
+	assert.NotEmpty(t, gateNode.LastEvaluatedAt, "lastEvaluatedAt must be populated when gate has been evaluated")
+	assert.Equal(t, "Fail", gateNode.State, "blocked gate must show state=Fail")
+}

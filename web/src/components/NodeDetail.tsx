@@ -58,6 +58,38 @@ export function NodeDetail({ node, onClose }: Props) {
         </div>
       )}
 
+      {/* PolicyGate: CEL expression section */}
+      {node.type === 'PolicyGate' && node.expression && (
+        <div style={{ marginBottom: '0.75rem' }}>
+          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>CEL Expression</h4>
+          <pre style={{
+            fontSize: '0.8rem',
+            color: '#7dd3fc',
+            background: '#0f172a',
+            borderRadius: '4px',
+            padding: '0.5rem 0.75rem',
+            margin: 0,
+            overflowX: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+          }}>
+            {node.expression}
+          </pre>
+          <div style={{ marginTop: '0.4rem', fontSize: '0.78rem', color: '#94a3b8' }}>
+            Result: <span style={{ color: node.state === 'Pass' ? '#22c55e' : node.state === 'Fail' ? '#ef4444' : '#94a3b8', fontWeight: 600 }}>
+              {node.state}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* PolicyGate: last evaluated timestamp */}
+      {node.type === 'PolicyGate' && node.lastEvaluatedAt && (
+        <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: '0.75rem' }}>
+          Last evaluated: {new Date(node.lastEvaluatedAt).toLocaleString()}
+        </div>
+      )}
+
       {node.prURL && (
         <div style={{ marginBottom: '0.75rem' }}>
           <a

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -57,6 +58,10 @@ type uiGraphNode struct {
 	Message     string            `json:"message,omitempty"`
 	PRURL       string            `json:"prURL,omitempty"`
 	Outputs     map[string]string `json:"outputs,omitempty"`
+	// Expression is the CEL expression for PolicyGate nodes.
+	Expression string `json:"expression,omitempty"`
+	// LastEvaluatedAt is the RFC3339 timestamp when the PolicyGate last evaluated.
+	LastEvaluatedAt string `json:"lastEvaluatedAt,omitempty"`
 }
 
 // uiGraphEdge is a directed dependency edge in the promotion DAG.
@@ -246,13 +251,19 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 		} else if gate.Status.LastEvaluatedAt != nil {
 			state = "Fail"
 		}
+		lastEvalStr := ""
+		if gate.Status.LastEvaluatedAt != nil {
+			lastEvalStr = gate.Status.LastEvaluatedAt.UTC().Format(time.RFC3339)
+		}
 		node := uiGraphNode{
-			ID:          gate.Namespace + "/" + gate.Name,
-			Type:        "PolicyGate",
-			Label:       gate.Name,
-			Environment: gate.Name,
-			State:       state,
-			Message:     gate.Status.Reason,
+			ID:              gate.Namespace + "/" + gate.Name,
+			Type:            "PolicyGate",
+			Label:           gate.Name,
+			Environment:     gate.Name,
+			State:           state,
+			Message:         gate.Status.Reason,
+			Expression:      gate.Spec.Expression,
+			LastEvaluatedAt: lastEvalStr,
 		}
 		nodes = append(nodes, node)
 	}

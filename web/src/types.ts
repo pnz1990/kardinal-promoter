@@ -33,6 +33,10 @@ export interface GraphNode {
   message?: string
   prURL?: string
   outputs?: Record<string, string>
+  /** CEL expression for PolicyGate nodes. */
+  expression?: string
+  /** ISO timestamp when the PolicyGate last evaluated. */
+  lastEvaluatedAt?: string
 }
 
 export interface GraphEdge {
