@@ -18,6 +18,7 @@ package cmd
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -179,7 +180,7 @@ func TestExplain_UnevaluatedGateExpression(t *testing.T) {
 // PromotionSteps and PolicyGates, only the active bundle's rows are shown (#267).
 func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 	now := metav1.Now()
-	old := metav1.NewTime(now.Time.Add(-1 * 3600 * 1e9))
+	old := metav1.NewTime(now.Add(-1 * time.Hour))
 
 	// Old bundle: Verified in prod.
 	oldStep := &v1alpha1.PromotionStep{
