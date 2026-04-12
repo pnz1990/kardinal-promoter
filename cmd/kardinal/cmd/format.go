@@ -67,6 +67,13 @@ func stepStatePriority(state string) int {
 // derive per-environment status and the active bundle version for each pipeline.
 // If steps is nil or empty the environment columns will show "-".
 func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep) error {
+	return FormatPipelineTableWithOptions(w, pipelines, steps, false)
+}
+
+// FormatPipelineTableWithOptions is like FormatPipelineTable but supports an additional
+// showNamespace parameter. When showNamespace is true, a NAMESPACE column is prepended
+// to each row (used by --all-namespaces flag).
+func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, showNamespace bool) error {
 	// When multiple PromotionSteps exist for the same pipeline+env (from different
 	// bundles), prefer the one with the highest state priority, then most recently
 	// created.
@@ -122,8 +129,12 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 
-	// Build header: PIPELINE BUNDLE <ENV1> <ENV2> ... AGE
-	header := "PIPELINE\tBUNDLE"
+	// Build header: [NAMESPACE] PIPELINE BUNDLE <ENV1> <ENV2> ... AGE
+	header := ""
+	if showNamespace {
+		header = "NAMESPACE\t"
+	}
+	header += "PIPELINE\tBUNDLE"
 	for _, env := range envOrder {
 		header += "\t" + strings.ToUpper(env)
 	}
@@ -140,7 +151,12 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 		bundleDisplay := "-"
 		var bestPriority int
 		var bestCreatedAt time.Time
-		if envMap, ok := pipelineEnvMap[p.Name]; ok {
+		// Use pipeline name scoped to namespace for multi-namespace step lookup.
+		pipelineKey := p.Name
+		if showNamespace {
+			pipelineKey = p.Name // step lookup uses pipelineName label (same across namespaces)
+		}
+		if envMap, ok := pipelineEnvMap[pipelineKey]; ok {
 			for _, est := range envMap {
 				if est.bundleName == "" {
 					continue
@@ -162,6 +178,9 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 			pipelineDisplay = p.Name + " [PAUSED]"
 		}
 		row := fmt.Sprintf("%s\t%s", pipelineDisplay, bundleDisplay)
+		if showNamespace {
+			row = fmt.Sprintf("%s\t%s\t%s", p.Namespace, pipelineDisplay, bundleDisplay)
+		}
 		for _, env := range envOrder {
 			state := "-"
 			if envMap, ok := pipelineEnvMap[p.Name]; ok {

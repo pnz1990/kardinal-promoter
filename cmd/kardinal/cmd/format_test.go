@@ -547,3 +547,68 @@ func TestFormatStepsTable_OnePerEnvWhenMultipleBundles(t *testing.T) {
 		}
 	}
 }
+
+// TestFormatPipelineTableWithOptions_ShowNamespace verifies that --all-namespaces
+// adds a NAMESPACE column to the output.
+func TestFormatPipelineTableWithOptions_ShowNamespace(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "app-a",
+				Namespace:         "team-alpha",
+				CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "prod"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "app-b",
+				Namespace:         "team-beta",
+				CreationTimestamp: metav1.NewTime(now.Add(-3 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{
+					{Name: "prod"},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTableWithOptions(&buf, pipelines, nil, true))
+	out := buf.String()
+
+	assert.Contains(t, out, "NAMESPACE", "header must include NAMESPACE column when showNamespace=true")
+	assert.Contains(t, out, "team-alpha", "row must include pipeline's namespace")
+	assert.Contains(t, out, "team-beta", "row must include pipeline's namespace")
+}
+
+// TestFormatPipelineTableWithOptions_NoNamespaceByDefault verifies that the
+// default FormatPipelineTable does NOT include a NAMESPACE column.
+func TestFormatPipelineTableWithOptions_NoNamespaceByDefault(t *testing.T) {
+	now := time.Now()
+	pipelines := []v1alpha1.Pipeline{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "app-a",
+				Namespace:         "my-ns",
+				CreationTimestamp: metav1.NewTime(now.Add(-5 * time.Minute)),
+			},
+			Spec: v1alpha1.PipelineSpec{
+				Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	out := buf.String()
+
+	assert.NotContains(t, out, "NAMESPACE", "default table must not include NAMESPACE column")
+	assert.NotContains(t, out, "my-ns", "namespace must not appear in default table")
+}
