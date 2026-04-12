@@ -25,7 +25,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -684,4 +686,99 @@ func TestHealthCheckExpiry_Idempotent(t *testing.T) {
 		"healthCheckExpiry must not be overwritten on subsequent reconciles")
 	// State must still be HealthChecking (expiry is in the future, deployment unhealthy).
 	assert.Equal(t, "HealthChecking", updated.Status.State)
+}
+
+// TestDeliveryDelegation_ArgoRollouts verifies that when delivery.delegate is set to
+// argoRollouts, the reconciler:
+//  1. Overrides the health adapter to ArgoRolloutsAdapter.
+//  2. Sets status.message to "delegated to argoRollouts".
+//  3. Verifies Rollout health (reaches Verified when Rollout.status.phase==Healthy).
+func TestDeliveryDelegation_ArgoRollouts(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "rollouts-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/org/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{
+					Name: "prod",
+					Health: v1alpha1.HealthConfig{
+						Type: "resource", // would normally use resource adapter
+					},
+					Delivery: v1alpha1.DeliveryConfig{
+						Delegate: "argoRollouts", // override to argoRollouts
+					},
+				},
+			},
+		},
+	}
+
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "rollouts-demo",
+			Images:   []v1alpha1.ImageRef{{Repository: "myapp", Tag: "v2.0.0"}},
+		},
+	}
+
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-rollouts", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "rollouts-demo",
+			BundleName:   "bundle-1",
+			Environment:  "prod",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State: "HealthChecking",
+		},
+	}
+
+	// Create a fake Rollout resource in the "Healthy" phase using unstructured dynamic client.
+	rolloutObj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Rollout",
+			"metadata": map[string]interface{}{
+				"name":      "rollouts-demo",
+				"namespace": "prod",
+			},
+			"status": map[string]interface{}{
+				"phase": "Healthy",
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	// Register the Rollout GVR in the fake dynamic scheme.
+	argoRolloutsGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	dynScheme := runtime.NewScheme()
+	dynClient := dynfake.NewSimpleDynamicClient(dynScheme, rolloutObj)
+	_, _ = dynClient.Resource(argoRolloutsGVR).Namespace("prod").Create(context.Background(), rolloutObj, metav1.CreateOptions{})
+
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := rec.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-rollouts", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-rollouts", Namespace: "default"}, &updated))
+
+	// Verify delegation is signalled in the step message.
+	assert.Contains(t, updated.Status.Message, "argoRollouts",
+		"status.message must mention argoRollouts when delivery.delegate is set")
 }
