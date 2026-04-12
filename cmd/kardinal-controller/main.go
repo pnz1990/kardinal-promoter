@@ -19,6 +19,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"io/fs"
 	"net/http"
@@ -26,7 +27,11 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -55,6 +60,12 @@ import (
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
+
+// ControllerVersion is the controller version string, overridable at build time via ldflags.
+// Set to the same value as the CLI version tag during release builds.
+//
+//nolint:gochecknoglobals // Build-time constant, analogous to cmd/kardinal/cmd.CLIVersion.
+var ControllerVersion = "v0.1.0-dev"
 
 var scheme = runtime.NewScheme()
 
@@ -251,9 +262,87 @@ func main() {
 	}()
 
 	logger.Info().Msg("starting kardinal-controller")
+
+	// Register a Runnable that creates/updates the kardinal-version ConfigMap
+	// after the controller starts. `kardinal version` reads this ConfigMap.
+	controllerNS := os.Getenv("POD_NAMESPACE")
+	if controllerNS == "" {
+		controllerNS = "kardinal-system"
+	}
+	if err := mgr.Add(&versionRunnable{
+		client:    mgr.GetClient(),
+		namespace: controllerNS,
+		version:   ControllerVersion,
+		log:       logger,
+	}); err != nil {
+		logger.Warn().Err(err).Msg("failed to register version ConfigMap runnable")
+	}
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Fatal().Err(err).Msg("problem running manager")
 	}
+}
+
+// ensureVersionConfigMap creates or updates the kardinal-version ConfigMap in the
+// controller's namespace. This ConfigMap is read by `kardinal version` to display
+// the controller and graph engine versions.
+//
+// This function is called as a controller-runtime Runnable (AddRunnable) so it
+// runs after the manager's caches are synced but before the main reconciliation loop.
+// It is idempotent: safe to call multiple times.
+func ensureVersionConfigMap(ctx context.Context, c sigs_client.Client, namespace, controllerVer string, log zerolog.Logger) {
+	key := types.NamespacedName{Name: "kardinal-version", Namespace: namespace}
+	cm := &corev1.ConfigMap{}
+	err := c.Get(ctx, key, cm)
+	if apierrors.IsNotFound(err) {
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "kardinal-version",
+				Namespace: namespace,
+			},
+			Data: map[string]string{
+				"version": controllerVer,
+			},
+		}
+		if createErr := c.Create(ctx, cm); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+			log.Warn().Err(createErr).Msg("failed to create kardinal-version ConfigMap")
+		} else {
+			log.Info().Str("version", controllerVer).Msg("created kardinal-version ConfigMap")
+		}
+		return
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to check kardinal-version ConfigMap")
+		return
+	}
+	// Update if version changed.
+	if cm.Data["version"] != controllerVer {
+		patch := sigs_client.MergeFrom(cm.DeepCopy())
+		if cm.Data == nil {
+			cm.Data = make(map[string]string)
+		}
+		cm.Data["version"] = controllerVer
+		if patchErr := c.Patch(ctx, cm, patch); patchErr != nil {
+			log.Warn().Err(patchErr).Msg("failed to update kardinal-version ConfigMap")
+		} else {
+			log.Info().Str("version", controllerVer).Msg("updated kardinal-version ConfigMap")
+		}
+	}
+}
+
+// versionRunnable is a manager.Runnable that writes the controller version to
+// a ConfigMap on startup. It implements the controller-runtime Runnable interface.
+type versionRunnable struct {
+	client    sigs_client.Client
+	namespace string
+	version   string
+	log       zerolog.Logger
+}
+
+// Start implements manager.Runnable.
+func (v *versionRunnable) Start(ctx context.Context) error {
+	ensureVersionConfigMap(ctx, v.client, v.namespace, v.version, v.log)
+	return nil
 }
 
 // newHealthDetector constructs an AutoDetector for health checking.
