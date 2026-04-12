@@ -502,3 +502,48 @@ func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
 	assert.NotContains(t, out, "my-app-old",
 		"the old Verified bundle should not appear when a newer Promoting bundle exists")
 }
+
+// TestFormatStepsTable_OnePerEnvWhenMultipleBundles verifies that when multiple
+// bundles have steps for the same environment, only the most active step is shown.
+func TestFormatStepsTable_OnePerEnvWhenMultipleBundles(t *testing.T) {
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-1 * time.Hour))
+	newTime := metav1.NewTime(now.Add(-30 * time.Second))
+
+	steps := []v1alpha1.PromotionStep{
+		// Old bundle — Verified in test
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "old-test", CreationTimestamp: old},
+			Spec:       v1alpha1.PromotionStepSpec{Environment: "test", StepType: "kustomize-set-image", BundleName: "old-bundle"},
+			Status:     v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		// New bundle — Promoting in test (higher priority)
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "new-test", CreationTimestamp: newTime},
+			Spec:       v1alpha1.PromotionStepSpec{Environment: "test", StepType: "kustomize-set-image", BundleName: "new-bundle"},
+			Status:     v1alpha1.PromotionStepStatus{State: "Promoting"},
+		},
+		// Old bundle — Verified in prod
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "old-prod", CreationTimestamp: old},
+			Spec:       v1alpha1.PromotionStepSpec{Environment: "prod", StepType: "kustomize-set-image", BundleName: "old-bundle"},
+			Status:     v1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatStepsTable(&buf, steps))
+	out := buf.String()
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	// Header + 2 env rows (test, prod) = 3 lines. NOT 4 (no duplicate test row).
+	assert.Len(t, lines, 3, "should show one row per environment, not one per bundle step")
+
+	// The test env row must show Promoting (new bundle), not Verified (old bundle).
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(strings.TrimSpace(line), "test") {
+			assert.Contains(t, line, "Promoting",
+				"test env row must show the active Promoting step, not old Verified")
+		}
+	}
+}
