@@ -592,13 +592,18 @@ func buildPolicyGateNode(
 
 // buildPRStatusNode builds a Graph Watch node for a PRStatus CRD.
 //
-// The PRStatus CRD is created by the open-pr step at the appropriate point in
-// the promotion sequence. This Graph node watches it and propagates when
-// status.merged == true — replacing the direct GitHub API polling that was
-// previously in handleWaitingForMerge and the wait-for-merge step.
+// The PRStatus CRD is created as a placeholder by the Graph; the open-pr step
+// populates spec.prURL, spec.prNumber, spec.repo after opening the PR.
+// The PRStatus reconciler monitors GitHub and sets status.merged = true.
 //
-// Graph-purity: this node is the canonical integration point for PS-4, SCM-2,
-// ST-10, ST-11 (docs/design/11-graph-purity-tech-debt.md).
+// This node uses readyWhen (not propagateWhen) so it does NOT block downstream
+// PromotionSteps. The PromotionStep reconciler checks prStatusRef.status.merged
+// in its own WaitingForMerge state. Using propagateWhen would create a circular
+// dependency: PromotionStep references prstatus.metadata.name (creating a dep),
+// but if prstatus.propagateWhen == false, the PromotionStep could never start.
+//
+// Graph-purity: this node provides observable PR merge state for the UI and
+// for the PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
 func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string) GraphNode {
 	templateMeta := map[string]interface{}{
 		// The name is set at runtime by the open-pr step; the Graph creates a
@@ -628,15 +633,16 @@ func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string
 			"metadata":   templateMeta,
 			"spec":       templateSpec,
 		},
-		// ReadyWhen: UI health signal — green when merged.
+		// ReadyWhen: health signal only — green in UI when PR is merged.
+		// NOT propagateWhen: the PromotionStep references this node's metadata.name
+		// which creates a dependency edge. Adding propagateWhen would block the
+		// PromotionStep from starting (circular: PS can't start → PR never opened
+		// → PRStatus never merged → propagateWhen never true → PS never starts).
 		ReadyWhen: []string{
 			fmt.Sprintf(`${%s.status.merged == true}`, nodeID),
 		},
-		// PropagateWhen: blocks downstream PromotionStep from advancing until
-		// the PR is merged. This is the gate that replaces WaitingForMerge polling.
-		PropagateWhen: []string{
-			fmt.Sprintf(`${%s.status.merged == true}`, nodeID),
-		},
+		// PropagateWhen is intentionally omitted — always propagates (unblocked).
+		// Merge-gate is enforced by the PromotionStep WaitingForMerge state machine.
 	}
 }
 
