@@ -245,23 +245,79 @@ func TestBundleReconciler_PromotingPhaseIsNoOp(t *testing.T) {
 	assert.False(t, translator.called, "Translator must NOT be called for Promoting bundles")
 }
 
-// TestBundleReconciler_Supersession verifies that creating a new Bundle for a Pipeline
-// supersedes older Promoting bundles.
-func TestBundleReconciler_Supersession(t *testing.T) {
-	// Old bundle is Promoting for the same pipeline.
+// TestBundleReconciler_SelfSupersession verifies the BU-1 fix: self-supersession.
+// When an older Available bundle detects a newer sibling, it marks itself Superseded.
+// This replaces the old cross-CRD write where the new bundle superseded its siblings.
+func TestBundleReconciler_SelfSupersession(t *testing.T) {
+	// Old bundle is Available for the same pipeline (older creation timestamp).
 	oldBundle := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "nginx-demo-v1",
 			Namespace:         "default",
-			CreationTimestamp: metav1.Time{},
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	// New bundle is Available and was created later.
+	newBundleObj := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(oldBundle, newBundleObj).
+		WithStatusSubresource(oldBundle, newBundleObj).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	// Reconcile old bundle — it detects the newer sibling and marks itself Superseded.
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Old bundle should be Superseded (self-supersession).
+	var gotOld kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &gotOld))
+	assert.Equal(t, "Superseded", gotOld.Status.Phase)
+
+	// New bundle is unaffected.
+	var gotNew kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"}, &gotNew))
+	assert.Equal(t, "Available", gotNew.Status.Phase)
+}
+
+// TestBundleReconciler_NewBundleBecomesAvailableWithoutSupersedingSiblings documents
+// the BU-1 fix: reconciling the new bundle no longer supersedes siblings.
+// The old bundle remains Available until it reconciles itself (self-supersession).
+func TestBundleReconciler_NewBundleBecomesAvailableWithoutSupersedingSiblings(t *testing.T) {
+	// Old bundle is Promoting.
+	oldBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		},
 		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
 		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
 	}
-	// New bundle: no status yet.
+	// New bundle just created (no status).
 	newBundleObj := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
 	}
 
 	s := newScheme()
@@ -282,55 +338,77 @@ func TestBundleReconciler_Supersession(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"}, &gotNew))
 	assert.Equal(t, "Available", gotNew.Status.Phase)
 
-	// Old bundle should be Superseded.
+	// Old bundle should still be Promoting — it has not reconciled itself yet.
+	// (Self-supersession happens when the old bundle's own reconcile runs.)
 	var gotOld kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &gotOld))
-	assert.Equal(t, "Superseded", gotOld.Status.Phase)
+	assert.Equal(t, "Promoting", gotOld.Status.Phase,
+		"old bundle stays Promoting until it reconciles itself (BU-1 self-supersession)")
 }
 
 // TestBundleReconciler_Supersession_DifferentPipeline verifies that bundles for
-// different pipelines are NOT superseded.
+// different pipelines are NOT superseded (self-supersession check).
 func TestBundleReconciler_Supersession_DifferentPipeline(t *testing.T) {
 	otherPipelineBundle := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "other-pipeline-v1", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "other-pipeline"},
-		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "other-pipeline-v1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "other-pipeline"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
-	newBundleObj := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	newerNginxBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(otherPipelineBundle, newBundleObj).
-		WithStatusSubresource(otherPipelineBundle, newBundleObj).
+		WithObjects(otherPipelineBundle, newerNginxBundle).
+		WithStatusSubresource(otherPipelineBundle, newerNginxBundle).
 		Build()
 
 	r := &bundle.Reconciler{Client: c}
+	// Reconcile other-pipeline bundle — nginx bundle is for a different pipeline.
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: "other-pipeline-v1", Namespace: "default"},
 	})
 	require.NoError(t, err)
 
-	// Other pipeline bundle must remain Promoting (not superseded).
+	// Other pipeline bundle must remain Available (different pipeline — no self-supersession).
 	var gotOther kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "other-pipeline-v1", Namespace: "default"}, &gotOther))
-	assert.Equal(t, "Promoting", gotOther.Status.Phase)
+	assert.Equal(t, "Available", gotOther.Status.Phase)
 }
 
-// TestBundleReconciler_Supersession_IdempotentForSuperseded verifies that
-// already-Superseded bundles are not touched again.
-func TestBundleReconciler_Supersession_IdempotentForSuperseded(t *testing.T) {
+// TestBundleReconciler_SelfSupersession_AlreadySupersededSkipped verifies that
+// a bundle that is already Superseded is not touched again (idempotent).
+func TestBundleReconciler_SelfSupersession_AlreadySupersededSkipped(t *testing.T) {
 	alreadySuperseded := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v0", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     kardinalv1alpha1.BundleStatus{Phase: "Superseded"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v0",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Superseded"},
 	}
+	// A new bundle (does not matter — superseded bundles reconcile to terminal state).
 	newBundleObj := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 
 	s := newScheme()
@@ -342,11 +420,11 @@ func TestBundleReconciler_Supersession_IdempotentForSuperseded(t *testing.T) {
 
 	r := &bundle.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v0", Namespace: "default"},
 	})
 	require.NoError(t, err)
 
-	// Still Superseded (not re-patched to a different value).
+	// Still Superseded (evidence sync falls through — terminal state not re-patched).
 	var gotOld kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v0", Namespace: "default"}, &gotOld))
 	assert.Equal(t, "Superseded", gotOld.Status.Phase)
@@ -450,18 +528,27 @@ func TestStartupReconciliation_NoSCMProvider(t *testing.T) {
 }
 
 // TestBundleReconciler_ConfigBundleDoesNotSupersedeImageBundle verifies that a
-// new config Bundle does NOT supersede an in-flight image Bundle for the same Pipeline.
+// config Bundle does NOT self-supersede when a newer image Bundle exists (different type).
 func TestBundleReconciler_ConfigBundleDoesNotSupersedeImageBundle(t *testing.T) {
-	// Image bundle actively promoting.
-	imagBundle := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
-	}
-	// New config bundle.
+	// Config bundle that's older — should NOT be superseded by the newer image bundle.
 	configBundle := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-config-v1", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-config-v1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	// New image bundle (newer, but different type).
+	imagBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 
 	sch := newScheme()
@@ -472,33 +559,38 @@ func TestBundleReconciler_ConfigBundleDoesNotSupersedeImageBundle(t *testing.T) 
 		Build()
 
 	r := &bundle.Reconciler{Client: c}
+	// Reconcile the config bundle — the image bundle is a different type, no self-supersession.
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "nginx-demo-config-v1", Namespace: "default"},
 	})
 	require.NoError(t, err)
 
-	// Image bundle must remain Promoting (different type — not superseded).
-	var gotImage kardinalv1alpha1.Bundle
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &gotImage))
-	assert.Equal(t, "Promoting", gotImage.Status.Phase, "image bundle must not be superseded by config bundle")
-
-	// Config bundle should be Available.
+	// Config bundle must remain Available (different type — no self-supersession).
 	var gotConfig kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-config-v1", Namespace: "default"}, &gotConfig))
-	assert.Equal(t, "Available", gotConfig.Status.Phase)
+	assert.Equal(t, "Available", gotConfig.Status.Phase, "config bundle must not be superseded by image bundle (different type)")
 }
 
 // TestBundleReconciler_ConfigBundleSupersededByNewConfigBundle verifies that a
-// new config Bundle does supersede an older config Bundle for the same Pipeline.
+// config Bundle self-supersedes when a newer config Bundle for the same Pipeline exists.
 func TestBundleReconciler_ConfigBundleSupersededByNewConfigBundle(t *testing.T) {
 	oldConfig := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-config-v1", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
-		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-config-v1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 	newConfig := &kardinalv1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-config-v2", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-config-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 
 	sch := newScheme()
@@ -509,12 +601,14 @@ func TestBundleReconciler_ConfigBundleSupersededByNewConfigBundle(t *testing.T) 
 		Build()
 
 	r := &bundle.Reconciler{Client: c}
+
+	// Reconcile the OLD config bundle — it detects the newer sibling and self-supersedes.
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "nginx-demo-config-v2", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-config-v1", Namespace: "default"},
 	})
 	require.NoError(t, err)
 
-	// Old config should be superseded.
+	// Old config should be superseded (self-supersession).
 	var gotOld kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-config-v1", Namespace: "default"}, &gotOld))
 	assert.Equal(t, "Superseded", gotOld.Status.Phase)
