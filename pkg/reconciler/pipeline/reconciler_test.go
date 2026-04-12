@@ -201,3 +201,86 @@ func TestPipelineReconciler_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result)
 }
+
+// TestDerivePhase_NoSteps verifies that an empty step list yields Unknown.
+func TestDerivePhase_NoSteps(t *testing.T) {
+	assert.Equal(t, "Unknown", pipeline.DerivePhase(nil))
+	assert.Equal(t, "Unknown", pipeline.DerivePhase([]kardinalv1alpha1.PromotionStep{}))
+}
+
+// TestDerivePhase_AllVerified verifies that all-Verified steps yield Ready.
+func TestDerivePhase_AllVerified(t *testing.T) {
+	now := metav1.Now()
+	steps := []kardinalv1alpha1.PromotionStep{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+	}
+	assert.Equal(t, "Ready", pipeline.DerivePhase(steps))
+}
+
+// TestDerivePhase_OneFailed verifies that a Failed step yields Degraded.
+func TestDerivePhase_OneFailed(t *testing.T) {
+	now := metav1.Now()
+	steps := []kardinalv1alpha1.PromotionStep{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
+		},
+	}
+	assert.Equal(t, "Degraded", pipeline.DerivePhase(steps))
+}
+
+// TestDerivePhase_Promoting verifies that Promoting steps yield Unknown (not yet done).
+func TestDerivePhase_Promoting(t *testing.T) {
+	now := metav1.Now()
+	steps := []kardinalv1alpha1.PromotionStep{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Promoting"},
+		},
+	}
+	assert.Equal(t, "Unknown", pipeline.DerivePhase(steps))
+}
+
+// TestDerivePhase_MultiBundle_NewFailed_OldVerified verifies that when a new bundle
+// has a Failed step, Degraded is shown (not Ready from the old Verified step).
+func TestDerivePhase_MultiBundle_NewFailed_OldVerified(t *testing.T) {
+	old := metav1.NewTime(metav1.Now().Add(-1 * 3600 * 1e9)) // 1 hour ago
+	now := metav1.Now()
+	steps := []kardinalv1alpha1.PromotionStep{
+		// Old bundle — Verified in prod
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "old-prod", Namespace: "default", CreationTimestamp: old},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+		},
+		// New bundle — Failed in prod
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "new-prod", Namespace: "default", CreationTimestamp: now},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
+		},
+	}
+	// Most recent step per env wins: new-prod is Failed → Degraded
+	assert.Equal(t, "Degraded", pipeline.DerivePhase(steps))
+}
