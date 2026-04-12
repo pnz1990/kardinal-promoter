@@ -106,6 +106,11 @@ func main() {
 	flag.StringVar(&uiListenAddress, "ui-listen-address", ":8082",
 		"The address the embedded kardinal-ui HTTP server binds to.")
 
+	var shard string
+	flag.StringVar(&shard, "shard", os.Getenv("KARDINAL_SHARD"),
+		"Shard name for distributed mode. When set, this controller only processes PromotionSteps "+
+			"with a matching kardinal.io/shard label. Leave empty for standalone (single-controller) mode.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -118,6 +123,12 @@ func main() {
 	}
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+
+	if shard != "" {
+		logger.Info().Str("shard", shard).Msg("controller started in distributed mode")
+	} else {
+		logger.Info().Msg("controller started in standalone mode")
+	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
@@ -169,6 +180,7 @@ func main() {
 		SCM:            scmProvider,
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
+		Shard:          shard,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
