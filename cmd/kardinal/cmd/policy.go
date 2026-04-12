@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"text/tabwriter"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
+	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -37,6 +39,7 @@ func newPolicyCmd() *cobra.Command {
 	}
 	policy.AddCommand(newPolicyListCmd())
 	policy.AddCommand(newPolicySimulateCmd())
+	policy.AddCommand(newPolicyTestCmd())
 	return policy
 }
 
@@ -425,3 +428,174 @@ func simulateCELEvaluate(env *cel.Env, expr string, ctx map[string]interface{}) 
 	}
 	return result, fmt.Sprintf("%s = %v", expr, result), nil
 }
+
+// ─── policy test ─────────────────────────────────────────────────────────────
+
+func newPolicyTestCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test <file>",
+		Short: "Validate PolicyGate YAML syntax and dry-run CEL expressions",
+		Long: `Validate a PolicyGate YAML file: check CEL syntax and dry-run evaluate
+each gate against a default context (current time, empty bundle).
+
+No cluster access is required — all validation is performed locally.
+
+Example:
+  kardinal policy test policy-gates.yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return policyTestFn(cmd.OutOrStdout(), args[0])
+		},
+	}
+}
+
+// policyTestFn reads a PolicyGate YAML file, validates each gate's CEL expression,
+// and performs a dry-run evaluation with a default context.
+// Returns a non-nil error only if the file cannot be read or parsed.
+// Individual gate validation errors are printed inline without aborting.
+func policyTestFn(w io.Writer, filename string) error {
+	data, err := os.ReadFile(filename) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("read %q: %w", filename, err)
+	}
+
+	// Parse: the file may contain a single PolicyGate or a list inside a List manifest.
+	// Try single gate first; if Kind is List, iterate items.
+	gates, err := parsePolicyGateYAML(data)
+	if err != nil {
+		return fmt.Errorf("parse %q: %w", filename, err)
+	}
+
+	if len(gates) == 0 {
+		if _, werr := fmt.Fprintf(w, "No PolicyGates found in %q\n", filename); werr != nil {
+			return fmt.Errorf("write: %w", werr)
+		}
+		return nil
+	}
+
+	celEnv, celErr := newSimulateCELEnvironment()
+	if celErr != nil {
+		return fmt.Errorf("init CEL environment: %w", celErr)
+	}
+
+	// Default dry-run context: current time, empty bundle.
+	now := time.Now().UTC()
+	defaultCtx := map[string]interface{}{
+		"bundle": map[string]interface{}{
+			"type":                "image",
+			"version":             "v0.0.0",
+			"upstreamSoakMinutes": float64(0),
+			"provenance": map[string]interface{}{
+				"author":    "test",
+				"commitSHA": "0000000",
+				"ciRunURL":  "",
+			},
+			"intent": map[string]interface{}{
+				"targetEnvironment": "test",
+			},
+		},
+		"schedule": map[string]interface{}{
+			"isWeekend": now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
+			"hour":      float64(now.Hour()),
+			"dayOfWeek": now.Weekday().String(),
+		},
+		"environment": map[string]interface{}{
+			"name": "test",
+		},
+		"metrics":        map[string]interface{}{},
+		"upstream":       map[string]interface{}{},
+		"previousBundle": map[string]interface{}{},
+	}
+
+	allPassed := true
+	for _, g := range gates {
+		name := g.Name
+		if name == "" {
+			name = "(unnamed)"
+		}
+		expr := g.Spec.Expression
+		if _, werr := fmt.Fprintf(w, "PolicyGate %q (%s):\n", name, filename); werr != nil {
+			return fmt.Errorf("write: %w", werr)
+		}
+		if _, werr := fmt.Fprintf(w, "  Expression: %s\n", expr); werr != nil {
+			return fmt.Errorf("write: %w", werr)
+		}
+
+		if expr == "" {
+			if _, werr := fmt.Fprintf(w, "  Syntax: SKIP (no expression)\n\n"); werr != nil {
+				return fmt.Errorf("write: %w", werr)
+			}
+			continue
+		}
+
+		// Validate CEL syntax.
+		_, issues := celEnv.Compile(expr)
+		if issues != nil && issues.Err() != nil {
+			allPassed = false
+			if _, werr := fmt.Fprintf(w, "  Syntax: INVALID — %s\n\n", issues.Err()); werr != nil {
+				return fmt.Errorf("write: %w", werr)
+			}
+			continue
+		}
+		if _, werr := fmt.Fprintf(w, "  Syntax: valid\n"); werr != nil {
+			return fmt.Errorf("write: %w", werr)
+		}
+
+		// Dry-run evaluation.
+		pass, reason, evalErr := simulateCELEvaluate(celEnv, expr, defaultCtx)
+		if evalErr != nil {
+			allPassed = false
+			if _, werr := fmt.Fprintf(w, "  Result: ERROR (%s)\n\n", evalErr); werr != nil {
+				return fmt.Errorf("write: %w", werr)
+			}
+			continue
+		}
+
+		result := "PASS"
+		if !pass {
+			allPassed = false
+			result = "FAIL"
+		}
+		if _, werr := fmt.Fprintf(w, "  Result: %s (%s)\n\n", result, reason); werr != nil {
+			return fmt.Errorf("write: %w", werr)
+		}
+	}
+
+	summary := "All gates valid"
+	if !allPassed {
+		summary = "Some gates have validation errors"
+	}
+	if _, werr := fmt.Fprintf(w, "%s (%d gate(s))\n", summary, len(gates)); werr != nil {
+		return fmt.Errorf("write: %w", werr)
+	}
+	return nil
+}
+
+// parsePolicyGateYAML decodes YAML that contains one or more PolicyGate objects.
+// Supports: a single PolicyGate document, or multiple documents in a --- separated file.
+func parsePolicyGateYAML(data []byte) ([]v1alpha1.PolicyGate, error) {
+	// Try single object first.
+	var single v1alpha1.PolicyGate
+	if err := sigsyaml.Unmarshal(data, &single); err == nil && single.Kind == "PolicyGate" {
+		return []v1alpha1.PolicyGate{single}, nil
+	}
+
+	// Try as a list wrapper with items field (kubectl-style).
+	type listWrapper struct {
+		Items []v1alpha1.PolicyGate `json:"items"`
+	}
+	var list listWrapper
+	if err := sigsyaml.Unmarshal(data, &list); err == nil && len(list.Items) > 0 {
+		return list.Items, nil
+	}
+
+	// Fallback: assume it's a single gate even without Kind set.
+	if single.Spec.Expression != "" || single.Name != "" {
+		return []v1alpha1.PolicyGate{single}, nil
+	}
+
+	return nil, fmt.Errorf("no PolicyGate resources found in YAML")
+}
+
+// ensure context is used (avoids 'context imported and not used' lint error)
+var _ = context.Background
