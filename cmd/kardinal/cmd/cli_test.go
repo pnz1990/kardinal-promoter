@@ -60,6 +60,33 @@ func TestCreateBundle_CreatesBundle(t *testing.T) {
 	assert.Contains(t, buf.String(), "nginx-demo")
 }
 
+// TestCreateBundle_RejectsMalformedImage verifies that image references with
+// invalid characters are rejected before creating a Bundle (#283).
+func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	tests := []struct {
+		image   string
+		wantErr bool
+	}{
+		{"ghcr.io/pnz1990/app:sha-abc1234", false},
+		{"nginx:1.29", false},
+		{"nginx", false},
+		{"!!! bad", true},
+		{"space bad", true},
+	}
+	for _, tc := range tests {
+		var buf bytes.Buffer
+		err := createBundleFn(&buf, c, "default", "nginx-demo", []string{tc.image}, "image")
+		if tc.wantErr {
+			require.Error(t, err, "image %q must be rejected", tc.image)
+		} else {
+			require.NoError(t, err, "image %q must be accepted", tc.image)
+		}
+	}
+}
+
 // TestRollback_CreatesBundleWithRollbackOf verifies rollback bundle creation.
 // The rollback command now queries PromotionStep history (not Bundle.Phase) to find
 // the last Verified bundle for the target environment (#264).
