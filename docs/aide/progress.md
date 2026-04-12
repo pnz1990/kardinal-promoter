@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-11T17:35Z
+> Last updated: 2026-04-12T04:00Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -28,10 +28,10 @@
 | 11 | GitHub Actions Integration and `kardinal init` | ✅ Complete | Items 017/020/023 merged: PRs #67, #72, #81. Bundle webhook, GitHub Action, kardinal init, E2E journey tests J1/J3/J4/J5 with fake client. |
 | 12 | Helm Strategy and Config-Only Promotions | ✅ Complete | Item 021 merged: PR #78. helm-set-image, config-merge steps, type-aware sequence routing, Config Bundle supersession, examples/config-promotion/. |
 | 13 | Rollback and Pause/Resume | ✅ Complete | Items 022/025 merged: PRs #77, #110. Auto-rollback, CLI rollback/pause/resume, reconciler pause enforcement. |
-| 14 | Distributed Mode (Control Plane + Agents) | 📋 Planned | Depends on Stage 6 |
+| 14 | Distributed Mode (Control Plane + Agents) | 🚧 In Progress | Shard routing (#121, PR #196) + delegation field (#122, PR #197) merged. Full distributed agent binary pending (Stage 14 completion). |
 | 15 | MetricCheck CRD and Upstream Soak Time | ✅ Complete | Item 027 merged: PR #114. MetricCheck CRD, Prometheus evaluator, CEL soak time context. |
 | 16 | Custom Promotion Steps via Webhook | ✅ Complete | Item 028 merged: PR #124. CustomWebhookStep, registry fallback, 10 tests, example server + Pipeline, docs/custom-steps.md. |
-| 17 | GitLab Support | 📋 Planned | Depends on Stage 5 |
+| 17 | GitLab Support | ✅ Complete | PR #165. GitLabProvider implementing SCMProvider, docs/scm-providers.md, Forgejo support. |
 | 18 | Subscription CRD | 📋 Planned | Depends on Stage 6 |
 | 19 | Security Hardening and Production Readiness | 📋 Planned | Depends on all prior stages |
 
@@ -195,6 +195,38 @@
 | fix | OpenPR 422 when PR already exists | ✅ Complete | commit 9a54ea0 |
 | fix | Helm chart missing GITHUB_TOKEN | ✅ Complete | commit 9a54ea0 |
 | fix | krocodile hash precision | ✅ Complete | commit 9a54ea0 (pinned to 9c18aa34) |
+
+---
+
+## v0.4.0 / v0.2.1 Items (queue-016 through queue-018)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 033 | kardinal promote command | ✅ Complete | #160 merged | |
+| 034 | Fix CEL import ban in CLI | ✅ Complete | #162 merged | |
+| 035 | Argo Rollouts health adapter | ✅ Complete | #163 merged | |
+| 036 | PRStatus CRD | ✅ Complete | #166 merged | Eliminates GetPRStatus live API calls |
+| 037 | GitLab SCM provider | ✅ Complete | #165 merged | GitLabProvider + Forgejo/Gitea |
+| 038 | RollbackPolicy CRD | ✅ Complete | #169 merged | |
+| 039 | UI polish + CLI7 | ✅ Complete | #170 merged | |
+| 039 | Graph purity batch A | ✅ Complete | #193 merged | PS-2/BU-1/BU-2/BU-4/PG-3 logic leaks |
+| 044 | exec.Command → workDir status field | ✅ Complete | #195 merged | Short-term mitigation for ST-7/8/9 |
+| 121 | Shard routing distributed mode | ✅ Complete | #196 merged | KARDINAL_SHARD env + reconciler filtering |
+| 122 | Argo Rollouts delivery delegation | ✅ Complete | #197 merged | deliveryDelegate.type=argoRollouts |
+
+---
+
+## v0.5.0 Items (queue-019)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 200 | kardinal history format fix | ✅ Complete | #207 merged | BUNDLE/ACTION/ENV/PR/APPROVER/DURATION/TIMESTAMP columns |
+| 201 | kardinal version Graph line | ✅ Complete | #206 merged | Graph: line added; reads from kardinal-version ConfigMap |
+| 199 | kardinal diff command | 🚧 In Review | #212 open | FormatDiffTable, per-repo image/digest/commit/author rows |
+| 202 | UI staleness indicator | 📋 Planned | | "refreshed X ago" live polling indicator |
+| 203 | UI 6-state health chip | 📋 Planned | | Reusable HealthChip component |
+| 204 | UI NodeDetail CEL expression | 📋 Planned | | PolicyGate CEL + evaluated value in NodeDetail |
+| 205 | UI blocked PolicyGate banner | 📋 Planned | | One-click filter for blocking gates |
 
 ---
 
