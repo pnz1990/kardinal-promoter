@@ -291,6 +291,7 @@ export function App() {
                 loading={graphLoading}
                 error={graphError}
                 highlightNodeIds={highlightIds}
+                bundleName={activeBundle?.name}
               />
             </div>
           </>
