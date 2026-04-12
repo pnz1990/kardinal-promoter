@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -42,32 +43,30 @@ func HumanAge(t time.Time) string {
 	}
 }
 
+// stepStatePriority returns a sort priority for a PromotionStep state.
+// Higher priority = displayed first. Used by FormatPipelineTable and FormatStepsTable.
+// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence over
+// terminal states (Verified/Failed) so the currently active bundle is shown.
+func stepStatePriority(state string) int {
+	switch state {
+	case "Promoting", "WaitingForMerge", "HealthChecking":
+		return 4
+	case "Pending":
+		return 3
+	case "Failed":
+		return 2
+	case "Verified":
+		return 1
+	default:
+		return 0
+	}
+}
+
 // FormatPipelineTable writes a tabwriter-formatted table of pipelines to w.
 // steps is the list of PromotionSteps in the same namespace; it is used to
 // derive per-environment status and the active bundle version for each pipeline.
 // If steps is nil or empty the environment columns will show "-".
 func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep) error {
-	// stepStatePriority assigns a priority to each PromotionStep state so we can
-	// prefer the most-active step when multiple bundles have steps for the same
-	// pipeline+environment. Higher priority = displayed first.
-	// Active states (Promoting/Pending/WaitingForMerge/HealthChecking) take precedence
-	// over terminal states (Verified/Failed/Superseded).
-	stepStatePriority := func(state string) int {
-		switch state {
-		case "Promoting", "WaitingForMerge", "HealthChecking":
-			return 4
-		case "Pending":
-			return 3
-		case "Failed":
-			return 2
-		case "Verified":
-			return 1
-		default:
-			return 0
-		}
-	}
-
-	// Build a lookup: pipeline → environment → (state, bundleName, createdAt)
 	// When multiple PromotionSteps exist for the same pipeline+env (from different
 	// bundles), prefer the one with the highest state priority, then most recently
 	// created.
@@ -229,12 +228,47 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 }
 
 // FormatStepsTable writes a tabwriter-formatted table of promotion steps to w.
+// When multiple bundles have steps for the same environment (e.g. after rapid
+// successive deploys), only the most-active step per environment is shown using
+// the same priority logic as FormatPipelineTable: active states (Promoting,
+// WaitingForMerge, HealthChecking) take precedence over terminal states (Verified,
+// Failed). Within same priority, the most recently created step wins.
 func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
+	// Filter to the best step per environment (same priority as FormatPipelineTable).
+	type stepKey struct{ env string }
+	type bestEntry struct {
+		step     v1alpha1.PromotionStep
+		priority int
+	}
+	best := make(map[stepKey]bestEntry)
+	for _, s := range steps {
+		key := stepKey{env: s.Spec.Environment}
+		state := s.Status.State
+		if state == "" {
+			state = "Pending"
+		}
+		priority := stepStatePriority(state)
+		existing, ok := best[key]
+		if !ok ||
+			priority > existing.priority ||
+			(priority == existing.priority && s.CreationTimestamp.After(existing.step.CreationTimestamp.Time)) {
+			best[key] = bestEntry{step: s, priority: priority}
+		}
+	}
+
+	// Sort by environment name for stable output.
+	envOrder := make([]string, 0, len(best))
+	for k := range best {
+		envOrder = append(envOrder, k.env)
+	}
+	sort.Strings(envOrder)
+
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE"); err != nil {
 		return fmt.Errorf("write steps table header: %w", err)
 	}
-	for _, s := range steps {
+	for _, env := range envOrder {
+		s := best[stepKey{env: env}].step
 		state := s.Status.State
 		if state == "" {
 			state = "Pending"
