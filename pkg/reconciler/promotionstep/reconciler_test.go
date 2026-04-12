@@ -654,3 +654,97 @@ func TestWorkDir_CleanedUpOnVerified(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr),
 		"working directory must be removed when step reaches terminal state (Verified)")
 }
+
+// TestShardFiltering_MatchingShard verifies that a reconciler processes steps whose shard label matches.
+func TestShardFiltering_MatchingShard(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-matching", "nginx-demo", "bundle-1", "test")
+	step.Labels = map[string]string{"kardinal.io/shard": "cluster-eu"}
+	pipeline := makePipeline("nginx-demo")
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		Shard:     "cluster-eu", // matching shard
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-matching", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Step should have advanced from empty (Pending) state to Promoting.
+	var s v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-matching", Namespace: "default"}, &s))
+	assert.Equal(t, "Promoting", s.Status.State,
+		"matching shard — reconciler must process the step and advance state to Promoting")
+}
+
+// TestShardIsolation_TwoShards verifies that two reconcilers with different shards
+// each process only their assigned steps (shard isolation in distributed mode).
+func TestShardIsolation_TwoShards(t *testing.T) {
+	scheme := buildScheme(t)
+
+	stepEU := makeStep("step-eu", "nginx-demo", "bundle-1", "prod-eu")
+	stepEU.Labels = map[string]string{"kardinal.io/shard": "cluster-eu"}
+
+	stepUS := makeStep("step-us", "nginx-demo", "bundle-1", "prod-us")
+	stepUS.Labels = map[string]string{"kardinal.io/shard": "cluster-us"}
+
+	pipeline := makePipeline("nginx-demo")
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(stepEU, stepUS, pipeline, bundle).Build()
+
+	// EU reconciler: processes only cluster-eu steps.
+	rEU := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		Shard:     "cluster-eu",
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	// US reconciler: processes only cluster-us steps.
+	rUS := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		Shard:     "cluster-us",
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	ctx := context.Background()
+
+	// EU reconciler processes EU step but skips US step.
+	_, err := rEU.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-eu", Namespace: "default"}})
+	require.NoError(t, err)
+	_, err = rEU.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-us", Namespace: "default"}})
+	require.NoError(t, err)
+
+	// US reconciler processes US step but skips EU step.
+	_, err = rUS.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-us", Namespace: "default"}})
+	require.NoError(t, err)
+	_, err = rUS.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-eu", Namespace: "default"}})
+	require.NoError(t, err)
+
+	var eu, us v1alpha1.PromotionStep
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "step-eu", Namespace: "default"}, &eu))
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "step-us", Namespace: "default"}, &us))
+
+	// EU step processed only by EU reconciler → Promoting.
+	assert.Equal(t, "Promoting", eu.Status.State,
+		"EU step must be in Promoting after EU reconciler ran")
+	// US step processed only by US reconciler → Promoting.
+	assert.Equal(t, "Promoting", us.Status.State,
+		"US step must be in Promoting after US reconciler ran")
+}
