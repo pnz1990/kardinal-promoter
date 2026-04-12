@@ -6,6 +6,7 @@ toolchain go1.25.9
 
 require (
 	github.com/google/cel-go v0.28.0
+	github.com/kubernetes-sigs/kro v0.0.0  // CEL library extensions only — see replace directive
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
@@ -78,3 +79,8 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2-0.20260122202528-d9cc6641c482 // indirect
 )
+
+// Use kro-fork local copy for CEL library extensions.
+// IMPORTANT: only import github.com/kubernetes-sigs/kro/pkg/cel/library — never the controller packages.
+// See AGENTS.md anti-patterns for the distinction.
+replace github.com/kubernetes-sigs/kro => ../kro-fork

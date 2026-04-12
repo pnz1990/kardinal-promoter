@@ -96,11 +96,14 @@ kind-up: ## Create local kind cluster and install krocodile + kardinal-promoter
 install-krocodile: ## Build and install the krocodile Graph controller (pinned commit — see hack/install-krocodile.sh)
 	bash hack/install-krocodile.sh
 
-setup-e2e-env: ## Full E2E environment: kind cluster + krocodile + ArgoCD + test app in test/uat/prod namespaces
+setup-e2e-env: ## Full single-cluster E2E: kind + krocodile + ArgoCD + test app in test/uat/prod
 	bash hack/setup-e2e-env.sh
 
-setup-e2e-env-fast: ## E2E environment without ArgoCD (faster, for unit/integration testing)
+setup-e2e-env-fast: ## Single-cluster E2E without ArgoCD (faster, for integration testing)
 	SKIP_ARGOCD=1 bash hack/setup-e2e-env.sh
+
+setup-multi-cluster-env: ## Multi-cluster E2E: kind (test+uat) + EKS krombat (prod). Requires AWS creds.
+	bash hack/setup-multi-cluster-env.sh
 
 kind-down:
 	kind delete cluster --name kardinal-e2e

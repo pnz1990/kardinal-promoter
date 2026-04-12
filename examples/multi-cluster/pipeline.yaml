@@ -1,0 +1,45 @@
+# examples/multi-cluster/pipeline.yaml
+# Multi-cluster Pipeline: pre-prod on kind, prod on EKS
+# Apply this after running: make setup-multi-cluster-env
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: test-app
+  namespace: default
+spec:
+  appName: kardinal-test-app
+  git:
+    provider: github
+    repoURL: https://github.com/pnz1990/kardinal-test-app
+    credentialsSecretRef:
+      name: github-token
+  environments:
+    - name: test
+      cluster: in-cluster              # kind cluster
+      branch: env/test
+      namespace: kardinal-test-app-test
+      delivery:
+        type: argocd
+      health:
+        type: argocd
+      autoPromote: true
+    - name: uat
+      cluster: in-cluster              # kind cluster
+      branch: env/uat
+      namespace: kardinal-test-app-uat
+      delivery:
+        type: argocd
+      health:
+        type: argocd
+      autoPromote: true
+    - name: prod
+      cluster: eks-krombat             # EKS cluster (kubeconfig context name)
+      branch: env/prod
+      namespace: kardinal-test-app-prod
+      delivery:
+        type: argocd
+      health:
+        type: argocd
+      autoPromote: false               # prod requires PR merge approval
+  policyGateRefs:
+    - name: no-weekend-deploys

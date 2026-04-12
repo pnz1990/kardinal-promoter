@@ -155,6 +155,76 @@ web/
   src/                      # React 19 UI (spec 006)
 ```
 
+## CEL Expressions — kro Library (READ BEFORE WRITING ANY CEL)
+
+kardinal uses `github.com/kubernetes-sigs/kro/pkg/cel/library` for all CEL evaluation.
+This gives PolicyGate expressions the **same extended function set** as kro's own
+`readyWhen`/`propagateWhen` expressions. Expressions written for kro graphs work
+identically in kardinal PolicyGates.
+
+**Available CEL functions (beyond standard CEL):**
+
+```
+# JSON
+json.marshal(value)                    → string   (any value to JSON string)
+json.unmarshal(jsonString)             → dyn      (JSON string to value)
+
+# Maps
+maps.merge(map1, map2)                 → map      (m2 keys overwrite m1)
+
+# Lists (all pure — return new list)
+lists.setAtIndex(list, index, value)   → list
+lists.insertAtIndex(list, index, value)→ list
+lists.removeAtIndex(list, index)       → list
+
+# Random (deterministic from seed — use for consistent soak calculations)
+random.seededInt(min, max, seed)       → int
+
+# Standard string extensions (via cel-go/ext)
+string.format(args)                    → string
+string.lowerAscii()                    → string
+```
+
+**If any part of the system evaluates CEL expressions** (backend policy gate,
+CLI `policy simulate`, UI expression preview/validation) — it MUST use
+`pkg/cel/NewCELEnvironment()` which registers all kro libraries. Never construct
+a raw `cel.NewEnv()` without going through this package.
+
+**Example PolicyGate expressions using extended functions:**
+
+```
+# Standard
+!schedule.isWeekend()
+bundle.metadata.annotations['team'] == 'platform'
+
+# Using json functions
+json.unmarshal(bundle.spec.metadata).releaseType == 'hotfix'
+
+# Using maps/lists
+maps.merge(environment.labels, bundle.labels)['env'] != 'prod'
+
+# Multi-condition with upstream soak
+!schedule.isWeekend() && upstream.uat.soakMinutes >= 30
+```
+
+## E2E Testing Infrastructure
+
+See `docs/aide/vision.md §PDCA Architecture` for the full validation loop.
+
+**Single-cluster setup** (kind, all environments):
+```bash
+make setup-e2e-env       # kind + krocodile + ArgoCD + test/uat/prod
+```
+
+**Multi-cluster setup** (kind pre-prod + EKS prod):
+```bash
+make setup-multi-cluster-env   # kind (test+uat) + EKS krombat (prod)
+```
+
+**Test application**: `github.com/pnz1990/kardinal-test-app`
+- Image: `ghcr.io/pnz1990/kardinal-test-app:sha-<7chars>`
+- Get latest SHA: `gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'`
+
 ## Go Standards (project-specific, referenced by QA checklist in team.yml)
 
 ```go
@@ -192,7 +262,8 @@ All issues must have labels from each of these groups (read by otherness agents 
 |---|---|
 | Task `[x]` without implementation | `/speckit.verify-tasks.run` |
 | Mutating Deployments/Services directly | `/speckit.verify` |
-| kro import in go.mod | CI + QA |
+| **kro controller packages in go.mod** — importing `kro/pkg/reconciler`, `kro/cmd`, `kro/api`, etc. | CI + QA |
+| **`github.com/kubernetes-sigs/kro/pkg/cel/library` is ALLOWED and encouraged** — use it for all CEL evaluation | — |
 | Missing Apache 2.0 header | CI + QA |
 | Banned filenames | CI + QA |
 | No idempotency test on reconciler | QA |
@@ -283,6 +354,9 @@ export SPECIFY_FEATURE=001-graph-integration
 The standalone agent runs these scenarios during product validation (every `product_validation_cycles`
 cycles). This requires a running kind cluster — use `make setup-e2e-env` to create one.
 The agent uses kardinal as a customer would. It does NOT mock anything.
+
+For multi-cluster scenarios (J2): use `make setup-multi-cluster-env` which sets up
+kind for pre-prod and the `krombat` EKS cluster for prod.
 
 ### Setup (before running scenarios)
 
