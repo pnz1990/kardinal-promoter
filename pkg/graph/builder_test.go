@@ -461,10 +461,17 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 	kind, _ := prStatusTestNode.Template["kind"].(string)
 	assert.Equal(t, "PRStatus", kind, "Watch node kind must be PRStatus")
 
-	// Check PropagateWhen references status.merged
-	require.NotEmpty(t, prStatusTestNode.PropagateWhen)
-	assert.Contains(t, prStatusTestNode.PropagateWhen[0], "status.merged == true",
-		"PropagateWhen must gate on status.merged")
+	// Check PropagateWhen is EMPTY to avoid circular dependency:
+	// PromotionStep references ${prstatus.metadata.name} creating a dep edge;
+	// if PRStatus also had propagateWhen=merged, the PromotionStep could never start
+	// because PRStatus can't be merged before the PR is opened.
+	assert.Empty(t, prStatusTestNode.PropagateWhen,
+		"PropagateWhen must be empty — PRStatus must not block PromotionStep (circular dep)")
+
+	// Check ReadyWhen references status.merged (health signal for UI only)
+	require.NotEmpty(t, prStatusTestNode.ReadyWhen)
+	assert.Contains(t, prStatusTestNode.ReadyWhen[0], "status.merged == true",
+		"ReadyWhen must gate on status.merged for UI health display")
 
 	// Check PromotionStep node has prStatusRef referencing the Watch node
 	testStepNode, ok := nodeMap["test"]
