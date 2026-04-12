@@ -246,3 +246,40 @@ export SPECIFY_FEATURE=001-graph-integration
 - `.specify/memory/constitution.md`
 - `.specify/memory/sdlc.md`
 - `docs/aide/team.yml`
+
+## Product Validation Scenarios
+
+The PM runs these additional scenarios during product validation (beyond the standard
+journeys in docs/aide/definition-of-done.md). Run against a live kind cluster.
+Open `kind/bug` issues for failures, `kind/docs` for doc mismatches.
+
+```bash
+# Scenario: Pause blocks an in-flight promotion
+kubectl apply -f examples/quickstart/pipeline.yaml
+kardinal create bundle nginx-demo --image ghcr.io/nginx/nginx:1.30.0
+kardinal pause nginx-demo
+# Expected: new bundle does not advance past test
+kardinal get pipelines
+# Expected: PAUSED badge visible
+
+# Scenario: Weekend gate blocks prod even with bundle ready at test+uat
+# (run this test on a Saturday, or mock the clock)
+kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
+# Expected: RESULT: BLOCKED
+
+# Scenario: CLI output format matches docs
+kardinal version 2>&1 | grep -E "CLI:|Controller:"
+# Compare against docs/cli-reference.md version section format
+
+# Scenario: explain shows gate details
+kardinal explain nginx-demo --env prod
+# Expected: shows PolicyGate name, CEL expression, current value, result
+# Compare against docs/cli-reference.md explain section format
+
+# Scenario: Rollback opens a PR
+kardinal rollback nginx-demo --env prod
+# Expected: PR opened with kardinal/rollback label and evidence body
+```
+
+After running: update `docs/aide/definition-of-done.md` journey status table
+with ✅ (pass) or ❌ (fail: <step>) for each scenario tested.

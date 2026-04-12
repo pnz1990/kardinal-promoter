@@ -8,3 +8,7 @@ max_parallel: 3
 # Executive project status update to GitHub Projects board every N cycles.
 # Only the unbounded standalone posts these. 0 = disabled.
 status_update_cycles: 5
+
+# Product validation: run the actual product against user journeys every N cycles.
+# Opens bug/doc issues for failures. 0 = disabled.
+product_validation_cycles: 3
