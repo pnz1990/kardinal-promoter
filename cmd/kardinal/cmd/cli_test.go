@@ -438,6 +438,32 @@ func TestPolicySimulate_EnvSpecificGateExcluded(t *testing.T) {
 	assert.Contains(t, out, "PASS", "no applicable gates means PASS")
 }
 
+// TestPolicySimulate_KroCELFunctionsAvailable verifies that kro CEL library functions
+// (json.*, maps.*, lists.*) are available in policy simulate (#243).
+func TestPolicySimulate_KroCELFunctionsAvailable(t *testing.T) {
+	s := cliTestScheme(t)
+	jsonGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "json-gate",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/applies-to": "prod"},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: `json.unmarshal("{\"ready\": true}").ready == true`,
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(jsonGate).Build()
+
+	var buf bytes.Buffer
+	err := policySimulateFn(&buf, c, "default", "nginx-demo", "prod", "Tuesday 10am", 0)
+	require.NoError(t, err, "policy simulate with json.unmarshal must not error")
+
+	out := buf.String()
+	assert.Contains(t, out, "PASS", "json.unmarshal expression evaluating true must PASS")
+	assert.NotContains(t, out, "compile error",
+		"kro library functions must be registered; no compile error expected")
+}
+
 // TestRollback_CopiesTypeFromOriginalBundle verifies that the rollback bundle
 // copies Type from the original Verified bundle, not hardcoding "image" (CLI-5 fix).
 func TestRollback_CopiesTypeFromOriginalBundle(t *testing.T) {

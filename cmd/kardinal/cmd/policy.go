@@ -30,6 +30,7 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
 )
 
 func newPolicyCmd() *cobra.Command {
@@ -387,9 +388,11 @@ func trimSpace(s string) string {
 }
 
 // newSimulateCELEnvironment creates a CEL environment for policy simulation in the CLI.
-// This is intentionally a separate function from pkg/cel.NewCELEnvironment() to avoid
-// the banned import of pkg/cel outside pkg/reconciler/policygate.
-// The variables registered here must match pkg/cel/environment.go exactly.
+// It registers the same variables and library extensions as pkg/cel.NewCELEnvironment()
+// so that complex expressions using json.*, maps.*, lists.*, random.* work correctly.
+//
+// The import of pkg/cel/library is allowed (see AGENTS.md — only pkg/cel itself is banned
+// outside pkg/reconciler/policygate). pkg/cel/library has no dependency on pkg/cel.
 func newSimulateCELEnvironment() (*cel.Env, error) {
 	env, err := cel.NewEnv(
 		cel.Variable("bundle", cel.DynType),
@@ -398,6 +401,12 @@ func newSimulateCELEnvironment() (*cel.Env, error) {
 		cel.Variable("metrics", cel.DynType),
 		cel.Variable("upstream", cel.DynType),
 		cel.Variable("previousBundle", cel.DynType),
+		// kro CEL library extensions — same set as pkg/cel.NewCELEnvironment().
+		// Ensures expressions like json.unmarshal(...), maps.merge(...), etc. work in simulate.
+		library.JSON(),
+		library.Maps(),
+		library.Lists(),
+		library.Random(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cel.NewEnv: %w", err)
