@@ -1,5 +1,6 @@
 // components/PipelineList.tsx — Sidebar list of Pipelines with active Bundle phase badges.
 import type { Pipeline } from '../types'
+import { HealthChip } from './HealthChip'
 
 interface Props {
   pipelines: Pipeline[]
@@ -7,16 +8,6 @@ interface Props {
   onSelect: (name: string) => void
   loading?: boolean
   error?: string
-}
-
-function phaseBadgeColor(phase: string): string {
-  switch (phase) {
-    case 'Verified': return '#22c55e'
-    case 'Promoting': return '#f59e0b'
-    case 'Failed': return '#ef4444'
-    case 'Superseded': return '#94a3b8'
-    default: return '#64748b'
-  }
 }
 
 export function PipelineList({ pipelines, selected, onSelect, loading, error }: Props) {
@@ -60,16 +51,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         >
           <span style={{ fontWeight: selected === p.name ? 600 : 400 }}>{p.name}</span>
           {p.phase && (
-            <span style={{
-              background: phaseBadgeColor(p.phase),
-              color: '#fff',
-              fontSize: '0.7rem',
-              padding: '2px 6px',
-              borderRadius: '9999px',
-              fontWeight: 600,
-            }}>
-              {p.phase}
-            </span>
+            <HealthChip state={p.phase} size="sm" />
           )}
         </li>
       ))}

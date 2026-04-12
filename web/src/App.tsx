@@ -2,21 +2,12 @@
 import { useState, useCallback } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
+import { HealthChip } from './components/HealthChip'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import type { Pipeline, Bundle, GraphResponse } from './types'
 
 const POLL_INTERVAL_MS = 5000
-
-function phaseBadgeColor(phase: string): string {
-  switch (phase) {
-    case 'Verified': return '#22c55e'
-    case 'Promoting': return '#f59e0b'
-    case 'Failed': return '#ef4444'
-    case 'Superseded': return '#94a3b8'
-    default: return '#64748b'
-  }
-}
 
 export function App() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
@@ -179,17 +170,7 @@ export function App() {
                         fontSize: '0.8rem',
                         color: '#cbd5e1',
                       }}>
-                        <span style={{
-                          background: phaseBadgeColor(b.phase),
-                          color: '#fff',
-                          fontSize: '0.65rem',
-                          padding: '1px 5px',
-                          borderRadius: '9999px',
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                        }}>
-                          {b.phase}
-                        </span>
+                        <HealthChip state={b.phase} size="sm" />
                         <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{b.name}</span>
                         {b.provenance?.commitSHA && (
                           <span style={{ color: '#64748b', fontFamily: 'monospace' }}>
