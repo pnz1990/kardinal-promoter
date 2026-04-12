@@ -132,7 +132,11 @@ spec:
                     type: string
                 type: object
               type:
-                description: Type classifies the bundle content.
+                description: |-
+                  Type classifies the bundle content.
+                  Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
+                  An image bundle does NOT supersede a config bundle and vice versa.
+                  This allows image and config promotions to coexist independently in the same pipeline.
                 enum:
                 - image
                 - config
@@ -263,6 +267,15 @@ spec:
                       description: PRURL is the URL of the pull request opened for
                         this promotion.
                       type: string
+                    soakMinutes:
+                      description: |-
+                        SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt.
+                        Written by the BundleReconciler as part of its own CRD status write.
+                        The PolicyGate reconciler reads this field from Bundle.status.environments
+                        to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates
+                        the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix).
+                      format: int64
+                      type: integer
                   required:
                   - name
                   type: object
