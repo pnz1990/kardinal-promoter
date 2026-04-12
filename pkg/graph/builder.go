@@ -538,6 +538,15 @@ func buildPolicyGateNode(
 	pipelineName, bundleName, envName string,
 	upstreams []string,
 ) GraphNode {
+	// Propagate scope and applies-to from the gate template so that
+	// `kardinal policy list` can show the correct scope (org/team) and
+	// applies-to value on the instantiated PolicyGate CRs (#249).
+	scopeLabel := gate.Labels["kardinal.io/scope"]
+	if scopeLabel == "" {
+		scopeLabel = "team"
+	}
+	appliesToLabel := gate.Labels["kardinal.io/applies-to"]
+
 	templateMeta := map[string]interface{}{
 		"name": k8sName, // K8s resource name (RFC 1123 subdomain — hyphens allowed, no underscores)
 		"labels": map[string]interface{}{
@@ -547,6 +556,9 @@ func buildPolicyGateNode(
 			"kardinal.io/bundle":        bundleName,
 			"kardinal.io/environment":   envName,
 			"kardinal.io/gate-template": gate.Name,
+			// Propagated from original PolicyGate template for CLI display.
+			"kardinal.io/scope":      scopeLabel,
+			"kardinal.io/applies-to": appliesToLabel,
 		},
 	}
 
