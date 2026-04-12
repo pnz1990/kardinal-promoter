@@ -280,37 +280,105 @@ export SPECIFY_FEATURE=001-graph-integration
 
 ## Product Validation Scenarios
 
-The PM runs these additional scenarios during product validation (beyond the standard
-journeys in docs/aide/definition-of-done.md). Run against a live kind cluster.
-Open `kind/bug` issues for failures, `kind/docs` for doc mismatches.
+The standalone agent runs these scenarios during product validation (every `product_validation_cycles`
+cycles). This requires a running kind cluster — use `make setup-e2e-env` to create one.
+The agent uses kardinal as a customer would. It does NOT mock anything.
+
+### Setup (before running scenarios)
 
 ```bash
-# Scenario: Pause blocks an in-flight promotion
+# Ensure E2E environment is running
+make setup-e2e-env
+
+# Get a real image SHA from the test app CI
+LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+
+# Apply Pipeline and PolicyGates
 kubectl apply -f examples/quickstart/pipeline.yaml
-kardinal create bundle nginx-demo --image ghcr.io/nginx/nginx:1.30.0
-kardinal pause nginx-demo
-# Expected: new bundle does not advance past test
+kubectl apply -f examples/quickstart/policy-gates.yaml
+kubectl create secret generic github-token \
+  --from-literal=token=${GITHUB_TOKEN} \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### Scenario 1: Happy path promotion
+
+```bash
+kardinal create bundle test-app --image $TEST_IMAGE
+sleep 30
 kardinal get pipelines
-# Expected: PAUSED badge visible
+# Expected: test=Verified, uat=Verified, prod=PR open
+kubectl get deployment kardinal-test-app -n kardinal-test-app-test
+# Expected: READY 1/1
+```
 
-# Scenario: Weekend gate blocks prod even with bundle ready at test+uat
-# (run this test on a Saturday, or mock the clock)
-kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
+**Pass criteria**: test and uat auto-promote; prod PR opened with evidence body.
+
+### Scenario 2: Pause blocks in-flight promotion
+
+```bash
+kardinal create bundle test-app --image $TEST_IMAGE
+kardinal pause test-app
+sleep 30
+kardinal get pipelines
+# Expected: PAUSED badge visible, bundle does not advance past test
+kardinal resume test-app
+```
+
+**Pass criteria**: PAUSED badge appears; promotion halts; resumes after resume.
+
+### Scenario 3: Weekend gate blocks prod
+
+```bash
+kardinal policy simulate --pipeline test-app --env prod --time "Saturday 3pm"
 # Expected: RESULT: BLOCKED
+kardinal policy simulate --pipeline test-app --env prod --time "Tuesday 10am"
+# Expected: RESULT: ALLOWED
+```
 
-# Scenario: CLI output format matches docs
-kardinal version 2>&1 | grep -E "CLI:|Controller:"
-# Compare against docs/cli-reference.md version section format
+**Pass criteria**: exact BLOCKED/ALLOWED strings returned.
 
-# Scenario: explain shows gate details
-kardinal explain nginx-demo --env prod
-# Expected: shows PolicyGate name, CEL expression, current value, result
-# Compare against docs/cli-reference.md explain section format
+### Scenario 4: Explain shows gate details
 
-# Scenario: Rollback opens a PR
-kardinal rollback nginx-demo --env prod
+```bash
+kardinal explain test-app --env prod
+# Expected: shows no-weekend-deploys gate with expression and current value
+```
+
+**Pass criteria**: gate name, CEL expression (`!schedule.isWeekend()`), and result visible.
+
+### Scenario 5: Rollback opens a PR
+
+```bash
+# Promote first
+kardinal create bundle test-app --image $TEST_IMAGE
+sleep 60  # wait for test+uat
+kardinal rollback test-app --env prod
 # Expected: PR opened with kardinal/rollback label and evidence body
 ```
 
-After running: update `docs/aide/definition-of-done.md` journey status table
-with ✅ (pass) or ❌ (fail: <step>) for each scenario tested.
+**Pass criteria**: PR has `kardinal/rollback` label; PR body contains promotion evidence.
+
+### Scenario 6: Concurrent bundles — correct supersession
+
+```bash
+IMAGE_A="ghcr.io/pnz1990/kardinal-test-app:sha-aaa1111"
+IMAGE_B="ghcr.io/pnz1990/kardinal-test-app:sha-bbb2222"
+kardinal create bundle test-app --image $IMAGE_A
+sleep 5
+kardinal create bundle test-app --image $IMAGE_B
+sleep 30
+kardinal get pipelines
+# Expected: only IMAGE_B bundle is Promoting; IMAGE_A bundle is Superseded
+```
+
+**Pass criteria**: older bundle superseded, newer one continues.
+
+### After running scenarios
+
+For each scenario: record PASS/FAIL + actual output.
+Open `kind/bug` issue if any scenario fails.
+Open `kind/docs` issue if output doesn't match `docs/cli-reference.md`.
+Update `docs/aide/definition-of-done.md` journey status table.
+Tear down: `make kind-down` (or keep running for continuous validation).

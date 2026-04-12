@@ -6,22 +6,51 @@
 
 ## ⚠️ Current Priority Order (read before generating any queue)
 
-**1. Complete v0.2.1** — 6 issues remaining. These all require cross-boundary changes that bounded agents couldn't finish. The unbounded standalone must handle them:
-- #146 `supersedeSiblings()` — `pkg/reconciler/bundle`
-- #144 `exec.Command` in steps — `pkg/steps` (replace kustomize binary with kyaml library)
-- #140 `Pipeline.Spec.Paused` — `pkg/reconciler/promotionstep` + `pkg/reconciler/bundle`
-- #139 `buildUpstreamContext` soakMinutes — `pkg/reconciler/policygate` + new status field in `api/v1alpha1`
-- #161 Epic (closes automatically when sub-issues close)
+**1. PDCA Validation Infrastructure** — the agent must be able to use the product for real.
+Before generating any feature queue, ensure the validation infrastructure exists:
+- `pnz1990/kardinal-test-app` exists at https://github.com/pnz1990/kardinal-test-app ✅
+- `make setup-e2e-env` creates a kind cluster with krocodile + ArgoCD + test app deployed
+- The full promotion loop can be tested: real image → real ArgoCD sync → real health check
 
-Generate queue-017 targeting these 4 issues. After they merge, v0.2.1 closes.
+**2. Complete remaining backlog** — see milestone pages for open issues.
 
-**2. Execute Workshop 1** (epic #123) — all code is ready. Run `make kind-up` and follow epic #123 steps on a live kind cluster. Record output. Post `[WORKSHOP 1 EXECUTED]` on Issue #1.
+**3. PDCA loop** — after each batch, the standalone agent:
+- Spins up the E2E environment (`make setup-e2e-env`)
+- Creates a Bundle referencing a real `ghcr.io/pnz1990/kardinal-test-app` image
+- Exercises complex promotion scenarios (pause, rollback, policy gates, multi-env)
+- Opens bugs for any failures, improvements for any UX issues
+- Tears down the cluster when done
 
-**3. v0.4.0 remaining features** — 11 issues open. After Workshop 1 executes, generate queue-018+ targeting v0.4.0 issues.
+---
 
-**Extensions specialist** (STANDALONE-EXTENSIONS) can work on v0.4.0 `area/scm` and `area/health` issues in parallel at any time — those are fully isolated.
+## PDCA Architecture: The Agent Uses the Product
 
-**Do not** generate a queue for Workshop 2 scope until Workshop 1 is fully executed (epic #123 closed).
+**The agent is not just a code writer. It is a customer of the product.**
+
+Every few cycles (configurable via `product_validation_cycles` in `maqa-config.yml`),
+the standalone agent uses kardinal-promoter from the outside — the way a real platform
+engineer would. It does NOT rely on unit tests alone.
+
+### Test Infrastructure
+
+| Component | Location | Purpose |
+|---|---|---|
+| Test application | `github.com/pnz1990/kardinal-test-app` | Real app with Dockerfile; CI pushes to `ghcr.io/pnz1990/kardinal-test-app` |
+| E2E environment | `make setup-e2e-env` | kind + krocodile + ArgoCD + app in test/uat/prod namespaces |
+| Pipeline | `examples/quickstart/pipeline.yaml` | 3-stage promotion: test → uat → prod |
+| Policy gates | `examples/quickstart/policy-gates.yaml` | No-weekend-deploys gate for prod |
+
+### PDCA Validation Scenarios (beyond standard journeys)
+
+See `AGENTS.md` §Product Validation Scenarios for the full list.
+
+Key scenarios:
+1. **Happy path promotion** — create Bundle, verify test→uat automated, verify prod PR opened
+2. **Pause blocks promotion** — create Bundle, pause pipeline, verify it stays at test
+3. **Weekend gate blocks prod** — `kardinal policy simulate --time "Saturday 3pm"` returns BLOCKED
+4. **Rollback** — `kardinal rollback` opens PR with rollback label and evidence body
+5. **Health check failure** — deploy an app that fails readiness, verify promotion blocks
+6. **Concurrent bundles** — create two Bundles simultaneously, verify correct supersession
 
 ---
 
