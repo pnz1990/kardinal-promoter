@@ -65,8 +65,16 @@ func newPolicyListCmd() *cobra.Command {
 }
 
 // policyListFn is the testable implementation of policy list.
+// It lists all PolicyGates across ALL namespaces and filters to show only
+// user-defined template gates (not per-bundle Graph instances). This ensures
+// org-level gates in namespaces like 'platform-policies' are always shown,
+// matching the documented behavior (Journey 3 pass criteria).
 func policyListFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipelineFilter string) error {
-	opts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
+	// List across all namespaces — policy templates can be in any namespace
+	// (e.g. platform-policies for org-level, or team namespaces for team-level).
+	// The current-namespace default is intentionally NOT used here; operators
+	// want to see all gates regardless of where kubectl is pointed.
+	opts := []sigs_client.ListOption{}
 	if pipelineFilter != "" {
 		opts = append(opts, sigs_client.MatchingLabels{"kardinal.io/pipeline": pipelineFilter})
 	}
@@ -76,7 +84,22 @@ func policyListFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Clien
 		return fmt.Errorf("list policy gates: %w", listErr)
 	}
 
-	return formatPolicyGateTable(w, gates.Items)
+	// Filter out Graph-managed per-bundle instances. These have either the
+	// internal.kro.run/graph-name label (set by krocodile) or kardinal.io/bundle
+	// label (set by the graph builder). User-defined template PolicyGates in
+	// namespaces like platform-policies have neither of these labels.
+	var templateGates []v1alpha1.PolicyGate
+	for _, g := range gates.Items {
+		if _, isGraphInstance := g.Labels["internal.kro.run/graph-name"]; isGraphInstance {
+			continue
+		}
+		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
+			continue
+		}
+		templateGates = append(templateGates, g)
+	}
+
+	return formatPolicyGateTable(w, templateGates)
 }
 
 func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
