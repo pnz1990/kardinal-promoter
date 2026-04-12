@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T18:52:48Z",
-  "current_queue": "queue-016",
+  "last_updated": "2026-04-12T01:50:48Z",
+  "current_queue": null,
   "last_sm_review": "2026-04-11T18:30:48Z",
   "last_pm_review": "2026-04-11T18:31:09Z",
   "batches_since_competitive_analysis": 3,
@@ -17,40 +17,41 @@
   },
   "bounded_sessions": {
     "STANDALONE-REFACTOR": {
-      "last_seen": "2026-04-11T18:52:48Z",
-      "cycle": 2,
-      "scope": "Graph purity refactor",
-      "current_item": "039-graph-purity-batch-a",
+      "last_seen": "2026-04-11T19:53:40Z",
+      "cycle": 7,
       "name": "Refactor Agent",
-      "progress_issue": "",
-      "last_report_at": ""
+      "scope": "Graph purity \u2014 fix existing logic leaks in pkg/health, pkg/scm, pkg/steps, policygate reconciler. No new CRDs.",
+      "current_item": null,
+      "progress_issue": "171",
+      "last_report_at": "2026-04-11T19:53:40Z"
     },
     "STANDALONE-CLI-UI": {
       "last_seen": null,
-      "cycle": 0,
-      "scope": "CLI and UI",
+      "cycle": 3,
+      "name": "CLI Agent",
+      "scope": "CLI and UI \u2014 kardinal commands, output formatting, policy simulate, embedded React UI",
       "current_item": null,
-      "name": "Cli Ui Agent",
-      "progress_issue": "",
-      "last_report_at": ""
+      "progress_issue": "173",
+      "last_report_at": "2026-04-11T19:18:14Z"
     },
     "STANDALONE-CORE": {
-      "last_seen": "2026-04-11T18:52:40Z",
-      "cycle": 2,
-      "scope": "Core features \u2014 new CRDs (PRStatus, RollbackPolicy), Graph integration, reconcilers",
-      "current_item": null,
+      "last_seen": "2026-04-11T20:35:25Z",
+      "cycle": 8,
       "name": "Core Agent",
-      "progress_issue": "",
-      "last_report_at": ""
+      "scope": "Core \u2014 new CRDs (PRStatus, RollbackPolicy, SoakTimer), PromotionStep reconciler fixes, Graph/translator",
+      "current_item": null,
+      "progress_issue": "172",
+      "last_report_at": "2026-04-11T20:35:08Z",
+      "scope_complete": true
     },
     "STANDALONE-EXTENSIONS": {
-      "last_seen": "2026-04-11T18:07:46Z",
-      "cycle": 1,
-      "scope": "Extension points",
-      "current_item": null,
+      "last_seen": null,
+      "cycle": 4,
       "name": "Extensions Agent",
-      "progress_issue": "",
-      "last_report_at": ""
+      "scope": "Extension points \u2014 GitLab SCM provider, ArgoRollouts health adapter, update strategies",
+      "current_item": null,
+      "progress_issue": "174",
+      "last_report_at": "2026-04-11T19:36:14Z"
     }
   },
   "features": {
@@ -439,8 +440,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T18:53:02Z",
-      "cycle": 34
+      "last_seen": null,
+      "cycle": 0
     }
   },
   "handoff": {

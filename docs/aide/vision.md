@@ -4,6 +4,27 @@
 > Status: Active
 > License: Apache 2.0
 
+## ⚠️ Current Priority Order (read before generating any queue)
+
+**1. Complete v0.2.1** — 6 issues remaining. These all require cross-boundary changes that bounded agents couldn't finish. The unbounded standalone must handle them:
+- #146 `supersedeSiblings()` — `pkg/reconciler/bundle`
+- #144 `exec.Command` in steps — `pkg/steps` (replace kustomize binary with kyaml library)
+- #140 `Pipeline.Spec.Paused` — `pkg/reconciler/promotionstep` + `pkg/reconciler/bundle`
+- #139 `buildUpstreamContext` soakMinutes — `pkg/reconciler/policygate` + new status field in `api/v1alpha1`
+- #161 Epic (closes automatically when sub-issues close)
+
+Generate queue-017 targeting these 4 issues. After they merge, v0.2.1 closes.
+
+**2. Execute Workshop 1** (epic #123) — all code is ready. Run `make kind-up` and follow epic #123 steps on a live kind cluster. Record output. Post `[WORKSHOP 1 EXECUTED]` on Issue #1.
+
+**3. v0.4.0 remaining features** — 11 issues open. After Workshop 1 executes, generate queue-018+ targeting v0.4.0 issues.
+
+**Extensions specialist** (STANDALONE-EXTENSIONS) can work on v0.4.0 `area/scm` and `area/health` issues in parallel at any time — those are fully isolated.
+
+**Do not** generate a queue for Workshop 2 scope until Workshop 1 is fully executed (epic #123 closed).
+
+---
+
 ## ⚠️ Immediate Goal: Execute Workshop 1
 
 **The standalone agent must execute this workshop end-to-end on a live kind cluster:**
