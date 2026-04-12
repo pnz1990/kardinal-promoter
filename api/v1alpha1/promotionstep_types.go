@@ -94,6 +94,13 @@ type PromotionStepStatus struct {
 	// Used by the auto-rollback policy in the pipeline environment spec.
 	// +optional
 	ConsecutiveHealthFailures int `json:"consecutiveHealthFailures,omitempty"`
+
+	// HealthCheckExpiry is the deadline for the health check, computed as
+	// healthCheckStartedAt + timeout. Set once when the health check begins.
+	// A Graph CEL expression can observe this field to detect a stale health check.
+	// Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
+	// +optional
+	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
 }
 
 // +kubebuilder:object:root=true

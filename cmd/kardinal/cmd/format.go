@@ -137,6 +137,23 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 	return nil
 }
 
+// PolicyGatePhase derives the three-way display state for a PolicyGate:
+//   - "Pass"    — ready == true (expression evaluated to true)
+//   - "Block"   — ready == false AND lastEvaluatedAt is set (expression evaluated to false)
+//   - "Pending" — not yet evaluated (lastEvaluatedAt is nil)
+//
+// This function is the single source of truth for this derivation; both
+// explain.go and policy.go must call it rather than re-implementing the logic.
+func PolicyGatePhase(g v1alpha1.PolicyGate) string {
+	if g.Status.Ready {
+		return "Pass"
+	}
+	if g.Status.LastEvaluatedAt != nil {
+		return "Block"
+	}
+	return "Pending"
+}
+
 // FormatBundleTable writes a tabwriter-formatted table of bundles to w.
 func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)

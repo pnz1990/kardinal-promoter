@@ -30,7 +30,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -114,14 +116,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
 	}
 
-	// Shard filtering: skip if labels don't match our shard.
+	// Shard filtering: in sharded mode, SetupWithManager already uses a predicate
+	// to prevent non-matching steps from being enqueued. This secondary guard
+	// handles the edge case where events arrive before the predicate is fully active
+	// (e.g. at startup) or when Shard is set but WithPredicates is not in effect.
+	// Graph-purity: the primary guard is now the controller-runtime predicate.
+	// See SetupWithManager and PS-3 in docs/design/11-graph-purity-tech-debt.md.
 	if r.Shard != "" {
 		stepShard := ps.Labels["kardinal.io/shard"]
 		if stepShard != r.Shard {
 			log.Debug().
 				Str("step_shard", stepShard).
 				Str("our_shard", r.Shard).
-				Msg("shard mismatch, skipping")
+				Msg("shard mismatch: secondary guard — should not normally fire")
 			return ctrl.Result{}, nil
 		}
 	}
@@ -273,33 +280,42 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed state: %w", patchErr)
 		}
-		_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		return ctrl.Result{}, nil
 	}
 
 	switch result.Status {
 	case steps.StepPending:
-		// A step is pending (e.g., open-pr step returns Pending while waiting).
-		// Transition to WaitingForMerge. Also patch the PRStatus CRD with PR data
-		// so the PRStatusReconciler can start polling GitHub.
-		ps.Status.State = StateWaitingForMerge
-		prURL := ""
-		if u, ok := state.Outputs["prURL"]; ok && u != "" {
-			prURL = u
+		prURL, hasPRURL := state.Outputs["prURL"]
+		if hasPRURL && prURL != "" {
+			// The open-pr step (or similar) has opened a PR and is waiting for merge.
+			// Transition to WaitingForMerge so the PRStatusReconciler can take over.
+			ps.Status.State = StateWaitingForMerge
 			ps.Status.PRURL = prURL
+			ps.Status.Message = result.Message
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch waiting-for-merge: %w", patchErr)
+			}
+			// Patch the PRStatus CRD spec so PRStatusReconciler can poll it.
+			// This is idempotent — if prStatusRef is not set, skip gracefully.
+			if ps.Spec.PRStatusRef != "" {
+				if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
+					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
+				}
+			}
+			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
+
+		// No prURL — this is a non-blocking retry (e.g. custom webhook 5xx backoff).
+		// Stay in Promoting state; use the step's requested RequeueAfter duration if set.
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-			return ctrl.Result{}, fmt.Errorf("patch waiting-for-merge: %w", patchErr)
+			return ctrl.Result{}, fmt.Errorf("patch promoting retry: %w", patchErr)
 		}
-		// Patch the PRStatus CRD spec so PRStatusReconciler can poll it.
-		// This is idempotent — if prStatusRef is not set, skip gracefully.
-		if ps.Spec.PRStatusRef != "" && prURL != "" {
-			if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
-				log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
-			}
+		requeue := result.RequeueAfter
+		if requeue == 0 {
+			return ctrl.Result{Requeue: true}, nil
 		}
-		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		return ctrl.Result{RequeueAfter: requeue}, nil
 
 	case steps.StepSuccess:
 		if nextIdx >= len(seq) {
@@ -327,7 +343,6 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed: %w", patchErr)
 		}
-		_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		return ctrl.Result{}, nil
 	}
 }
@@ -378,15 +393,11 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			Str("prStatusRef", prStatusName).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("PRStatus reports PR closed without merge — failing")
-		bundle, _ := r.loadBundle(ctx, ps)
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.State = StateFailed
 		ps.Status.Message = fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber)
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed on closed PR: %w", patchErr)
-		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -419,44 +430,32 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			}
 		}
 
-		// Check if we've exceeded the timeout (recorded in step start time via conditions).
-		// If startedAt is set and elapsed > timeout, fail.
-		if ps.Status.Conditions != nil {
-			for _, cond := range ps.Status.Conditions {
-				if cond.Type == "HealthCheckStarted" {
-					elapsed := time.Since(cond.LastTransitionTime.Time)
-					if elapsed > timeout {
-						log.Warn().Dur("elapsed", elapsed).Dur("timeout", timeout).Msg("health check timeout")
-						patch := client.MergeFrom(ps.DeepCopy())
-						ps.Status.State = StateFailed
-						ps.Status.Message = fmt.Sprintf("health check timeout after %s", timeout)
-						if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-							return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
-						}
-						if bundle != nil {
-							_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-						}
-						return ctrl.Result{}, nil
-					}
-				}
+		// Set status.healthCheckExpiry on first entry (idempotent — only set once).
+		// This writes time-based state to the CRD so the Graph can observe it.
+		// Graph-purity: eliminates PS-5 (time.Since() in reconciler hot path).
+		if ps.Status.HealthCheckExpiry == nil {
+			expiry := metav1.NewTime(time.Now().Add(timeout))
+			patch := client.MergeFrom(ps.DeepCopy())
+			ps.Status.HealthCheckExpiry = &expiry
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch health check expiry: %w", patchErr)
 			}
 		}
 
-		// Record health check start time (idempotent — only add if not already there).
-		hasStarted := false
-		for _, c := range ps.Status.Conditions {
-			if c.Type == "HealthCheckStarted" {
-				hasStarted = true
-				break
-			}
-		}
-		if !hasStarted {
+		// Check if we've exceeded the timeout by comparing to the stored expiry field.
+		// time.Now() is used only to write a CRD status field — Graph-first compliant.
+		if time.Now().After(ps.Status.HealthCheckExpiry.Time) {
+			log.Warn().
+				Time("expiry", ps.Status.HealthCheckExpiry.Time).
+				Dur("timeout", timeout).
+				Msg("health check timeout")
 			patch := client.MergeFrom(ps.DeepCopy())
-			ps.Status.Conditions = appendCondition(ps.Status.Conditions,
-				"HealthCheckStarted", metav1.ConditionTrue, "Started", "health check in progress", time.Now())
+			ps.Status.State = StateFailed
+			ps.Status.Message = fmt.Sprintf("health check timeout after %s", timeout)
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
-				return ctrl.Result{}, fmt.Errorf("patch health check start: %w", patchErr)
+				return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
 			}
+			return ctrl.Result{}, nil
 		}
 
 		adapter, err := r.HealthDetector.Select(ctx, healthType)
@@ -504,9 +503,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
 			}
-			if bundle != nil {
-				_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-			}
 			return ctrl.Result{}, nil
 		}
 
@@ -518,19 +514,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			return ctrl.Result{}, fmt.Errorf("patch consecutive failures: %w", patchErr)
 		}
 
-		// Check auto-rollback threshold.
-		env = findEnv(pipeline, ps.Spec.Environment) // re-evaluate (env was already declared above)
-		if env.AutoRollback != nil && bundle != nil {
-			threshold := env.AutoRollback.FailureThreshold
-			if threshold <= 0 {
-				threshold = 3 // default
-			}
-			if ps.Status.ConsecutiveHealthFailures >= threshold {
-				if rbErr := r.maybeCreateAutoRollback(ctx, log, ps, bundle); rbErr != nil {
-					log.Error().Err(rbErr).Msg("auto-rollback: failed to create rollback bundle")
-				}
-			}
-		}
+		// Note: the auto-rollback threshold decision is handled by the RollbackPolicyReconciler,
+		// which watches PromotionStep.status.consecutiveHealthFailures and creates a rollback Bundle
+		// when the threshold is exceeded. This eliminates PS-6 and PS-7 (logic leaks).
 
 		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 	}
@@ -570,9 +556,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health): %w", patchErr)
 		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-		}
 		return ctrl.Result{}, nil
 	}
 
@@ -587,9 +570,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
 		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
-		}
 		return ctrl.Result{}, nil
 
 	case steps.StepPending:
@@ -601,9 +581,6 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health): %w", patchErr)
-		}
-		if bundle != nil {
-			_ = r.copyEvidenceToBundle(ctx, ps, bundle)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -620,46 +597,46 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 	return ctrl.Result{Requeue: true}, nil
 }
 
-// copyEvidenceToBundle writes per-environment evidence into Bundle.status.environments.
-// This persists audit data beyond the PromotionStep's lifetime.
-func (r *Reconciler) copyEvidenceToBundle(ctx context.Context, ps *v1alpha1.PromotionStep, bundle *v1alpha1.Bundle) error {
-	envStatus := v1alpha1.EnvironmentStatus{
-		Name:  ps.Spec.Environment,
-		Phase: ps.Status.State,
-		PRURL: ps.Status.PRURL,
+// SetupWithManager registers the PromotionStep reconciler with controller-runtime.
+// In distributed (sharded) mode, it adds a label-selector predicate so that only
+// PromotionSteps matching the agent's shard label are enqueued. This replaces the
+// silent Go-level skip (PS-3 in docs/design/11-graph-purity-tech-debt.md) with a
+// declarative controller-level filter that is observable via label selectors.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	b := ctrl.NewControllerManagedBy(mgr)
+	if r.Shard != "" {
+		// In sharded mode, filter to only watch PromotionSteps for our shard.
+		// Steps without a shard label are NOT processed by any sharded agent —
+		// they are intended for standalone (non-sharded) controllers.
+		shard := r.Shard
+		b = b.For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(shardMatchPredicate{shard: shard}))
+	} else {
+		b = b.For(&v1alpha1.PromotionStep{})
 	}
-	if prURL, ok := ps.Status.Outputs["prURL"]; ok && prURL != "" {
-		envStatus.PRURL = prURL
-	}
-	if ps.Status.State == StateVerified {
-		now := metav1.NewTime(time.Now().UTC())
-		envStatus.HealthCheckedAt = &now
-	}
-
-	patch := client.MergeFrom(bundle.DeepCopy())
-	updated := false
-	for i, env := range bundle.Status.Environments {
-		if env.Name == ps.Spec.Environment {
-			bundle.Status.Environments[i] = envStatus
-			updated = true
-			break
-		}
-	}
-	if !updated {
-		bundle.Status.Environments = append(bundle.Status.Environments, envStatus)
-	}
-
-	if err := r.Status().Patch(ctx, bundle, patch); err != nil {
-		return fmt.Errorf("patch bundle evidence for env %s: %w", ps.Spec.Environment, err)
-	}
-	return nil
+	return b.Complete(r)
 }
 
-// SetupWithManager registers the PromotionStep reconciler with controller-runtime.
-func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.PromotionStep{}).
-		Complete(r)
+// shardMatchPredicate implements sigs.k8s.io/controller-runtime/pkg/predicate.Predicate
+// for shard-based filtering. Eliminates PS-3: shard filtering is now at the watch
+// layer (controller-runtime predicate) rather than inside the reconcile function.
+type shardMatchPredicate struct {
+	shard string
+}
+
+func (p shardMatchPredicate) Create(e event.CreateEvent) bool {
+	return e.Object.GetLabels()["kardinal.io/shard"] == p.shard
+}
+
+func (p shardMatchPredicate) Delete(e event.DeleteEvent) bool {
+	return e.Object.GetLabels()["kardinal.io/shard"] == p.shard
+}
+
+func (p shardMatchPredicate) Update(e event.UpdateEvent) bool {
+	return e.ObjectNew.GetLabels()["kardinal.io/shard"] == p.shard
+}
+
+func (p shardMatchPredicate) Generic(e event.GenericEvent) bool {
+	return e.Object.GetLabels()["kardinal.io/shard"] == p.shard
 }
 
 // patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data
@@ -776,61 +753,6 @@ func extractRepo(prURL string) string {
 		return ""
 	}
 	return parts[0] + "/" + parts[1]
-}
-
-// maybeCreateAutoRollback creates a rollback Bundle if one doesn't already exist
-// for this PromotionStep. It is idempotent: checks for an existing rollback Bundle
-// before creating a new one.
-func (r *Reconciler) maybeCreateAutoRollback(ctx context.Context, log zerolog.Logger,
-	ps *v1alpha1.PromotionStep, bundle *v1alpha1.Bundle) error {
-	// Check if a rollback Bundle already exists for this original bundle.
-	var existingBundles v1alpha1.BundleList
-	if err := r.List(ctx, &existingBundles, client.InNamespace(ps.Namespace)); err != nil {
-		return fmt.Errorf("list bundles for rollback check: %w", err)
-	}
-	for _, b := range existingBundles.Items {
-		if b.Labels["kardinal.io/rollback"] == "true" &&
-			b.Spec.Provenance != nil &&
-			b.Spec.Provenance.RollbackOf == bundle.Name {
-			log.Debug().Str("existing_rollback", b.Name).Msg("auto-rollback: rollback bundle already exists, skipping")
-			return nil
-		}
-	}
-
-	// Create rollback Bundle with the same images as the current bundle.
-	now := metav1.NewTime(time.Now().UTC())
-	rollbackName := fmt.Sprintf("%s-rollback-%d", bundle.Spec.Pipeline, now.Unix()%100000)
-	rollbackBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rollbackName,
-			Namespace: ps.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/pipeline": bundle.Spec.Pipeline,
-				"kardinal.io/rollback": "true",
-			},
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     bundle.Spec.Type,
-			Pipeline: bundle.Spec.Pipeline,
-			Images:   bundle.Spec.Images,
-			Provenance: &v1alpha1.BundleProvenance{
-				RollbackOf: bundle.Name,
-				Timestamp:  now,
-				Author:     "kardinal-controller (auto-rollback)",
-			},
-		},
-	}
-
-	if err := r.Create(ctx, rollbackBundle); err != nil {
-		return fmt.Errorf("create rollback bundle: %w", err)
-	}
-
-	log.Info().
-		Str("rollback_bundle", rollbackName).
-		Str("original_bundle", bundle.Name).
-		Int("failures", ps.Status.ConsecutiveHealthFailures).
-		Msg("auto-rollback: created rollback bundle")
-	return nil
 }
 
 // appendCondition appends or updates a metav1.Condition.

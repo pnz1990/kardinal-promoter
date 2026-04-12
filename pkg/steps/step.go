@@ -15,6 +15,7 @@ package steps
 
 import (
 	"context"
+	"time"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -44,6 +45,11 @@ type StepResult struct {
 
 	// Outputs holds key/value pairs to pass to subsequent steps.
 	Outputs map[string]string
+
+	// RequeueAfter, when set with StepPending, signals to the reconciler how long
+	// to wait before re-executing the step. A zero value means requeue immediately.
+	// Used by steps that need non-blocking retry backoff (e.g. custom webhook retries).
+	RequeueAfter time.Duration
 }
 
 // GitConfig holds Git repository connection details for a step.

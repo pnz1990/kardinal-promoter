@@ -16,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
@@ -70,8 +72,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	recheckInterval := parseRecheckInterval(gate.Spec.RecheckInterval)
 
-	// Build CEL context
-	celCtx, err := r.buildContext(ctx, &gate, bundleName)
+	// Build CEL context. bundleVersion is returned separately so it can be
+	// written to status.reason, making the evaluated bundle version CRD-observable
+	// (PG-6: extractVersion result was previously invisible to the Graph).
+	celCtx, bundleVersion, err := r.buildContext(ctx, &gate, bundleName)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to build CEL context, setting gate to blocked")
 		if patchErr := r.patchStatus(ctx, &gate, false,
@@ -93,6 +97,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: recheckInterval}, nil
 	}
 
+	// Prefix reason with bundle version so it is CRD-observable without a
+	// separate status field (PG-6 partial fix — full fix requires api/v1alpha1
+	// field addition for a dedicated status.bundleVersion field).
+	if bundleVersion != "" {
+		reason = fmt.Sprintf("bundle.version=%s: %s", bundleVersion, reason)
+	}
+
 	log.Info().
 		Bool("ready", pass).
 		Str("reason", reason).
@@ -107,21 +118,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // buildContext constructs the Phase 1 CEL context for gate evaluation.
+// It also returns the bundle version string (second return value) so the caller
+// can write it to status.reason — making the version CRD-observable (PG-6 partial fix).
 func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
-	bundleName string) (map[string]interface{}, error) {
+	bundleName string) (map[string]interface{}, string, error) {
 	var bundle kardinalv1alpha1.Bundle
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      bundleName,
 		Namespace: gate.Namespace,
 	}, &bundle); err != nil {
-		return nil, fmt.Errorf("load bundle %s: %w", bundleName, err)
+		return nil, "", fmt.Errorf("load bundle %s: %w", bundleName, err)
 	}
 
 	now := r.now()
+	version := extractVersion(&bundle)
 
 	bundleCtx := map[string]interface{}{
 		"type":    bundle.Spec.Type,
-		"version": extractVersion(&bundle),
+		"version": version,
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",
@@ -169,7 +183,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		},
 		"metrics":  metricsCtx,
 		"upstream": upstreamCtx,
-	}, nil
+	}, version, nil
 }
 
 // buildMetricsContext lists all MetricCheck objects in the given namespace and
@@ -234,9 +248,44 @@ func (r *Reconciler) now() time.Time {
 }
 
 // SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
+// It adds a Watch on MetricCheck objects so that when any MetricCheck in a namespace
+// changes (status updated by the MetricCheckReconciler), all PolicyGates in that
+// same namespace are queued for re-evaluation. This is the controller-runtime
+// equivalent of a "Watch node" — the PolicyGate reconciler reacts to MetricCheck
+// status changes rather than waiting for recheckInterval alone.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// metricCheckMapper enqueues all PolicyGates in the same namespace as the
+	// changed MetricCheck. This ensures PolicyGates with metrics.* expressions
+	// are re-evaluated immediately when a MetricCheck result changes.
+	metricCheckMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var gateList kardinalv1alpha1.PolicyGateList
+		if err := r.List(ctx, &gateList, client.InNamespace(obj.GetNamespace())); err != nil {
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0, len(gateList.Items))
+		for _, gate := range gateList.Items {
+			// Only enqueue instance gates (those with a bundle label) —
+			// templates have no bundle label and are always skipped by Reconcile.
+			if gate.Labels[labelBundle] == "" {
+				continue
+			}
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      gate.Name,
+					Namespace: gate.Namespace,
+				},
+			})
+		}
+		return reqs
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.PolicyGate{}).
+		// Watch MetricCheck objects: when a MetricCheck status changes (Pass/Fail),
+		// all PolicyGates in the same namespace are re-evaluated immediately.
+		// This replaces the polling-only model with an event-driven one,
+		// moving toward the Graph-first Watch node architecture.
+		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(metricCheckMapper)).
 		Complete(r)
 }
 

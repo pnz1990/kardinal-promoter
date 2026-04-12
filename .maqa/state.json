@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-11T18:31:21Z",
-  "current_queue": "queue-016",
+  "last_updated": "2026-04-12T01:50:48Z",
+  "current_queue": null,
   "last_sm_review": "2026-04-11T18:30:48Z",
   "last_pm_review": "2026-04-11T18:31:09Z",
   "batches_since_competitive_analysis": 3,
@@ -17,28 +17,41 @@
   },
   "bounded_sessions": {
     "STANDALONE-REFACTOR": {
-      "last_seen": "2026-04-11T18:06:56Z",
-      "cycle": 1,
-      "scope": "Graph purity refactor",
-      "current_item": null
+      "last_seen": "2026-04-11T19:53:40Z",
+      "cycle": 7,
+      "name": "Refactor Agent",
+      "scope": "Graph purity \u2014 fix existing logic leaks in pkg/health, pkg/scm, pkg/steps, policygate reconciler. No new CRDs.",
+      "current_item": null,
+      "progress_issue": "171",
+      "last_report_at": "2026-04-11T19:53:40Z"
     },
     "STANDALONE-CLI-UI": {
       "last_seen": null,
-      "cycle": 0,
-      "scope": "CLI and UI",
-      "current_item": null
+      "cycle": 3,
+      "name": "CLI Agent",
+      "scope": "CLI and UI \u2014 kardinal commands, output formatting, policy simulate, embedded React UI",
+      "current_item": null,
+      "progress_issue": "173",
+      "last_report_at": "2026-04-11T19:18:14Z"
     },
     "STANDALONE-CORE": {
-      "last_seen": "2026-04-11T18:05:58Z",
-      "cycle": 1,
-      "scope": "Core features \u2014 new CRDs (PRStatus, RollbackPolicy), Graph integration, reconcilers",
-      "current_item": "036-prstatuscrd"
+      "last_seen": "2026-04-11T20:35:25Z",
+      "cycle": 8,
+      "name": "Core Agent",
+      "scope": "Core \u2014 new CRDs (PRStatus, RollbackPolicy, SoakTimer), PromotionStep reconciler fixes, Graph/translator",
+      "current_item": null,
+      "progress_issue": "172",
+      "last_report_at": "2026-04-11T20:35:08Z",
+      "scope_complete": true
     },
     "STANDALONE-EXTENSIONS": {
-      "last_seen": "2026-04-11T18:07:46Z",
-      "cycle": 1,
-      "scope": "Extension points",
-      "current_item": null
+      "last_seen": null,
+      "cycle": 4,
+      "name": "Extensions Agent",
+      "scope": "Extension points \u2014 GitLab SCM provider, ArgoRollouts health adapter, update strategies",
+      "current_item": null,
+      "progress_issue": "174",
+      "last_report_at": "2026-04-11T19:36:14Z"
     }
   },
   "features": {
@@ -388,6 +401,33 @@
       "dependency_mode": "merged",
       "pr_number": 165,
       "pr_merged": true
+    },
+    "038-rollbackpolicycrd": {
+      "state": "in_review",
+      "assigned_to": "STANDALONE-REFACTOR",
+      "assigned_at": "2026-04-11T18:34:45Z",
+      "worktree_path": "../kardinal-promoter.038-rollbackpolicycrd",
+      "dependency_mode": "merged",
+      "pr_number": 169,
+      "pr_merged": false
+    },
+    "039-ui-polish-and-cli7": {
+      "state": "in_review",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "assigned_at": "2026-04-11T18:45:50Z",
+      "worktree_path": "../kardinal-promoter.039-ui-polish-and-cli7",
+      "dependency_mode": "merged",
+      "pr_number": 170,
+      "pr_merged": false,
+      "notes": "PAUSED for restart. PR #170 open, CI in progress (build/lint/integration pending). QA diff review complete \u2014 no issues found. Next step: wait for all CI green, then QA LGTM comment, then merge. bun.lock committed to worktree (CI uses bun install). State: in_review."
+    },
+    "039-graph-purity-batch-a": {
+      "state": "in_progress",
+      "assigned_to": "STANDALONE-REFACTOR",
+      "worktree_path": "../kardinal-promoter.039-graph-purity-batch-a",
+      "pr_number": null,
+      "pr_merged": false,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
@@ -400,8 +440,23 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-11T18:28:21Z",
-      "cycle": 33
+      "last_seen": null,
+      "cycle": 0
     }
+  },
+  "handoff": {
+    "saved_at": "2026-04-11T18:55:32Z",
+    "agent": "STANDALONE-EXTENSIONS (eternal loop)",
+    "immediate_next_action": "QA review + merge PR #170 (039-ui-polish-and-cli7)",
+    "pr_170_ci": "GREEN (success CI)",
+    "pr_170_branch": "039-ui-polish-and-cli7",
+    "after_170": "Pick up next unblocked v0.4.0 issue. Current open non-blocked: #122 (argoRollouts delegation, area/controller), #121 (shard routing, area/controller). Blocked-on-krocodile: #130, #132, #136, #138. Arch debt: #142.",
+    "queue": "queue-016 complete. Need to create queue-017 for next batch.",
+    "batches_since_competitive_analysis": 3,
+    "items_done_this_session": [
+      "037-gitlab-scm-provider (PR #165)",
+      "038-rollbackpolicycrd (PR #169)"
+    ],
+    "last_main_ci": "GREEN"
   }
 }

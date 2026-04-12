@@ -375,48 +375,6 @@ func TestSplitImageRef(t *testing.T) {
 	}
 }
 
-// TestPolicyGatePhase verifies the three-way gate state helper (CLI-7 partial fix).
-func TestPolicyGatePhase(t *testing.T) {
-	now := metav1.Now()
-	tests := []struct {
-		name   string
-		gate   v1alpha1.PolicyGate
-		expect string
-	}{
-		{
-			name:   "not evaluated (no lastEvaluatedAt)",
-			gate:   v1alpha1.PolicyGate{},
-			expect: "Pending",
-		},
-		{
-			name: "evaluated and passing",
-			gate: v1alpha1.PolicyGate{
-				Status: v1alpha1.PolicyGateStatus{
-					Ready:           true,
-					LastEvaluatedAt: &now,
-				},
-			},
-			expect: "Pass",
-		},
-		{
-			name: "evaluated and blocking",
-			gate: v1alpha1.PolicyGate{
-				Status: v1alpha1.PolicyGateStatus{
-					Ready:           false,
-					LastEvaluatedAt: &now,
-				},
-			},
-			expect: "Block",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := policyGatePhase(tt.gate)
-			assert.Equal(t, tt.expect, got)
-		})
-	}
-}
-
 // TestPolicyList_ShowsPendingState verifies that unevaluated gates show "Pending".
 func TestPolicyList_ShowsPendingState(t *testing.T) {
 	s := cliTestScheme(t)

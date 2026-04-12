@@ -136,7 +136,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		if envFilter != "" && env != envFilter {
 			continue
 		}
-		gateState := policyGatePhase(g)
+		gateState := PolicyGatePhase(g)
 		reason := g.Status.Reason
 		if reason == "" {
 			reason = "-"

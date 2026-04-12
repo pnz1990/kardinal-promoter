@@ -18,6 +18,7 @@ package promotionstep_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,8 +209,9 @@ func TestHealthCheckingWithRealAdapter_NotHealthy(t *testing.T) {
 	assert.Equal(t, "HealthChecking", updated.Status.State)
 }
 
-// TestAutoRollback_TriggersAfterThreshold verifies that after failureThreshold
-// consecutive health-check failures a rollback Bundle is created.
+// TestAutoRollback_TriggersAfterThreshold verifies that after reaching the failure
+// threshold, the PromotionStep reconciler increments consecutiveHealthFailures but
+// does NOT create a rollback Bundle — that is now the RollbackPolicyReconciler's job.
 func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 	s := healthTestScheme(t)
 	threshold := 3
@@ -231,7 +233,7 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 			},
 		},
 	}
-	// Bundle with images so we can create a rollback bundle.
+	// Bundle with images.
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
 		Spec: v1alpha1.BundleSpec{
@@ -241,7 +243,7 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 		},
 		Status: v1alpha1.BundleStatus{Phase: "Promoting"},
 	}
-	// PromotionStep already at threshold-1 failures; next failure should trigger rollback.
+	// PromotionStep already at threshold-1 failures; next failure increments counter.
 	ps := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{Name: "step-hc-ar", Namespace: "default"},
 		Spec: v1alpha1.PromotionStepSpec{
@@ -252,7 +254,7 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 		},
 		Status: v1alpha1.PromotionStepStatus{
 			State:                     "HealthChecking",
-			ConsecutiveHealthFailures: threshold - 1, // one more → trigger
+			ConsecutiveHealthFailures: threshold - 1, // one more → increment to threshold
 		},
 	}
 	// Deployment still not healthy.
@@ -286,30 +288,25 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The step should remain HealthChecking (not Failed) — auto-rollback creates a new Bundle.
+	// The step should remain HealthChecking — auto-rollback is now via RollbackPolicyReconciler.
 	var updatedPS v1alpha1.PromotionStep
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-hc-ar", Namespace: "default"}, &updatedPS))
-	// Counter incremented.
-	assert.Equal(t, threshold, updatedPS.Status.ConsecutiveHealthFailures)
+	// Counter incremented — this is what RollbackPolicyReconciler watches.
+	assert.Equal(t, threshold, updatedPS.Status.ConsecutiveHealthFailures,
+		"consecutiveHealthFailures must be incremented to threshold")
 
-	// A rollback Bundle should have been created.
+	// The PromotionStep reconciler must NOT create rollback bundles anymore.
+	// The RollbackPolicyReconciler handles this when it detects the threshold.
 	var bundleList v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList))
-	// There should be a rollback bundle (in addition to the original).
-	var rollbackBundles []v1alpha1.Bundle
 	for _, b := range bundleList.Items {
-		if b.Labels["kardinal.io/rollback"] == "true" {
-			rollbackBundles = append(rollbackBundles, b)
-		}
+		assert.NotEqual(t, "true", b.Labels["kardinal.io/rollback"],
+			"PromotionStep reconciler must NOT create rollback bundles — use RollbackPolicyReconciler")
 	}
-	require.Len(t, rollbackBundles, 1, "exactly one rollback bundle should be created")
-	rb := rollbackBundles[0]
-	require.NotNil(t, rb.Spec.Provenance, "rollback bundle must have provenance")
-	assert.Equal(t, "bundle-1", rb.Spec.Provenance.RollbackOf)
 }
 
 // TestAutoRollback_DoesNotTriggerBeforeThreshold verifies that below the threshold
-// no rollback Bundle is created.
+// no rollback Bundle is created and consecutiveHealthFailures is incremented.
 func TestAutoRollback_DoesNotTriggerBeforeThreshold(t *testing.T) {
 	s := healthTestScheme(t)
 
@@ -381,8 +378,9 @@ func TestAutoRollback_DoesNotTriggerBeforeThreshold(t *testing.T) {
 	}
 }
 
-// TestAutoRollback_Idempotent verifies that reconciling twice after threshold
-// creates only one rollback Bundle.
+// TestAutoRollback_Idempotent verifies that the PromotionStep reconciler
+// increments consecutiveHealthFailures but never creates rollback Bundles.
+// The RollbackPolicyReconciler is responsible for rollback creation and idempotency.
 func TestAutoRollback_Idempotent(t *testing.T) {
 	s := healthTestScheme(t)
 
@@ -455,7 +453,7 @@ func TestAutoRollback_Idempotent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Exactly one rollback bundle should exist.
+	// No rollback bundles should be created by the PromotionStep reconciler.
 	var bundleList v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList))
 	var rollbacks int
@@ -464,5 +462,226 @@ func TestAutoRollback_Idempotent(t *testing.T) {
 			rollbacks++
 		}
 	}
-	assert.Equal(t, 1, rollbacks, "exactly one rollback bundle should exist even after multiple reconciles")
+	assert.Equal(t, 0, rollbacks,
+		"PromotionStep reconciler must NOT create rollback bundles — RollbackPolicyReconciler is responsible")
+}
+
+// TestHealthCheckExpiry_SetOnFirstEntry verifies that status.healthCheckExpiry is written
+// to the PromotionStep CRD on the first reconcile in HealthChecking state.
+// This field is the Graph-observable replacement for the time.Since() timeout check (PS-5).
+func TestHealthCheckExpiry_SetOnFirstEntry(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "5m"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-expiry-set", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State: "HealthChecking",
+			// HealthCheckExpiry is nil — first entry
+		},
+	}
+	// Deployment is not yet healthy so we stay in HealthChecking (not Verified).
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps, deploy).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	before := metav1.Now()
+	_, err := rec.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-expiry-set", Namespace: "default"},
+	})
+	after := metav1.Now()
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-expiry-set", Namespace: "default"}, &updated))
+
+	require.NotNil(t, updated.Status.HealthCheckExpiry, "healthCheckExpiry must be set on first entry")
+
+	// Expiry must be ≈ now + 5m (allow small clock drift).
+	expiry := updated.Status.HealthCheckExpiry.Time
+	minExpiry := before.Add(4 * time.Minute)
+	maxExpiry := after.Add(6 * time.Minute)
+	assert.True(t, expiry.After(minExpiry), "expiry should be at least now+4m (was: %s)", expiry)
+	assert.True(t, expiry.Before(maxExpiry), "expiry should be at most now+6m (was: %s)", expiry)
+}
+
+// TestHealthCheckExpiry_TimeoutFails verifies that when healthCheckExpiry is in the past,
+// the PromotionStep transitions to Failed.
+func TestHealthCheckExpiry_TimeoutFails(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "5m"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// HealthCheckExpiry is already in the past — timeout has been reached.
+	pastExpiry := metav1.NewTime(metav1.Now().Add(-1 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-expiry-past", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:             "HealthChecking",
+			HealthCheckExpiry: &pastExpiry,
+		},
+	}
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps, deploy).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := rec.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-expiry-past", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-expiry-past", Namespace: "default"}, &updated))
+	assert.Equal(t, "Failed", updated.Status.State, "health check timeout must transition to Failed")
+	assert.Contains(t, updated.Status.Message, "timeout")
+}
+
+// TestHealthCheckExpiry_Idempotent verifies that if healthCheckExpiry is already set,
+// the reconciler does NOT overwrite it on subsequent reconciles.
+func TestHealthCheckExpiry_Idempotent(t *testing.T) {
+	s := healthTestScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto", Health: v1alpha1.HealthConfig{Type: "resource", Timeout: "5m"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "bundle-1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// HealthCheckExpiry is already set (simulates a restart after first entry).
+	fixedExpiry := metav1.NewTime(metav1.Now().Add(8 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-expiry-idem", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "bundle-1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:             "HealthChecking",
+			HealthCheckExpiry: &fixedExpiry,
+		},
+	}
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, ps, deploy).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	rec := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &noopSCM{},
+		GitClient:      &noopGit{},
+		HealthDetector: health.NewAutoDetector(c, dynClient),
+		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
+	}
+
+	// Reconcile twice — expiry must remain unchanged.
+	for i := 0; i < 2; i++ {
+		_, err := rec.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "step-expiry-idem", Namespace: "default"},
+		})
+		require.NoError(t, err)
+	}
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-expiry-idem", Namespace: "default"}, &updated))
+	require.NotNil(t, updated.Status.HealthCheckExpiry)
+	assert.Equal(t, fixedExpiry.Time.UTC().Truncate(time.Second),
+		updated.Status.HealthCheckExpiry.Time.UTC().Truncate(time.Second),
+		"healthCheckExpiry must not be overwritten on subsequent reconciles")
+	// State must still be HealthChecking (expiry is in the future, deployment unhealthy).
+	assert.Equal(t, "HealthChecking", updated.Status.State)
 }

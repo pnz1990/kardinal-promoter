@@ -68,10 +68,11 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
 
-	// Step 3: validate skip permissions
-	if err := validateSkipPermissions(input.Pipeline, input.Bundle, input.PolicyGates); err != nil {
-		return nil, err
-	}
+	// Step 3: validate skip permissions — REMOVED from Build().
+	// Skip-permission validation is now done by the caller (Translator.Translate)
+	// before calling Build(), so the result is written to Bundle.status by the
+	// Bundle reconciler (Graph-first: validation result flows through CRD status).
+	// See docs/design/11-graph-purity-tech-debt.md GB-2.
 
 	// Step 4: collect and match PolicyGates by environment
 	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates)
@@ -264,7 +265,14 @@ func removeEnv(envs []string, name string) []string {
 
 // --- Step 3: validate skip permissions ---
 
-func validateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
+// ValidateSkipPermissions checks whether the Bundle's intent to skip environments
+// is permitted by the org-level PolicyGates. Returns an error if any skip is denied.
+//
+// This function was previously called inside Build() which made the check invisible
+// to the Graph. It is now exported so callers (Translator) can call it before Build(),
+// allowing the Bundle reconciler to write the result to Bundle.status (Graph-first).
+// See docs/design/11-graph-purity-tech-debt.md GB-2 (elimination in progress).
+func ValidateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
 	bundle *kardinalv1alpha1.Bundle, allGates []kardinalv1alpha1.PolicyGate) error {
 	if bundle.Spec.Intent == nil {
 		return nil
@@ -697,13 +705,24 @@ func gateNodeK8sName(bundleSlugK8s, gateName, gateNS, envName string) string {
 	return slugify(fmt.Sprintf("%s-%s-%s--%s", gateName, ns, envName, bundleSlugK8s))
 }
 
-// bundleVersionSlug returns a slug from the bundle name suitable for node naming.
+// bundleVersionSlug returns a CEL-safe slug from the bundle name for use in node IDs.
+//
+// Dual-slug convention (GB-3/GB-4 in docs/design/11-graph-purity-tech-debt.md):
+//   - celSafeSlug / bundleVersionSlug → underscores, valid CEL identifiers
+//     Used in: node IDs, readyWhen/propagateWhen CEL expressions, gateNodeName
+//   - slugify → hyphens, valid Kubernetes resource names
+//     Used in: metadata.name fields only
+//
+// Always use celSafeSlug for IDs appearing in CEL expressions.
+// Always use slugify for Kubernetes resource names.
 func bundleVersionSlug(bundleName string) string {
 	return celSafeSlug(bundleName)
 }
 
 // slugify replaces characters not valid in Kubernetes names with dashes.
-// Use celSafeSlug for node IDs that appear in CEL expressions.
+// Produces kebab-case (hyphens) suitable for metadata.name fields.
+// Do NOT use for CEL expression identifiers — use celSafeSlug instead.
+// See dual-slug convention in bundleVersionSlug doc comment.
 func slugify(s string) string {
 	var b strings.Builder
 	for _, c := range s {
@@ -722,6 +741,7 @@ func slugify(s string) string {
 // celSafeSlug creates an identifier safe for use as a CEL variable name.
 // CEL identifiers follow Go rules: letters, digits, underscores; must not
 // start with a digit. Hyphens and other special chars are replaced with '_'.
+// See dual-slug convention in bundleVersionSlug doc comment.
 func celSafeSlug(s string) string {
 	var b strings.Builder
 	for i, c := range s {

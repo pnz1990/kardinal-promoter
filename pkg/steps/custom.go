@@ -41,16 +41,29 @@ const (
 	// defaultWebhookTimeout is the default timeout when none is specified.
 	defaultWebhookTimeout = 300 * time.Second
 
-	// maxRetries is the number of retry attempts for 5xx errors.
+	// maxRetries is the maximum number of retry attempts for 5xx errors.
 	maxRetries = 3
 
-	// retryBackoff is the wait duration between retries.
-	retryBackoff = 30 * time.Second
+	// RetryBackoff is the wait duration between retries.
+	// Exported so tests can assert that StepResult.RequeueAfter is set correctly.
+	// Instead of blocking with time.After, the step returns StepPending with
+	// RequeueAfter=RetryBackoff, letting controller-runtime handle the delay.
+	RetryBackoff = 30 * time.Second
 )
+
+// outputKeyRetryAttempt is the state.Outputs key used to persist retry attempt count
+// across reconcile iterations. Prefixed with "_custom." to avoid collision with
+// step-provided outputs.
+const outputKeyRetryAttempt = "_custom.retryAttempt"
 
 // CustomWebhookStep dispatches a custom promotion step via HTTP POST.
 // The step name is any non-built-in uses: value from the Pipeline spec.
 // Configuration (URL, timeout, auth) is passed via PromotionStep.Spec.Inputs.
+//
+// Non-blocking retries: on 5xx responses the step returns StepPending with
+// RequeueAfter=retryBackoff. The attempt count is stored in state.Outputs
+// (persisted to PromotionStep.status.outputs) so retries survive controller restarts.
+// This eliminates the time.After blocking sleep that was previously in Execute().
 type CustomWebhookStep struct {
 	// stepName is the step name (the uses: value from the Pipeline spec).
 	stepName string
@@ -88,6 +101,13 @@ type webhookResponse struct {
 
 // Execute sends a POST request to the webhook URL and interprets the response.
 // Idempotent: safe to call multiple times (webhook server must also be idempotent).
+//
+// Retry behaviour (Graph-first, non-blocking):
+//   - On 5xx or network error: increment attempt counter in state.Outputs (persisted to
+//     PromotionStep.status.outputs by the reconciler), return StepPending with
+//     RequeueAfter=retryBackoff. Controller-runtime requeueing replaces blocking
+//     time.After — no goroutine is ever blocked.
+//   - After maxRetries failures: return StepFailed.
 func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (StepResult, error) {
 	log := zerolog.Ctx(ctx).With().Str("custom_step", s.stepName).Logger()
 
@@ -112,6 +132,23 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 		authHeader = state.Inputs["webhook.authorization"]
 	}
 
+	// Read the current attempt count from persisted outputs.
+	// attempt is 0-indexed: on the first call attempt==0, on first retry attempt==1.
+	attempt := 0
+	if raw, ok := state.Outputs[outputKeyRetryAttempt]; ok {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			attempt = n
+		}
+	}
+
+	// Check if we have exhausted all retries before making another call.
+	if attempt >= maxRetries {
+		msg := fmt.Sprintf("custom step %q: all %d attempts failed — step is permanently failed", s.stepName, maxRetries)
+		return StepResult{Status: StepFailed, Message: msg}, nil
+	}
+
+	log.Info().Int("attempt", attempt+1).Int("max", maxRetries).Str("url", webhookURL).Msg("invoking custom webhook")
+
 	// Build request body.
 	reqBody := webhookRequest{
 		Bundle:       state.Bundle,
@@ -124,50 +161,45 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 		return StepResult{Status: StepFailed, Message: fmt.Sprintf("marshal request: %v", err)}, nil
 	}
 
-	// Execute with retries.
-	var lastErr error
-	var lastStatus int
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			log.Info().Int("attempt", attempt+1).Dur("backoff", retryBackoff).Msg("retrying after backoff")
-			select {
-			case <-ctx.Done():
-				return StepResult{
-					Status:  StepFailed,
-					Message: fmt.Sprintf("custom step %q: context cancelled waiting for retry: %v", s.stepName, ctx.Err()),
-				}, nil
-			case <-time.After(retryBackoff):
-			}
-		}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	resp, callErr := s.doCall(callCtx, webhookURL, bodyBytes, authHeader)
+	cancel()
 
-		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		resp, callErr := s.doCall(callCtx, webhookURL, bodyBytes, authHeader)
-		cancel()
-
-		if callErr != nil {
-			lastErr = callErr
-			log.Warn().Err(callErr).Int("attempt", attempt+1).Msg("webhook call failed")
-			continue
-		}
-
-		lastStatus = resp.statusCode
-		if resp.statusCode >= 500 {
-			log.Warn().Int("status", resp.statusCode).Int("attempt", attempt+1).Msg("webhook returned 5xx, will retry")
-			lastErr = fmt.Errorf("HTTP %d", resp.statusCode)
-			continue
-		}
-
-		// Non-5xx response — process it.
-		return s.processResponse(resp)
+	if callErr != nil {
+		log.Warn().Err(callErr).Int("attempt", attempt+1).Msg("webhook call failed, scheduling retry")
+		return s.scheduleRetry(state, attempt, fmt.Sprintf("attempt %d/%d: %v", attempt+1, maxRetries, callErr))
 	}
 
-	// All retries exhausted.
-	if lastErr != nil {
-		msg := fmt.Sprintf("custom step %q: all %d attempts failed (last error: %v)", s.stepName, maxRetries, lastErr)
+	if resp.statusCode >= 500 {
+		log.Warn().Int("status", resp.statusCode).Int("attempt", attempt+1).Msg("webhook returned 5xx, scheduling retry")
+		return s.scheduleRetry(state, attempt, fmt.Sprintf("attempt %d/%d: HTTP %d", attempt+1, maxRetries, resp.statusCode))
+	}
+
+	// Non-5xx response — clear the retry counter and process it.
+	delete(state.Outputs, outputKeyRetryAttempt)
+	return s.processResponse(resp)
+}
+
+// scheduleRetry increments the attempt counter in state.Outputs (which are persisted to
+// PromotionStep.status.outputs by the reconciler) and returns StepPending with
+// RequeueAfter=retryBackoff. This is non-blocking: controller-runtime handles the wait.
+func (s *CustomWebhookStep) scheduleRetry(state *StepState, currentAttempt int, reason string) (StepResult, error) {
+	nextAttempt := currentAttempt + 1
+	if state.Outputs == nil {
+		state.Outputs = make(map[string]string)
+	}
+	state.Outputs[outputKeyRetryAttempt] = strconv.Itoa(nextAttempt)
+
+	if nextAttempt >= maxRetries {
+		msg := fmt.Sprintf("custom step %q: all %d attempts failed (last: %s)", s.stepName, maxRetries, reason)
 		return StepResult{Status: StepFailed, Message: msg}, nil
 	}
-	msg := fmt.Sprintf("custom step %q: all %d attempts failed (last HTTP status: %d)", s.stepName, maxRetries, lastStatus)
-	return StepResult{Status: StepFailed, Message: msg}, nil
+
+	return StepResult{
+		Status:       StepPending,
+		Message:      fmt.Sprintf("custom step %q: %s; retry %d/%d after %s", s.stepName, reason, nextAttempt+1, maxRetries, RetryBackoff),
+		RequeueAfter: RetryBackoff,
+	}, nil
 }
 
 // callResult holds the parsed HTTP response.

@@ -18,7 +18,7 @@
 // deployment is healthy after a promotion PR is merged.
 //
 // Phase 1 adapters: resource (Deployment), argocd (Argo CD Application), flux (Flux Kustomization).
-// Phase 2 adapters: argoRollouts, flagger.
+// Phase 2 adapters: argoRollouts (Argo Rollouts Rollout), flagger (Flagger Canary).
 package health
 
 import (
@@ -49,7 +49,7 @@ type HealthStatus struct {
 
 // CheckOptions carries the health check configuration for a specific environment.
 type CheckOptions struct {
-	// Type selects the adapter: "resource", "argocd", "flux", "argoRollouts".
+	// Type selects the adapter: "resource", "argocd", "flux", "argoRollouts", "flagger".
 	// Empty means auto-detect.
 	Type string
 
@@ -64,6 +64,9 @@ type CheckOptions struct {
 
 	// ArgoRollouts configuration (for type: argoRollouts).
 	ArgoRollouts ArgoRolloutsConfig
+
+	// Flagger configuration (for type: flagger).
+	Flagger FlaggerConfig
 
 	// Timeout is the maximum time to wait for health. Default: 10 minutes.
 	Timeout time.Duration
@@ -100,6 +103,14 @@ type ArgoRolloutsConfig struct {
 	// Name is the Rollout name. Defaults to pipeline name.
 	Name string
 	// Namespace is the Rollout namespace. Defaults to environment name.
+	Namespace string
+}
+
+// FlaggerConfig is the health check configuration for a Flagger Canary.
+type FlaggerConfig struct {
+	// Name is the Canary name. Defaults to pipeline name.
+	Name string
+	// Namespace is the Canary namespace. Defaults to environment name.
 	Namespace string
 }
 
@@ -371,6 +382,67 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 	return HealthStatus{Healthy: false, Reason: reason, CheckedAt: time.Now()}, nil
 }
 
+// --- FlaggerAdapter ---
+
+// FlaggerAdapter checks Flagger Canary health status.
+// A Canary is healthy when status.phase == "Succeeded".
+// Uses the dynamic client to avoid a compile-time dependency on the Flagger SDK.
+type FlaggerAdapter struct {
+	dynamic dynamic.Interface
+}
+
+// NewFlaggerAdapter constructs a FlaggerAdapter.
+func NewFlaggerAdapter(dynClient dynamic.Interface) *FlaggerAdapter {
+	return &FlaggerAdapter{dynamic: dynClient}
+}
+
+// Name returns "flagger".
+func (a *FlaggerAdapter) Name() string { return "flagger" }
+
+var flaggerGVR = schema.GroupVersionResource{
+	Group:    "flagger.app",
+	Version:  "v1beta1",
+	Resource: "canaries",
+}
+
+// Check verifies that the Flagger Canary is in the Succeeded phase.
+func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
+	cfg := opts.Flagger
+	if cfg.Namespace == "" {
+		cfg.Namespace = "default"
+	}
+	if cfg.Name == "" {
+		return HealthStatus{Healthy: false, Reason: "Flagger.Name not configured", CheckedAt: time.Now()}, nil
+	}
+
+	canary, err := a.dynamic.Resource(flaggerGVR).
+		Namespace(cfg.Namespace).
+		Get(ctx, cfg.Name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return HealthStatus{
+				Healthy:   false,
+				Reason:    fmt.Sprintf("Canary %s/%s not found", cfg.Namespace, cfg.Name),
+				CheckedAt: time.Now(),
+			}, nil
+		}
+		return HealthStatus{}, fmt.Errorf("get canary %s/%s: %w", cfg.Namespace, cfg.Name, err)
+	}
+
+	phase, _, _ := unstructured.NestedString(canary.Object, "status", "phase")
+	statusMsg, _, _ := unstructured.NestedString(canary.Object, "status", "lastTransitionTime")
+
+	if phase == "Succeeded" {
+		return HealthStatus{Healthy: true, Reason: "Canary phase: Succeeded", CheckedAt: time.Now()}, nil
+	}
+
+	reason := fmt.Sprintf("Canary phase: %s", phase)
+	if statusMsg != "" {
+		reason += fmt.Sprintf(" (lastTransition: %s)", statusMsg)
+	}
+	return HealthStatus{Healthy: false, Reason: reason, CheckedAt: time.Now()}, nil
+}
+
 // --- AutoDetector ---
 
 // AutoDetector selects the appropriate health adapter based on what is available
@@ -385,40 +457,31 @@ func NewAutoDetector(k8s sigs_client.Client, dynClient dynamic.Interface) *AutoD
 	return &AutoDetector{k8s: k8s, dynamic: dynClient}
 }
 
-// Select returns the best available adapter for the given health type.
-// If healthType is empty, auto-detects based on installed CRDs.
-func (d *AutoDetector) Select(ctx context.Context, healthType string) (Adapter, error) {
+// Select returns the adapter for the given health type.
+// healthType must be one of: "resource", "argocd", "flux", "argoRollouts", "flagger".
+// An empty or unknown healthType returns an error — health.type must be
+// explicitly configured in Pipeline.spec.environments[*].health.type.
+// Silent fallback (auto-detection via CRD probing) is removed to prevent
+// misconfiguration being silently masked (HE-4 in docs/design/11-graph-purity-tech-debt.md).
+func (d *AutoDetector) Select(_ context.Context, healthType string) (Adapter, error) {
 	switch healthType {
+	case "resource":
+		return NewDeploymentAdapter(d.k8s), nil
 	case "argocd":
 		return NewArgoCDAdapter(d.dynamic), nil
 	case "flux":
 		return NewFluxAdapter(d.dynamic), nil
 	case "argoRollouts":
 		return NewArgoRolloutsAdapter(d.dynamic), nil
-	case "resource", "":
-		// Auto-detect: try argocd, then flux, fall back to resource.
-		if healthType == "" {
-			if crdAvailable(ctx, d.dynamic, "applications.argoproj.io") {
-				return NewArgoCDAdapter(d.dynamic), nil
-			}
-			if crdAvailable(ctx, d.dynamic, "kustomizations.kustomize.toolkit.fluxcd.io") {
-				return NewFluxAdapter(d.dynamic), nil
-			}
-		}
-		return NewDeploymentAdapter(d.k8s), nil
+	case "flagger":
+		return NewFlaggerAdapter(d.dynamic), nil
+	case "":
+		return nil, fmt.Errorf(
+			"health.type is required in Pipeline spec environments: " +
+				"set health.type to one of [resource, argocd, flux, argoRollouts, flagger]")
 	default:
-		return NewDeploymentAdapter(d.k8s), nil
+		return nil, fmt.Errorf(
+			"unknown health.type %q: must be one of [resource, argocd, flux, argoRollouts, flagger]",
+			healthType)
 	}
-}
-
-// crdAvailable checks whether a CRD (by plural resource name) is installed in the cluster.
-// It uses the dynamic client to attempt a list of the CRD resource at the apiextensions group.
-func crdAvailable(ctx context.Context, dynClient dynamic.Interface, crdName string) bool {
-	crdGVR := schema.GroupVersionResource{
-		Group:    "apiextensions.k8s.io",
-		Version:  "v1",
-		Resource: "customresourcedefinitions",
-	}
-	_, err := dynClient.Resource(crdGVR).Get(ctx, crdName, metav1.GetOptions{})
-	return err == nil
 }

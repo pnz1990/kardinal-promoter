@@ -254,14 +254,41 @@ func TestFluxAdapter_Progressing(t *testing.T) {
 // TestAutoDetector_SelectsDeploymentWhenNoGitOpsCRDs verifies fallback to Deployment adapter.
 func TestAutoDetector_SelectsDeploymentWhenNoGitOpsCRDs(t *testing.T) {
 	s := buildScheme(t)
-	// No ArgoCD or Flux CRDs
+	// No ArgoCD or Flux CRDs — but explicit "resource" type is provided
 	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
 	detector := health.NewAutoDetector(c, dynClient)
-	adapter, err := detector.Select(context.Background(), "")
+	adapter, err := detector.Select(context.Background(), "resource")
 	require.NoError(t, err)
 	assert.Equal(t, "resource", adapter.Name())
+}
+
+// TestAutoDetector_EmptyTypeReturnsError verifies that an empty health type
+// returns an error instead of silently auto-detecting. Operators must configure
+// health.type explicitly in Pipeline spec to prevent misconfiguration.
+func TestAutoDetector_EmptyTypeReturnsError(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+	_, err := detector.Select(context.Background(), "")
+	require.Error(t, err, "empty health type must return error — health.type must be explicit in Pipeline spec")
+	assert.Contains(t, err.Error(), "health.type")
+}
+
+// TestAutoDetector_UnknownTypeReturnsError verifies that an unknown health type
+// returns an error rather than silently falling back to Deployment.
+func TestAutoDetector_UnknownTypeReturnsError(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+	_, err := detector.Select(context.Background(), "unknownType")
+	require.Error(t, err, "unknown health type must return error")
+	assert.Contains(t, err.Error(), "unknownType")
 }
 
 // TestAutoDetector_PreferredByType verifies explicit type selection.
@@ -362,4 +389,111 @@ func TestAutoDetector_ArgoRolloutsType(t *testing.T) {
 	adapter, err := detector.Select(context.Background(), "argoRollouts")
 	require.NoError(t, err)
 	assert.Equal(t, "argoRollouts", adapter.Name())
+}
+
+// TestFlaggerAdapter_Succeeded verifies that a Canary with phase=Succeeded is Healthy.
+func TestFlaggerAdapter_Succeeded(t *testing.T) {
+	canary := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "flagger.app/v1beta1",
+			"kind":       "Canary",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase": "Succeeded",
+			},
+		},
+	}
+	canary.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "flagger.app",
+		Version: "v1beta1",
+		Kind:    "Canary",
+	})
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Succeeded")
+}
+
+// TestFlaggerAdapter_Failed verifies that a Canary with phase=Failed is Unhealthy.
+func TestFlaggerAdapter_Failed(t *testing.T) {
+	canary := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "flagger.app/v1beta1",
+			"kind":       "Canary",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase": "Failed",
+			},
+		},
+	}
+	canary.SetGroupVersionKind(schema.GroupVersionKind{Group: "flagger.app", Version: "v1beta1", Kind: "Canary"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Failed")
+}
+
+// TestFlaggerAdapter_Progressing verifies that a Canary in Progressing phase is Unhealthy.
+func TestFlaggerAdapter_Progressing(t *testing.T) {
+	canary := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "flagger.app/v1beta1",
+			"kind":       "Canary",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase": "Progressing",
+			},
+		},
+	}
+	canary.SetGroupVersionKind(schema.GroupVersionKind{Group: "flagger.app", Version: "v1beta1", Kind: "Canary"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "Progressing")
+}
+
+// TestFlaggerAdapter_NotFound verifies that a missing Canary returns Unhealthy.
+func TestFlaggerAdapter_NotFound(t *testing.T) {
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+
+	adapter := health.NewFlaggerAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flagger: health.FlaggerConfig{Name: "missing", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy)
+	assert.Contains(t, result.Reason, "not found")
+}
+
+// TestAutoDetector_FlaggerType verifies that explicit "flagger" type returns a FlaggerAdapter.
+func TestAutoDetector_FlaggerType(t *testing.T) {
+	s := buildScheme(t)
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	detector := health.NewAutoDetector(c, dynClient)
+
+	adapter, err := detector.Select(context.Background(), "flagger")
+	require.NoError(t, err)
+	assert.Equal(t, "flagger", adapter.Name())
 }

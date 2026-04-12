@@ -10,6 +10,9 @@ import (
 // BundleSpec defines the desired state of a Bundle.
 type BundleSpec struct {
 	// Type classifies the bundle content.
+	// Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
+	// An image bundle does NOT supersede a config bundle and vice versa.
+	// This allows image and config promotions to coexist independently in the same pipeline.
 	// +kubebuilder:validation:Enum=image;config;mixed
 	// +kubebuilder:validation:Required
 	Type string `json:"type"`

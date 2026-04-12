@@ -45,6 +45,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	pgrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
+	rprec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 )
 
 // journeyScheme builds the scheme used by all journey tests.
@@ -265,7 +266,10 @@ func TestJourney4Rollback(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "step-prod-bad",
 			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "nginx-demo",
+				"kardinal.io/environment": "prod",
+			},
 		},
 		Spec: v1alpha1.PromotionStepSpec{
 			PipelineName: "nginx-demo",
@@ -276,6 +280,18 @@ func TestJourney4Rollback(t *testing.T) {
 		Status: v1alpha1.PromotionStepStatus{
 			State:                     "HealthChecking",
 			ConsecutiveHealthFailures: 0,
+		},
+	}
+
+	// RollbackPolicy CRD — created by the Graph controller alongside the PromotionStep.
+	// Monitors ConsecutiveHealthFailures and triggers rollback when threshold exceeded.
+	rollbackPolicy := &v1alpha1.RollbackPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "rp-nginx-demo-prod", Namespace: "default"},
+		Spec: v1alpha1.RollbackPolicySpec{
+			PipelineName:     "nginx-demo",
+			Environment:      "prod",
+			BundleRef:        "nginx-demo-bad",
+			FailureThreshold: 1, // trigger immediately for test speed
 		},
 	}
 
@@ -290,8 +306,8 @@ func TestJourney4Rollback(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, badBundle, step, unhealthyDeploy).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		WithObjects(pipeline, badBundle, step, unhealthyDeploy, rollbackPolicy).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.RollbackPolicy{}).
 		Build()
 
 	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -304,14 +320,21 @@ func TestJourney4Rollback(t *testing.T) {
 		HealthDetector: healthDetector,
 		WorkDirFn:      func(_, _ string) string { return t.TempDir() },
 	}
+	rpRec := &rprec.Reconciler{
+		Client: c,
+		NowFn:  func() time.Time { return time.Now().UTC() },
+	}
 
 	ctx := context.Background()
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod-bad", Namespace: "default"}}
+	psReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod-bad", Namespace: "default"}}
+	rpReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-nginx-demo-prod", Namespace: "default"}}
 
-	// Reconcile until rollback bundle appears (max 10 iterations).
+	// Reconcile both reconcilers until rollback bundle appears (max 10 iterations).
 	var rollbackBundle *v1alpha1.Bundle
 	for i := 0; i < 10; i++ {
-		_, err := rec.Reconcile(ctx, req)
+		_, err := rec.Reconcile(ctx, psReq)
+		require.NoError(t, err)
+		_, err = rpRec.Reconcile(ctx, rpReq)
 		require.NoError(t, err)
 
 		var bundleList v1alpha1.BundleList

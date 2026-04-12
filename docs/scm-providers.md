@@ -10,6 +10,8 @@ controller at startup.
 |---|---|---|---|
 | GitHub | `github` (default) | Pull Requests | HMAC-SHA256 (`X-Hub-Signature-256`) |
 | GitLab | `gitlab` | Merge Requests | Token comparison (`X-Gitlab-Token`) |
+| Forgejo / Codeberg | `forgejo` | Pull Requests | HMAC-SHA256 (`X-Gitea-Signature`) |
+| Gitea | `gitea` | Pull Requests | HMAC-SHA256 (`X-Gitea-Signature`) |
 
 ---
 
@@ -116,6 +118,64 @@ kardinal-controller \
 
 ---
 
+## Forgejo / Gitea
+
+Forgejo (including Codeberg.org) and Gitea share the same REST API v1. Use `forgejo`
+for Forgejo instances and `gitea` for Gitea instances — both map to the same provider
+implementation.
+
+### Controller flags
+
+```bash
+kardinal-controller \
+  --scm-provider forgejo \
+  --github-token $FORGEJO_TOKEN \
+  --scm-api-url https://codeberg.org \
+  --webhook-secret $KARDINAL_WEBHOOK_SECRET
+```
+
+Alternatively, set environment variables:
+
+```bash
+export GITHUB_TOKEN=your-forgejo-token
+export KARDINAL_WEBHOOK_SECRET=my-hmac-secret
+export KARDINAL_SCM_PROVIDER=forgejo
+export KARDINAL_SCM_API_URL=https://codeberg.org   # or your self-hosted Forgejo URL
+```
+
+### Required token scopes
+
+| Scope | Purpose |
+|---|---|
+| `write:issue` | Post comments on pull requests |
+| `write:repository` | Create and close pull requests, add labels |
+
+Create an API token in your Forgejo/Gitea instance under **Settings → Applications → Access Tokens**.
+
+### Webhook configuration
+
+1. In your Forgejo/Gitea repository, go to **Settings → Webhooks → Add Webhook → Gitea**.
+2. Set **Target URL** to `http://<controller-host>:8083/webhook`.
+3. Set **Secret** to the same value as `--webhook-secret`.
+4. Select **Pull Request** events.
+5. Click **Add Webhook**.
+
+> Forgejo/Gitea validates webhooks using HMAC-SHA256 (same algorithm as GitHub).
+> The signature is sent in the `X-Gitea-Signature` header.
+
+### Codeberg.org (public Forgejo instance)
+
+Codeberg is the primary public Forgejo instance. Use `--scm-api-url https://codeberg.org`:
+
+```bash
+kardinal-controller \
+  --scm-provider forgejo \
+  --github-token $CODEBERG_TOKEN \
+  --scm-api-url https://codeberg.org
+```
+
+---
+
 ## Pipeline CRD configuration
 
 Set `spec.git.provider` in your Pipeline to document which SCM is used for that pipeline.
@@ -128,8 +188,8 @@ metadata:
   name: my-pipeline
 spec:
   git:
-    provider: gitlab          # Informational: "github" or "gitlab"
-    repo: "mygroup/myrepo"
+    provider: forgejo          # Informational: "github", "gitlab", "forgejo", or "gitea"
+    repo: "myorg/myrepo"
     branch: main
   environments:
     - name: dev

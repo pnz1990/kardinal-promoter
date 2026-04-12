@@ -131,7 +131,7 @@ This adapter is used when `delivery.delegate: argoRollouts` is set on the enviro
 | `Healthy` | Healthy (canary completed successfully) |
 | `Degraded` | Fail (canary failed, Argo Rollouts rolled back) |
 
-## Adapter: flagger (Phase 2)
+## Adapter: flagger
 
 Watches a Flagger Canary's phase.
 

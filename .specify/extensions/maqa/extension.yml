@@ -3,68 +3,25 @@ schema_version: "1.0"
 extension:
   id: "maqa"
   name: "MAQA — Multi-Agent & Quality Assurance"
-  version: "0.1.5"
-  description: "Coordinator + feature + QA agent workflow. Parallel worktree-based implementation with optional Trello integration via maqa-trello."
+  version: "0.2.0"
+  description: "Two-mode autonomous agent framework: standalone (full team in one session) and bounded-standalone (scoped agent with injected boundary). Built on otherness."
   author: "GenieRobot"
   repository: "https://github.com/GenieRobot/spec-kit-maqa-ext"
   license: "MIT"
-  homepage: "https://github.com/GenieRobot/spec-kit-maqa-ext"
 
 requires:
   speckit_version: ">=0.3.0"
 
 provides:
   commands:
-    - name: "speckit.maqa.coordinator"
-      file: "commands/speckit.maqa.coordinator.md"
-      description: "Assess ready features, create worktrees, return SPAWN plan for parallel feature agents"
-      aliases: ["speckit.maqa"]
-
-    - name: "speckit.maqa.feature"
-      file: "commands/speckit.maqa.feature.md"
-      description: "Implement one feature in one worktree. Tests optional. Reports done or blocked."
-
-    - name: "speckit.maqa.qa"
-      file: "commands/speckit.maqa.qa.md"
-      description: "Static analysis quality gate: text, links, security, accessibility (all configurable)."
-
-    - name: "speckit.maqa.scrummaster"
-      file: "commands/speckit.maqa.scrummaster.md"
-      description: "One-shot Scrum Master review after each batch. SDLC health check, flow metrics, minor process improvements."
-
-    - name: "speckit.maqa.pm"
-      file: "commands/speckit.maqa.pm.md"
-      description: "One-shot Product Manager review after each batch. Vision alignment, journey coverage, doc freshness, competitive analysis."
-
     - name: "speckit.maqa.standalone"
       file: "commands/speckit.maqa.standalone.md"
-      description: "Single-session mode: one agent plays all roles sequentially (coordinator→engineer→QA→SM→PM). Fully autonomous, one item at a time."
+      description: "Full autonomous team in one session — coordinates, implements, reviews, releases. Reads agents_path from maqa-config.yml."
 
     - name: "speckit.maqa.bounded-standalone"
       file: "commands/speckit.maqa.bounded-standalone.md"
-      description: "Bounded standalone agent. Reads scope from BOUNDARY file in repo root. Multiple sessions can run concurrently on different areas without conflicts."
+      description: "Scoped agent — boundary injected in prompt. Multiple sessions run concurrently. Posts hourly progress to a dedicated GitHub issue."
 
     - name: "speckit.maqa.setup"
       file: "commands/speckit.maqa.setup.md"
-      description: "One-time Claude Code setup: deploys coordinator/feature/qa as native subagents in .claude/agents/"
-
-  config:
-    - name: "maqa-config.yml"
-      template: "config-template.yml"
-      description: "MAQA workflow configuration (test command, TDD mode, QA checks, parallelism, auto_push, qa_cadence)"
-      required: false
-
-hooks:
-  after_tasks:
-    command: "speckit.maqa.coordinator"
-    optional: true
-    prompt: "Launch MAQA coordinator to start parallel implementation?"
-    description: "Optionally start the coordinator workflow after task breakdown"
-
-tags:
-  - "multi-agent"
-  - "orchestration"
-  - "quality-assurance"
-  - "workflow"
-  - "parallel"
-  - "tdd"
+      description: "One-time setup: creates maqa-config.yml and installs agent files to agents_path."

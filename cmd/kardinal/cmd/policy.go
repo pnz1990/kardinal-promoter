@@ -96,7 +96,7 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 		if recheck == "" {
 			recheck = "5m"
 		}
-		ready := policyGatePhase(g)
+		ready := PolicyGatePhase(g)
 		lastEval := "-"
 		if g.Status.LastEvaluatedAt != nil {
 			lastEval = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
@@ -110,25 +110,6 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 	}
 
 	return tw.Flush()
-}
-
-// policyGatePhase returns the three-way evaluation state of a PolicyGate.
-// Returns "Pass", "Block", or "Pending".
-//   - "Pass":    gate has been evaluated and status.ready is true
-//   - "Block":   gate has been evaluated (lastEvaluatedAt != nil) and status.ready is false
-//   - "Pending": gate has not yet been evaluated (lastEvaluatedAt is nil)
-//
-// This helper is used by both formatPolicyGateTable and explainFn to ensure
-// consistent state labelling across CLI commands (CLI-7 partial fix).
-// The full fix (adding status.phase to the PolicyGate CRD) is tracked in #155.
-func policyGatePhase(g v1alpha1.PolicyGate) string {
-	if g.Status.LastEvaluatedAt == nil {
-		return "Pending"
-	}
-	if g.Status.Ready {
-		return "Pass"
-	}
-	return "Block"
 }
 
 // ─── policy simulate ────────────────────────────────────────────────────────

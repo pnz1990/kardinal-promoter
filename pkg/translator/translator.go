@@ -65,6 +65,15 @@ func (t *Translator) Translate(ctx context.Context,
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
 
+	// Validate skip permissions before building the Graph.
+	// The result of this check flows into Bundle.status via the Bundle reconciler
+	// (which sets phase=Failed if Translate returns an error). This makes the
+	// skip-permission decision observable via CRD status rather than invisible
+	// inside graph.Builder. Eliminates GB-2 from 11-graph-purity-tech-debt.md.
+	if err := graph.ValidateSkipPermissions(pipeline, bundle, gates); err != nil {
+		return "", fmt.Errorf("translator.Translate: skip permission denied: %w", err)
+	}
+
 	// Build Graph spec
 	result, err := t.builder.Build(graph.BuildInput{
 		Pipeline:    pipeline,
@@ -95,12 +104,23 @@ func (t *Translator) Translate(ctx context.Context,
 
 // collectGates lists PolicyGates from all policy namespaces and the pipeline's namespace.
 // De-duplicates by name+namespace.
+//
+// Policy namespace resolution (TR-2 elimination — docs/design/11-graph-purity-tech-debt.md):
+// If pipeline.spec.policyNamespaces is set, use those namespaces instead of the
+// controller-wide default (t.policyNS). This makes the policy namespace list
+// explicit in the Pipeline spec rather than hardcoded in the controller.
 func (t *Translator) collectGates(ctx context.Context,
 	pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, error) {
 	seen := make(map[string]bool)
 	var gates []kardinalv1alpha1.PolicyGate
 
-	namespaces := append([]string(nil), t.policyNS...)
+	// Use Pipeline.spec.policyNamespaces when set; fall back to controller-wide default.
+	baseNS := t.policyNS
+	if len(pipeline.Spec.PolicyNamespaces) > 0 {
+		baseNS = pipeline.Spec.PolicyNamespaces
+	}
+
+	namespaces := append([]string(nil), baseNS...)
 	// Add pipeline namespace if not already included
 	pipelineNS := pipeline.Namespace
 	alreadyIncluded := false
