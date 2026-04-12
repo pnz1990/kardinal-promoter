@@ -759,7 +759,10 @@ func TestBundleReconciler_SyncEvidenceFromPromotionStep(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(b, ps).
+		WithObjects(&kardinalv1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+			Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+		}, b, ps).
 		WithStatusSubresource(b).
 		Build()
 
@@ -818,7 +821,10 @@ func TestBundleReconciler_SyncEvidence_Idempotent(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(b, ps).
+		WithObjects(&kardinalv1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+			Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+		}, b, ps).
 		WithStatusSubresource(b).
 		Build()
 
