@@ -60,6 +60,8 @@ export interface PromotionStep {
   message?: string
   prURL?: string
   outputs?: Record<string, string>
+  /** Index of the currently executing sub-step within the step sequence. */
+  currentStepIndex?: number
 }
 
 export interface PolicyGate {

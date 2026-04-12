@@ -14,6 +14,8 @@ interface Props {
   error?: string
   /** Optional set of node IDs to highlight (e.g. blocked gates). */
   highlightNodeIds?: Set<string>
+  /** Bundle name — passed to NodeDetail to fetch step detail. */
+  bundleName?: string
 }
 
 const NODE_WIDTH = 180
@@ -50,7 +52,7 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
   })
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds }: Props) {
+export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundleName }: Props) {
   const [selected, setSelected] = useState<GraphNode | null>(null)
 
   if (loading) {
@@ -157,7 +159,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds }: Prop
         })}
       </svg>
 
-      <NodeDetail node={selected} onClose={() => setSelected(null)} />
+      <NodeDetail node={selected} onClose={() => setSelected(null)} bundleName={bundleName} />
     </div>
   )
 }
