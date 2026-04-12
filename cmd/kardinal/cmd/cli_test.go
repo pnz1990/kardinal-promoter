@@ -264,28 +264,96 @@ func TestPolicySimulate_PassOnWeekday(t *testing.T) {
 	assert.Contains(t, out, "PASS")
 }
 
-// TestHistory_ListsBundles verifies that historyFn lists bundles for a pipeline.
-func TestHistory_ListsBundles(t *testing.T) {
+// TestHistory_ListsPromotionSteps verifies that historyFn lists promotion steps for a pipeline.
+func TestHistory_ListsPromotionSteps(t *testing.T) {
 	s := cliTestScheme(t)
-	b1 := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Verified"},
+	step1 := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v1-dev",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: "dev", StepType: "open-pr"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified", PRURL: "https://github.com/org/repo/pull/10"},
 	}
-	b2 := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	step2 := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v2-dev",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v2", Environment: "dev", StepType: "open-pr"},
+		Status: v1alpha1.PromotionStepStatus{State: "Promoting"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b1, b2).WithStatusSubresource(b1, b2).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(step1, step2).WithStatusSubresource(step1, step2).Build()
 
 	var buf bytes.Buffer
-	err := historyFn(&buf, c, "default", "nginx-demo")
+	err := historyFn(&buf, c, "default", "nginx-demo", "", 20)
 	require.NoError(t, err)
 
 	out := buf.String()
-	assert.Contains(t, out, "nginx-demo-v1")
-	assert.Contains(t, out, "nginx-demo-v2")
+	assert.Contains(t, out, "nginx-demo-v1", "should show bundle v1")
+	assert.Contains(t, out, "nginx-demo-v2", "should show bundle v2")
+	assert.Contains(t, out, "BUNDLE", "should have header")
+	assert.Contains(t, out, "ACTION", "should have ACTION column")
+	assert.Contains(t, out, "ENV", "should have ENV column")
+	assert.Contains(t, out, "#10", "should show PR number")
+}
+
+// TestHistory_EnvFilter verifies that env filter works.
+func TestHistory_EnvFilter(t *testing.T) {
+	s := cliTestScheme(t)
+	stepDev := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v1-dev",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: "dev", StepType: "open-pr"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	stepProd := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v1-prod",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: "prod", StepType: "open-pr"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(stepDev, stepProd).WithStatusSubresource(stepDev, stepProd).Build()
+
+	var buf bytes.Buffer
+	err := historyFn(&buf, c, "default", "nginx-demo", "prod", 20)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "prod", "should contain prod env")
+	assert.NotContains(t, out, "dev", "should not contain dev when filtered to prod")
+}
+
+// TestHistory_RollbackAction verifies that rollback steps show action=rollback.
+func TestHistory_RollbackAction(t *testing.T) {
+	s := cliTestScheme(t)
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v1-rollback-prod",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline": "nginx-demo",
+				"kardinal.io/rollback": "true",
+			},
+		},
+		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: "prod", StepType: "open-pr"},
+		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(step).WithStatusSubresource(step).Build()
+
+	var buf bytes.Buffer
+	err := historyFn(&buf, c, "default", "nginx-demo", "", 20)
+	require.NoError(t, err)
+
+	assert.Contains(t, buf.String(), "rollback", "rollback step should show action=rollback")
 }
 
 // TestPolicySimulate_GlobalGateAppliedToAllEnvs verifies that gates without applies-to
