@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-12T04:00Z
+> Last updated: 2026-04-13T19:45Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -222,11 +222,23 @@
 |---|---|---|---|---|
 | 200 | kardinal history format fix | ✅ Complete | #207 merged | BUNDLE/ACTION/ENV/PR/APPROVER/DURATION/TIMESTAMP columns |
 | 201 | kardinal version Graph line | ✅ Complete | #206 merged | Graph: line added; reads from kardinal-version ConfigMap |
-| 199 | kardinal diff command | 🚧 In Review | #212 open | FormatDiffTable, per-repo image/digest/commit/author rows |
-| 202 | UI staleness indicator | 📋 Planned | | "refreshed X ago" live polling indicator |
-| 203 | UI 6-state health chip | 📋 Planned | | Reusable HealthChip component |
-| 204 | UI NodeDetail CEL expression | 📋 Planned | | PolicyGate CEL + evaluated value in NodeDetail |
-| 205 | UI blocked PolicyGate banner | 📋 Planned | | One-click filter for blocking gates |
+| 199 | kardinal diff command | ✅ Complete | #212 merged | FormatDiffTable, per-repo image/digest/commit/author rows |
+| 202 | UI staleness indicator | ✅ Complete | #214 merged | "refreshed X ago" live polling indicator |
+| 203 | UI 6-state health chip | ✅ Complete | #211 merged | Reusable HealthChip component |
+| 204 | UI NodeDetail CEL expression | ✅ Complete | #215 merged | PolicyGate CEL + evaluated value in NodeDetail |
+| 205 | UI blocked PolicyGate banner | ✅ Complete | #216 merged | One-click filter for blocking gates |
+
+---
+
+## v0.6.0-proof Items (queue-015)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 301 | PR body field assertions (issue #412) | ✅ Complete | #438 merged | TestPRBodyDocumentedFields — 25 sub-tests; closes #412 |
+| 302 | Health adapter edge case tests (issue #407) | ✅ Complete | #439 merged | NotFound+OutOfSync+OpInProgress (ArgoCD), NotFound (Flux) |
+| 303 | PRStatus regression tests + bug fix (issue #276) | ✅ Complete | #440 merged | Added prNumber==0 guard; TestReconciler_EmptySpec_NoSCMCall |
+| 304 | UI API regression tests (issue #410) | ✅ Complete | #441 merged | TestUIAPI_ListGates_NoDuplicates, TestUIAPI_ListPipelines_PausedBadge |
+| 305 | Vitest frontend test infrastructure + HealthChip tests | ✅ Complete | #442 merged | 31 tests, vitest setup, CI frontend test step |
 
 ---
 
