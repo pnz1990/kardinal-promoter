@@ -171,20 +171,16 @@ kardinal explain <pipeline> --env <environment>
 
 Output:
 ```
-PROMOTION: my-app / prod
-  Bundle: v1.29.0
-
-POLICY GATES:
-  no-weekend-deploys  [org]   PASS   schedule.isWeekend = false
-  staging-soak        [org]   FAIL   bundle.upstreamSoakMinutes = 12 (threshold: >= 30)
-                                     ETA: ~18 minutes (based on staging verifiedAt)
-
-RESULT: BLOCKED by staging-soak
+ENVIRONMENT   TYPE            NAME                STATE           EXPRESSION                        REASON
+prod          PolicyGate      no-weekend-deploys  Blocked         !schedule.isWeekend               !schedule.isWeekend = false
+prod          PolicyGate      staging-soak        Blocked         bundle.upstreamSoakMinutes >= 30  bundle.version=1.29.0: bundle.upstreamSoakMinutes >= 30 = false
+prod          PromotionStep   prod                WaitingForMerge                                   PR #42 open
 ```
 
 Flags:
 - `--watch`: continuous output, re-evaluates and reprints when gate states change
 - `--bundle <version>`: explain a specific Bundle (default: latest active)
+- `--env <env>`: filter by environment
 
 ### kardinal rollback
 
@@ -288,28 +284,30 @@ PolicyGate "no-weekend-deploys" (policy-gates.yaml):
 
 ### kardinal policy simulate
 
-Simulate a PolicyGate evaluation against a hypothetical context (future time, different labels, etc.).
+Simulate a PolicyGate evaluation against a hypothetical context (future time, soak-minutes override, etc.).
 
 ```bash
 kardinal policy simulate \
   --pipeline my-app \
   --env prod \
-  --time "Saturday 3pm" \
-  [--label hotfix=true]
+  --time "Saturday 3pm"
 ```
 
-Output:
+Output (blocked):
 ```
-SIMULATED: my-app -> prod at Saturday 15:00 UTC
-
-POLICY GATES:
-  no-weekend-deploys  [org]   FAIL   schedule.isWeekend = true
-  staging-soak        [org]   PASS   bundle.upstreamSoakMinutes = 45 (>= 30)
-
 RESULT: BLOCKED
-  Blocked by: no-weekend-deploys
-  Message: "Production deployments are blocked on weekends"
-  Next window: Monday 00:00 UTC
+Blocked by: no-weekend-deploys
+Message: "Production deployments are blocked on weekends"
+Next window: Monday 00:00 UTC
+
+no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
+```
+
+Output (passing):
+```
+RESULT: PASS
+no-weekend-deploys:   PASS   (!schedule.isWeekend = true)
+staging-soak:         PASS   (bundle.upstreamSoakMinutes >= 30 = true)
 ```
 
 ### kardinal diff
