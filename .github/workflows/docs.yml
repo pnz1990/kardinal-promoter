@@ -38,6 +38,8 @@ jobs:
 
       - name: Generate CLI reference pages
         run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/
+        env:
+          GOFLAGS: -mod=mod
 
       - name: Upload generated CLI docs
         uses: actions/upload-artifact@v4
@@ -171,6 +173,8 @@ jobs:
             exit 1
           fi
           echo "✅ CLI docs are in sync"
+        env:
+          GOFLAGS: -mod=mod
 
   # ── Step 5: Deploy to GitHub Pages (main only) ────────────────────────────
   deploy:
