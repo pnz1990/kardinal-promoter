@@ -107,26 +107,26 @@ kubectl apply -f examples/quickstart/pipeline.yaml
 kubectl apply -f examples/quickstart/policy-gates.yaml
 
 # 6. Create a Bundle
-kardinal create bundle nginx-demo \
-  --image ghcr.io/nginx/nginx:1.29.0
+kardinal create bundle kardinal-test-app \
+  --image ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
 
 # 7. Watch promotion start
 kardinal get pipelines
-# PIPELINE    BUNDLE    TEST       UAT     PROD     AGE
-# nginx-demo  v1.29.0  Verified   ...     ...      2m
+# PIPELINE              BUNDLE        TEST       UAT     PROD     AGE
+# kardinal-test-app     sha-9349a3f   Verified   ...     ...      2m
 
 # 8. Check policy gate explanation
-kardinal explain nginx-demo --env prod
+kardinal explain kardinal-test-app --env prod
 # Must show: PolicyGates evaluated, reason why prod is waiting or ready
 
 # 9. Prod PR is opened automatically
-# Must open a PR titled: "[kardinal] Promote nginx-demo v1.29.0 to prod"
+# Must open a PR titled: "[kardinal] Promote kardinal-test-app sha-9349a3f to prod"
 # PR body must contain: artifact info, upstream verification, policy compliance table
 
 # 10. After PR merge
 kardinal get pipelines
-# PIPELINE    BUNDLE    TEST       UAT        PROD       AGE
-# nginx-demo  v1.29.0  Verified   Verified   Verified   8m
+# PIPELINE              BUNDLE        TEST       UAT        PROD       AGE
+# kardinal-test-app     sha-9349a3f   Verified   Verified   Verified   8m
 ```
 
 ### Pass criteria
@@ -135,10 +135,10 @@ kardinal get pipelines
 - [ ] `kubectl apply -f examples/quickstart/pipeline.yaml` succeeds with no errors
 - [ ] Bundle creation triggers automatic promotion to test and uat
 - [ ] PolicyGates block prod on weekends (verify with `kardinal explain`)
-- [ ] `kardinal explain nginx-demo --env prod` shows gate evaluation with values
+- [ ] `kardinal explain kardinal-test-app --env prod` shows gate evaluation with values
 - [ ] A PR is opened for prod with structured evidence body (not a raw diff)
 - [ ] After PR merge, `kardinal get pipelines` shows PROD=Verified
-- [ ] `kardinal get steps nginx-demo` shows all steps with correct states
+- [ ] `kardinal get steps kardinal-test-app` shows all steps with correct states
 
 ---
 
@@ -245,14 +245,14 @@ kardinal policy list
 #   staging-soak-30m    [org] applies-to: prod  recheckInterval: 2m
 
 # 3. Simulate a weekend promotion
-kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm"
 # RESULT: BLOCKED
 # Blocked by: no-weekend-deploys
 # Message: "Production deployments are blocked on weekends"
 # Next window: Monday 00:00 UTC
 
 # 4. Simulate with soak-time insufficient
-kardinal policy simulate --pipeline nginx-demo --env prod \
+kardinal policy simulate --pipeline kardinal-test-app --env prod \
   --time "Tuesday 10am" --soak-minutes 10
 # RESULT: BLOCKED
 # Blocked by: staging-soak-30m
@@ -260,7 +260,7 @@ kardinal policy simulate --pipeline nginx-demo --env prod \
 # ETA: ~20 minutes
 
 # 5. Simulate both gates passing
-kardinal policy simulate --pipeline nginx-demo --env prod \
+kardinal policy simulate --pipeline kardinal-test-app --env prod \
   --time "Tuesday 10am" --soak-minutes 45
 # RESULT: PASS
 # no-weekend-deploys: PASS (Tuesday 10:00 UTC, isWeekend=false)
@@ -287,7 +287,7 @@ kardinal policy list
 # Must show no-weekend-deploys [org], staging-soak-30m [org], no-bot-deploys [team]
 
 # 8. Verify gates in Graph
-kardinal explain nginx-demo --env prod
+kardinal explain kardinal-test-app --env prod
 # Must show all three gates as nodes with current evaluation state
 ```
 
@@ -316,15 +316,15 @@ One command. One PR. Same policy gates. Same audit trail.
 ### Exact steps that must work
 
 ```bash
-# Assume nginx-demo v1.29.0 is verified in prod
+# Assume kardinal-test-app v1.29.0 is verified in prod
 
 # 1. Promote a bad version
-kardinal create bundle nginx-demo --image ghcr.io/nginx/nginx:1.30.0-bad
+kardinal create bundle kardinal-test-app --image ghcr.io/pnz1990/kardinal-test-app:sha-badbad0
 # (goes through pipeline, reaches prod)
 
 # 2. Roll back
-kardinal rollback nginx-demo --env prod
-# Rolling back nginx-demo in prod: v1.30.0-bad -> v1.29.0
+kardinal rollback kardinal-test-app --env prod
+# Rolling back kardinal-test-app in prod: v1.30.0-bad -> v1.29.0
 # PR #N opened: https://github.com/.../pull/N
 
 # 3. PR has kardinal/rollback label, same evidence structure as a forward promotion
@@ -340,7 +340,7 @@ kardinal get pipelines
 - [ ] `kardinal rollback` opens a PR with `kardinal/rollback` label
 - [ ] Rollback PR has the same evidence structure as a promotion PR
 - [ ] After merge, the environment reflects the rolled-back version
-- [ ] `kardinal history nginx-demo` shows both the promotion and the rollback
+- [ ] `kardinal history kardinal-test-app` shows both the promotion and the rollback
 
 ---
 
@@ -518,9 +518,9 @@ Manual coordinator comments alone do NOT count as evidence.
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
 | 3: Policy governance | ✅ | 2026-04-13 | TestJourney3PolicyGovernance PASS in CI (E2E run 24362344722). No-weekend and soak gates verified. |
 | 4: Rollback | ✅ | 2026-04-13 | TestJourney4Rollback PASS in CI (E2E run 24362344722). Auto-rollback + manual rollback + pause/resume complete. |
-| 5: CLI workflow | 🔄 In Progress | 2026-04-11 | TestJourney5CLI is SKIP (requires binary). All CLI commands implemented. |
-| 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build implemented (PR #82). No CI E2E test yet. |
-| 7: Multi-tenant self-service | ❌ Not started | — | Requires Stages 0-4 (Pipeline CRD + PolicyGate injection) |
+| 5: CLI workflow | ✅ | 2026-04-13 | TestJourney5CLI PASS in CI (E2E run 24363674266). Binary built in CI step; version, policy simulate, policy test all verified. |
+| 6: Rendered manifests | ✅ | 2026-04-13 | TestJourney6RenderedManifests PASS in CI (E2E run 24363674266). layout:branch step sequence with kustomize-build verified. |
+| 7: Multi-tenant self-service | ❌ Not started | — | Requires ApplicationSet controller integration |
 
 ---
 
