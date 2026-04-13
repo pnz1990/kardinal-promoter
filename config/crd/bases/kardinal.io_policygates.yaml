@@ -74,20 +74,36 @@ spec:
                   When any non-expired override exists (matching Stage or with empty Stage),
                   the gate passes immediately. Expired overrides are kept as audit records.
                 items:
-                  description: PolicyGateOverride is a time-limited emergency override
-                    record (K-09).
+                  description: |-
+                    PolicyGateOverride is a time-limited emergency override record (K-09).
+                    When any non-expired override exists for a gate, the gate passes immediately
+                    without evaluating the CEL expression. The override is visible in the PR
+                    evidence body with an "OVERRIDDEN" badge.
                   properties:
                     createdAt:
+                      description: CreatedAt is when the override was created (set
+                        by the CLI).
                       format: date-time
                       type: string
                     createdBy:
+                      description: CreatedBy is the user who created the override
+                        (informational).
                       type: string
                     expiresAt:
+                      description: |-
+                        ExpiresAt is when this override stops being effective.
+                        After this time the gate evaluates CEL normally.
                       format: date-time
                       type: string
                     reason:
+                      description: Reason is the mandatory human-readable justification
+                        for the override.
+                      minLength: 1
                       type: string
                     stage:
+                      description: |-
+                        Stage is the environment name this override applies to.
+                        An empty string applies to all environments.
                       type: string
                   required:
                   - expiresAt
