@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-13T22:52:01Z",
+  "last_updated": "2026-04-13T21:59:55Z",
   "current_queue": "queue-017",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -622,13 +622,13 @@
       "pr_merged": true
     },
     "400-wave-topology": {
-      "state": "done",
+      "state": "in_progress",
       "assigned_to": "STANDALONE",
       "assigned_at": "2026-04-13T21:59:55Z",
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": null,
-      "pr_merged": true
+      "pr_merged": false
     },
     "401-integration-test-step": {
       "state": "done",
@@ -649,12 +649,12 @@
       "pr_merged": false
     },
     "403-kardinal-override": {
-      "state": "in_review",
-      "assigned_to": null,
-      "assigned_at": null,
+      "state": "in_progress",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T22:49:15Z",
       "worktree_path": null,
       "dependency_mode": "merged",
-      "pr_number": 471,
+      "pr_number": null,
       "pr_merged": false
     },
     "404-cross-stage-history-cel": {
@@ -675,17 +675,15 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
+    },
+    "STANDALONE": {
+      "last_seen": "2026-04-13T22:49:15Z",
+      "cycle": 53
     }
   },
   "handoff": {
-    "fixed_at": "2026-04-13T23:16:52Z",
-    "reason": "Collision fix applied. Branch-push locking now in effect.",
-    "resume_with": "/otherness.run",
-    "note": "otherness updated: git push branch = distributed lock. No slot IDs needed. Each session claims an item by successfully pushing feat/<item-id> to remote. If push fails, pick another item.",
-    "remaining_items": [
-      "402-pr-review-gate",
-      "403-kardinal-override (PR #471 needs CI green)",
-      "404-cross-stage-history-cel"
-    ]
+    "requested_at": "2026-04-13T21:38:46Z",
+    "reason": "Manual stop requested via /otherness.pause",
+    "resume_with": "/otherness.run"
   }
 }

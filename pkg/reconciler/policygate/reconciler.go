@@ -74,6 +74,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	recheckInterval := parseRecheckInterval(gate.Spec.RecheckInterval)
 
+	// Check for active override (K-09): if any non-expired override exists for
+	// this gate (matching stage or stage=""), the gate passes immediately.
+	// This check is done before building the CEL context for performance.
+	now := r.now()
+	if activeOverride := findActiveOverride(gate.Spec.Overrides, gate.Labels[labelEnvironment], now); activeOverride != nil {
+		overrideReason := fmt.Sprintf("OVERRIDDEN by %s: %s (expires %s)",
+			activeOverride.CreatedBy,
+			activeOverride.Reason,
+			activeOverride.ExpiresAt.UTC().Format("2006-01-02T15:04Z"))
+		log.Info().Str("reason", overrideReason).Msg("policygate override active, passing")
+		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
+		}
+		return ctrl.Result{RequeueAfter: recheckInterval}, nil
+	}
+
 	// Build CEL context. bundleVersion is returned separately so it can be
 	// written to status.reason, making the evaluated bundle version CRD-observable
 	// (PG-6: extractVersion result was previously invisible to the Graph).
@@ -410,4 +426,20 @@ func parseRecheckInterval(s string) time.Duration {
 		return defaultRecheckInterval
 	}
 	return d
+}
+
+// findActiveOverride returns the first non-expired override matching the given
+// environment name (K-09). An override with Stage="" matches any environment.
+// Returns nil if no active override is found.
+func findActiveOverride(overrides []kardinalv1alpha1.PolicyGateOverride, envName string, now time.Time) *kardinalv1alpha1.PolicyGateOverride {
+	for i := range overrides {
+		o := &overrides[i]
+		if o.ExpiresAt.Time.IsZero() || now.After(o.ExpiresAt.Time) {
+			continue // expired or zero
+		}
+		if o.Stage == "" || o.Stage == envName {
+			return o
+		}
+	}
+	return nil
 }

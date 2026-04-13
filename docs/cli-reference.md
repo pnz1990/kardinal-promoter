@@ -224,6 +224,24 @@ Resume a paused Pipeline by setting `spec.paused: false`.
 kardinal resume <pipeline>
 ```
 
+### kardinal override
+
+Force-pass a PolicyGate with a mandatory audit record (K-09). The gate passes immediately without evaluating CEL until the override expires.
+
+```bash
+kardinal override <pipeline> --gate <gate-name> [--stage <env>] --reason "<text>" [--expires-in <duration>]
+```
+
+Flags: `--gate` (required), `--reason` (required), `--stage` (empty = all envs), `--expires-in` (default: `1h`).
+
+Example:
+```bash
+kardinal override my-app --stage prod --gate no-weekend-deploy \
+  --reason "P0 hotfix — incident #4521" --expires-in 2h
+```
+
+See [Policy Gates — Emergency Overrides](policy-gates.md#emergency-overrides-k-09) for details.
+
 ### kardinal history
 
 Show the promotion history for a Pipeline, including which Bundles were promoted to which environments and when.

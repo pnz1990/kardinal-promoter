@@ -29,6 +29,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 * [kardinal init](kardinal_init.md)	 - Interactive wizard to generate a Pipeline YAML
 * [kardinal logs](kardinal_logs.md)	 - Show promotion step execution logs for a pipeline (Kargo parity)
 * [kardinal metrics](kardinal_metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
+* [kardinal override](kardinal_override.md)	 - Force-pass a PolicyGate with a mandatory audit record (K-09)
 * [kardinal pause](kardinal_pause.md)	 - Pause a pipeline, preventing new promotions from starting
 * [kardinal policy](kardinal_policy.md)	 - Manage and evaluate promotion policy gates
 * [kardinal promote](kardinal_promote.md)	 - Trigger promotion of a pipeline to a specific environment
