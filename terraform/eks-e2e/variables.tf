@@ -5,9 +5,9 @@ variable "cluster_name" {
 }
 
 variable "region" {
-  description = "AWS region"
+  description = "AWS region — intentionally separate from any existing clusters"
   type        = string
-  default     = "us-west-2"
+  default     = "us-east-2"
 }
 
 variable "kubernetes_version" {

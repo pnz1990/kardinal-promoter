@@ -114,6 +114,29 @@ type BundleStatus struct {
 	// Environments holds per-environment promotion evidence.
 	// +optional
 	Environments []EnvironmentStatus `json:"environments,omitempty"`
+
+	// Metrics holds deployment efficiency metrics for this Bundle (K-05).
+	// Populated by the BundleReconciler when all environments reach Verified.
+	// +optional
+	Metrics *BundleMetrics `json:"metrics,omitempty"`
+}
+
+// BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).
+type BundleMetrics struct {
+	// CommitToProductionMinutes is the time from Bundle creation to the last
+	// environment reaching Verified. Indicates total promotion pipeline latency.
+	// +optional
+	CommitToProductionMinutes int64 `json:"commitToProductionMinutes,omitempty"`
+
+	// BakeResets is the total number of bake timer resets across all environments.
+	// High bake reset count indicates flaky health or over-sensitive bake windows.
+	// +optional
+	BakeResets int `json:"bakeResets,omitempty"`
+
+	// AutoRollbacks is the number of environments that auto-rolled back during
+	// this Bundle's promotion.
+	// +optional
+	AutoRollbacks int `json:"autoRollbacks,omitempty"`
 }
 
 // EnvironmentStatus captures per-environment promotion evidence for a Bundle.

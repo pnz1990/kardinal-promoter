@@ -108,17 +108,17 @@ setup-e2e-env: ## Full single-cluster E2E: kind + krocodile + ArgoCD + test app 
 setup-e2e-env-fast: ## Single-cluster E2E without ArgoCD (faster, for integration testing)
 	SKIP_ARGOCD=1 bash hack/setup-e2e-env.sh
 
-setup-multi-cluster-env: ## Multi-cluster E2E: kind (test+uat) + EKS prod cluster. Requires AWS creds + EKS cluster (see terraform/krombat).
+setup-multi-cluster-env: ## Multi-cluster E2E: kind (test+uat) + EKS prod cluster. Requires AWS creds + EKS cluster (see terraform/eks-e2e).
 	bash hack/setup-multi-cluster-env.sh
 
 eks-up: ## Create EKS prod cluster for multi-cluster E2E via Terraform (requires AWS creds)
-	cd terraform/krombat && terraform init && terraform apply -auto-approve
+	cd terraform/eks-e2e && terraform init && terraform apply -auto-approve
 	@echo ""
 	@echo "Cluster ready. Update kubeconfig with:"
-	@cd terraform/krombat && terraform output -raw kubeconfig_update_command
+	@cd terraform/eks-e2e && terraform output -raw kubeconfig_update_command
 
 eks-down: ## Destroy EKS prod cluster (saves cost when not running E2E)
-	cd terraform/krombat && terraform destroy -auto-approve
+	cd terraform/eks-e2e && terraform destroy -auto-approve
 
 kind-down:
 	kind delete cluster --name kardinal-e2e

@@ -48,7 +48,7 @@ ITEM.md
 # Terraform
 terraform/.terraform/
 terraform/**/.terraform/
-terraform/krombat/terraform.tfstate
-terraform/krombat/terraform.tfstate.backup
-terraform/krombat/.terraform.lock.hcl
-terraform/krombat/terraform.tfvars
+terraform/eks-e2e/terraform.tfstate
+terraform/eks-e2e/terraform.tfstate.backup
+terraform/eks-e2e/.terraform.lock.hcl
+terraform/eks-e2e/terraform.tfvars

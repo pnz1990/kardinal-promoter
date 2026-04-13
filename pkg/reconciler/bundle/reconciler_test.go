@@ -1091,3 +1091,66 @@ func TestBundleReconciler_ConcurrentBundleSupersession(t *testing.T) {
 		"newest bundle (v5) must NOT be Superseded — it is the active bundle")
 	t.Logf("concurrent supersession: bundles 1–4 Superseded, bundle 5 phase=%s ✅", newestBundle.Status.Phase)
 }
+
+// ─── K-05: Deployment metrics ────────────────────────────────────────────────
+
+// TestBundleReconciler_MetricsComputedOnVerified verifies that when a Bundle
+// has all environments Verified, the reconciler computes Bundle.status.metrics
+// including commitToProductionMinutes (K-05).
+func TestBundleReconciler_MetricsComputedOnVerified(t *testing.T) {
+	scheme := newScheme()
+
+	// Bundle created 2 hours ago
+	createdAt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	verifiedAt := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+
+	myPipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod"},
+			},
+		},
+	}
+	myBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-v1",
+			Namespace:         "default",
+			CreationTimestamp: createdAt,
+		},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "my-app",
+		},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase: "Promoting",
+			Environments: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", HealthCheckedAt: &verifiedAt},
+				{Name: "prod", Phase: "Verified", HealthCheckedAt: &verifiedAt},
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(myPipeline, myBundle).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	// commitToProductionMinutes must be set (>0 since bundle was created 2h ago)
+	assert.NotNil(t, got.Status.Metrics, "metrics must be set when all environments are Verified")
+	if got.Status.Metrics != nil {
+		assert.Greater(t, got.Status.Metrics.CommitToProductionMinutes, int64(0),
+			"commitToProductionMinutes must be >0 (bundle was created 2h ago)")
+		assert.Less(t, got.Status.Metrics.CommitToProductionMinutes, int64(200),
+			"commitToProductionMinutes must be < 200 (should be ~120-130m)")
+	}
+}

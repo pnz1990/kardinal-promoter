@@ -4,7 +4,7 @@
 # Intentionally minimal: 2 x t3.medium nodes.
 #
 # Usage:
-#   cd terraform/krombat
+#   cd terraform/eks-e2e
 #   terraform init
 #   terraform apply
 #
@@ -53,7 +53,7 @@ module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.5"
 
-  name = "krombat"
+  name = "kardinal-e2e"
   cidr = "10.100.0.0/16"
 
   azs             = slice(data.aws_availability_zones.available.names, 0, 2)
