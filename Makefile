@@ -16,7 +16,7 @@ GOPROXY          ?= https://proxy.golang.org
 # Docker image
 IMG ?= kardinal-promoter:dev
 
-.PHONY: all build build-controller build-cli ui test test-integration lint vet generate manifests \
+.PHONY: all build build-controller build-cli ui ui-test test test-integration lint vet generate manifests \
         install uninstall docker-build helm-lint \
         install-krocodile \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
@@ -37,6 +37,9 @@ build-cli:
 ## UI
 ui: ## Build the embedded React UI (requires Node.js and npm)
 	cd web && npm ci && npm run build
+
+ui-test: ## Run React component unit tests (vitest, requires Node.js and npm)
+	cd web && npm ci && npm test
 
 ## Test
 test:
