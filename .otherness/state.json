@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-13T23:32:23Z",
+  "last_updated": "2026-04-13T22:52:01Z",
   "current_queue": "queue-017",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -627,7 +627,7 @@
       "assigned_at": "2026-04-13T21:59:55Z",
       "worktree_path": null,
       "dependency_mode": "merged",
-      "pr_number": 469,
+      "pr_number": null,
       "pr_merged": true
     },
     "401-integration-test-step": {
@@ -640,22 +640,24 @@
       "pr_merged": true
     },
     "402-pr-review-gate": {
-      "state": "todo",
+      "state": "assigned",
+      "assigned_to": "STANDALONE-402-pr-review-gate",
+      "assigned_at": "2026-04-13T23:35:08Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false,
+      "branch": "feat/402-pr-review-gate",
+      "worktree": "../kardinal-promoter.402-pr-review-gate"
+    },
+    "403-kardinal-override": {
+      "state": "in_review",
       "assigned_to": null,
       "assigned_at": null,
       "worktree_path": null,
       "dependency_mode": "merged",
-      "pr_number": null,
-      "pr_merged": false
-    },
-    "403-kardinal-override": {
-      "state": "done",
-      "assigned_to": "STANDALONE",
-      "assigned_at": "2026-04-13T22:49:15Z",
-      "worktree_path": null,
-      "dependency_mode": "merged",
       "pr_number": 471,
-      "pr_merged": true
+      "pr_merged": false
     },
     "404-cross-stage-history-cel": {
       "state": "todo",
@@ -675,20 +677,17 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
-    },
-    "STANDALONE": {
-      "last_seen": "2026-04-13T22:49:15Z",
-      "cycle": 53
-    },
-    "STANDALONE-A": {
-      "last_seen": "2026-04-13T23:29:57Z",
-      "cycle": 2
     }
   },
   "handoff": {
-    "requested_at": "2026-04-13T23:32:23Z",
-    "reason": "Manual stop via /otherness.pause \u2014 402/404 reset to todo (no code pushed). Resume with /otherness.run.",
+    "fixed_at": "2026-04-13T23:16:52Z",
+    "reason": "Collision fix applied. Branch-push locking now in effect.",
     "resume_with": "/otherness.run",
-    "notes": "402-pr-review-gate and 404-cross-stage-history-cel were assigned and partially planned but no code was pushed. Worktrees cleaned up. Safe to resume."
+    "note": "otherness updated: git push branch = distributed lock. No slot IDs needed. Each session claims an item by successfully pushing feat/<item-id> to remote. If push fails, pick another item.",
+    "remaining_items": [
+      "402-pr-review-gate",
+      "403-kardinal-override (PR #471 needs CI green)",
+      "404-cross-stage-history-cel"
+    ]
   }
 }
