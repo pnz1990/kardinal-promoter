@@ -100,7 +100,7 @@ nav:
     - Security: guides/security.md
     - Monitoring: guides/monitoring.md
   - Reference:
-    - CLI Reference: reference/cli.md
+    - CLI Reference: cli-reference.md
     - Pipeline CRD: pipeline-reference.md
     - API Reference: reference/api.md
     - CEL Context: reference/cel-context.md
