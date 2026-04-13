@@ -685,12 +685,12 @@
       "cycle": 1
     },
     "STANDALONE-B": {
-      "last_seen": "2026-04-13T22:55:11Z",
-      "cycle": 0
+      "last_seen": "2026-04-13T22:55:26Z",
+      "cycle": 1
     }
   },
   "handoff": {
-    "requested_at": "2026-04-13T22:51:45Z",
+    "requested_at": "2026-04-13T23:10:49Z",
     "reason": "Manual stop requested via /otherness.pause",
     "resume_with": "/otherness.run"
   }
