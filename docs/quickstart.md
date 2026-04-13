@@ -1,16 +1,30 @@
 # Quickstart
 
-This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes an Nginx application through test, uat, and prod environments using Git pull requests.
+This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes the `kardinal-test-app` through test, uat, and prod environments using Git pull requests.
 
 ## What you will build
 
-```
-test (auto-promote) --> uat (auto-promote) --> prod (PR review required)
+```mermaid
+graph LR
+    CI["CI pushes image<br/>kardinal-test-app:sha-abc1234"] --> Bundle["Bundle created"]
+    Bundle --> Test["test\n(auto-promote)"]
+    Test --> UAT["uat\n(auto-promote)"]
+    UAT --> Gate["no-weekend-deploys\nCEL gate"]
+    Gate --> Prod["prod\n(PR review required)"]
+    Prod --> Verified["All Verified ✅"]
+
+    style Test fill:#22c55e,color:#fff
+    style UAT fill:#22c55e,color:#fff
+    style Gate fill:#f59e0b,color:#fff
+    style Prod fill:#3b82f6,color:#fff
 ```
 
 - Test and uat promote automatically when the upstream environment is verified.
 - Prod requires a human to review and merge a PR.
 - The PR includes promotion evidence: what image is being deployed, who built it, and what upstream verification looked like.
+
+!!! info "Test application"
+    This quickstart uses [`pnz1990/kardinal-test-app`](https://github.com/pnz1990/kardinal-test-app) and the [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) GitOps repository. These are the reference applications used in kardinal's own CI validation.
 
 ## Prerequisites
 
@@ -58,13 +72,11 @@ kardinal version
 
 ## Set up your GitOps repo
 
-Fork or create a repository with this structure:
+This quickstart uses [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) as the GitOps target repository. It already has the required directory structure with environment branches. Fork it or use it directly.
+
+The repository structure:
 
 ```
-base/
-  deployment.yaml
-  service.yaml
-  kustomization.yaml
 environments/
   test/
     kustomization.yaml      # patches for test
@@ -72,41 +84,6 @@ environments/
     kustomization.yaml      # patches for uat
   prod/
     kustomization.yaml      # patches for prod
-```
-
-Each environment's `kustomization.yaml` references the base and applies environment-specific patches (replica count, resource limits, ingress hostnames, etc.).
-
-Example `base/deployment.yaml`:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-demo
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: nginx-demo
-  template:
-    metadata:
-      labels:
-        app: nginx-demo
-    spec:
-      containers:
-        - name: nginx
-          image: ghcr.io/<your-username>/nginx-demo:latest
-          ports:
-            - containerPort: 80
-```
-
-Example `environments/test/kustomization.yaml`:
-
-```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - ../../base
 ```
 
 ## Create Argo CD Applications
@@ -118,7 +95,7 @@ cat <<EOF | kubectl apply -f -
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: nginx-demo
+  name: kardinal-test-app
   namespace: argocd
 spec:
   generators:
@@ -129,16 +106,16 @@ spec:
           - env: prod
   template:
     metadata:
-      name: nginx-demo-{{env}}
+      name: kardinal-test-app-{{env}}
     spec:
       project: default
       source:
-        repoURL: https://github.com/<your-username>/kardinal-demo
+        repoURL: https://github.com/pnz1990/kardinal-demo
         targetRevision: main
         path: environments/{{env}}
       destination:
         server: https://kubernetes.default.svc
-        namespace: nginx-demo-{{env}}
+        namespace: kardinal-test-app-{{env}}
       syncPolicy:
         automated:
           prune: true
@@ -161,10 +138,10 @@ You can generate a Pipeline YAML using `kardinal init`:
 
 ```bash
 kardinal init
-# Application name [my-app]: nginx-demo
+# Application name [my-app]: kardinal-test-app
 # Namespace [default]: default
 # Environments (comma-separated) [test,uat,prod]: test,uat,prod
-# Git repository URL: https://github.com/<your-username>/kardinal-demo
+# Git repository URL: https://github.com/pnz1990/kardinal-demo
 # Base branch [main]: main
 # Update strategy (kustomize/helm) [kustomize]: kustomize
 # Pipeline YAML written to pipeline.yaml
@@ -184,10 +161,10 @@ cat <<EOF | kubectl apply -f -
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: nginx-demo
+  name: kardinal-test-app
 spec:
   git:
-    url: https://github.com/<your-username>/kardinal-demo
+    url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
     provider: github
@@ -202,7 +179,7 @@ spec:
       health:
         type: argocd
         argocd:
-          name: nginx-demo-test
+          name: kardinal-test-app-test
     - name: uat
       path: environments/uat
       update:
@@ -211,7 +188,7 @@ spec:
       health:
         type: argocd
         argocd:
-          name: nginx-demo-uat
+          name: kardinal-test-app-uat
     - name: prod
       path: environments/prod
       update:
@@ -220,7 +197,7 @@ spec:
       health:
         type: argocd
         argocd:
-          name: nginx-demo-prod
+          name: kardinal-test-app-prod
 EOF
 ```
 
@@ -228,18 +205,30 @@ Verify the Pipeline was created:
 
 ```bash
 kardinal get pipelines
-# PIPELINE     BUNDLE   TEST   UAT   PROD   AGE
-# nginx-demo   --       --     --    --     10s
+# PIPELINE              BUNDLE   TEST   UAT   PROD   AGE
+# kardinal-test-app     --       --     --    --     10s
 ```
+
+!!! tip "Troubleshooting: Pipeline not appearing"
+    If the pipeline doesn't appear, check that the controller is running:
+    ```bash
+    kubectl get pods -n kardinal-system
+    kubectl logs -n kardinal-system deployment/kardinal-promoter-controller | tail -20
+    ```
 
 ## Create your first Bundle
 
 In a real setup, your CI pipeline creates Bundles after building and pushing images.
-For this quickstart, create one manually:
+For this quickstart, use the latest `kardinal-test-app` image:
 
 ```bash
-kardinal create bundle nginx-demo \
-  --image ghcr.io/<your-username>/nginx-demo:1.29.0
+# Get the latest image SHA from the test app repository
+LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+echo "Using image: $TEST_IMAGE"
+
+# Create the Bundle
+kardinal create bundle kardinal-test-app --image $TEST_IMAGE
 ```
 
 Or equivalently with kubectl:
@@ -249,19 +238,18 @@ cat <<EOF | kubectl apply -f -
 apiVersion: kardinal.io/v1alpha1
 kind: Bundle
 metadata:
-  name: nginx-demo-v1-29-0
+  name: kardinal-test-app-sha-${LATEST_SHA}
   labels:
-    kardinal.io/pipeline: nginx-demo
+    kardinal.io/pipeline: kardinal-test-app
 spec:
   type: image
-  pipeline: nginx-demo
+  pipeline: kardinal-test-app
   images:
-    - repository: ghcr.io/<your-username>/nginx-demo
-      tag: "1.29.0"
-      digest: sha256:replace-with-actual-digest
+    - repository: ghcr.io/pnz1990/kardinal-test-app
+      tag: "sha-${LATEST_SHA}"
   provenance:
-    commitSHA: "manual-quickstart"
-    author: "<your-username>"
+    commitSHA: "${LATEST_SHA}"
+    author: "quickstart"
 EOF
 ```
 
@@ -272,38 +260,46 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE     BUNDLE    TEST       UAT        PROD           AGE
-# nginx-demo   v1.29.0  Verified   Promoting  Waiting        2m
+# PIPELINE              BUNDLE          TEST       UAT        PROD           AGE
+# kardinal-test-app     sha-abc1234     Verified   Promoting  Waiting        2m
 
 # See individual steps
-kardinal get steps nginx-demo
-# STEP                          TYPE            STATE           ENV
-# nginx-demo-v1-29-0-test       PromotionStep   Verified        test
-# nginx-demo-v1-29-0-uat        PromotionStep   HealthChecking  uat
-# nginx-demo-v1-29-0-prod       PromotionStep   Pending         prod
+kardinal get steps kardinal-test-app
+# STEP                                     TYPE            STATE           ENV
+# kardinal-test-app-sha-abc1234-test       PromotionStep   Verified        test
+# kardinal-test-app-sha-abc1234-uat        PromotionStep   HealthChecking  uat
+# kardinal-test-app-sha-abc1234-prod       PromotionStep   Pending         prod
 
 # Check why prod hasn't started
-kardinal explain nginx-demo --env prod
-# PROMOTION: nginx-demo / prod
-#   Bundle: v1.29.0
+kardinal explain kardinal-test-app --env prod
+# PROMOTION: kardinal-test-app / prod
+#   Bundle: sha-abc1234
 #
 # RESULT: WAITING
 #   Upstream environment "uat" has not been verified yet.
 ```
 
+!!! tip "Troubleshooting: Test stuck in HealthChecking"
+    If the test environment stays in `HealthChecking` for more than a few minutes:
+    ```bash
+    kubectl get deployment kardinal-test-app -n kardinal-test-app-test
+    kubectl describe argoapp kardinal-test-app-test -n argocd
+    ```
+    Check that ArgoCD has synced the environment and the deployment is healthy.
+
 Once uat is verified, the prod PromotionStep is created. Since prod uses `approval: pr-review`, kardinal-promoter opens a PR:
 
 ```bash
-kardinal get steps nginx-demo
-# STEP                          TYPE            STATE             ENV
-# nginx-demo-v1-29-0-test       PromotionStep   Verified          test
-# nginx-demo-v1-29-0-uat        PromotionStep   Verified          uat
-# nginx-demo-v1-29-0-prod       PromotionStep   WaitingForMerge   prod
+kardinal get steps kardinal-test-app
+# STEP                                     TYPE            STATE             ENV
+# kardinal-test-app-sha-abc1234-test       PromotionStep   Verified          test
+# kardinal-test-app-sha-abc1234-uat        PromotionStep   Verified          uat
+# kardinal-test-app-sha-abc1234-prod       PromotionStep   WaitingForMerge   prod
 ```
 
-Go to your GitHub repo. You will see a PR titled:
+Go to your GitHub repo ([pnz1990/kardinal-demo](https://github.com/pnz1990/kardinal-demo)). You will see a PR titled:
 
-> **[kardinal] Promote nginx-demo v1.29.0 to prod**
+> **[kardinal] Promote kardinal-test-app sha-abc1234 to prod**
 
 The PR body contains:
 - The artifact being promoted (image reference, digest)
@@ -315,8 +311,8 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE     BUNDLE    TEST       UAT        PROD       AGE
-# nginx-demo   v1.29.0  Verified   Verified   Verified   8m
+# PIPELINE              BUNDLE          TEST       UAT        PROD       AGE
+# kardinal-test-app     sha-abc1234     Verified   Verified   Verified   8m
 ```
 
 The promotion is complete.
@@ -359,26 +355,15 @@ Add a step to your CI pipeline that creates a Bundle after building and pushing 
     curl -X POST https://kardinal.example.com/api/v1/bundles \
       -H "Authorization: Bearer ${{ secrets.KARDINAL_TOKEN }}" \
       -d '{
-        "pipeline": "nginx-demo",
+        "pipeline": "kardinal-test-app",
         "type": "image",
-        "images": [{"repository": "ghcr.io/${{ github.repository }}", "tag": "${{ github.sha }}", "digest": "${{ steps.build.outputs.digest }}"}],
+        "images": [{"repository": "ghcr.io/${{ github.repository }}", "tag": "sha-${{ github.sha }}", "digest": "${{ steps.build.outputs.digest }}"}],
         "provenance": {
           "commitSHA": "${{ github.sha }}",
           "ciRunURL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
           "author": "${{ github.actor }}"
         }
       }'
-```
-
-Or use the GitHub Action:
-
-```yaml
-- uses: kardinal-dev/create-bundle-action@v1
-  with:
-    pipeline: nginx-demo
-    image: ghcr.io/${{ github.repository }}:${{ github.sha }}
-    digest: ${{ steps.build.outputs.digest }}
-    token: ${{ secrets.KARDINAL_TOKEN }}
 ```
 
 ## Next steps
