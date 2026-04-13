@@ -885,3 +885,83 @@ func TestApprove_BundleNotFound(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nonexistent-bundle")
 }
+
+// --- #406: pause/resume lifecycle tests ---
+
+// TestPauseResume_FreezeGateCreatedAndDeleted verifies the full pause/resume lifecycle
+// from the CLI perspective (issue #406):
+// 1. pauseFn creates a freeze-<pipeline> PolicyGate with expression "false"
+// 2. resumeFn deletes the freeze gate
+// 3. The pipeline's Spec.Paused is set/unset correctly
+func TestPauseResume_FreezeGateCreatedAndDeleted(t *testing.T) {
+	s := cliTestScheme(t)
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git:          v1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
+
+	// Step 1: pause
+	var pauseBuf bytes.Buffer
+	require.NoError(t, pauseFn(&pauseBuf, c, "default", "nginx-demo"),
+		"pause must succeed")
+	assert.Contains(t, pauseBuf.String(), "paused")
+
+	// Verify Pipeline.Spec.Paused = true
+	var paused v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo", Namespace: "default"}, &paused))
+	assert.True(t, paused.Spec.Paused, "Pipeline.Spec.Paused must be true after pause")
+
+	// Verify freeze gate exists with expression "false"
+	var freezeGate v1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "freeze-nginx-demo", Namespace: "default"}, &freezeGate),
+		"freeze gate must be created by pauseFn")
+	assert.Equal(t, "false", freezeGate.Spec.Expression,
+		"freeze gate expression must be 'false' to block all promotions")
+	assert.Equal(t, "true", freezeGate.Labels["kardinal.io/freeze"],
+		"freeze gate must have kardinal.io/freeze=true label")
+
+	// Step 2: resume
+	var resumeBuf bytes.Buffer
+	require.NoError(t, resumeFn(&resumeBuf, c, "default", "nginx-demo"),
+		"resume must succeed")
+	assert.Contains(t, resumeBuf.String(), "resumed")
+
+	// Verify Pipeline.Spec.Paused = false
+	var resumed v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo", Namespace: "default"}, &resumed))
+	assert.False(t, resumed.Spec.Paused, "Pipeline.Spec.Paused must be false after resume")
+
+	// Verify freeze gate is deleted
+	var deletedGate v1alpha1.PolicyGate
+	err := c.Get(context.Background(),
+		types.NamespacedName{Name: "freeze-nginx-demo", Namespace: "default"}, &deletedGate)
+	assert.True(t, apierrors.IsNotFound(err),
+		"freeze gate must be deleted by resumeFn; got: %v", err)
+}
+
+// TestPause_PipelineNotFound verifies pauseFn returns an error when the pipeline does not exist.
+func TestPause_PipelineNotFound(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	var buf bytes.Buffer
+	err := pauseFn(&buf, c, "default", "nonexistent-pipeline")
+	assert.Error(t, err, "pause must fail when pipeline does not exist")
+	assert.Contains(t, err.Error(), "nonexistent-pipeline")
+}
+
+// TestResume_PipelineNotFound verifies resumeFn returns an error when the pipeline does not exist.
+func TestResume_PipelineNotFound(t *testing.T) {
+	s := cliTestScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+
+	var buf bytes.Buffer
+	err := resumeFn(&buf, c, "default", "nonexistent-pipeline")
+	assert.Error(t, err, "resume must fail when pipeline does not exist")
+	assert.Contains(t, err.Error(), "nonexistent-pipeline")
+}
