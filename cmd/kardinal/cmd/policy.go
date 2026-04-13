@@ -194,6 +194,20 @@ func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.C
 		return fmt.Errorf("list policy gates: %w", listErr)
 	}
 
+	// Filter out Graph-managed per-bundle instances (same filter as policy list).
+	// Only evaluate user-defined template gates — per-bundle instances are evaluated
+	// by the Graph and would produce N² duplicate results (#297).
+	var templateGates []v1alpha1.PolicyGate
+	for _, g := range gates.Items {
+		if _, isGraphInstance := g.Labels["internal.kro.run/graph-name"]; isGraphInstance {
+			continue
+		}
+		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
+			continue
+		}
+		templateGates = append(templateGates, g)
+	}
+
 	// Build simulated time.
 	simTime := time.Now().UTC()
 	if timeStr != "" {
@@ -244,7 +258,7 @@ func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.C
 	var blocked []string
 
 	// Only evaluate gates that apply to this pipeline/environment.
-	for _, g := range gates.Items {
+	for _, g := range templateGates {
 		if g.Spec.Expression == "" {
 			continue
 		}
