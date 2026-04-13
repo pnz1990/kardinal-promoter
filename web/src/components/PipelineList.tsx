@@ -1,6 +1,8 @@
 // components/PipelineList.tsx — Sidebar list of Pipelines with health chips,
 // bundle name, environment count, and namespace indicator.
 // Includes an onboarding empty state (Kargo parity).
+// #345: debounced search/filter input at the top.
+import { useState, useCallback, useRef } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
 
@@ -71,6 +73,19 @@ function EmptyState() {
 }
 
 export function PipelineList({ pipelines, selected, onSelect, loading, error }: Props) {
+  // #345: search/filter state with debounce
+  const [searchQuery, setSearchQuery] = useState('')
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearchQuery(value)
+    if (debounceTimer.current) clearTimeout(debounceTimer.current)
+    debounceTimer.current = setTimeout(() => {
+      setDebouncedQuery(value.trim().toLowerCase())
+    }, 150)
+  }, [])
+
   if (loading) {
     // #335: skeleton loading state — shimmer placeholders instead of "Loading pipelines..."
     return (
@@ -109,9 +124,62 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
     return <EmptyState />
   }
 
+  // #345: filter pipelines by search query
+  const filteredPipelines = debouncedQuery
+    ? pipelines.filter(p => p.name.toLowerCase().includes(debouncedQuery))
+    : pipelines
+
   return (
-    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-      {pipelines.map(p => {
+    <div>
+      {/* #345: search/filter input */}
+      {pipelines.length > 3 && (
+        <div style={{ padding: '0.5rem 1rem 0.25rem', position: 'relative' }}>
+          <input
+            type="text"
+            placeholder="Filter pipelines…"
+            value={searchQuery}
+            onChange={e => handleSearchChange(e.target.value)}
+            aria-label="Filter pipelines by name"
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              background: '#1e293b',
+              border: '1px solid #334155',
+              borderRadius: '4px',
+              padding: '0.3rem 1.75rem 0.3rem 0.5rem',
+              fontSize: '0.78rem',
+              color: '#e2e8f0',
+              outline: 'none',
+            }}
+          />
+          {searchQuery && (
+            <button
+              onClick={() => handleSearchChange('')}
+              aria-label="Clear filter"
+              style={{
+                position: 'absolute',
+                right: '1.3rem',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                color: '#64748b',
+                fontSize: '0.9rem',
+                padding: '0 2px',
+                lineHeight: 1,
+              }}
+            >×</button>
+          )}
+        </div>
+      )}
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {filteredPipelines.length === 0 && debouncedQuery && (
+          <li style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
+            No pipelines match "{debouncedQuery}"
+          </li>
+        )}
+        {filteredPipelines.map(p => {
         const bundle = shortBundleName(p.activeBundleName)
         const envCount = p.environmentCount
 
@@ -193,6 +261,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
           </li>
         )
       })}
-    </ul>
+      </ul>
+    </div>
   )
 }

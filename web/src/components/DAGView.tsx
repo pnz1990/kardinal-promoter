@@ -182,9 +182,33 @@ function DAGNode({
     <g
       transform={`translate(${node.x - NODE_WIDTH / 2}, ${node.y - NODE_HEIGHT / 2})`}
       onClick={() => onSelectNode?.(isSelected ? null : node)}
-      style={{ cursor: 'pointer' }}
+      style={{ cursor: 'pointer', outline: 'none' }}
       role="button"
+      tabIndex={0}
       aria-label={`${node.environment} — ${node.state}`}
+      aria-pressed={isSelected}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelectNode?.(isSelected ? null : node)
+        }
+      }}
+      onFocus={e => {
+        // #346: visible focus ring for keyboard navigation
+        const rect = (e.currentTarget as SVGGElement).querySelector('rect')
+        if (rect) {
+          rect.setAttribute('stroke', '#a5b4fc')
+          rect.setAttribute('stroke-width', '2.5')
+        }
+      }}
+      onBlur={e => {
+        // #346: restore normal stroke on blur
+        const rect = (e.currentTarget as SVGGElement).querySelector('rect')
+        if (rect) {
+          rect.setAttribute('stroke', strokeColor)
+          rect.setAttribute('stroke-width', String(strokeWidth))
+        }
+      }}
     >
       {/* SVG title provides native browser tooltip on hover (#327) */}
       <title>
