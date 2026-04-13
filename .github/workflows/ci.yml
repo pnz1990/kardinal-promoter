@@ -246,7 +246,7 @@ jobs:
           echo "has_chart=$(test -d chart/kardinal-promoter && echo true || echo false)" >> $GITHUB_OUTPUT
       - name: Install Helm
         if: steps.chart_check.outputs.has_chart == 'true'
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: "latest"
       - name: Lint chart
