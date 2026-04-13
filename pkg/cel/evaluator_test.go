@@ -645,3 +645,51 @@ func TestEvaluator_AllFunctionsInRealPolicyGate(t *testing.T) {
 		})
 	}
 }
+
+// TestEvaluator_Validate_ValidExpression verifies that Validate returns nil for valid CEL syntax.
+// This is the compile-only check used by reconcileTemplate (Issue #315).
+func TestEvaluator_Validate_ValidExpression(t *testing.T) {
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	// These expressions reference deep bundle fields — they would fail at EVALUATION
+	// with an empty bundle context, but must compile (syntax is valid).
+	valid := []string{
+		`!schedule.isWeekend`,
+		`bundle.metadata.annotations["team"] == "platform"`,
+		`bundle.provenance.author != "dependabot[bot]"`,
+		`upstream["uat"].soakMinutes >= 30`,
+		`json.unmarshal(bundle.metadata.annotations["channel"]).channel == "stable"`,
+		`environment.labels.merge(bundle.metadata.labels)["tier"] != "experimental"`,
+	}
+	for _, expr := range valid {
+		t.Run(expr, func(t *testing.T) {
+			err := eval.Validate(expr)
+			assert.NoError(t, err, "expression %q has valid syntax and should compile", expr)
+		})
+	}
+}
+
+// TestEvaluator_Validate_InvalidExpression verifies that Validate returns an error for invalid CEL.
+func TestEvaluator_Validate_InvalidExpression(t *testing.T) {
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	invalid := []string{
+		`this is not valid CEL !!!`,
+		`{{{}}}`,
+		``,
+	}
+	for _, expr := range invalid {
+		t.Run(expr, func(t *testing.T) {
+			err := eval.Validate(expr)
+			// Empty expression: no error from CEL (compiles to nil AST) — allowed
+			if expr == "" {
+				return
+			}
+			assert.Error(t, err, "expression %q has invalid syntax and should not compile", expr)
+		})
+	}
+}

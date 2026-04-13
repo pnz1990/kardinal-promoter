@@ -138,15 +138,11 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 		return ctrl.Result{}, nil
 	}
 
-	// Try to compile the expression to detect syntax errors.
-	_, _, celErr := r.Evaluator.Evaluate(gate.Spec.Expression, map[string]interface{}{
-		"bundle":         map[string]interface{}{},
-		"schedule":       map[string]interface{}{"isWeekend": false, "hour": 0, "dayOfWeek": "Monday"},
-		"environment":    map[string]interface{}{"name": ""},
-		"metrics":        map[string]interface{}{},
-		"upstream":       map[string]interface{}{},
-		"previousBundle": map[string]interface{}{},
-	})
+	// Validate CEL syntax using compile-only check (no evaluation).
+	// Using Validate() instead of Evaluate() avoids false positives: a syntactically
+	// valid expression like bundle.metadata.annotations["team"] would fail evaluation
+	// with an empty bundle map, but that's a runtime concern, not a syntax error.
+	celErr := r.Evaluator.Validate(gate.Spec.Expression)
 
 	var reason string
 	if celErr != nil {
