@@ -260,3 +260,4 @@ Requires human architectural decision: should each step be a separate CRD type, 
 | `ShapeWatch` for external K8s resources | HE-1, HE-2, HE-3 | #131 |
 | CEL schedule library | PG-1, CLI-2 | #126 |
 | Server-side policy simulation API | CLI-1, CLI-2 | #132 |
+| `startAfterMinutes` on Graph edges (time-offset starts) | Staggered scheduling within waves | #454 |
