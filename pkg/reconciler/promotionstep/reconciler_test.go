@@ -23,14 +23,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	dynfake "k8s.io/client-go/dynamic/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -80,7 +84,33 @@ func buildScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	require.NoError(t, v1alpha1.AddToScheme(s))
+	require.NoError(t, appsv1.AddToScheme(s))
+	require.NoError(t, corev1.AddToScheme(s))
 	return s
+}
+
+// healthyDeployment returns a Deployment with Available=True for health check tests.
+func healthyDeployment(name, namespace string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+}
+
+// degradedDeployment returns a Deployment with Available=False for health check tests.
+func degradedDeployment(name, namespace string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Status: appsv1.DeploymentStatus{
+			Conditions: []appsv1.DeploymentCondition{
+				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Message: "pods not ready"},
+			},
+		},
+	}
 }
 
 func makeStep(name, pipelineName, bundleName, env string) *v1alpha1.PromotionStep {
@@ -1027,5 +1057,196 @@ func TestOrphanCleanup_MultipleStepsForBundle(t *testing.T) {
 		getErr := c.Get(context.Background(), types.NamespacedName{Name: stepName, Namespace: "default"}, &got)
 		assert.True(t, apierrors.IsNotFound(getErr) || got.DeletionTimestamp != nil,
 			"step %s must be deleted or marked for deletion when parent bundle is gone", stepName)
+	}
+}
+
+// ─── K-01: Contiguous soak / bake ────────────────────────────────────────────
+
+// TestBakeTracking_FirstHealthyPass verifies that when a PromotionStep enters
+// HealthChecking with a bake config, the first healthy check sets BakeStartedAt
+// and begins accumulating BakeElapsedMinutes.
+func TestBakeTracking_FirstHealthyPass(t *testing.T) {
+	s := buildScheme(t)
+	pipeline := minimalPipelineWithBake(t, "my-app", "prod", 30) // bake: 30 minutes
+
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "prod",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State: "HealthChecking",
+		},
+	}
+
+	// Healthy deployment for the resource adapter
+	deploy := healthyDeployment("my-app", "prod")
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, ps, deploy, bundle).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	healthDet := health.NewAutoDetector(c, dynClient)
+	r := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &mockSCM{},
+		GitClient:      &mockGit{},
+		HealthDetector: healthDet,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	// With bake configured and health=healthy, BakeStartedAt must be set
+	assert.NotNil(t, got.Status.BakeStartedAt,
+		"BakeStartedAt must be set when health passes with bake config")
+	// BakeElapsedMinutes starts at 0 on first pass (no elapsed time yet)
+	assert.GreaterOrEqual(t, got.Status.BakeElapsedMinutes, int64(0))
+	// Step should NOT be Verified yet — needs to accumulate bake minutes
+	assert.NotEqual(t, "Verified", got.Status.State,
+		"step must not be Verified before bake duration completes")
+}
+
+// TestBakeTracking_HealthFailureResetsTimer verifies that a health failure
+// during the bake window resets BakeElapsedMinutes to 0 when policy=reset-on-alarm.
+func TestBakeTracking_HealthFailureResetsTimer(t *testing.T) {
+	s := buildScheme(t)
+	pipeline := minimalPipelineWithBake(t, "my-app", "prod", 30)
+
+	startedAt := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "prod",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:              "HealthChecking",
+			BakeStartedAt:      &startedAt,
+			BakeElapsedMinutes: 8, // had 8 minutes accumulated
+		},
+	}
+
+	// Unhealthy deployment — health alarm fires
+	deploy := degradedDeployment("my-app", "prod")
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, ps, deploy, bundle).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	healthDet := health.NewAutoDetector(c, dynClient)
+	r := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &mockSCM{},
+		GitClient:      &mockGit{},
+		HealthDetector: healthDet,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	// reset-on-alarm: timer resets to 0
+	assert.Equal(t, int64(0), got.Status.BakeElapsedMinutes,
+		"BakeElapsedMinutes must reset to 0 on health failure (reset-on-alarm policy)")
+	assert.Greater(t, got.Status.BakeResets, 0,
+		"BakeResets counter must increment on health alarm")
+	// Step stays in HealthChecking — not Failed, not Verified
+	assert.Equal(t, "HealthChecking", got.Status.State,
+		"step must remain HealthChecking after bake reset")
+}
+
+// TestBakeTracking_VerifiedAfterFullBake verifies that the step transitions to
+// Verified when BakeElapsedMinutes >= bake.minutes.
+func TestBakeTracking_VerifiedAfterFullBake(t *testing.T) {
+	s := buildScheme(t)
+	pipeline := minimalPipelineWithBake(t, "my-app", "prod", 30) // 30 min bake
+
+	startedAt := metav1.NewTime(time.Now().Add(-31 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "prod",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:              "HealthChecking",
+			BakeStartedAt:      &startedAt,
+			BakeElapsedMinutes: 30, // exactly at threshold
+		},
+	}
+
+	deploy := healthyDeployment("my-app", "prod")
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, ps, deploy, bundle).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	healthDet := health.NewAutoDetector(c, dynClient)
+	r := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &mockSCM{},
+		GitClient:      &mockGit{},
+		HealthDetector: healthDet,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	assert.Equal(t, "Verified", got.Status.State,
+		"step must be Verified once BakeElapsedMinutes >= bake.minutes")
+}
+
+// minimalPipelineWithBake creates a Pipeline with bake config for testing.
+func minimalPipelineWithBake(t *testing.T, name, env string, bakeMinutes int) *v1alpha1.Pipeline {
+	t.Helper()
+	return &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{
+					Name:     env,
+					Approval: "auto",
+					Health:   v1alpha1.HealthConfig{Type: "resource"},
+					Bake: &v1alpha1.BakeConfig{
+						Minutes: bakeMinutes,
+						Policy:  "reset-on-alarm",
+					},
+				},
+			},
+		},
 	}
 }

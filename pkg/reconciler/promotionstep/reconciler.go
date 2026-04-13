@@ -647,6 +647,13 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 		}
 
+		// K-01: Contiguous soak / bake tracking.
+		// When env.Bake is configured, health must be healthy for Bake.Minutes
+		// contiguously before transitioning to Verified.
+		if env.Bake != nil {
+			return r.handleBake(ctx, log, ps, pipeline, env, result.Healthy, adapter.Name(), result.Reason)
+		}
+
 		if result.Healthy {
 			log.Info().Str("env", ps.Spec.Environment).Str("adapter", adapter.Name()).Msg("health check passed, Verified")
 			now := metav1.NewTime(time.Now().UTC())
@@ -739,6 +746,111 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		}
 		return ctrl.Result{}, nil
 	}
+}
+
+// handleBake implements the K-01 contiguous-healthy soak window.
+//
+// When env.Bake is configured, the step must be healthy for Bake.Minutes
+// contiguously before transitioning to Verified. A health failure with
+// policy=reset-on-alarm resets the elapsed timer to 0 and increments BakeResets.
+//
+// All time values are written to CRD status fields — Graph-first compliant.
+// time.Now() is called only to write status fields, never in a conditional.
+func (r *Reconciler) handleBake(
+	ctx context.Context,
+	log zerolog.Logger,
+	ps *v1alpha1.PromotionStep,
+	pipeline *v1alpha1.Pipeline,
+	env v1alpha1.EnvironmentSpec,
+	healthy bool,
+	adapterName, reason string,
+) (ctrl.Result, error) {
+	now := metav1.NewTime(time.Now().UTC())
+	patch := client.MergeFrom(ps.DeepCopy())
+
+	if !healthy {
+		policy := env.Bake.Policy
+		if policy == "" {
+			policy = "reset-on-alarm"
+		}
+		if policy == "reset-on-alarm" {
+			// Reset the contiguous timer.
+			ps.Status.BakeElapsedMinutes = 0
+			ps.Status.BakeStartedAt = &now // restart the window
+			ps.Status.BakeResets++
+			ps.Status.Message = fmt.Sprintf(
+				"bake: health alarm via %s — timer reset (resets=%d, need %dm contiguous)",
+				adapterName, ps.Status.BakeResets, env.Bake.Minutes)
+			log.Info().
+				Str("env", ps.Spec.Environment).
+				Int("bakeResets", ps.Status.BakeResets).
+				Int("bakeMinutes", env.Bake.Minutes).
+				Msg("bake: health alarm, timer reset")
+		} else {
+			// fail-on-alarm: transition to Failed immediately.
+			ps.Status.State = StateFailed
+			ps.Status.Message = fmt.Sprintf(
+				"bake: health alarm via %s (policy=fail-on-alarm): %s", adapterName, reason)
+			log.Info().Str("env", ps.Spec.Environment).Msg("bake: health alarm, fail-on-alarm")
+		}
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch bake alarm: %w", patchErr)
+		}
+		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
+	}
+
+	// Healthy. Start or advance the bake window.
+	if ps.Status.BakeStartedAt == nil {
+		// First healthy check — start the window.
+		ps.Status.BakeStartedAt = &now
+		ps.Status.BakeElapsedMinutes = 0
+	} else {
+		// Advance elapsed time: minutes since BakeStartedAt minus any resets.
+		// We compute elapsed as time since the current window started,
+		// minus the time spent in unhealthy periods. Since we reset BakeStartedAt
+		// on alarm, the simple calculation is: now - BakeStartedAt in minutes.
+		elapsed := time.Since(ps.Status.BakeStartedAt.Time)
+		ps.Status.BakeElapsedMinutes = int64(elapsed.Minutes())
+	}
+
+	ps.Status.ConsecutiveHealthFailures = 0
+
+	if ps.Status.BakeElapsedMinutes >= int64(env.Bake.Minutes) {
+		// Bake complete — transition to Verified.
+		ps.Status.State = StateVerified
+		ps.Status.Message = fmt.Sprintf(
+			"bake complete: %dm contiguous healthy via %s (resets=%d)",
+			env.Bake.Minutes, adapterName, ps.Status.BakeResets)
+		ps.Status.Conditions = appendCondition(ps.Status.Conditions,
+			"Verified", metav1.ConditionTrue, "BakeComplete",
+			fmt.Sprintf("contiguous soak %dm complete", env.Bake.Minutes),
+			now.Time)
+		log.Info().
+			Str("env", ps.Spec.Environment).
+			Int64("elapsedMinutes", ps.Status.BakeElapsedMinutes).
+			Int("requiredMinutes", env.Bake.Minutes).
+			Msg("bake: complete, Verified")
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch bake verified: %w", patchErr)
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Still baking — update progress and requeue.
+	remaining := int64(env.Bake.Minutes) - ps.Status.BakeElapsedMinutes
+	ps.Status.Message = fmt.Sprintf(
+		"bake: %dm/%dm contiguous healthy via %s (~%dm remaining, resets=%d)",
+		ps.Status.BakeElapsedMinutes, env.Bake.Minutes, adapterName,
+		remaining, ps.Status.BakeResets)
+	log.Debug().
+		Str("env", ps.Spec.Environment).
+		Int64("elapsed", ps.Status.BakeElapsedMinutes).
+		Int64("remaining", remaining).
+		Msg("bake: in progress")
+	if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+		return ctrl.Result{}, fmt.Errorf("patch bake progress: %w", patchErr)
+	}
+	return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 }
 
 // patchState is a helper to patch state + message atomically.

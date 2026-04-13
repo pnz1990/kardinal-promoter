@@ -110,6 +110,24 @@ type PromotionStepStatus struct {
 	// Long-term: git operations become Kubernetes Jobs (owned nodes in the Graph).
 	// +optional
 	WorkDir string `json:"workDir,omitempty"`
+
+	// BakeStartedAt is when the contiguous-healthy soak window began (K-01).
+	// Set on the first successful health check when env.bake is configured.
+	// Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm).
+	// +optional
+	BakeStartedAt *metav1.Time `json:"bakeStartedAt,omitempty"`
+
+	// BakeElapsedMinutes is the number of contiguous healthy minutes accumulated
+	// so far in the current bake window (K-01). Resets to 0 on health failure
+	// when policy=reset-on-alarm. When this reaches env.bake.minutes, the step
+	// transitions to Verified.
+	// +optional
+	BakeElapsedMinutes int64 `json:"bakeElapsedMinutes,omitempty"`
+
+	// BakeResets is the number of times the bake timer was reset due to a
+	// health alarm during the current bake window (K-01).
+	// +optional
+	BakeResets int `json:"bakeResets,omitempty"`
 }
 
 // +kubebuilder:object:root=true
