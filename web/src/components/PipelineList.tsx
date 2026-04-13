@@ -124,25 +124,41 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
     return <EmptyState />
   }
 
-  // #345: filter pipelines by search query
+  // #345: filter pipelines by search query (includes namespace prefix search)
   const filteredPipelines = debouncedQuery
-    ? pipelines.filter(p => p.name.toLowerCase().includes(debouncedQuery))
+    ? pipelines.filter(p =>
+        p.name.toLowerCase().includes(debouncedQuery) ||
+        p.namespace.toLowerCase().includes(debouncedQuery) ||
+        `${p.namespace}/${p.name}`.toLowerCase().includes(debouncedQuery)
+      )
     : pipelines
+
+  // #358: detect multi-namespace setup — show namespace prefix when needed
+  const uniqueNamespaces = new Set(pipelines.map(p => p.namespace))
+  const isMultiNamespace = uniqueNamespaces.size > 1
+
+  // Group by namespace for multi-namespace display
+  const pipelinesByNamespace: Record<string, typeof filteredPipelines> = {}
+  for (const p of filteredPipelines) {
+    if (!pipelinesByNamespace[p.namespace]) pipelinesByNamespace[p.namespace] = []
+    pipelinesByNamespace[p.namespace].push(p)
+  }
+  const namespaceOrder = Array.from(uniqueNamespaces).sort()
 
   return (
     <div>
       {/* #345: search/filter input */}
       {pipelines.length > 3 && (
-        <div style={{ padding: '0.5rem 1rem 0.25rem', position: 'relative' }}>
-          <input
-            type="text"
-            placeholder="Filter pipelines…"
-            value={searchQuery}
-            onChange={e => handleSearchChange(e.target.value)}
-            aria-label="Filter pipelines by name"
-            style={{
-              width: '100%',
-              boxSizing: 'border-box',
+         <div style={{ padding: '0.5rem 1rem 0.25rem', position: 'relative' }}>
+           <input
+             type="text"
+             placeholder={isMultiNamespace ? "Filter by name or namespace…" : "Filter pipelines…"}
+             value={searchQuery}
+             onChange={e => handleSearchChange(e.target.value)}
+             aria-label="Filter pipelines by name or namespace"
+             style={{
+               width: '100%',
+               boxSizing: 'border-box',
               background: '#1e293b',
               border: '1px solid #334155',
               borderRadius: '4px',
@@ -179,13 +195,47 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
             No pipelines match "{debouncedQuery}"
           </li>
         )}
-        {filteredPipelines.map(p => {
+        {/* #358: multi-namespace grouped display */}
+        {isMultiNamespace ? (
+          namespaceOrder.map(ns => {
+            const nsPipelines = pipelinesByNamespace[ns]
+            if (!nsPipelines || nsPipelines.length === 0) return null
+            return (
+              <li key={ns}>
+                {/* Namespace header */}
+                <div style={{
+                  padding: '0.3rem 1rem 0.15rem',
+                  fontSize: '0.65rem',
+                  color: '#475569',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  borderTop: '1px solid #1e293b',
+                  fontFamily: 'monospace',
+                  background: '#070f1b',
+                }}>
+                  {ns}
+                </div>
+                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                  {nsPipelines.map(p => renderPipelineItem(p))}
+                </ul>
+              </li>
+            )
+          })
+        ) : (
+          filteredPipelines.map(p => renderPipelineItem(p))
+        )}
+      </ul>
+    </div>
+  )
+
+  // #358: renderPipelineItem as inner function for reuse in grouped and flat display
+  function renderPipelineItem(p: Pipeline) {
         const bundle = shortBundleName(p.activeBundleName)
         const envCount = p.environmentCount
 
         return (
           <li
-            key={p.name}
+            key={`${p.namespace}/${p.name}`}
             onClick={() => onSelect(p.name)}
             role="button"
             aria-selected={selected === p.name}
@@ -260,8 +310,5 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
             )}
           </li>
         )
-      })}
-      </ul>
-    </div>
-  )
+  }
 }
