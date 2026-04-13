@@ -1,0 +1,49 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: payment-service
+  namespace: default
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: resource
+      # Run integration tests after deployment to test environment
+      steps:
+        - uses: git-clone
+        - uses: kustomize-set-image
+        - uses: kustomize-build
+        - uses: git-commit
+        - uses: git-push
+        - uses: health-check
+        # Run integration test suite against the deployed test environment
+        - uses: integration-test
+
+    - name: uat
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: resource
+
+    - name: prod
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 15m

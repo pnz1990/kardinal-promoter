@@ -256,6 +256,60 @@ When `renderManifests: true` is set on an environment, the default step sequence
 
 Without `renderManifests: true`, the standard sequence omits `kustomize-build`.
 
+## Integration Test Step (K-07)
+
+The `integration-test` built-in step creates a Kubernetes Job in the target environment namespace, waits for it to complete, and writes the result to the step output accumulator. This is the most powerful quality gate after bake time — running real tests against the actual deployed service.
+
+### Configuration
+
+```yaml
+steps:
+  - uses: integration-test
+```
+
+The step reads its config from `PromotionStep.spec.inputs`:
+
+| Input key | Required | Default | Description |
+|---|---|---|---|
+| `integration_test.image` | Yes | | Container image to run (e.g., `ghcr.io/myorg/integration-tests:latest`) |
+| `integration_test.command` | No | container default | Space-separated command and args (e.g., `./run-tests.sh --env staging`) |
+| `integration_test.timeout` | No | `30m` | Maximum time to wait for Job completion (Go duration, e.g., `10m`, `1h`) |
+
+### Behavior
+
+1. **First call**: creates a `batch/v1 Job` in the environment namespace and returns `Pending` (reconciler requeues in 15s).
+2. **Subsequent calls**: re-checks Job status. Returns `Pending` while running, `Success` when Job succeeds, `Failed` when Job fails.
+3. **Timeout**: if `integration_test.timeout` elapses, the Job is deleted and the step returns `Failed`.
+4. **Idempotent**: multiple reconcile iterations never create duplicate Jobs (deterministic Job name from bundle+env).
+5. **Cleanup**: Jobs use `ttlSecondsAfterFinished: 3600` so they self-delete after 1 hour.
+
+### Outputs
+
+On success, the step populates:
+- `integration_test.result`: `"passed"`
+- `integration_test.job`: the Job name
+- `integration_test.elapsed`: time taken (e.g., `"2m34s"`)
+
+On failure:
+- `integration_test.result`: `"failed"`
+- `integration_test.job`: the Job name
+
+### Example
+
+```yaml
+environments:
+  - name: test
+    steps:
+      - uses: git-clone
+      - uses: kustomize-set-image
+      - uses: git-commit
+      - uses: git-push
+      - uses: health-check
+      - uses: integration-test   # runs after health check passes
+```
+
+See `examples/integration-test/pipeline.yaml` for a complete example.
+
 ## Examples
 
 ### Minimal (3 lines per environment, all defaults)

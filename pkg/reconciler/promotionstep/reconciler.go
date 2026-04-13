@@ -367,6 +367,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		},
 		SCM:       r.SCM,
 		GitClient: r.GitClient,
+		K8sClient: r.Client,
 	}
 
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, ps.Status.CurrentStepIndex)
@@ -738,6 +739,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		Outputs:     cloneMap(ps.Status.Outputs),
 		SCM:         r.SCM,
 		GitClient:   r.GitClient,
+		K8sClient:   r.Client,
 	}
 
 	result, execErr := healthStep.Execute(ctx, state)
