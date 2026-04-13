@@ -371,7 +371,7 @@ func TestEvaluator_JSONUnmarshal_InvalidJSON(t *testing.T) {
 	ctx := buildKroCtx()
 	// Override annotation with invalid JSON
 	ctx["bundle"].(map[string]interface{})["metadata"].(map[string]interface{})["annotations"].(map[string]interface{})["channel"] = "not-json-{{{!"
-	pass, reason, err := eval.Evaluate(`json.unmarshal(bundle.metadata.annotations["channel"]).channel == "stable"`, ctx)
+	pass, reason, _ := eval.Evaluate(`json.unmarshal(bundle.metadata.annotations["channel"]).channel == "stable"`, ctx)
 	// CEL json.unmarshal on invalid JSON must not panic; it returns an error or false
 	// (fail-closed: either an error is returned, or the expression evaluates to false)
 	assert.False(t, pass, "invalid JSON must not pass a gate")
