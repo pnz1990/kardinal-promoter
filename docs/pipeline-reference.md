@@ -86,6 +86,7 @@ spec:
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
 | `path` | No | `environments/<name>` | Directory (layout: directory) or branch (layout: branch) in the GitOps repo containing the environment's manifests. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
+| `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. Wave N automatically depends on all wave N-1 environments. Composable with `dependsOn`. |
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: runs `kustomize edit set-image`. `helm`: patches a configurable path in `values.yaml`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `renderManifests` | No | `false` | When `true`, runs `kustomize-build` after `kustomize-set-image` and commits rendered plain YAML to the environment branch. Requires `layout: branch`. Enables the rendered manifests pattern. |
@@ -157,6 +158,40 @@ environments:
   - name: post-deploy-validation
     dependsOn: [prod-us, prod-eu]    # waits for both regions
 ```
+
+### Wave Topology (K-06)
+
+For multi-region deployments with many parallel environments, `wave:` is syntactic sugar for `dependsOn`. Environments with the same wave number are promoted in parallel. Wave N environments automatically depend on **all** wave N-1 environments.
+
+```yaml
+environments:
+  - name: test        # no wave — sequential (depends on nothing)
+  - name: staging     # no wave — sequential (depends on test)
+
+  # Wave 1: prod-eu and prod-us start simultaneously after staging
+  - name: prod-eu
+    wave: 1
+    approval: pr-review
+    bake:
+      minutes: 720
+
+  - name: prod-us
+    wave: 1
+    approval: pr-review
+    bake:
+      minutes: 720
+
+  # Wave 2: prod-ap starts after BOTH prod-eu AND prod-us reach Verified
+  - name: prod-ap
+    wave: 2
+    approval: pr-review
+    bake:
+      minutes: 480
+```
+
+`wave:` and explicit `dependsOn` are composable — the final dependency set is the union of wave-derived edges and any explicit `dependsOn` entries. Non-wave environments (Wave == 0) continue to use the sequential default (each depends on the previous in the list).
+
+See `examples/wave-topology/pipeline.yaml` for a complete example.
 
 ## Git Layout: Directory vs Branch
 
