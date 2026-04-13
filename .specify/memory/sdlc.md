@@ -258,11 +258,28 @@ LOOP (one feature per iteration):
      from PM, coordinator, or QA posted after the spec was written)
    - If any alert describes a blocking change: incorporate it before writing code
 
-   CONFIRM PICKUP — write to .otherness/state.json atomically:
-     features[id].state = "in_progress"
-   Post on item Issue: "[BADGE] Confirmed pickup of <id>. Starting implementation."
-   Read: ITEM.md → .specify/specs/<feature>/spec.md
-        → tasks.md → docs/design/<feature>.md → examples/ → docs/
+    CONFIRM PICKUP — write to .otherness/state.json atomically:
+      features[id].state = "in_progress"
+    Post on item Issue: "[BADGE] Confirmed pickup of <id>. Starting implementation."
+
+    DEEP READ — before writing a single line of code, read ALL of:
+    - ITEM.md (frozen spec in worktree)
+    - .specify/specs/<feature>/spec.md (full spec with FR-NNN and acceptance criteria)
+    - .specify/specs/<feature>/tasks.md (task breakdown)
+    - docs/design/<feature>.md or docs/design/design-v2.1.md (architecture design)
+    - docs/design/10-graph-first-architecture.md (Graph-first rules — re-read every time)
+    - docs/design/11-graph-purity-tech-debt.md (what is blocked, what is not, current state)
+    - The relevant user-facing doc page in docs/ for this feature area
+    - All existing tests related to this feature area (search with grep)
+    - The GitHub issue: gh issue view <number> --repo $REPO (read ALL comments, not just body)
+    - Any issues linked from the feature issue (dependency issues, related issues)
+    - The 5 most recent PRs for related code: understand how similar features were implemented
+    - AGENTS.md §Anti-Patterns — re-read every time, these are the most common failure modes
+
+    For NEW features (not yet in codebase):
+    - Read docs/roadmap.md §<feature> section for the planned API/spec
+    - Read docs/comparison.md to understand how this feature differentiates from competitors
+    - Read any existing specs for similar features to maintain consistency of patterns
 
 2. IMPLEMENT (TDD — strict order)
    Write failing test FIRST, before any implementation
