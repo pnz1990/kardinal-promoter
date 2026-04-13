@@ -590,12 +590,20 @@
       "pr_merged": true
     },
     "307-pre-deploy-gates": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "STANDALONE",
       "assigned_at": "2026-04-13T20:36:04Z",
       "dependency_mode": "merged",
       "pr_number": 457,
-      "pr_merged": false
+      "pr_merged": true
+    },
+    "308-abort-vs-rollback": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T20:46:50Z",
+      "dependency_mode": "merged",
+      "pr_number": 458,
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
@@ -608,8 +616,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-13T20:36:04Z",
-      "cycle": 40
+      "last_seen": "2026-04-13T20:52:29Z",
+      "cycle": 43
     }
   },
   "handoff": {

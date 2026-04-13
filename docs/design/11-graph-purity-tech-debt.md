@@ -104,22 +104,37 @@ Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, con
 
 ---
 
-## Blocked on Krocodile (Do Not Touch)
+## Blocked on Krocodile
 
-Only the following genuinely require upstream krocodile changes. Everything else has a path — see §Previously Blocked — Now Unblocked below.
+**Nothing is currently blocked on krocodile.** All previously blocked issues have implementation
+paths that require only kardinal changes. See §Previously Blocked — Now Unblocked below.
 
-| ID | Issue | What krocodile must provide | Why no workaround |
+`recheckAfter` as a krocodile primitive is still desirable for the general case and should
+be contributed upstream — but kardinal no longer requires it as a prerequisite for any feature.
+
+| ID | Issue | Desired krocodile contribution | Priority |
 |---|---|---|---|
-| PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Time-based gates need periodic re-evaluation without an external watch event. `ctrl.Result{RequeueAfter}` in the PolicyGate reconciler is the only alternative, which is a logic leak. No clean workaround within Graph-first rules. |
-| HE-1 / HE-2 / HE-3 | #136 | `ShapeWatch` for external K8s resources | Health adapters read Deployment/Application/Kustomization outside the Graph. Requires Watch semantics for arbitrary external resources — or wait for the Aggregated API provider (#456) which solves this differently. |
-
-> **Note on `dependsOn` explicit edges** (also in #138): the positional naming workaround
-> in `builder.go:467` is correct and acceptable until the upstream PR lands. Contribute
-> `dependsOn` alongside `recheckAfter` in the same krocodile PR.
+| PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Nice-to-have — superseded by `ScheduleClock` pattern |
+| GB-5 | #138 | Explicit `dependsOn` edges | Nice-to-have — positional workaround is correct today |
+| HE-1 / HE-2 / HE-3 | #136 | `ShapeWatch` for external K8s resources | Superseded by Aggregated API (#456) |
 
 ---
 
 ## Previously Blocked — Now Unblocked
+
+### #138 (recheckAfter): unblocked via ScheduleClock pattern
+
+**Ellis Tarn (krocodile author) suggested using `propagateWhen` with a time-based trigger node.**
+
+The `ScheduleClock` CRD is an Owned node whose sole job is writing `status.tick = time.Now()`
+on a configurable interval. This fires a real Kubernetes watch event. PolicyGate nodes that
+reference `clock` in their dependency scope re-evaluate their `propagateWhen` expressions on
+every tick — including `schedule.isWeekend()` and `schedule.hour()` functions.
+
+Register `schedule.*` as CEL library extensions on the Graph's `DefaultEnvironment` (Q3 — 
+stateless, cheap, synchronous). No `recheckAfter` krocodile primitive required.
+
+See §ScheduleClock Implementation below for the full spec.
 
 ### #132 (step-as-Graph-node): unblocked via flat DAG compilation
 
@@ -127,18 +142,113 @@ See §Flat DAG Compilation below. Bundle type is known at creation time — the 
 can be generated statically. No runtime Graph mutation. No krocodile changes required.
 Performance at scale is a benchmark question, not a correctness blocker.
 
-### #130 and #68 (eliminate pkg/cel): partially unblocked
+### #130 and #68 (eliminate pkg/cel): fully unblocked
 
-Non-time-based PolicyGate expressions (bundle metadata, environment, metrics, soak time)
-are pure Kubernetes resource field reads — migrate to Graph Watch nodes today without `pkg/cel`
-and without krocodile changes. Only time-based gates (`schedule.isWeekend`, `schedule.hour`)
-remain blocked on `recheckAfter` (#138). Reduce `pkg/cel` to time-only scope until recheckAfter
-lands.
+With `ScheduleClock` + `schedule.*` CEL library (from #138 solution), `pkg/cel` can be deleted
+entirely:
+- Non-time-based expressions → Graph Watch nodes (no krocodile needed)
+- Time-based expressions (`schedule.*`) → CEL library on Graph DefaultEnvironment + ScheduleClock trigger
 
 ### #400 (Journey 2 multi-cluster): unblocked via Stage 14 implementation
 
 Was labeled blocked via Stage 14 → #132 → krocodile. Since #132 is unblocked, Stage 14 is
 a kardinal implementation task. Journey 2 test can be written once Stage 14 ships.
+
+---
+
+## ScheduleClock Implementation — #138 Unblocked
+
+> Closes: #138, #130, #68 (eliminates `pkg/cel` entirely)
+> Suggested by: Ellis Tarn (krocodile author)
+> Architecture: ✅ Pure — Q2 (Owned node) + Q3 (CEL library extension)
+
+### Problem
+
+Time-based PolicyGate expressions (`!schedule.isWeekend()`, `schedule.hour >= 9`) need
+periodic re-evaluation. Nothing in the cluster changes when the clock advances — no watch
+event fires, so the Graph never re-evaluates these nodes.
+
+### Solution
+
+**Two parts that compose:**
+
+**1. `ScheduleClock` CRD** — an Owned node that writes a timestamp on a fixed interval,
+generating real Kubernetes watch events:
+
+```go
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+// pkg/reconciler/scheduleclock/reconciler.go
+// Reconciler writes status.tick every spec.interval.
+// This is the only thing it does — it exists to generate watch events.
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    var clock kardinalv1alpha1.ScheduleClock
+    if err := r.Get(ctx, req.NamespacedName, &clock); err != nil {
+        return ctrl.Result{}, client.IgnoreNotFound(err)
+    }
+    clock.Status.Tick = time.Now().UTC().Format(time.RFC3339)
+    if err := r.Status().Update(ctx, &clock); err != nil {
+        return ctrl.Result{}, fmt.Errorf("updating tick: %w", err)
+    }
+    interval := clock.Spec.Interval.Duration
+    if interval == 0 {
+        interval = time.Minute
+    }
+    return ctrl.Result{RequeueAfter: interval}, nil
+}
+```
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: ScheduleClock
+metadata:
+  name: kardinal-clock
+  namespace: kardinal-system
+spec:
+  interval: 1m
+status:
+  tick: "2026-04-13T14:00:00Z"   # updated every interval
+```
+
+**2. `schedule.*` CEL library on Graph DefaultEnvironment** — stateless functions:
+
+```go
+// pkg/cel/schedule/library.go
+// Registered on the Graph's DefaultEnvironment via WithCustomDeclarations.
+// schedule.isWeekend() — true if Saturday or Sunday UTC
+// schedule.hour()      — current UTC hour (0-23)
+// schedule.dayOfWeek() — "Monday", "Tuesday", ...
+```
+
+**3. Graph builder wires clock dependency** — any PolicyGate node whose expression
+contains `schedule.` gets an automatic data-flow reference to the `ScheduleClock` node:
+
+```yaml
+# Generated by the Pipeline translator for a PolicyGate with schedule.* expression
+- id: noWeekendDeploys
+  template:
+    apiVersion: kardinal.io/v1alpha1
+    kind: PolicyGate
+    ...
+  propagateWhen:
+    - "${!schedule.isWeekend() && kardinal_clock.status.tick != ''}"
+    #                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    #  clock reference creates a data-flow edge — re-evaluated on every tick
+```
+
+### What this eliminates
+
+- `pkg/cel/environment.go` — deleted entirely (#130, #68)
+- `ctrl.Result{RequeueAfter: N}` timer loop in PolicyGate reconciler
+- `pkg/cel/` import in CLI (`cmd/kardinal/policy.go`) — CLI calls server API instead
+- All `time.Now()` / weekday/hour computation in `policygate/reconciler.go`
+
+### One ScheduleClock per cluster is sufficient
+
+All pipelines share one `kardinal-clock` in `kardinal-system`. The 1-minute tick interval
+is appropriate for time-based gates — gates that care about business hours don't need
+sub-minute precision.
 
 ---
 
@@ -281,12 +391,14 @@ SCM provider (`pkg/scm/gitlab.go`) would be replaced the same way.
 
 ## Pending Upstream Contributions to krocodile
 
-| Contribution | Eliminates | Tracked |
+These are no longer blocking kardinal — all have in-project alternatives — but worth
+contributing upstream for the benefit of the broader krocodile ecosystem.
+
+| Contribution | Kardinal alternative | Tracked |
 |---|---|---|
-| `recheckAfter` on Graph nodes | PG-4, GB-5 | #134 |
-| Explicit `dependsOn` edges | GB-5 | #134 |
-| `ShapeWatch` for external K8s resources | HE-1, HE-2, HE-3 | #131 |
-| CEL schedule library | PG-1, CLI-2 | #126 |
-| Server-side policy simulation API | CLI-1, CLI-2 | #132 |
-| `startAfterMinutes` on Graph edges (time-offset starts) | Staggered scheduling within waves | #454 |
-| Aggregated API provider (GitHub) | #128, #133, #140, #143, #149 | ellistarn/kro#80 |
+| `recheckAfter` on Graph nodes | `ScheduleClock` CRD pattern | #134 |
+| Explicit `dependsOn` edges | Positional naming workaround (acceptable) | #134 |
+| `ShapeWatch` for external K8s resources | Aggregated API provider (#456) | #131 |
+| CEL schedule library in DefaultEnvironment | `pkg/cel/schedule` registered via `WithCustomDeclarations` | #126 |
+| `startAfterMinutes` on Graph edges | Sequential waves (deferred) | #454 |
+| Aggregated API provider (GitHub) | `PRStatus` CRD workaround (#133) until landed | ellistarn/kro#80 (#456) |
