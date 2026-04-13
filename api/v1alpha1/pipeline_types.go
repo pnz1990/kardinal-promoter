@@ -129,6 +129,13 @@ type EnvironmentSpec struct {
 	// +optional
 	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
 
+	// Bake configures a contiguous-healthy soak window for this environment (K-01).
+	// When set, the health check must pass continuously for Bake.Minutes before
+	// the step transitions to Verified. A health failure resets the timer if
+	// policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm".
+	// +optional
+	Bake *BakeConfig `json:"bake,omitempty"`
+
 	// Layout configures how the promotion interacts with the Git repo layout.
 	// "directory" (default): env manifests are in a subdirectory of the main branch.
 	// "branch": rendered manifests are committed to a separate env-specific branch.
@@ -153,6 +160,23 @@ type AutoRollbackSpec struct {
 	// +kubebuilder:default=3
 	// +optional
 	FailureThreshold int `json:"failureThreshold,omitempty"`
+}
+
+// BakeConfig defines a contiguous-healthy soak window for an environment (K-01).
+// The health check must pass continuously for Minutes before the step is Verified.
+type BakeConfig struct {
+	// Minutes is the required contiguous healthy duration in minutes.
+	// The timer resets on health failure when Policy is "reset-on-alarm".
+	// +kubebuilder:validation:Minimum=1
+	Minutes int `json:"minutes"`
+
+	// Policy controls behavior when health fails during the bake window.
+	// "reset-on-alarm" (default): timer resets to 0, step stays in HealthChecking.
+	// "fail-on-alarm": step transitions to Failed immediately on first health failure.
+	// +kubebuilder:validation:Enum=reset-on-alarm;fail-on-alarm
+	// +kubebuilder:default=reset-on-alarm
+	// +optional
+	Policy string `json:"policy,omitempty"`
 }
 
 // WebhookConfig defines the HTTP webhook endpoint for a custom promotion step.

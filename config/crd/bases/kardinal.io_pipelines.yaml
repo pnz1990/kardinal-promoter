@@ -84,6 +84,32 @@ spec:
                             that trigger an automatic rollback Bundle creation. Default: 3.
                           type: integer
                       type: object
+                    bake:
+                      description: |-
+                        Bake configures a contiguous-healthy soak window for this environment (K-01).
+                        When set, the health check must pass continuously for Bake.Minutes before
+                        the step transitions to Verified. A health failure resets the timer if
+                        policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm".
+                      properties:
+                        minutes:
+                          description: |-
+                            Minutes is the required contiguous healthy duration in minutes.
+                            The timer resets on health failure when Policy is "reset-on-alarm".
+                          minimum: 1
+                          type: integer
+                        policy:
+                          default: reset-on-alarm
+                          description: |-
+                            Policy controls behavior when health fails during the bake window.
+                            "reset-on-alarm" (default): timer resets to 0, step stays in HealthChecking.
+                            "fail-on-alarm": step transitions to Failed immediately on first health failure.
+                          enum:
+                          - reset-on-alarm
+                          - fail-on-alarm
+                          type: string
+                      required:
+                      - minutes
+                      type: object
                     delivery:
                       description: Delivery holds in-cluster progressive delivery
                         delegation configuration.

@@ -113,6 +113,26 @@ spec:
           status:
             description: PromotionStepStatus defines the observed state of a PromotionStep.
             properties:
+              bakeElapsedMinutes:
+                description: |-
+                  BakeElapsedMinutes is the number of contiguous healthy minutes accumulated
+                  so far in the current bake window (K-01). Resets to 0 on health failure
+                  when policy=reset-on-alarm. When this reaches env.bake.minutes, the step
+                  transitions to Verified.
+                format: int64
+                type: integer
+              bakeResets:
+                description: |-
+                  BakeResets is the number of times the bake timer was reset due to a
+                  health alarm during the current bake window (K-01).
+                type: integer
+              bakeStartedAt:
+                description: |-
+                  BakeStartedAt is when the contiguous-healthy soak window began (K-01).
+                  Set on the first successful health check when env.bake is configured.
+                  Reset when BakeElapsedMinutes resets (health failure with reset-on-alarm).
+                format: date-time
+                type: string
               conditions:
                 description: Conditions holds status conditions.
                 items:
