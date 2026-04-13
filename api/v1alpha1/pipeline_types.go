@@ -218,6 +218,7 @@ type HelmUpdateConfig struct {
 type HealthConfig struct {
 	// Type selects the health check backend.
 	// Supported values: resource, argocd, flux, argoRollouts, flagger.
+	// +kubebuilder:validation:Enum=resource;argocd;flux;argoRollouts;flagger
 	// +optional
 	Type string `json:"type,omitempty"`
 
@@ -235,6 +236,7 @@ type HealthConfig struct {
 type DeliveryConfig struct {
 	// Delegate offloads in-cluster progressive delivery to an external controller.
 	// Supported values: none, argoRollouts, flagger.
+	// +kubebuilder:validation:Enum=none;argoRollouts;flagger
 	// +optional
 	Delegate string `json:"delegate,omitempty"`
 }
