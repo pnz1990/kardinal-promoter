@@ -963,3 +963,82 @@ func TestPolicyGateReconciler_ChangeWindowAllowed(t *testing.T) {
 
 	assert.True(t, got.Status.Ready, "gate must be ready when no active change window")
 }
+
+// TestReconciler_OverrideActive verifies that a non-expired override causes
+// the gate to pass immediately without evaluating CEL (K-09).
+func TestReconciler_OverrideActive(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	future := metav1.NewTime(time.Now().Add(1 * time.Hour))
+	gate := makeGateInstance("no-weekend-deploy", "default", "app-v1", "false", "5m")
+	gate.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{
+		{Reason: "P0 hotfix — incident #4521", Stage: "prod", ExpiresAt: future, CreatedBy: "alice"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.True(t, got.Status.Ready, "gate must pass when non-expired override exists")
+	assert.Contains(t, got.Status.Reason, "OVERRIDDEN")
+	assert.Contains(t, got.Status.Reason, "P0 hotfix")
+}
+
+// TestReconciler_OverrideExpired verifies that an expired override is ignored (K-09).
+func TestReconciler_OverrideExpired(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	past := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	gate := makeGateInstance("no-weekend-deploy", "default", "app-v1", "false", "5m")
+	gate.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{
+		{Reason: "expired", Stage: "prod", ExpiresAt: past},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.False(t, got.Status.Ready, "gate must block when override is expired")
+}
+
+// TestReconciler_OverrideWrongStage verifies that a stage-specific override
+// does not affect other stages (K-09).
+func TestReconciler_OverrideWrongStage(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	future := metav1.NewTime(time.Now().Add(1 * time.Hour))
+	gate := makeGateInstance("no-weekend-deploy", "default", "app-v1", "false", "5m")
+	gate.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{
+		{Reason: "for uat", Stage: "uat", ExpiresAt: future},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.False(t, got.Status.Ready, "override for 'uat' must not affect 'prod' gate")
+}

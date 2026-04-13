@@ -251,3 +251,17 @@ kardinal policy test my-gate.yaml
 # Simulate a gate against hypothetical conditions
 kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 ```
+
+## Emergency Overrides (K-09)
+
+Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.
+
+```bash
+kardinal override my-app --stage prod --gate no-weekend-deploy \
+  --reason "P0 hotfix — incident #4521" --expires-in 2h
+```
+
+The override adds a `PolicyGateOverride` entry to `PolicyGate.spec.overrides[]`. The gate passes immediately until the override expires. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
+- `kubectl get policygate <name> -o yaml`
+- PR evidence body (OVERRIDDEN badge in policy compliance table)
+- `kardinal explain` output
