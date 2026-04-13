@@ -134,6 +134,18 @@ spec:
                   substitution. It carries the resolved state of the upstream PromotionStep
                   that must be Verified before this gate is evaluated.
                 type: string
+              when:
+                default: post-deploy
+                description: |-
+                  When controls when this gate is evaluated in the promotion lifecycle (K-02).
+                  "pre-deploy" (default: post-deploy): evaluated before git operations start.
+                    If not ready, the PromotionStep stays in Pending and no git-clone begins.
+                  "post-deploy": evaluated after deployment (during bake/health check phase).
+                    This is the default behavior for all existing gates.
+                enum:
+                - pre-deploy
+                - post-deploy
+                type: string
             required:
             - expression
             type: object

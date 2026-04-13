@@ -40,6 +40,16 @@ type PolicyGateSpec struct {
 	// that must be Verified before this gate is evaluated.
 	// +optional
 	UpstreamEnvironment string `json:"upstreamEnvironment,omitempty"`
+
+	// When controls when this gate is evaluated in the promotion lifecycle (K-02).
+	// "pre-deploy" (default: post-deploy): evaluated before git operations start.
+	//   If not ready, the PromotionStep stays in Pending and no git-clone begins.
+	// "post-deploy": evaluated after deployment (during bake/health check phase).
+	//   This is the default behavior for all existing gates.
+	// +kubebuilder:validation:Enum=pre-deploy;post-deploy
+	// +kubebuilder:default=post-deploy
+	// +optional
+	When string `json:"when,omitempty"`
 }
 
 // PolicyGateStatus defines the observed state of a PolicyGate.
