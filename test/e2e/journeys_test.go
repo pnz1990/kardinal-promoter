@@ -47,6 +47,7 @@ import (
 	pgrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	rprec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
+	kardinalsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
 // journeyScheme builds the scheme used by all journey tests.
@@ -579,4 +580,74 @@ func runCLICmd(binary string, args ...string) (string, error) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
 	return string(out), err
+}
+
+// TestJourney6RenderedManifests validates docs/aide/definition-of-done.md Journey 6.
+//
+// A pipeline with layout:branch + kustomize-build renders manifests at promotion time
+// and commits the rendered YAML to environment-specific branches.
+//
+// This test verifies the step sequence is correctly generated for layout:branch
+// pipelines, as the full rendering requires a live Git repo with a DRY source branch.
+func TestJourney6RenderedManifests(t *testing.T) {
+	// Verify that a Pipeline with layout:branch produces the kustomize-build step sequence.
+	// The DefaultSequenceForBundle function must include kustomize-build when layout=branch.
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "rendered-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{
+					Name:     "prod",
+					Approval: "pr-review",
+					Update:   v1alpha1.UpdateConfig{Strategy: "kustomize"},
+					Layout:   "branch",
+				},
+			},
+		},
+	}
+	require.NotNil(t, pipeline, "pipeline must be created")
+
+	// The step sequence for a pr-review, kustomize, layout:branch pipeline
+	// must include kustomize-build (renders manifests before committing to env branch).
+	approvalMode := pipeline.Spec.Environments[0].Approval
+	strategy := pipeline.Spec.Environments[0].Update.Strategy
+	layout := pipeline.Spec.Environments[0].Layout
+
+	seq := kardinalsteps.DefaultSequenceForBundle(approvalMode, "image", strategy, layout)
+
+	// layout:branch must include kustomize-build step
+	found := false
+	for _, s := range seq {
+		if s == "kustomize-build" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"journey 6: layout:branch pipeline must include kustomize-build in step sequence; got: %v ✅", seq)
+	t.Logf("journey 6: step sequence for layout:branch = %v ✅", seq)
+
+	// The kustomize-build step must appear BEFORE git-commit
+	// (rendered YAML is committed to the env branch, not the DRY source)
+	kustomizeBuildIdx := -1
+	gitCommitIdx := -1
+	for i, s := range seq {
+		if s == "kustomize-build" {
+			kustomizeBuildIdx = i
+		}
+		if s == "git-commit" {
+			gitCommitIdx = i
+		}
+	}
+	if kustomizeBuildIdx >= 0 && gitCommitIdx >= 0 {
+		assert.Less(t, kustomizeBuildIdx, gitCommitIdx,
+			"journey 6: kustomize-build must appear before git-commit in step sequence")
+		t.Log("journey 6: kustomize-build precedes git-commit ✅")
+	}
+}
+
+// TestJourney7MultiTenantSelfService is a stub for Journey 7.
+// Full implementation requires ApplicationSet controller integration.
+func TestJourney7MultiTenantSelfService(t *testing.T) {
+	t.Skip("journey 7: multi-tenant self-service requires ApplicationSet controller — not yet implemented")
 }
