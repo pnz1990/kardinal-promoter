@@ -497,3 +497,93 @@ func TestAutoDetector_FlaggerType(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "flagger", adapter.Name())
 }
+
+// TestArgoCDAdapter_NotFound verifies that a missing Application returns Unhealthy
+// with a "not found" reason, not an error. This covers the issue #407 gap.
+func TestArgoCDAdapter_NotFound(t *testing.T) {
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+
+	adapter := health.NewArgoCDAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoCD: health.ArgoCDConfig{Name: "missing-app", Namespace: "argocd"},
+	})
+
+	require.NoError(t, err, "not-found must not return an error, just Unhealthy")
+	assert.False(t, result.Healthy, "missing Application must be Unhealthy")
+	assert.Contains(t, result.Reason, "not found")
+}
+
+// TestArgoCDAdapter_OutOfSync verifies that a Healthy but OutOfSync Application
+// is reported as Unhealthy. Promotion must wait for sync to complete.
+func TestArgoCDAdapter_OutOfSync(t *testing.T) {
+	app := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]interface{}{"name": "nginx-prod", "namespace": "argocd"},
+			"status": map[string]interface{}{
+				"health": map[string]interface{}{"status": "Healthy"},
+				"sync":   map[string]interface{}{"status": "OutOfSync"},
+			},
+		},
+	}
+	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), app)
+
+	adapter := health.NewArgoCDAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoCD: health.ArgoCDConfig{Name: "nginx-prod", Namespace: "argocd"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy, "Healthy+OutOfSync must be Unhealthy — sync must complete")
+	assert.Contains(t, result.Reason, "OutOfSync")
+}
+
+// TestArgoCDAdapter_OperationInProgress verifies that an Application with
+// opPhase=Running (sync operation in progress) is reported as Unhealthy.
+// The promotion health check must wait for the sync operation to finish
+// before declaring the environment healthy.
+func TestArgoCDAdapter_OperationInProgress(t *testing.T) {
+	app := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]interface{}{"name": "nginx-prod", "namespace": "argocd"},
+			"status": map[string]interface{}{
+				"health": map[string]interface{}{"status": "Healthy"},
+				"sync":   map[string]interface{}{"status": "Synced"},
+				"operationState": map[string]interface{}{
+					"phase": "Running",
+				},
+			},
+		},
+	}
+	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), app)
+
+	adapter := health.NewArgoCDAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoCD: health.ArgoCDConfig{Name: "nginx-prod", Namespace: "argocd"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy, "opPhase=Running must be Unhealthy — operation not yet complete")
+	// Reason should mention the operation phase so operators know what to wait for
+	assert.Contains(t, result.Reason, "Running")
+}
+
+// TestFluxAdapter_NotFound verifies that a missing Kustomization returns Unhealthy
+// with a "not found" reason, not an error. This covers the issue #407 gap.
+func TestFluxAdapter_NotFound(t *testing.T) {
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+
+	adapter := health.NewFluxAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		Flux: health.FluxConfig{Name: "missing-ks", Namespace: "flux-system"},
+	})
+
+	require.NoError(t, err, "not-found must not return an error, just Unhealthy")
+	assert.False(t, result.Healthy, "missing Kustomization must be Unhealthy")
+	assert.Contains(t, result.Reason, "not found")
+}
