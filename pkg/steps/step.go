@@ -17,6 +17,8 @@ import (
 	"context"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -112,6 +114,11 @@ type StepState struct {
 	// Custom webhook steps read their configuration (webhook.url, webhook.timeoutSeconds,
 	// webhook.secretRef.name, webhook.authorization) from this map.
 	Inputs map[string]string
+
+	// K8sClient is the Kubernetes API client for steps that need to create or
+	// manage cluster resources (e.g., integration-test Job creation).
+	// May be nil for unit tests or environments that do not use such steps.
+	K8sClient client.Client
 }
 
 // Step is a single unit of promotion work.
