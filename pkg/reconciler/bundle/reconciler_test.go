@@ -5,6 +5,7 @@ package bundle_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -1017,4 +1019,75 @@ func TestBundleReconciler_SameSecondSupersession(t *testing.T) {
 		types.NamespacedName{Name: "nginx-demo-aaa", Namespace: "default"}, &aaa))
 	assert.Equal(t, "Superseded", aaa.Status.Phase,
 		"lexicographically smaller name superseded when timestamps equal")
+}
+
+// TestBundleReconciler_ConcurrentBundleSupersession verifies that when N bundles
+// are created in rapid succession, all older bundles are superseded and only
+// the newest one is promoted. This is the regression test for issue #405.
+//
+// Scenario: 5 bundles created ~1 second apart. Each bundle reconciles itself.
+// Expected: bundles 1–4 become Superseded; bundle 5 becomes Available/Promoting.
+func TestBundleReconciler_ConcurrentBundleSupersession(t *testing.T) {
+	s := newScheme()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Git:          kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test", Approval: "auto"}},
+		},
+	}
+
+	// Create 5 bundles with increasing timestamps to simulate rapid successive creation.
+	baseTime := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+	bundles := make([]*kardinalv1alpha1.Bundle, 5)
+	for i := 0; i < 5; i++ {
+		bundles[i] = &kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              fmt.Sprintf("nginx-demo-v%d", i+1),
+				Namespace:         "default",
+				CreationTimestamp: metav1.Time{Time: baseTime.Add(time.Duration(i) * time.Second)},
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+		}
+	}
+
+	builder := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline)
+	statusSubresources := make([]client.Object, 5)
+	for i, b := range bundles {
+		builder = builder.WithObjects(b)
+		statusSubresources[i] = b
+	}
+	c := builder.WithStatusSubresource(statusSubresources...).Build()
+
+	r := &bundle.Reconciler{Client: c}
+
+	// Reconcile all bundles. Each bundle should check for newer siblings
+	// and supersede itself if a newer one exists.
+	for i := 0; i < 5; i++ {
+		_, err := r.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      fmt.Sprintf("nginx-demo-v%d", i+1),
+				Namespace: "default",
+			},
+		})
+		require.NoError(t, err, "bundle %d reconcile must not error", i+1)
+	}
+
+	// Check results: bundles 1–4 must be Superseded; bundle 5 must NOT be Superseded.
+	for i := 0; i < 4; i++ {
+		var b kardinalv1alpha1.Bundle
+		require.NoError(t, c.Get(context.Background(),
+			types.NamespacedName{Name: fmt.Sprintf("nginx-demo-v%d", i+1), Namespace: "default"}, &b))
+		assert.Equal(t, "Superseded", b.Status.Phase,
+			"bundle %d (v%d) must be Superseded — it has 1+ newer siblings", i+1, i+1)
+	}
+
+	// Bundle 5 (newest) must not be Superseded — it has no newer siblings.
+	var newestBundle kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "nginx-demo-v5", Namespace: "default"}, &newestBundle))
+	assert.NotEqual(t, "Superseded", newestBundle.Status.Phase,
+		"newest bundle (v5) must NOT be Superseded — it is the active bundle")
+	t.Logf("concurrent supersession: bundles 1–4 Superseded, bundle 5 phase=%s ✅", newestBundle.Status.Phase)
 }
