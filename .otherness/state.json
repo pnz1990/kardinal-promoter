@@ -640,13 +640,15 @@
       "pr_merged": true
     },
     "402-pr-review-gate": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
+      "state": "assigned",
+      "assigned_to": "STANDALONE-402-pr-review-gate",
+      "assigned_at": "2026-04-13T23:35:08Z",
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": null,
-      "pr_merged": false
+      "pr_merged": false,
+      "branch": "feat/402-pr-review-gate",
+      "worktree": "../kardinal-promoter.402-pr-review-gate"
     },
     "403-kardinal-override": {
       "state": "in_review",
