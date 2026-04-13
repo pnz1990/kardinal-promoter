@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -890,4 +891,141 @@ func TestSupersessionGuard_ClosesOpenPRAndFails(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "stale-prod-step", Namespace: "default"}, &got))
 	assert.Equal(t, "Failed", got.Status.State, "WaitingForMerge step must be Failed when bundle is Superseded")
 	assert.Contains(t, got.Status.Message, "superseded", "failure message must mention supersession")
+}
+
+// --- #409: orphan cleanup lifecycle tests ---
+
+// TestOrphanCleanup_DeleteBundle_PromotingPhase verifies that when a Bundle in
+// Promoting phase is deleted (e.g. by the operator), all its PromotionSteps
+// self-delete on the next reconcile (orphan guard kicks in).
+// This is a regression test for issue #409 (was broken before #257/#270 fix).
+func TestOrphanCleanup_DeleteBundle_PromotingPhase(t *testing.T) {
+	s := buildScheme(t)
+
+	// Bundle is in Promoting phase (active promotion in progress).
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "my-pipeline"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	step := makeStep("step-test", "my-pipeline", "nginx-demo-v1", "test")
+	step.Status.State = "Promoting"
+	pipeline := makePipeline("my-pipeline")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(step, pipeline, bundle).
+		WithStatusSubresource(step).
+		Build()
+
+	// Delete the bundle (simulate operator action).
+	require.NoError(t, c.Delete(context.Background(), bundle))
+
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-test", Namespace: "default"},
+	})
+	require.NoError(t, err, "orphan guard must not crash on deleted Promoting bundle")
+
+	// PromotionStep must be self-deleted.
+	var got v1alpha1.PromotionStep
+	getErr := c.Get(context.Background(), types.NamespacedName{Name: "step-test", Namespace: "default"}, &got)
+	assert.True(t, apierrors.IsNotFound(getErr) || got.DeletionTimestamp != nil,
+		"PromotionStep must be deleted or marked for deletion when parent bundle is gone; got state=%s", got.Status.State)
+}
+
+// TestOrphanCleanup_DeleteBundle_FailedPhase verifies that when a Bundle in
+// Failed phase is deleted, its PromotionSteps also self-delete.
+func TestOrphanCleanup_DeleteBundle_FailedPhase(t *testing.T) {
+	s := buildScheme(t)
+
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "my-pipeline"},
+		Status:     v1alpha1.BundleStatus{Phase: "Failed"},
+	}
+	step := makeStep("step-failed-test", "my-pipeline", "nginx-demo-v2", "test")
+	step.Status.State = "Failed"
+	pipeline := makePipeline("my-pipeline")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(step, pipeline, bundle).
+		WithStatusSubresource(step).
+		Build()
+
+	// Delete the bundle.
+	require.NoError(t, c.Delete(context.Background(), bundle))
+
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-failed-test", Namespace: "default"},
+	})
+	require.NoError(t, err, "orphan guard must not crash on deleted Failed bundle")
+
+	var got v1alpha1.PromotionStep
+	getErr := c.Get(context.Background(), types.NamespacedName{Name: "step-failed-test", Namespace: "default"}, &got)
+	assert.True(t, apierrors.IsNotFound(getErr) || got.DeletionTimestamp != nil,
+		"PromotionStep must be deleted or marked for deletion when parent bundle is gone")
+}
+
+// TestOrphanCleanup_MultipleStepsForBundle verifies that ALL PromotionSteps
+// for a deleted bundle self-delete — not just the one being reconciled.
+// Each step must reconcile itself when the bundle is gone.
+func TestOrphanCleanup_MultipleStepsForBundle(t *testing.T) {
+	s := buildScheme(t)
+
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v3", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "my-pipeline"},
+		Status:     v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	stepTest := makeStep("step3-test", "my-pipeline", "nginx-demo-v3", "test")
+	stepUAT := makeStep("step3-uat", "my-pipeline", "nginx-demo-v3", "uat")
+	stepProd := makeStep("step3-prod", "my-pipeline", "nginx-demo-v3", "prod")
+	pipeline := makePipeline("my-pipeline")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(stepTest, stepUAT, stepProd, pipeline, bundle).
+		WithStatusSubresource(stepTest, stepUAT, stepProd).
+		Build()
+
+	// Delete the bundle.
+	require.NoError(t, c.Delete(context.Background(), bundle))
+
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	// Reconcile each step — each one should self-delete.
+	for _, stepName := range []string{"step3-test", "step3-uat", "step3-prod"} {
+		_, err := r.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: stepName, Namespace: "default"},
+		})
+		require.NoError(t, err, "orphan guard must not crash for step %s", stepName)
+	}
+
+	// All steps must be gone.
+	for _, stepName := range []string{"step3-test", "step3-uat", "step3-prod"} {
+		var got v1alpha1.PromotionStep
+		getErr := c.Get(context.Background(), types.NamespacedName{Name: stepName, Namespace: "default"}, &got)
+		assert.True(t, apierrors.IsNotFound(getErr) || got.DeletionTimestamp != nil,
+			"step %s must be deleted or marked for deletion when parent bundle is gone", stepName)
+	}
 }
