@@ -238,6 +238,8 @@ spec:
                 - HealthChecking
                 - Verified
                 - Failed
+                - AbortedByAlarm
+                - RollingBack
                 type: string
               workDir:
                 description: |-

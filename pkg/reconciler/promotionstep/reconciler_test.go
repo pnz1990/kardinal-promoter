@@ -1388,3 +1388,143 @@ func minimalPipelineWithBake(t *testing.T, name, env string, bakeMinutes int) *v
 		},
 	}
 }
+
+// ─── K-03: Abort vs Rollback on health failure ────────────────────────────────
+
+// TestOnHealthFailure_AbortSetsAbortedState verifies that onHealthFailure=abort
+// transitions the step to AbortedByAlarm when health fails (fail-on-alarm policy).
+func TestOnHealthFailure_AbortSetsAbortedState(t *testing.T) {
+	scheme := buildScheme(t)
+	pipeline := pipelineWithHealthFailurePolicy(t, "my-app", "prod", "abort")
+
+	startedAt := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "prod",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:         "HealthChecking",
+			BakeStartedAt: &startedAt,
+		},
+	}
+
+	// Unhealthy deployment
+	deploy := degradedDeployment("my-app", "prod")
+	bundle := makeBundle("my-app-v1", "my-app")
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pipeline, ps, deploy, bundle).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	healthDet := health.NewAutoDetector(c, dynClient)
+	r := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &mockSCM{},
+		GitClient:      &mockGit{},
+		HealthDetector: healthDet,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	assert.Equal(t, "AbortedByAlarm", got.Status.State,
+		"step must be AbortedByAlarm when onHealthFailure=abort and health fails")
+}
+
+// TestOnHealthFailure_RollbackCreatesBundle verifies that onHealthFailure=rollback
+// creates a rollback Bundle and transitions the step to RollingBack.
+func TestOnHealthFailure_RollbackCreatesBundle(t *testing.T) {
+	scheme := buildScheme(t)
+	pipeline := pipelineWithHealthFailurePolicy(t, "my-app", "prod", "rollback")
+
+	startedAt := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "prod",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:         "HealthChecking",
+			BakeStartedAt: &startedAt,
+		},
+	}
+
+	// Unhealthy deployment + a "previous" bundle to roll back to
+	deploy := degradedDeployment("my-app", "prod")
+	bundle := makeBundle("my-app-v1", "my-app")
+	bundle.Spec.Provenance = &v1alpha1.BundleProvenance{CommitSHA: "abc123"}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pipeline, ps, deploy, bundle).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
+		Build()
+
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	healthDet := health.NewAutoDetector(c, dynClient)
+	r := &promotionstep.Reconciler{
+		Client:         c,
+		SCM:            &mockSCM{},
+		GitClient:      &mockGit{},
+		HealthDetector: healthDet,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	assert.Equal(t, "RollingBack", got.Status.State,
+		"step must be RollingBack when onHealthFailure=rollback and health fails")
+
+	// A rollback Bundle must have been created
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	var rollbackBundle *v1alpha1.Bundle
+	for i := range bundles.Items {
+		b := &bundles.Items[i]
+		if b.Name != "my-app-v1" && b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "" {
+			rollbackBundle = b
+			break
+		}
+	}
+	require.NotNil(t, rollbackBundle, "a rollback Bundle must be created by the reconciler")
+	assert.Equal(t, "my-app-v1", rollbackBundle.Spec.Provenance.RollbackOf,
+		"rollback Bundle must reference the failing bundle")
+	assert.Equal(t, "my-app", rollbackBundle.Spec.Pipeline,
+		"rollback Bundle must target the same pipeline")
+}
+
+// pipelineWithHealthFailurePolicy creates a Pipeline with bake + onHealthFailure for K-03 tests.
+func pipelineWithHealthFailurePolicy(t *testing.T, name, env, policy string) *v1alpha1.Pipeline {
+	t.Helper()
+	return &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{
+					Name:            env,
+					Approval:        "auto",
+					Health:          v1alpha1.HealthConfig{Type: "resource"},
+					OnHealthFailure: policy,
+					Bake: &v1alpha1.BakeConfig{
+						Minutes: 30,
+						Policy:  "fail-on-alarm", // triggers onHealthFailure on health failure
+					},
+				},
+			},
+		},
+	}
+}

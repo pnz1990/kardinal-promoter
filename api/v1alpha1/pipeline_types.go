@@ -136,6 +136,16 @@ type EnvironmentSpec struct {
 	// +optional
 	Bake *BakeConfig `json:"bake,omitempty"`
 
+	// OnHealthFailure controls what the reconciler does when health fails during
+	// bake or health checking (K-03).
+	// "rollback": create a rollback Bundle at the previous version; step → RollingBack.
+	// "abort": freeze the step; state → AbortedByAlarm; requires human intervention.
+	// "none" (default): step → Failed; downstream stops.
+	// +kubebuilder:validation:Enum=rollback;abort;none
+	// +kubebuilder:default=none
+	// +optional
+	OnHealthFailure string `json:"onHealthFailure,omitempty"`
+
 	// Layout configures how the promotion interacts with the Git repo layout.
 	// "directory" (default): env manifests are in a subdirectory of the main branch.
 	// "branch": rendered manifests are committed to a separate env-specific branch.

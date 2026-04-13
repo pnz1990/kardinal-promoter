@@ -62,7 +62,7 @@ type PromotionStepStatus struct {
 	// State is the step execution state.
 	// The Graph controller uses readyWhen expressions of the form
 	// ${step.status.state == "Verified"} to advance the promotion DAG.
-	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verified;Failed
+	// +kubebuilder:validation:Enum=Pending;Promoting;WaitingForMerge;HealthChecking;Verified;Failed;AbortedByAlarm;RollingBack
 	State string `json:"state,omitempty"`
 
 	// Message provides human-readable detail about the current state.
