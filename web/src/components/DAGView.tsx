@@ -99,19 +99,24 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
           </marker>
         </defs>
 
-        {/* Edges */}
+        {/* Edges — cubic bezier curves so they don't clip through nodes (#325) */}
         {layout.map((node, i) => {
           const nodeEdges = edges.filter(e => e.from === node.id)
           return nodeEdges.map((edge, j) => {
             const to = layout.find(n => n.id === edge.to)
             if (!to) return null
+            const x1 = node.x + NODE_WIDTH / 2
+            const y1 = node.y
+            const x2 = to.x - NODE_WIDTH / 2
+            const y2 = to.y
+            // Control points: horizontal tension pulls the curve away from node edges.
+            const cx1 = x1 + Math.abs(x2 - x1) * 0.5
+            const cx2 = x2 - Math.abs(x2 - x1) * 0.5
             return (
-              <line
+              <path
                 key={`${i}-${j}`}
-                x1={node.x + NODE_WIDTH / 2}
-                y1={node.y}
-                x2={to.x - NODE_WIDTH / 2}
-                y2={to.y}
+                d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
+                fill="none"
                 stroke="#475569"
                 strokeWidth={1.5}
                 markerEnd="url(#arrowhead)"

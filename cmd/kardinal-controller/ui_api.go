@@ -50,6 +50,7 @@ type uiBundleResponse struct {
 	Phase      string                     `json:"phase"`
 	Type       string                     `json:"type"`
 	Pipeline   string                     `json:"pipeline"`
+	CreatedAt  string                     `json:"createdAt,omitempty"` // ISO 8601 creation time for timeline sorting (#337)
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
 }
 
@@ -187,6 +188,7 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			Phase:      b.Status.Phase,
 			Type:       b.Spec.Type,
 			Pipeline:   b.Spec.Pipeline,
+			CreatedAt:  b.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Provenance: b.Spec.Provenance,
 		})
 	}
@@ -475,14 +477,22 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-// pipelinePhase returns the overall pipeline phase from its status conditions.
+// pipelinePhase returns the overall pipeline phase for the UI sidebar.
+// Prefers status.phase (set by the pipeline reconciler) over the condition reason
+// so the sidebar reflects the real runtime phase (Promoting, Degraded, etc.) (#349).
 func pipelinePhase(p *v1alpha1.Pipeline) string {
+	if p.Status.Phase != "" {
+		return p.Status.Phase
+	}
+	// Fallback: derive from Ready condition (pre-reconciler or transitional state).
 	for _, cond := range p.Status.Conditions {
 		if cond.Type == "Ready" {
 			if cond.Status == "True" {
 				return "Ready"
 			}
-			return cond.Reason
+			if cond.Reason != "" {
+				return cond.Reason
+			}
 		}
 	}
 	return "Initializing"

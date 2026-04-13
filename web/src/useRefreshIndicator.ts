@@ -22,14 +22,13 @@ interface RefreshIndicatorResult {
  * The counter increments every second via a setInterval and resets to 0 on onSuccess().
  */
 export function useRefreshIndicator(): RefreshIndicatorResult {
-  const [lastSuccess, setLastSuccess] = useState<Date | null>(null)
   const [elapsedSeconds, setElapsedSeconds] = useState<number | null>(null)
+  // lastSuccessRef is the single source of truth; onSuccess sets it and resets elapsed.
+  // A separate state for lastSuccess is not needed — the ref suffices for the tick closure.
   const lastSuccessRef = useRef<Date | null>(null)
 
   const onSuccess = useCallback(() => {
-    const now = new Date()
-    lastSuccessRef.current = now
-    setLastSuccess(now)
+    lastSuccessRef.current = new Date()
     setElapsedSeconds(0)
   }, [])
 
@@ -43,11 +42,6 @@ export function useRefreshIndicator(): RefreshIndicatorResult {
     }, 1000)
     return () => clearInterval(id)
   }, [])
-
-  // Sync ref with state (needed for the tick closure).
-  useEffect(() => {
-    lastSuccessRef.current = lastSuccess
-  }, [lastSuccess])
 
   return { elapsedSeconds, onSuccess }
 }

@@ -157,6 +157,55 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			// Transient error — requeue to retry later.
 			return ctrl.Result{}, fmt.Errorf("check parent bundle %s: %w", ps.Spec.BundleName, err)
 		}
+
+		// Supersession guard: if parent bundle is Superseded, close any open PR and
+		// move active steps to Failed so they don't linger (#310).
+		// Graph-first: we write only to our OWN status (PromotionStep), and close
+		// the PR via the SCM provider (external I/O scoped to this reconciler's step).
+		isActiveState := ps.Status.State == StateWaitingForMerge || ps.Status.State == StatePromoting
+		if parentBundle.Status.Phase == "Superseded" && isActiveState {
+			log.Info().
+				Str("bundle", ps.Spec.BundleName).
+				Str("env", ps.Spec.Environment).
+				Str("state", ps.Status.State).
+				Msg("parent bundle superseded — closing open PR and marking step Failed")
+
+			// Best-effort PR close via PRStatus CRD (preferred path).
+			if r.SCM != nil && ps.Spec.PRStatusRef != "" {
+				var prs v1alpha1.PRStatus
+				if prErr := r.Get(ctx, types.NamespacedName{
+					Name:      ps.Spec.PRStatusRef,
+					Namespace: ps.Namespace,
+				}, &prs); prErr == nil && prs.Spec.PRNumber > 0 {
+					if closeErr := r.SCM.ClosePR(ctx, prs.Spec.Repo, prs.Spec.PRNumber); closeErr != nil {
+						log.Warn().Err(closeErr).
+							Int("pr", prs.Spec.PRNumber).
+							Msg("failed to close superseded PR (non-fatal)")
+					} else {
+						log.Info().Int("pr", prs.Spec.PRNumber).Msg("closed superseded PR via PRStatus")
+					}
+				}
+			} else if r.SCM != nil {
+				// Fallback: close via PR URL from outputs (covers Promoting steps that
+				// opened a PR but haven't yet transitioned to WaitingForMerge).
+				if prURL, ok := ps.Status.Outputs["prURL"]; ok && prURL != "" {
+					repo := extractRepo(prURL)
+					prNum := extractPRNumber(prURL)
+					if repo != "" && prNum > 0 {
+						if closeErr := r.SCM.ClosePR(ctx, repo, prNum); closeErr != nil {
+							log.Warn().Err(closeErr).
+								Int("pr", prNum).
+								Msg("failed to close superseded PR via outputs (non-fatal)")
+						} else {
+							log.Info().Int("pr", prNum).Msg("closed superseded PR via outputs")
+						}
+					}
+				}
+			}
+
+			return r.patchState(ctx, &ps, StateFailed,
+				fmt.Sprintf("bundle %s was superseded — promotion cancelled", ps.Spec.BundleName))
+		}
 	}
 
 	switch ps.Status.State {
@@ -301,6 +350,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		ps.Status.State = StateFailed
 		ps.Status.Message = execErr.Error()
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			if apierrors.IsNotFound(patchErr) {
+				log.Debug().Msg("promotionstep deleted before failed-state patch — ignoring")
+				return ctrl.Result{}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("patch failed state: %w", patchErr)
 		}
 		return ctrl.Result{}, nil
@@ -851,6 +904,25 @@ func cloneMap(m map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// extractPRNumber extracts the PR number from a GitHub PR URL.
+// e.g. "https://github.com/owner/repo/pull/42" → 42
+func extractPRNumber(prURL string) int {
+	idx := strings.LastIndex(prURL, "/pull/")
+	if idx < 0 {
+		return 0
+	}
+	numStr := prURL[idx+len("/pull/"):]
+	// Trim any trailing path segments
+	if end := strings.Index(numStr, "/"); end >= 0 {
+		numStr = numStr[:end]
+	}
+	var n int
+	if _, err := fmt.Sscanf(numStr, "%d", &n); err != nil {
+		return 0
+	}
+	return n
 }
 
 // extractRepo extracts "owner/repo" from a GitHub PR URL.

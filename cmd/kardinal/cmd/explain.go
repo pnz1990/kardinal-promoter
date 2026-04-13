@@ -169,18 +169,17 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	}
 
 	for _, g := range gates.Items {
+		// Filter out Graph-managed per-bundle instances (#297).
+		// Only show user-defined template gates (same filter as policy list/simulate).
+		if _, isGraphInstance := g.Labels["internal.kro.run/graph-name"]; isGraphInstance {
+			continue
+		}
+		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
+			continue
+		}
 		env := g.Labels["kardinal.io/environment"]
 		if envFilter != "" && env != envFilter {
 			continue
-		}
-		// Only show gates for the active bundle in this environment.
-		// PolicyGates carry a kardinal.io/bundle label set by the graph builder (since PR #258).
-		// Gates without this label (e.g. from older deployments) are shown for all bundles.
-		gateBundle := g.Labels["kardinal.io/bundle"]
-		if gateBundle != "" {
-			if best, ok := activeBundleByEnv[env]; ok && gateBundle != best.bundleName {
-				continue
-			}
 		}
 		gateState := PolicyGatePhase(g)
 		reason := g.Status.Reason

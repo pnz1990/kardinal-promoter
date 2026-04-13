@@ -38,8 +38,17 @@ function shortName(bundleName: string): string {
 }
 
 export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Props) {
-  // Sort newest-first by name, show at most 10.
-  const sorted = [...bundles].sort((a, b) => (a.name > b.name ? -1 : 1)).slice(0, 10)
+  // Sort newest-first by createdAt timestamp (ISO 8601), falling back to name (#337).
+  // Name fallback ensures stability when createdAt is not yet populated.
+  const sorted = [...bundles]
+    .sort((a, b) => {
+      if (a.createdAt && b.createdAt) {
+        return a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0
+      }
+      // Fallback: reverse-lexicographic name sort (newer bundles tend to have larger names)
+      return a.name > b.name ? -1 : 1
+    })
+    .slice(0, 10)
 
   if (sorted.length === 0) return null
 

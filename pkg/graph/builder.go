@@ -547,6 +547,17 @@ func buildPolicyGateNode(
 	}
 	appliesToLabel := gate.Labels["kardinal.io/applies-to"]
 
+	// kardinal.io/gate-name holds the user-defined gate name from the original
+	// PolicyGate template (e.g. "no-weekend-deploys"). This is propagated through
+	// cross-product instantiations so the UI can deduplicate by the human-readable
+	// gate name rather than the long cross-product instance name.
+	// If the input gate already has a gate-name label (cross-product case), inherit it;
+	// otherwise use the gate's own name (direct template case).
+	gateName := gate.Labels["kardinal.io/gate-name"]
+	if gateName == "" {
+		gateName = gate.Name
+	}
+
 	templateMeta := map[string]interface{}{
 		"name": k8sName, // K8s resource name (RFC 1123 subdomain — hyphens allowed, no underscores)
 		"labels": map[string]interface{}{
@@ -556,6 +567,8 @@ func buildPolicyGateNode(
 			"kardinal.io/bundle":        bundleName,
 			"kardinal.io/environment":   envName,
 			"kardinal.io/gate-template": gate.Name,
+			// gate-name: stable human-readable name, propagated through cross-product instances.
+			"kardinal.io/gate-name": gateName,
 			// Propagated from original PolicyGate template for CLI display.
 			"kardinal.io/scope":      scopeLabel,
 			"kardinal.io/applies-to": appliesToLabel,

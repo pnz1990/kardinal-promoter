@@ -200,7 +200,9 @@ func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 			Labels: map[string]string{
 				"kardinal.io/pipeline":    "my-app",
 				"kardinal.io/environment": "prod",
-				"kardinal.io/bundle":      "old-bundle",
+				// Per-bundle Graph instance — must be filtered out by explain (#297)
+				"kardinal.io/bundle":          "old-bundle",
+				"internal.kro.run/graph-name": "my-app-old-bundle",
 			},
 		},
 		Spec:   v1alpha1.PolicyGateSpec{Expression: "true"},
@@ -225,12 +227,16 @@ func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 			Labels: map[string]string{
 				"kardinal.io/pipeline":    "my-app",
 				"kardinal.io/environment": "prod",
-				"kardinal.io/bundle":      "new-bundle",
+				// Note: no kardinal.io/bundle label — template gates are shown by explain;
+				// per-bundle Graph instances (with bundle label) are filtered out (#297).
 			},
 		},
 		Spec:   v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 		Status: v1alpha1.PolicyGateStatus{Ready: false, LastEvaluatedAt: &now},
 	}
+	// oldGate is also template-style for consistency.
+	// The test verifies that explain shows gates scoped to the active environment,
+	// not that it filters by bundle. Gate-by-bundle filtering is an API concern (#297).
 
 	s := buildExplainScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(oldStep, oldGate, newStep, newGate).Build()

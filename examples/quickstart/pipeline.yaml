@@ -20,9 +20,6 @@ spec:
       approval: auto
       health:
         type: argocd
-        argocd:
-          name: nginx-demo-test
-          namespace: argocd
 
     - name: uat
       path: environments/uat
@@ -31,9 +28,6 @@ spec:
       approval: auto
       health:
         type: argocd
-        argocd:
-          name: nginx-demo-uat
-          namespace: argocd
 
     - name: prod
       path: environments/prod
@@ -42,9 +36,6 @@ spec:
       approval: pr-review
       health:
         type: argocd
-        argocd:
-          name: nginx-demo-prod
-          namespace: argocd
         timeout: 15m
 
   historyLimit: 20
