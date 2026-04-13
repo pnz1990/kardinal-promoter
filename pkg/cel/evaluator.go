@@ -59,6 +59,17 @@ func (e *Evaluator) Evaluate(expr string, ctx map[string]interface{}) (bool, str
 	return result, fmt.Sprintf("%s = %v", expr, result), nil
 }
 
+// Validate compiles the CEL expression and returns a non-nil error if it has
+// a syntax or type error. It does NOT evaluate the expression — only checks
+// that the expression is valid CEL and would not crash at compile time.
+//
+// This is safe to call for template PolicyGates without a real bundle context
+// (Issue #315 — syntax-only check, not evaluation).
+func (e *Evaluator) Validate(expr string) error {
+	_, err := e.getOrCompile(expr)
+	return err
+}
+
 // getOrCompile returns a cached program for the expression, or compiles it.
 func (e *Evaluator) getOrCompile(expr string) (cel.Program, error) {
 	e.mu.Lock()

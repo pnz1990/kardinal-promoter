@@ -467,13 +467,13 @@
       "pr_merged": true
     },
     "121-shard-routing": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "STANDALONE",
       "assigned_at": "2026-04-12T02:56:28Z",
       "worktree_path": "../kardinal-promoter.121-shard-routing",
       "dependency_mode": "merged",
       "pr_number": 196,
-      "pr_merged": false
+      "pr_merged": true
     },
     "200-cli-history-format": {
       "state": "done",

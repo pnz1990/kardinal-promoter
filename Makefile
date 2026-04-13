@@ -60,6 +60,9 @@ vuln: $(GOVULNCHECK)
 	$(GOVULNCHECK) ./...
 
 ## Generate (CRD manifests + DeepCopy)
+## IMPORTANT: Run 'make manifests generate' after any change to api/v1alpha1/ types,
+##            then commit the updated config/crd/bases/ and zz_generated.deepcopy.go.
+##            CI enforces this via the 'Check CRD and deepcopy are up to date' step.
 generate: $(CONTROLLER_GEN)
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 

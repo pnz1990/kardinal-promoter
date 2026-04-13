@@ -33,7 +33,7 @@ import (
 // kro CEL library extensions (same as kro readyWhen/propagateWhen):
 //   - json.marshal(v)                   → JSON string
 //   - json.unmarshal(s)                 → dynamic value
-//   - maps.merge(m1, m2)               → merged map (m2 wins)
+//   - map1.merge(map2)                  → merged map (m2 wins) [member function]
 //   - lists.setAtIndex(l, i, v)         → new list with v at index i
 //   - lists.insertAtIndex(l, i, v)      → new list with v inserted
 //   - lists.removeAtIndex(l, i)         → new list with index i removed

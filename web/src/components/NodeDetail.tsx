@@ -2,6 +2,10 @@
 // For PolicyGate nodes: shows CEL expression and last evaluated timestamp.
 // For PromotionStep nodes: shows step-by-step execution context (Kargo parity).
 //
+// #326: NodeDetail is no longer position:fixed. It is rendered as a sibling of
+// the DAGView in App.tsx's flex layout, so it shifts the DAG left rather than
+// overlapping it.
+//
 // Steps are passed as a prop (managed by App's 5s poll) rather than fetched
 // independently, eliminating the 3s polling race condition (issue #322).
 import { useState, useEffect } from 'react'
@@ -39,6 +43,22 @@ function formatTimestamp(iso: string): string {
   }
 }
 
+/** Format elapsed seconds since an ISO timestamp for elapsed duration timers (#330). */
+function formatElapsed(iso: string): string | null {
+  try {
+    const d = new Date(iso)
+    if (isNaN(d.getTime())) return null
+    const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
+    if (diffSec < 0) return null
+    if (diffSec < 60) return `${diffSec}s`
+    const mins = Math.floor(diffSec / 60)
+    const secs = diffSec % 60
+    return `${mins}m ${secs}s`
+  } catch {
+    return null
+  }
+}
+
 /** List of promotion sub-step types in execution order. */
 const STEP_SEQUENCE = [
   'git-clone',
@@ -51,33 +71,40 @@ const STEP_SEQUENCE = [
   'health-check',
 ]
 
-/** Returns an icon for a sub-step given the current state and currentStepIndex. */
-function stepIcon(index: number, currentIndex: number, stepState: string): string {
-  if (index < currentIndex) return '✓'
+/**
+ * Returns an icon for a sub-step given its position relative to the current step.
+ * #359: Uses a clearer distinction — completed (✓), active (▶/✗/◎), pending (○).
+ */
+function stepIcon(index: number, currentIndex: number, stepState: string, isActive: boolean): string {
+  if (index < currentIndex) return '✓'  // already completed
   if (index === currentIndex) {
+    if (!isActive) return '◎'  // current but step not yet executing (Pending)
     const health = kardinalStateToHealth(stepState)
     if (health === 'Error') return '✗'
     if (health === 'Reconciling') return '▶'
-    return '○'
+    return '◎'
   }
-  return '○'
+  return '○'  // not yet reached
 }
 
-function stepIconColor(index: number, currentIndex: number, stepState: string): string {
+function stepIconColor(index: number, currentIndex: number, stepState: string, isActive: boolean): string {
   if (index < currentIndex) return '#22c55e'
   if (index === currentIndex) {
+    if (!isActive) return '#6366f1'  // indigo for pending-current
     const health = kardinalStateToHealth(stepState)
     if (health === 'Error') return '#ef4444'
     if (health === 'Reconciling') return '#f59e0b'
-    return '#94a3b8'
+    return '#6366f1'
   }
   return '#334155'
 }
 
-/** Step progress panel for PromotionStep nodes. */
+/** Step progress panel for PromotionStep nodes. #359: correctly reflects step states. */
 function StepProgress({ step }: { step: PromotionStep }) {
   const currentIndex = step.currentStepIndex ?? 0
   const state = step.state
+  // isActive: the promotion is actively running (not pending/done/failed).
+  const isActive = ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(state)
 
   return (
     <div style={{ marginBottom: '0.75rem' }}>
@@ -98,20 +125,20 @@ function StepProgress({ step }: { step: PromotionStep }) {
               alignItems: 'center',
               gap: '0.5rem',
               marginBottom: i < STEP_SEQUENCE.length - 1 ? '0.3rem' : 0,
-              opacity: i > currentIndex ? 0.4 : 1,
+              opacity: i > currentIndex ? 0.35 : 1,
             }}
           >
             <span style={{
               fontSize: '0.7rem',
-              color: stepIconColor(i, currentIndex, state),
+              color: stepIconColor(i, currentIndex, state, isActive),
               width: '12px',
               flexShrink: 0,
             }}>
-              {stepIcon(i, currentIndex, state)}
+              {stepIcon(i, currentIndex, state, isActive)}
             </span>
             <span style={{
               fontSize: '0.75rem',
-              color: i === currentIndex ? '#e2e8f0' : '#64748b',
+              color: i === currentIndex ? '#e2e8f0' : i < currentIndex ? '#86efac' : '#64748b',
               fontFamily: 'monospace',
               fontWeight: i === currentIndex ? 600 : 400,
             }}>
@@ -119,6 +146,9 @@ function StepProgress({ step }: { step: PromotionStep }) {
             </span>
             {i === currentIndex && state === 'WaitingForMerge' && (
               <span style={{ fontSize: '0.65rem', color: '#f59e0b' }}>waiting</span>
+            )}
+            {i === currentIndex && state === 'HealthChecking' && (
+              <span style={{ fontSize: '0.65rem', color: '#a78bfa' }}>checking</span>
             )}
           </div>
         ))}
@@ -136,9 +166,20 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const [rollbackMessage, setRollbackMessage] = useState<string | null>(null)
   const [celValid, setCelValid] = useState<boolean | null>(null)
   const [celError, setCelError] = useState<string | null>(null)
+  // #330: tick counter to update elapsed timers every second while panel is open.
+  const [, setTick] = useState(0)
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
+
+  // #330: tick every second so elapsed timers stay current.
+  useEffect(() => {
+    if (!isPromotionStep) return
+    const isActiveStep = stepDetail && ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(stepDetail.state)
+    if (!isActiveStep) return
+    const id = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [isPromotionStep, stepDetail?.state])
 
   /** Validate the CEL expression of a PolicyGate node when it is selected. */
   useEffect(() => {
@@ -217,21 +258,27 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
   if (!node) return null
 
+  // #330: elapsed duration for active PromotionStep nodes.
+  // Uses node.lastEvaluatedAt as a proxy for step start time when available.
+  const isActiveNode = isPromotionStep && stepDetail &&
+    ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(stepDetail.state)
+  const elapsedDisplay = isActiveNode && node.lastEvaluatedAt
+    ? formatElapsed(node.lastEvaluatedAt)
+    : null
+
   return (
     <div style={{
-      position: 'fixed',
-      right: 0,
-      top: 0,
-      bottom: 0,
       width: '340px',
+      minWidth: '300px',
+      height: '100%',
       background: '#1e293b',
       borderLeft: '1px solid #334155',
       padding: '1.5rem',
       overflowY: 'auto',
-      zIndex: 1000,
+      flexShrink: 0,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>{node.label}</h3>
+        <h3 style={{ fontSize: '1rem', fontWeight: 600, margin: 0 }}>{node.label}</h3>
         <button
           onClick={onClose}
           style={{
@@ -258,6 +305,14 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
         <strong style={{ color: '#cbd5e1' }}>Environment:</strong> {node.environment}
       </div>
+
+      {/* #330: Elapsed duration timer for active PromotionStep nodes */}
+      {isActiveNode && (
+        <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginBottom: '0.5rem' }}>
+          <strong style={{ color: '#fbbf24' }}>Elapsed:</strong>{' '}
+          {elapsedDisplay ?? 'running…'}
+        </div>
+      )}
 
       {/* Promote button — shown on PromotionStep nodes when a pipeline is known */}
       {isPromotionStep && pipelineName && node.environment && (
