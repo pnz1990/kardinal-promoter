@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -444,4 +445,105 @@ func TestUIAPI_ValidateCEL_KroFunctionsAvailable(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, tc.wantValid, resp["valid"], "expression: %s", tc.expression)
 	}
+}
+
+// TestUIAPI_ListGates_NoDuplicates is a regression test for the "176 PolicyGates" bug
+// (issue #410 — proof(UI)). When multiple PolicyGate CRs exist (e.g. one per
+// environment per gate name from the Graph), the /api/v1/ui/gates endpoint must
+// return exactly the number of CRs that exist — not inflate them via deduplication
+// or template expansion.
+//
+// The current implementation lists PolicyGate CRs directly (one entry per CR),
+// which is correct. This test verifies that 3 distinct gate CRs → 3 response items.
+func TestUIAPI_ListGates_NoDuplicates(t *testing.T) {
+	gates := []v1alpha1.PolicyGate{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploys", Namespace: "platform-policies"},
+			Spec:       v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+			Status:     v1alpha1.PolicyGateStatus{Ready: true, Reason: "Weekday"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "staging-soak-30m", Namespace: "platform-policies"},
+			Spec:       v1alpha1.PolicyGateSpec{Expression: "bundle.upstreamSoakMinutes >= 30"},
+			Status:     v1alpha1.PolicyGateStatus{Ready: true, Reason: "soak=45m"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "no-bot-deploys", Namespace: "my-team"},
+			Spec:       v1alpha1.PolicyGateSpec{Expression: `bundle.provenance.author != "dependabot[bot]"`},
+			Status:     v1alpha1.PolicyGateStatus{Ready: false, Reason: "author is dependabot"},
+		},
+	}
+
+	s := uiScheme()
+	clientObjects := make([]client.Object, len(gates))
+	for i := range gates {
+		clientObjects[i] = &gates[i]
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(clientObjects...).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/gates", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiGateResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Exactly 3 gates — no duplicates, no inflation (#410 regression)
+	assert.Len(t, resp, 3, "API must return exactly 3 gates — no duplicates from templates")
+
+	// Names match the CRs
+	names := make([]string, len(resp))
+	for i, g := range resp {
+		names[i] = g.Name
+	}
+	assert.Contains(t, names, "no-weekend-deploys")
+	assert.Contains(t, names, "staging-soak-30m")
+	assert.Contains(t, names, "no-bot-deploys")
+
+	// Namespaces preserved (org vs team)
+	namespaces := make(map[string]string)
+	for _, g := range resp {
+		namespaces[g.Name] = g.Namespace
+	}
+	assert.Equal(t, "platform-policies", namespaces["no-weekend-deploys"])
+	assert.Equal(t, "my-team", namespaces["no-bot-deploys"])
+}
+
+// TestUIAPI_ListPipelines_PausedBadge verifies that a paused Pipeline is reflected
+// in the pipeline list response (issue #410 — proof(UI): PAUSED badge in pipeline list).
+func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Paused: true,
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod"},
+			},
+		},
+		Status: v1alpha1.PipelineStatus{Phase: "Ready"},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+
+	// UI should surface Paused=true so the frontend can show the PAUSED badge (#410)
+	assert.True(t, resp[0].Paused, "paused pipeline must have Paused=true in API response")
+	assert.Equal(t, "my-app", resp[0].Name)
 }
