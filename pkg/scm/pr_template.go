@@ -84,10 +84,31 @@ type PRBody struct {
 	// Each entry includes a pre-computed Elapsed string to avoid time.Since in
 	// template execution (SCM-4 logic leak fix).
 	UpstreamEnvironments []PRBodyUpstreamEnv
+
+	// PreviousCommitSHA is the commit SHA of the previous bundle in the same
+	// environment. When non-empty, the PR body includes a GitHub comparison link
+	// from PreviousCommitSHA to Bundle.Provenance.CommitSHA (Kargo parity:
+	// "External link to diff between freights during promotion").
+	PreviousCommitSHA string
+
+	// RepoURL is the Git repository URL (e.g. "https://github.com/org/repo").
+	// Used together with PreviousCommitSHA to build the comparison link.
+	RepoURL string
 }
 
-var prBodyTemplate = template.Must(template.New("pr-body").Parse(`
-<!-- kardinal-promoter auto-generated PR -->
+var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMap{
+	"buildDiffURL": func(repoURL, prevSHA, newSHA string) string {
+		if repoURL == "" || prevSHA == "" || newSHA == "" {
+			return ""
+		}
+		// Normalise repo URL: remove trailing .git
+		repo := repoURL
+		if len(repo) > 4 && repo[len(repo)-4:] == ".git" {
+			repo = repo[:len(repo)-4]
+		}
+		return repo + "/compare/" + prevSHA + "..." + newSHA
+	},
+}).Parse(`<!-- kardinal-promoter auto-generated PR -->
 ## Promotion: {{.BundleName}} → {{.PipelineName}}/{{.Environment}}
 
 ### Artifact Provenance
@@ -98,6 +119,13 @@ var prBodyTemplate = template.Must(template.New("pr-body").Parse(`
 | {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}[CI run]({{$.Bundle.Provenance.CIRunURL}}){{else}}—{{end}} | {{if $.Bundle.Provenance}}{{$.Bundle.Provenance.CommitSHA}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{$.Bundle.Provenance.Author}}{{else}}—{{end}} |
 {{- else}}
 | — | — | — | — | — | — |
+{{- end}}
+{{- $diffURL := buildDiffURL .RepoURL .PreviousCommitSHA (or (and .Bundle.Provenance .Bundle.Provenance.CommitSHA) "")}}
+{{- if $diffURL}}
+
+### Source Diff
+
+[View changes from previous deployment →]({{$diffURL}})
 {{- end}}
 
 ### Policy Gate Compliance

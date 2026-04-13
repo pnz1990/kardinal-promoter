@@ -62,6 +62,7 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		GateResults:          state.GateResults,
 		UpstreamEnvironments: buildPRBodyUpstreamEnvs(state.UpstreamEnvironments),
 		Pipeline:             state.Pipeline,
+		RepoURL:              state.Pipeline.Git.URL,
 	})
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("render PR body: %v", err)},
