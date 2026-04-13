@@ -4,6 +4,7 @@ import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
 import { HealthChip } from './components/HealthChip'
 import { BlockedBanner } from './components/BlockedBanner'
+import { BundleTimeline } from './components/BundleTimeline'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -28,6 +29,8 @@ export function App() {
   const [selectedPipeline, setSelectedPipeline] = useState<string | undefined>()
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [bundleHistoryOpen, setBundleHistoryOpen] = useState(false)
+  // Bundle selected via timeline — overrides the automatic activeBundle selection.
+  const [timelineSelectedBundle, setTimelineSelectedBundle] = useState<string | undefined>()
 
   const [graph, setGraph] = useState<GraphResponse | undefined>()
   const [graphLoading, setGraphLoading] = useState(false)
@@ -77,6 +80,7 @@ export function App() {
     setGraphLoading(true)
     setBundleHistoryOpen(false)
     setShowBlockedOnly(false)
+    setTimelineSelectedBundle(undefined) // reset timeline selection on pipeline change
 
     api.listBundles(name)
       .then(bs => {
@@ -91,7 +95,22 @@ export function App() {
   }, [])
 
   const activePipeline = pipelines.find(p => p.name === selectedPipeline)
-  const activeBundle = bundles.find(b => b.phase === 'Promoting') ?? bundles[0]
+  // Use timeline-selected bundle if set, otherwise fall back to auto-selection.
+  const autoActiveBundle = bundles.find(b => b.phase === 'Promoting') ?? bundles[0]
+  const activeBundle = timelineSelectedBundle
+    ? bundles.find(b => b.name === timelineSelectedBundle) ?? autoActiveBundle
+    : autoActiveBundle
+
+  // Handler for timeline bundle selection — loads that bundle's graph.
+  const handleTimelineBundleSelect = useCallback((bundleName: string) => {
+    setTimelineSelectedBundle(bundleName)
+    setGraphLoading(true)
+    setGraphError(undefined)
+    api.getGraph(bundleName)
+      .then(g => { setGraph(g); setGraphError(undefined) })
+      .catch(e => setGraphError(String(e)))
+      .finally(() => setGraphLoading(false))
+  }, [])
 
   // Derive current namespace from the first loaded pipeline.
   const currentNamespace = pipelines[0]?.namespace
@@ -276,6 +295,16 @@ export function App() {
                   </ul>
                 )}
               </div>
+            )}
+
+            {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity) */}
+            {selectedPipeline && (
+              <BundleTimeline
+                pipelineName={selectedPipeline}
+                environments={[]}
+                selectedBundle={activeBundle?.name}
+                onSelectBundle={handleTimelineBundleSelect}
+              />
             )}
 
             {/* DAG */}
