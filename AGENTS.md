@@ -218,7 +218,8 @@ make setup-e2e-env       # kind + krocodile + ArgoCD + test/uat/prod
 
 **Multi-cluster setup** (kind pre-prod + EKS prod):
 ```bash
-make setup-multi-cluster-env   # kind (test+uat) + EKS krombat (prod)
+make eks-up                    # create EKS cluster kardinal-e2e-prod in us-east-2 (Terraform)
+make setup-multi-cluster-env   # kind (test+uat) + EKS kardinal-e2e-prod (prod)
 ```
 
 **Test application**: `github.com/pnz1990/kardinal-test-app`
@@ -355,8 +356,9 @@ The standalone agent runs these scenarios during product validation (every `prod
 cycles). This requires a running kind cluster — use `make setup-e2e-env` to create one.
 The agent uses kardinal as a customer would. It does NOT mock anything.
 
-For multi-cluster scenarios (J2): use `make setup-multi-cluster-env` which sets up
-kind for pre-prod and the `krombat` EKS cluster for prod.
+For multi-cluster scenarios (J2): use `make eks-up` to create the `kardinal-e2e-prod` EKS
+cluster in us-east-2 (Terraform, `terraform/eks-e2e/`), then `make setup-multi-cluster-env`
+which sets up kind for pre-prod and the EKS cluster for prod.
 
 ### CRITICAL: Use the real test repos, not nginx
 
