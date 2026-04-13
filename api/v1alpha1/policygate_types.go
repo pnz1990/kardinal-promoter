@@ -50,6 +50,40 @@ type PolicyGateSpec struct {
 	// +kubebuilder:default=post-deploy
 	// +optional
 	When string `json:"when,omitempty"`
+
+	// Overrides holds time-limited emergency overrides (K-09).
+	// When any non-expired override exists (matching Stage or with empty Stage),
+	// the gate passes immediately. Expired overrides are kept as audit records.
+	// +optional
+	Overrides []PolicyGateOverride `json:"overrides,omitempty"`
+}
+
+// PolicyGateOverride is a time-limited emergency override record (K-09).
+// When any non-expired override exists for a gate, the gate passes immediately
+// without evaluating the CEL expression. The override is visible in the PR
+// evidence body with an "OVERRIDDEN" badge.
+type PolicyGateOverride struct {
+	// Reason is the mandatory human-readable justification for the override.
+	// +kubebuilder:validation:MinLength=1
+	Reason string `json:"reason"`
+
+	// Stage is the environment name this override applies to.
+	// An empty string applies to all environments.
+	// +optional
+	Stage string `json:"stage,omitempty"`
+
+	// ExpiresAt is when this override stops being effective.
+	// After this time the gate evaluates CEL normally.
+	// +kubebuilder:validation:Format=date-time
+	ExpiresAt metav1.Time `json:"expiresAt"`
+
+	// CreatedAt is when the override was created (set by the CLI).
+	// +optional
+	CreatedAt *metav1.Time `json:"createdAt,omitempty"`
+
+	// CreatedBy is the user who created the override (informational).
+	// +optional
+	CreatedBy string `json:"createdBy,omitempty"`
 }
 
 // PolicyGateStatus defines the observed state of a PolicyGate.
