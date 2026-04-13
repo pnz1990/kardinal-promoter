@@ -17,9 +17,10 @@ import (
 	"context"
 	"time"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // StepStatus is the outcome state of a step execution.
