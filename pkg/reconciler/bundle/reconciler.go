@@ -384,7 +384,6 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		metrics := computeBundleMetrics(b, envs)
 		if metrics != nil {
 			b.Status.Metrics = metrics
-			changed = true
 		}
 	}
 
