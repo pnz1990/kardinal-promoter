@@ -95,6 +95,16 @@ type uiStepResponse struct {
 	PRURL            string            `json:"prURL,omitempty"`
 	Outputs          map[string]string `json:"outputs,omitempty"`
 	CurrentStepIndex int               `json:"currentStepIndex"` // index into step sequence (#359)
+	// #341: Kubernetes conditions — shown in NodeDetail conditions panel.
+	Conditions []uiCondition `json:"conditions,omitempty"`
+}
+
+// uiCondition is the JSON shape for a Kubernetes condition.
+type uiCondition struct {
+	Type               string `json:"type"`
+	Status             string `json:"status"`
+	Message            string `json:"message,omitempty"`
+	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
 
 // uiGateResponse is the JSON shape for a PolicyGate.
@@ -455,6 +465,7 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 			PRURL:            ps.Status.PRURL,
 			Outputs:          ps.Status.Outputs,
 			CurrentStepIndex: ps.Status.CurrentStepIndex,
+			Conditions:       buildUIConditions(ps.Status.Conditions),
 		})
 	}
 	writeJSON(w, result)
@@ -769,4 +780,24 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"valid": true,
 	})
+}
+
+// buildUIConditions converts Kubernetes metav1.Condition slice to UI-friendly shape (#341).
+func buildUIConditions(conditions []metav1.Condition) []uiCondition {
+	if len(conditions) == 0 {
+		return nil
+	}
+	result := make([]uiCondition, 0, len(conditions))
+	for _, c := range conditions {
+		uc := uiCondition{
+			Type:    c.Type,
+			Status:  string(c.Status),
+			Message: c.Message,
+		}
+		if !c.LastTransitionTime.IsZero() {
+			uc.LastTransitionTime = c.LastTransitionTime.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		result = append(result, uc)
+	}
+	return result
 }

@@ -68,6 +68,13 @@ export interface PromotionStep {
   outputs?: Record<string, string>
   /** Index of the currently executing sub-step within the step sequence. */
   currentStepIndex?: number
+  /** #341: Kubernetes conditions from status.conditions — shows transition history. */
+  conditions?: Array<{
+    type: string
+    status: string
+    message?: string
+    lastTransitionTime?: string
+  }>
 }
 
 export interface PolicyGate {
