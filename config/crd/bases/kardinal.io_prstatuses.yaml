@@ -23,6 +23,12 @@ spec:
     - jsonPath: .status.open
       name: Open
       type: boolean
+    - jsonPath: .status.approved
+      name: Approved
+      type: boolean
+    - jsonPath: .status.approvalCount
+      name: Approvals
+      type: integer
     - jsonPath: .spec.prNumber
       name: PR
       type: integer
@@ -90,6 +96,17 @@ spec:
               PRStatusStatus holds the observed state of the pull request.
               Written exclusively by the PRStatusReconciler.
             properties:
+              approvalCount:
+                description: |-
+                  ApprovalCount is the number of distinct approved reviews on this PR.
+                  Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount >= 2
+                type: integer
+              approved:
+                description: |-
+                  Approved is true when the pull request has at least one approved review
+                  and no outstanding change-request reviews. Written by PRStatusReconciler.
+                  CEL: bundle.pr["staging"].isApproved
+                type: boolean
               lastCheckedAt:
                 description: LastCheckedAt records the timestamp of the most recent
                   SCM API poll.
