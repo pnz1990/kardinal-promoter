@@ -10,11 +10,3 @@ nodes:
         nodeRegistration:
           kubeletExtraArgs:
             node-labels: "ingress-ready=true"
-      - |
-        kind: ClusterConfiguration
-        apiServer:
-          extraArgs:
-            feature-gates: "ValidatingAdmissionPolicy=true"
-        controllerManager:
-          extraArgs:
-            feature-gates: "ValidatingAdmissionPolicy=true"

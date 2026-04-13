@@ -59,8 +59,17 @@ jobs:
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
 
       - name: Install kardinal-promoter
+        env:
+          GOTOOLCHAIN: local
         run: |
-          make install
+          # Disable ValidatingAdmissionPolicy in kind/k8s 1.29 — VAP is beta in 1.29
+          # and requires feature gate enablement via kubeadm which breaks cluster startup.
+          # VAP graduates to stable in k8s 1.30; re-enable when cluster is upgraded.
+          make manifests
+          kubectl apply -f config/crd/bases/
+          helm upgrade --install kardinal chart/kardinal-promoter \
+            --namespace kardinal-system --create-namespace \
+            --set validatingAdmissionPolicy.enabled=false
 
       - name: Verify both controllers are running
         run: |
