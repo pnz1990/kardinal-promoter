@@ -241,8 +241,9 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"environment": map[string]interface{}{
 			"name": gate.Labels[labelEnvironment],
 		},
-		"metrics":  metricsCtx,
-		"upstream": upstreamCtx,
+		"metrics":      metricsCtx,
+		"upstream":     upstreamCtx,
+		"changewindow": r.buildChangeWindowContext(ctx, now),
 	}, version, nil
 }
 
@@ -276,6 +277,43 @@ func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle) map[string]interface{
 		result[env.Name] = map[string]interface{}{
 			"soakMinutes": env.SoakMinutes,
 		}
+	}
+	return result
+}
+
+// buildChangeWindowContext lists all ChangeWindow objects cluster-wide and
+// returns a map: {"<name>": bool} where the boolean is true if the window
+// is currently active (blocking). CEL expressions use:
+//
+//	changewindow["holiday-freeze"]         → true when the window is active
+//	!changewindow["holiday-freeze"]        → passes when window is inactive
+//
+// Graph-first: reads CRD status fields only. The ChangeWindow controller is
+// responsible for updating status.active; this method reads it.
+// Fallback: if status.active is not set, re-derives from spec.start/end vs now.
+func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time) map[string]interface{} {
+	var list kardinalv1alpha1.ChangeWindowList
+	if err := r.List(ctx, &list); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to list ChangeWindows, using empty context")
+		return map[string]interface{}{}
+	}
+
+	result := make(map[string]interface{}, len(list.Items))
+	for _, cw := range list.Items {
+		// Use status.active if set by the ChangeWindow controller.
+		// Fall back to spec-based derivation for blackout windows.
+		active := cw.Status.Active
+		if cw.Spec.Type == "blackout" {
+			// Re-derive: active if now is between Start and End.
+			// This fallback ensures correctness even when the controller hasn't
+			// run yet (e.g. just after creation).
+			start := cw.Spec.Start.Time
+			end := cw.Spec.End.Time
+			if !start.IsZero() && !end.IsZero() {
+				active = now.After(start) && now.Before(end)
+			}
+		}
+		result[cw.Name] = active
 	}
 	return result
 }

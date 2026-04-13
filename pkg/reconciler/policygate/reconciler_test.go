@@ -852,3 +852,114 @@ func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 	assert.Contains(t, got.Status.Reason, "valid CEL syntax",
 		"status.reason must confirm valid CEL syntax for operator visibility")
 }
+
+// ─── K-04: ChangeWindow CRD ───────────────────────────────────────────────────
+
+// TestPolicyGateReconciler_ChangeWindowBlocked verifies that a PolicyGate using
+// changewindow.isBlocked() returns ready=false when a blackout ChangeWindow is active.
+func TestPolicyGateReconciler_ChangeWindowBlocked(t *testing.T) {
+	scheme := newScheme()
+
+	// Active blackout window (starts before now, ends after now)
+	cw := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "holiday-freeze",
+			Namespace: "kardinal-system",
+		},
+		Spec: kardinalv1alpha1.ChangeWindowSpec{
+			Type:   "blackout",
+			Start:  metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+			End:    metav1.NewTime(time.Now().Add(1 * time.Hour)),
+			Reason: "Q4 holiday freeze",
+		},
+	}
+
+	gate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cw-gate",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/bundle":      "bundle-1",
+				"kardinal.io/pipeline":    "my-app",
+				"kardinal.io/environment": "test",
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{
+			Expression: `!changewindow["holiday-freeze"]`,
+			Message:    "blocked by change window",
+		},
+	}
+	bundle := makeBundle("bundle-1", "default")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(gate, bundle, cw).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+		Build()
+
+	env1, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval1 := celpkg.NewEvaluator(env1)
+	r := &policygate.Reconciler{Client: c, Evaluator: eval1}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
+	_, reconcileErr1 := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr1)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	assert.False(t, got.Status.Ready, "gate must be not-ready when change window is active")
+	assert.NotEmpty(t, got.Status.Reason, "reason must be set when gate blocks")
+}
+
+// TestPolicyGateReconciler_ChangeWindowAllowed verifies that a PolicyGate using
+// changewindow.isBlocked() returns ready=true when no active blackout window exists.
+func TestPolicyGateReconciler_ChangeWindowAllowed(t *testing.T) {
+	scheme := newScheme()
+
+	// Past window — ended before now (no longer blocking)
+	cw := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "past-freeze",
+			Namespace: "kardinal-system",
+		},
+		Spec: kardinalv1alpha1.ChangeWindowSpec{
+			Type:  "blackout",
+			Start: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+			End:   metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+		},
+	}
+
+	gate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cw-gate-ok",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/bundle":      "bundle-1",
+				"kardinal.io/pipeline":    "my-app",
+				"kardinal.io/environment": "test",
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{
+			Expression: `!changewindow["past-freeze"]`,
+		},
+	}
+	bundle := makeBundle("bundle-1", "default")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(gate, bundle, cw).
+		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+		Build()
+
+	env2, err2 := celpkg.NewCELEnvironment()
+	require.NoError(t, err2)
+	eval2 := celpkg.NewEvaluator(env2)
+	r := &policygate.Reconciler{Client: c, Evaluator: eval2}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate-ok", Namespace: "default"}}
+	_, reconcileErr2 := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr2)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	assert.True(t, got.Status.Ready, "gate must be ready when no active change window")
+}
