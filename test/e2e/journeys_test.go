@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -475,7 +476,43 @@ func TestJourney5CLI(t *testing.T) {
 		assert.NotContains(t, out, "panic", "journey 5: must not panic")
 		assert.NotContains(t, out, "nil pointer dereference", "journey 5: must not nil-deref")
 	}
-	t.Log("Journey 5: CLI — version and policy simulate verified ✅")
+	t.Log("journey 5: kardinal policy simulate (no cluster) — no panic ✅")
+
+	// policy test: runs locally without a cluster (validates CEL syntax from file)
+	// Write a test gate file to a temp dir.
+	gateFile := filepath.Join(t.TempDir(), "test-gate.yaml")
+	gateContent := `apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-weekend
+spec:
+  expression: "!schedule.isWeekend"
+  message: "Block weekends"
+  recheckInterval: 5m
+`
+	require.NoError(t, os.WriteFile(gateFile, []byte(gateContent), 0600))
+
+	out, err = runCLICmd(kardinal, "policy", "test", gateFile)
+	require.NoError(t, err, "journey 5: policy test with valid gate must exit 0; got: %s", out)
+	assert.Contains(t, out, "valid", "journey 5: policy test output must contain 'valid'")
+	t.Logf("journey 5: kardinal policy test → %s ✅", strings.TrimSpace(out))
+
+	// policy test with invalid CEL must exit non-zero
+	badGateFile := filepath.Join(t.TempDir(), "bad-gate.yaml")
+	badGateContent := `apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: bad-gate
+spec:
+  expression: "this is not valid CEL !!!"
+`
+	require.NoError(t, os.WriteFile(badGateFile, []byte(badGateContent), 0600))
+	out, err = runCLICmd(kardinal, "policy", "test", badGateFile)
+	assert.Error(t, err, "journey 5: policy test with invalid CEL must exit non-zero")
+	assert.Contains(t, out, "INVALID", "journey 5: invalid CEL output must contain 'INVALID'")
+	t.Logf("journey 5: kardinal policy test (invalid CEL) → exit non-zero ✅")
+
+	t.Log("Journey 5: CLI — version, policy simulate, policy test all verified ✅")
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
