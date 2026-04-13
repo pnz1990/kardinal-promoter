@@ -54,12 +54,12 @@ type PRStatusStatus struct {
 
 	// Approved is true when the pull request has at least one approved review
 	// and no outstanding change-request reviews. Written by PRStatusReconciler.
-	// CEL: bundle.pr("staging").isApproved()
+	// CEL: bundle.pr["staging"].isApproved
 	// +optional
 	Approved bool `json:"approved,omitempty"`
 
 	// ApprovalCount is the number of distinct approved reviews on this PR.
-	// Written by PRStatusReconciler. CEL: bundle.pr("staging").hasMinReviewers(2)
+	// Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount >= 2
 	// +optional
 	ApprovalCount int `json:"approvalCount,omitempty"`
 
