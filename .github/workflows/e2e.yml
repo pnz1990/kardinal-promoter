@@ -1,10 +1,13 @@
 name: E2E Journey Tests
 
-# Runs on push to main (to verify all journeys after merge) and on-demand.
-# Not on every PR — cluster setup is expensive (~5-10 min).
+# Runs on push to main (to verify all journeys after merge), on-demand,
+# and on a daily schedule (per issue #399 — automated evidence for TestJourney1Quickstart).
 on:
   push:
     branches: [main]
+  schedule:
+    # Run daily at 02:00 UTC to produce automated CI evidence (issue #399).
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       journey:
