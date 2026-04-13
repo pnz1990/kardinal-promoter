@@ -8,6 +8,9 @@
 //
 // Steps are passed as a prop (managed by App's 5s poll) rather than fetched
 // independently, eliminating the 3s polling race condition (issue #322).
+//
+// #333: CEL expression syntax highlighting — keywords=yellow, strings=green,
+//       identifiers=blue, operators=white, functions=cyan, comments=gray.
 import { useState, useEffect, useCallback } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
@@ -140,6 +143,137 @@ function CopyButton({ text }: { text: string }) {
     </button>
   )
 }
+
+// ── #333: CEL syntax highlighter ─────────────────────────────────────────────
+// Tokenizes a CEL expression for basic keyword/identifier/string/operator coloring.
+// Adapted from kro-ui KroCodeBlock pattern, simplified for CEL-only use.
+
+type CELTokenType = 'keyword' | 'function' | 'string' | 'number' | 'operator' | 'boolean' | 'identifier' | 'plain'
+interface CELToken { type: CELTokenType; text: string }
+
+const CEL_KEYWORDS = new Set(['true', 'false', 'null', 'in', 'has', 'all', 'exists', 'map', 'filter', 'exists_one', 'type'])
+const CEL_KRO_FUNCTIONS = new Set([
+  'json.marshal', 'json.unmarshal', 'maps.merge', 'lists.setAtIndex',
+  'lists.insertAtIndex', 'lists.removeAtIndex', 'random.seededInt',
+  'schedule.isWeekend', 'lowerAscii', 'contains', 'startsWith', 'endsWith',
+  'matches', 'size', 'int', 'uint', 'double', 'string', 'bytes', 'duration', 'timestamp',
+])
+
+function tokenizeCEL(expr: string): CELToken[] {
+  const tokens: CELToken[] = []
+  let i = 0
+  const len = expr.length
+
+  while (i < len) {
+    const ch = expr[i]
+
+    // String literal: single or double quoted
+    if (ch === '"' || ch === "'") {
+      const quote = ch
+      let j = i + 1
+      while (j < len && expr[j] !== quote) {
+        if (expr[j] === '\\') j++ // skip escape
+        j++
+      }
+      j++ // closing quote
+      tokens.push({ type: 'string', text: expr.slice(i, j) })
+      i = j
+      continue
+    }
+
+    // Number
+    if (/[0-9]/.test(ch) || (ch === '-' && /[0-9]/.test(expr[i + 1] ?? ''))) {
+      let j = i + 1
+      while (j < len && /[0-9.]/.test(expr[j])) j++
+      tokens.push({ type: 'number', text: expr.slice(i, j) })
+      i = j
+      continue
+    }
+
+    // Operator / punctuation
+    if (/[!&|=<>+\-*/%()[\]{},.:@]/.test(ch)) {
+      // Multi-char operators: !=, ==, <=, >=, &&, ||
+      const two = expr.slice(i, i + 2)
+      if (['!=', '==', '<=', '>=', '&&', '||'].includes(two)) {
+        tokens.push({ type: 'operator', text: two })
+        i += 2
+        continue
+      }
+      tokens.push({ type: 'operator', text: ch })
+      i++
+      continue
+    }
+
+    // Whitespace
+    if (/\s/.test(ch)) {
+      let j = i + 1
+      while (j < len && /\s/.test(expr[j])) j++
+      tokens.push({ type: 'plain', text: expr.slice(i, j) })
+      i = j
+      continue
+    }
+
+    // Identifier or keyword
+    if (/[a-zA-Z_$]/.test(ch)) {
+      let j = i + 1
+      while (j < len && /[a-zA-Z0-9_.[\]]/.test(expr[j])) j++
+      const word = expr.slice(i, j)
+      // check if it's a kro function call prefix (e.g. "json.unmarshal")
+      let type: CELTokenType = 'identifier'
+      if (CEL_KEYWORDS.has(word.toLowerCase())) {
+        type = word === 'true' || word === 'false' ? 'boolean' : 'keyword'
+      } else if (CEL_KRO_FUNCTIONS.has(word)) {
+        type = 'function'
+      } else if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(word) && j < len && expr[j] === '(') {
+        // Function call: word followed by (
+        type = 'function'
+      }
+      tokens.push({ type, text: word })
+      i = j
+      continue
+    }
+
+    // Fallback
+    tokens.push({ type: 'plain', text: ch })
+    i++
+  }
+  return tokens
+}
+
+const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
+  keyword: '#fbbf24',    // yellow — true/false/in/has etc
+  function: '#67e8f9',   // cyan — function calls
+  string: '#86efac',     // green — string literals
+  number: '#f9a8d4',     // pink — numbers
+  operator: '#e2e8f0',   // white — operators
+  boolean: '#fbbf24',    // yellow — boolean literals
+  identifier: '#93c5fd', // blue — identifiers (bundle.X, schedule.X)
+  plain: '#7dd3fc',      // light blue — default
+}
+
+/** #333: Syntax-highlighted CEL expression block. */
+function CELBlock({ expression }: { expression: string }) {
+  const tokens = tokenizeCEL(expression)
+  return (
+    <code style={{
+      display: 'block',
+      background: '#0f172a',
+      borderRadius: '4px',
+      padding: '0.5rem 0.75rem',
+      fontSize: '0.8rem',
+      fontFamily: 'monospace',
+      wordBreak: 'break-all',
+      whiteSpace: 'pre-wrap',
+    }}>
+      {tokens.map((token, idx) => (
+        <span key={idx} style={{ color: CEL_TOKEN_COLORS[token.type] }}>
+          {token.text}
+        </span>
+      ))}
+    </code>
+  )
+}
+// ── end CEL syntax highlighter ────────────────────────────────────────────────
 
 /** Step progress panel for PromotionStep nodes. #359: correctly reflects step states. */
 function StepProgress({ step }: { step: PromotionStep }) {
@@ -474,20 +608,10 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
             {/* #339: copy-to-clipboard for CEL expression */}
             <CopyButton text={node.expression} />
           </div>
-          <code style={{
-            display: 'block',
-            background: '#0f172a',
-            border: `1px solid ${celValid === false ? '#7f1d1d' : '#334155'}`,
-            borderRadius: '4px',
-            padding: '0.5rem 0.75rem',
-            fontSize: '0.8rem',
-            color: '#7dd3fc',
-            fontFamily: 'monospace',
-            wordBreak: 'break-all',
-            whiteSpace: 'pre-wrap',
-          }}>
-            {node.expression}
-          </code>
+          {/* #333: CEL expression with syntax highlighting */}
+          <div style={{ border: `1px solid ${celValid === false ? '#7f1d1d' : '#334155'}`, borderRadius: '4px' }}>
+            <CELBlock expression={node.expression} />
+          </div>
           {celValid === false && celError && (
             <div style={{ fontSize: '0.7rem', color: '#fca5a5', marginTop: '0.25rem' }}>
               {celError}
