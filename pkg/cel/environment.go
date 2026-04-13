@@ -47,6 +47,7 @@ import (
 //   - metrics        — MetricCheck status values (dynamic map)
 //   - upstream       — upstream environment soak times (dynamic map)
 //   - previousBundle — last Verified Bundle for rollback detection (dynamic map)
+//   - changewindow   — ChangeWindow active status: map[name]bool (K-04)
 func NewCELEnvironment() (*cel.Env, error) {
 	env, err := cel.NewEnv(
 		// Context variables — populated by PolicyGate reconciler buildContext()
@@ -56,6 +57,7 @@ func NewCELEnvironment() (*cel.Env, error) {
 		cel.Variable("metrics", cel.DynType),
 		cel.Variable("upstream", cel.DynType),
 		cel.Variable("previousBundle", cel.DynType),
+		cel.Variable("changewindow", cel.DynType), // K-04: map[name]bool
 
 		// Standard CEL string/math extensions
 		ext.Strings(),
