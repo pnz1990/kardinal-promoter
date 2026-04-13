@@ -228,10 +228,36 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // handlePending initializes the step sequence and transitions to Promoting.
+// Before transitioning, checks all required pre-deploy PolicyGates (K-02).
+// If any pre-deploy gate is not ready, stays in Pending and requeues.
 func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
+	}
+
+	// K-02: Check pre-deploy gates before starting any git operations.
+	// Required gates are listed in ps.Spec.RequiredGates (set by the Graph controller).
+	// Only gates with spec.when == "pre-deploy" block the Pending → Promoting transition.
+	if len(ps.Spec.RequiredGates) > 0 {
+		blocked, blockingGate, checkErr := r.checkPreDeployGates(ctx, ps)
+		if checkErr != nil {
+			log.Warn().Err(checkErr).Msg("failed to check pre-deploy gates — will retry")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if blocked {
+			log.Info().
+				Str("gate", blockingGate).
+				Str("env", ps.Spec.Environment).
+				Msg("pre-deploy gate not ready — step stays in Pending")
+			// Update message for visibility but do NOT change state.
+			patch := client.MergeFrom(ps.DeepCopy())
+			ps.Status.Message = fmt.Sprintf("waiting for pre-deploy gate: %s", blockingGate)
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				log.Warn().Err(patchErr).Msg("failed to patch pre-deploy wait message (non-fatal)")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 	}
 
 	env := findEnv(pipeline, ps.Spec.Environment)
@@ -746,6 +772,27 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		}
 		return ctrl.Result{}, nil
 	}
+}
+
+// checkPreDeployGates looks up all gates in ps.Spec.RequiredGates and returns
+// true + the first blocking gate name if any pre-deploy gate is not ready.
+// Returns (false, "", nil) when all pre-deploy gates are ready (or there are none).
+// Graph-first: reads CRD status fields only — no external calls.
+func (r *Reconciler) checkPreDeployGates(ctx context.Context, ps *v1alpha1.PromotionStep) (blocked bool, blockingGate string, err error) {
+	for _, gateName := range ps.Spec.RequiredGates {
+		var gate v1alpha1.PolicyGate
+		if getErr := r.Get(ctx, types.NamespacedName{Name: gateName, Namespace: ps.Namespace}, &gate); getErr != nil {
+			if apierrors.IsNotFound(getErr) {
+				// Gate not yet created by the Graph — treat as not ready.
+				return true, gateName, nil
+			}
+			return false, "", fmt.Errorf("get policy gate %s: %w", gateName, getErr)
+		}
+		if gate.Spec.When == "pre-deploy" && !gate.Status.Ready {
+			return true, gateName, nil
+		}
+	}
+	return false, "", nil
 }
 
 // handleBake implements the K-01 contiguous-healthy soak window.

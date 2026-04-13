@@ -1060,6 +1060,144 @@ func TestOrphanCleanup_MultipleStepsForBundle(t *testing.T) {
 	}
 }
 
+// ─── K-02: Pre-deploy gates ───────────────────────────────────────────────────
+
+// TestPreDeployGate_BlocksPendingTransition verifies that a pre-deploy gate
+// that is NOT ready prevents the Pending → Promoting transition.
+func TestPreDeployGate_BlocksPendingTransition(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-prod", "my-app", "bundle-1", "prod")
+	// step.Spec.RequiredGates = ["pre-deploy-gate"] set after creation
+	step.Spec.RequiredGates = []string{"pre-deploy-gate"}
+
+	pipeline := makePipeline("my-app")
+	bundle := makeBundle("bundle-1", "my-app")
+
+	// Pre-deploy gate that is NOT ready
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "pre-deploy-gate", Namespace: "default"},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend",
+			When:       "pre-deploy",
+		},
+		Status: v1alpha1.PolicyGateStatus{Ready: false, Reason: "weekend"},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(step, pipeline, bundle, gate).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+	result, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	// Step must NOT advance to Promoting — pre-deploy gate is blocking
+	assert.NotEqual(t, "Promoting", got.Status.State,
+		"step must not advance to Promoting when pre-deploy gate is not ready")
+	// Should requeue to check again later
+	assert.Greater(t, result.RequeueAfter.Milliseconds(), int64(0),
+		"should requeue when blocked by pre-deploy gate")
+}
+
+// TestPreDeployGate_AllowsTransitionWhenReady verifies that when all pre-deploy
+// gates are ready, the step advances normally to Promoting.
+func TestPreDeployGate_AllowsTransitionWhenReady(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-prod", "my-app", "bundle-1", "prod")
+	step.Spec.RequiredGates = []string{"pre-deploy-gate"}
+
+	pipeline := makePipeline("my-app")
+	bundle := makeBundle("bundle-1", "my-app")
+
+	// Pre-deploy gate that IS ready
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "pre-deploy-gate", Namespace: "default"},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend",
+			When:       "pre-deploy",
+		},
+		Status: v1alpha1.PolicyGateStatus{Ready: true, Reason: "weekday"},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(step, pipeline, bundle, gate).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	// Step must advance to Promoting — all pre-deploy gates are ready
+	assert.Equal(t, "Promoting", got.Status.State,
+		"step must advance to Promoting when all pre-deploy gates are ready")
+}
+
+// TestPreDeployGate_PostDeployGatesDoNotBlockPending verifies that gates with
+// when: post-deploy (or no when field) do NOT block the Pending → Promoting transition.
+func TestPreDeployGate_PostDeployGatesDoNotBlockPending(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-prod", "my-app", "bundle-1", "prod")
+	step.Spec.RequiredGates = []string{"post-deploy-gate"}
+
+	pipeline := makePipeline("my-app")
+	bundle := makeBundle("bundle-1", "my-app")
+
+	// Post-deploy gate that is NOT ready — should NOT block Pending → Promoting
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "post-deploy-gate", Namespace: "default"},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "upstream.uat.soakMinutes >= 30",
+			When:       "post-deploy", // or "" (default)
+		},
+		Status: v1alpha1.PolicyGateStatus{Ready: false, Reason: "not enough soak"},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(step, pipeline, bundle, gate).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+		Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+
+	// Post-deploy gate NOT ready must NOT block the transition to Promoting
+	assert.Equal(t, "Promoting", got.Status.State,
+		"post-deploy gate must not block Pending → Promoting transition")
+}
+
 // ─── K-01: Contiguous soak / bake ────────────────────────────────────────────
 
 // TestBakeTracking_FirstHealthyPass verifies that when a PromotionStep enters
