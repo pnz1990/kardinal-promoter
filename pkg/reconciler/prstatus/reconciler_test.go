@@ -276,3 +276,89 @@ func TestReconciler_IdempotentOnSecondReconcile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, scm.calls, "second reconcile should not call SCM again")
 }
+
+// TestReconciler_EmptySpec_NoSCMCall is a regression test for issue #276
+// (PRStatus with empty spec — graph placeholder — must not trigger SCM calls).
+//
+// When the Graph creates a PRStatus Watch node as a placeholder (before the
+// open-pr step fills in the PR URL and number), the spec fields are empty/zero.
+// The reconciler must skip SCM polling for placeholder PRStatus objects.
+// Calling GetPRStatus with prNumber=0 would cause an API error.
+func TestReconciler_EmptySpec_NoSCMCall(t *testing.T) {
+	scheme := buildScheme(t)
+
+	// Placeholder PRStatus: all spec fields empty/zero (mirroring what Graph creates
+	// before the open-pr step runs and sets the real PR URL+number).
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "placeholder-pr",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PRStatusSpec{
+			PRURL:    "", // empty — not yet opened
+			PRNumber: 0,  // zero — not yet opened
+			Repo:     "", // empty — not yet opened
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(prs).
+		WithStatusSubresource(&v1alpha1.PRStatus{}).
+		Build()
+
+	scm := &fakeSCM{}
+	r := &prstatus.Reconciler{
+		Client: fakeClient,
+		SCM:    scm,
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "placeholder-pr", Namespace: "default"},
+	})
+
+	require.NoError(t, err, "empty-spec PRStatus must not error (#276 regression)")
+	assert.Equal(t, 0, scm.calls, "GetPRStatus must NOT be called for placeholder PRStatus with empty spec (#276 regression)")
+	// Reconciler should requeue to poll later when the spec might be filled in
+	assert.Greater(t, result.RequeueAfter.Milliseconds(), int64(0),
+		"placeholder PRStatus should requeue for later polling")
+}
+
+// TestReconciler_ZeroPRNumber_NoSCMCall is a regression test for issue #276.
+// PRNumber=0 explicitly means the PR has not yet been created. The reconciler
+// must not call GetPRStatus with prNumber=0 as that would cause a 404 from GitHub.
+func TestReconciler_ZeroPRNumber_NoSCMCall(t *testing.T) {
+	scheme := buildScheme(t)
+
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "zero-pr-number",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PRStatusSpec{
+			PRURL:    "https://github.com/owner/repo/pull/0",
+			PRNumber: 0, // explicitly zero — not yet assigned
+			Repo:     "owner/repo",
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(prs).
+		WithStatusSubresource(&v1alpha1.PRStatus{}).
+		Build()
+
+	scm := &fakeSCM{}
+	r := &prstatus.Reconciler{
+		Client: fakeClient,
+		SCM:    scm,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "zero-pr-number", Namespace: "default"},
+	})
+
+	require.NoError(t, err, "zero prNumber must not error (#276 regression)")
+	assert.Equal(t, 0, scm.calls,
+		"GetPRStatus must NOT be called for PRStatus with prNumber=0 (#276 regression)")
+}
