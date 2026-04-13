@@ -475,14 +475,22 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-// pipelinePhase returns the overall pipeline phase from its status conditions.
+// pipelinePhase returns the overall pipeline phase for the UI sidebar.
+// Prefers status.phase (set by the pipeline reconciler) over the condition reason
+// so the sidebar reflects the real runtime phase (Promoting, Degraded, etc.) (#349).
 func pipelinePhase(p *v1alpha1.Pipeline) string {
+	if p.Status.Phase != "" {
+		return p.Status.Phase
+	}
+	// Fallback: derive from Ready condition (pre-reconciler or transitional state).
 	for _, cond := range p.Status.Conditions {
 		if cond.Type == "Ready" {
 			if cond.Status == "True" {
 				return "Ready"
 			}
-			return cond.Reason
+			if cond.Reason != "" {
+				return cond.Reason
+			}
 		}
 	}
 	return "Initializing"
