@@ -106,148 +106,176 @@ Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, con
 
 ## Blocked on Krocodile (Do Not Touch)
 
-These issues require upstream contributions to krocodile. They are labeled `blocked-on-krocodile`. Do not implement workarounds.
+Only the following genuinely require upstream krocodile changes. Everything else has a path — see §Previously Blocked — Now Unblocked below.
 
-| ID | Issue | What krocodile must provide |
-|---|---|---|
-| CEL-1 / PG-1 / PG-4 | #130 | `recheckAfter` primitive + `schedule` CEL library in krocodile DefaultEnvironment |
-| PS-1 / ST-1 / ST-2 | #132 | Large node counts + step-level CRDs + `dependsOn` edges |
-| HE-1 / HE-2 / HE-3 | #136 | Verify `ShapeWatch` for external K8s resources in krocodile; if not present, contribute it |
-| PG-4 / GB-5 | #138 | `recheckAfter` + explicit `dependsOn` edges — upstream PR to krocodile |
-
----
-
-## Logic Leak Catalog (full, for reference)
-
-Every item below is a place where business logic lives outside the Graph layer. Each has a GitHub issue tracking its elimination.
-
-### CRITICAL — Eliminate before v1.0
-
-| ID | Package | Description | Category | GitHub Issue |
-|---|---|---|---|---|
-| CEL-1 | `pkg/cel/environment.go` | Parallel CEL environment duplicates Graph CEL variables (`bundle`, `environment`, `schedule`) | CEL_DUPLICATE | #130 |
-| CEL-2 | `pkg/cel/` + `policygate/reconciler.go` | `buildMetricsContext()` aggregates MetricCheck CRDs in Go before CEL — Graph never sees this aggregation | CEL_DUPLICATE + RECONCILER_DECISION | #131 |
-| PG-1 | `policygate/reconciler.go:162` | `time.Now()` + weekday/hour computation inside reconciler — time-based gate logic in Go | TIME | #132 (krocodile recheckAfter) |
-| PG-2 | `policygate/reconciler.go:147` | `buildMetricsContext()` cross-CRD aggregation in Go | RECONCILER_DECISION | #131 |
-| PS-1 | `promotionstep/reconciler.go:183` | `DefaultSequenceForBundle()` step sequencing in Go — the step sequence is a DAG-within-a-DAG invisible to the Graph | SEQUENCING | #132 |
-| PS-4 | `promotionstep/reconciler.go:348` | `r.SCM.GetPRStatus()` live GitHub API call on reconcile hot path | EXTERNAL_API | #133 |
-| PS-6 | `promotionstep/reconciler.go:495` | Auto-rollback threshold comparison in Go — decision invisible to Graph | RECONCILER_DECISION | #134 |
-| PS-7 | `promotionstep/reconciler.go:737` | `maybeCreateAutoRollback()` creates Bundle CRD from PromotionStep reconciler — Graph-bypassing side effect | RECONCILER_DECISION | #134 |
-| ST-1 | `pkg/steps/defaults.go:44` | `DefaultSequenceForBundle()` step routing algorithm in Go | SEQUENCING | #132 |
-| ST-2 | `pkg/steps/engine.go:46` | `Engine.ExecuteFrom()` is a mini-scheduler invisible to the Graph | SEQUENCING | #132 |
-| ST-3 | `pkg/steps/custom.go:91` | `CustomWebhookStep.Execute()` makes live HTTP POST with blocking retries inside reconciler | EXTERNAL_API | #135 |
-| ST-4 | `pkg/steps/custom.go:130` | `time.After(retryBackoff)` blocking sleep inside reconcile loop | TIME + EXTERNAL_API | #135 |
-| HE-1 | `pkg/health/adapter.go:139` | `DeploymentAdapter` reads Deployment — should be a Watch node | RESOURCE_ATTR | #136 |
-| HE-2 | `pkg/health/adapter.go:180` | `ArgoCDAdapter` reads Application — should be a Watch node | RESOURCE_ATTR | ✅ RESOLVED — PR #194 |
-| HE-3 | `pkg/health/adapter.go:238` | `FluxAdapter` reads Kustomization — should be a Watch node | RESOURCE_ATTR | ✅ RESOLVED — PR #194 |
-| SCM-2 | `pkg/scm/github.go:97` | `GetPRStatus()` decision should be a `PRStatus` CRD with Watch node | EXTERNAL_API | #133 |
-| CLI-1 | `cmd/kardinal/policy.go:182` | CLI imports `pkg/cel` — banned outside `pkg/reconciler/policygate` | CEL_DUPLICATE | #137 |
-| CLI-2 | `cmd/kardinal/policy.go:174` | CLI computes `schedule.isWeekend` client-side, duplicating PolicyGate reconciler logic | TIME + CEL_DUPLICATE | #137 |
-
-### HIGH — Eliminate before Workshop 2
-
-| ID | Package | Description | Category | GitHub Issue |
-|---|---|---|---|---|
-| PG-3 | `policygate/reconciler.go:197` | `buildUpstreamContext()` computes `soakMinutes` via `time.Since()` in Go | TIME + RESOURCE_ATTR | #133 |
-| PG-4 | `policygate/reconciler.go:30` | `defaultRecheckInterval` timer loop in Go — documented workaround for missing kro `recheckAfter` | TIME | #134 (recheckAfter upstream) |
-| PS-2 | `promotionstep/reconciler.go:131` | `Pipeline.Spec.Paused` check in Go — should be `includeWhen` on Graph node | RESOURCE_ATTR | #135 |
-| PS-5 | `promotionstep/reconciler.go:388` | Health check timeout computed via `time.Since()` in Go | TIME | #136 |
-| PS-9 | `promotionstep/reconciler.go:607` | `copyEvidenceToBundle()` writes to Bundle.status from PromotionStep reconciler — cross-CRD mutation | RECONCILER_DECISION | #137 |
-| PS-10 | `promotionstep/reconciler.go:262` | Step outputs (`StepState.Outputs`) in-memory map — dependencies between steps invisible to Graph | SEQUENCING | #127 |
-| HE-4 | `pkg/health/adapter.go:314` | `AutoDetector.Select()` probes CRDs at runtime to choose adapter — should be Pipeline spec field | RECONCILER_DECISION | #138 |
-| ST-5 | `pkg/steps/kustomize.go:55` | `exec.CommandContext("kustomize")` — external binary call in reconcile path | EXTERNAL_API | #139 |
-| ST-6 | `pkg/steps/kustomize_build.go:51` | `exec.CommandContext("kustomize build")` + `os.WriteFile` — host-local state | EXTERNAL_API | #139 |
-| ST-7 | `pkg/steps/git_clone.go:50` | `gitClient.Clone()` blocking network call + host-local filesystem state | EXTERNAL_API | #140 |
-| ST-8 | `pkg/steps/git_commit.go:51` | `gitClient.CommitAll()` host-local git operation | EXTERNAL_API | #140 |
-| ST-9 | `pkg/steps/git_push.go:41` | `gitClient.Push()` token injection via `git remote set-url` host mutation | EXTERNAL_API | #140 |
-| ST-10 | `pkg/steps/open_pr.go:72` | `state.SCM.OpenPR()` GitHub API call in step engine | EXTERNAL_API | #128 |
-| ST-11 | `pkg/steps/wait_for_merge.go:52` | `state.SCM.GetPRStatus()` duplicated in step engine (also exists in reconciler PS-4) | EXTERNAL_API | #128 |
-| ST-12 | `pkg/steps/step.go:68` | `StepState` in-memory context blob — step dependencies not in CRD fields | SEQUENCING | #127 |
-| SCM-5 | `pkg/scm/git_client.go:84` | `Push()` mutates `git remote set-url` on controller host — mutable state with security implication | EXTERNAL_API | #140 |
-| GB-2 | `pkg/graph/builder.go:267` | `validateSkipPermissions()` evaluates gates in Go at build time — Graph never sees this check | RECONCILER_DECISION | #141 |
-| BU-1 | `bundle/reconciler.go:120` | `supersedeSiblings()` business rule (one active promotion per pipeline) in Go loop | RECONCILER_DECISION | #142 |
-| BU-2 | `bundle/reconciler.go:186` | `Pipeline.Spec.Paused` check duplicated in Bundle reconciler | RESOURCE_ATTR | #135 |
-| BU-3 | `bundle/reconciler.go:229` | `Start()` calls `SCM.GetPRStatus()` for all in-flight PRs at startup | EXTERNAL_API | #128 |
-| WH-1 | `webhook.go:144` | `reconcileMergedPR()` does reconciler work in HTTP handler | RECONCILER_DECISION | #143 |
-
-### MEDIUM — Clean up progressively
-
-| ID | Package | Description | Category | GitHub Issue |
-|---|---|---|---|---|
-| PG-5 | `policygate/reconciler.go:64` | Template/instance distinction via label check in Go | RECONCILER_DECISION | #144 |
-| PG-6 | `policygate/reconciler.go:246` | `extractVersion()` routing logic, result never in CRD status | RECONCILER_DECISION | #144 |
-| PS-3 | `promotionstep/reconciler.go:118` | Shard filtering in Go — silent skip invisible to Graph | RECONCILER_DECISION | #145 |
-| PS-8 | `promotionstep/reconciler.go:452` | Health adapter naming convention hardcoded in Go | RECONCILER_DECISION | #138 |
-| HE-5 | `pkg/health/adapter.go:338` | `crdAvailable()` live API call on every reconcile | EXTERNAL_API | #138 |
-| GB-1 | `pkg/graph/builder.go:112` | Sequential ordering default in builder, not in Pipeline spec | RECONCILER_DECISION | #146 |
-| GB-5 | `pkg/graph/builder.go:467` | Fan-in positional naming workaround for missing `dependsOn` | SEQUENCING | #134 (dependsOn upstream) |
-| TR-1 | `translator.go:99` | `collectGates()` namespace aggregation in Go | RECONCILER_DECISION | #147 |
-| CLI-3 | `cmd/kardinal/policy.go:229` | Gate filtering by `applies-to` reimplemented in CLI | RECONCILER_DECISION | #132 |
-| CLI-4 | `cmd/kardinal/rollback.go:67` | "Latest Verified bundle" query in CLI Go loop | RECONCILER_DECISION | #148 |
-| CLI-5 | `cmd/kardinal/rollback.go:93` | Hardcoded `Type: "image"` for rollback bundle | RECONCILER_DECISION | #148 |
-| BU-4 | `bundle/reconciler.go:138` | Type-aware supersession rule in Go | RECONCILER_DECISION | #142 |
-| WH-2 | `webhook.go:165` | URL parsing logic triplicated across three files | RECONCILER_DECISION | #143 |
-
-### LOW — When time permits
-
-| ID | Package | Description | Category | GitHub Issue |
-|---|---|---|---|---|
-| SCM-3 | `pkg/scm/github.go:183` | `EnsureLabels()` repo config side-effect in promotion path | EXTERNAL_API | #149 |
-| SCM-4 | `pkg/scm/pr_template.go:50` | `time.Since()` in PR body template | TIME | #149 |
-| GB-3 | `builder.go:438` | `defaultStepType()` routing — acceptable (written to CRD spec) | RECONCILER_DECISION | #146 |
-| GB-4 | `builder.go:357` | Dual slug functions (CEL-safe vs K8s-safe) | RECONCILER_DECISION | #146 |
-| TR-2 | `translator.go:36` | `policyNS` default hardcoded | RECONCILER_DECISION | #147 |
-| CLI-6 | `init.go:50` | `approvalModeFunc()` last-env default in scaffold | RECONCILER_DECISION | — (acceptable for scaffold) |
-| CLI-7 | `explain.go:139` | Three-way gate state derived in CLI | RECONCILER_DECISION | #150 |
-| MC-1 | `metriccheck/reconciler.go:127` | Threshold comparison Go enum — could be CEL expression | CEL_DUPLICATE | #150 |
-
----
-
-## Elimination Paths by Mechanism
-
-### Mechanism A: Watch Nodes (highest ROI — no new CRDs needed)
-
-Replace Go adapters with Graph Watch nodes reading existing K8s resources directly:
-
-```
-HE-1: Deployment → readyWhen: ${deployment.status.conditions[?type=='Available'].status == 'True'}
-HE-2: ArgoCD Application → readyWhen: ${app.status.health.status == 'Healthy' && app.status.sync.status == 'Synced'}
-HE-3: Flux Kustomization → readyWhen: ${ks.status.conditions[?type=='Ready'].status == 'True'}
-PS-2/BU-2: Pipeline.Spec.Paused → includeWhen: ${pipeline.spec.paused == false} on all nodes
-```
-
-### Mechanism B: New CRDs as Graph-observable intermediaries
-
-| New CRD | Replaces | Reconciler writes | Graph reads via |
+| ID | Issue | What krocodile must provide | Why no workaround |
 |---|---|---|---|
-| `PRStatus` | PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 | `status.merged`, `status.open`, `status.prURL` | Watch node `readyWhen: ${prStatus.status.merged}` |
-| `SoakTimer` | PG-3 | `status.soakMinutes` | Watch node in PolicyGate context |
-| `RollbackPolicy` | PS-6, PS-7 | `status.shouldRollback` | Watch node triggering Bundle creation |
+| PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Time-based gates need periodic re-evaluation without an external watch event. `ctrl.Result{RequeueAfter}` in the PolicyGate reconciler is the only alternative, which is a logic leak. No clean workaround within Graph-first rules. |
+| HE-1 / HE-2 / HE-3 | #136 | `ShapeWatch` for external K8s resources | Health adapters read Deployment/Application/Kustomization outside the Graph. Requires Watch semantics for arbitrary external resources — or wait for the Aggregated API provider (#456) which solves this differently. |
 
-### Mechanism C: CEL library extensions on kro (requires upstream contribution)
+> **Note on `dependsOn` explicit edges** (also in #138): the positional naming workaround
+> in `builder.go:467` is correct and acceptable until the upstream PR lands. Contribute
+> `dependsOn` alongside `recheckAfter` in the same krocodile PR.
+
+---
+
+## Previously Blocked — Now Unblocked
+
+### #132 (step-as-Graph-node): unblocked via flat DAG compilation
+
+See §Flat DAG Compilation below. Bundle type is known at creation time — the full step DAG
+can be generated statically. No runtime Graph mutation. No krocodile changes required.
+Performance at scale is a benchmark question, not a correctness blocker.
+
+### #130 and #68 (eliminate pkg/cel): partially unblocked
+
+Non-time-based PolicyGate expressions (bundle metadata, environment, metrics, soak time)
+are pure Kubernetes resource field reads — migrate to Graph Watch nodes today without `pkg/cel`
+and without krocodile changes. Only time-based gates (`schedule.isWeekend`, `schedule.hour`)
+remain blocked on `recheckAfter` (#138). Reduce `pkg/cel` to time-only scope until recheckAfter
+lands.
+
+### #400 (Journey 2 multi-cluster): unblocked via Stage 14 implementation
+
+Was labeled blocked via Stage 14 → #132 → krocodile. Since #132 is unblocked, Stage 14 is
+a kardinal implementation task. Journey 2 test can be written once Stage 14 ships.
+
+---
+
+## Flat DAG Compilation — #132 is Unblocked
+
+> This section documents the resolution of why #132 was labeled blocked-on-krocodile and
+> establishes the correct implementation approach.
+
+### The original concern
+
+Issue #132 was labeled `blocked-on-krocodile` citing two concerns:
+1. Large node counts degrading the Graph controller
+2. Dynamic step sequences requiring runtime Graph mutation
+
+### Why it is not actually blocked
+
+**Dynamic node count is not the problem.** The Graph is generated *per-Bundle* at Bundle creation time. At that point the Bundle type is known (image, config, helm), so the complete flat step DAG can be generated statically in the Pipeline translator. The resulting Graph is immutable for that Bundle's lifetime — correct behavior, no runtime mutation needed.
+
+**Large node counts are a performance concern, not a correctness blocker.** A 5-environment pipeline with 7 steps per environment = 35 Graph nodes. krocodile handles this today. Benchmark before optimizing, not before building.
+
+### The correct implementation
+
+At Bundle creation, the Pipeline translator generates a **fully flat DAG** where each step is a Graph node:
 
 ```
-schedule.isWeekend() → eliminates PG-1, CLI-2
-schedule.hour()
-schedule.dayOfWeek()
-Requires: recheckAfter kro primitive first (issue #134)
+# For one environment "prod" with image Bundle:
+GitCloneTask(prod)      → SetImageTask(prod)
+SetImageTask(prod)      → GitCommitTask(prod)
+GitCommitTask(prod)     → GitPushTask(prod)
+GitPushTask(prod)       → OpenPRTask(prod)
+OpenPRTask(prod)        → WaitForMergeTask(prod)   [Watch on PRStatus]
+WaitForMergeTask(prod)  → HealthCheckTask(prod)    [Watch on Deployment/App/Kustomization]
+HealthCheckTask(prod)   → [next environment's GitCloneTask, or final verified node]
 ```
 
-### Mechanism D: Step-as-Graph-node refactor (largest, requires architecture decision)
+Step type selection (`kustomize-set-image` vs `helm-set-image` vs `config-merge`) is encoded as `includeWhen` conditions on Graph nodes — config Bundle includes `ConfigMergeTask`, excludes `SetImageTask`, etc. The Graph controller handles the conditional inclusion natively.
 
-Each promotion step becomes a dedicated Graph node:
-```
-git-clone     → Graph node (Owned, writes status.cloned)
-set-image     → Graph node (Owned, writes status.imageSet)
-git-commit    → Graph node (Owned, writes status.committed)
-git-push      → Graph node (Owned, writes status.pushed)
-open-pr       → Graph node (Owned, writes status.prURL)
-wait-for-merge → Watch node on PRStatus CRD
-health-check  → Watch node on Deployment/Application/Kustomization
-```
-Eliminates: PS-1, PS-10, ST-1, ST-2, ST-5–ST-12
+**CRD design decision (resolved):** Use a generic `PromotionStepTask` CRD with a `type` field, not separate CRD types per step. Rationale: RBAC, observability, and reconciler registration are simpler with one CRD. The `type` field drives behavior.
 
-Requires human architectural decision: should each step be a separate CRD type, or a generic `Step` CRD with a `type` field?
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: PromotionStepTask
+metadata:
+  name: prod-git-clone-abc123
+  labels:
+    kardinal.io/bundle: abc123
+    kardinal.io/environment: prod
+    kardinal.io/step: git-clone
+spec:
+  type: git-clone           # git-clone | set-image | git-commit | git-push |
+                            # open-pr | wait-merge | health-check | config-merge |
+                            # helm-set-image | custom-webhook
+  bundleRef: abc123
+  environmentRef: prod
+  config: {}                # step-specific config from Pipeline spec
+status:
+  phase: Pending | Running | Succeeded | Failed
+  outputs: {}               # passed to downstream steps via Graph scope
+  startedAt: ""
+  completedAt: ""
+```
+
+### What this eliminates
+
+Completing #132 with the flat DAG approach eliminates these logic leaks in one PR:
+- PS-1: `DefaultSequenceForBundle()` Go routing algorithm
+- PS-10: `StepState.Outputs` in-memory map (step outputs become CRD status fields in Graph scope)
+- ST-1: `DefaultSequenceForBundle()` in steps package
+- ST-2: `Engine.ExecuteFrom()` mini-scheduler
+- ST-5 through ST-12: all `exec.Command` calls move to dedicated reconcilers per step type
+
+### Performance note
+
+Before implementation, benchmark krocodile with a synthetic Graph of 50+ nodes to confirm no
+controller performance regression. If a regression is found, report upstream with the benchmark
+data — do not work around it by keeping the Go step engine.
+
+---
+
+## Aggregated API Adoption Plan (ellistarn/kro#80)
+
+> This section tracks the planned adoption of krocodile's aggregated API design for
+> external system integration. See: https://github.com/ellistarn/kro/pull/80
+
+### What it is
+
+A design by the krocodile author for serving external system state as native Kubernetes
+resources via the Kubernetes API Aggregation Layer. The first provider is GitHub (`api.github.com`),
+exposing `GithubArtifact` and `GithubAuthentication` resources. Graphs consume these through
+existing Watch semantics — no new krocodile primitives required.
+
+Key properties:
+- **No CRD sync drift** — state is served live via aggregated apiserver, not copied into CRDs
+- **Request deduplication** — N Graphs watching the same GitHub path produce one upstream API call
+- **ETag-based caching** — `If-None-Match` avoids counting polls against rate limits
+- **Content-hash resourceVersion** — watch events fire only when data actually changes
+- **OAuth device flow** — no PAT management; `kubectl get githubartifacts` shows the auth URL
+
+### What this eliminates in kardinal
+
+When this lands in krocodile, kardinal should refactor the following **in a single PR**:
+
+| Logic leak | Current (purity violation) | With aggregated API (pure) |
+|---|---|---|
+| `GetPRStatus()` in reconciler hot path (#133) | Live GitHub API call in 5 code paths | Watch node on `GithubArtifact` for the PR branch |
+| `PRStatus` CRD reconciler (#133) | kardinal-owned reconciler calls GitHub | Replaced by `GithubArtifact` Watch node |
+| `git clone` in step engine (#140) | `exec.Command("git clone")` | Watch node on `GithubArtifact` for repo path |
+| `EnsureLabels()` repo config (#149) | GitHub API call in promotion path | One-time `GithubArtifact` setup Watch node |
+| `PAT-in-Secret` auth model | User manages PAT lifecycle | OAuth device flow via `GithubAuthentication` |
+| Subscription CRD polling (#18 planned) | Polling reconciler with `time.After` | Watch node on `GithubArtifact` where `status.sha` changes → create Bundle |
+
+This single aggregated API adoption PR would close issues **#128, #133, #140, #143, #149**
+and unblock the Subscription CRD implementation as a clean Watch node.
+
+### Migration path
+
+When `ellistarn/kro#80` merges into krocodile mainline:
+
+1. Deploy the `github-provider` aggregated API server alongside the kardinal controller
+   (ship as an optional component in the kardinal Helm chart — off by default, enabled via
+   `github.provider.enabled: true`)
+2. Replace `PRStatus` CRD + reconciler with a Watch node on `GithubArtifact`
+3. Replace `git clone` exec.Command with Watch node on `GithubArtifact` for repo reads
+4. Remove `pkg/scm/github.go` API call paths; the aggregated API server handles all GitHub I/O
+5. Update `kardinal init` to guide users through OAuth device flow instead of PAT creation
+6. Implement Subscription CRD as a Graph watching `GithubArtifact` for SHA changes
+
+**Do not implement the `PRStatus` CRD workaround (#133) if the aggregated API is imminent.**
+If `ellistarn/kro#80` is within 2–3 milestones of merging, skip the workaround and wait for
+the clean path. If it stalls, implement `PRStatus` CRD as a transitional measure and migrate
+when the aggregated API lands.
+
+### GitLab provider
+
+The aggregated API design is provider-agnostic. Once the GitHub provider exists as a reference,
+a `gitlab-provider` for the `api.gitlab.com` group follows the same pattern. kardinal's GitLab
+SCM provider (`pkg/scm/gitlab.go`) would be replaced the same way.
 
 ---
 
@@ -261,3 +289,4 @@ Requires human architectural decision: should each step be a separate CRD type, 
 | CEL schedule library | PG-1, CLI-2 | #126 |
 | Server-side policy simulation API | CLI-1, CLI-2 | #132 |
 | `startAfterMinutes` on Graph edges (time-offset starts) | Staggered scheduling within waves | #454 |
+| Aggregated API provider (GitHub) | #128, #133, #140, #143, #149 | ellistarn/kro#80 |

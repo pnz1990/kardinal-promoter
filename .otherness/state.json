@@ -579,6 +579,23 @@
       "dependency_mode": "merged",
       "pr_number": 442,
       "pr_merged": true
+    },
+    "306-contiguous-soak-bake": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T20:20:52Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 455,
+      "pr_merged": true
+    },
+    "307-pre-deploy-gates": {
+      "state": "in_review",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T20:36:04Z",
+      "dependency_mode": "merged",
+      "pr_number": 457,
+      "pr_merged": false
     }
   },
   "session_heartbeats": {
@@ -591,8 +608,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-13T19:59:17Z",
-      "cycle": 37
+      "last_seen": "2026-04-13T20:36:04Z",
+      "cycle": 40
     }
   },
   "handoff": {
