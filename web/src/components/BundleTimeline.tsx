@@ -4,6 +4,9 @@
 //
 // Bundles are passed as a prop (managed by App) rather than fetched independently,
 // avoiding duplicate requests and stale-state races (issue #321).
+//
+// #338: Shift-click selects a second bundle for comparison.
+// When two bundles are selected, a "Compare" button appears.
 import type { Bundle } from '../types'
 
 interface Props {
@@ -13,6 +16,12 @@ interface Props {
   onSelectBundle?: (bundleName: string) => void
   /** Currently selected bundle (highlighted). */
   selectedBundle?: string
+  /** #338: Second bundle selected for comparison (shift-click). */
+  compareBundle?: string
+  /** Called when user shift-clicks a bundle to start comparison. */
+  onCompareBundle?: (bundleName: string | null) => void
+  /** Called when user clicks the Compare button. */
+  onCompare?: () => void
 }
 
 /** Color for a bundle phase. */
@@ -37,7 +46,7 @@ function shortName(bundleName: string): string {
   return bundleName.slice(-6)
 }
 
-export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Props) {
+export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compareBundle, onCompareBundle, onCompare }: Props) {
   // Sort newest-first by createdAt timestamp (ISO 8601), falling back to name (#337).
   // Name fallback ensures stability when createdAt is not yet populated.
   const sorted = [...bundles]
@@ -52,6 +61,8 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Prop
 
   if (sorted.length === 0) return null
 
+  const showCompare = compareBundle && selectedBundle && compareBundle !== selectedBundle
+
   return (
     <div style={{
       padding: '0.5rem 1rem',
@@ -59,29 +70,80 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Prop
       borderBottom: '1px solid #1e293b',
       overflowX: 'auto',
     }}>
-      <div style={{ fontSize: '0.65rem', color: '#475569', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Bundle History (newest → oldest)
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+        <span style={{ fontSize: '0.65rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Bundle History (newest → oldest)
+        </span>
+        {/* #338: Compare button appears when two bundles are selected */}
+        {showCompare && (
+          <button
+            onClick={onCompare}
+            style={{
+              fontSize: '0.65rem',
+              background: '#1e1b4b',
+              color: '#a5b4fc',
+              border: '1px solid #4338ca',
+              borderRadius: '3px',
+              padding: '1px 6px',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+            title="Compare selected bundles"
+          >
+            Compare ↔
+          </button>
+        )}
+        {compareBundle && (
+          <button
+            onClick={() => onCompareBundle?.(null)}
+            style={{
+              fontSize: '0.65rem',
+              background: 'none',
+              color: '#64748b',
+              border: 'none',
+              cursor: 'pointer',
+              padding: '0',
+            }}
+            title="Clear comparison selection"
+          >
+            × clear
+          </button>
+        )}
+        {!compareBundle && bundles.length >= 2 && (
+          <span style={{ fontSize: '0.6rem', color: '#334155' }}>
+            Shift-click to compare
+          </span>
+        )}
       </div>
       <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
         {sorted.map(b => {
           const isSelected = b.name === selectedBundle
+          const isCompare = b.name === compareBundle
           const color = phaseColor(b.phase)
           return (
             <button
               key={b.name}
-              onClick={() => onSelectBundle?.(b.name)}
-              title={`${b.name}: ${b.phase}`}
+              onClick={(e) => {
+                if (e.shiftKey) {
+                  // #338: shift-click selects for comparison
+                  if (onCompareBundle) onCompareBundle(isCompare ? null : b.name)
+                } else {
+                  onSelectBundle?.(b.name)
+                }
+              }}
+              title={`${b.name}: ${b.phase}${isCompare ? ' (comparison target)' : ''}${'\nShift-click to compare'}`}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 gap: '2px',
                 padding: '0.3rem 0.5rem',
-                background: isSelected ? '#1e293b' : 'transparent',
-                border: `1px solid ${isSelected ? color : '#334155'}`,
+                background: isCompare ? '#1e1b4b' : isSelected ? '#1e293b' : 'transparent',
+                border: `1px solid ${isCompare ? '#4338ca' : isSelected ? color : '#334155'}`,
                 borderRadius: '4px',
                 cursor: 'pointer',
                 minWidth: '56px',
+                outline: isCompare ? '1px solid #6366f1' : 'none',
               }}
             >
               {/* Phase dot */}
@@ -93,9 +155,9 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Prop
               {/* Short name */}
               <span style={{
                 fontSize: '0.75rem',
-                color: isSelected ? '#e2e8f0' : '#64748b',
+                color: isSelected || isCompare ? '#e2e8f0' : '#64748b',
                 fontFamily: 'monospace',
-                fontWeight: isSelected ? 600 : 400,
+                fontWeight: isSelected || isCompare ? 600 : 400,
               }}>
                 {shortName(b.name)}
               </span>
@@ -106,6 +168,14 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Prop
               }}>
                 {b.phase === 'Superseded' ? 'Sup' : b.phase}
               </span>
+              {/* #338: "B" badge for comparison bundle */}
+              {isCompare && (
+                <span style={{
+                  fontSize: '0.55rem',
+                  color: '#a5b4fc',
+                  fontWeight: 700,
+                }}>⇅B</span>
+              )}
             </button>
           )
         })}

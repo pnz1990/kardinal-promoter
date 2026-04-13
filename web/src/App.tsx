@@ -8,6 +8,7 @@ import { NodeDetail } from './components/NodeDetail'
 import { HealthChip } from './components/HealthChip'
 import { BlockedBanner } from './components/BlockedBanner'
 import { BundleTimeline } from './components/BundleTimeline'
+import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
 import { api } from './api/client'
@@ -50,6 +51,10 @@ export function App() {
 
   // #326: selectedNode lifted from DAGView so NodeDetail is a split-panel sibling.
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+
+  // #338: Bundle diff comparison state.
+  const [compareBundle, setCompareBundle] = useState<string | undefined>()
+  const [showDiffPanel, setShowDiffPanel] = useState(false)
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
   const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()
@@ -452,8 +457,29 @@ export function App() {
                 bundles={bundles}
                 selectedBundle={activeBundle?.name}
                 onSelectBundle={handleTimelineBundleSelect}
+                compareBundle={compareBundle}
+                onCompareBundle={(name) => {
+                  setCompareBundle(name ?? undefined)
+                  if (!name) setShowDiffPanel(false)
+                }}
+                onCompare={() => setShowDiffPanel(true)}
               />
             </div>
+
+            {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
+            {showDiffPanel && compareBundle && activeBundle && (
+              (() => {
+                const compareBundleObj = bundles.find(b => b.name === compareBundle)
+                if (!compareBundleObj) return null
+                return (
+                  <BundleDiffPanel
+                    bundleA={activeBundle}
+                    bundleB={compareBundleObj}
+                    onClose={() => { setShowDiffPanel(false); setCompareBundle(undefined) }}
+                  />
+                )
+              })()
+            )}
 
             {/* #332: Pipeline lane view — horizontal stage cards (Kargo-parity).
                 Shows each PromotionStep environment as a card with state chip, bundle, and actions. */}
