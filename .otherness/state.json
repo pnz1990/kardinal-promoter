@@ -1,0 +1,691 @@
+{
+  "version": "1.3",
+  "project": "kardinal-promoter",
+  "mode": "standalone",
+  "initialized": "2026-04-09",
+  "last_updated": "2026-04-13T22:52:01Z",
+  "current_queue": "queue-017",
+  "last_sm_review": "2026-04-13T18:54:36Z",
+  "last_pm_review": "2026-04-13T18:54:36Z",
+  "batches_since_competitive_analysis": 0,
+  "batches_since_doc_audit": 1,
+  "batches_since_dead_scan": 0,
+  "engineer_slots": {
+    "ENGINEER-1": null,
+    "ENGINEER-2": null,
+    "ENGINEER-3": null
+  },
+  "bounded_sessions": {
+    "STANDALONE-REFACTOR": {
+      "last_seen": "2026-04-11T19:53:40Z",
+      "cycle": 7,
+      "name": "Refactor Agent",
+      "scope": "Graph purity \u2014 fix existing logic leaks in pkg/health, pkg/scm, pkg/steps, policygate reconciler. No new CRDs.",
+      "current_item": null,
+      "progress_issue": "171",
+      "last_report_at": "2026-04-11T19:53:40Z"
+    },
+    "STANDALONE-CLI-UI": {
+      "last_seen": null,
+      "cycle": 3,
+      "name": "CLI Agent",
+      "scope": "CLI and UI \u2014 kardinal commands, output formatting, policy simulate, embedded React UI",
+      "current_item": null,
+      "progress_issue": "224",
+      "last_report_at": "2026-04-12T04:42:58Z"
+    },
+    "STANDALONE-CORE": {
+      "last_seen": "2026-04-11T20:35:25Z",
+      "cycle": 8,
+      "name": "Core Agent",
+      "scope": "Core \u2014 new CRDs (PRStatus, RollbackPolicy, SoakTimer), PromotionStep reconciler fixes, Graph/translator",
+      "current_item": null,
+      "progress_issue": "172",
+      "last_report_at": "2026-04-11T20:35:08Z",
+      "scope_complete": true
+    },
+    "STANDALONE-EXTENSIONS": {
+      "name": "Extensions Agent",
+      "last_seen": null,
+      "cycle": 6,
+      "scope": "Extension points \u2014 translator migration for Watch nodes (HE-1/2/3), remaining v0.4.0 scm/health",
+      "current_item": null,
+      "progress_issue": "174",
+      "last_report_at": "2026-04-12T02:52:13Z"
+    },
+    "STANDALONE-UI-CLI": {
+      "name": "UI-CLI Agent",
+      "last_seen": "2026-04-12T04:40:48Z",
+      "cycle": 1,
+      "scope": "UI and CLI \u2014 feature parity with Kargo UI gitops promoter",
+      "current_item": null,
+      "progress_issue": "173",
+      "last_report_at": ""
+    },
+    "STANDALONE-VALIDATOR": {
+      "name": "Validator",
+      "last_seen": "2026-04-13T01:12:27Z",
+      "cycle": 1,
+      "scope": "Customer-lens product validation \u2014 prove every feature works with real apps and complex CEL. No code changes. Only run commands, observe outputs, open bugs. Be creative with scenarios.",
+      "current_item": null,
+      "progress_issue": "296",
+      "last_report_at": "2026-04-13T01:12:27Z"
+    },
+    "STANDALONE-DOCS": {
+      "name": "Docs Agent",
+      "last_seen": "2026-04-13T04:12:24Z",
+      "cycle": 4,
+      "scope": "Professional documentation site \u2014 MkDocs Material, GitHub Pages, auto-generated CLI+API reference, no content duplication.",
+      "current_item": null,
+      "progress_issue": "387",
+      "last_report_at": "2026-04-13T04:12:24Z",
+      "scope_complete": true
+    }
+  },
+  "features": {
+    "001-go-module-scaffold": {
+      "state": "done",
+      "assigned_to": "ENGINEER-1",
+      "worktree_path": "../kardinal-promoter.001-go-module-scaffold",
+      "pr_number": 8,
+      "pr_merged": true,
+      "assigned_at": "2026-04-10T04:09:53Z",
+      "dependency_mode": "merged"
+    },
+    "002-kubebuilder-scaffold": {
+      "state": "done",
+      "assigned_to": "ENGINEER-1",
+      "assigned_at": "2026-04-10T08:51:53Z",
+      "worktree_path": "../kardinal-promoter.002-kubebuilder-scaffold",
+      "pr_number": 11,
+      "pr_merged": true,
+      "dependency_mode": "branch"
+    },
+    "003-dockerfile-and-helm": {
+      "state": "done",
+      "assigned_to": "ENGINEER-2",
+      "assigned_at": "2026-04-10T08:51:53Z",
+      "worktree_path": "../kardinal-promoter.003-dockerfile-and-helm",
+      "pr_number": 10,
+      "pr_merged": true,
+      "dependency_mode": "branch"
+    },
+    "004-ci-and-lint": {
+      "state": "done",
+      "assigned_to": "ENGINEER-3",
+      "assigned_at": "2026-04-10T08:51:53Z",
+      "worktree_path": "../kardinal-promoter.004-ci-and-lint",
+      "pr_number": 9,
+      "pr_merged": true,
+      "dependency_mode": "branch"
+    },
+    "005-crd-types-and-validation": {
+      "state": "done",
+      "assigned_to": "ENGINEER-1",
+      "assigned_at": "2026-04-10T17:16:36Z",
+      "worktree_path": "../kardinal-promoter.005-crd-types-and-validation",
+      "pr_number": 19,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "006-controller-manager-and-reconcilers": {
+      "state": "done",
+      "assigned_to": "ENGINEER-1",
+      "assigned_at": "2026-04-10T18:28:01Z",
+      "worktree_path": "../kardinal-promoter.006-controller-manager-and-reconcilers",
+      "pr_number": 23,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "007-helm-chart-controller-deploy": {
+      "state": "done",
+      "assigned_to": "ENGINEER-2",
+      "assigned_at": "2026-04-10T18:40:33Z",
+      "worktree_path": "../kardinal-promoter.007-helm-chart-controller-deploy",
+      "pr_number": 24,
+      "pr_merged": true,
+      "dependency_mode": "branch"
+    },
+    "008-graph-types-propagate-when": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T20:27:29Z",
+      "worktree_path": "../kardinal-promoter.008-graph-types-propagate-when",
+      "pr_number": 27,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "009-graph-builder": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T20:39:19Z",
+      "worktree_path": "../kardinal-promoter.009-graph-builder",
+      "pr_number": 29,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "010-policygate-cel": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T21:12:12Z",
+      "worktree_path": "../kardinal-promoter.010-policygate-cel",
+      "pr_number": 31,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "011-cli-foundation": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T21:55:13Z",
+      "worktree_path": "../kardinal-promoter.011-cli-foundation",
+      "pr_number": 37,
+      "pr_merged": true,
+      "dependency_mode": "merged",
+      "engineer_slots": {
+        "STANDALONE": null
+      }
+    },
+    "012-scm-and-steps-engine": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T22:23:23Z",
+      "worktree_path": "../kardinal-promoter.012-scm-and-steps-engine",
+      "pr_number": 57,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "013-promotionstep-reconciler": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T22:48:16Z",
+      "worktree_path": "../kardinal-promoter.013-promotionstep-reconciler",
+      "pr_number": 58,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "014-health-adapters": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T23:19:33Z",
+      "worktree_path": "../kardinal-promoter.014-health-adapters",
+      "pr_number": 62,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "015-cli-full": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T23:31:03Z",
+      "worktree_path": "../kardinal-promoter.015-cli-full",
+      "pr_number": 63,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "016-pr-evidence": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-10T23:47:29Z",
+      "worktree_path": "../kardinal-promoter.016-pr-evidence",
+      "pr_number": 64,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "017-kardinal-init": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T00:04:05Z",
+      "worktree_path": "../kardinal-promoter.017-kardinal-init",
+      "pr_number": 67,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "018-startup-reconciliation": {
+      "state": "done",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "pr_number": 69,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "019-embedded-react-ui": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:15:07Z",
+      "worktree_path": "../kardinal-promoter.019-embedded-react-ui",
+      "pr_number": 73,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "020-bundle-webhook": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:15:07Z",
+      "worktree_path": "../kardinal-promoter.020-bundle-webhook",
+      "pr_number": 72,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "021-helm-config-promotions": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:53:31Z",
+      "worktree_path": "../kardinal-promoter.021-helm-config-promotions",
+      "pr_number": 78,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "022-auto-rollback": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T01:53:31Z",
+      "worktree_path": "../kardinal-promoter.022-auto-rollback",
+      "pr_number": 77,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "023-e2e-test-infra": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T03:27:01Z",
+      "worktree_path": "../kardinal-promoter.023-e2e-test-infra",
+      "pr_number": 81,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "024-rendered-manifests": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T03:27:01Z",
+      "worktree_path": "../kardinal-promoter.024-rendered-manifests",
+      "pr_number": 82,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "025-pause-resume": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:10:49Z",
+      "worktree_path": "../kardinal-promoter.025-pause-resume",
+      "pr_number": 110,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "026-kind-e2e": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:10:49Z",
+      "worktree_path": "../kardinal-promoter.026-kind-e2e",
+      "pr_number": 111,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "027-metriccheck-crd": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:33:40Z",
+      "worktree_path": "../kardinal-promoter.027-metriccheck-crd",
+      "pr_number": 114,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "028-custom-steps": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T04:58:19Z",
+      "worktree_path": "../kardinal-promoter.028-custom-steps",
+      "pr_number": 124,
+      "pr_merged": true,
+      "dependency_mode": "merged",
+      "engineer_slots": {
+        "STANDALONE": null
+      }
+    },
+    "029-pipeline-table-columns": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "worktree_path": "../kardinal-promoter.029-pipeline-table-columns",
+      "pr_number": 128,
+      "pr_merged": true,
+      "dependency_mode": "merged",
+      "assigned_at": "2026-04-11T05:27:56Z"
+    },
+    "030-explain-policygate-labels": {
+      "state": "done",
+      "assigned_to": null,
+      "worktree_path": null,
+      "pr_number": 129,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "031-explain-cel-expression": {
+      "state": "done",
+      "assigned_to": null,
+      "worktree_path": null,
+      "pr_number": 129,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "032-workshop1-execution": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "worktree_path": null,
+      "pr_number": null,
+      "pr_merged": true,
+      "dependency_mode": "merged",
+      "assigned_at": "2026-04-11T05:54:08Z",
+      "notes": "Full execution completed 2026-04-11. All pass criteria met. 12 bugs fixed. PR #1 merged. v0.2.0 released."
+    },
+    "033-promote-command": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T17:31:50Z",
+      "worktree_path": "../kardinal-promoter.033-promote-command",
+      "dependency_mode": "merged",
+      "pr_number": 160,
+      "pr_merged": true
+    },
+    "034-fix-cel-import-ban": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T17:41:52Z",
+      "worktree_path": "../kardinal-promoter.034-fix-cel-import-ban",
+      "dependency_mode": "merged",
+      "pr_number": 162,
+      "pr_merged": true
+    },
+    "035-argo-rollouts-adapter": {
+      "state": "done",
+      "assigned_to": "STANDALONE-ENG",
+      "assigned_at": "2026-04-11T17:50:01Z",
+      "worktree_path": "../kardinal-promoter.035-argo-rollouts-adapter",
+      "dependency_mode": "merged",
+      "pr_number": 163,
+      "pr_merged": true
+    },
+    "036-prstatuscrd": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CORE",
+      "assigned_at": "2026-04-11T18:07:53Z",
+      "worktree_path": "../kardinal-promoter.036-prstatuscrd",
+      "dependency_mode": "merged",
+      "pr_number": 166,
+      "pr_merged": true
+    },
+    "037-cli-arch-cleanup": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "assigned_at": "2026-04-11T18:10:00Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 164,
+      "pr_merged": true
+    },
+    "037-gitlab-scm-provider": {
+      "state": "done",
+      "assigned_to": "STANDALONE-EXTENSIONS",
+      "assigned_at": "2026-04-11T18:11:31Z",
+      "worktree_path": "../kardinal-promoter.037-gitlab-scm-provider",
+      "dependency_mode": "merged",
+      "pr_number": 165,
+      "pr_merged": true
+    },
+    "038-rollbackpolicycrd": {
+      "state": "done",
+      "assigned_to": "STANDALONE-REFACTOR",
+      "assigned_at": "2026-04-11T18:34:45Z",
+      "worktree_path": "../kardinal-promoter.038-rollbackpolicycrd",
+      "dependency_mode": "merged",
+      "pr_number": 169,
+      "pr_merged": true
+    },
+    "039-ui-polish-and-cli7": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "assigned_at": "2026-04-11T18:45:50Z",
+      "worktree_path": "../kardinal-promoter.039-ui-polish-and-cli7",
+      "dependency_mode": "merged",
+      "pr_number": 170,
+      "pr_merged": true,
+      "notes": "PAUSED for restart. PR #170 open, CI in progress (build/lint/integration pending). QA diff review complete \u2014 no issues found. Next step: wait for all CI green, then QA LGTM comment, then merge. bun.lock committed to worktree (CI uses bun install). State: in_review."
+    },
+    "039-graph-purity-batch-a": {
+      "state": "done",
+      "assigned_to": "STANDALONE-REFACTOR",
+      "worktree_path": "../kardinal-promoter.039-graph-purity-batch-a",
+      "pr_number": 193,
+      "pr_merged": true,
+      "dependency_mode": "merged"
+    },
+    "044-exec-command-library": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T02:46:00Z",
+      "worktree_path": "../kardinal-promoter.044-exec-command-library",
+      "dependency_mode": "merged",
+      "pr_number": 195,
+      "pr_merged": true
+    },
+    "121-shard-routing": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-12T02:56:28Z",
+      "worktree_path": "../kardinal-promoter.121-shard-routing",
+      "dependency_mode": "merged",
+      "pr_number": 196,
+      "pr_merged": true
+    },
+    "200-cli-history-format": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 207,
+      "pr_merged": true
+    },
+    "201-cli-version-graph": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 206,
+      "pr_merged": true
+    },
+    "204-ui-cel-expression": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 215,
+      "pr_merged": true
+    },
+    "205-ui-blocked-banner": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 216,
+      "pr_merged": true
+    },
+    "202-ui-staleness": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 214,
+      "pr_merged": true
+    },
+    "203-ui-health-chip": {
+      "state": "done",
+      "assigned_to": "STANDALONE-CLI-UI",
+      "pr_number": 211,
+      "pr_merged": true
+    },
+    "199-cli-diff-command": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "pr_number": 212,
+      "pr_merged": true
+    },
+    "218-metriccheck-coverage": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "pr_number": 221,
+      "pr_merged": true
+    },
+    "219-translator-coverage": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "pr_number": 222,
+      "pr_merged": true
+    },
+    "220-promotionstep-coverage": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "pr_number": 223,
+      "pr_merged": true
+    },
+    "301-pr-evidence-assertions": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T18:29:18Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 438,
+      "pr_merged": true
+    },
+    "302-health-adapter-tests": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T18:45:00Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 439,
+      "pr_merged": true
+    },
+    "303-prstatus-regression": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T18:56:29Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 440,
+      "pr_merged": true
+    },
+    "304-ui-api-regression": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T19:07:15Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 441,
+      "pr_merged": true
+    },
+    "305-ui-vitest-setup": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T19:21:34Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 442,
+      "pr_merged": true
+    },
+    "306-contiguous-soak-bake": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T20:20:52Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 455,
+      "pr_merged": true
+    },
+    "307-pre-deploy-gates": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T20:36:04Z",
+      "dependency_mode": "merged",
+      "pr_number": 457,
+      "pr_merged": true
+    },
+    "308-abort-vs-rollback": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T20:46:50Z",
+      "dependency_mode": "merged",
+      "pr_number": 458,
+      "pr_merged": true
+    },
+    "309-changewindow-crd": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T21:13:14Z",
+      "dependency_mode": "merged",
+      "pr_number": 460,
+      "pr_merged": true
+    },
+    "310-deployment-metrics": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T21:28:12Z",
+      "dependency_mode": "merged",
+      "pr_number": 461,
+      "pr_merged": true
+    },
+    "400-wave-topology": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T21:59:55Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": true
+    },
+    "401-integration-test-step": {
+      "state": "done",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 470,
+      "pr_merged": true
+    },
+    "402-pr-review-gate": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "403-kardinal-override": {
+      "state": "in_review",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 471,
+      "pr_merged": false
+    },
+    "404-cross-stage-history-cel": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    }
+  },
+  "session_heartbeats": {
+    "COORDINATOR": {
+      "last_seen": "2026-04-10T20:14:29Z",
+      "cycle": 70
+    },
+    "QA": {
+      "last_seen": "2026-04-10T20:13:22Z",
+      "cycle": 39
+    }
+  },
+  "handoff": {
+    "fixed_at": "2026-04-13T23:16:52Z",
+    "reason": "Collision fix applied. Branch-push locking now in effect.",
+    "resume_with": "/otherness.run",
+    "note": "otherness updated: git push branch = distributed lock. No slot IDs needed. Each session claims an item by successfully pushing feat/<item-id> to remote. If push fails, pick another item.",
+    "remaining_items": [
+      "402-pr-review-gate",
+      "403-kardinal-override (PR #471 needs CI green)",
+      "404-cross-stage-history-cel"
+    ]
+  }
+}
