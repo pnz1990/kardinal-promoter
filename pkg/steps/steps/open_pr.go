@@ -52,13 +52,22 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		branch = fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
 	}
 
+	// Use a more descriptive PR title for rollback promotions.
+	rollbackOf := ""
+	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
+		rollbackOf = state.Bundle.Provenance.RollbackOf
+	}
 	title := fmt.Sprintf("[kardinal] Promote %s to %s", state.BundleName, state.Environment.Name)
+	if rollbackOf != "" {
+		title = fmt.Sprintf("[kardinal] Rollback %s to %s (reverts %s)", state.Environment.Name, state.BundleName, rollbackOf)
+	}
 
 	body, err := scm.RenderPRBody(scm.PRBody{
 		PipelineName:         state.PipelineName,
 		Environment:          state.Environment.Name,
 		BundleName:           state.BundleName,
 		Bundle:               state.Bundle,
+		RollbackOf:           rollbackOf,
 		GateResults:          state.GateResults,
 		UpstreamEnvironments: buildPRBodyUpstreamEnvs(state.UpstreamEnvironments),
 		Pipeline:             state.Pipeline,

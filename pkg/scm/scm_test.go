@@ -771,3 +771,66 @@ func TestNewProvider_Gitea(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, p)
 }
+
+// TestRenderPRBody_RollbackSection verifies that rollback PRs include a rollback
+// notice section with the bundle being rolled back to and the one being reverted.
+// This is required by issue #402 — rollback PR body must contain structured evidence.
+func TestRenderPRBody_RollbackSection(t *testing.T) {
+	data := scm.PRBody{
+		PipelineName: "nginx-demo",
+		Environment:  "prod",
+		BundleName:   "nginx-demo-rollback-abc123",
+		RollbackOf:   "nginx-demo-bad-version",
+		Bundle: v1alpha1.BundleSpec{
+			Type: "image",
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"},
+			},
+			Provenance: &v1alpha1.BundleProvenance{
+				CommitSHA:  "abc123",
+				Author:     "ci",
+				RollbackOf: "nginx-demo-bad-version",
+			},
+		},
+	}
+
+	body, err := scm.RenderPRBody(data)
+	require.NoError(t, err)
+
+	// Rollback PR must contain the rollback notice (#402)
+	assert.Contains(t, body, "ROLLBACK", "rollback PR body must contain ROLLBACK header")
+	assert.Contains(t, body, "nginx-demo-bad-version",
+		"rollback PR body must mention the bundle being reverted")
+	assert.Contains(t, body, "nginx-demo-rollback-abc123",
+		"rollback PR body must mention the new rollback bundle name")
+	assert.Contains(t, body, "prod", "rollback PR body must mention the environment")
+	// Rollback body must NOT show standard 'Promotion:' header
+	assert.NotContains(t, body, "## Promotion:",
+		"rollback PR must use ROLLBACK header, not Promotion header")
+	t.Logf("rollback PR body:\n%s", body)
+}
+
+// TestRenderPRBody_NormalPromotion_NoRollbackSection verifies that normal promotion
+// PRs do NOT include the rollback section.
+func TestRenderPRBody_NormalPromotion_NoRollbackSection(t *testing.T) {
+	data := scm.PRBody{
+		PipelineName: "nginx-demo",
+		Environment:  "prod",
+		BundleName:   "nginx-demo-v1-29-0",
+		// RollbackOf intentionally empty
+		Bundle: v1alpha1.BundleSpec{
+			Type: "image",
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"},
+			},
+		},
+	}
+
+	body, err := scm.RenderPRBody(data)
+	require.NoError(t, err)
+
+	assert.NotContains(t, body, "ROLLBACK",
+		"normal promotion PR must NOT have ROLLBACK header")
+	assert.Contains(t, body, "Promotion:",
+		"normal promotion PR must have standard Promotion header")
+}
