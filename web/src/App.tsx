@@ -9,6 +9,7 @@ import { HealthChip } from './components/HealthChip'
 import { BlockedBanner } from './components/BlockedBanner'
 import { BundleTimeline } from './components/BundleTimeline'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
+import { PipelineLaneView } from './components/PipelineLaneView'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -453,6 +454,27 @@ export function App() {
                 onSelectBundle={handleTimelineBundleSelect}
               />
             </div>
+
+            {/* #332: Pipeline lane view — horizontal stage cards (Kargo-parity).
+                Shows each PromotionStep environment as a card with state chip, bundle, and actions. */}
+            <PipelineLaneView
+              nodes={graph?.nodes ?? []}
+              selectedNode={selectedNode}
+              onSelectNode={setSelectedNode}
+              activeBundleName={activeBundle?.name}
+              pipelineName={selectedPipeline ?? undefined}
+              onPromote={(environment) => {
+                if (!selectedPipeline || !activePipeline) return
+                api.promote(selectedPipeline, environment, activePipeline.namespace ?? 'default')
+                  .catch((err: Error) => console.error('promote failed:', err.message))
+              }}
+              onRollback={(environment) => {
+                if (!selectedPipeline || !activePipeline) return
+                api.rollback(selectedPipeline, environment, activePipeline.namespace ?? 'default')
+                  .catch((err: Error) => console.error('rollback failed:', err.message))
+              }}
+              loading={graphLoading}
+            />
 
             {/* #326: Content row — DAG + NodeDetail split panel side by side.
                 NodeDetail is a flex sibling, not position:fixed overlay. */}
