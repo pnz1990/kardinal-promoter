@@ -28,8 +28,12 @@ const (
 	labelBundle = "kardinal.io/bundle"
 	// labelEnvironment is the environment the gate is evaluated for.
 	labelEnvironment = "kardinal.io/environment"
+	// labelPipeline is the pipeline the gate is associated with.
+	labelPipeline = "kardinal.io/pipeline"
 	// defaultRecheckInterval is used when gate.Spec.RecheckInterval is empty or invalid.
 	defaultRecheckInterval = 5 * time.Minute
+	// historyLimit is the number of recent Bundles to include in history stats.
+	historyLimit = 10
 )
 
 // Reconciler evaluates PolicyGate CEL expressions and patches status.
@@ -230,9 +234,15 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		metricsCtx = map[string]interface{}{}
 	}
 
-	// Build upstream soak context from bundle environment statuses.
+	// Build upstream soak context from bundle environment statuses,
+	// enriched with cross-stage history from all Bundles in the pipeline (K-10).
 	// SoakMinutes is read from Bundle.status.environments[*].soakMinutes (PG-3 fix).
-	upstreamCtx := buildUpstreamContext(&bundle)
+	pipelineName := gate.Labels[labelPipeline]
+	upstreamCtx, upstreamErr := r.buildUpstreamContextWithHistory(ctx, gate.Namespace, pipelineName, &bundle)
+	if upstreamErr != nil {
+		zerolog.Ctx(ctx).Warn().Err(upstreamErr).Msg("failed to build upstream history context, using basic soak only")
+		upstreamCtx = buildUpstreamContext(&bundle)
+	}
 
 	// bundle.upstreamSoakMinutes is the maximum soak minutes across all verified
 	// upstream environments. It is a convenience shorthand so expressions can write
@@ -295,6 +305,126 @@ func buildUpstreamContext(bundle *kardinalv1alpha1.Bundle) map[string]interface{
 		}
 	}
 	return result
+}
+
+// buildUpstreamContextWithHistory extends buildUpstreamContext with cross-stage
+// promotion history (K-10). It lists the last historyLimit Bundles for the same
+// pipeline and computes per-environment history stats:
+//
+//   - soakMinutes         — contiguous healthy minutes (from current bundle)
+//   - recentSuccessCount  — number of Verified bundles in last historyLimit
+//   - recentFailureCount  — number of Failed bundles in last historyLimit
+//   - lastPromotedAt      — RFC3339 timestamp of last verified promotion (or "")
+//
+// CEL usage:
+//
+//	upstream.staging.recentSuccessCount >= 3    # last 3 staging promotions succeeded
+//	upstream.staging.lastPromotedAt != ""       # staging was ever promoted
+//
+// Graph-purity: reads Bundle CRD status only. No external API calls.
+// Non-fatal: on List error, falls back to basic soakMinutes-only context.
+func (r *Reconciler) buildUpstreamContextWithHistory(
+	ctx context.Context, ns, pipelineName string,
+	currentBundle *kardinalv1alpha1.Bundle,
+) (map[string]interface{}, error) {
+	// Start with current bundle's soak data (always available).
+	result := buildUpstreamContext(currentBundle)
+
+	if pipelineName == "" {
+		// No pipeline label — cannot query history. Return soak-only context.
+		return result, nil
+	}
+
+	// List all Bundles for this pipeline in the same namespace.
+	var list kardinalv1alpha1.BundleList
+	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil, fmt.Errorf("list bundles in namespace %s: %w", ns, err)
+	}
+
+	// Filter to this pipeline only (in-memory filter — no field indexer required).
+	var pipelineBundles []kardinalv1alpha1.Bundle
+	for _, b := range list.Items {
+		if b.Spec.Pipeline == pipelineName {
+			pipelineBundles = append(pipelineBundles, b)
+		}
+	}
+
+	// Sort by creation time (newest first) to take the last historyLimit.
+	sorted := sortBundlesByCreationDesc(pipelineBundles)
+	if len(sorted) > historyLimit {
+		sorted = sorted[:historyLimit]
+	}
+
+	// Per-environment stats across the last historyLimit bundles.
+	type envStats struct {
+		successCount int64
+		failureCount int64
+		lastAt       string // RFC3339 or ""
+	}
+	stats := make(map[string]*envStats)
+
+	for _, b := range sorted {
+		for _, env := range b.Status.Environments {
+			if _, ok := stats[env.Name]; !ok {
+				stats[env.Name] = &envStats{}
+			}
+			st := stats[env.Name]
+			switch env.Phase {
+			case "Verified":
+				st.successCount++
+				// Track latest verified timestamp.
+				if env.HealthCheckedAt != nil {
+					ts := env.HealthCheckedAt.UTC().Format(time.RFC3339)
+					if st.lastAt == "" || ts > st.lastAt {
+						st.lastAt = ts
+					}
+				}
+			case "Failed":
+				st.failureCount++
+			}
+		}
+	}
+
+	// Merge history stats into the upstream context.
+	for envName, st := range stats {
+		existing, ok := result[envName].(map[string]interface{})
+		if !ok {
+			existing = map[string]interface{}{"soakMinutes": int64(0)}
+		}
+		existing["recentSuccessCount"] = st.successCount
+		existing["recentFailureCount"] = st.failureCount
+		existing["lastPromotedAt"] = st.lastAt
+		result[envName] = existing
+	}
+
+	// Ensure current bundle's env entries have history fields (zero-valued).
+	for _, env := range currentBundle.Status.Environments {
+		entry, ok := result[env.Name].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, ok := entry["recentSuccessCount"]; !ok {
+			entry["recentSuccessCount"] = int64(0)
+			entry["recentFailureCount"] = int64(0)
+			entry["lastPromotedAt"] = ""
+		}
+		result[env.Name] = entry
+	}
+
+	return result, nil
+}
+
+// sortBundlesByCreationDesc sorts bundles newest-first by CreationTimestamp.
+// Returns a new slice; does not modify the original.
+func sortBundlesByCreationDesc(bundles []kardinalv1alpha1.Bundle) []kardinalv1alpha1.Bundle {
+	out := make([]kardinalv1alpha1.Bundle, len(bundles))
+	copy(out, bundles)
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j].CreationTimestamp.After(out[j-1].CreationTimestamp.Time); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
 }
 
 // buildChangeWindowContext lists all ChangeWindow objects cluster-wide and
