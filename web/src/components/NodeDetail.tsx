@@ -8,7 +8,7 @@
 //
 // Steps are passed as a prop (managed by App's 5s poll) rather than fetched
 // independently, eliminating the 3s polling race condition (issue #322).
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { api } from '../api/client'
@@ -97,6 +97,48 @@ function stepIconColor(index: number, currentIndex: number, stepState: string, i
     return '#6366f1'
   }
   return '#334155'
+}
+
+/** #339: Copy-to-clipboard button. Shows 📋 → ✓ on success for 2s. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(() => {
+      // Fallback for environments without clipboard API
+      const el = document.createElement('textarea')
+      el.value = text
+      el.style.position = 'fixed'
+      el.style.opacity = '0'
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }, [text])
+  return (
+    <button
+      onClick={handleCopy}
+      title={copied ? 'Copied!' : 'Copy to clipboard'}
+      style={{
+        background: 'none',
+        border: '1px solid #334155',
+        borderRadius: '4px',
+        padding: '1px 6px',
+        cursor: 'pointer',
+        fontSize: '0.7rem',
+        color: copied ? '#86efac' : '#94a3b8',
+        transition: 'color 0.2s',
+        lineHeight: 1.4,
+      }}
+    >
+      {copied ? '✓' : '📋'}
+    </button>
+  )
 }
 
 /** Step progress panel for PromotionStep nodes. #359: correctly reflects step states. */
@@ -429,6 +471,8 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 title={celError ?? 'syntax error'}
               >✗ error</span>
             )}
+            {/* #339: copy-to-clipboard for CEL expression */}
+            <CopyButton text={node.expression} />
           </div>
           <code style={{
             display: 'block',
@@ -515,7 +559,11 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       {/* PromotionStep outputs from graph node */}
       {node.outputs && Object.keys(node.outputs).length > 0 && (
         <div style={{ marginBottom: '0.75rem' }}>
-          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>Step Outputs</h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>Step Outputs</h4>
+            {/* #339: copy-to-clipboard for step outputs JSON */}
+            <CopyButton text={JSON.stringify(node.outputs, null, 2)} />
+          </div>
           {Object.entries(node.outputs).map(([k, v]) => (
             <div key={k} style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.2rem' }}>
               <span style={{ color: '#7dd3fc' }}>{k}</span>:{' '}
@@ -528,6 +576,50 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* #341: Kubernetes conditions panel — show condition history from step status */}
+      {isPromotionStep && stepDetail?.conditions && stepDetail.conditions.length > 0 && (
+        <div style={{ marginBottom: '0.75rem' }}>
+          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
+            Conditions
+          </h4>
+          <div style={{
+            background: '#0f172a',
+            border: '1px solid #1e293b',
+            borderRadius: '4px',
+            padding: '0.4rem 0.6rem',
+          }}>
+            {stepDetail.conditions.map((cond, i) => (
+              <div key={i} style={{
+                display: 'flex',
+                gap: '0.5rem',
+                alignItems: 'flex-start',
+                fontSize: '0.75rem',
+                marginBottom: i < stepDetail.conditions!.length - 1 ? '0.3rem' : 0,
+              }}>
+                <span style={{
+                  color: cond.status === 'True' ? '#86efac' : cond.status === 'False' ? '#fca5a5' : '#94a3b8',
+                  flexShrink: 0,
+                  fontFamily: 'monospace',
+                }}>
+                  {cond.status === 'True' ? '✓' : cond.status === 'False' ? '✗' : '?'}
+                </span>
+                <div>
+                  <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{cond.type}</span>
+                  {cond.message && (
+                    <span style={{ color: '#94a3b8', marginLeft: '0.4rem' }}>— {cond.message}</span>
+                  )}
+                  {cond.lastTransitionTime && (
+                    <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: '0.1rem' }}>
+                      {formatTimestamp(cond.lastTransitionTime)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
