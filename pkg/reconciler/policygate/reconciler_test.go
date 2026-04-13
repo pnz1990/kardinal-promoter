@@ -163,7 +163,9 @@ func TestPolicyGateReconciler_BundleNotFound(t *testing.T) {
 	assert.False(t, got.Status.Ready, "gate must be blocked when bundle is missing")
 }
 
-// TestPolicyGateReconciler_TemplateIgnored verifies templates (no bundle label) are skipped.
+// TestPolicyGateReconciler_TemplateIgnored verifies templates (no bundle label) are processed
+// for CEL validation but do NOT get requeued (no recheckInterval requeue for templates).
+// Since the template has valid CEL, status.reason should indicate "valid CEL syntax".
 func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 	// Gate template: no kardinal.io/bundle label
 	template := &kardinalv1alpha1.PolicyGate{
@@ -196,7 +198,15 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "no-weekend-template", Namespace: "platform-policies"},
 	})
 	require.NoError(t, err)
+	// Templates return empty result (no requeue interval — they have no recheckInterval loop)
 	assert.Equal(t, ctrl.Result{}, result, "template must return empty result (no requeue)")
+
+	// #315: template CEL should be validated and status updated
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "no-weekend-template", Namespace: "platform-policies"}, &got))
+	assert.Contains(t, got.Status.Reason, "valid CEL syntax",
+		"valid template must indicate valid syntax in status.reason")
 }
 
 // TestPolicyGateReconciler_RequeueAfterRecheckInterval verifies RequeueAfter.
@@ -744,4 +754,101 @@ func TestPolicyGateReconciler_StatusReasonContainsVersion(t *testing.T) {
 	// PG-6: bundle version must be visible in status.reason so Graph and operators can observe it
 	assert.Contains(t, got.Status.Reason, "1.29.0",
 		"status.reason must include bundle version to make routing info CRD-observable")
+}
+
+// makeGateTemplate creates a template PolicyGate (no bundle label) for testing.
+func makeGateTemplate(name, ns, expression string) *kardinalv1alpha1.PolicyGate {
+	return &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"kardinal.io/scope":      "org",
+				"kardinal.io/applies-to": "prod",
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{
+			Expression:      expression,
+			Message:         "template gate message",
+			RecheckInterval: "5m",
+		},
+	}
+}
+
+// TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError verifies that a template
+// PolicyGate (no bundle label) with invalid CEL has the compilation error surfaced in
+// status.reason — so platform engineers can see the error via kubectl describe pg.
+// This is issue #315 for template gates (the existing test covers instances).
+func TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError(t *testing.T) {
+	gate := makeGateTemplate("bad-template", "platform-policies", `this is not valid CEL !!!`)
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate).
+		WithStatusSubresource(gate).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "bad-template", Namespace: "platform-policies"},
+	})
+	require.NoError(t, err, "invalid CEL in template must not crash the reconciler")
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "bad-template", Namespace: "platform-policies"}, &got))
+
+	// #315: status must surface the CEL error so platform engineers can see it.
+	assert.False(t, got.Status.Ready,
+		"template gate with invalid CEL must NOT be ready — fail-closed")
+	assert.Contains(t, got.Status.Reason, "CEL syntax error",
+		"status.reason must contain the compilation error message for operator visibility")
+}
+
+// TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid verifies that a template
+// PolicyGate with valid CEL sets status.reason to indicate valid syntax.
+func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
+	gate := makeGateTemplate("valid-template", "platform-policies", `!schedule.isWeekend`)
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate).
+		WithStatusSubresource(gate).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "valid-template", Namespace: "platform-policies"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "valid-template", Namespace: "platform-policies"}, &got))
+
+	// Template gates are always ready=false (not evaluated against a real bundle yet)
+	assert.False(t, got.Status.Ready,
+		"template gate is never ready=true — it's a spec, not an evaluation")
+	assert.Contains(t, got.Status.Reason, "valid CEL syntax",
+		"status.reason must confirm valid CEL syntax for operator visibility")
 }

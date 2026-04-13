@@ -63,11 +63,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get policygate: %w", err)
 	}
 
-	// Skip templates (no bundle label = platform/team template, not instance)
+	// Template PolicyGates (no bundle label) are platform/team-defined gate specs.
+	// They are not evaluated for a specific bundle, but we validate their CEL
+	// expression and surface compilation errors in status.reason (Issue #315).
 	bundleName := gate.Labels[labelBundle]
 	if bundleName == "" {
-		log.Debug().Msg("policygate has no bundle label, skipping (template)")
-		return ctrl.Result{}, nil
+		log.Debug().Msg("policygate has no bundle label, validating CEL syntax (template)")
+		return r.reconcileTemplate(ctx, &gate)
 	}
 
 	recheckInterval := parseRecheckInterval(gate.Spec.RecheckInterval)
@@ -115,6 +117,54 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	return ctrl.Result{RequeueAfter: recheckInterval}, nil
+}
+
+// reconcileTemplate validates the CEL expression on a template PolicyGate
+// (one without a kardinal.io/bundle label). It attempts to compile the expression
+// and writes the result to status so operators can see CEL errors without needing
+// to wait for a bundle to fail (Issue #315 — minimum viable fix: Option B).
+//
+// On syntax error: status.ready=false, status.reason shows the CEL error message.
+// On valid syntax: status.ready=false (not yet evaluated against a real context),
+// status.reason shows "valid CEL syntax".
+func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) (ctrl.Result, error) {
+	log := zerolog.Ctx(ctx).With().
+		Str("gate", gate.Name).
+		Str("namespace", gate.Namespace).
+		Logger()
+
+	if gate.Spec.Expression == "" {
+		// No expression to validate — leave status alone.
+		return ctrl.Result{}, nil
+	}
+
+	// Try to compile the expression to detect syntax errors.
+	_, _, celErr := r.Evaluator.Evaluate(gate.Spec.Expression, map[string]interface{}{
+		"bundle":         map[string]interface{}{},
+		"schedule":       map[string]interface{}{"isWeekend": false, "hour": 0, "dayOfWeek": "Monday"},
+		"environment":    map[string]interface{}{"name": ""},
+		"metrics":        map[string]interface{}{},
+		"upstream":       map[string]interface{}{},
+		"previousBundle": map[string]interface{}{},
+	})
+
+	var reason string
+	if celErr != nil {
+		// CEL compilation error — surface it so operators can see it.
+		reason = fmt.Sprintf("CEL syntax error: %s", celErr)
+		log.Warn().Err(celErr).Str("expr", gate.Spec.Expression).
+			Msg("template PolicyGate has invalid CEL expression")
+	} else {
+		reason = "valid CEL syntax (not yet evaluated — awaiting bundle promotion)"
+	}
+
+	// Patch status to reflect the validation result. ready=false for templates
+	// (only instances are evaluated against a real bundle context and may become ready=true).
+	if patchErr := r.patchStatus(ctx, gate, false, reason); patchErr != nil {
+		return ctrl.Result{}, fmt.Errorf("patch template gate status: %w", patchErr)
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // buildContext constructs the Phase 1 CEL context for gate evaluation.
