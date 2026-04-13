@@ -1,0 +1,118 @@
+site_name: kardinal-promoter
+site_description: Kubernetes-native promotion controller — GitOps pipelines with visible policy gates and PR evidence
+site_url: https://pnz1990.github.io/kardinal-promoter/
+repo_url: https://github.com/pnz1990/kardinal-promoter
+repo_name: pnz1990/kardinal-promoter
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - search.highlight
+    - search.suggest
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+    - content.action.edit
+    - content.action.view
+    - toc.follow
+
+plugins:
+  - search:
+      lang: en
+  - git-revision-date-localized:
+      enable_creation_date: true
+      fallback_to_build_date: true
+  - minify:
+      minify_html: true
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      check_paths: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quickstart: quickstart.md
+    - Installation: installation.md
+    - Concepts: concepts.md
+  - Guides:
+    - Policy Gates: policy-gates.md
+    - Health Verification: health-adapters.md
+    - Rollback: rollback.md
+    - CI Integration: ci-integration.md
+    - PR Evidence: pr-evidence.md
+    - Custom Steps: custom-steps.md
+    - Rendered Manifests: rendered-manifests.md
+    - Multi-Cluster: distributed-mode.md
+    - SCM Providers: scm-providers.md
+    - Advanced Patterns: advanced-patterns.md
+    - Security: guides/security.md
+    - Monitoring: guides/monitoring.md
+  - Reference:
+    - CLI Reference: reference/cli.md
+    - Pipeline CRD: pipeline-reference.md
+    - API Reference: reference/api.md
+    - CEL Context: reference/cel-context.md
+    - Troubleshooting: troubleshooting.md
+    - FAQ: faq.md
+  - Architecture: architecture.md
+  - Comparison: comparison.md
+  - Changelog: changelog.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pnz1990/kardinal-promoter
+  version:
+    provider: mike

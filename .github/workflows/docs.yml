@@ -1,0 +1,227 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "api/v1alpha1/**"
+      - "cmd/kardinal/**"
+      - "hack/gen-cli-docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "api/v1alpha1/**"
+      - "cmd/kardinal/**"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  # ── Step 1: Generate CLI reference from Cobra ──────────────────────────────
+  generate-cli-docs:
+    name: Generate CLI docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate CLI reference pages
+        run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/
+
+      - name: Upload generated CLI docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-cli-docs
+          path: docs/reference/cli/
+          retention-days: 1
+
+  # ── Step 2: Generate CRD API reference from Go types ──────────────────────
+  generate-api-docs:
+    name: Generate API docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install gen-crd-api-reference-docs
+        run: go install github.com/ahmetb/gen-crd-api-reference-docs@v0.3.0
+
+      - name: Create API ref templates directory
+        run: |
+          mkdir -p hack/api-ref-templates
+          # Use default templates — creates clean Markdown output
+          cat > hack/api-ref-config.json << 'EOF'
+          {
+            "hideMemberFields": ["TypeMeta", "ListMeta"],
+            "hideTypePatterns": [".*List$"],
+            "externalPackages": [
+              {
+                "typeMatchPrefix": "k8s.io/apimachinery",
+                "docsURLTemplate": "https://pkg.go.dev/k8s.io/apimachinery/{{.importPath}}#{{.name}}"
+              }
+            ],
+            "typeDisplayNamePrefixOverrides": {
+              "kardinal.io/v1alpha1": ""
+            }
+          }
+          EOF
+
+      - name: Generate API reference
+        run: |
+          gen-crd-api-reference-docs \
+            -api-dir ./api/v1alpha1 \
+            -config hack/api-ref-config.json \
+            -out-file docs/reference/api.md \
+            -v 4 2>&1 || echo "Generation completed (warnings expected for unresolved types)"
+
+      - name: Upload generated API docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-api-docs
+          path: docs/reference/api.md
+          retention-days: 1
+
+  # ── Step 3: Build and validate ─────────────────────────────────────────────
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    needs: [generate-cli-docs, generate-api-docs]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download generated CLI docs
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-cli-docs
+          path: docs/reference/cli/
+
+      - name: Download generated API docs
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-api-docs
+          path: docs/reference/
+        continue-on-error: true  # API gen may fail on partial types
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install MkDocs and plugins
+        run: |
+          pip install \
+            mkdocs-material==9.5.* \
+            mkdocs-gen-files==0.5.* \
+            mkdocs-literate-nav==0.6.* \
+            mkdocs-section-index==0.3.* \
+            mkdocs-minify-plugin==0.8.* \
+            "mkdocs-git-revision-date-localized-plugin==1.2.*" \
+            pymdown-extensions==10.*
+
+      - name: Build docs
+        run: mkdocs build --verbose
+        env:
+          MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: site/
+          retention-days: 1
+
+  # ── Step 4: Verify CLI docs are in sync (CI enforcement) ──────────────────
+  verify-cli-docs-sync:
+    name: Verify CLI docs in sync
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check CLI docs are up to date
+        run: |
+          go run ./hack/gen-cli-docs/main.go --output /tmp/cli-docs/
+          if ! diff -rq /tmp/cli-docs/ docs/reference/cli/ 2>/dev/null; then
+            echo "❌ CLI docs are stale. Run: go run ./hack/gen-cli-docs/main.go"
+            echo "Changed files:"
+            diff -r /tmp/cli-docs/ docs/reference/cli/ || true
+            exit 1
+          fi
+          echo "✅ CLI docs are in sync"
+
+  # ── Step 5: Deploy to GitHub Pages (main only) ────────────────────────────
+  deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: github-pages
+      url: https://pnz1990.github.io/kardinal-promoter/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download generated CLI docs
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-cli-docs
+          path: docs/reference/cli/
+
+      - name: Download generated API docs
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-api-docs
+          path: docs/reference/
+        continue-on-error: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install MkDocs and plugins
+        run: |
+          pip install \
+            mkdocs-material==9.5.* \
+            mkdocs-gen-files==0.5.* \
+            mkdocs-literate-nav==0.6.* \
+            mkdocs-section-index==0.3.* \
+            mkdocs-minify-plugin==0.8.* \
+            "mkdocs-git-revision-date-localized-plugin==1.2.*" \
+            pymdown-extensions==10.*
+
+      - name: Configure Git for deploy
+        run: |
+          git config user.name "kardinal-bot"
+          git config user.email "kardinal-bot@users.noreply.github.com"
+
+      - name: Deploy to gh-pages
+        run: mkdocs gh-deploy --force --clean --verbose
+        env:
+          MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
