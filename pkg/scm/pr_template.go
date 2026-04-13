@@ -77,6 +77,10 @@ type PRBody struct {
 	// BundleName is the Bundle resource name.
 	BundleName string
 
+	// RollbackOf is the name of the Bundle this rollback reverts (if this is a rollback PR).
+	// When non-empty, the PR body includes a rollback notice section (#402).
+	RollbackOf string
+
 	// GateResults holds PolicyGate evaluation results for this environment.
 	GateResults []v1alpha1.GateResult
 
@@ -109,7 +113,16 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 		return repo + "/compare/" + prevSHA + "..." + newSHA
 	},
 }).Parse(`<!-- kardinal-promoter auto-generated PR -->
-## Promotion: {{.BundleName}} → {{.PipelineName}}/{{.Environment}}
+{{- if .RollbackOf}}
+## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
+
+> **This is a rollback PR.** It reverts environment {{.Environment}} to the state of bundle {{.RollbackOf}}.
+> Rolling back FROM: the current (failed) bundle
+> Rolling back TO: {{.BundleName}} (copy of {{.RollbackOf}})
+
+{{- else}}
+## Promotion: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
+{{- end}}
 
 ### Artifact Provenance
 
