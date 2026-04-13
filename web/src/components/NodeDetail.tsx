@@ -132,6 +132,8 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const [stepLoading, setStepLoading] = useState(false)
   const [promoteState, setPromoteState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [promoteMessage, setPromoteMessage] = useState<string | null>(null)
+  const [rollbackState, setRollbackState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [rollbackMessage, setRollbackMessage] = useState<string | null>(null)
   const [celValid, setCelValid] = useState<boolean | null>(null)
   const [celError, setCelError] = useState<string | null>(null)
 
@@ -197,6 +199,22 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       })
   }
 
+  /** Trigger a rollback for this environment (#331). */
+  function handleRollback() {
+    if (!pipelineName || !node?.environment) return
+    setRollbackState('loading')
+    setRollbackMessage(null)
+    api.rollback(pipelineName, node.environment, namespace)
+      .then(res => {
+        setRollbackState('success')
+        setRollbackMessage(`Rollback bundle ${res.bundle} created`)
+      })
+      .catch((err: unknown) => {
+        setRollbackState('error')
+        setRollbackMessage(err instanceof Error ? err.message : 'Rollback failed')
+      })
+  }
+
   if (!node) return null
 
   return (
@@ -243,7 +261,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* Promote button — shown on PromotionStep nodes when a pipeline is known */}
       {isPromotionStep && pipelineName && node.environment && (
-        <div style={{ marginBottom: '0.75rem' }}>
+        <div style={{ marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
           <button
             onClick={handlePromote}
             disabled={promoteState === 'loading'}
@@ -273,11 +291,46 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           </button>
           {promoteMessage && (
             <div style={{
-              marginTop: '0.3rem',
               fontSize: '0.7rem',
               color: promoteState === 'error' ? '#fca5a5' : '#86efac',
             }}>
               {promoteMessage}
+            </div>
+          )}
+          {/* Rollback button (#331) */}
+          <button
+            onClick={handleRollback}
+            disabled={rollbackState === 'loading'}
+            title={`Roll back ${pipelineName} environment ${node.environment} to the previous verified version`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.35rem 0.8rem',
+              background: rollbackState === 'success' ? '#1c3a2e' : rollbackState === 'error' ? '#7f1d1d' : '#292524',
+              color: rollbackState === 'success' ? '#86efac' : '#fca5a5',
+              border: `1px solid ${rollbackState === 'error' ? '#7f1d1d' : '#44403c'}`,
+              borderRadius: '4px',
+              cursor: rollbackState === 'loading' ? 'wait' : 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 500,
+              opacity: rollbackState === 'loading' ? 0.7 : 1,
+            }}
+          >
+            <span>↩</span>
+            <span>
+              {rollbackState === 'loading' ? 'Rolling back…'
+                : rollbackState === 'success' ? 'Rollback started!'
+                : rollbackState === 'error' ? 'Failed'
+                : `Rollback ${node.environment}`}
+            </span>
+          </button>
+          {rollbackMessage && (
+            <div style={{
+              fontSize: '0.7rem',
+              color: rollbackState === 'error' ? '#fca5a5' : '#86efac',
+            }}>
+              {rollbackMessage}
             </div>
           )}
         </div>
@@ -369,14 +422,38 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {node.prURL && (
         <div style={{ marginBottom: '0.75rem' }}>
-          <a
-            href={node.prURL}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: '#6366f1', fontSize: '0.85rem' }}
-          >
-            View Pull Request ↗
-          </a>
+          {/* Prominent merge CTA when WaitingForMerge */}
+          {node.state === 'WaitingForMerge' ? (
+            <a
+              href={node.prURL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.4rem 0.9rem',
+                background: '#4f46e5',
+                color: '#fff',
+                borderRadius: '4px',
+                fontSize: '0.82rem',
+                fontWeight: 600,
+                textDecoration: 'none',
+              }}
+            >
+              <span>↗</span>
+              <span>Open Pull Request — Merge to Deploy</span>
+            </a>
+          ) : (
+            <a
+              href={node.prURL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#6366f1', fontSize: '0.85rem' }}
+            >
+              View Pull Request ↗
+            </a>
+          )}
         </div>
       )}
 

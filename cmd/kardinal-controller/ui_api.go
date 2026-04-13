@@ -41,6 +41,7 @@ type uiPipelineResponse struct {
 	Phase            string `json:"phase"`
 	EnvironmentCount int    `json:"environmentCount"`
 	ActiveBundleName string `json:"activeBundleName,omitempty"`
+	Paused           bool   `json:"paused,omitempty"` // true when spec.paused=true (#328)
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -121,6 +122,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/bundles/", s.handleBundleSubresource)
 	mux.HandleFunc("/api/v1/ui/gates", s.handleGates)
 	mux.HandleFunc("/api/v1/ui/promote", s.handlePromote)
+	mux.HandleFunc("/api/v1/ui/rollback", s.handleRollback)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 }
 
@@ -150,6 +152,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			Namespace:        p.Namespace,
 			Phase:            pipelinePhase(&p),
 			EnvironmentCount: len(p.Spec.Environments),
+			Paused:           p.Spec.Paused,
 		})
 	}
 	writeJSON(w, result)
@@ -587,8 +590,118 @@ func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleValidateCEL validates a PolicyGate CEL expression using the same CEL
-// environment as the backend evaluator. The UI calls this on-the-fly as the
+// handleRollback handles POST /api/v1/ui/rollback — creates a rollback Bundle
+// for the given pipeline and environment. UI equivalent of `kardinal rollback`.
+//
+// Request body (JSON):
+//
+//	{"pipeline": "nginx-demo", "environment": "prod", "namespace": "default", "toBundle": "nginx-demo-abc"}
+//
+// Response (JSON on success):
+//
+//	{"bundle": "nginx-demo-rollback-xyz", "message": "rollback started"}
+func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Pipeline    string `json:"pipeline"`
+		Environment string `json:"environment"`
+		Namespace   string `json:"namespace"`
+		ToBundle    string `json:"toBundle"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Pipeline == "" {
+		http.Error(w, "pipeline is required", http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	rollbackOf := req.ToBundle
+	if rollbackOf == "" {
+		// Find the most recently Verified PromotionStep for this pipeline+env.
+		var steps v1alpha1.PromotionStepList
+		labelSel := client.MatchingLabels{"kardinal.io/pipeline": req.Pipeline}
+		if req.Environment != "" {
+			labelSel["kardinal.io/environment"] = req.Environment
+		}
+		if err := s.client.List(r.Context(), &steps, client.InNamespace(ns), labelSel); err != nil {
+			http.Error(w, "failed to list steps", http.StatusInternalServerError)
+			return
+		}
+		var latest *v1alpha1.PromotionStep
+		for i := range steps.Items {
+			ps := &steps.Items[i]
+			if ps.Status.State != "Verified" {
+				continue
+			}
+			if latest == nil || ps.CreationTimestamp.After(latest.CreationTimestamp.Time) {
+				latest = ps
+			}
+		}
+		if latest == nil {
+			http.Error(w, "no verified promotion found to roll back to", http.StatusNotFound)
+			return
+		}
+		rollbackOf = latest.Spec.BundleName
+	}
+
+	// Copy bundle type from the target bundle.
+	bundleType := "image"
+	var srcBundle v1alpha1.Bundle
+	if err := s.client.Get(r.Context(), client.ObjectKey{Name: rollbackOf, Namespace: ns}, &srcBundle); err == nil {
+		if srcBundle.Spec.Type != "" {
+			bundleType = srcBundle.Spec.Type
+		}
+	}
+
+	rollbackBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: req.Pipeline + "-rollback-",
+			Namespace:    ns,
+			Labels:       map[string]string{"kardinal.io/rollback": "true"},
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:     bundleType,
+			Pipeline: req.Pipeline,
+			Provenance: &v1alpha1.BundleProvenance{
+				RollbackOf: rollbackOf,
+			},
+		},
+	}
+	if req.Environment != "" {
+		rollbackBundle.Spec.Intent = &v1alpha1.BundleIntent{
+			TargetEnvironment: req.Environment,
+		}
+	}
+	if err := s.client.Create(r.Context(), rollbackBundle); err != nil {
+		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create rollback bundle")
+		http.Error(w, "failed to create rollback bundle", http.StatusInternalServerError)
+		return
+	}
+
+	s.log.Info().
+		Str("bundle", rollbackBundle.Name).
+		Str("pipeline", req.Pipeline).
+		Str("rollbackOf", rollbackOf).
+		Msg("ui: rollback triggered")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"bundle":  rollbackBundle.Name,
+		"message": "rollback started — rolling back to " + rollbackOf,
+	})
+}
+
 // user types to provide syntax feedback without needing the full evaluation context.
 //
 // POST /api/v1/ui/validate-cel

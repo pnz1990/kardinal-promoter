@@ -149,6 +149,13 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
               role="button"
               aria-label={`${node.environment} — ${node.state}`}
             >
+              {/* SVG title provides native browser tooltip on hover (#327) */}
+              <title>
+                {node.type === 'PolicyGate'
+                  ? `${node.label}\nState: ${node.state}${node.expression ? `\nExpression: ${node.expression}` : ''}${node.message ? `\nReason: ${node.message}` : ''}`
+                  : `${node.environment} — ${node.state}${node.message ? `\n${node.message}` : ''}${node.prURL ? `\nPR: ${node.prURL}` : ''}`
+                }
+              </title>
               <rect
                 width={NODE_WIDTH}
                 height={NODE_HEIGHT}

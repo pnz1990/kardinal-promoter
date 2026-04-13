@@ -134,6 +134,17 @@ jobs:
             echo "$banned"
             exit 1
           fi
+      - name: Verify CRD schemas are up to date
+        run: |
+          # Install controller-gen at the pinned version used by Makefile.
+          CONTROLLER_GEN_VERSION=$(grep 'CONTROLLER_GEN_VERSION\s*?=' Makefile | awk '{print $NF}')
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@${CONTROLLER_GEN_VERSION}
+          controller-gen crd:allowDangerousTypes=true paths="./api/..." \
+            output:crd:artifacts:config=config/crd/bases
+          controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
+          git diff --exit-code config/crd/bases/ api/v1alpha1/zz_generated.deepcopy.go || \
+            (echo "CRD schemas are stale — run 'make manifests generate' and commit" && exit 1)
+
 
   # ── Integration tests: reconcilers via fake client (no cluster needed) ────────
   integration:

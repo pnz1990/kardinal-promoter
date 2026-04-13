@@ -92,7 +92,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Prop
               }} />
               {/* Short name */}
               <span style={{
-                fontSize: '0.62rem',
+                fontSize: '0.75rem',
                 color: isSelected ? '#e2e8f0' : '#64748b',
                 fontFamily: 'monospace',
                 fontWeight: isSelected ? 600 : 400,
@@ -101,7 +101,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Prop
               </span>
               {/* Phase label */}
               <span style={{
-                fontSize: '0.7rem',
+                fontSize: '0.75rem',
                 color,
               }}>
                 {b.phase === 'Superseded' ? 'Sup' : b.phase}

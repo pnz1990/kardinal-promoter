@@ -6,6 +6,8 @@ export interface Pipeline {
   phase: string
   environmentCount: number
   activeBundleName?: string
+  /** True when the pipeline has spec.paused=true (#328). */
+  paused?: boolean
 }
 
 export interface Bundle {

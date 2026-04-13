@@ -128,7 +128,27 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               }}>
                 {p.name}
               </span>
-              {p.phase && <HealthChip state={p.phase} size="sm" />}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                {/* Paused badge — visible accent when pipeline is paused (#328) */}
+                {p.paused && (
+                  <span
+                    title="Pipeline is paused — no new promotions will start"
+                    style={{
+                      fontSize: '0.6rem',
+                      background: '#1e1b4b',
+                      color: '#a5b4fc',
+                      border: '1px solid #4338ca',
+                      borderRadius: '3px',
+                      padding: '0px 4px',
+                      fontWeight: 700,
+                      letterSpacing: '0.05em',
+                    }}
+                  >
+                    PAUSED
+                  </span>
+                )}
+                {p.phase && <HealthChip state={p.paused ? 'Paused' : p.phase} size="sm" />}
+              </div>
             </div>
 
             {/* Sub-line: env count + active bundle */}
