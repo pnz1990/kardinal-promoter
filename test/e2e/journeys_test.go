@@ -241,7 +241,76 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 	assert.False(t, blocked, "journey 3: simulate Saturday must return BLOCKED")
 	t.Logf("journey 3: policy simulate Saturday 3pm → RESULT: BLOCKED (reason: %s) ✅", reason)
 
-	t.Log("Journey 3: Policy Governance — weekend gate, weekday gate, simulate all verified ✅")
+	// ── Test: all 7 kro library CEL function types (#401) ────────────────────
+	// Verifies that all kro CEL library extensions work in PolicyGate context.
+	// These are the functions documented in AGENTS.md §CEL Expressions.
+	kroLibCtx := map[string]interface{}{
+		"bundle": map[string]interface{}{
+			"type":    "image",
+			"version": "1.29.0",
+			"metadata": map[string]interface{}{
+				"name": "test-bundle",
+				"annotations": map[string]interface{}{
+					"channel": `{"channel":"stable"}`,
+					"team":    "platform",
+				},
+				"labels": map[string]interface{}{
+					"tier": "production",
+				},
+			},
+			"upstreamSoakMinutes": int64(45),
+		},
+		"schedule": map[string]interface{}{
+			"isWeekend": false,
+			"hour":      10,
+			"dayOfWeek": "Tuesday",
+		},
+		"environment": map[string]interface{}{
+			"name": "prod",
+			"labels": map[string]interface{}{
+				"tier": "production",
+			},
+		},
+		"metrics": map[string]interface{}{},
+		"upstream": map[string]interface{}{
+			"uat": map[string]interface{}{"soakMinutes": int64(45)},
+		},
+		"previousBundle": map[string]interface{}{},
+	}
+
+	type kroTest struct {
+		name string
+		expr string
+		want bool
+	}
+	kroTests := []kroTest{
+		// 1. json.unmarshal — parse JSON annotation
+		{"json.unmarshal", `json.unmarshal(bundle.metadata.annotations["channel"]).channel == "stable"`, true},
+		// 2. maps.merge — combine two maps
+		{"maps.merge", `environment.labels.merge({"extra": "value"})["extra"] == "value"`, true},
+		// 3. lists.setAtIndex — replace element
+		{"lists.setAtIndex", `lists.setAtIndex([1,2,3], 1, 9)[1] == 9`, true},
+		// 4. lists.insertAtIndex — insert element
+		{"lists.insertAtIndex", `lists.insertAtIndex([1,2,3], 0, 0).size() == 4`, true},
+		// 5. lists.removeAtIndex — remove element
+		{"lists.removeAtIndex", `lists.removeAtIndex([1,2,3], 2).size() == 2`, true},
+		// 6. random.seededInt — deterministic random
+		{"random.seededInt", `random.seededInt(0, 100, "test-seed") >= 0`, true},
+		// 7. string.lowerAscii — string normalization
+		{"string.lowerAscii", `bundle.metadata.annotations["team"].lowerAscii() == "platform"`, true},
+		// Combined schedule + upstream (J3 pass criteria)
+		{"combined_schedule_upstream", `!schedule.isWeekend && upstream["uat"].soakMinutes >= 30`, true},
+	}
+
+	for _, tc := range kroTests {
+		pass, kroReason, evalErr := evaluator.Evaluate(tc.expr, kroLibCtx)
+		require.NoError(t, evalErr, "journey 3: kro function %q must compile without error", tc.name)
+		assert.Equal(t, tc.want, pass,
+			"journey 3: kro function %q: got %v want %v (reason: %s)", tc.name, pass, tc.want, kroReason)
+		t.Logf("journey 3: kro lib function %s → %v ✅", tc.name, pass)
+	}
+
+	t.Log("Journey 3: Policy Governance — weekend gate, weekday gate, simulate, all 7 kro CEL functions verified ✅")
 }
 
 // TestJourney4Rollback validates docs/aide/definition-of-done.md Journey 4.
