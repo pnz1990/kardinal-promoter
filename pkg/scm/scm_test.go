@@ -834,3 +834,143 @@ func TestRenderPRBody_NormalPromotion_NoRollbackSection(t *testing.T) {
 	assert.Contains(t, body, "Promotion:",
 		"normal promotion PR must have standard Promotion header")
 }
+
+// TestPRBodyDocumentedFields verifies that the PR body contains every field
+// documented in docs/pr-evidence.md. This is the automated evidence for issue #412
+// (proof(PR evidence): every prod PR on kardinal-demo contains all required fields).
+//
+// The test exercises the full template with realistic data and asserts each documented
+// field is present. A failure here means the PR body that users see is missing evidence.
+func TestPRBodyDocumentedFields(t *testing.T) {
+	evalTime := metav1.NewTime(time.Date(2026, 4, 13, 14, 0, 0, 0, time.UTC))
+	healthCheckedAt := metav1.NewTime(time.Date(2026, 4, 13, 13, 15, 0, 0, time.UTC))
+
+	data := scm.PRBody{
+		PipelineName: "my-app",
+		Environment:  "prod",
+		BundleName:   "my-app-v1-29-0",
+		RepoURL:      "https://github.com/pnz1990/kardinal-demo",
+		Bundle: v1alpha1.BundleSpec{
+			Type: "image",
+			Images: []v1alpha1.ImageRef{
+				{
+					Repository: "ghcr.io/pnz1990/kardinal-test-app",
+					Tag:        "sha-abc1234",
+					Digest:     "sha256:a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+				},
+			},
+			Provenance: &v1alpha1.BundleProvenance{
+				CommitSHA: "abc1234def5678",
+				CIRunURL:  "https://github.com/pnz1990/kardinal-test-app/actions/runs/12345",
+				Author:    "platform-engineer",
+			},
+		},
+		GateResults: []v1alpha1.GateResult{
+			{
+				GateName:      "no-weekend-deploys",
+				GateNamespace: "platform-policies",
+				Result:        "pass",
+				Reason:        "Monday 14:00 UTC — not a weekend",
+				EvaluatedAt:   evalTime,
+			},
+			{
+				GateName:      "staging-soak-30m",
+				GateNamespace: "platform-policies",
+				Result:        "pass",
+				Reason:        "soakMinutes=45 >= 30",
+				EvaluatedAt:   evalTime,
+			},
+		},
+		UpstreamEnvironments: []scm.PRBodyUpstreamEnv{
+			{
+				Name:            "test",
+				Phase:           "Verified",
+				HealthCheckedAt: &healthCheckedAt,
+				Elapsed:         "2h45m",
+			},
+			{
+				Name:            "uat",
+				Phase:           "Verified",
+				HealthCheckedAt: &healthCheckedAt,
+				Elapsed:         "45m",
+			},
+		},
+		PreviousCommitSHA: "prevcommit1234",
+	}
+
+	body, err := scm.RenderPRBody(data)
+	require.NoError(t, err)
+	t.Logf("Full PR body:\n%s", body)
+
+	tests := []struct {
+		field    string // human-readable field name from docs/pr-evidence.md
+		contains string // substring that must appear in the PR body
+	}{
+		// Header
+		{"bundle name", "my-app-v1-29-0"},
+		{"pipeline name", "my-app"},
+		{"target environment", "prod"},
+		// Artifact Provenance table
+		{"provenance table header", "Artifact Provenance"},
+		{"image repository", "ghcr.io/pnz1990/kardinal-test-app"},
+		{"image tag", "sha-abc1234"},
+		{"image digest (sha256)", "sha256:a1b2c3d4"},
+		{"ci run url link", "github.com/pnz1990/kardinal-test-app/actions/runs/12345"},
+		{"source commit sha", "abc1234def5678"},
+		{"author", "platform-engineer"},
+		// Policy Gate Compliance table
+		{"gate compliance table header", "Policy Gate Compliance"},
+		{"gate name", "no-weekend-deploys"},
+		{"gate namespace", "platform-policies"},
+		{"gate result", "pass"},
+		{"gate reason", "not a weekend"},
+		{"soak gate name", "staging-soak-30m"},
+		{"soak gate reason", "soakMinutes=45"},
+		// Upstream Verification table
+		{"upstream verification table header", "Upstream Verification"},
+		{"upstream env test", "test"},
+		{"upstream env uat", "uat"},
+		{"upstream elapsed uat", "45m"},
+		{"upstream elapsed test", "2h45m"},
+		// Source diff link (PreviousCommitSHA provided)
+		{"source diff section", "Source Diff"},
+		{"diff link contains prev sha", "prevcommit1234"},
+		{"diff link contains new sha", "abc1234def5678"},
+		// Template identifier
+		{"kardinal-promoter footer", "kardinal-promoter"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.field, func(t *testing.T) {
+			assert.True(t,
+				strings.Contains(body, tc.contains),
+				"PR body must contain %q for field %q\nActual body:\n%s",
+				tc.contains, tc.field, body,
+			)
+		})
+	}
+}
+
+// TestFormatElapsed verifies the pre-computed elapsed time formatting used to
+// eliminate time.Since() calls inside the PR template (SCM-4 logic leak fix).
+func TestFormatElapsed(t *testing.T) {
+	now := time.Date(2026, 4, 13, 14, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		since time.Time
+		want  string
+	}{
+		{"30 seconds ago", now.Add(-30 * time.Second), "0m"},
+		{"5 minutes ago", now.Add(-5 * time.Minute), "5m"},
+		{"45 minutes ago", now.Add(-45 * time.Minute), "45m"},
+		{"2 hours 30 minutes ago", now.Add(-150 * time.Minute), "2h30m"},
+		{"exactly 1 hour", now.Add(-60 * time.Minute), "1h0m"},
+		{"3 days ago", now.Add(-72 * time.Hour), "3d"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scm.FormatElapsed(tc.since, now)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
