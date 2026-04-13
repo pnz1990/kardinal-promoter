@@ -154,7 +154,10 @@ kardinal uses the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/
 
 | Function | Signature | Example |
 |---|---|---|
-| `maps.merge` | `(map, map) → map` | `maps.merge(environment, {"region": "us-east-1"})` |
+| `.merge()` | `map.merge(map) → map` | `environment.labels.merge({"region": "us-east-1"})` |
+
+> **Note**: `merge` is a **member function** called on a map: `map1.merge(map2)`.
+> The namespace-style `maps.merge(map1, map2)` is incorrect and produces "undeclared reference" errors.
 
 ### Lists
 

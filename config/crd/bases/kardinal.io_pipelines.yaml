@@ -92,6 +92,10 @@ spec:
                           description: |-
                             Delegate offloads in-cluster progressive delivery to an external controller.
                             Supported values: none, argoRollouts, flagger.
+                          enum:
+                          - none
+                          - argoRollouts
+                          - flagger
                           type: string
                       type: object
                     dependsOn:
@@ -118,6 +122,12 @@ spec:
                           description: |-
                             Type selects the health check backend.
                             Supported values: resource, argocd, flux, argoRollouts, flagger.
+                          enum:
+                          - resource
+                          - argocd
+                          - flux
+                          - argoRollouts
+                          - flagger
                           type: string
                       type: object
                     layout:

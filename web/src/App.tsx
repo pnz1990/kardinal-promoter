@@ -248,16 +248,69 @@ export function App() {
           <>
             {/* Pipeline header */}
             <div style={{ marginBottom: '1rem' }}>
-              <h1 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.25rem' }}>
-                {activePipeline?.name}
-              </h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
+                  {activePipeline?.name}
+                </h1>
+                {/* Paused banner in main panel (#328) */}
+                {activePipeline?.paused && (
+                  <span style={{
+                    fontSize: '0.7rem',
+                    background: '#1e1b4b',
+                    color: '#a5b4fc',
+                    border: '1px solid #4338ca',
+                    borderRadius: '4px',
+                    padding: '2px 8px',
+                    fontWeight: 700,
+                    letterSpacing: '0.05em',
+                  }}>
+                    ⏸ PAUSED — no new promotions
+                  </span>
+                )}
+              </div>
+              {/* Bundle provenance card (#329) */}
               {activeBundle && (
-                <div style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-                  Bundle: <span style={{ color: '#7dd3fc' }}>{activeBundle.name}</span>
-                  {' · '}
-                  {activeBundle.phase}
+                <div style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  alignItems: 'center',
+                  fontSize: '0.82rem',
+                  color: '#94a3b8',
+                }}>
+                  <span>
+                    Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                  </span>
+                  <span style={{ color: '#334155' }}>·</span>
+                  <HealthChip state={activeBundle.phase} size="sm" />
                   {activeBundle.provenance?.commitSHA && (
-                    <> · <span style={{ fontFamily: 'monospace' }}>{activeBundle.provenance.commitSHA.slice(0, 8)}</span></>
+                    <>
+                      <span style={{ color: '#334155' }}>·</span>
+                      <span style={{ fontFamily: 'monospace', color: '#64748b' }}
+                            title="Commit SHA">
+                        {activeBundle.provenance.commitSHA.slice(0, 8)}
+                      </span>
+                    </>
+                  )}
+                  {activeBundle.provenance?.author && (
+                    <>
+                      <span style={{ color: '#334155' }}>·</span>
+                      <span title="Author">{activeBundle.provenance.author}</span>
+                    </>
+                  )}
+                  {activeBundle.provenance?.ciRunURL && (
+                    <>
+                      <span style={{ color: '#334155' }}>·</span>
+                      <a
+                        href={activeBundle.provenance.ciRunURL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#6366f1', fontSize: '0.78rem' }}
+                        title="CI run"
+                      >
+                        CI run ↗
+                      </a>
+                    </>
                   )}
                 </div>
               )}

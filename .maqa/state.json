@@ -70,6 +70,16 @@
       "current_item": null,
       "progress_issue": "296",
       "last_report_at": "2026-04-13T01:12:27Z"
+    },
+    "STANDALONE-DOCS": {
+      "name": "Docs Agent",
+      "last_seen": "2026-04-13T04:12:24Z",
+      "cycle": 4,
+      "scope": "Professional documentation site \u2014 MkDocs Material, GitHub Pages, auto-generated CLI+API reference, no content duplication.",
+      "current_item": null,
+      "progress_issue": "387",
+      "last_report_at": "2026-04-13T04:12:24Z",
+      "scope_complete": true
     }
   },
   "features": {
@@ -536,8 +546,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-13T02:20:12Z",
-      "cycle": 25
+      "last_seen": "2026-04-13T05:08:15Z",
+      "cycle": 28
     }
   },
   "handoff": {
