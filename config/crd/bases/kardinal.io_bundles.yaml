@@ -280,6 +280,28 @@ spec:
                   - name
                   type: object
                 type: array
+              metrics:
+                description: |-
+                  Metrics holds deployment efficiency metrics for this Bundle (K-05).
+                  Populated by the BundleReconciler when all environments reach Verified.
+                properties:
+                  autoRollbacks:
+                    description: |-
+                      AutoRollbacks is the number of environments that auto-rolled back during
+                      this Bundle's promotion.
+                    type: integer
+                  bakeResets:
+                    description: |-
+                      BakeResets is the total number of bake timer resets across all environments.
+                      High bake reset count indicates flaky health or over-sensitive bake windows.
+                    type: integer
+                  commitToProductionMinutes:
+                    description: |-
+                      CommitToProductionMinutes is the time from Bundle creation to the last
+                      environment reaching Verified. Indicates total promotion pipeline latency.
+                    format: int64
+                    type: integer
+                type: object
               phase:
                 description: Phase is the bundle promotion phase.
                 enum:

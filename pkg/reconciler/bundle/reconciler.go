@@ -298,6 +298,19 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	if len(psList.Items) == 0 {
+		// K-05: even when no PromotionSteps exist, compute metrics if all environments
+		// in status are already Verified (this happens on re-reconcile after Graph deletion).
+		if b.Status.Metrics == nil && len(b.Status.Environments) > 0 {
+			if metrics := computeBundleMetrics(b, b.Status.Environments); metrics != nil {
+				patch := client.MergeFrom(b.DeepCopy())
+				b.Status.Metrics = metrics
+				if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
+					return ctrl.Result{}, fmt.Errorf("patch bundle metrics: %w", patchErr)
+				}
+				log.Info().Int64("commitToProductionMinutes", metrics.CommitToProductionMinutes).
+					Msg("K-05: bundle metrics computed")
+			}
+		}
 		log.Debug().Msg("no promotion steps found for bundle, nothing to sync")
 		return ctrl.Result{}, nil
 	}
@@ -365,6 +378,16 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		envs = append(envs, env)
 	}
 
+	// K-05: Compute deployment metrics when all environments are Verified.
+	// Only runs once (when metrics is nil and all envs just reached Verified).
+	if b.Status.Metrics == nil {
+		metrics := computeBundleMetrics(b, envs)
+		if metrics != nil {
+			b.Status.Metrics = metrics
+			changed = true
+		}
+	}
+
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Environments = envs
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
@@ -373,6 +396,44 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 
 	log.Info().Int("environments", len(envs)).Msg("bundle evidence synced from PromotionStep status")
 	return ctrl.Result{}, nil
+}
+
+// computeBundleMetrics derives deployment efficiency metrics from a Bundle's
+// environments slice. Returns nil if not all environments are Verified yet.
+//
+// K-05: commitToProductionMinutes is the elapsed time from Bundle creation to the
+// last environment reaching HealthCheckedAt (the final verification timestamp).
+// Graph-first: reads from CRD status only; time.Now() is used only to write the
+// Metrics field as a CRD status update.
+func computeBundleMetrics(b *kardinalv1alpha1.Bundle, envs []kardinalv1alpha1.EnvironmentStatus) *kardinalv1alpha1.BundleMetrics {
+	// Only compute when all environments have reached Verified (have HealthCheckedAt set).
+	var latestHealthCheck *time.Time
+	for i := range envs {
+		if envs[i].HealthCheckedAt == nil {
+			return nil // not all verified yet
+		}
+		t := envs[i].HealthCheckedAt.Time
+		if latestHealthCheck == nil || t.After(*latestHealthCheck) {
+			latestHealthCheck = &t
+		}
+	}
+	if latestHealthCheck == nil {
+		return nil
+	}
+
+	created := b.CreationTimestamp.Time
+	if created.IsZero() {
+		return nil
+	}
+
+	elapsed := latestHealthCheck.Sub(created)
+	if elapsed < 0 {
+		elapsed = -elapsed
+	}
+
+	return &kardinalv1alpha1.BundleMetrics{
+		CommitToProductionMinutes: int64(elapsed.Minutes()),
+	}
 }
 
 // Start implements manager.Runnable. It is called by controller-runtime after the
