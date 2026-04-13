@@ -173,6 +173,19 @@ spec:
                         "uat", "prod").
                       minLength: 1
                       type: string
+                    onHealthFailure:
+                      default: none
+                      description: |-
+                        OnHealthFailure controls what the reconciler does when health fails during
+                        bake or health checking (K-03).
+                        "rollback": create a rollback Bundle at the previous version; step → RollingBack.
+                        "abort": freeze the step; state → AbortedByAlarm; requires human intervention.
+                        "none" (default): step → Failed; downstream stops.
+                      enum:
+                      - rollback
+                      - abort
+                      - none
+                      type: string
                     path:
                       description: |-
                         Path is the subdirectory within the GitOps repository for this environment.

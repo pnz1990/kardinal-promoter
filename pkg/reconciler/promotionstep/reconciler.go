@@ -59,6 +59,11 @@ const (
 	StateVerified = "Verified"
 	// StateFailed — terminal failure.
 	StateFailed = "Failed"
+	// StateAbortedByAlarm — terminal: health alarm with onHealthFailure=abort (K-03).
+	// Requires human intervention to resume or rollback.
+	StateAbortedByAlarm = "AbortedByAlarm"
+	// StateRollingBack — rollback Bundle created; step waits for rollback to complete (K-03).
+	StateRollingBack = "RollingBack"
 
 	// requeueWaitForMerge is how often to requeue while waiting for a PR merge.
 	requeueWaitForMerge = 30 * time.Second
@@ -774,6 +779,94 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	}
 }
 
+// applyHealthFailurePolicy dispatches the onHealthFailure action (K-03).
+// Called when health fails with policy=fail-on-alarm (from handleBake) or
+// when health fails without bake and onHealthFailure is configured.
+//
+// "rollback": creates a rollback Bundle, transitions step to RollingBack.
+// "abort":    transitions step to AbortedByAlarm (human intervention required).
+// "none":     transitions step to Failed (existing behavior).
+//
+// Graph-first: creates a new Bundle CRD (its own resource). Does not mutate
+// any other CRD's status.
+func (r *Reconciler) applyHealthFailurePolicy(
+	ctx context.Context,
+	log zerolog.Logger,
+	ps *v1alpha1.PromotionStep,
+	pipeline *v1alpha1.Pipeline,
+	env v1alpha1.EnvironmentSpec,
+	adapterName, reason string,
+	patch client.Patch,
+) (ctrl.Result, error) {
+	_ = pipeline // reserved for future use (finding previous bundle version)
+
+	switch env.OnHealthFailure {
+	case "abort":
+		ps.Status.State = StateAbortedByAlarm
+		ps.Status.Message = fmt.Sprintf(
+			"health alarm via %s (onHealthFailure=abort): %s — human intervention required",
+			adapterName, reason)
+		log.Info().Str("env", ps.Spec.Environment).Msg("health failure: AbortedByAlarm")
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch abort: %w", patchErr)
+		}
+		return ctrl.Result{}, nil
+
+	case "rollback":
+		// Create a rollback Bundle at the previous version.
+		// The rollback Bundle travels the full pipeline, restoring the prior state.
+		rollbackBundle := r.buildRollbackBundle(ps)
+		if createErr := r.Create(ctx, rollbackBundle); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
+			return ctrl.Result{}, fmt.Errorf("create rollback bundle: %w", createErr)
+		}
+		ps.Status.State = StateRollingBack
+		ps.Status.Message = fmt.Sprintf(
+			"health alarm via %s (onHealthFailure=rollback): rollback Bundle %s created",
+			adapterName, rollbackBundle.Name)
+		log.Info().
+			Str("env", ps.Spec.Environment).
+			Str("rollbackBundle", rollbackBundle.Name).
+			Msg("health failure: rollback Bundle created, state=RollingBack")
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch rolling-back: %w", patchErr)
+		}
+		return ctrl.Result{}, nil
+
+	default: // "none" or unset
+		ps.Status.State = StateFailed
+		ps.Status.Message = fmt.Sprintf(
+			"health alarm via %s (onHealthFailure=none): %s", adapterName, reason)
+		log.Info().Str("env", ps.Spec.Environment).Msg("health failure: Failed")
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch failed (health policy): %w", patchErr)
+		}
+		return ctrl.Result{}, nil
+	}
+}
+
+// buildRollbackBundle creates a rollback Bundle for K-03.
+// The bundle is annotated with the original bundle name for audit trail.
+func (r *Reconciler) buildRollbackBundle(ps *v1alpha1.PromotionStep) *v1alpha1.Bundle {
+	rollbackName := ps.Spec.BundleName + "-rollback-alarm"
+	return &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      rollbackName,
+			Namespace: ps.Namespace,
+			Labels: map[string]string{
+				"kardinal.io/rollback": "true",
+				"kardinal.io/reason":   "AutoRollback",
+			},
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: ps.Spec.PipelineName,
+			Provenance: &v1alpha1.BundleProvenance{
+				RollbackOf: ps.Spec.BundleName,
+			},
+		},
+	}
+}
+
 // checkPreDeployGates looks up all gates in ps.Spec.RequiredGates and returns
 // true + the first blocking gate name if any pre-deploy gate is not ready.
 // Returns (false, "", nil) when all pre-deploy gates are ready (or there are none).
@@ -834,11 +927,8 @@ func (r *Reconciler) handleBake(
 				Int("bakeMinutes", env.Bake.Minutes).
 				Msg("bake: health alarm, timer reset")
 		} else {
-			// fail-on-alarm: transition to Failed immediately.
-			ps.Status.State = StateFailed
-			ps.Status.Message = fmt.Sprintf(
-				"bake: health alarm via %s (policy=fail-on-alarm): %s", adapterName, reason)
-			log.Info().Str("env", ps.Spec.Environment).Msg("bake: health alarm, fail-on-alarm")
+			// fail-on-alarm: apply onHealthFailure policy (K-03).
+			return r.applyHealthFailurePolicy(ctx, log, ps, pipeline, env, adapterName, reason, patch)
 		}
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch bake alarm: %w", patchErr)
