@@ -64,13 +64,20 @@ func journeyScheme(t *testing.T) *runtime.Scheme {
 // promotes through test → uat → prod automatically.
 // In this test we use approvalMode: auto for all envs (the real PR flow is verified
 // in TestPromotionLoop_PRReview_ViaWebhook in promotion_loop_test.go).
+//
+// Pipeline references pnz1990/kardinal-demo (the GitOps repo) and uses
+// ghcr.io/pnz1990/kardinal-test-app (the reference test application image).
+// This matches the AGENTS.md §Product Validation Scenarios (issue #399).
 func TestJourney1Quickstart(t *testing.T) {
 	s := journeyScheme(t)
 
 	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kardinal-test-app", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{
-			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Git: v1alpha1.PipelineGit{
+				URL:    "https://github.com/pnz1990/kardinal-demo",
+				Branch: "main",
+			},
 			Environments: []v1alpha1.EnvironmentSpec{
 				{Name: "test", Approval: "auto"},
 				{Name: "uat", Approval: "auto"},
@@ -79,19 +86,26 @@ func TestJourney1Quickstart(t *testing.T) {
 		},
 	}
 	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-29-0", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: "kardinal-test-app-sha-abc1234", Namespace: "default"},
 		Spec: v1alpha1.BundleSpec{
 			Type:     "image",
-			Pipeline: "nginx-demo",
+			Pipeline: "kardinal-test-app",
 			// No Images: the kustomize-set-image step skips when no images are specified,
-			// allowing the promotion loop to advance without requiring kustomize in PATH.
+			// allowing the promotion loop to advance in unit tests without requiring kustomize.
+			// In CI with a live cluster, the real image is used via 'kardinal create bundle'.
 			// The real kustomize-set-image behaviour is tested in pkg/steps/steps/steps_test.go.
+			// Reference image for documentation: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+			Provenance: &v1alpha1.BundleProvenance{
+				Author:    "ci-system",
+				CommitSHA: "abc1234def5678",
+				CIRunURL:  "https://github.com/pnz1990/kardinal-test-app/actions/runs/1",
+			},
 		},
 	}
 	steps := []*v1alpha1.PromotionStep{
-		makeJourneyStep("step-test", "nginx-demo", "nginx-demo-v1-29-0", "test", "auto"),
-		makeJourneyStep("step-uat", "nginx-demo", "nginx-demo-v1-29-0", "uat", "auto"),
-		makeJourneyStep("step-prod", "nginx-demo", "nginx-demo-v1-29-0", "prod", "auto"),
+		makeJourneyStep("step-test", "kardinal-test-app", "kardinal-test-app-sha-abc1234", "test", "auto"),
+		makeJourneyStep("step-uat", "kardinal-test-app", "kardinal-test-app-sha-abc1234", "uat", "auto"),
+		makeJourneyStep("step-prod", "kardinal-test-app", "kardinal-test-app-sha-abc1234", "prod", "auto"),
 	}
 
 	c := fake.NewClientBuilder().WithScheme(s).
@@ -100,8 +114,11 @@ func TestJourney1Quickstart(t *testing.T) {
 		Build()
 
 	rec := &psrec.Reconciler{
-		Client:    c,
-		SCM:       &mockSCMForLoop{prURL: "https://github.com/test/repo/pull/1", prNumber: 1},
+		Client: c,
+		SCM: &mockSCMForLoop{
+			prURL:    "https://github.com/pnz1990/kardinal-demo/pull/1",
+			prNumber: 1,
+		},
 		GitClient: &mockGitForLoop{},
 		WorkDirFn: func(_, _ string) string { return t.TempDir() },
 	}
@@ -122,6 +139,7 @@ func TestJourney1Quickstart(t *testing.T) {
 			"journey 1: %s should be Verified; got %s: %s", stepName, ps.Status.State, ps.Status.Message)
 	}
 	t.Log("Journey 1: Quickstart — test → uat → prod all Verified ✅")
+	t.Logf("journey 1: pipeline=kardinal-test-app repo=pnz1990/kardinal-demo image=ghcr.io/pnz1990/kardinal-test-app:sha-abc1234 ✅")
 }
 
 // TestJourney2MultiClusterFleet validates docs/aide/definition-of-done.md Journey 2.
