@@ -108,20 +108,32 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 		nameSet[e.Name] = true
 	}
 
+	// Expand wave topology (K-06): if any environment has Wave > 0, build
+	// wave-derived dependsOn edges before falling through to the default logic.
+	// Wave N environments depend on ALL wave-(N-1) environments. Wave edges are
+	// unioned with any explicit DependsOn entries on the same environment.
+	waveDeps := expandWaveDeps(envs)
+
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
 	for i, e := range envs {
-		switch {
-		case len(e.DependsOn) > 0:
-			// Validate dependsOn references
-			for _, dep := range e.DependsOn {
-				if !nameSet[dep] {
-					return nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
-						e.Name, dep)
-				}
+		// Start with any wave-derived edges.
+		merged := append([]string(nil), waveDeps[e.Name]...)
+		// Union with explicit DependsOn.
+		for _, dep := range e.DependsOn {
+			if !nameSet[dep] {
+				return nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
+					e.Name, dep)
 			}
-			deps[e.Name] = e.DependsOn
-		case i > 0:
-			// Default: depends on previous in list
+			if !containsStr(merged, dep) {
+				merged = append(merged, dep)
+			}
+		}
+
+		switch {
+		case len(merged) > 0:
+			deps[e.Name] = merged
+		case i > 0 && e.Wave == 0:
+			// Default: depends on previous in list (only when wave is not used)
 			deps[e.Name] = []string{envs[i-1].Name}
 		default:
 			deps[e.Name] = nil
@@ -809,6 +821,49 @@ func sortStrings(s []string) {
 			s[j], s[j-1] = s[j-1], s[j]
 		}
 	}
+}
+
+// expandWaveDeps builds wave-derived dependency edges (K-06).
+// For each environment with Wave > 0, it produces edges to ALL environments
+// that have Wave == (this.Wave - 1). If no environments use Wave, returns an
+// empty map and the caller falls through to the default sequential logic.
+func expandWaveDeps(envs []kardinalv1alpha1.EnvironmentSpec) map[string][]string {
+	waveDeps := make(map[string][]string, len(envs))
+
+	// Index environments by wave number.
+	byWave := make(map[int][]string)
+	for _, e := range envs {
+		if e.Wave > 0 {
+			byWave[e.Wave] = append(byWave[e.Wave], e.Name)
+		}
+	}
+	if len(byWave) == 0 {
+		return waveDeps // no wave topology — caller uses default logic
+	}
+
+	for _, e := range envs {
+		if e.Wave <= 1 {
+			continue // wave 1 (or non-wave) has no predecessors via wave
+		}
+		prev := byWave[e.Wave-1]
+		if len(prev) == 0 {
+			continue
+		}
+		sorted := append([]string(nil), prev...)
+		sortStrings(sorted)
+		waveDeps[e.Name] = sorted
+	}
+	return waveDeps
+}
+
+// containsStr reports whether s contains target.
+func containsStr(s []string, target string) bool {
+	for _, v := range s {
+		if v == target {
+			return true
+		}
+	}
+	return false
 }
 
 // prStatusNodeName generates the CEL-safe node ID for a PRStatus Watch node.

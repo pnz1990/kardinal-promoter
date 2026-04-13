@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-12T02:56:28Z",
-  "current_queue": "queue-015",
+  "last_updated": "2026-04-13T21:59:55Z",
+  "current_queue": "queue-017",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -614,11 +614,56 @@
       "pr_merged": true
     },
     "310-deployment-metrics": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": "STANDALONE",
       "assigned_at": "2026-04-13T21:28:12Z",
       "dependency_mode": "merged",
       "pr_number": 461,
+      "pr_merged": true
+    },
+    "400-wave-topology": {
+      "state": "in_progress",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T21:59:55Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "401-integration-test-step": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "402-pr-review-gate": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "403-kardinal-override": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
+    },
+    "404-cross-stage-history-cel": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
       "pr_merged": false
     }
   },
@@ -632,35 +677,13 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-13T21:28:12Z",
-      "cycle": 47
+      "last_seen": "2026-04-13T21:54:24Z",
+      "cycle": 48
     }
   },
   "handoff": {
-    "saved_at": "2026-04-13T21:30:44Z",
-    "resume_with": "/otherness.run",
-    "summary": "Major session: full roadmap, architecture, and docs overhaul. Ready to continue implementing.",
-    "critical_context": [
-      "K-01 (contiguous soak), K-02 (pre-deploy gates), K-03 (abort/rollback), K-04 (ChangeWindow) all MERGED to main",
-      "blocked-on-krocodile is now EMPTY \u2014 nothing blocks the roadmap on krocodile",
-      "#132 (step-as-Graph-node): unblocked via flat DAG compilation \u2014 implement PromotionStepTask CRD",
-      "#138 (recheckAfter): unblocked via ScheduleClock pattern (Ellis Tarn suggestion) \u2014 implement ScheduleClock CRD + schedule.* CEL library",
-      "#130/#68 (pkg/cel): partially unblocked \u2014 non-time-based gates can migrate to Watch nodes now",
-      "#400 (Journey 2 multi-cluster): unblocked \u2014 Stage 14 is kardinal impl work, not krocodile",
-      "EKS cluster for multi-cluster E2E: Terraform at terraform/eks-e2e/, region us-east-2, make eks-up",
-      "New roadmap issues: #444-453 (K-01 to K-10), milestones v0.5.0 and v0.6.0",
-      "Aggregated API adoption plan documented: ellistarn/kro#80 \u2014 when merged, closes #128,#133,#140,#143,#149 in one shot",
-      "docs/design/11-graph-purity-tech-debt.md fully updated \u2014 read it before any architecture work"
-    ],
-    "next_high_value_items": [
-      "#138: ScheduleClock CRD + schedule.* CEL library (prereq for ChangeWindow, pkg/cel cleanup)",
-      "#447: K-05 deployment metrics on Bundle + Pipeline status",
-      "#450: K-06 wave topology (wave: field, ~30 lines in builder.go)",
-      "#132: PromotionStepTask CRD + flat DAG \u2014 highest-impact open issue, run krocodile benchmark first",
-      "#130/#68: migrate non-time-based PolicyGate expressions to Graph Watch nodes"
-    ],
-    "items_in_flight": {
-      "310-deployment-metrics": "in_review \u2014 PR open, check CI and merge"
-    }
+    "requested_at": "2026-04-13T21:38:46Z",
+    "reason": "Manual stop requested via /otherness.pause",
+    "resume_with": "/otherness.run"
   }
 }

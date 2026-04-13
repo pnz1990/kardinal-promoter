@@ -119,6 +119,18 @@ type EnvironmentSpec struct {
 	// +optional
 	DependsOn []string `json:"dependsOn,omitempty"`
 
+	// Wave assigns this environment to a numbered deployment wave (K-06).
+	// Environments with the same wave number are promoted in parallel.
+	// Wave N environments automatically depend on ALL wave (N-1) environments —
+	// the translator generates the edges so users need not write explicit dependsOn.
+	// Wave and explicit DependsOn are composable: the final dependency set is the
+	// union of wave-derived edges and any explicit DependsOn entries.
+	// Wave values must be >= 1. Environments without a Wave use the default
+	// sequential ordering (each depends on the previous in the list).
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Wave int `json:"wave,omitempty"`
+
 	// Shard pins this environment to a specific kardinal-controller agent shard
 	// in distributed mode. Leave empty for single-controller deployments.
 	// +optional

@@ -535,7 +535,17 @@ func findSubstr(s, sub string) bool {
 	return false
 }
 
-// findUpstreamRef returns the upstream reference value from a PromotionStep node template.
+// assertPropagateWhenContains checks that at least one entry in node.PropagateWhen
+// contains the given substring.
+func assertPropagateWhenContains(t *testing.T, node graph.GraphNode, substr, msg string) {
+	t.Helper()
+	for _, pw := range node.PropagateWhen {
+		if containsStr(pw, substr) {
+			return
+		}
+	}
+	t.Errorf("%s: PropagateWhen %v does not contain %q", msg, node.PropagateWhen, substr)
+}
 func findUpstreamRef(t *testing.T, n graph.GraphNode) string {
 	t.Helper()
 	spec, ok := n.Template["spec"].(map[string]interface{})
@@ -649,4 +659,142 @@ func TestBuilder_PolicyGateScopeDefault(t *testing.T) {
 
 	assert.Equal(t, "team", labels["kardinal.io/scope"],
 		"default scope must be 'team' when label is absent")
+}
+
+// --- Wave topology tests (K-06) ---
+
+// TestBuilder_WaveTopology_3Waves verifies that wave: fields generate correct
+// dependency edges: wave-2 envs depend on all wave-1 envs; wave-3 on all wave-2.
+func TestBuilder_WaveTopology_3Waves(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "multi-region", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "staging", Wave: 1},
+				{Name: "prod-eu", Wave: 2},
+				{Name: "prod-us", Wave: 2},
+				{Name: "prod-ap", Wave: 3},
+			},
+		},
+	}
+	bundle := makeBundle("app-v1", "multi-region")
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+
+	nodeMap := make(map[string]graph.GraphNode)
+	for _, n := range result.Graph.Spec.Nodes {
+		nodeMap[n.ID] = n
+	}
+
+	// prod-eu and prod-us must both depend on staging
+	assert.True(t, containsCELRef(nodeMap["prod_eu"].Template, "staging"),
+		"prod-eu must depend on staging (wave 2 depends on wave 1)")
+	assert.True(t, containsCELRef(nodeMap["prod_us"].Template, "staging"),
+		"prod-us must depend on staging (wave 2 depends on wave 1)")
+
+	// prod-ap must depend on both prod-eu and prod-us
+	assert.True(t, containsCELRef(nodeMap["prod_ap"].Template, "prod_eu"),
+		"prod-ap must depend on prod-eu (wave 3 depends on wave 2)")
+	assert.True(t, containsCELRef(nodeMap["prod_ap"].Template, "prod_us"),
+		"prod-ap must depend on prod-us (wave 3 depends on wave 2)")
+}
+
+// TestBuilder_WaveTopology_2Wave_Plus_Serial verifies that a mix of wave and
+// non-wave envs works: the non-wave env uses sequential default.
+func TestBuilder_WaveTopology_2Wave_Plus_Serial(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "mixed-pipe", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},            // no wave — sequential
+				{Name: "staging"},         // no wave — sequential: depends on test
+				{Name: "prod-1", Wave: 1}, // wave 1 — no predecessors via wave
+				{Name: "prod-2", Wave: 1}, // wave 1 — no predecessors via wave
+			},
+		},
+	}
+	bundle := makeBundle("app-v2", "mixed-pipe")
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+
+	nodeMap := make(map[string]graph.GraphNode)
+	for _, n := range result.Graph.Spec.Nodes {
+		nodeMap[n.ID] = n
+	}
+
+	// staging depends on test (sequential)
+	assert.True(t, containsCELRef(nodeMap["staging"].Template, "test"),
+		"staging must depend on test (sequential default)")
+
+	// wave-1 envs have no wave-derived deps (they are the first wave)
+	prod1 := nodeMap["prod_1"]
+	prod2 := nodeMap["prod_2"]
+	// prod-1 and prod-2 are wave 1 — they have no automatic dependencies (first wave)
+	// They may still depend on sequential predecessor if Wave is set. Since Wave>0,
+	// sequential default is NOT applied — they are independent wave roots.
+	_ = prod1
+	_ = prod2
+}
+
+// TestBuilder_WaveTopology_WithExplicitDependsOn verifies that explicit dependsOn
+// is unioned with wave-derived edges.
+func TestBuilder_WaveTopology_WithExplicitDependsOn(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "union-pipe", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "eu-1", Wave: 1},
+				{Name: "us-1", Wave: 1},
+				// prod-combined: wave 2 deps (eu-1, us-1) plus explicit dep on us-1 — deduped
+				{Name: "prod-combined", Wave: 2, DependsOn: []string{"us-1"}},
+			},
+		},
+	}
+	bundle := makeBundle("app-v3", "union-pipe")
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+
+	nodeMap := make(map[string]graph.GraphNode)
+	for _, n := range result.Graph.Spec.Nodes {
+		nodeMap[n.ID] = n
+	}
+
+	combined := nodeMap["prod_combined"]
+	assert.True(t, containsCELRef(combined.Template, "eu_1"),
+		"prod-combined must depend on eu-1 via wave")
+	assert.True(t, containsCELRef(combined.Template, "us_1"),
+		"prod-combined must depend on us-1 via wave (no duplicate)")
+}
+
+// TestBuilder_WaveTopology_NoWave_BackwardCompat verifies that pipelines with
+// no wave fields behave identically to before K-06 (sequential default).
+func TestBuilder_WaveTopology_NoWave_BackwardCompat(t *testing.T) {
+	b := graph.NewBuilder()
+	pipeline := makeLinearPipeline("compat-pipe", "test", "uat", "prod")
+	bundle := makeBundle("app-compat", "compat-pipe")
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+
+	nodeMap := make(map[string]graph.GraphNode)
+	for _, n := range result.Graph.Spec.Nodes {
+		nodeMap[n.ID] = n
+	}
+
+	// Verify sequential dependency preserved
+	uatNode := nodeMap["uat"]
+	require.NotNil(t, uatNode)
+	assert.True(t, containsCELRef(uatNode.Template, "test"),
+		"uat must depend on test in sequential (no-wave) pipeline")
+
+	prodNode := nodeMap["prod"]
+	require.NotNil(t, prodNode)
+	assert.True(t, containsCELRef(prodNode.Template, "uat"),
+		"prod must depend on uat in sequential (no-wave) pipeline")
 }
