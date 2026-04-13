@@ -379,11 +379,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	prStatusName := ps.Spec.PRStatusRef
 	if prStatusName == "" {
-		// PRStatusRef not yet set (old PromotionStep before this feature, or
-		// Graph hasn't propagated the value yet). Fall back to requeue to wait
-		// for the Graph to populate the field.
-		log.Warn().Msg("prStatusRef not set — waiting for Graph to populate")
-		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+		// PRStatusRef not set — this is a pre-PRStatus PromotionStep (schema migration).
+		// Fall back to direct SCM check using the PR number from outputs (#367).
+		return r.handleWaitingForMergeViaDirectSCM(ctx, log, ps)
 	}
 
 	var prs v1alpha1.PRStatus
@@ -426,6 +424,68 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	}
 
 	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.
+	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+}
+
+// handleWaitingForMergeViaDirectSCM handles WaitingForMerge for legacy PromotionSteps
+// that have no prStatusRef (created before the PRStatus CRD was introduced).
+// Falls back to calling the SCM provider directly (#367 migration fix).
+func (r *Reconciler) handleWaitingForMergeViaDirectSCM(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	// Extract PR number from step outputs.
+	prNumStr := ps.Status.Outputs["prNumber"]
+	prURL := ps.Status.Outputs["prURL"]
+	if prNumStr == "" || prURL == "" {
+		log.Warn().Msg("no prStatusRef and no prNumber/prURL outputs — requeueing")
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+
+	if r.SCM == nil {
+		log.Warn().Msg("SCM provider not configured — cannot check PR status")
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+
+	// Derive repo from pipeline Git URL.
+	pipeline, err := r.loadPipeline(ctx, ps)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to load pipeline for SCM check (non-fatal)")
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+	repo := extractRepo(pipeline.Spec.Git.URL)
+
+	prNum := 0
+	if _, err := fmt.Sscanf(prNumStr, "%d", &prNum); err != nil || prNum <= 0 {
+		log.Warn().Str("prNumber", prNumStr).Msg("invalid prNumber — requeueing")
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+
+	merged, open, err := r.SCM.GetPRStatus(ctx, repo, prNum)
+	if err != nil {
+		log.Warn().Err(err).Int("prNumber", prNum).Msg("SCM GetPRStatus failed — requeueing")
+		return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
+	}
+
+	if merged {
+		log.Info().Int("prNumber", prNum).Msg("SCM reports PR merged (migration fallback) — advancing to HealthChecking")
+		patch := client.MergeFrom(ps.DeepCopy())
+		ps.Status.State = StateHealthChecking
+		ps.Status.Message = fmt.Sprintf("PR #%d merged (via SCM direct check — migration)", prNum)
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch health-checking: %w", patchErr)
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	if !open {
+		log.Info().Int("prNumber", prNum).Msg("SCM reports PR closed without merge")
+		patch := client.MergeFrom(ps.DeepCopy())
+		ps.Status.State = StateFailed
+		ps.Status.Message = fmt.Sprintf("PR #%d was closed without merging", prNum)
+		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+			return ctrl.Result{}, fmt.Errorf("patch failed: %w", patchErr)
+		}
+		return ctrl.Result{}, nil
+	}
+
 	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 }
 
