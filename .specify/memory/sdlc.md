@@ -333,6 +333,15 @@ ESCALATION (max 2 retries before escalating):
 - Spec ambiguity → label needs-human, write exact question, stop
 - Unexplained test failure → label needs-human, paste full output, stop
 - New dependency addition → label needs-human (human gate), stop
+
+THINK HARDER BEFORE ESCALATING:
+Before posting needs-human, run through this checklist:
+□ Have I re-read docs/design/10-graph-first-architecture.md for this specific question?
+□ Have I searched the codebase for prior art on this exact pattern?
+□ Have I checked docs/design/11-graph-purity-tech-debt.md for a documented path?
+□ Have I re-read the full issue thread including all comments?
+□ Have I looked at how the 3 most similar merged PRs solved comparable problems?
+If all 5 are yes and the ambiguity remains: then escalate. Not before.
 ```
 
 ---
@@ -457,6 +466,13 @@ INSPECTION CYCLE:
    - Improvements proposed or applied
    - Any SDLC-level needs-human items
 
+5. SELF-IMPROVEMENT OBLIGATION
+   The SM must find at least one thing to improve per batch — not just confirm things are
+   fine. If metrics look healthy: dig deeper. What will go wrong in 3 batches that isn't
+   visible yet? What assumption in sdlc.md will break under a different load pattern?
+   The absence of obvious problems is not permission to coast.
+   Minimum output: one committed process improvement OR one documented risk.
+
 RULES:
 - Only touch: sdlc.md, constitution.md, team.yml, spec/tasks templates, AGENTS.md process sections
 - Never touch: vision, roadmap, definition-of-done, user docs, specs, code
@@ -556,6 +572,14 @@ REVIEW CYCLE:
    - User doc issues found or fixed
    - Competitive findings (if analysis ran)
    - Product proposals opened
+
+8. SELF-IMPROVEMENT OBLIGATION
+   The PM must find at least one thing to improve per batch. Not just review — hunt.
+   Read competitor release notes. Read community pain points. Re-read the roadmap with
+   fresh eyes. Ask: "What would make a user abandon this tool?"
+   If nothing obvious: read the last 5 closed bug issues and ask why each one existed.
+   The answer will point to a systemic gap.
+   Minimum output: one product improvement committed, proposed, or escalated.
 
 RULES:
 - Only touch: vision, roadmap, definition-of-done, progress, specs, user docs, examples
