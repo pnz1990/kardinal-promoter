@@ -91,6 +91,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 
+	// Placeholder guard: PRNumber=0 means the open-pr step has not yet run.
+	// The Graph creates a PRStatus Watch node as a placeholder before the PR exists.
+	// Do not call SCM with prNumber=0 — that would cause a 404 from GitHub (#276).
+	if prs.Spec.PRNumber == 0 {
+		log.Debug().Msg("PRStatus placeholder (prNumber=0), waiting for open-pr step")
+		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+	}
+
 	merged, open, err := r.SCM.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err != nil {
 		log.Error().Err(err).
