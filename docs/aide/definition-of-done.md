@@ -505,11 +505,18 @@ kardinal get pipelines --all-namespaces
 
 Updated by the coordinator after each batch.
 
+**Rule (Issue #418):** A journey is only marked ✅ when:
+1. Its `TestJourneyN` test passes in CI on main branch (automated evidence), OR
+2. A `[PDCA AUTOMATED]` comment on Issue #1 confirms live cluster validation with real images
+3. Every code example in the relevant doc page runs without error
+
+Manual coordinator comments alone do NOT count as evidence.
+
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | ✅ Verified | 2026-04-11 | Workshop 1 executed end-to-end on live kind cluster. All 10 pass criteria met. v0.2.0 released. |
+| 1: Quickstart | 🔄 In Progress | 2026-04-13 | Workshop 1 executed manually on kind cluster (2026-04-11, v0.2.0). **Pending**: TestJourney1Quickstart must pass in CI with real kardinal-test-app image (issue #399). |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
-| 3: Policy governance | 🔄 In Progress | 2026-04-11 | Fake-client + kind cluster tests added. No-weekend and soak gates verified on cluster. |
+| 3: Policy governance | 🔄 In Progress | 2026-04-13 | Fake-client + kind cluster tests added. No-weekend and soak gates verified. All kro library CEL functions now tested (issue #404 resolved). |
 | 4: Rollback | 🔄 In Progress | 2026-04-11 | Auto-rollback + manual rollback + pause/resume all complete (Stage 13). |
 | 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented. CLI binary version output verified. |
 | 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build implemented (PR #82). |
