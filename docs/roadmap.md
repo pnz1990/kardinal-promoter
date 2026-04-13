@@ -309,13 +309,12 @@ as code that competitors cannot express.
 
 ---
 
-## Not Planned
+## Not in Scope
 
-These features are out of scope for kardinal. Use the recommended tools instead:
+These concerns are intentionally delegated to dedicated tools — kardinal integrates with them rather than duplicating them:
 
-| Feature | Recommended tool |
+| Out of scope | Delegate to |
 |---|---|
-| Passive OCI artifact discovery | Kargo Warehouses, Flux ImagePolicy |
 | Traffic splitting / canary weights | Argo Rollouts, Flagger |
 | Load test gating | k6, Locust in CI |
 | SAST / vulnerability scan gating | Trivy, govulncheck in CI |
