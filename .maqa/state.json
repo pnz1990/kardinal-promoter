@@ -5,8 +5,8 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-12T02:56:28Z",
   "current_queue": "queue-019",
-  "last_sm_review": "2026-04-11T18:30:48Z",
-  "last_pm_review": "2026-04-11T18:31:09Z",
+  "last_sm_review": "2026-04-13T01:54:17Z",
+  "last_pm_review": "2026-04-13T01:54:17Z",
   "batches_since_competitive_analysis": 3,
   "batches_since_doc_audit": 1,
   "batches_since_dead_scan": 0,
@@ -61,6 +61,15 @@
       "current_item": null,
       "progress_issue": "173",
       "last_report_at": ""
+    },
+    "STANDALONE-VALIDATOR": {
+      "name": "Validator",
+      "last_seen": "2026-04-13T01:12:27Z",
+      "cycle": 1,
+      "scope": "Customer-lens product validation \u2014 prove every feature works with real apps and complex CEL. No code changes. Only run commands, observe outputs, open bugs. Be creative with scenarios.",
+      "current_item": null,
+      "progress_issue": "296",
+      "last_report_at": "2026-04-13T01:12:27Z"
     }
   },
   "features": {
@@ -527,8 +536,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-12T04:43:44Z",
-      "cycle": 4
+      "last_seen": "2026-04-13T02:20:12Z",
+      "cycle": 25
     }
   },
   "handoff": {

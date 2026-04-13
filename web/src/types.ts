@@ -14,6 +14,8 @@ export interface Bundle {
   phase: string
   type: string
   pipeline: string
+  /** ISO 8601 creation timestamp for timeline sorting (#337). */
+  createdAt?: string
   provenance?: Provenance
 }
 

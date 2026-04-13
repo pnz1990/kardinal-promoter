@@ -50,6 +50,7 @@ type uiBundleResponse struct {
 	Phase      string                     `json:"phase"`
 	Type       string                     `json:"type"`
 	Pipeline   string                     `json:"pipeline"`
+	CreatedAt  string                     `json:"createdAt,omitempty"` // ISO 8601 creation time for timeline sorting (#337)
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
 }
 
@@ -187,6 +188,7 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			Phase:      b.Status.Phase,
 			Type:       b.Spec.Type,
 			Pipeline:   b.Spec.Pipeline,
+			CreatedAt:  b.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Provenance: b.Spec.Provenance,
 		})
 	}

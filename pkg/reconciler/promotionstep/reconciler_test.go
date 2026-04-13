@@ -837,3 +837,57 @@ func TestOrphanGuard_NoDeleteWhenBundleExists(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "normal-step", Namespace: "default"}, &got))
 	assert.Equal(t, "Promoting", got.Status.State, "step must advance to Promoting when bundle exists")
 }
+
+// TestSupersessionGuard_ClosesOpenPRAndFails verifies that when the parent Bundle
+// is Superseded, a WaitingForMerge PromotionStep transitions to Failed (#310).
+func TestSupersessionGuard_ClosesOpenPRAndFails(t *testing.T) {
+	s := buildScheme(t)
+
+	// Bundle is already Superseded (newer bundle took over).
+	bundle := makeBundle("superseded-bundle", "my-pipeline")
+	bundle.Status.Phase = "Superseded"
+
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "stale-prod-step",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-pipeline",
+			BundleName:   "superseded-bundle",
+			Environment:  "prod",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State: "WaitingForMerge",
+			Outputs: map[string]string{
+				"prURL": "https://github.com/org/repo/pull/42",
+			},
+		},
+	}
+	pipeline := makePipeline("my-pipeline")
+
+	mock := &mockSCM{}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(step, bundle, pipeline).
+		WithStatusSubresource(step).
+		Build()
+
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       mock,
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "stale-prod-step", Namespace: "default"},
+	})
+	require.NoError(t, err, "supersession guard must not return an error")
+
+	// Step must be in Failed state.
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "stale-prod-step", Namespace: "default"}, &got))
+	assert.Equal(t, "Failed", got.Status.State, "WaitingForMerge step must be Failed when bundle is Superseded")
+	assert.Contains(t, got.Status.Message, "superseded", "failure message must mention supersession")
+}

@@ -136,6 +136,11 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	b.Status.Phase = "Available"
 
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Bundle was deleted between cache read and patch — treat as a no-op.
+			log.Debug().Msg("bundle deleted before Available patch — ignoring")
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Available: %w", err)
 	}
 
@@ -259,6 +264,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	_ = graphName // GraphRef will be stored in BundleStatus in a future stage
 
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Debug().Msg("bundle deleted before Promoting patch — ignoring")
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Promoting: %w", err)
 	}
 

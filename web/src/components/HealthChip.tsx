@@ -47,8 +47,6 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
     case 'Paused':
       return 'Paused'
     default:
-      // Handle common backend variations: "Paused" via condition reason
-      if (state.toLowerCase() === 'paused') return 'Paused'
       return 'Unknown'
   }
 }
