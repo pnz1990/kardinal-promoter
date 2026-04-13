@@ -72,9 +72,29 @@ function EmptyState() {
 
 export function PipelineList({ pipelines, selected, onSelect, loading, error }: Props) {
   if (loading) {
+    // #335: skeleton loading state — shimmer placeholders instead of "Loading pipelines..."
     return (
-      <div style={{ padding: '1rem', color: '#94a3b8', fontSize: '0.82rem' }}>
-        Loading pipelines...
+      <div style={{ padding: '0.5rem 0' }}>
+        <style>{`
+          @keyframes shimmer-pl {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+          }
+        `}</style>
+        {[80, 65, 90, 70].map((w, i) => (
+          <div
+            key={i}
+            style={{
+              height: '42px',
+              borderRadius: '4px',
+              background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+              backgroundSize: '200% 100%',
+              animation: 'shimmer-pl 1.5s infinite',
+              margin: '0.3rem 1rem',
+              width: `${w}%`,
+            }}
+          />
+        ))}
       </div>
     )
   }

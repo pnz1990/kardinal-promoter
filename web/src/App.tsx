@@ -8,10 +8,11 @@ import { NodeDetail } from './components/NodeDetail'
 import { HealthChip } from './components/HealthChip'
 import { BlockedBanner } from './components/BlockedBanner'
 import { BundleTimeline } from './components/BundleTimeline'
+import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
-import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep } from './types'
+import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -42,6 +43,10 @@ export function App() {
   // Steps for the active bundle — passed down to NodeDetail to avoid independent polling.
   const [activeSteps, setActiveSteps] = useState<PromotionStep[]>([])
 
+  // #340: PolicyGates — polled globally every 5s.
+  const [gates, setGates] = useState<PolicyGate[]>([])
+  const [gatesLoading, setGatesLoading] = useState(true)
+
   // #326: selectedNode lifted from DAGView so NodeDetail is a split-panel sibling.
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
 
@@ -54,8 +59,13 @@ export function App() {
   // Shared fetch function — called by both interval poll and manual refresh.
   const doFetchAll = useCallback(async () => {
     try {
-      const ps = await api.listPipelines()
+      const [ps, gs] = await Promise.all([
+        api.listPipelines(),
+        api.listGates().catch(() => [] as PolicyGate[]),
+      ])
       setPipelines(ps)
+      setGates(gs)
+      setGatesLoading(false)
       setPipelinesError(undefined)
     } catch (e) {
       setPipelinesError(String(e))
@@ -280,9 +290,26 @@ export function App() {
                 </p>
               </>
             ) : (
-              <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-                Apply a pipeline to get started.
-              </p>
+              <>
+                <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+                  No pipelines found. Apply a Pipeline to get started:
+                </p>
+                <code style={{
+                  display: 'block',
+                  background: '#1e293b',
+                  border: '1px solid #334155',
+                  borderRadius: '6px',
+                  padding: '0.6rem 1rem',
+                  fontSize: '0.8rem',
+                  color: '#7dd3fc',
+                  fontFamily: 'monospace',
+                  textAlign: 'left',
+                  maxWidth: '480px',
+                  margin: '0 auto',
+                }}>
+                  kubectl apply -f examples/quickstart/pipeline.yaml
+                </code>
+              </>
             )}
           </div>
         ) : (
@@ -365,6 +392,9 @@ export function App() {
                 highlightActive={showBlockedOnly}
                 onToggleHighlight={() => setShowBlockedOnly(v => !v)}
               />
+
+              {/* #340: PolicyGates panel — shows all active gates with CEL expressions */}
+              <PolicyGatesPanel gates={gates} loading={gatesLoading} />
 
               {/* Bundle history (collapsible) */}
               {bundles.length > 0 && (
