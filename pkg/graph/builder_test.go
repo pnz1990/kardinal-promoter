@@ -535,17 +535,6 @@ func findSubstr(s, sub string) bool {
 	return false
 }
 
-// assertPropagateWhenContains checks that at least one entry in node.PropagateWhen
-// contains the given substring.
-func assertPropagateWhenContains(t *testing.T, node graph.GraphNode, substr, msg string) {
-	t.Helper()
-	for _, pw := range node.PropagateWhen {
-		if containsStr(pw, substr) {
-			return
-		}
-	}
-	t.Errorf("%s: PropagateWhen %v does not contain %q", msg, node.PropagateWhen, substr)
-}
 func findUpstreamRef(t *testing.T, n graph.GraphNode) string {
 	t.Helper()
 	spec, ok := n.Template["spec"].(map[string]interface{})
