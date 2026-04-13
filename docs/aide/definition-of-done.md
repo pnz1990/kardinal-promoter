@@ -514,12 +514,12 @@ Manual coordinator comments alone do NOT count as evidence.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | 🔄 In Progress | 2026-04-13 | Workshop 1 executed manually on kind cluster (2026-04-11, v0.2.0). **Pending**: TestJourney1Quickstart must pass in CI with real kardinal-test-app image (issue #399). |
+| 1: Quickstart | ✅ | 2026-04-13 | TestJourney1Quickstart PASS in CI (E2E run 24362344722). TestPRBodyDocumentedFields adds PR body field coverage (PR #438). |
 | 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
-| 3: Policy governance | 🔄 In Progress | 2026-04-13 | Fake-client + kind cluster tests added. No-weekend and soak gates verified. All kro library CEL functions now tested (issue #404 resolved). |
-| 4: Rollback | 🔄 In Progress | 2026-04-11 | Auto-rollback + manual rollback + pause/resume all complete (Stage 13). |
-| 5: CLI workflow | 🔄 In Progress | 2026-04-11 | All CLI commands implemented. CLI binary version output verified. |
-| 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build implemented (PR #82). |
+| 3: Policy governance | ✅ | 2026-04-13 | TestJourney3PolicyGovernance PASS in CI (E2E run 24362344722). No-weekend and soak gates verified. |
+| 4: Rollback | ✅ | 2026-04-13 | TestJourney4Rollback PASS in CI (E2E run 24362344722). Auto-rollback + manual rollback + pause/resume complete. |
+| 5: CLI workflow | 🔄 In Progress | 2026-04-11 | TestJourney5CLI is SKIP (requires binary). All CLI commands implemented. |
+| 6: Rendered manifests | 🔄 In Progress | 2026-04-11 | layout:branch + kustomize-build implemented (PR #82). No CI E2E test yet. |
 | 7: Multi-tenant self-service | ❌ Not started | — | Requires Stages 0-4 (Pipeline CRD + PolicyGate injection) |
 
 ---
