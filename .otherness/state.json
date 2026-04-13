@@ -681,7 +681,11 @@
       "cycle": 52
     },
     "STANDALONE-A": {
-      "last_seen": "2026-04-13T22:54:55Z",
+      "last_seen": "2026-04-13T22:55:08Z",
+      "cycle": 1
+    },
+    "STANDALONE-B": {
+      "last_seen": "2026-04-13T22:55:11Z",
       "cycle": 0
     }
   },
