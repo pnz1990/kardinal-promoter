@@ -329,6 +329,130 @@ ghcr.io/myorg/my-app              1.28.0                1.29.0
   author                          dependabot[bot]        engineer-name
 ```
 
+### kardinal approve
+
+Approve a Bundle for promotion, bypassing upstream gate requirements.
+
+```bash
+kardinal approve <bundle-name> [--env <environment>]
+```
+
+Approval patches the Bundle with `kardinal.io/approved=true` (and optionally
+`kardinal.io/approved-for=<env>`). Useful for hotfix deployments that must skip
+the normal upstream soak or gate requirements.
+
+```bash
+# Approve for all environments
+kardinal approve kardinal-test-app-sha-abc1234
+
+# Approve for a specific environment only
+kardinal approve kardinal-test-app-sha-abc1234 --env prod
+```
+
+Output:
+```
+Bundle "kardinal-test-app-sha-abc1234" approved for "prod".
+  Label: kardinal.io/approved=true, kardinal.io/approved-for=prod
+  To track: kardinal explain kardinal-test-app --env prod
+```
+
+Flags:
+- `--env <env>`: target environment to approve for (optional)
+
+### kardinal metrics
+
+Show DORA-style promotion metrics for a pipeline.
+
+```bash
+kardinal metrics --pipeline <pipeline> [--env <env>] [--days <n>]
+```
+
+Computes from CRD history:
+
+```bash
+kardinal metrics --pipeline kardinal-test-app --env prod --days 30
+```
+
+Output:
+```
+PIPELINE              ENV    PERIOD   DEPLOY_FREQ   LEAD_TIME     FAIL_RATE   ROLLBACKS
+kardinal-test-app     prod   30d      2.1/day       45m avg       3.2%        1
+```
+
+| Column | Description |
+|---|---|
+| `DEPLOY_FREQ` | Successful promotions to the target environment per day |
+| `LEAD_TIME` | Average time from Bundle creation to target environment verification |
+| `FAIL_RATE` | Percentage of Bundles that reached `Failed` state |
+| `ROLLBACKS` | Number of rollback Bundles in the period |
+
+Flags:
+- `--pipeline <name>`: pipeline name (required)
+- `--env <env>`: target environment for lead time calculation (default: `prod`)
+- `--days <n>`: lookback period in days (default: `30`)
+
+### kardinal refresh
+
+Force re-reconciliation of a Pipeline immediately.
+
+```bash
+kardinal refresh <pipeline>
+```
+
+Adds a `kardinal.io/refresh` annotation to the Pipeline, triggering the controller
+to run a reconciliation cycle. Useful to force a retry after a transient error or
+to re-evaluate PolicyGates.
+
+```bash
+kardinal refresh kardinal-test-app
+# Pipeline "kardinal-test-app" refresh requested.
+```
+
+### kardinal dashboard
+
+Open the kardinal UI dashboard in a browser.
+
+```bash
+kardinal dashboard [--address <url>] [--no-open]
+```
+
+Uses port-forwarding to access the controller's embedded UI (port 8082 by default).
+
+```bash
+kardinal dashboard             # open in default browser
+kardinal dashboard --no-open   # print URL only
+# kardinal UI: http://localhost:8082/ui/
+```
+
+Flags:
+- `--address <url>`: direct URL to the kardinal UI (skip auto-detection)
+- `--no-open`: print the URL without opening browser
+
+### kardinal logs
+
+Show promotion step execution logs for a pipeline.
+
+```bash
+kardinal logs <pipeline> [--env <env>] [--bundle <bundle>]
+```
+
+For each active PromotionStep, shows state, message, and outputs (branch, PR URL).
+
+```bash
+kardinal logs kardinal-test-app
+# --- kardinal-test-app-sha-abc1234-test (test) ---
+# State:   Verified
+# Message: health check passed (ArgoCD Synced)
+#
+# --- kardinal-test-app-sha-abc1234-uat (uat) ---
+# State:   WaitingForMerge
+# PR URL:  https://github.com/pnz1990/kardinal-demo/pull/42
+```
+
+Flags:
+- `--env <env>`: filter by environment
+- `--bundle <name>`: show logs for a specific Bundle (default: most recent active)
+
 ### kardinal version
 
 Print the CLI and controller versions.

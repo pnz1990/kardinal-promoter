@@ -1,6 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
+//go:build ignore
+
 // hack/gen-cli-docs/main.go generates one Markdown page per kardinal CLI
 // subcommand using Cobra's built-in doc generator. Output is placed in
 // docs/reference/cli/ and is consumed by mkdocs during the docs build.

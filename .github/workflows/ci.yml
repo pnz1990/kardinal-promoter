@@ -8,6 +8,10 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Use module mode: vendor/ is not committed (only modules.txt was tracked
+  # historically). GOFLAGS=-mod=mod ensures all go tools resolve deps from
+  # the module cache rather than a partial vendor directory.
+  GOFLAGS: -mod=mod
 
 # Concurrency: cancel in-progress runs for the same PR/branch
 concurrency:
@@ -51,7 +55,7 @@ jobs:
           python3 -c "
           import yaml, sys, pathlib
           errors = []
-          skip_patterns = ['.git', 'node_modules', 'vendor', '.specify/extensions']
+          skip_patterns = ['.git', 'node_modules', 'vendor', '.specify/extensions', 'mkdocs.yml']
           for f in pathlib.Path('.').rglob('*.yml'):
             if any(p in str(f) for p in skip_patterns):
               continue
