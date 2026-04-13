@@ -12,7 +12,7 @@ Manage and evaluate promotion policy gates
 
 ```
       --context string      Kubeconfig context override
-      --kubeconfig string   Path to kubeconfig file (default "/Users/rrroizma/.kube/config")
+      --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
   -o, --output string       Output format: table (default), json, yaml
 ```

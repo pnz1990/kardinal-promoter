@@ -16,7 +16,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -57,8 +56,8 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	// Persistent flags available to all subcommands.
 	root.PersistentFlags().StringVarP(&globalNamespace, "namespace", "n", "",
 		"Kubernetes namespace (default: current context namespace)")
-	root.PersistentFlags().StringVar(&globalKubeconfig, "kubeconfig", defaultKubeconfig(),
-		"Path to kubeconfig file")
+	root.PersistentFlags().StringVar(&globalKubeconfig, "kubeconfig", "",
+		`Path to kubeconfig file (default "~/.kube/config")`)
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
@@ -125,15 +124,4 @@ func buildClient() (sigs_client.Client, string, error) {
 	}
 
 	return c, ns, nil
-}
-
-// defaultKubeconfig returns $KUBECONFIG if set, otherwise ~/.kube/config.
-func defaultKubeconfig() string {
-	if kc := os.Getenv("KUBECONFIG"); kc != "" {
-		return kc
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(home, ".kube", "config")
-	}
-	return ""
 }
