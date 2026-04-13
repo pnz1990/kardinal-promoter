@@ -67,6 +67,7 @@ type uiGraphNode struct {
 	Outputs         map[string]string `json:"outputs,omitempty"`
 	Expression      string            `json:"expression,omitempty"`
 	LastEvaluatedAt string            `json:"lastEvaluatedAt,omitempty"`
+	StartedAt       string            `json:"startedAt,omitempty"` // ISO 8601 step creation time for elapsed timers (#330)
 }
 
 // uiGraphEdge is a directed dependency edge in the promotion DAG.
@@ -83,16 +84,17 @@ type uiGraphResponse struct {
 
 // uiStepResponse is the JSON shape for a PromotionStep.
 type uiStepResponse struct {
-	Name        string            `json:"name"`
-	Namespace   string            `json:"namespace"`
-	Pipeline    string            `json:"pipeline"`
-	Bundle      string            `json:"bundle"`
-	Environment string            `json:"environment"`
-	StepType    string            `json:"stepType"`
-	State       string            `json:"state"`
-	Message     string            `json:"message,omitempty"`
-	PRURL       string            `json:"prURL,omitempty"`
-	Outputs     map[string]string `json:"outputs,omitempty"`
+	Name             string            `json:"name"`
+	Namespace        string            `json:"namespace"`
+	Pipeline         string            `json:"pipeline"`
+	Bundle           string            `json:"bundle"`
+	Environment      string            `json:"environment"`
+	StepType         string            `json:"stepType"`
+	State            string            `json:"state"`
+	Message          string            `json:"message,omitempty"`
+	PRURL            string            `json:"prURL,omitempty"`
+	Outputs          map[string]string `json:"outputs,omitempty"`
+	CurrentStepIndex int               `json:"currentStepIndex"` // index into step sequence (#359)
 }
 
 // uiGateResponse is the JSON shape for a PolicyGate.
@@ -347,6 +349,10 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 			if state == "" {
 				state = "NotStarted"
 			}
+			startedAt := ""
+			if !ps.CreationTimestamp.IsZero() {
+				startedAt = ps.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00")
+			}
 			nodes = append(nodes, uiGraphNode{
 				ID:          stepID,
 				Type:        "PromotionStep",
@@ -356,6 +362,7 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 				Message:     ps.Status.Message,
 				PRURL:       ps.Status.PRURL,
 				Outputs:     ps.Status.Outputs,
+				StartedAt:   startedAt,
 			})
 		} else {
 			nodes = append(nodes, uiGraphNode{
@@ -437,16 +444,17 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 			continue
 		}
 		result = append(result, uiStepResponse{
-			Name:        ps.Name,
-			Namespace:   ps.Namespace,
-			Pipeline:    ps.Spec.PipelineName,
-			Bundle:      ps.Spec.BundleName,
-			Environment: ps.Spec.Environment,
-			StepType:    ps.Spec.StepType,
-			State:       ps.Status.State,
-			Message:     ps.Status.Message,
-			PRURL:       ps.Status.PRURL,
-			Outputs:     ps.Status.Outputs,
+			Name:             ps.Name,
+			Namespace:        ps.Namespace,
+			Pipeline:         ps.Spec.PipelineName,
+			Bundle:           ps.Spec.BundleName,
+			Environment:      ps.Spec.Environment,
+			StepType:         ps.Spec.StepType,
+			State:            ps.Status.State,
+			Message:          ps.Status.Message,
+			PRURL:            ps.Status.PRURL,
+			Outputs:          ps.Status.Outputs,
+			CurrentStepIndex: ps.Status.CurrentStepIndex,
 		})
 	}
 	writeJSON(w, result)

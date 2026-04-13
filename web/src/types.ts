@@ -41,6 +41,8 @@ export interface GraphNode {
   expression?: string
   /** ISO timestamp of last CEL evaluation for PolicyGate nodes. */
   lastEvaluatedAt?: string
+  /** ISO timestamp when the PromotionStep was created — used for elapsed timers (#330). */
+  startedAt?: string
 }
 
 export interface GraphEdge {

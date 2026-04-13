@@ -661,6 +661,51 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
 		"gate must block: bundle.upstreamSoakMinutes = max(5,10) = 10 < 30")
 }
 
+// TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus verifies that a PolicyGate
+// instance with syntactically invalid CEL does NOT apply silently — the reconciler sets
+// status.ready=false and populates status.reason with the compilation error message.
+// This is Option B from issue #315: operators can see the error via kubectl describe pg.
+func TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus(t *testing.T) {
+	gate := makeGateInstance("bad-cel-gate", "default", "nginx-demo-v1",
+		`this is not valid CEL !!!`, "5m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+	eval := celpkg.NewEvaluator(env)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(gate, bundle).
+		WithStatusSubresource(gate).
+		Build()
+
+	r := &policygate.Reconciler{
+		Client:    c,
+		Evaluator: eval,
+		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
+	}
+
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "bad-cel-gate", Namespace: "default"},
+	})
+	require.NoError(t, err, "invalid CEL must not crash the reconciler (fail-closed, not panic)")
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "bad-cel-gate", Namespace: "default"}, &got))
+
+	// #315: gate must be ready=false (fail-closed)
+	assert.False(t, got.Status.Ready,
+		"gate with invalid CEL must NOT be ready — fail-closed")
+
+	// #315: status.reason must contain the CEL compilation error so operators can diagnose it
+	// via `kubectl get pg bad-cel-gate -o wide` or `kubectl describe pg bad-cel-gate`
+	assert.Contains(t, got.Status.Reason, "CEL compile error",
+		"status.reason must contain the compilation error for operator visibility")
+}
+
 // TestPolicyGateReconciler_StatusReasonContainsVersion verifies that when a bundle
 // has an image tag, the evaluated status.reason includes the bundle version.
 // This makes the routing info (bundle version used for evaluation) CRD-observable

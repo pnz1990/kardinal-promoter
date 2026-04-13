@@ -1,11 +1,40 @@
 // components/DAGView.tsx — Promotion DAG visualization using dagre for layout.
 // Uses a simple SVG-based rendering to avoid full reactflow complexity while
 // still providing a clear visual DAG.
-import { useState } from 'react'
+//
+// #326: selectedNode is lifted to the parent (App) so NodeDetail can be rendered
+// as a proper split panel sibling rather than a position:fixed overlay.
+import { useState, useEffect } from 'react'
 import dagre from '@dagrejs/dagre'
-import type { GraphNode, GraphEdge, PromotionStep } from '../types'
-import { NodeDetail } from './NodeDetail'
+import type { GraphNode, GraphEdge } from '../types'
 import { kardinalStateToHealth, healthChipColors } from './HealthChip'
+
+/** Active states that warrant an elapsed-time display (#330). */
+const ACTIVE_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
+
+/** Elapsed time formatter: "4m 12s", "1h 23m", etc. (#330) */
+function formatElapsed(startedAt: string | undefined): string {
+  if (!startedAt) return ''
+  const startMs = new Date(startedAt).getTime()
+  if (isNaN(startMs)) return ''
+  const elapsed = Math.floor((Date.now() - startMs) / 1000)
+  if (elapsed <= 0) return ''
+  if (elapsed < 60) return `${elapsed}s`
+  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
+  return `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m`
+}
+
+/** Hook that ticks every second and returns elapsed string for an active PromotionStep node. */
+function useElapsedTick(startedAt: string | undefined, active: boolean): string {
+  const [elapsed, setElapsed] = useState(() => formatElapsed(startedAt))
+  useEffect(() => {
+    if (!active || !startedAt) return
+    setElapsed(formatElapsed(startedAt))
+    const id = setInterval(() => setElapsed(formatElapsed(startedAt)), 1000)
+    return () => clearInterval(id)
+  }, [startedAt, active])
+  return elapsed
+}
 
 interface Props {
   nodes: GraphNode[]
@@ -14,14 +43,10 @@ interface Props {
   error?: string
   /** Optional set of node IDs to highlight (e.g. blocked gates). */
   highlightNodeIds?: Set<string>
-  /** Bundle name — passed to NodeDetail to fetch step detail. */
-  bundleName?: string
-  /** Pipeline name — passed to NodeDetail for the promote button. */
-  pipelineName?: string
-  /** Namespace of the pipeline. Defaults to 'default'. */
-  namespace?: string
-  /** Steps for the active bundle — avoids NodeDetail independent polling (#322). */
-  steps?: PromotionStep[]
+  /** Currently selected node — controlled by parent (#326). */
+  selectedNode?: GraphNode | null
+  /** Called when a node is clicked — parent updates selected state (#326). */
+  onSelectNode?: (node: GraphNode | null) => void
 }
 
 const NODE_WIDTH = 180
@@ -67,9 +92,7 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
   })
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundleName, pipelineName, namespace, steps }: Props) {
-  const [selected, setSelected] = useState<GraphNode | null>(null)
-
+export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode }: Props) {
   if (loading) {
     return <div style={{ padding: '2rem', color: '#94a3b8' }}>Loading DAG...</div>
   }
@@ -87,7 +110,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
   const svgH = Math.max(maxY, 200)
 
   return (
-    <div style={{ position: 'relative', overflow: 'auto' }}>
+    <div style={{ overflow: 'auto' }}>
       <svg
         width={svgW}
         height={svgH}
@@ -129,7 +152,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
         {layout.map(node => {
           const health = kardinalStateToHealth(node.state, node.type)
           const { bg, border, text } = healthChipColors(health)
-          const isSelected = selected?.id === node.id
+          const isSelected = selectedNode?.id === node.id
           const isHighlighted = highlightNodeIds?.has(node.id) ?? false
 
           // Highlighted nodes get a brighter stroke to stand out.
@@ -144,7 +167,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
             <g
               key={node.id}
               transform={`translate(${node.x - NODE_WIDTH / 2}, ${node.y - NODE_HEIGHT / 2})`}
-              onClick={() => setSelected(node)}
+              onClick={() => onSelectNode?.(isSelected ? null : node)}
               style={{ cursor: 'pointer' }}
               role="button"
               aria-label={`${node.environment} — ${node.state}`}
@@ -185,32 +208,30 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
               >
                 {node.state}
               </text>
-              {/* PR badge — shown when a PR exists (Kargo parity: stage node shows PR link) */}
-              {showPRBadge && (
-                <text
-                  x={NODE_WIDTH / 2}
-                  y={56}
-                  textAnchor="middle"
-                  fill="#818cf8"
-                  fontSize="9"
-                  style={{ pointerEvents: 'none' }}
+              {/* PR badge — shown when a PR exists; clicking opens the PR in a new tab (#361) */}
+              {showPRBadge && node.prURL && (
+                <a
+                  href={node.prURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
                 >
-                  🔗 {prNumber}
-                </text>
+                  <text
+                    x={NODE_WIDTH / 2}
+                    y={56}
+                    textAnchor="middle"
+                    fill="#818cf8"
+                    fontSize="9"
+                    style={{ cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    🔗 {prNumber}
+                  </text>
+                </a>
               )}
             </g>
           )
         })}
       </svg>
-
-      <NodeDetail
-        node={selected}
-        onClose={() => setSelected(null)}
-        bundleName={bundleName}
-        pipelineName={pipelineName}
-        namespace={namespace}
-        steps={steps}
-      />
     </div>
   )
 }

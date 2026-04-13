@@ -299,8 +299,23 @@ func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.C
 		for _, name := range blocked {
 			for _, r := range results {
 				if r.name == name {
-					if _, err := fmt.Fprintf(w, "Blocked by: %s\nMessage: %q\n\n", r.name, r.message); err != nil {
+					if _, err := fmt.Fprintf(w, "Blocked by: %s\nMessage: %q\n", r.name, r.message); err != nil {
 						return fmt.Errorf("write blocked: %w", err)
+					}
+					// Show next window for schedule-based gates (e.g. weekend gates).
+					// Compute the next weekday window when the simulated time is on a weekend.
+					if simTime.Weekday() == time.Saturday || simTime.Weekday() == time.Sunday {
+						daysUntilMonday := (int(time.Monday) - int(simTime.Weekday()) + 7) % 7
+						if daysUntilMonday == 0 {
+							daysUntilMonday = 7
+						}
+						nextWindow := time.Date(simTime.Year(), simTime.Month(), simTime.Day()+daysUntilMonday, 0, 0, 0, 0, time.UTC)
+						if _, err := fmt.Fprintf(w, "Next window: %s\n", nextWindow.Format("Monday 15:04 UTC")); err != nil {
+							return fmt.Errorf("write next window: %w", err)
+						}
+					}
+					if _, err := fmt.Fprintf(w, "\n"); err != nil {
+						return fmt.Errorf("write newline: %w", err)
 					}
 					break
 				}
@@ -439,7 +454,7 @@ func newSimulateCELEnvironment() (*cel.Env, error) {
 		cel.Variable("upstream", cel.DynType),
 		cel.Variable("previousBundle", cel.DynType),
 		// kro CEL library extensions — same set as pkg/cel.NewCELEnvironment().
-		// Ensures expressions like json.unmarshal(...), maps.merge(...), etc. work in simulate.
+		// Ensures expressions like json.unmarshal(...), map1.merge(map2), etc. work in simulate.
 		library.JSON(),
 		library.Maps(),
 		library.Lists(),

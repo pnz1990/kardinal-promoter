@@ -1,14 +1,17 @@
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
-import { useState, useCallback, useMemo } from 'react'
+// #326: selectedNode is lifted here so NodeDetail renders as a split panel
+// sibling of DAGView rather than a position:fixed overlay.
+import { useState, useCallback, useMemo, useRef } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { DAGView } from './components/DAGView'
+import { NodeDetail } from './components/NodeDetail'
 import { HealthChip } from './components/HealthChip'
 import { BlockedBanner } from './components/BlockedBanner'
 import { BundleTimeline } from './components/BundleTimeline'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
-import type { Pipeline, Bundle, GraphResponse, PromotionStep } from './types'
+import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep } from './types'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -36,8 +39,11 @@ export function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
-  // Steps for the active bundle — passed down to DAGView/NodeDetail to avoid independent polling.
+  // Steps for the active bundle — passed down to NodeDetail to avoid independent polling.
   const [activeSteps, setActiveSteps] = useState<PromotionStep[]>([])
+
+  // #326: selectedNode lifted from DAGView so NodeDetail is a split-panel sibling.
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
   const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()
@@ -45,8 +51,8 @@ export function App() {
   // Blocked gate filter state.
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
 
-  // Poll pipeline list every 5 seconds.
-  usePolling(async () => {
+  // Shared fetch function — called by both interval poll and manual refresh.
+  const doFetchAll = useCallback(async () => {
     try {
       const ps = await api.listPipelines()
       setPipelines(ps)
@@ -56,14 +62,11 @@ export function App() {
     } finally {
       setPipelinesLoading(false)
     }
-  }, POLL_INTERVAL_MS)
+  }, [])
 
-  // Refresh bundles + graph + steps for the selected pipeline every 5 seconds.
-  // Single poll callback — no independent sub-polls in children (#321, #322, #324).
-  usePolling(async () => {
-    if (!selectedPipeline) return
+  const doFetchGraph = useCallback(async (pipelineName: string) => {
     try {
-      const bs = await api.listBundles(selectedPipeline)
+      const bs = await api.listBundles(pipelineName)
       setBundles(bs)
       const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
       if (promoting) {
@@ -79,7 +82,27 @@ export function App() {
     } catch (e) {
       setGraphError(String(e))
     }
+  }, [onPollSuccess])
+
+  // Poll pipeline list every 5 seconds.
+  usePolling(doFetchAll, POLL_INTERVAL_MS)
+
+  // Refresh bundles + graph + steps for the selected pipeline every 5 seconds.
+  // Single poll callback — no independent sub-polls in children (#321, #322, #324).
+  const selectedPipelineRef = useRef(selectedPipeline)
+  selectedPipelineRef.current = selectedPipeline
+  usePolling(async () => {
+    if (!selectedPipelineRef.current) return
+    await doFetchGraph(selectedPipelineRef.current)
   }, POLL_INTERVAL_MS, !!selectedPipeline)
+
+  // Manual refresh (#362): re-fetch everything immediately on demand.
+  const manualRefresh = useCallback(async () => {
+    await doFetchAll()
+    if (selectedPipelineRef.current) {
+      await doFetchGraph(selectedPipelineRef.current)
+    }
+  }, [doFetchAll, doFetchGraph])
 
   const handleSelectPipeline = useCallback((name: string) => {
     setSelectedPipeline(name)
@@ -90,6 +113,7 @@ export function App() {
     setShowBlockedOnly(false)
     setTimelineSelectedBundle(undefined) // reset timeline selection on pipeline change
     setActiveSteps([])
+    setSelectedNode(null) // close detail panel when switching pipelines
 
     api.listBundles(name)
       .then(bs => {
@@ -121,6 +145,7 @@ export function App() {
     setTimelineSelectedBundle(bundleName)
     setGraphLoading(true)
     setGraphError(undefined)
+    setSelectedNode(null) // close detail panel when switching bundles
     Promise.all([
       api.getGraph(bundleName),
       api.getSteps(bundleName),
@@ -187,18 +212,34 @@ export function App() {
           }}>
             KARDINAL
           </span>
-          {/* Staleness indicator */}
-          <span
-            title={pipelinesError ? `Error: ${pipelinesError}` : 'Last updated'}
+          {/* Staleness indicator with manual refresh button (#362) */}
+          <button
+            onClick={manualRefresh}
+            title="Refresh now"
+            aria-label="Refresh data"
             style={{
-              fontSize: '0.65rem',
-              color: indicatorColor,
-              fontVariantNumeric: 'tabular-nums',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              padding: 0,
             }}
-            aria-label={`Data ${formatElapsed(elapsedSeconds)}`}
           >
-            {pipelinesError ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
-          </span>
+            <span
+              title={pipelinesError ? `Error: ${pipelinesError}` : 'Last updated'}
+              style={{
+                fontSize: '0.65rem',
+                color: indicatorColor,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+              aria-label={`Data ${formatElapsed(elapsedSeconds)}`}
+            >
+              {pipelinesError ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
+            </span>
+            <span style={{ fontSize: '0.6rem', color: '#475569' }} title="Click to refresh">↺</span>
+          </button>
         </div>
         <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#475569', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>PIPELINES</span>
@@ -227,8 +268,8 @@ export function App() {
         </div>
       </aside>
 
-      {/* Main area */}
-      <main style={{ flex: 1, overflow: 'auto', padding: '1.5rem', background: '#0f172a' }}>
+      {/* Main area — column layout for header + content row */}
+      <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#0f172a' }}>
         {!selectedPipeline ? (
           <div style={{ color: '#475569', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
@@ -246,158 +287,177 @@ export function App() {
           </div>
         ) : (
           <>
-            {/* Pipeline header */}
-            <div style={{ marginBottom: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
-                  {activePipeline?.name}
-                </h1>
-                {/* Paused banner in main panel (#328) */}
-                {activePipeline?.paused && (
-                  <span style={{
-                    fontSize: '0.7rem',
-                    background: '#1e1b4b',
-                    color: '#a5b4fc',
-                    border: '1px solid #4338ca',
-                    borderRadius: '4px',
-                    padding: '2px 8px',
-                    fontWeight: 700,
-                    letterSpacing: '0.05em',
+            {/* Header area (fixed height) */}
+            <div style={{ padding: '1.5rem 1.5rem 0', flexShrink: 0 }}>
+              {/* Pipeline header */}
+              <div style={{ marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                  <h1 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0 }}>
+                    {activePipeline?.name}
+                  </h1>
+                  {/* Paused banner in main panel (#328) */}
+                  {activePipeline?.paused && (
+                    <span style={{
+                      fontSize: '0.7rem',
+                      background: '#1e1b4b',
+                      color: '#a5b4fc',
+                      border: '1px solid #4338ca',
+                      borderRadius: '4px',
+                      padding: '2px 8px',
+                      fontWeight: 700,
+                      letterSpacing: '0.05em',
+                    }}>
+                      ⏸ PAUSED — no new promotions
+                    </span>
+                  )}
+                </div>
+                {/* Bundle provenance card (#329) */}
+                {activeBundle && (
+                  <div style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '0.5rem',
+                    alignItems: 'center',
+                    fontSize: '0.82rem',
+                    color: '#94a3b8',
                   }}>
-                    ⏸ PAUSED — no new promotions
-                  </span>
+                    <span>
+                      Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                    </span>
+                    <span style={{ color: '#334155' }}>·</span>
+                    <HealthChip state={activeBundle.phase} size="sm" />
+                    {activeBundle.provenance?.commitSHA && (
+                      <>
+                        <span style={{ color: '#334155' }}>·</span>
+                        <span style={{ fontFamily: 'monospace', color: '#64748b' }}
+                              title="Commit SHA">
+                          {activeBundle.provenance.commitSHA.slice(0, 8)}
+                        </span>
+                      </>
+                    )}
+                    {activeBundle.provenance?.author && (
+                      <>
+                        <span style={{ color: '#334155' }}>·</span>
+                        <span title="Author">{activeBundle.provenance.author}</span>
+                      </>
+                    )}
+                    {activeBundle.provenance?.ciRunURL && (
+                      <>
+                        <span style={{ color: '#334155' }}>·</span>
+                        <a
+                          href={activeBundle.provenance.ciRunURL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: '#6366f1', fontSize: '0.78rem' }}
+                          title="CI run"
+                        >
+                          CI run ↗
+                        </a>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
-              {/* Bundle provenance card (#329) */}
-              {activeBundle && (
-                <div style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: '0.5rem',
-                  alignItems: 'center',
-                  fontSize: '0.82rem',
-                  color: '#94a3b8',
-                }}>
-                  <span>
-                    Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
-                  </span>
-                  <span style={{ color: '#334155' }}>·</span>
-                  <HealthChip state={activeBundle.phase} size="sm" />
-                  {activeBundle.provenance?.commitSHA && (
-                    <>
-                      <span style={{ color: '#334155' }}>·</span>
-                      <span style={{ fontFamily: 'monospace', color: '#64748b' }}
-                            title="Commit SHA">
-                        {activeBundle.provenance.commitSHA.slice(0, 8)}
-                      </span>
-                    </>
-                  )}
-                  {activeBundle.provenance?.author && (
-                    <>
-                      <span style={{ color: '#334155' }}>·</span>
-                      <span title="Author">{activeBundle.provenance.author}</span>
-                    </>
-                  )}
-                  {activeBundle.provenance?.ciRunURL && (
-                    <>
-                      <span style={{ color: '#334155' }}>·</span>
-                      <a
-                        href={activeBundle.provenance.ciRunURL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: '#6366f1', fontSize: '0.78rem' }}
-                        title="CI run"
-                      >
-                        CI run ↗
-                      </a>
-                    </>
+
+              {/* Blocked PolicyGate banner */}
+              <BlockedBanner
+                blockedCount={blockedGateIds.size}
+                highlightActive={showBlockedOnly}
+                onToggleHighlight={() => setShowBlockedOnly(v => !v)}
+              />
+
+              {/* Bundle history (collapsible) */}
+              {bundles.length > 0 && (
+                <div style={{ marginBottom: '1rem' }}>
+                  <button
+                    onClick={() => setBundleHistoryOpen(o => !o)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: '#6366f1',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                      padding: '0.25rem 0',
+                      fontWeight: 600,
+                    }}
+                    aria-expanded={bundleHistoryOpen}
+                  >
+                    {bundleHistoryOpen ? '▾' : '▸'} Bundle history ({bundles.length})
+                  </button>
+                  {bundleHistoryOpen && (
+                    <ul style={{
+                      listStyle: 'none',
+                      padding: '0.5rem 0',
+                      margin: 0,
+                      borderLeft: '2px solid #1e293b',
+                      paddingLeft: '0.75rem',
+                    }}>
+                      {bundles.map(b => (
+                        <li key={b.name} style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          marginBottom: '0.35rem',
+                          fontSize: '0.8rem',
+                          color: '#cbd5e1',
+                        }}>
+                          <HealthChip state={b.phase} size="sm" />
+                          <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{b.name}</span>
+                          {b.provenance?.commitSHA && (
+                            <span style={{ color: '#64748b', fontFamily: 'monospace' }}>
+                              {b.provenance.commitSHA.slice(0, 8)}
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
               )}
+
+              {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
+                  Receives bundles from parent state — no independent fetch (#321). */}
+              <BundleTimeline
+                bundles={bundles}
+                selectedBundle={activeBundle?.name}
+                onSelectBundle={handleTimelineBundleSelect}
+              />
             </div>
 
-            {/* Blocked PolicyGate banner */}
-            <BlockedBanner
-              blockedCount={blockedGateIds.size}
-              highlightActive={showBlockedOnly}
-              onToggleHighlight={() => setShowBlockedOnly(v => !v)}
-            />
-
-            {/* Bundle history (collapsible) */}
-            {bundles.length > 0 && (
-              <div style={{ marginBottom: '1rem' }}>
-                <button
-                  onClick={() => setBundleHistoryOpen(o => !o)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#6366f1',
-                    cursor: 'pointer',
-                    fontSize: '0.8rem',
-                    padding: '0.25rem 0',
-                    fontWeight: 600,
-                  }}
-                  aria-expanded={bundleHistoryOpen}
-                >
-                  {bundleHistoryOpen ? '▾' : '▸'} Bundle history ({bundles.length})
-                </button>
-                {bundleHistoryOpen && (
-                  <ul style={{
-                    listStyle: 'none',
-                    padding: '0.5rem 0',
-                    margin: 0,
-                    borderLeft: '2px solid #1e293b',
-                    paddingLeft: '0.75rem',
-                  }}>
-                    {bundles.map(b => (
-                      <li key={b.name} style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        marginBottom: '0.35rem',
-                        fontSize: '0.8rem',
-                        color: '#cbd5e1',
-                      }}>
-                        <HealthChip state={b.phase} size="sm" />
-                        <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{b.name}</span>
-                        {b.provenance?.commitSHA && (
-                          <span style={{ color: '#64748b', fontFamily: 'monospace' }}>
-                            {b.provenance.commitSHA.slice(0, 8)}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
+            {/* #326: Content row — DAG + NodeDetail split panel side by side.
+                NodeDetail is a flex sibling, not position:fixed overlay. */}
+            <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '0 1.5rem 1.5rem' }}>
+              {/* DAG area */}
+              <div style={{
+                flex: 1,
+                background: '#1e293b',
+                borderRadius: selectedNode ? '8px 0 0 8px' : '8px',
+                padding: '1rem',
+                minHeight: '300px',
+                overflow: 'auto',
+              }}>
+                <DAGView
+                  nodes={graph?.nodes ?? []}
+                  edges={graph?.edges ?? []}
+                  loading={graphLoading}
+                  error={graphError}
+                  highlightNodeIds={highlightIds}
+                  selectedNode={selectedNode}
+                  onSelectNode={setSelectedNode}
+                />
               </div>
-            )}
 
-            {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
-                Receives bundles from parent state — no independent fetch (#321). */}
-            <BundleTimeline
-              bundles={bundles}
-              selectedBundle={activeBundle?.name}
-              onSelectBundle={handleTimelineBundleSelect}
-            />
-
-            {/* DAG */}
-            <div style={{
-              background: '#1e293b',
-              borderRadius: '8px',
-              padding: '1rem',
-              minHeight: '300px',
-            }}>
-              <DAGView
-                nodes={graph?.nodes ?? []}
-                edges={graph?.edges ?? []}
-                loading={graphLoading}
-                error={graphError}
-                highlightNodeIds={highlightIds}
-                bundleName={activeBundle?.name}
-                pipelineName={selectedPipeline}
-                namespace={activePipeline?.namespace ?? 'default'}
-                steps={activeSteps}
-              />
+              {/* NodeDetail split panel (#326) — sibling of DAGView, not overlay */}
+              {selectedNode && (
+                <NodeDetail
+                  node={selectedNode}
+                  onClose={() => setSelectedNode(null)}
+                  bundleName={activeBundle?.name}
+                  pipelineName={selectedPipeline}
+                  namespace={activePipeline?.namespace ?? 'default'}
+                  steps={activeSteps}
+                />
+              )}
             </div>
           </>
         )}

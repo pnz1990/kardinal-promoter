@@ -262,7 +262,8 @@ func TestPolicyList_ShowsGates(t *testing.T) {
 	assert.Contains(t, out, "5m")
 }
 
-// TestPolicySimulate_BlockedOnWeekend verifies simulation returns BLOCKED on Saturday.
+// TestPolicySimulate_BlockedOnWeekend verifies simulation returns BLOCKED on Saturday,
+// and that the "Next window" field is shown (issue #318 regression test).
 func TestPolicySimulate_BlockedOnWeekend(t *testing.T) {
 	s := cliTestScheme(t)
 	gate := &v1alpha1.PolicyGate{
@@ -285,6 +286,9 @@ func TestPolicySimulate_BlockedOnWeekend(t *testing.T) {
 	out := buf.String()
 	assert.Contains(t, out, "BLOCKED")
 	assert.Contains(t, out, "no-weekend-deploys")
+	// #318: Next window must appear when gate blocks on a weekend simulation
+	assert.Contains(t, out, "Next window: Monday", "BLOCKED weekend gate must show Next window field")
+	assert.Contains(t, out, "UTC", "Next window must include UTC timezone")
 }
 
 // TestPolicySimulate_PassOnWeekday verifies simulation returns PASS on Tuesday.

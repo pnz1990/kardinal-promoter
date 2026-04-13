@@ -45,17 +45,19 @@ func HumanAge(t time.Time) string {
 
 // stepStatePriority returns a sort priority for a PromotionStep state.
 // Higher priority = displayed first. Used by FormatPipelineTable and FormatStepsTable.
-// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence over
-// terminal states (Verified/Failed) so the currently active bundle is shown.
+// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence,
+// then Pending (step queued but not started), then Verified (success),
+// then Failed (terminal error). This ensures in-flight promotions are
+// shown over older terminal-state bundles (#260).
 func stepStatePriority(state string) int {
 	switch state {
 	case "Promoting", "WaitingForMerge", "HealthChecking":
 		return 4
 	case "Pending":
 		return 3
-	case "Failed":
-		return 2
 	case "Verified":
+		return 2
+	case "Failed":
 		return 1
 	default:
 		return 0
