@@ -8,6 +8,9 @@ export interface Pipeline {
   activeBundleName?: string
   /** True when the pipeline has spec.paused=true (#328). */
   paused?: boolean
+  /** #342: per-environment promotion phases from active Bundle status.
+   * Keys are environment names, values are the promotion phase (Promoting, Verified, etc.) */
+  environmentStates?: Record<string, string>
 }
 
 export interface Bundle {

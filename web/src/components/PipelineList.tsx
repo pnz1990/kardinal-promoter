@@ -289,22 +289,58 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               </div>
             </div>
 
-            {/* Sub-line: env count + active bundle */}
+             {/* Sub-line: env count + health bar + active bundle (#342) */}
             {(bundle || envCount > 0) && (
-              <div style={{ fontSize: '0.7rem', color: '#64748b', display: 'flex', gap: '0.4rem' }}>
-                {envCount > 0 && (
-                  <span>{envCount} env{envCount !== 1 ? 's' : ''}</span>
+              <div style={{ fontSize: '0.7rem', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                {/* Multi-segment health bar when env states are available (#342) */}
+                {p.environmentStates && Object.keys(p.environmentStates).length > 0 ? (
+                  <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span>{envCount} env{envCount !== 1 ? 's' : ''}</span>
+                    <span style={{ color: '#1e293b' }}>·</span>
+                    {/* State badges: count per phase */}
+                    {(() => {
+                      const counts: Record<string, number> = {}
+                      for (const phase of Object.values(p.environmentStates!)) {
+                        counts[phase] = (counts[phase] ?? 0) + 1
+                      }
+                      const phaseColor: Record<string, string> = {
+                        Verified: '#22c55e', Promoting: '#6366f1', WaitingForMerge: '#6366f1',
+                        HealthChecking: '#a78bfa', Failed: '#ef4444', Pending: '#475569',
+                      }
+                      return Object.entries(counts).map(([phase, count]) => (
+                        <span key={phase} style={{
+                          fontSize: '0.6rem',
+                          color: phaseColor[phase] ?? '#64748b',
+                          fontWeight: 600,
+                        }} title={`${count} env${count !== 1 ? 's' : ''} in ${phase}`}>
+                          {count} {phase === 'WaitingForMerge' ? 'PR' : phase === 'HealthChecking' ? 'health' : phase.toLowerCase()}
+                        </span>
+                      ))
+                    })()}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    {envCount > 0 && (
+                      <span>{envCount} env{envCount !== 1 ? 's' : ''}</span>
+                    )}
+                    {bundle && (
+                      <>
+                        {envCount > 0 && <span>·</span>}
+                        <span
+                          style={{ fontFamily: 'monospace', color: '#94a3b8' }}
+                          title={p.activeBundleName}
+                        >
+                          {bundle}
+                        </span>
+                      </>
+                    )}
+                  </div>
                 )}
-                {bundle && (
-                  <>
-                    {envCount > 0 && <span>·</span>}
-                    <span
-                      style={{ fontFamily: 'monospace', color: '#94a3b8' }}
-                      title={p.activeBundleName}
-                    >
-                      {bundle}
-                    </span>
-                  </>
+                {/* Bundle name shown below the health bar when env states are shown */}
+                {p.environmentStates && bundle && (
+                  <span style={{ fontFamily: 'monospace', color: '#94a3b8' }} title={p.activeBundleName}>
+                    {bundle}
+                  </span>
                 )}
               </div>
             )}

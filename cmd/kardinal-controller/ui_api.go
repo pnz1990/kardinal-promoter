@@ -42,6 +42,10 @@ type uiPipelineResponse struct {
 	EnvironmentCount int    `json:"environmentCount"`
 	ActiveBundleName string `json:"activeBundleName,omitempty"`
 	Paused           bool   `json:"paused,omitempty"` // true when spec.paused=true (#328)
+	// #342: per-environment state counts for the multi-segment health bar.
+	// Derived from the active Bundle's status.environments.
+	// Keys are environment names, values are the promotion phase.
+	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -157,15 +161,67 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	// Build per-pipeline active bundle index:
+	// For each pipeline, find the most recent Promoting (or Verified) Bundle
+	// and read its per-environment states for the health bar (#342).
+	var bundleList v1alpha1.BundleList
+	// List all bundles — ignore error (best-effort; env states will be nil on error)
+	_ = s.client.List(r.Context(), &bundleList)
+	// Index: pipelineName → active bundle (prefer Promoting > Available > Verified)
+	type activeBundleEntry struct {
+		name      string
+		envStates map[string]string
+	}
+	activeBundles := make(map[string]*activeBundleEntry)
+	phaseOrder := map[string]int{"Promoting": 3, "Available": 2, "Verified": 1, "Failed": 0, "Superseded": -1}
+	// Build a name→phase index for existing bundle lookup.
+	bundlePhase := make(map[string]string, len(bundleList.Items))
+	for _, b := range bundleList.Items {
+		bundlePhase[b.Name] = b.Status.Phase
+	}
+	for _, b := range bundleList.Items {
+		if b.Spec.Pipeline == "" {
+			continue
+		}
+		key := fmt.Sprintf("%s/%s", b.Namespace, b.Spec.Pipeline)
+		existing := activeBundles[key]
+		newScore := phaseOrder[b.Status.Phase]
+		existingScore := -99
+		if existing != nil {
+			existingScore = phaseOrder[bundlePhase[existing.name]]
+		}
+		if existing == nil || newScore > existingScore {
+			envStates := make(map[string]string, len(b.Status.Environments))
+			for _, env := range b.Status.Environments {
+				if env.Phase != "" {
+					envStates[env.Name] = env.Phase
+				}
+			}
+			activeBundles[key] = &activeBundleEntry{
+				name:      b.Name,
+				envStates: envStates,
+			}
+		}
+	}
+
 	result := make([]uiPipelineResponse, 0, len(list.Items))
 	for _, p := range list.Items {
-		result = append(result, uiPipelineResponse{
+		key := fmt.Sprintf("%s/%s", p.Namespace, p.Name)
+		resp := uiPipelineResponse{
 			Name:             p.Name,
 			Namespace:        p.Namespace,
 			Phase:            pipelinePhase(&p),
 			EnvironmentCount: len(p.Spec.Environments),
 			Paused:           p.Spec.Paused,
-		})
+		}
+		if ab := activeBundles[key]; ab != nil {
+			resp.ActiveBundleName = ab.name
+			if len(ab.envStates) > 0 {
+				resp.EnvironmentStates = ab.envStates
+			}
+		}
+		result = append(result, resp)
 	}
 	writeJSON(w, result)
 }
