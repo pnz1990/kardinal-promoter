@@ -80,6 +80,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.AddCommand(newApproveCmd())
 	root.AddCommand(newRefreshCmd())
 	root.AddCommand(newDashboardCmd())
+	root.AddCommand(newLogsCmd())
 
 	return root
 }
