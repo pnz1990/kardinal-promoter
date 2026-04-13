@@ -62,6 +62,9 @@ func (m *mockSCM) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, e
 	m.getPRCalled++
 	return m.merged, m.open, nil
 }
+func (m *mockSCM) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
+	return false, 0, nil
+}
 func (m *mockSCM) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
 	return scm.WebhookEvent{}, nil
 }

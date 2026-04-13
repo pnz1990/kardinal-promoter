@@ -1233,3 +1233,138 @@ func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
 	_, reconcileErr := r.Reconcile(context.Background(), req)
 	require.NoError(t, reconcileErr, "missing pipeline label must not crash reconciler")
 }
+
+
+// makePRStatus creates a PRStatus with the given bundle, environment and approval state.
+func makePRStatus(name, ns, bundleName, envName string, approved bool, approvalCount int) *kardinalv1alpha1.PRStatus {
+	return &kardinalv1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"kardinal.io/bundle":      bundleName,
+				"kardinal.io/environment": envName,
+			},
+		},
+		Spec: kardinalv1alpha1.PRStatusSpec{
+			PRNumber: 42, Repo: "owner/repo",
+			PRURL: "https://github.com/owner/repo/pull/42",
+		},
+		Status: kardinalv1alpha1.PRStatusStatus{
+			Approved: approved, ApprovalCount: approvalCount, Open: true,
+		},
+	}
+}
+
+// TestPolicyGateReconciler_PRReviewGate_Approved verifies that bundle.pr["prod"].isApproved
+// evaluates to true when the PRStatus CRD has status.approved=true (K-08).
+func TestPolicyGateReconciler_PRReviewGate_Approved(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	prs := makePRStatus("prstatus-app-v1-prod", "default", "app-v1", "prod", true, 1)
+	gate := makeGateInstance("pr-review-gate", "default", "app-v1",
+		`bundle.pr["prod"].isApproved`, "5m")
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.True(t, got.Status.Ready, "gate must pass when PR is approved")
+}
+
+// TestPolicyGateReconciler_PRReviewGate_NotApproved verifies that bundle.pr["prod"].isApproved
+// evaluates to false when the PRStatus has status.approved=false (K-08).
+func TestPolicyGateReconciler_PRReviewGate_NotApproved(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	prs := makePRStatus("prstatus-app-v1-prod", "default", "app-v1", "prod", false, 0)
+	gate := makeGateInstance("pr-review-gate", "default", "app-v1",
+		`bundle.pr["prod"].isApproved`, "5m")
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.False(t, got.Status.Ready, "gate must block when PR is not approved")
+}
+
+// TestPolicyGateReconciler_PRReviewGate_MinReviewers verifies that
+// bundle.pr["prod"].approvalCount >= 2 works correctly (K-08).
+func TestPolicyGateReconciler_PRReviewGate_MinReviewers(t *testing.T) {
+	tests := []struct {
+		name          string
+		approvalCount int
+		wantReady     bool
+	}{
+		{"1 approval (need 2) — blocks", 1, false},
+		{"2 approvals (need 2) — passes", 2, true},
+		{"3 approvals (need 2) — passes", 3, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bundle := makeBundle("app-v1", "default")
+			prs := makePRStatus("prstatus-app-v1-prod", "default", "app-v1", "prod", tt.approvalCount >= 1, tt.approvalCount)
+			gate := makeGateInstance("min-reviewers-gate", "default", "app-v1",
+				`bundle.pr["prod"].approvalCount >= 2`, "5m")
+
+			s := newScheme()
+			c := fake.NewClientBuilder().WithScheme(s).
+				WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
+			env, err := celpkg.NewCELEnvironment()
+			require.NoError(t, err)
+
+			r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+			_, reconcileErr := r.Reconcile(context.Background(), req)
+			require.NoError(t, reconcileErr)
+
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tt.wantReady, got.Status.Ready, tt.name)
+		})
+	}
+}
+
+// TestPolicyGateReconciler_PRReviewGate_NoPRStatus verifies that when no PRStatus
+// exists for the stage, bundle.pr["prod"].isApproved defaults to false (K-08).
+func TestPolicyGateReconciler_PRReviewGate_NoPRStatus(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	// No PRStatus objects — gate must block (fail-closed).
+	gate := makeGateInstance("pr-review-gate", "default", "app-v1",
+		`bundle.pr["prod"].isApproved`, "5m")
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.False(t, got.Status.Ready, "gate must block when no PRStatus exists (fail-closed)")
+}

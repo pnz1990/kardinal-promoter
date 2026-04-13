@@ -18,10 +18,13 @@
 // Architecture:
 //   - PRStatus CRs are created by the open-pr step (or by the webhook on
 //     the first merged-PR event) with spec.prURL, spec.prNumber, spec.repo.
-//   - This reconciler polls GitHub via SCM.GetPRStatus and writes
-//     status.merged, status.open, status.lastCheckedAt.
+//   - This reconciler polls GitHub via SCM.GetPRStatus and SCM.GetPRReviewStatus
+//     and writes status.merged, status.open, status.approved, status.approvalCount,
+//     status.lastCheckedAt.
 //   - The Graph Watch node reads status.merged to advance the Graph DAG,
 //     replacing the old polling loop in handleWaitingForMerge.
+//   - PolicyGate CEL expressions can use bundle.pr("stage").isApproved() which
+//     reads status.approved from the PRStatus CRD (K-08).
 //   - Idempotent: reconciling a PRStatus with status.merged=true is a no-op.
 //
 // Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1.
@@ -109,11 +112,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 
+	// Poll review approval state (K-08: PR review gate).
+	// Non-fatal on error — approval state defaults to false.
+	approved, approvalCount, reviewErr := r.SCM.GetPRReviewStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	if reviewErr != nil {
+		log.Warn().Err(reviewErr).
+			Str("prURL", prs.Spec.PRURL).
+			Int("prNumber", prs.Spec.PRNumber).
+			Msg("GetPRReviewStatus failed (non-fatal), defaulting approved=false")
+		// Keep previous approved/approvalCount values if available.
+		approved = prs.Status.Approved
+		approvalCount = prs.Status.ApprovalCount
+	}
+
 	// Write results to status — this is the only CRD status this reconciler writes.
 	now := metav1.NewTime(time.Now().UTC())
 	patch := client.MergeFrom(prs.DeepCopy())
 	prs.Status.Merged = merged
 	prs.Status.Open = open
+	prs.Status.Approved = approved
+	prs.Status.ApprovalCount = approvalCount
 	prs.Status.LastCheckedAt = &now
 
 	if err := r.Status().Patch(ctx, &prs, patch); err != nil {

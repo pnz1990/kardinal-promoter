@@ -62,6 +62,9 @@ func (m *mockSCMForLoop) CommentOnPR(_ context.Context, _ string, _ int, _ strin
 func (m *mockSCMForLoop) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
 	return m.merged, m.open, nil
 }
+func (m *mockSCMForLoop) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
+	return false, 0, nil
+}
 func (m *mockSCMForLoop) ParseWebhookEvent(payload []byte, _ string) (scm.WebhookEvent, error) {
 	var raw struct {
 		Action      string `json:"action"`

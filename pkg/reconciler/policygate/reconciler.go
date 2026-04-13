@@ -257,6 +257,15 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	}
 	bundleCtx["upstreamSoakMinutes"] = maxSoakMinutes
 
+	// Build PR review context (K-08): bundle.pr["<envName>"].isApproved / .approvalCount
+	// Reads PRStatus CRDs labelled with this bundle. Non-fatal on error.
+	prCtx, prErr := r.buildPRContext(ctx, gate.Namespace, bundleName)
+	if prErr != nil {
+		zerolog.Ctx(ctx).Warn().Err(prErr).Msg("failed to build PR context, using empty")
+		prCtx = map[string]interface{}{}
+	}
+	bundleCtx["pr"] = prCtx
+
 	return map[string]interface{}{
 		"bundle": bundleCtx,
 		"schedule": map[string]interface{}{
@@ -462,6 +471,40 @@ func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time
 		result[cw.Name] = active
 	}
 	return result
+}
+
+// buildPRContext lists PRStatus CRDs for this bundle and returns a map
+// keyed by environment name:
+//
+//	{"staging": {"isApproved": true, "approvalCount": 2}, "prod": {...}}
+//
+// CEL usage: bundle.pr["staging"].isApproved  — true/false
+//
+//	bundle.pr["staging"].approvalCount >= 2
+//
+// K-08: the review state is written by PRStatusReconciler to CRD status,
+// so this is a pure CRD status read — no external API calls in the hot path.
+func (r *Reconciler) buildPRContext(ctx context.Context, ns, bundleName string) (map[string]interface{}, error) {
+	var list kardinalv1alpha1.PRStatusList
+	if err := r.List(ctx, &list,
+		client.InNamespace(ns),
+		client.MatchingLabels{"kardinal.io/bundle": bundleName},
+	); err != nil {
+		return nil, fmt.Errorf("list prstatus for bundle %s: %w", bundleName, err)
+	}
+
+	result := make(map[string]interface{}, len(list.Items))
+	for _, prs := range list.Items {
+		envName := prs.Labels["kardinal.io/environment"]
+		if envName == "" {
+			continue
+		}
+		result[envName] = map[string]interface{}{
+			"isApproved":    prs.Status.Approved,
+			"approvalCount": int64(prs.Status.ApprovalCount),
+		}
+	}
+	return result, nil
 }
 
 // patchStatus patches the PolicyGate's status fields.

@@ -150,6 +150,17 @@ Bundles by creation time.
 | `upstream.<env>.lastPromotedAt` | string | RFC3339 timestamp of the last successful promotion for `<env>` (empty string if never) |
 | `upstream.<env>.soakMinutes` | int | Minutes since the current bundle's health check for `<env>` (unchanged) |
 
+### PR review attributes (K-08)
+
+Available when the stage has `approval: pr-review`. The review state is written by the
+PRStatus controller to `PRStatus.status.approved` / `status.approvalCount` — no
+external API calls are made during gate evaluation.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `bundle.pr["<stageName>"].isApproved` | bool | True when the PR for the named stage has at least one approval and no outstanding change-request reviews |
+| `bundle.pr["<stageName>"].approvalCount` | int | Number of distinct approving reviews on the stage PR |
+
 Examples:
 
 ```yaml
@@ -168,6 +179,19 @@ expression: |
   upstream.staging.recentSuccessCount >= 3 &&
   !changewindow["holiday-freeze"]
 ```
+
+# Block until the staging PR is approved
+expression: 'bundle.pr["staging"].isApproved'
+
+# Require at least 2 approvers before promoting to prod
+expression: 'bundle.pr["staging"].approvalCount >= 2'
+
+# Combine PR review with time gate
+expression: '!schedule.isWeekend && bundle.pr["staging"].isApproved'
+```
+
+When no PRStatus exists for the named stage (e.g. the `open-pr` step has not run yet),
+`bundle.pr["staging"]` returns an empty map — `isApproved` evaluates to `false` (fail-closed).
 
 ### Planned attributes (not yet available)
 
@@ -231,6 +255,11 @@ expression: |
   !schedule.isWeekend &&
   bundle.provenance.author != "dependabot[bot]" &&
   bundle.upstreamSoakMinutes >= 30
+
+# PR review AND time gate — 2+ approvals required on business days
+expression: |
+  !schedule.isWeekend &&
+  bundle.pr["staging"].approvalCount >= 2
 ```
 
 ## Skip Permissions
