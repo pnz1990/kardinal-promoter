@@ -425,6 +425,64 @@ func TestOpenPRStep_AppliesLabels(t *testing.T) {
 	assert.Contains(t, mockSCM.addedLabels, "kardinal/promotion", "kardinal/promotion label must be applied")
 }
 
+// TestOpenPRStep_RollbackBundleAppliesRollbackLabel verifies that when a Bundle
+// has Provenance.RollbackOf set (it is a rollback), the open-pr step applies the
+// 'kardinal/rollback' label to the PR. This is required by issue #402 and
+// docs/rollback.md — rollback PRs must be distinguishable from promotion PRs.
+func TestOpenPRStep_RollbackBundleAppliesRollbackLabel(t *testing.T) {
+	mockSCM := &mockSCMProvider{
+		prURL:    "https://github.com/owner/repo/pull/7",
+		prNumber: 7,
+	}
+	state := makeState(&mockGitClient{}, mockSCM)
+	state.Outputs["branch"] = "kardinal/nginx-demo-v1-29-0/prod"
+	// Mark bundle as a rollback: Provenance.RollbackOf set.
+	state.Bundle.Provenance = &v1alpha1.BundleProvenance{
+		RollbackOf: "nginx-demo-v1-29-0",
+		Author:     "ci",
+	}
+
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+
+	result, err := step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, 1, mockSCM.addLabelsCalls, "should call AddLabelsToPR once")
+	// Rollback PRs must have kardinal/rollback label (#402)
+	assert.Contains(t, mockSCM.addedLabels, "kardinal/rollback",
+		"rollback bundle must add kardinal/rollback label to PR")
+	assert.Contains(t, mockSCM.addedLabels, "kardinal",
+		"rollback PR must still have base kardinal label")
+}
+
+// TestOpenPRStep_NormalBundleDoesNotHaveRollbackLabel verifies that a normal
+// (non-rollback) promotion PR does NOT get the kardinal/rollback label.
+func TestOpenPRStep_NormalBundleDoesNotHaveRollbackLabel(t *testing.T) {
+	mockSCM := &mockSCMProvider{
+		prURL:    "https://github.com/owner/repo/pull/8",
+		prNumber: 8,
+	}
+	state := makeState(&mockGitClient{}, mockSCM)
+	state.Outputs["branch"] = "kardinal/nginx-demo-v1-30-0/prod"
+	// Normal bundle: Provenance without RollbackOf.
+	state.Bundle.Provenance = &v1alpha1.BundleProvenance{
+		Author:    "ci",
+		CommitSHA: "abc123",
+	}
+
+	step, err := parentsteps.Lookup("open-pr")
+	require.NoError(t, err)
+
+	result, err := step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.NotContains(t, mockSCM.addedLabels, "kardinal/rollback",
+		"normal promotion PR must NOT have kardinal/rollback label")
+	assert.Contains(t, mockSCM.addedLabels, "kardinal/promotion",
+		"normal promotion PR must have kardinal/promotion label")
+}
+
 func TestLookup_UnknownStep_FallsBackToCustom(t *testing.T) {
 	// Unknown step names now return a CustomWebhookStep (not an error).
 	// The custom step will fail at execution time if webhook.url is missing.
