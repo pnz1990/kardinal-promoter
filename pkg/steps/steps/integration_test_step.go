@@ -87,8 +87,8 @@ func (s *integrationTestStep) Execute(ctx context.Context, state *parentsteps.St
 	jobName := integrationTestJobName(state.BundleName, state.Environment.Name)
 
 	// Check if job already exists
-	var existing batchv1.Job
-	getErr := state.K8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, &existing)
+	var current batchv1.Job
+	getErr := state.K8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, &current)
 	if getErr != nil && !apierrors.IsNotFound(getErr) {
 		return parentsteps.StepResult{}, fmt.Errorf("integration-test: get job: %w", getErr)
 	}
@@ -134,8 +134,8 @@ func (s *integrationTestStep) Execute(ctx context.Context, state *parentsteps.St
 			if !apierrors.IsAlreadyExists(createErr) {
 				return parentsteps.StepResult{}, fmt.Errorf("integration-test: create job: %w", createErr)
 			}
-			// Already exists — fall through to status check
-			if getErr2 := state.K8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, &existing); getErr2 != nil {
+			// Already exists (race) — re-fetch and fall through to status check
+			if getErr2 := state.K8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, &current); getErr2 != nil {
 				return parentsteps.StepResult{}, fmt.Errorf("integration-test: re-get job after conflict: %w", getErr2)
 			}
 		} else {
@@ -147,13 +147,10 @@ func (s *integrationTestStep) Execute(ctx context.Context, state *parentsteps.St
 			}, nil
 		}
 	} else {
-		existing = existing
-	}
-
-	// Re-fetch existing job status
-	var current batchv1.Job
-	if getErr2 := state.K8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, &current); getErr2 != nil {
-		return parentsteps.StepResult{}, fmt.Errorf("integration-test: get job status: %w", getErr2)
+		// Job exists — re-fetch to get latest status
+		if getErr2 := state.K8sClient.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, &current); getErr2 != nil {
+			return parentsteps.StepResult{}, fmt.Errorf("integration-test: re-fetch job status: %w", getErr2)
+		}
 	}
 
 	// Check for timeout: compare job creation time + timeout vs now
