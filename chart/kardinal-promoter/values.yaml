@@ -116,3 +116,10 @@ krocodile:
   apiGroup: "experimental.kro.run"
   # Namespace where the Graph controller runs
   namespace: "kro-system"
+
+# -- ValidatingAdmissionPolicy for PolicyGate CEL expression validation.
+# Requires Kubernetes 1.28+. When enabled, prevents PolicyGates with empty
+# spec.expression from being created or updated (issue #317).
+# Full CEL syntax validation requires a validating webhook.
+validatingAdmissionPolicy:
+  enabled: true

@@ -1,0 +1,41 @@
+{{/*
+ValidatingAdmissionPolicy for PolicyGate CEL expression validation.
+Requires Kubernetes 1.28+ (ValidatingAdmissionPolicy graduated to GA in 1.30).
+Rejects PolicyGate resources with empty spec.expression at admission time.
+
+Note: This policy validates that spec.expression is non-empty. Full CEL syntax
+validation requires a validating webhook (issue #317) with server-side compilation.
+This policy catches the most common mistake (missing expression field) at apply time.
+
+Enabled by default. Set validatingAdmissionPolicy.enabled=false to disable.
+*/}}
+{{- if .Values.validatingAdmissionPolicy.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kardinal-policygate-expression-required
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["kardinal.io"]
+      apiVersions: ["v1alpha1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["policygates"]
+  validations:
+  - expression: "object.spec.expression != ''"
+    message: "spec.expression must not be empty — provide a CEL expression (e.g. '!schedule.isWeekend')"
+    reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kardinal-policygate-expression-required
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: kardinal-policygate-expression-required
+  validationActions: [Deny]
+{{- end }}

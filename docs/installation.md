@@ -91,6 +91,7 @@ kubectl get pods -n kardinal-system
 | `nodeSelector` | `{}` | Node selector |
 | `tolerations` | `[]` | Pod tolerations |
 | `affinity` | `{}` | Pod affinity |
+| `validatingAdmissionPolicy.enabled` | `true` | Deploy `ValidatingAdmissionPolicy` to reject PolicyGates with empty `spec.expression` at apply time (requires Kubernetes ≥ 1.28) |
 
 ---
 
