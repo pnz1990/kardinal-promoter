@@ -175,6 +175,11 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	}
 	activeBundles := make(map[string]*activeBundleEntry)
 	phaseOrder := map[string]int{"Promoting": 3, "Available": 2, "Verified": 1, "Failed": 0, "Superseded": -1}
+	// Build a name→phase index for existing bundle lookup.
+	bundlePhase := make(map[string]string, len(bundleList.Items))
+	for _, b := range bundleList.Items {
+		bundlePhase[b.Name] = b.Status.Phase
+	}
 	for _, b := range bundleList.Items {
 		if b.Spec.Pipeline == "" {
 			continue
@@ -184,17 +189,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		newScore := phaseOrder[b.Status.Phase]
 		existingScore := -99
 		if existing != nil {
-			existingScore = phaseOrder[b.Labels["kardinal.io/phase"]] // use score from existing
-			// Use the phase of the existing entry's name would need a reverse lookup
-			// Simpler: just compare phase strings directly
-			existingPhaseScore := 0
-			for _, bl := range bundleList.Items {
-				if bl.Name == existing.name {
-					existingPhaseScore = phaseOrder[bl.Status.Phase]
-					break
-				}
-			}
-			existingScore = existingPhaseScore
+			existingScore = phaseOrder[bundlePhase[existing.name]]
 		}
 		if existing == nil || newScore > existingScore {
 			envStates := make(map[string]string, len(b.Status.Environments))
