@@ -79,7 +79,13 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	}
 
 	// Apply standard kardinal labels to the PR.
+	// Include kardinal/rollback when this bundle is a rollback (Provenance.RollbackOf is set).
+	// This is required by issue #402 / docs/rollback.md — rollback PRs must have the
+	// kardinal/rollback label so operators can filter them from promotion PRs.
 	baseLabels := []string{"kardinal", "kardinal/promotion"}
+	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
+		baseLabels = append(baseLabels, "kardinal/rollback")
+	}
 	if labelsErr := state.SCM.AddLabelsToPR(ctx, repo, prNum, baseLabels); labelsErr != nil {
 		// Non-fatal: log but do not fail the step.
 		_ = labelsErr
