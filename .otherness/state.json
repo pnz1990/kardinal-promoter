@@ -640,9 +640,9 @@
       "pr_merged": true
     },
     "402-pr-review-gate": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
+      "state": "assigned",
+      "assigned_to": "STANDALONE-A",
+      "assigned_at": "2026-04-13T23:27:43Z",
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": null,
@@ -658,9 +658,9 @@
       "pr_merged": true
     },
     "404-cross-stage-history-cel": {
-      "state": "todo",
-      "assigned_to": null,
-      "assigned_at": null,
+      "state": "assigned",
+      "assigned_to": "STANDALONE-A",
+      "assigned_at": "2026-04-13T23:27:43Z",
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": null,
