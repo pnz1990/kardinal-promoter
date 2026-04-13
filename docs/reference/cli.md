@@ -1,4 +1,3 @@
-# cli
+# CLI Reference
 
-!!! note "Stub — to be completed"
-    This page is a stub. The docs agent will complete it.
+See the full [CLI Reference](../cli-reference.md).
