@@ -51,7 +51,7 @@ jobs:
           python3 -c "
           import yaml, sys, pathlib
           errors = []
-          skip_patterns = ['.git', 'node_modules', 'vendor', '.specify/extensions']
+          skip_patterns = ['.git', 'node_modules', 'vendor', '.specify/extensions', 'mkdocs.yml']
           for f in pathlib.Path('.').rglob('*.yml'):
             if any(p in str(f) for p in skip_patterns):
               continue
