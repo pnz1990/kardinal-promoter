@@ -26,6 +26,28 @@ spec:
   expression: <string>                  # CEL expression
   message: <string>                     # human-readable explanation shown when gate blocks
   recheckInterval: <duration>           # how often to re-evaluate (default: "5m")
+  when: <string>                        # "pre-deploy" or "post-deploy" (default: "post-deploy")
+```
+
+### `when` field (K-02)
+
+The `when` field controls at which point in the promotion lifecycle the gate is evaluated:
+
+- `post-deploy` (default): gate is evaluated **after** the PR is merged and the deployment starts. This is the standard behavior for soak gates, error-rate checks, and other post-deployment conditions.
+- `pre-deploy`: gate is evaluated **before** git operations begin. If a `pre-deploy` gate is not ready, the PromotionStep stays in `Pending` and no `git-clone` starts. Use this to block deployments when upstream health is degraded.
+
+**Example: block prod deployments when staging error rate is high**
+
+```yaml
+kind: PolicyGate
+metadata:
+  name: staging-healthy-before-prod
+  namespace: platform-policies
+spec:
+  when: pre-deploy
+  expression: 'metrics.staging_error_rate.value < 0.01'
+  message: "Staging error rate is above 1% — do not start prod deployment"
+  recheckInterval: 1m
 ```
 
 ## Scoping
