@@ -74,7 +74,7 @@ The CEL expression references an attribute that does not exist in the current ph
 kardinal policy test my-gate.yaml
 ```
 
-The output will show which attribute is unavailable. For example, `metrics.successRate` is only available in Phase 2. Remove the attribute or upgrade to a later phase.
+The output will show which attribute is unavailable. For example, `delegation.status` and `externalApproval.*` are planned future attributes — remove them or wait for that feature to ship. Attributes like `metrics.*` and `bundle.upstreamSoakMinutes` are available now but require the `MetricCheck` CRD to be configured for the relevant environment.
 
 ## Bundle not promoting
 

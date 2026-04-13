@@ -4,10 +4,10 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-12T02:56:28Z",
-  "current_queue": "queue-019",
-  "last_sm_review": "2026-04-13T01:54:17Z",
-  "last_pm_review": "2026-04-13T01:54:17Z",
-  "batches_since_competitive_analysis": 3,
+  "current_queue": "queue-015",
+  "last_sm_review": "2026-04-13T18:54:36Z",
+  "last_pm_review": "2026-04-13T18:54:36Z",
+  "batches_since_competitive_analysis": 0,
   "batches_since_doc_audit": 1,
   "batches_since_dead_scan": 0,
   "engineer_slots": {
@@ -534,6 +534,51 @@
       "assigned_to": "STANDALONE",
       "pr_number": 223,
       "pr_merged": true
+    },
+    "301-pr-evidence-assertions": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T18:29:18Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 438,
+      "pr_merged": true
+    },
+    "302-health-adapter-tests": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T18:45:00Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 439,
+      "pr_merged": true
+    },
+    "303-prstatus-regression": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T18:56:29Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 440,
+      "pr_merged": true
+    },
+    "304-ui-api-regression": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T19:07:15Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 441,
+      "pr_merged": true
+    },
+    "305-ui-vitest-setup": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T19:21:34Z",
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": 442,
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
@@ -546,8 +591,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-13T05:08:15Z",
-      "cycle": 28
+      "last_seen": "2026-04-13T19:59:17Z",
+      "cycle": 37
     }
   },
   "handoff": {

@@ -108,6 +108,7 @@ nav:
     - FAQ: faq.md
   - Architecture: architecture.md
   - Comparison: comparison.md
+  - Roadmap: roadmap.md
   - Changelog: changelog.md
 
 extra:

@@ -89,9 +89,9 @@ All matching PolicyGates from both sources are injected into the Graph.
 
 ## CEL Context
 
-PolicyGate expressions are evaluated against a context that depends on the phase of kardinal-promoter deployed.
+All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release.
 
-### Phase 1
+### Core attributes
 
 | Attribute | Type | Description | Example |
 |---|---|---|---|
@@ -107,22 +107,24 @@ PolicyGate expressions are evaluated against a context that depends on the phase
 | `environment.name` | string | Target environment name | `"prod"` |
 | `environment.approval` | string | Approval mode | `"pr-review"` |
 
-### Phase 2 (additional)
+### Metric and soak attributes
 
 | Attribute | Type | Description |
 |---|---|---|
-| `metrics.*` | float64 | MetricCheck results injected by name |
+| `metrics.*` | float64 | MetricCheck results injected by name (requires a `MetricCheck` CRD targeting this environment) |
 | `bundle.upstreamSoakMinutes` | int | Minutes since upstream environment was verified |
 | `previousBundle.version` | string | Previously deployed version in this environment |
 
-### Phase 3 (additional)
+### Planned attributes (not yet available)
+
+!!! warning "Not yet implemented"
+    The following attributes are on the roadmap but will cause a CEL evaluation error if referenced today.
+    Gates using them will fail closed.
 
 | Attribute | Type | Description |
 |---|---|---|
 | `delegation.status` | string | Argo Rollouts or Flagger rollout status |
 | `externalApproval.*` | map | Webhook gate response data |
-
-Referencing an attribute from a later phase causes a CEL evaluation error. The gate fails closed with a message indicating the attribute is not available.
 
 ## CEL Expression Examples
 
@@ -155,7 +157,7 @@ expression: "bundle.labels.hotfix == true"
 expression: 'bundle.version.startsWith("1.")'
 ```
 
-### Metric-based (Phase 2)
+### Metric-based
 
 ```yaml
 # Require 99.5% success rate in the upstream environment

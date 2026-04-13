@@ -17,7 +17,7 @@ spec:
     layout: <string>                    # "directory" (default) or "branch"
     sourceBranch: <string>              # Source branch for DRY templates (layout: branch only; default: spec.git.branch)
     branchPrefix: <string>              # Branch prefix for rendered envs (layout: branch only; default: "env/")
-    provider: <string>                  # "github" (Phase 1), "gitlab" (Phase 2)
+    provider: <string>                  # "github" or "gitlab"
     secretRef:
       name: <string>                    # Secret containing the Git token
     webhookMode: <string>               # "webhook" (default) or "polling"
@@ -28,7 +28,7 @@ spec:
       path: <string>                    # Path in the GitOps repo (default: "environments/<name>")
       dependsOn: [<string>, ...]        # Environments this one depends on (default: previous in list)
       update:
-        strategy: <string>              # "kustomize" (default), "helm" (Phase 2), "replace" (Phase 3)
+        strategy: <string>              # "kustomize" (default), "helm", "replace" (future)
       approval: <string>               # "auto" (default) or "pr-review"
         # pr: <bool>                    # For approval: auto, set pr: true to create audit PRs
       renderManifests: <bool>           # When true, runs kustomize-build and commits rendered YAML to env branch (requires layout: branch)
@@ -45,16 +45,16 @@ spec:
         flux:                           # When type: flux
           name: <string>                # Flux Kustomization name
           namespace: <string>           # Default: "flux-system"
-        argoRollouts:                   # When type: argoRollouts (Phase 2)
+        argoRollouts:                   # When type: argoRollouts
           name: <string>                # Rollout name
           namespace: <string>           # Rollout namespace
-        flagger:                        # When type: flagger (Phase 2)
+        flagger:                        # When type: flagger
           name: <string>                # Canary name
           namespace: <string>           # Canary namespace
         cluster: <string>              # kubeconfig Secret name for remote clusters
         timeout: <duration>             # Health check timeout (default: "10m")
       delivery:
-        delegate: <string>              # "none" (default), "argoRollouts", "flagger" (Phase 3)
+        delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (future)
       shard: <string>                   # Agent shard name for distributed mode (optional)
       steps:                            # Custom promotion step sequence (optional, overrides defaults)
         - uses: <string>                # Step name (built-in or custom)
@@ -74,7 +74,7 @@ spec:
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch`: environments as separate branches (use with `sourceBranch` and `branchPrefix` for rendered manifests). |
 | `sourceBranch` | No | `spec.git.branch` | Only used with `layout: branch`. The branch containing DRY source templates. Promotions read from this branch before rendering. |
 | `branchPrefix` | No | `env/` | Only used with `layout: branch`. Prefix for rendered environment branches. For `branchPrefix: env/`, the `prod` environment writes to `env/prod`. |
-| `provider` | Yes | | `github` (Phase 1) or `gitlab` (Phase 2). Selects the SCM provider for PR creation. |
+| `provider` | Yes | | `github` or `gitlab`. Selects the SCM provider for PR creation. |
 | `secretRef.name` | Yes | | Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. |
 | `webhookMode` | No | `webhook` | `webhook`: react to GitHub webhook events for fast PR merge detection. `polling`: fall back to periodic polling (use in environments where inbound webhooks are not reachable). |
 | `pollInterval` | No | `30s` | Polling interval when `webhookMode: polling`. Has no effect in webhook mode. |
@@ -86,13 +86,13 @@ spec:
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
 | `path` | No | `environments/<name>` | Directory (layout: directory) or branch (layout: branch) in the GitOps repo containing the environment's manifests. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: runs `kustomize edit set-image`. `helm`: patches a configurable path in `values.yaml` (Phase 2). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: runs `kustomize edit set-image`. `helm`: patches a configurable path in `values.yaml`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `renderManifests` | No | `false` | When `true`, runs `kustomize-build` after `kustomize-set-image` and commits rendered plain YAML to the environment branch. Requires `layout: branch`. Enables the rendered manifests pattern. |
 | `health.type` | No | auto-detected | Health verification adapter. Auto-detected on startup if omitted: checks for Argo CD Application CRD, then Flux Kustomization CRD, then falls back to Deployment condition. |
 | `health.timeout` | No | `10m` | How long to wait for health verification before marking the step as Failed. |
 | `health.cluster` | No | (local cluster) | Name of a Kubernetes Secret containing a kubeconfig for a remote cluster. Used for multi-cluster health verification. |
-| `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion (implemented). `flagger`: watch Flagger Canary status (Phase 3). `none`: instant deploy (rolling update). |
+| `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status (future). `none`: instant deploy (rolling update). |
 | `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` will reconcile this environment's PromotionSteps. When omitted, the control plane controller handles the step. |
 | `steps` | No | (inferred) | Custom promotion step sequence. When omitted, the default sequence is inferred from `update.strategy`, `approval`, and `renderManifests`. When specified, overrides the default entirely. See [Promotion Steps](#promotion-steps). |
 

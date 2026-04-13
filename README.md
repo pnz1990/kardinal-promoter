@@ -23,12 +23,13 @@ All state lives in Kubernetes CRDs. There is no external database.
 
 ## Status
 
-Pre-release. Design document: v2.1. Not yet implemented.
+**v0.4.0** — Production-ready. Stages 0–17 complete (all Phase 1 and Phase 2 features shipped).
+See the [full documentation](https://pnz1990.github.io/kardinal-promoter/) and [changelog](docs/changelog.md).
+
+## Documentation
+
+[https://pnz1990.github.io/kardinal-promoter/](https://pnz1990.github.io/kardinal-promoter/)
 
 ## Design
 
 See [kardinal-promoter Technical Design Document v2.1](docs/design/design-v2.1.md).
-
-## License
-
-Apache 2.0

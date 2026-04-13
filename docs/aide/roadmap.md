@@ -805,25 +805,35 @@ None — this is the foundation.
 
 ## Summary
 
-| Stage | Description | Phase |
+| Stage | Description | Status |
 |---|---|---|
-| 0 | Project skeleton, build tooling, CI | Foundation |
-| 1 | CRD types and validation schemas | Foundation |
-| 2 | Bundle and Pipeline reconcilers (no-op) | Phase 1a |
-| 3 | Graph generation and kro integration | Phase 1a |
-| 4 | PolicyGate CEL evaluator | Phase 1a |
-| 5 | Git operations and GitHub PR flow | Phase 1a |
-| 6 | PromotionStep reconciler and full promotion loop | Phase 1a |
-| 7 | Health adapters (Deployment, Argo CD, Flux) | Phase 1b |
-| 8 | CLI (full command set) | Phase 1b |
-| 9 | Embedded React UI | Phase 1b |
-| 10 | PR evidence, labels, webhook reliability | Phase 1b |
-| 11 | GitHub Actions integration and `kardinal init` | Phase 1b |
-| 12 | Helm strategy and config-only promotions | Phase 2 |
-| 13 | Rollback and pause/resume | Phase 2 |
-| 14 | Distributed mode (control plane + agents) | Phase 2 |
-| 15 | MetricCheck CRD and upstream soak time | Phase 2 |
-| 16 | Custom promotion steps via webhook | Phase 2 |
-| 17 | GitLab support | Phase 2 |
-| 18 | Subscription CRD | Phase 3 |
-| 19 | Security hardening and production readiness | Phase 3 |
+| 0 | Project skeleton, build tooling, CI | ✅ Complete |
+| 1 | CRD types and validation schemas | ✅ Complete |
+| 2 | Bundle and Pipeline reconcilers (no-op) | ✅ Complete |
+| 3 | Graph generation and kro integration | ✅ Complete |
+| 4 | PolicyGate CEL evaluator | ✅ Complete |
+| 5 | Git operations and GitHub PR flow | ✅ Complete |
+| 6 | PromotionStep reconciler and full promotion loop | ✅ Complete |
+| 7 | Health adapters (Deployment, Argo CD, Flux) | ✅ Complete |
+| 8 | CLI (full command set) | ✅ Complete |
+| 9 | Embedded React UI | ✅ Complete |
+| 10 | PR evidence, labels, webhook reliability | ✅ Complete |
+| 11 | GitHub Actions integration and `kardinal init` | ✅ Complete |
+| 12 | Helm strategy and config-only promotions | ✅ Complete |
+| 13 | Rollback and pause/resume | ✅ Complete |
+| 14 | Distributed mode (control plane + agents) | 🚧 In Progress |
+| 15 | MetricCheck CRD and upstream soak time | ✅ Complete |
+| 16 | Custom promotion steps via webhook | ✅ Complete |
+| 17 | GitLab support | ✅ Complete |
+| 18 | Subscription CRD | 📋 Planned |
+| 19 | Security hardening and production readiness | 📋 Planned |
+| 20 | Contiguous healthy soak + `bake:` shorthand (K-01) | 📋 Planned |
+| 21 | Pre-deploy gate type `when: pre-deploy` (K-02) | 📋 Planned |
+| 22 | Auto-rollback: ABORT vs ROLLBACK (K-03) | 📋 Planned |
+| 23 | ChangeWindow CRD (K-04) | 📋 Planned |
+| 24 | Deployment metrics on Bundle + Pipeline (K-05) | 📋 Planned |
+| 25 | Wave topology `wave:` field (K-06) | 📋 Planned |
+| 26 | Integration test step (K-07) | 📋 Planned |
+| 27 | PR review gate (K-08) | 📋 Planned |
+| 28 | `kardinal override` with audit record (K-09) | 📋 Planned |
+| 29 | Cross-stage history CEL functions (K-10) | 📋 Planned |

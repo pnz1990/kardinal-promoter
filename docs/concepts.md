@@ -246,7 +246,7 @@ PolicyGate expressions are evaluated against a context that includes:
 | `environment.name` | string | "prod" |
 | `environment.approval` | string | "pr-review" |
 
-Additional attributes are added in later phases (metrics, upstream soak time, delegation status).
+Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`), and previously deployed version (`previousBundle.version`). See the [CEL context reference](policy-gates.md#cel-context) for the full list.
 
 ### Inspecting gates
 
@@ -293,8 +293,8 @@ After a promotion is applied (manifests written to Git), kardinal-promoter verif
 | `resource` (default) | Deployment Available condition | Clusters without a GitOps tool |
 | `argocd` | Argo CD Application health + sync status | Argo CD users (auto-detected) |
 | `flux` | Flux Kustomization Ready condition | Flux users (auto-detected) |
-| `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments (Phase 2) |
-| `flagger` | Flagger Canary phase | Canary deployments (Phase 2) |
+| `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments |
+| `flagger` | Flagger Canary phase | Canary deployments |
 
 Most teams do not need to configure health adapters. If Argo CD is installed, the controller detects it and uses the `argocd` adapter automatically. Same for Flux.
 
@@ -308,7 +308,12 @@ health:
   cluster: prod-us-cluster    # kubeconfig Secret name
 ```
 
-## Subscription (Phase 3)
+## Subscription
+
+!!! warning "Not yet implemented — planned for a future release"
+    The Subscription CRD is on the roadmap but not yet available. The spec below shows the intended API.
+    Today, Bundles are created by CI (via webhook or CLI). When Subscription ships, it will provide
+    a passive trigger alternative.
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 

@@ -8,8 +8,8 @@ On startup, the controller checks which CRDs are installed in the cluster:
 
 1. If `Application` CRD (`argoproj.io/v1alpha1`) exists, the `argocd` adapter is available.
 2. If `Kustomization` CRD (`kustomize.toolkit.fluxcd.io/v1`) exists, the `flux` adapter is available.
-3. If `Rollout` CRD (`argoproj.io/v1alpha1`) exists, the `argoRollouts` adapter is available (Phase 2).
-4. If `Canary` CRD (`flagger.app/v1beta1`) exists, the `flagger` adapter is available (Phase 2).
+3. If `Rollout` CRD (`argoproj.io/v1alpha1`) exists, the `argoRollouts` adapter is available.
+4. If `Canary` CRD (`flagger.app/v1beta1`) exists, the `flagger` adapter is available.
 
 When a Pipeline environment does not specify `health.type`, the controller uses the first available adapter in priority order: `argocd`, `flux`, `resource`.
 

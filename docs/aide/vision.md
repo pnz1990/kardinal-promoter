@@ -300,7 +300,7 @@ Phases: Available, Promoting, Verified, Failed, Superseded. Per-environment evid
 
 CEL-powered policy checks represented as nodes in the promotion Graph. Platform teams define org-level gates (in `platform-policies` namespace) that are automatically injected into every Pipeline targeting matching environments. Teams can add their own gates but cannot remove org gates.
 
-CEL context includes: bundle metadata, schedule (isWeekend, hour, dayOfWeek), environment info, metrics (Phase 2), upstream soak time (Phase 2).
+CEL context includes: bundle metadata, schedule (isWeekend, hour, dayOfWeek), environment info, metrics, upstream soak time.
 
 Re-evaluation via `recheckInterval` for time-based gates. `lastEvaluatedAt` freshness prevents stale gate state.
 
@@ -316,7 +316,7 @@ Custom steps: any `uses` value not matching a built-in step dispatches as HTTP P
 
 ### F5: Health Adapters
 
-Pluggable, auto-detected health verification. Phase 1 adapters: Deployment condition (`resource`), Argo CD Application health+sync (`argocd`), Flux Kustomization Ready (`flux`). Phase 2: Argo Rollouts (`argoRollouts`), Flagger (`flagger`).
+Pluggable, auto-detected health verification. Available adapters: Deployment condition (`resource`), Argo CD Application health+sync (`argocd`), Flux Kustomization Ready (`flux`), Argo Rollouts (`argoRollouts`), Flagger (`flagger`).
 
 Auto-detection: controller checks for CRDs on startup and periodically. Priority: argocd, flux, resource. Remote cluster support via kubeconfig Secrets.
 
@@ -437,13 +437,13 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 
 - kro's Graph controller must be available in the cluster (experimental, API may change)
 - A GitOps tool (Argo CD, Flux, or equivalent) must be syncing from the Git repository
-- CI must create Bundles (via webhook, CLI, or kubectl) in Phase 1. Subscription CRD (Phase 3) removes CI requirement.
+- CI must create Bundles (via webhook, CLI, or kubectl). Subscription CRD (planned) removes CI requirement.
 
 ### Assumptions
 
 - Teams have an existing GitOps repository with Kustomize or Helm per-environment directories
 - Environment-specific configuration (secrets, resource limits) is already managed in the GitOps repo
-- GitHub is the Git provider in Phase 1. GitLab in Phase 2.
+- GitHub and GitLab are the supported Git providers. Other providers are planned.
 
 ### Constraints
 
@@ -466,26 +466,18 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 
 ## Success Criteria
 
-### Phase 1a (weeks 1-6)
+### Delivered (v0.4.0 — Stages 0–17 complete)
 
 - A user can apply a Pipeline CRD and a Bundle, and see the promotion flow through 3 environments (test, uat, prod) with correct ordering.
-- PolicyGates block production promotion on weekends and enforce upstream soak time.
+- PolicyGates block production promotion on weekends and enforce upstream soak time and metrics.
 - PRs contain promotion evidence (provenance, upstream verification, policy compliance).
 - `kardinal explain` shows which gates are blocking and why.
-- E2E test passes: kind cluster + Graph controller + GitHub repo + 3-env pipeline + PolicyGate blocking.
-
-### Phase 1b (weeks 7-12)
-
 - kardinal-ui renders the promotion DAG with per-node state.
-- Health verification works with Argo CD, Flux, and bare Kubernetes (auto-detected).
+- Health verification works with Argo CD, Flux, bare Kubernetes, Argo Rollouts, and Flagger (auto-detected).
 - Multi-cluster health via remote kubeconfig Secrets.
 - `kardinal init` generates a Pipeline from 8 lines of config.
-- GitHub Action creates Bundles from CI.
-
-### Phase 2 (weeks 13-20)
-
-- Argo Rollouts and Flagger delegation.
-- Distributed mode with kardinal-agent.
+- GitHub Action and GitLab CI create Bundles from CI.
+- Argo Rollouts and Flagger health delegation.
 - Custom promotion steps via webhook.
 - Config-only Bundles with config-merge step.
 - Rollback CLI and automatic rollback on failure.
@@ -493,35 +485,52 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 - `kardinal policy simulate`.
 - GitLab support.
 
-### Phase 3 (weeks 21-28)
+### Next (v0.5.0)
 
-- Subscription CRD for registry and Git watching.
-- Direct Graph authoring for power users.
-- Mixed Bundles (image + config).
-- Webhook gates.
-- Security hardening.
+- Contiguous healthy soak (`bake:` stage field, reset-on-alarm)
+- Pre-deploy gate type (`when: pre-deploy` on PolicyGate)
+- Auto-rollback with ABORT vs ROLLBACK distinction
+- ChangeWindow CRD for fleet-wide freeze management
+- Deployment metrics on Bundle and Pipeline status
+
+### Planned (v0.6.0+)
+
+- Wave topology (`wave:` field on stages)
+- Integration test step (Kubernetes Job as promotion step)
+- PR review gate (`bundle.pr().isApproved()`)
+- `kardinal override` with audit record
+- Cross-stage history CEL functions
+- Subscription CRD for registry and Git watching
+- Security hardening and production readiness
 
 ## Competitive Landscape
 
-| Dimension | kardinal-promoter | Kargo (v1.9.5) | GitOps Promoter (v0.26.3) |
+| Dimension | kardinal-promoter | Kargo (v1.9.5) | GitOps Promoter (v0.26.x) |
 |---|---|---|---|
-| Pipeline model | Graph DAG (fan-out, conditional, forEach) | Stage dependencies (configurable) | Linear branch promotion |
-| Policy governance | PolicyGate Graph nodes (CEL), visible in UI | None shipped; planned (#3440) | Commit statuses |
-| GitOps integration | Auto-detects Argo CD, Flux, bare K8s | Argo CD for health verification | Any (commit statuses) |
-| PR approval | Evidence (provenance, metrics, policy table) | git-open-pr / wait-for-pr (since v1.8.0) | PR with branch diff |
+| Pipeline model | Graph DAG (fan-out, conditional) | Stage pipeline (sequential) | Linear branch promotion |
+| Policy governance | PolicyGate Graph nodes (CEL, cross-stage) | Manual approval only | CommitStatus webhook checks |
+| Cross-stage policy | Yes — gate reads upstream soak, metrics, history | No | No |
+| GitOps integration | ArgoCD, Flux, bare K8s (auto-detected) | ArgoCD primary | Any (commit statuses) |
+| PR approval | Evidence (provenance, metrics, policy table) | None — tracked in Kargo UI | Git diff only |
 | Artifact bundling | Bundle CRD (images, Helm, Git ref, provenance) | Freight (images, charts, Git refs, digests) | None (raw Git diff) |
-| Rollback | Forward promotion of prior Bundle | Re-promote prior Freight; AnalysisTemplate | Revert PR manually |
-| Multi-cluster | Argo CD hub-spoke, Flux via kubeconfig | Argo CD hub-spoke | Branch structure |
-| Maturity | Pre-release | v1.9.x (stable) | v0.26.x (experimental) |
+| Artifact discovery | Bundle created by CI/CLI | Warehouse (automatic OCI/git scanning) | Git commit-based |
+| Rollback | Forward promotion of prior Bundle (auto or manual) | Manual re-promote | Manual git revert |
+| Auto-rollback | Yes (RollbackPolicy CRD) | No | No |
+| Multi-cluster | ArgoCD hub-spoke, Flux via kubeconfig | ArgoCD hub-spoke | Branch structure |
+| CLI | Full command set | Full command set | None |
+| UI | Embedded React (DAG, gate states, timeline) | Polished Kargo UI | None |
+| Maturity | v0.4.0, active development | v1.9.x, production-grade, commercial | v0.26.x, experimental |
 
 ### Key differentiators
 
-1. PolicyGates as visible DAG nodes (no competitor has this)
-2. GitOps-tool agnostic with auto-detection (Kargo requires Argo CD)
-3. Build provenance on artifacts (Kargo Freight has no CI run link)
-4. Pluggable promotion steps with custom webhooks
-5. Fully declarative (no API server, all state in K8s CRDs)
-6. Config-only promotions through the same pipeline
+1. **Cross-stage policy** — gates can read upstream soak time, metrics, and bundle history across the entire pipeline. No competitor has this.
+2. **Graph-native DAG** — fan-out, conditional branches, arbitrary dependencies. Kargo is sequential; GitOps Promoter has no DAG.
+3. **GitOps-tool agnostic** — ArgoCD, Flux, bare Kubernetes, all auto-detected. Kargo requires ArgoCD.
+4. **Contiguous healthy soak** (v0.5.0) — timer resets if health fails, not just elapsed time.
+5. **Auto-rollback** — automated rollback Bundle on health failure.
+6. **Structured PR evidence** — gate results, soak time, provenance in every production PR.
+7. **ChangeWindow CRD** (v0.5.0) — one object freezes all pipelines fleet-wide.
+8. **Deployment metrics** (v0.5.0) — time-to-production, rollback rate, operator interventions per pipeline.
 
 ## Workshop Benchmarks
 

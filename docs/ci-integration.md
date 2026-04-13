@@ -64,7 +64,7 @@ jobs:
 
 The GitHub Action wraps the webhook call with proper error handling and retry logic.
 
-### GitLab CI (Phase 2)
+### GitLab CI
 
 ```yaml
 stages:
