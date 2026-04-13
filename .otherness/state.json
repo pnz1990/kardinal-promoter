@@ -604,6 +604,14 @@
       "dependency_mode": "merged",
       "pr_number": 458,
       "pr_merged": true
+    },
+    "309-changewindow-crd": {
+      "state": "done",
+      "assigned_to": "STANDALONE",
+      "assigned_at": "2026-04-13T21:13:14Z",
+      "dependency_mode": "merged",
+      "pr_number": 460,
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
@@ -616,8 +624,8 @@
       "cycle": 39
     },
     "STANDALONE": {
-      "last_seen": "2026-04-13T20:52:29Z",
-      "cycle": 43
+      "last_seen": "2026-04-13T21:18:55Z",
+      "cycle": 46
     }
   },
   "handoff": {

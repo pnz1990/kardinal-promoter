@@ -4,28 +4,24 @@
 # Sets up a multi-cluster E2E environment for kardinal-promoter:
 #
 #   Cluster 1 (kind): pre-prod environments — test and uat
-#   Cluster 2 (EKS):  prod-like environment — prod
+#   Cluster 2 (EKS):  prod-like environment — prod (the 'krombat' cluster)
 #
 # This enables testing the full promotion path across cluster boundaries,
 # validating that kardinal's distributed mode and cross-cluster health checks
 # work correctly.
 #
+# The EKS cluster must already exist. Create it with:
+#   cd terraform/krombat && terraform init && terraform apply
+#
 # Usage:
 #   ./hack/setup-multi-cluster-env.sh
-#
-# Prerequisites:
-#   - kind, kubectl, helm, aws CLI, eksctl (or existing EKS cluster)
-#   - AWS credentials configured (export AWS_PROFILE or AWS_ACCESS_KEY_ID etc.)
-#   - EKS cluster named 'krombat' already exists (or set EKS_CLUSTER_NAME)
-#
-# The script intentionally does NOT create the EKS cluster — it uses the
-# existing one (the 'krombat' cluster). Only the kind cluster is created fresh.
 
 set -euo pipefail
 
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
-EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-krombat}"
-EKS_REGION="${EKS_REGION:-us-west-2}"
+# EKS cluster name — read from Terraform output if available, otherwise use env var or default
+EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-$(cd terraform/krombat && terraform output -raw cluster_name 2>/dev/null || echo "kardinal-e2e-prod")}"
+EKS_REGION="${EKS_REGION:-$(cd terraform/krombat && terraform output -raw cluster_region 2>/dev/null || echo "us-west-2")}"
 KROCODILE_COMMIT="${KROCODILE_COMMIT:-501ea75f}"
 ARGOCD_VERSION="${ARGOCD_VERSION:-v2.10.3}"
 TEST_APP_IMAGE="${TEST_APP_IMAGE:-ghcr.io/pnz1990/kardinal-test-app:latest}"
@@ -33,6 +29,17 @@ TEST_APP_IMAGE="${TEST_APP_IMAGE:-ghcr.io/pnz1990/kardinal-test-app:latest}"
 echo "=== kardinal-promoter Multi-Cluster E2E Setup ==="
 echo "kind cluster:  $KIND_CLUSTER (test + uat namespaces)"
 echo "EKS cluster:   $EKS_CLUSTER_NAME in $EKS_REGION (prod namespace)"
+echo "  (create EKS cluster first: cd terraform/krombat && terraform init && terraform apply)"
+echo ""
+
+# Verify EKS cluster is reachable before proceeding
+if ! aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$EKS_REGION" \
+    --query 'cluster.status' --output text 2>/dev/null | grep -q "ACTIVE"; then
+  echo "ERROR: EKS cluster '$EKS_CLUSTER_NAME' not found or not ACTIVE in $EKS_REGION."
+  echo "Create it first:"
+  echo "  cd terraform/krombat && terraform init && terraform apply"
+  exit 1
+fi
 
 # ── Step 1: Kind cluster for pre-prod ────────────────────────────────────────
 echo ""

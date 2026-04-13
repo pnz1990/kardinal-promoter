@@ -44,3 +44,11 @@ ITEM.md
 # Misc
 *.log
 .claude/agents/
+
+# Terraform
+terraform/.terraform/
+terraform/**/.terraform/
+terraform/krombat/terraform.tfstate
+terraform/krombat/terraform.tfstate.backup
+terraform/krombat/.terraform.lock.hcl
+terraform/krombat/terraform.tfvars
