@@ -8,7 +8,7 @@ import { BundleTimeline } from './components/BundleTimeline'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
-import type { Pipeline, Bundle, GraphResponse } from './types'
+import type { Pipeline, Bundle, GraphResponse, PromotionStep } from './types'
 
 const POLL_INTERVAL_MS = 5000
 
@@ -36,6 +36,9 @@ export function App() {
   const [graphLoading, setGraphLoading] = useState(false)
   const [graphError, setGraphError] = useState<string | undefined>()
 
+  // Steps for the active bundle — passed down to DAGView/NodeDetail to avoid independent polling.
+  const [activeSteps, setActiveSteps] = useState<PromotionStep[]>([])
+
   // Refresh indicator: tracks last successful poll for the staleness indicator.
   const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()
 
@@ -48,7 +51,6 @@ export function App() {
       const ps = await api.listPipelines()
       setPipelines(ps)
       setPipelinesError(undefined)
-      onPollSuccess()
     } catch (e) {
       setPipelinesError(String(e))
     } finally {
@@ -56,7 +58,8 @@ export function App() {
     }
   }, POLL_INTERVAL_MS)
 
-  // Refresh bundles + graph for the selected pipeline every 5 seconds.
+  // Refresh bundles + graph + steps for the selected pipeline every 5 seconds.
+  // Single poll callback — no independent sub-polls in children (#321, #322, #324).
   usePolling(async () => {
     if (!selectedPipeline) return
     try {
@@ -64,10 +67,15 @@ export function App() {
       setBundles(bs)
       const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
       if (promoting) {
-        const g = await api.getGraph(promoting.name)
+        const [g, steps] = await Promise.all([
+          api.getGraph(promoting.name),
+          api.getSteps(promoting.name),
+        ])
         setGraph(g)
+        setActiveSteps(steps)
         setGraphError(undefined)
       }
+      onPollSuccess()
     } catch (e) {
       setGraphError(String(e))
     }
@@ -81,13 +89,20 @@ export function App() {
     setBundleHistoryOpen(false)
     setShowBlockedOnly(false)
     setTimelineSelectedBundle(undefined) // reset timeline selection on pipeline change
+    setActiveSteps([])
 
     api.listBundles(name)
       .then(bs => {
         setBundles(bs)
         const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
         if (promoting) {
-          return api.getGraph(promoting.name).then(g => setGraph(g))
+          return Promise.all([
+            api.getGraph(promoting.name),
+            api.getSteps(promoting.name),
+          ]).then(([g, steps]) => {
+            setGraph(g)
+            setActiveSteps(steps)
+          })
         }
       })
       .catch(e => setGraphError(String(e)))
@@ -106,8 +121,15 @@ export function App() {
     setTimelineSelectedBundle(bundleName)
     setGraphLoading(true)
     setGraphError(undefined)
-    api.getGraph(bundleName)
-      .then(g => { setGraph(g); setGraphError(undefined) })
+    Promise.all([
+      api.getGraph(bundleName),
+      api.getSteps(bundleName),
+    ])
+      .then(([g, steps]) => {
+        setGraph(g)
+        setActiveSteps(steps)
+        setGraphError(undefined)
+      })
       .catch(e => setGraphError(String(e)))
       .finally(() => setGraphLoading(false))
   }, [])
@@ -297,15 +319,13 @@ export function App() {
               </div>
             )}
 
-            {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity) */}
-            {selectedPipeline && (
-              <BundleTimeline
-                pipelineName={selectedPipeline}
-                environments={[]}
-                selectedBundle={activeBundle?.name}
-                onSelectBundle={handleTimelineBundleSelect}
-              />
-            )}
+            {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
+                Receives bundles from parent state — no independent fetch (#321). */}
+            <BundleTimeline
+              bundles={bundles}
+              selectedBundle={activeBundle?.name}
+              onSelectBundle={handleTimelineBundleSelect}
+            />
 
             {/* DAG */}
             <div style={{
@@ -323,6 +343,7 @@ export function App() {
                 bundleName={activeBundle?.name}
                 pipelineName={selectedPipeline}
                 namespace={activePipeline?.namespace ?? 'default'}
+                steps={activeSteps}
               />
             </div>
           </>

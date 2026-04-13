@@ -1,14 +1,14 @@
 // components/BundleTimeline.tsx — Horizontal timeline of bundle promotion history.
 // Inspired by Kargo's freight timeline. Shows recent bundles as chips with
 // per-environment state color coding. Newest bundles on the left.
-import { useEffect, useState } from 'react'
+//
+// Bundles are passed as a prop (managed by App) rather than fetched independently,
+// avoiding duplicate requests and stale-state races (issue #321).
 import type { Bundle } from '../types'
-import { api } from '../api/client'
 
 interface Props {
-  pipelineName: string
-  /** Environments in pipeline order — sets the column order. */
-  environments: string[]
+  /** Bundles for this pipeline — managed by the parent (App). */
+  bundles: Bundle[]
   /** Callback when a bundle is selected — fetches its DAG. */
   onSelectBundle?: (bundleName: string) => void
   /** Currently selected bundle (highlighted). */
@@ -37,21 +37,11 @@ function shortName(bundleName: string): string {
   return bundleName.slice(-6)
 }
 
-export function BundleTimeline({ pipelineName, onSelectBundle, selectedBundle }: Props) {
-  const [bundles, setBundles] = useState<Bundle[]>([])
+export function BundleTimeline({ bundles, onSelectBundle, selectedBundle }: Props) {
+  // Sort newest-first by name, show at most 10.
+  const sorted = [...bundles].sort((a, b) => (a.name > b.name ? -1 : 1)).slice(0, 10)
 
-  useEffect(() => {
-    if (!pipelineName) return
-    api.listBundles(pipelineName)
-      .then(bs => {
-        // Sort newest first, show at most 10
-        const sorted = [...bs].sort((a, b) => a.name > b.name ? -1 : 1)
-        setBundles(sorted.slice(0, 10))
-      })
-      .catch(() => setBundles([]))
-  }, [pipelineName])
-
-  if (bundles.length === 0) return null
+  if (sorted.length === 0) return null
 
   return (
     <div style={{
@@ -64,7 +54,7 @@ export function BundleTimeline({ pipelineName, onSelectBundle, selectedBundle }:
         Bundle History (newest → oldest)
       </div>
       <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-        {bundles.map(b => {
+        {sorted.map(b => {
           const isSelected = b.name === selectedBundle
           const color = phaseColor(b.phase)
           return (
@@ -102,7 +92,7 @@ export function BundleTimeline({ pipelineName, onSelectBundle, selectedBundle }:
               </span>
               {/* Phase label */}
               <span style={{
-                fontSize: '0.55rem',
+                fontSize: '0.7rem',
                 color,
               }}>
                 {b.phase === 'Superseded' ? 'Sup' : b.phase}

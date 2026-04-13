@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/cel-go/cel"
@@ -54,14 +55,16 @@ type uiBundleResponse struct {
 
 // uiGraphNode is a node in the promotion DAG.
 type uiGraphNode struct {
-	ID          string            `json:"id"`
-	Type        string            `json:"type"` // "PromotionStep" or "PolicyGate"
-	Label       string            `json:"label"`
-	Environment string            `json:"environment"`
-	State       string            `json:"state"`
-	Message     string            `json:"message,omitempty"`
-	PRURL       string            `json:"prURL,omitempty"`
-	Outputs     map[string]string `json:"outputs,omitempty"`
+	ID              string            `json:"id"`
+	Type            string            `json:"type"` // "PromotionStep" or "PolicyGate"
+	Label           string            `json:"label"`
+	Environment     string            `json:"environment"`
+	State           string            `json:"state"`
+	Message         string            `json:"message,omitempty"`
+	PRURL           string            `json:"prURL,omitempty"`
+	Outputs         map[string]string `json:"outputs,omitempty"`
+	Expression      string            `json:"expression,omitempty"`
+	LastEvaluatedAt string            `json:"lastEvaluatedAt,omitempty"`
 }
 
 // uiGraphEdge is a directed dependency edge in the promotion DAG.
@@ -217,51 +220,201 @@ func (s *uiAPIServer) handleBundleSubresource(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// handleBundleGraph builds a clean, readable DAG for a single Bundle:
+//   - One PromotionStep node per environment (synthetic "NotStarted" when not yet created)
+//   - One PolicyGate node per unique gate template that applies to this bundle (deduped by kardinal.io/gate-template label)
+//   - Directed edges: env[i] → gate(s) for env[i+1] → env[i+1] → ...
 func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, bundleName string) {
+	ctx := r.Context()
+
+	// 1. Look up the Bundle to find its pipeline name and namespace.
+	var bundle v1alpha1.Bundle
 	var psList v1alpha1.PromotionStepList
-	if err := s.client.List(r.Context(), &psList); err != nil {
+	if err := s.client.List(ctx, &psList, client.MatchingLabels{"kardinal.io/bundle": bundleName}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	var gateList v1alpha1.PolicyGateList
-	_ = s.client.List(r.Context(), &gateList) // best-effort
+	var bl v1alpha1.BundleList
+	if err := s.client.List(ctx, &bl); err == nil {
+		for _, b := range bl.Items {
+			if b.Name == bundleName {
+				bundle = b
+				break
+			}
+		}
+	}
 
+	// 2. Fetch the Pipeline spec for ordered environments.
+	var envOrder []string
+	if bundle.Spec.Pipeline != "" {
+		var pl v1alpha1.Pipeline
+		if err := s.client.Get(ctx, client.ObjectKey{Name: bundle.Spec.Pipeline, Namespace: bundle.Namespace}, &pl); err == nil {
+			for _, e := range pl.Spec.Environments {
+				envOrder = append(envOrder, e.Name)
+			}
+		}
+	}
+	// Fallback: derive order from existing PromotionSteps if pipeline not found.
+	if len(envOrder) == 0 {
+		seen := map[string]bool{}
+		for _, ps := range psList.Items {
+			if !seen[ps.Spec.Environment] {
+				envOrder = append(envOrder, ps.Spec.Environment)
+				seen[ps.Spec.Environment] = true
+			}
+		}
+	}
+
+	// 3. Build PromotionStep lookup by environment.
+	stepByEnv := map[string]*v1alpha1.PromotionStep{}
+	for i := range psList.Items {
+		ps := &psList.Items[i]
+		stepByEnv[ps.Spec.Environment] = ps
+	}
+
+	// 4. Fetch PolicyGates for this bundle, deduplicate by kardinal.io/gate-name label.
+	//    The gate-name label holds the user-defined gate name (e.g. "no-weekend-deploys")
+	//    and is propagated through cross-product instantiations by the graph builder.
+	//    We pick the canonical instance: prefer the gate whose own name equals the gate-name
+	//    (i.e. the direct instantiation for this bundle), falling back to lexicographic first.
+	var gateList v1alpha1.PolicyGateList
+	_ = s.client.List(ctx, &gateList, client.MatchingLabels{"kardinal.io/bundle": bundleName})
+
+	// namedGates: gate-name → best PolicyGate for that human-readable gate name
+	namedGates := map[string]*v1alpha1.PolicyGate{}
+	for i := range gateList.Items {
+		g := &gateList.Items[i]
+		// Prefer kardinal.io/gate-name (stable, human-readable, set by graph builder).
+		// Fall back to gate-template, then to own name.
+		gateName := g.Labels["kardinal.io/gate-name"]
+		if gateName == "" {
+			gateName = g.Labels["kardinal.io/gate-template"]
+		}
+		if gateName == "" {
+			gateName = g.Name
+		}
+		prev, exists := namedGates[gateName]
+		if !exists {
+			namedGates[gateName] = g
+			continue
+		}
+		// Prefer the gate whose own name equals the gate-name (direct instance for this bundle).
+		if g.Name == gateName {
+			namedGates[gateName] = g
+		} else if prev.Name != gateName {
+			// Both are cross-product copies — pick lexicographically first for stability.
+			if g.Name < prev.Name {
+				namedGates[gateName] = g
+			}
+		}
+	}
+	// templateGates is an alias for namedGates to keep the rest of the code readable.
+	templateGates := namedGates
+
+	// Group deduplicated gates by the environment they apply to.
+	// Sort gate names within each env group for stable rendering.
+	gatesByEnv := map[string][]string{} // env → []gateName (sorted)
+	for gateName, g := range templateGates {
+		env := g.Labels["kardinal.io/environment"]
+		if env == "" {
+			env = g.Labels["kardinal.io/applies-to"]
+		}
+		if env != "" {
+			gatesByEnv[env] = append(gatesByEnv[env], gateName)
+		}
+	}
+	for env := range gatesByEnv {
+		sort.Strings(gatesByEnv[env])
+	}
+
+	// 5. Build nodes and edges in pipeline env order.
 	nodes := make([]uiGraphNode, 0)
 	edges := make([]uiGraphEdge, 0)
 
-	for _, ps := range psList.Items {
-		if ps.Spec.BundleName != bundleName {
-			continue
-		}
-		node := uiGraphNode{
-			ID:          ps.Name,
-			Type:        "PromotionStep",
-			Label:       ps.Spec.Environment,
-			Environment: ps.Spec.Environment,
-			State:       ps.Status.State,
-			Message:     ps.Status.Message,
-			PRURL:       ps.Status.PRURL,
-			Outputs:     ps.Status.Outputs,
-		}
-		nodes = append(nodes, node)
-	}
+	prevIDs := []string{} // last node(s) in the chain before current env
 
-	for _, gate := range gateList.Items {
-		state := "Pending"
-		if gate.Status.Ready {
-			state = "Pass"
-		} else if gate.Status.LastEvaluatedAt != nil {
-			state = "Fail"
+	for _, env := range envOrder {
+		// PromotionStep node (synthetic if not yet created).
+		stepID := "step-" + env
+		if ps, ok := stepByEnv[env]; ok {
+			stepID = ps.Name
+			state := ps.Status.State
+			if state == "" {
+				state = "NotStarted"
+			}
+			nodes = append(nodes, uiGraphNode{
+				ID:          stepID,
+				Type:        "PromotionStep",
+				Label:       env,
+				Environment: env,
+				State:       state,
+				Message:     ps.Status.Message,
+				PRURL:       ps.Status.PRURL,
+				Outputs:     ps.Status.Outputs,
+			})
+		} else {
+			nodes = append(nodes, uiGraphNode{
+				ID:          stepID,
+				Type:        "PromotionStep",
+				Label:       env,
+				Environment: env,
+				State:       "NotStarted",
+			})
 		}
-		node := uiGraphNode{
-			ID:          gate.Namespace + "/" + gate.Name,
-			Type:        "PolicyGate",
-			Label:       gate.Name,
-			Environment: gate.Name,
-			State:       state,
-			Message:     gate.Status.Reason,
+
+		// Edges from previous chain tail → this step node.
+		for _, pid := range prevIDs {
+			edges = append(edges, uiGraphEdge{From: pid, To: stepID})
 		}
-		nodes = append(nodes, node)
+
+		// Gate nodes that guard the *next* environment after this one.
+		// Attach them after the current step, before the next step.
+		nextEnvIdx := -1
+		for i, e := range envOrder {
+			if e == env {
+				nextEnvIdx = i + 1
+				break
+			}
+		}
+		var nextEnv string
+		if nextEnvIdx < len(envOrder) {
+			nextEnv = envOrder[nextEnvIdx]
+		}
+		gateTemplates := gatesByEnv[nextEnv]
+		if len(gateTemplates) == 0 {
+			// No gates guard the next env — current step is the tail.
+			prevIDs = []string{stepID}
+		} else {
+			// Insert gate nodes between current step and next step.
+			gateIDs := make([]string, 0, len(gateTemplates))
+			for _, tmpl := range gateTemplates {
+				g := templateGates[tmpl]
+				gateID := "gate-" + tmpl
+				state := "Pending"
+				if g.Status.Ready {
+					state = "Pass"
+				} else if g.Status.LastEvaluatedAt != nil {
+					state = "Block"
+				}
+				lastEval := ""
+				if g.Status.LastEvaluatedAt != nil {
+					lastEval = g.Status.LastEvaluatedAt.Format("2006-01-02T15:04:05Z07:00")
+				}
+				nodes = append(nodes, uiGraphNode{
+					ID:              gateID,
+					Type:            "PolicyGate",
+					Label:           tmpl,
+					Environment:     tmpl,
+					State:           state,
+					Message:         g.Status.Reason,
+					Expression:      g.Spec.Expression,
+					LastEvaluatedAt: lastEval,
+				})
+				edges = append(edges, uiGraphEdge{From: stepID, To: gateID})
+				gateIDs = append(gateIDs, gateID)
+			}
+			prevIDs = gateIDs
+		}
 	}
 
 	writeJSON(w, uiGraphResponse{Nodes: nodes, Edges: edges})

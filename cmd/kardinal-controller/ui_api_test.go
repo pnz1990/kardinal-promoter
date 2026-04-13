@@ -166,7 +166,15 @@ func TestUIAPI_GetSteps(t *testing.T) {
 // returns nodes from PromotionSteps for that bundle.
 func TestUIAPI_GetGraph(t *testing.T) {
 	ps := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-prod", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo-v1-prod",
+			Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/bundle":      "nginx-demo-v1",
+				"kardinal.io/environment": "prod",
+				"kardinal.io/pipeline":    "nginx-demo",
+			},
+		},
 		Spec: v1alpha1.PromotionStepSpec{
 			PipelineName: "nginx-demo",
 			BundleName:   "nginx-demo-v1",
@@ -178,9 +186,23 @@ func TestUIAPI_GetGraph(t *testing.T) {
 			PRURL: "https://github.com/org/repo/pull/42",
 		},
 	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Pipeline: "nginx-demo",
+		},
+	}
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "prod"},
+			},
+		},
+	}
 
 	s := uiScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ps).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ps, bundle, pipeline).Build()
 	srv := newUIAPIServer(c, zerolog.Nop())
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)

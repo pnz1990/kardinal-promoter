@@ -1,6 +1,9 @@
 // components/NodeDetail.tsx — Detail panel shown when a DAG node is clicked.
 // For PolicyGate nodes: shows CEL expression and last evaluated timestamp.
 // For PromotionStep nodes: shows step-by-step execution context (Kargo parity).
+//
+// Steps are passed as a prop (managed by App's 5s poll) rather than fetched
+// independently, eliminating the 3s polling race condition (issue #322).
 import { useState, useEffect } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
@@ -9,12 +12,14 @@ import { api } from '../api/client'
 interface Props {
   node: GraphNode | null
   onClose: () => void
-  /** Bundle name — needed to fetch detailed step data. */
+  /** Bundle name — needed for fallback step lookup if steps prop not provided. */
   bundleName?: string
   /** Pipeline name — needed for the promote action. */
   pipelineName?: string
   /** Namespace of the pipeline. Defaults to 'default'. */
   namespace?: string
+  /** Steps for the active bundle — from parent poll, no independent fetch needed (#322). */
+  steps?: PromotionStep[]
 }
 
 /** Format an ISO timestamp to a human-readable string. */
@@ -122,7 +127,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
   )
 }
 
-export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default' }: Props) {
+export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
   const [stepLoading, setStepLoading] = useState(false)
   const [promoteState, setPromoteState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -132,7 +137,6 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
-  const isActiveState = node && ['Running', 'Promoting', 'WaitingForMerge', 'HealthChecking'].includes(node.state)
 
   /** Validate the CEL expression of a PolicyGate node when it is selected. */
   useEffect(() => {
@@ -141,7 +145,6 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       setCelError(null)
       return
     }
-    // Validate the expression asynchronously (best effort — UI only).
     api.validateCEL(node.expression)
       .then(res => {
         setCelValid(res.valid)
@@ -152,6 +155,31 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         setCelError(null)
       })
   }, [node?.id, isPolicyGate])
+
+  // Derive step detail from parent-provided steps prop (no independent fetch/poll).
+  // Falls back to a one-shot fetch if steps prop is not provided.
+  useEffect(() => {
+    if (!node || !isPromotionStep) {
+      setStepDetail(null)
+      return
+    }
+    // Prefer prop-provided steps (updated by parent 5s poll).
+    if (steps) {
+      const match = steps.find(s => s.environment === node.environment)
+      setStepDetail(match ?? null)
+      return
+    }
+    // Fallback: one-shot fetch (no polling — parent handles refresh).
+    if (!bundleName) return
+    setStepLoading(true)
+    api.getSteps(bundleName)
+      .then(ss => {
+        const match = ss.find(s => s.environment === node.environment)
+        setStepDetail(match ?? null)
+      })
+      .catch(() => setStepDetail(null))
+      .finally(() => setStepLoading(false))
+  }, [node?.id, isPromotionStep, steps, bundleName])
 
   /** Trigger a new promotion for this environment. */
   function handlePromote() {
@@ -168,37 +196,6 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         setPromoteMessage(err instanceof Error ? err.message : 'Promote failed')
       })
   }
-
-  // Fetch step detail when a PromotionStep node is selected and bundle is known.
-  useEffect(() => {
-    if (!node || !isPromotionStep || !bundleName) {
-      setStepDetail(null)
-      return
-    }
-
-    setStepLoading(true)
-    api.getSteps(bundleName)
-      .then(steps => {
-        const match = steps.find(s => s.environment === node.environment)
-        setStepDetail(match ?? null)
-      })
-      .catch(() => setStepDetail(null))
-      .finally(() => setStepLoading(false))
-  }, [node?.id, bundleName, isPromotionStep])
-
-  // Auto-refresh step detail when node is in active state.
-  useEffect(() => {
-    if (!isActiveState || !bundleName || !isPromotionStep) return
-    const id = setInterval(() => {
-      api.getSteps(bundleName)
-        .then(steps => {
-          const match = steps.find(s => s.environment === node!.environment)
-          setStepDetail(match ?? null)
-        })
-        .catch(() => {/* ignore */})
-    }, 3000)
-    return () => clearInterval(id)
-  }, [isActiveState, bundleName, isPromotionStep, node?.id])
 
   if (!node) return null
 

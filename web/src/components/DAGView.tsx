@@ -3,7 +3,7 @@
 // still providing a clear visual DAG.
 import { useState } from 'react'
 import dagre from '@dagrejs/dagre'
-import type { GraphNode, GraphEdge } from '../types'
+import type { GraphNode, GraphEdge, PromotionStep } from '../types'
 import { NodeDetail } from './NodeDetail'
 import { kardinalStateToHealth, healthChipColors } from './HealthChip'
 
@@ -20,6 +20,8 @@ interface Props {
   pipelineName?: string
   /** Namespace of the pipeline. Defaults to 'default'. */
   namespace?: string
+  /** Steps for the active bundle — avoids NodeDetail independent polling (#322). */
+  steps?: PromotionStep[]
 }
 
 const NODE_WIDTH = 180
@@ -65,7 +67,7 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
   })
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundleName, pipelineName, namespace }: Props) {
+export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundleName, pipelineName, namespace, steps }: Props) {
   const [selected, setSelected] = useState<GraphNode | null>(null)
 
   if (loading) {
@@ -195,6 +197,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
         bundleName={bundleName}
         pipelineName={pipelineName}
         namespace={namespace}
+        steps={steps}
       />
     </div>
   )
