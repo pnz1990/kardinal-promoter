@@ -1,0 +1,81 @@
+# otherness-config.yaml — kardinal-promoter
+# Single source of truth for all otherness/maqa/speckit agentic tooling.
+
+# ── Project identity ──────────────────────────────────────────────────────────
+project:
+  name: kardinal-promoter
+  repo: pnz1990/kardinal-promoter
+  report_issue: 1
+  board_url: https://github.com/users/pnz1990/projects/1
+  pr_label: kardinal
+
+# ── MAQA runtime ──────────────────────────────────────────────────────────────
+maqa:
+  mode: standalone
+  agents_path: ~/.otherness/agents
+  max_parallel: 3
+
+  # Executive project status update to GitHub Projects board every N cycles.
+  # Only the unbounded standalone posts these. 0 = disabled.
+  status_update_cycles: 5
+
+  # Product validation: run the actual product against user journeys every N cycles.
+  # Opens bug/doc issues for failures. 0 = disabled.
+  product_validation_cycles: 3
+
+# ── CI gate ───────────────────────────────────────────────────────────────────
+ci:
+  provider: github-actions
+
+  github_actions:
+    workflow: ci.yml
+
+  circleci:
+    org_slug: ""
+    project_slug: ""
+
+  gitlab:
+    base_url: https://gitlab.com
+    project_id: ""
+
+  bitbucket:
+    workspace: ""
+    repo_slug: ""
+
+  wait_timeout_seconds: 1200
+  block_on_red: true
+
+# ── GitHub Projects board ─────────────────────────────────────────────────────
+github_projects:
+  project_id: PVT_kwHOC22HhM4BUMuc
+  project_number: "1"
+  linked_repo: pnz1990/kardinal-promoter
+
+  status_field_id: PVTSSF_lAHOC22HhM4BUMuczhBWhSY
+  todo_option_id: 6b907ee2
+  in_progress_option_id: a319a29c
+  in_review_option_id: a28ea749
+  done_option_id: 6b05228e
+  blocked_option_id: 5a260a66
+
+  team_field_id: PVTSSF_lAHOC22HhM4BUMuczhBWhac
+  team_engineer1_option_id: 83acb259
+  team_engineer2_option_id: 7eeb1c25
+  team_engineer3_option_id: e1b7f00a
+  team_standalone_option_id: ec1b6e4e
+
+  priority_field_id: PVTSSF_lAHOC22HhM4BUMuczhBb450
+  priority_critical_option_id: 9203fb5e
+  priority_high_option_id: ee3fdd47
+  priority_medium_option_id: 0d963b50
+  priority_low_option_id: d26e2099
+
+  size_field_id: PVTSSF_lAHOC22HhM4BUMuczhBb454
+  size_xs_option_id: 55d02415
+  size_s_option_id: 5ba17e5c
+  size_m_option_id: d45d0990
+  size_l_option_id: 57d87033
+  size_xl_option_id: 4c9c6a03
+
+  start_date_field_id: PVTF_lAHOC22HhM4BUMuczhBWhao
+  target_date_field_id: PVTF_lAHOC22HhM4BUMuczhBWhas

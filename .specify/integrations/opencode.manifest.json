@@ -3,16 +3,13 @@
   "version": "0.6.0",
   "installed_at": "2026-04-09T23:08:06.661556+00:00",
   "files": {
-    ".opencode/command/speckit.analyze.md": "699032fdd49afe31d23c7191f3fe7bcb1d14b081fbc94c2287e6ba3a57574fda",
-    ".opencode/command/speckit.checklist.md": "d7d691689fe45427c868dcf18ade4df500f0c742a6c91923fefba405d6466dde",
-    ".opencode/command/speckit.clarify.md": "0cc766dcc5cab233ccdf3bc4cfb5759a6d7d1e13e29f611083046f818f5812bb",
-    ".opencode/command/speckit.constitution.md": "58d35eb026f56bb7364d91b8b0382d5dd1249ded6c1449a2b69546693afb85f7",
-    ".opencode/command/speckit.implement.md": "83628415c86ba487b3a083c7a2c0f016c9073abd02c1c7f4a30cff949b6602c0",
-    ".opencode/command/speckit.plan.md": "1c674de8b50036918bb5fee538c7632faebe6d55f8fbdb2b3fda016b4fc1cf36",
-    ".opencode/command/speckit.specify.md": "5bbb5270836cc9a3286ce3ed96a500f3d383a54abb06aa11b01a2d2f76dbf39b",
-    ".opencode/command/speckit.tasks.md": "a58886f29f75e1a14840007772ddd954742aafb3e03d9d1231bee033e6c1626b",
-    ".opencode/command/speckit.taskstoissues.md": "e84794f7a839126defb364ca815352c5c2b2d20db2d6da399fa53e4ddbb7b3ee",
     ".specify/integrations/opencode/scripts/update-context.ps1": "aa3645cd6faa1e851c46b4df0a5a6d90994ba26c318c7a33b0c9e85b22a15f37",
-    ".specify/integrations/opencode/scripts/update-context.sh": "cd5dd3b1855d6ee7fb3a083de719a60bd9082df30cd0267b280071042780331e"
+    ".specify/integrations/opencode/scripts/update-context.sh": "cd5dd3b1855d6ee7fb3a083de719a60bd9082df30cd0267b280071042780331e",
+    ".opencode/command/otherness.run.bounded.md": "b811fd46bdf0aac473a12fd0ebe15897945387a2d6e65806d3df46552774af8b",
+    ".opencode/command/otherness.setup.md": "24dd54aee2beab77134291075bd58c03983078ed1fec5f7199320e8549d08a28",
+    ".opencode/command/otherness.run.md": "03b618d1c934c5e3c332fdd1220fd091ec10d3c47194c36b49b09bb547b871d3",
+    ".opencode/command/otherness.status.md": "919a85f27e7d6c88f03a43c3f7f044c5b348724b14a351df84831b61478af8a4",
+    ".opencode/command/otherness.upgrade.md": "251a5630cd8714c6bc4cfd07eccb43396b597484ce2345d05aeb874a1fdc1720",
+    ".opencode/command/otherness.pause.md": "8811c242f6e03a9c7cc76c6036c49555c4fd2f62f49c03129ed15e64442899b9"
   }
 }

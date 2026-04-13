@@ -27,7 +27,7 @@
 ## Phantom Completion Check
 
 ```
-# /speckit.verify-tasks.run (paste output — must show zero phantom completions)
+# Verify all [X] tasks have real implementation (paste output)
 
 ```
 
@@ -47,8 +47,8 @@
 
 - [ ] `go test ./... -race` passes
 - [ ] `go vet ./...` zero findings
-- [ ] `/speckit.verify-tasks.run` zero phantom completions
-- [ ] `/speckit.verify` all acceptance criteria pass
+- [ ] All [X] tasks have real implementation (no phantom completions)
+- [ ] All acceptance criteria from spec.md implemented
 - [ ] Manual kubectl validation output included above
 - [ ] All new `.go` files have Apache 2.0 copyright header
 - [ ] No `util.go`, `helpers.go`, `common.go` created

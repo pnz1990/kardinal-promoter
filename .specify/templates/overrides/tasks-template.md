@@ -13,7 +13,7 @@ Idempotent handlers. Conventional Commits.
 - **[P]**: Can run in parallel (no shared state)
 - Include exact file paths in every task
 - Test tasks PRECEDE implementation tasks (TDD)
-- Run `/speckit.verify-tasks.run` after marking tasks complete
+- Run verify-tasks check after marking tasks complete
 
 ---
 
@@ -63,6 +63,6 @@ Idempotent handlers. Conventional Commits.
 **Checkpoint**: Relevant journey steps in `docs/aide/definition-of-done.md` produce documented output.
 
 - [ ] T009 Run relevant journey steps and capture output
-- [ ] T010 `/speckit.verify-tasks.run` — zero phantom completions
-- [ ] T011 `/speckit.verify` — all acceptance criteria pass
+- [ ] T010 Verify all [X] tasks have real implementation — zero phantom completions
+- [ ] T011 All acceptance criteria from spec.md pass
 - [ ] T012 Journey output added to PR body as evidence

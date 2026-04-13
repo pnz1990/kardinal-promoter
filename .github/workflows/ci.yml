@@ -78,8 +78,7 @@ jobs:
             "docs/aide/team.yml"
             "AGENTS.md"
             ".specify/memory/constitution.md"
-            "maqa-config.yml"
-            "maqa-github-projects/github-projects-config.yml"
+            "otherness-config.yaml"
           )
           missing=()
           for f in "${required[@]}"; do

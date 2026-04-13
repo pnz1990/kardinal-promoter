@@ -27,10 +27,7 @@ immediately on every session's next cycle — no git pull, no rebase required.
 The number of engineer sessions is dynamic: run as many as needed. Each session reads
 its slot identity from the `CLAIM` file the coordinator writes into its worktree.
 
-**Note on `/speckit.maqa.qa`**: this is a one-shot static analysis tool invoked by the coordinator
-for a single feature. It is NOT the same as the QA watcher session. Do not confuse them.
-The QA watcher (`<agents_path>/qa-watcher.md`) is the continuous loop that polls for open PRs.
-The one-shot tool (`/speckit.maqa.qa`) runs inline when the coordinator needs a static analysis pass.
+**Note on agent roles**: otherness runs all roles in a single session via `/otherness.run` (standalone mode). The `AGENT_ID` system below applies to bounded-standalone sessions (`/otherness.run.bounded`) where multiple scoped agents run concurrently.
 
 All sessions start in the main repository directory. The coordinator creates
 worktrees for engineers. Engineers `cd` into their worktree after assignment.
@@ -60,11 +57,11 @@ what in their notification feed.
 
 ### RESUME PROTOCOL (mandatory — do this before anything else)
 
-Every session MUST read `.maqa/state.json` immediately on startup and check:
+Every session MUST read `.otherness/state.json` immediately on startup and check:
 
 ```python
 # Pseudo-code — implement in any language
-state = read('.maqa/state.json')
+state = read('.otherness/state.json')
 in_flight = [id for id, item in state['features'].items()
              if item['state'] in ('assigned','in_progress','in_review')]
 
@@ -83,7 +80,7 @@ The previous session's work is intact in state.json — pick it up and continue.
 
 ### HEARTBEAT (Coordinator and QA only)
 
-On every poll cycle, write to `.maqa/state.json`:
+On every poll cycle, write to `.otherness/state.json`:
 ```json
 "session_heartbeats": {
   "COORDINATOR": { "last_seen": "<ISO-8601-now>", "cycle": <N> },
@@ -141,9 +138,9 @@ LOOP:
         PM — run spec validation on the generated items when available."
      Do NOT wait indefinitely — a dead PM session must not block queue generation.
    Then:
-   - /speckit.aide.create-queue   → docs/aide/queue/queue-NNN.md
-   - /speckit.aide.create-item    → docs/aide/items/NNN-*.md per item
-   - /speckit.maqa-github-projects.populate
+   - Generate queue → docs/aide/queue/queue-NNN.md
+   - Generate items → docs/aide/items/NNN-*.md per item
+   - Populate GitHub Projects board
 
 3. Validate dependencies before assigning:
    For each item, check its dependency_mode (see item file header):
@@ -165,19 +162,19 @@ LOOP:
    b. No other slot already has this item-id (duplicate-assignment guard)
    If either check fails: skip this item, log warning on the report issue.
 
-   THEN, atomically write to .maqa/state.json:
+   THEN, atomically write to .otherness/state.json:
    - features[id].state       = "assigned"   ← NOT "in_progress"
    - features[id].assigned_to = SLOT
    - features[id].assigned_at = <ISO-8601 now>
    - features[id].worktree_path = <path>
    - engineer_slots[SLOT]     = id
    THEN (after state.json is written):
-   - /speckit.worktree.create
+   - Create git worktree for the feature branch
    - Move GitHub Projects card: Todo → In Progress
    - Comment on item Issue: "[BADGE] Assigned <id> to <SLOT>. Worktree: <path>"
    - Comment on the report issue with assignment summary
 
-5. Monitor .maqa/state.json every 2 min:
+5. Monitor .otherness/state.json every 2 min:
    - assigned (>10 min old, not yet in_progress) → re-post assignment comment;
      if still assigned after another 10 min: reset state=todo, clear slot, alert
    - in_progress → no action needed (engineer confirmed pickup)
@@ -194,8 +191,7 @@ LOOP:
 
 6. When all queue items are done or blocked:
    BATCH AUDIT (before generating next queue):
-   - /speckit.analyze               spec ↔ tasks ↔ implementation consistency
-   - /speckit.memorylint.run        AGENTS.md vs constitution drift
+   - Check AGENTS.md vs constitution drift manually
    - <project build command>        full project still compiles
    - <project test command>         regression suite on main
    - <project vuln scan>            security scan
@@ -245,7 +241,7 @@ If yes: that is your item. Go to step 1 immediately — do not wait.
 LOOP (one feature per iteration):
 
 1. PICK UP
-   Poll .maqa/state.json every 2 min for an item where:
+   Poll .otherness/state.json every 2 min for an item where:
      features[id].assigned_to == MY_AGENT_ID
      features[id].state       == "assigned"   ← must be "assigned", not "todo"
    If no such item exists: wait and re-poll. Do NOT self-select from the queue.
@@ -262,7 +258,7 @@ LOOP (one feature per iteration):
      from PM, coordinator, or QA posted after the spec was written)
    - If any alert describes a blocking change: incorporate it before writing code
 
-   CONFIRM PICKUP — write to .maqa/state.json atomically:
+   CONFIRM PICKUP — write to .otherness/state.json atomically:
      features[id].state = "in_progress"
    Post on item Issue: "[BADGE] Confirmed pickup of <id>. Starting implementation."
    Read: ITEM.md → .specify/specs/<feature>/spec.md
@@ -275,8 +271,8 @@ LOOP (one feature per iteration):
    Tick each task in tasks.md ONLY after its code exists
 
 3. SELF-VALIDATE (mandatory, no exceptions)
-   /speckit.verify-tasks.run — zero phantom completions
-   /speckit.verify — all acceptance criteria pass
+   Verify all [X] tasks in tasks.md have real implementation (zero phantom completions)
+   All acceptance criteria from spec.md satisfied
    Run the journey steps this feature contributes to (from definition-of-done.md)
    Capture output — it goes in the PR body as journey validation evidence
    If journey step does not produce documented result: fix, re-test, re-validate
@@ -286,7 +282,7 @@ LOOP (one feature per iteration):
    Title: "feat(<scope>): <description>"  (Conventional Commits)
    Body MUST include: item ID, spec ref, acceptance criteria checked,
                       test output, verify-tasks output, journey validation output
-   Set .maqa/state.json item state = in_review
+   Set .otherness/state.json item state = in_review
 
 5. MONITOR CI
    Poll CI every 3 min: gh pr checks <pr-number>
@@ -304,8 +300,8 @@ LOOP (one feature per iteration):
 
 7. MERGE — THIS STEP IS MANDATORY. DO NOT EXIT THE SESSION BEFORE IT COMPLETES.
    gh pr merge <pr-number> --squash --delete-branch
-   /speckit.worktree.clean
-   Set .maqa/state.json item state = done
+   Remove git worktree for the feature branch
+   Set .otherness/state.json item state = done
    Post on item Issue: "[BADGE] Merged in PR #N. Feature complete."
 
 8. SMOKE TEST ON MAIN
@@ -340,12 +336,11 @@ LOOP:
    until all prior comments are read and understood.
    Read full diff
    Read: docs/aide/items/<item>.md, .specify/specs/<feature>/spec.md
-   Run: /speckit.verify on the branch
    CHECKLIST (all must pass):
    □ Every Given/When/Then acceptance scenario from spec.md implemented
    □ Every FR-NNN has real code (not stub or no-op)
    □ PR body includes journey validation output (manual test evidence)
-   □ PR body includes /speckit.verify-tasks.run output (zero phantom completions)
+   □ PR body includes verify-tasks output (zero phantom completions)
    □ <project lint/vet> passes (check CI)
    □ <project copyright header> on all new source files
    □ No banned filenames (project-specific list in AGENTS.md)
@@ -383,7 +378,7 @@ READS (SDLC layer — the only files this role touches):
   docs/aide/team.yml               → roles, rules, lifecycle
   .specify/templates/overrides/    → spec and tasks templates
   AGENTS.md                        → process sections only (not product/architecture)
-  .maqa/state.json                 → flow metrics (cycle times, retry counts)
+  .otherness/state.json                 → flow metrics (cycle times, retry counts)
   docs/aide/queue/                 → queue health (items blocked vs done)
   report issue history                 → NEEDS HUMAN frequency, QA rejection rates
 
@@ -397,7 +392,7 @@ DOES NOT READ OR MODIFY (product layer):
 
 INSPECTION CYCLE:
 
-1. FLOW ANALYSIS — read .maqa/state.json and report issue history
+1. FLOW ANALYSIS — read .otherness/state.json and report issue history
    Compute for this batch:
    - Average time per item (todo → done)
    - QA rejection rate (% of PRs that needed changes)
@@ -418,7 +413,7 @@ INSPECTION CYCLE:
      (if tasks are too coarse or too fine: update tasks-template.md)
    □ Is constitution.md still accurate? Any new principles needed?
    □ Is team.yml still accurate? Any rules that are never followed or always violated?
-   □ Has /speckit.memorylint.run identified drift between AGENTS.md and constitution?
+   □ AGENTS.md and constitution.md are consistent (no drift)
 
 3. APPLY IMPROVEMENTS
    The Scrum Master commits directly to main — no PR required.
@@ -483,7 +478,7 @@ DOES NOT READ OR MODIFY (SDLC layer):
   .specify/memory/constitution.md (except product principles I-III)
   docs/aide/team.yml
   .specify/templates/
-  .maqa/
+  .otherness/
 
 REVIEW CYCLE:
 
@@ -566,7 +561,7 @@ Max retries before escalating: **2**
 Agent cannot proceed → MUST:
 1. Label the GitHub Issue `blocked` or `needs-human`
 2. Comment with: agent badge, what is blocking, file/line, exact decision needed
-3. Set `.maqa/state.json` item state = `blocked` (for engineers)
+3. Set `.otherness/state.json` item state = `blocked` (for engineers)
 4. Stop. No workarounds.
 
 Human reads it, resolves it, removes the label. Coordinator resumes within 2 min.
@@ -603,7 +598,7 @@ Badges: `[🎯 COORDINATOR]`, `[🔨 ENGINEER-N]`, `[🔍 QA]`, `[🔄 SCRUM-MAS
 
 ## State File
 
-`.maqa/state.json` — the team's shared state. Written atomically.
+`.otherness/state.json` — the team's shared state. Written atomically.
 
 **Ownership rule**: the Coordinator is the ONLY agent that writes to
 `engineer_slots` and that advances item state from `todo → assigned` or from
@@ -693,12 +688,9 @@ sets state back to `todo` and clears the slot (the engineer session may have die
 docs/aide/
   team.yml              → copy as-is (generic, no project-specific values)
 
-maqa-config.yml         → copy, update: test_command, board
-maqa-ci/ci-config.yml   → copy, update: owner, repo, provider
-maqa-github-projects/
-  github-projects-config.yml  → run /speckit.maqa-github-projects.setup
+otherness-config.yaml   → copy ~/.otherness/otherness-config-template.yaml, update project identity, CI, board
 
-.maqa/state.json        → copy as-is (reset at first coordinator run)
+.otherness/state.json        → copy as-is (reset at first coordinator run)
 .specifyignore          → copy, update for project file patterns
 Makefile                → copy structure, update build/test/lint commands
 .github/workflows/ci.yml     → copy, update stack-specific steps
@@ -729,6 +721,6 @@ AGENTS.md                        → tech stack, architecture, commands,
 3. Write `docs/aide/definition-of-done.md` — the 3-5 journeys that prove it works
 4. Write `AGENTS.md` — tech stack, package structure, language standards, PR label
 5. Configure GitHub repo, Projects board, report issue, branch protection
-6. Run `specify init` + install extensions + run `/speckit.maqa-github-projects.setup`
-7. Open 7 sessions, set `AGENT_ID`, run role commands
+6. Run `/otherness.setup` to create `otherness-config.yaml`, seed `.otherness/state.json`, and prepare for the first run
+7. Open a session and run `/otherness.run`
 8. Watch the board. Unblock `needs-human` labels. Read reports. That's it.

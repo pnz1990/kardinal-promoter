@@ -27,7 +27,7 @@ Before generating any feature queue, ensure the validation infrastructure exists
 
 **The agent is not just a code writer. It is a customer of the product.**
 
-Every few cycles (configurable via `product_validation_cycles` in `maqa-config.yml`),
+Every few cycles (configurable via `product_validation_cycles` in `otherness-config.yaml`),
 the standalone agent uses kardinal-promoter from the outside — the way a real platform
 engineer would. It does NOT rely on unit tests alone.
 

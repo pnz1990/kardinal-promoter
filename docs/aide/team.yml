@@ -21,14 +21,12 @@ source_of_truth:
 roles:
 
   coordinator:
-    command: /speckit.maqa.coordinator
+    command: /otherness.run
     loop: continuous
     stop_condition: "all journeys in definition-of-done.md are passing"
     consistency_audit:
       runs: "after every batch (before generating next queue)"
       commands:
-        - "/speckit.analyze"
-        - "/speckit.memorylint.run"
         - "PROJECT.build_command"
         - "PROJECT.test_command"
         - "PROJECT.vuln_command"
@@ -64,7 +62,7 @@ roles:
       - "If QA heartbeat >15 min old and item in_review: post dead-session alert on Issue #1 and the PR."
 
   engineer:
-    command: /speckit.maqa.feature
+    command: /otherness.run
     loop: continuous
     owns_feature_e2e: true
     merge_owner: true
@@ -82,12 +80,12 @@ roles:
       - "When QA posts LGTM: merge IMMEDIATELY in the same poll cycle. Do NOT wait for coordinator signal."
       - "MERGE IS MANDATORY. Do not exit the session before gh pr merge completes."
       - "Run PROJECT.build_command on main after merge (smoke test)."
-      - "Clean up worktree after merge via /speckit.worktree.clean"
+      - "Clean up worktree after merge"
       - "Max 2 retries before escalating to needs-human."
       - "New external dependency requires needs-human label first."
 
   qa:
-    command: /speckit.maqa.qa
+    command: /otherness.run
     loop: continuous
     poll_interval: 2m
     stop_condition: "no open PRs AND [PROJECT COMPLETE] posted"
@@ -98,7 +96,7 @@ roles:
       - "Every Given/When/Then from spec.md is implemented"
       - "Every FR-NNN has real code (not stub)"
       - "PR body includes journey validation output"
-      - "PR body includes /speckit.verify-tasks.run output"
+      - "PR body includes verify-tasks output"
       - "CI lint passes (PROJECT.lint_command)"
       - "Copyright header on all new source files"
       - "No banned filenames (see AGENTS.md)"
@@ -115,7 +113,7 @@ roles:
       - "LGTM comment MUST include: 'ENGINEER-N: execute merge NOW — gh pr merge <N> --squash --delete-branch'"
 
   scrum_master:
-    command: /speckit.maqa.scrummaster
+    command: /otherness.run
     trigger: "spawned by coordinator after every [BATCH COMPLETE]"
     owns: "SDLC layer only"
     touches:
@@ -133,7 +131,7 @@ roles:
       - "examples/"
       - "any source code"
     rules:
-      - "Read .maqa/state.json and Issue #1 history to compute flow metrics."
+      - "Read .otherness/state.json and Issue #1 history to compute flow metrics."
       - "Inspect: does sdlc.md reflect what agents actually do?"
       - "Inspect: is QA rejection rate > 30%? Engineers need better self-validation."
       - "Inspect: are NEEDS HUMAN escalations for appropriate reasons?"
@@ -146,7 +144,7 @@ roles:
       - "Post [SDLC REVIEW] to report issue after each cycle."
 
   product_manager:
-    command: /speckit.maqa.pm
+    command: /otherness.run
     trigger: "spawned by coordinator after every [BATCH COMPLETE]"
     owns: "product layer only"
     touches:
@@ -162,7 +160,7 @@ roles:
       - ".specify/memory/constitution.md"
       - "docs/aide/team.yml"
       - ".specify/templates/"
-      - ".maqa/"
+      - ".otherness/"
       - "any source code"
     competitive_analysis_every_n_batches: 3
     rules:
@@ -188,7 +186,7 @@ roles:
     - done
     - blocked
   merge_owner: engineer
-  state_file: .maqa/state.json
+  state_file: .otherness/state.json
   state_file_version: "1.2"
   state_extra_fields:
     session_heartbeats:
@@ -228,7 +226,7 @@ dependencies:
   parallel_ok: true
 
 ci_gate:
-  config: maqa-ci/ci-config.yml
+  config: otherness-config.yaml
   block_on_red: true
   timeout_minutes: 20
 
@@ -257,11 +255,9 @@ pr_protocol:
 worktrees:
   base: ".."
   naming: "<PROJECT_NAME>.<feature-branch>"
-  create_command: /speckit.worktree.create
-  clean_command: /speckit.worktree.clean
 
 state:
-  file: .maqa/state.json
+  file: .otherness/state.json
   write_strategy: atomic
 
 queue:
@@ -286,7 +282,7 @@ reporting:
     project_complete: "[PROJECT COMPLETE] All {n} stages and {m} journeys complete."
 
 communication:
-  state_file: .maqa/state.json
+  state_file: .otherness/state.json
   labels:
     blocked: f97316
     needs_human: e11d48
@@ -310,7 +306,7 @@ human_gates:
 
 board:
   provider: github-projects
-  config: maqa-github-projects/github-projects-config.yml
+  config: otherness-config.yaml
   columns:
     todo: "Todo"
     in_progress: "In Progress"

@@ -11,9 +11,7 @@ Read this. Open 5 terminal sessions. Step away.
 - [x] Report issue #1 (subscribe): https://github.com/pnz1990/kardinal-promoter/issues/1
 - [x] GitHub Actions CI workflow (`.github/workflows/ci.yml`)
 - [x] spec-kit v0.6.0 + 8 active extensions
-- [x] maqa-github-projects configured (project ID + status field IDs)
-- [x] maqa-ci configured (GitHub Actions, pnz1990/kardinal-promoter)
-- [x] maqa-config.yml (go test ./... -race, TDD mode, max 3 parallel)
+- [x] otherness-config.yaml (mode, CI gate, board field IDs)
 - [x] Vision, roadmap, progress, specs, and design docs in place
 
 ---
@@ -22,17 +20,10 @@ Read this. Open 5 terminal sessions. Step away.
 
 | Session | Directory | Role | Command |
 |---|---|---|---|
-| 1 | `kardinal-promoter/` | Coordinator | `/speckit.maqa.coordinator` |
-| 2 | `kardinal-promoter/` | Engineer 1 | `/speckit.maqa.feature` |
-| 3 | `kardinal-promoter/` | Engineer 2 | `/speckit.maqa.feature` |
-| 4 | `kardinal-promoter/` | Engineer 3 | `/speckit.maqa.feature` |
-| 5 | `kardinal-promoter/` | QA | `/speckit.maqa.qa` |
-| 6 | `kardinal-promoter/` | Scrum Master | `/speckit.maqa.scrummaster` |
-| 7 | `kardinal-promoter/` | Product Manager | `/speckit.maqa.pm` |
+| 1 | `kardinal-promoter/` | Standalone agent (all roles) | `/otherness.run` |
 
-All sessions start in the main repo directory. The coordinator creates worktrees for engineers.
-Engineers `cd` into their worktree when picking up work.
-Scrum Master and PM work in the main repo — no worktrees needed.
+All roles are played sequentially by the standalone agent in a single session.
+For concurrent scoped sessions use `/otherness.run.bounded` with a boundary block.
 
 ---
 
@@ -82,7 +73,7 @@ All sessions loop or react continuously:
 4. Populates the GitHub Projects board
 5. Creates worktrees for engineers
 6. Assigns items respecting dependency order (max 3 parallel)
-7. Tracks state in `.maqa/state.json`
+7. Tracks state in `.otherness/state.json`
 8. Posts batch reports to Issue #1
 9. Repeats until all 20 stages complete
 
@@ -117,7 +108,7 @@ All sessions loop or react continuously:
 
 Triggered by coordinator posting `[BATCH COMPLETE]` to Issue #1.
 
-1. Reads `.maqa/state.json` and Issue #1 history — computes flow metrics
+1. Reads `.otherness/state.json` and Issue #1 history — computes flow metrics
 2. Inspects SDLC files: `sdlc.md`, `team.yml`, templates, `AGENTS.md` process sections
 3. Checks: do agents actually follow the documented process?
 4. Opens `sdlc-improvement` Issues for systemic problems
@@ -153,13 +144,13 @@ Does NOT touch: sdlc.md, team.yml, templates, code.
 
 **Act on `needs-human` labels**: Read the issue comment. Make the decision. Remove the label. The coordinator resumes within 2 minutes.
 
-**Adjust direction**: Edit `docs/aide/vision.md` or `docs/aide/roadmap.md`, then run `/speckit.aide.feedback-loop` in a new session.
+**Adjust direction**: Edit `docs/aide/vision.md` or `docs/aide/roadmap.md`, then restart `/otherness.run` in a new session.
 
 ---
 
 ## If a Session Disconnects
 
-Restart the session in the same directory and re-run the role command. All agents read `.maqa/state.json` to resume. No work is lost.
+Restart the session in the same directory and re-run the role command. All agents read `.otherness/state.json` to resume. No work is lost.
 
 ---
 
@@ -183,7 +174,7 @@ Restart the session in the same directory and re-run the role command. All agent
 | `docs/aide/team.yml` | Human | Roles, rules, lifecycle |
 | `docs/aide/queue/` | Coordinator | Work item queues |
 | `docs/aide/items/` | Coordinator | Item specs |
-| `.maqa/state.json` | All agents | Feature lifecycle state |
-| `maqa-config.yml` | Human | Test command, parallelism |
+| `.otherness/state.json` | All agents | Feature lifecycle state |
+| `otherness-config.yaml` | Human | Mode, CI gate, board field IDs |
 | `.github/workflows/ci.yml` | Human | CI (headers, vet, test, build) |
 | `AGENTS.md` | Human | Full agent context |

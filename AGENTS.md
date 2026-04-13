@@ -112,7 +112,7 @@ The PM knows the full product:
   - https://github.com/akuity/kargo/issues (what Kargo users are asking for that we don't have)
   - https://github.com/argoproj-labs/gitops-promoter/issues
 
-PM must NOT know about: SDLC process, team.yml, sdlc.md, templates, maqa-config.
+PM must NOT know about: SDLC process, team.yml, sdlc.md, templates, otherness-config.
 
 ---
 
@@ -260,14 +260,14 @@ All issues must have labels from each of these groups (read by otherness agents 
 
 | Pattern | Caught by |
 |---|---|
-| Task `[x]` without implementation | `/speckit.verify-tasks.run` |
-| Mutating Deployments/Services directly | `/speckit.verify` |
+| Task `[x]` without implementation | QA adversarial review |
+| Mutating Deployments/Services directly | QA |
 | **kro controller packages in go.mod** — importing `kro/pkg/reconciler`, `kro/cmd`, `kro/api`, etc. | CI + QA |
 | **`github.com/kubernetes-sigs/kro/pkg/cel/library` is ALLOWED and encouraged** — use it for all CEL evaluation | — |
 | Missing Apache 2.0 header | CI + QA |
 | Banned filenames | CI + QA |
 | No idempotency test on reconciler | QA |
-| Feature not in user docs | `/speckit.verify` |
+| Feature not in user docs | QA |
 | go.mod not tidy | CI |
 | **Business logic evaluated outside a Graph node or reconciler that writes to CRD status** | **QA — Graph-first violation → NEEDS HUMAN** |
 | **New usage of `pkg/cel` outside `pkg/reconciler/policygate`** | **QA — Graph-first violation → NEEDS HUMAN** |

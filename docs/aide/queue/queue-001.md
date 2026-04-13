@@ -44,7 +44,7 @@ that lets later queues compile and test cleanly.
 
 ## Acceptance Gate
 
-All 4 items `done` in `.maqa/state.json` before advancing to Stage 1 queue.
+All 4 items `done` in `.otherness/state.json` before advancing to Stage 1 queue.
 
 `make build` must produce `bin/kardinal-controller` and `bin/kardinal`.
 `make test` must pass with zero failures.

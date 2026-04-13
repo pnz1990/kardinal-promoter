@@ -36,7 +36,7 @@ that every downstream stage depends on for type safety.
 
 ## Acceptance Gate
 
-Item 005 `done` in `.maqa/state.json` before advancing to Stage 2 queue.
+Item 005 `done` in `.otherness/state.json` before advancing to Stage 2 queue.
 
 - `kubectl apply -f config/crd/bases/` against a fresh kind cluster installs all CRDs without error
 - `kubectl apply -f config/samples/` creates valid objects that pass server-side validation
