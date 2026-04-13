@@ -137,6 +137,38 @@ All PolicyGate expressions are evaluated against the following context. All attr
 | `bundle.upstreamSoakMinutes` | int | Minutes since upstream environment was verified |
 | `previousBundle.version` | string | Previously deployed version in this environment |
 
+### Cross-stage history attributes (K-10)
+
+Available for all gates. The history is computed from Bundle CRD status across the last 10
+promotions for the pipeline — no external API calls. The lookup is scoped to the last 10
+Bundles by creation time.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `upstream.<env>.recentSuccessCount` | int | Number of bundles with `Verified` status for `<env>` in the last 10 promotions |
+| `upstream.<env>.recentFailureCount` | int | Number of bundles with `Failed` status for `<env>` in the last 10 promotions |
+| `upstream.<env>.lastPromotedAt` | string | RFC3339 timestamp of the last successful promotion for `<env>` (empty string if never) |
+| `upstream.<env>.soakMinutes` | int | Minutes since the current bundle's health check for `<env>` (unchanged) |
+
+Examples:
+
+```yaml
+# Block prod until staging has been successfully promoted at least 3 times recently
+expression: 'upstream.staging.recentSuccessCount >= 3'
+
+# Block if staging recently had 2+ failures (quality gate)
+expression: 'upstream.staging.recentFailureCount < 2'
+
+# Block if staging has never been promoted
+expression: 'upstream.staging.lastPromotedAt != ""'
+
+# Composite: soak + recent success history
+expression: |
+  upstream.staging.soakMinutes >= 60 &&
+  upstream.staging.recentSuccessCount >= 3 &&
+  !changewindow["holiday-freeze"]
+```
+
 ### Planned attributes (not yet available)
 
 !!! warning "Not yet implemented"

@@ -5,6 +5,7 @@ package policygate_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -1041,4 +1043,193 @@ func TestReconciler_OverrideWrongStage(t *testing.T) {
 	var got kardinalv1alpha1.PolicyGate
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
 	assert.False(t, got.Status.Ready, "override for 'uat' must not affect 'prod' gate")
+}
+
+// makeBundleWithHistory creates a Bundle with per-environment phase set, for history testing.
+// pipelineName is set so the history lookup can find it.
+func makeBundleWithHistory(name, ns, pipelineName string, envPhases map[string]string, createdAt metav1.Time) *kardinalv1alpha1.Bundle {
+	envStatuses := make([]kardinalv1alpha1.EnvironmentStatus, 0, len(envPhases))
+	for envName, phase := range envPhases {
+		es := kardinalv1alpha1.EnvironmentStatus{Name: envName, Phase: phase}
+		if phase == "Verified" {
+			t := metav1.NewTime(createdAt.Time)
+			es.HealthCheckedAt = &t
+		}
+		envStatuses = append(envStatuses, es)
+	}
+	return &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         ns,
+			CreationTimestamp: createdAt,
+		},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: pipelineName,
+		},
+		Status: kardinalv1alpha1.BundleStatus{
+			Environments: envStatuses,
+		},
+	}
+}
+
+// TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount verifies that
+// upstream.staging.recentSuccessCount counts Verified bundles correctly (K-10).
+func TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		expr      string
+		bundles   []map[string]string // per-bundle envPhase maps
+		wantReady bool
+	}{
+		{
+			name:      "3 successes required, 3 verified (current + 2 hist) — passes",
+			expr:      `upstream.staging.recentSuccessCount >= 3`,
+			bundles:   []map[string]string{{"staging": "Verified"}, {"staging": "Verified"}},
+			wantReady: true,
+		},
+		{
+			name:      "3 successes required, only current verified + 1 hist failed — blocks",
+			expr:      `upstream.staging.recentSuccessCount >= 3`,
+			bundles:   []map[string]string{{"staging": "Failed"}, {"staging": "Failed"}},
+			wantReady: false,
+		},
+		{
+			name:      "no historical bundles — current bundle counts as 1 success — blocks for >= 2",
+			expr:      `upstream.staging.recentSuccessCount >= 2`,
+			bundles:   nil,
+			wantReady: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			allObjects := []client.Object{}
+
+			// Current bundle being promoted
+			currentBundle := makeBundleWithHistory("current", "default", "test-pipeline",
+				map[string]string{"staging": "Verified"}, metav1.NewTime(now))
+			currentBundle.Status.Environments = []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "staging", Phase: "Verified", SoakMinutes: 10},
+			}
+			allObjects = append(allObjects, currentBundle)
+
+			// Historical bundles
+			for i, phases := range tt.bundles {
+				b := makeBundleWithHistory(
+					fmt.Sprintf("hist-%d", i), "default", "test-pipeline",
+					phases, metav1.NewTime(now.Add(-time.Duration(i+1)*time.Hour)),
+				)
+				allObjects = append(allObjects, b)
+			}
+
+			gate := makeGateInstance("history-gate", "default", "current", tt.expr, "5m")
+			gate.Labels["kardinal.io/pipeline"] = "test-pipeline"
+			allObjects = append(allObjects, gate)
+
+			s := newScheme()
+			c := fake.NewClientBuilder().WithScheme(s).
+				WithObjects(allObjects...).WithStatusSubresource(gate).Build()
+			env, err := celpkg.NewCELEnvironment()
+			require.NoError(t, err)
+
+			r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+			_, reconcileErr := r.Reconcile(context.Background(), req)
+			require.NoError(t, reconcileErr)
+
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tt.wantReady, got.Status.Ready, tt.name)
+		})
+	}
+}
+
+// TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount verifies that
+// upstream.staging.recentFailureCount is correctly populated (K-10).
+func TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount(t *testing.T) {
+	now := time.Now()
+	currentBundle := makeBundleWithHistory("current", "default", "my-pipeline",
+		map[string]string{}, metav1.NewTime(now))
+	hist1 := makeBundleWithHistory("hist-1", "default", "my-pipeline",
+		map[string]string{"staging": "Failed"}, metav1.NewTime(now.Add(-1*time.Hour)))
+	hist2 := makeBundleWithHistory("hist-2", "default", "my-pipeline",
+		map[string]string{"staging": "Failed"}, metav1.NewTime(now.Add(-2*time.Hour)))
+
+	// Gate blocks if more than 1 recent failure
+	gate := makeGateInstance("failure-gate", "default", "current",
+		`upstream.staging.recentFailureCount < 2`, "5m")
+	gate.Labels["kardinal.io/pipeline"] = "my-pipeline"
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, currentBundle, hist1, hist2).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.False(t, got.Status.Ready, "gate must block when recentFailureCount >= 2")
+}
+
+// TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt verifies that
+// upstream.staging.lastPromotedAt is non-empty after a successful promotion (K-10).
+func TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt(t *testing.T) {
+	now := time.Now()
+	currentBundle := makeBundleWithHistory("current", "default", "my-pipeline",
+		map[string]string{"staging": "Verified"}, metav1.NewTime(now))
+	currentBundle.Status.Environments = []kardinalv1alpha1.EnvironmentStatus{
+		{Name: "staging", Phase: "Verified", SoakMinutes: 5,
+			HealthCheckedAt: func() *metav1.Time { t := metav1.NewTime(now); return &t }()},
+	}
+
+	// Gate passes only if staging was ever promoted
+	gate := makeGateInstance("history-gate", "default", "current",
+		`upstream.staging.lastPromotedAt != ""`, "5m")
+	gate.Labels["kardinal.io/pipeline"] = "my-pipeline"
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, currentBundle).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var got kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.True(t, got.Status.Ready, "gate must pass when staging was promoted")
+}
+
+// TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel verifies that when
+// the gate has no pipeline label, the reconciler falls back gracefully (K-10).
+func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
+	bundle := makeBundle("app-v1", "default")
+	// Gate without pipeline label — should not crash
+	gate := makeGateInstance("soak-gate", "default", "app-v1", `upstream.staging.soakMinutes >= 0`, "5m")
+	delete(gate.Labels, "kardinal.io/pipeline")
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+	env, err := celpkg.NewCELEnvironment()
+	require.NoError(t, err)
+
+	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr, "missing pipeline label must not crash reconciler")
 }
