@@ -58,6 +58,15 @@ jobs:
           make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
 
+      - name: Build kardinal CLI binary
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          # Build the CLI so TestJourney5CLI can find and run it
+          make build-cli
+          sudo cp bin/kardinal /usr/local/bin/kardinal
+          kardinal version || echo "CLI built (version command may need cluster)"
+
       - name: Install kardinal-promoter
         env:
           GOTOOLCHAIN: local
