@@ -675,23 +675,17 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
-    },
-    "STANDALONE": {
-      "last_seen": "2026-04-13T22:51:33Z",
-      "cycle": 52
-    },
-    "STANDALONE-A": {
-      "last_seen": "2026-04-13T22:55:08Z",
-      "cycle": 1
-    },
-    "STANDALONE-B": {
-      "last_seen": "2026-04-13T22:55:26Z",
-      "cycle": 1
     }
   },
   "handoff": {
-    "stopped_at": "2026-04-13T23:12:47Z",
-    "reason": "EMERGENCY STOP \u2014 concurrent session collision. Fix being applied to otherness. Resume after fix.",
-    "resume_with": "/otherness.run"
+    "fixed_at": "2026-04-13T23:16:52Z",
+    "reason": "Collision fix applied. Branch-push locking now in effect.",
+    "resume_with": "/otherness.run",
+    "note": "otherness updated: git push branch = distributed lock. No slot IDs needed. Each session claims an item by successfully pushing feat/<item-id> to remote. If push fails, pick another item.",
+    "remaining_items": [
+      "402-pr-review-gate",
+      "403-kardinal-override (PR #471 needs CI green)",
+      "404-cross-stage-history-cel"
+    ]
   }
 }
