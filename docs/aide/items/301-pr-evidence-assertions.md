@@ -40,13 +40,13 @@ flow end-to-end with a fake K8s client but does NOT check what was in the PR bod
 
 ## Tasks
 
-- [ ] Read `pkg/scm/pr_template.go` to understand what fields are included
-- [ ] Read `test/journey/journey_test.go` to understand current test structure
-- [ ] Add `TestPRBodyFields` table-driven test in `pkg/scm/` that verifies template output
-- [ ] Check AC1 fields in the PR template output
-- [ ] Run `go test ./pkg/scm/... -race` — all pass
-- [ ] Run `go test ./test/journey/... -race` — all pass
-- [ ] Post issue #412 with evidence
+- [x] Read `pkg/scm/pr_template.go` to understand what fields are included
+- [x] Read `test/journey/journey_test.go` to understand current test structure
+- [x] Add `TestPRBodyDocumentedFields` table-driven test in `pkg/scm/scm_test.go` verifying template output (25 sub-tests)
+- [x] Check AC1 fields in the PR template output
+- [x] Run `go test ./pkg/scm/... -race` — all pass
+- [x] Run `go test ./... -race -count=1 -timeout 120s` — all pass (E2E infra skips without cluster)
+- [x] Post issue #412 with evidence (PR #438)
 
 ## Files to modify
 
