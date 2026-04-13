@@ -1,0 +1,318 @@
+# Autonomous Team Configuration
+#
+# GENERIC AND REUSABLE across projects.
+# Project-specific values are in AGENTS.md and docs/aide/definition-of-done.md.
+#
+# Human NEVER creates queue files, item files, or code.
+# Coordinator generates all artifacts autonomously.
+
+version: "1.1"
+
+source_of_truth:
+  - docs/aide/vision.md
+  - docs/aide/roadmap.md
+  - docs/aide/progress.md
+  - docs/aide/definition-of-done.md
+  - .specify/memory/constitution.md
+  - .specify/memory/sdlc.md
+  - docs/aide/team.yml
+  - AGENTS.md
+
+roles:
+
+  coordinator:
+    command: /speckit.maqa.coordinator
+    loop: continuous
+    stop_condition: "all journeys in definition-of-done.md are passing"
+    consistency_audit:
+      runs: "after every batch (before generating next queue)"
+      commands:
+        - "/speckit.analyze"
+        - "/speckit.memorylint.run"
+        - "PROJECT.build_command"
+        - "PROJECT.test_command"
+        - "PROJECT.vuln_command"
+      on_failure: "post [BATCH QUALITY GATE FAILED] to report issue, label needs-human, stop queue"
+    doc_freshness:
+      runs: "after any batch with user-facing features"
+      on_discrepancy: "open GitHub Issue labeled doc-gap, add to next queue"
+    spec_traceability:
+      runs: "after each feature merges"
+      on_missing: "open GitHub Issue labeled missing-test, add to next queue"
+    dynamic_expansion:
+      spec_triggers:
+        - "merged feature reveals edge cases not in existing specs"
+        - "journey test fails due to unspecified behavior"
+        - "design docs describe something not in any spec"
+      journey_triggers:
+        - "new user-facing capability not covered by existing journeys"
+        - "roadmap stage introduces new user workflow"
+      how_spec: "create .specify/specs/NNN-name/spec.md + tasks.md, update constitution + progress.md"
+      how_journey: "add journey to definition-of-done.md, add test stub, add make target"
+      report: "[NEW SPEC] / [NEW JOURNEY] on report issue"
+    rules:
+      - "On startup: apply RESUME PROTOCOL — read state.json, if items in-flight resume immediately."
+      - "Never implement features. Never commit. Never push."
+      - "Coordinator may merge a PR only as fallback when engineer session has clearly ended (QA LGTM + CI green + no activity >30 min)."
+      - "Engineers merge their own PRs — coordinator fallback is the exception, not the norm."
+      - "Check dependency_mode per item: merged (default) = dep state==done; branch = dep branch exists on remote."
+      - "Assign next item IMMEDIATELY when a slot frees — do not wait for the whole batch to finish."
+      - "Never generate next queue if audit failed."
+      - "Never skip the batch audit."
+      - "Post [BATCH COMPLETE] with journey status after every batch."
+      - "Write session_heartbeats.COORDINATOR on every poll cycle."
+      - "If QA heartbeat >15 min old and item in_review: post dead-session alert on Issue #1 and the PR."
+
+  engineer:
+    command: /speckit.maqa.feature
+    loop: continuous
+    owns_feature_e2e: true
+    merge_owner: true
+    stop_condition: "no more work assigned + queue exhausted"
+    rules:
+      - "On startup: apply RESUME PROTOCOL — if item assigned_to==MY_SLOT and state==assigned, pick it up immediately."
+      - "Work ONLY in the assigned worktree."
+      - "TDD: test file before implementation file, always."
+      - "SPEC FRESHNESS: on pickup, run git pull origin main, then read ITEM.md (frozen spec in worktree root), then gh issue view <item-issue-number> for pre-impl alerts."
+      - "If any Issue alert contradicts ITEM.md: follow the alert."
+      - "Run relevant journey steps from definition-of-done.md before pushing."
+      - "Capture journey output and include in PR body."
+      - "Monitor CI every 3 min after push. Fix red before waiting for QA."
+      - "Poll PR comments AND reviews every 5 min (--json reviews,comments). Read all comments — PM/coordinator flags are blocking."
+      - "When QA posts LGTM: merge IMMEDIATELY in the same poll cycle. Do NOT wait for coordinator signal."
+      - "MERGE IS MANDATORY. Do not exit the session before gh pr merge completes."
+      - "Run PROJECT.build_command on main after merge (smoke test)."
+      - "Clean up worktree after merge via /speckit.worktree.clean"
+      - "Max 2 retries before escalating to needs-human."
+      - "New external dependency requires needs-human label first."
+
+  qa:
+    command: /speckit.maqa.qa
+    loop: continuous
+    poll_interval: 2m
+    stop_condition: "no open PRs AND [PROJECT COMPLETE] posted"
+    re_review_policy: full_diff_every_time
+    checklist:
+      - "Read ALL existing PR comments before starting checklist (gh pr view <N> --json comments)"
+      - "Treat PM-flagged code defects as blocking QA findings — do not skip them"
+      - "Every Given/When/Then from spec.md is implemented"
+      - "Every FR-NNN has real code (not stub)"
+      - "PR body includes journey validation output"
+      - "PR body includes /speckit.verify-tasks.run output"
+      - "CI lint passes (PROJECT.lint_command)"
+      - "Copyright header on all new source files"
+      - "No banned filenames (see AGENTS.md)"
+      - "Correct error handling pattern (see AGENTS.md)"
+      - "Idempotency for every new handler/reconciler"
+      - "Project anti-patterns absent (see AGENTS.md)"
+      - "docs/ consistent with implementation"
+      - "examples/ produce documented behavior"
+      - "Feature advances at least one journey"
+    rules:
+      - "Never approve based on partial re-review."
+      - "Escalate to report issue after same issue appears 3+ times."
+      - "Provide file:line references for every requested change."
+      - "LGTM comment MUST include: 'ENGINEER-N: execute merge NOW — gh pr merge <N> --squash --delete-branch'"
+
+  scrum_master:
+    command: /speckit.maqa.scrummaster
+    trigger: "spawned by coordinator after every [BATCH COMPLETE]"
+    owns: "SDLC layer only"
+    touches:
+      - ".specify/memory/sdlc.md"
+      - ".specify/memory/constitution.md"
+      - "docs/aide/team.yml"
+      - ".specify/templates/overrides/"
+      - "AGENTS.md (process sections only)"
+    never_touches:
+      - "docs/aide/vision.md"
+      - "docs/aide/roadmap.md"
+      - "docs/aide/definition-of-done.md"
+      - ".specify/specs/ (content)"
+      - "docs/ user documentation"
+      - "examples/"
+      - "any source code"
+    rules:
+      - "Read .maqa/state.json and Issue #1 history to compute flow metrics."
+      - "Inspect: does sdlc.md reflect what agents actually do?"
+      - "Inspect: is QA rejection rate > 30%? Engineers need better self-validation."
+      - "Inspect: are NEEDS HUMAN escalations for appropriate reasons?"
+      - "Inspect: are spec/tasks templates producing unambiguous work?"
+      - "Commit minor improvements (< 30 lines) directly to main — no PR required."
+      - "Open GitHub Issues labeled sdlc-improvement only for large structural redesigns."
+      - "Never block engineers or coordinator with process changes."
+      - "ATOMIC SCHEMA RULE: any state name change must update Engineer Loop PICK UP in the same commit."
+      - "If unsure product vs process: it is product — escalate to PM."
+      - "Post [SDLC REVIEW] to report issue after each cycle."
+
+  product_manager:
+    command: /speckit.maqa.pm
+    trigger: "spawned by coordinator after every [BATCH COMPLETE]"
+    owns: "product layer only"
+    touches:
+      - "docs/aide/vision.md"
+      - "docs/aide/roadmap.md"
+      - "docs/aide/definition-of-done.md"
+      - "docs/aide/progress.md"
+      - ".specify/specs/ (content)"
+      - "docs/ user documentation"
+      - "examples/"
+    never_touches:
+      - ".specify/memory/sdlc.md"
+      - ".specify/memory/constitution.md"
+      - "docs/aide/team.yml"
+      - ".specify/templates/"
+      - ".maqa/"
+      - "any source code"
+    competitive_analysis_every_n_batches: 3
+    rules:
+      - "Read batch report: what shipped? Which journeys advanced?"
+      - "Check vision alignment: do shipped features match the vision?"
+      - "Check journey coverage: are journeys still the right acceptance criteria?"
+      - "Check spec completeness: gaps between vision and specs?"
+      - "Check user doc freshness: do docs describe the current product?"
+      - "Open product-gap Issues for features competitors have that we lack."
+      - "Open product-proposal Issues for structural changes — humans prioritise, not PM."
+      - "Commit user doc fixes and product-layer corrections directly to main — no PR required."
+      - "Never implement features — proposals only."
+      - "If unsure product vs process: it is process — escalate to SM."
+      - "Post [PRODUCT REVIEW] to report issue after each cycle."
+
+
+  states:
+    - backlog
+    - todo
+    - assigned
+    - in_progress
+    - in_review
+    - done
+    - blocked
+  merge_owner: engineer
+  state_file: .maqa/state.json
+  state_file_version: "1.2"
+  state_extra_fields:
+    session_heartbeats:
+      description: "Written on every poll cycle by COORDINATOR and QA. Used for dead-session detection."
+      schema: '{"COORDINATOR": {"last_seen": "<ISO-8601>", "cycle": <N>}, "QA": {"last_seen": "<ISO-8601>", "cycle": <N>}}'
+    dependency_mode:
+      description: "Per-item field in item file header. merged (default) = dep state==done. branch = dep branch exists on remote."
+      values: ["merged", "branch"]
+  state_ownership:
+    coordinator_writes:
+      - "backlog -> todo"
+      - "todo -> assigned"
+      - "assigned -> todo (stale recovery after 20 min)"
+      - "done: free slot (set engineer_slots[SLOT]=null)"
+      - "in_review -> done (fallback only: engineer dead >30 min after QA LGTM + CI green)"
+    engineer_writes:
+      - "assigned -> in_progress (confirm pickup only)"
+      - "in_progress -> in_review"
+      - "in_review -> done (primary path)"
+      - "in_progress -> blocked"
+    note: "Engineers NEVER self-select from the queue. Coordinator is sole assigner.
+      ATOMIC SCHEMA RULE: any change to a state name here MUST update the Engineer
+      Loop PICK UP polling condition in sdlc.md in the same commit. Violating this
+      causes silent engineer idle (proven: Night 1, RC-3)."
+  state_machine:
+    "backlog -> todo": "coordinator validates dependency check (mode: merged=state==done, branch=remote branch exists)"
+    "todo -> assigned": "coordinator: duplicate-assignment guard passes, writes atomically, creates worktree, snapshots ITEM.md, posts comment"
+    "assigned -> in_progress": "engineer confirms pickup after verifying assigned_to==MY_SLOT"
+    "in_progress -> in_review": "engineer validates, CI green, PR open"
+    "in_review -> in_progress": "QA requests changes"
+    "in_review -> done": "QA approves + CI green + engineer merges IMMEDIATELY + smoke test passes (coordinator fallback if engineer dead >30 min)"
+    "in_progress -> blocked": "blocked after 2 retries"
+    "assigned -> todo": "stale assignment recovery by coordinator (>20 min, no pickup)"
+
+dependencies:
+  enforcement: strict
+  parallel_ok: true
+
+ci_gate:
+  config: maqa-ci/ci-config.yml
+  block_on_red: true
+  timeout_minutes: 20
+
+branch_protection:
+  branch: main
+  require_pr: true
+  required_approvals: 1
+  dismiss_stale_reviews: true
+  allow_force_pushes: false
+
+pr_protocol:
+  base_branch: main
+  require_ci: true
+  require_qa_approval: true
+  merge_method: squash
+  delete_branch_on_merge: true
+  template: docs/aide/pr-template.md
+  required_in_body:
+    - item_id
+    - spec_reference
+    - acceptance_criteria_checked
+    - test_output
+    - verify_tasks_output
+    - journey_validation_output
+
+worktrees:
+  base: ".."
+  naming: "<PROJECT_NAME>.<feature-branch>"
+  create_command: /speckit.worktree.create
+  clean_command: /speckit.worktree.clean
+
+state:
+  file: .maqa/state.json
+  write_strategy: atomic
+
+queue:
+  dir: docs/aide/queue/
+  items_dir: docs/aide/items/
+  batch_size: 10
+  coordinator_generates: true
+
+reporting:
+  issue_number: "see AGENTS.md"
+  issue_url: "see AGENTS.md"
+  label: report
+  events:
+    batch_complete: "[BATCH COMPLETE] {queue_id}: {done} shipped, {blocked} blocked. Journeys: {journey_status}"
+    needs_human: "[NEEDS HUMAN] {item_id}: {agent} blocked. See issue #{issue}."
+    qa_finding: "[QA FINDING] {item_id} PR#{pr} {severity}: {file}:{line} - {desc}"
+    batch_quality_gate_failed: "[BATCH QUALITY GATE FAILED] {queue_id}: {failed}."
+    new_spec: "[NEW SPEC] {spec_id}: {title} - journeys {journeys}"
+    new_journey: "[NEW JOURNEY] J{N}: {title} - stages {stages}"
+    sdlc_review: "[SDLC REVIEW] batch #{n}: {metrics_summary}. Issues: {issues_found}. Improvements: {applied}."
+    product_review: "[PRODUCT REVIEW] batch #{n}: {vision_alignment}. Gaps: {gaps}. Proposals: {proposals}. Doc fixes: {doc_fixes}."
+    project_complete: "[PROJECT COMPLETE] All {n} stages and {m} journeys complete."
+
+communication:
+  state_file: .maqa/state.json
+  labels:
+    blocked: f97316
+    needs_human: e11d48
+    report: 0075ca
+    sdlc_improvement: 7c3aed
+    product_gap: f59e0b
+    product_proposal: 10b981
+  max_retries_before_escalation: 2
+
+human_gates:
+  - type: new_external_dependency
+    description: "Adding any new external package/library not already in use"
+  - type: api_contract_change
+    description: "Changing a public interface or API contract not in the spec"
+  - type: spec_contradiction
+    description: "Spec says X but user docs/examples require Y"
+  - type: unexplained_test_failure
+    description: "Tests fail in CI with no clear cause after 2 fix attempts"
+  - type: security_finding
+    description: "QA identifies a potential security vulnerability"
+
+board:
+  provider: github-projects
+  config: maqa-github-projects/github-projects-config.yml
+  columns:
+    todo: "Todo"
+    in_progress: "In Progress"
+    in_review: "In Review"
+    done: "Done"
