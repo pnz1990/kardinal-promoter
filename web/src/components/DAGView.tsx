@@ -23,12 +23,21 @@ interface Props {
 }
 
 const NODE_WIDTH = 180
-const NODE_HEIGHT = 60
+const NODE_HEIGHT = 64  // slightly taller to fit PR badge
 const MARGIN = 40
 
 /** Node label prefix for PolicyGate type. */
 function nodeTypePrefix(node: GraphNode): string {
   return node.type === 'PolicyGate' ? '🔒 ' : ''
+}
+
+/**
+ * Extract PR number from a GitHub PR URL.
+ * "https://github.com/org/repo/pull/42" → "#42"
+ */
+function extractPRNumber(prURL: string): string | null {
+  const m = prURL.match(/\/pull\/(\d+)$/)
+  return m ? `#${m[1]}` : null
 }
 
 interface LayoutNode extends GraphNode {
@@ -80,9 +89,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
       <svg
         width={svgW}
         height={svgH}
-        style={{ display: 'block' }}
-        role="img"
-        aria-label="Promotion DAG"
+        style={{ display: 'block', minWidth: '100%' }}
       >
         <defs>
           <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -91,22 +98,24 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
         </defs>
 
         {/* Edges */}
-        {edges.map((edge, i) => {
-          const from = layout.find(n => n.id === edge.from)
-          const to = layout.find(n => n.id === edge.to)
-          if (!from || !to) return null
-          return (
-            <line
-              key={i}
-              x1={from.x + NODE_WIDTH / 2}
-              y1={from.y}
-              x2={to.x - NODE_WIDTH / 2}
-              y2={to.y}
-              stroke="#475569"
-              strokeWidth={1.5}
-              markerEnd="url(#arrowhead)"
-            />
-          )
+        {layout.map((node, i) => {
+          const nodeEdges = edges.filter(e => e.from === node.id)
+          return nodeEdges.map((edge, j) => {
+            const to = layout.find(n => n.id === edge.to)
+            if (!to) return null
+            return (
+              <line
+                key={`${i}-${j}`}
+                x1={node.x + NODE_WIDTH / 2}
+                y1={node.y}
+                x2={to.x - NODE_WIDTH / 2}
+                y2={to.y}
+                stroke="#475569"
+                strokeWidth={1.5}
+                markerEnd="url(#arrowhead)"
+              />
+            )
+          })
         })}
 
         {/* Nodes */}
@@ -119,6 +128,10 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
           // Highlighted nodes get a brighter stroke to stand out.
           const strokeColor = isHighlighted ? '#fbbf24' : border
           const strokeWidth = isSelected ? 2.5 : isHighlighted ? 2.5 : 1.5
+
+          // PR badge: show PR number when WaitingForMerge or when prURL is available
+          const prNumber = node.prURL ? extractPRNumber(node.prURL) : null
+          const showPRBadge = prNumber !== null
 
           return (
             <g
@@ -139,7 +152,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
               />
               <text
                 x={NODE_WIDTH / 2}
-                y={22}
+                y={21}
                 textAnchor="middle"
                 fill="#e2e8f0"
                 fontSize="11"
@@ -150,7 +163,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
               </text>
               <text
                 x={NODE_WIDTH / 2}
-                y={42}
+                y={39}
                 textAnchor="middle"
                 fill={text}
                 fontSize="10"
@@ -158,6 +171,19 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, bundle
               >
                 {node.state}
               </text>
+              {/* PR badge — shown when a PR exists (Kargo parity: stage node shows PR link) */}
+              {showPRBadge && (
+                <text
+                  x={NODE_WIDTH / 2}
+                  y={56}
+                  textAnchor="middle"
+                  fill="#818cf8"
+                  fontSize="9"
+                  style={{ pointerEvents: 'none' }}
+                >
+                  🔗 {prNumber}
+                </text>
+              )}
             </g>
           )
         })}
