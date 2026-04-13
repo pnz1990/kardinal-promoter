@@ -1,0 +1,74 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: rollouts-demo
+  namespace: default
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    # Stage 1: test (sequential — no wave, uses default ordering)
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: resource
+
+    # Stage 2: staging (sequential — depends on test by default)
+    - name: staging
+      path: environments/staging
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: resource
+      bake:
+        minutes: 30  # must remain healthy for 30 minutes
+
+    # Stage 3: Wave 1 — prod-eu and prod-us start simultaneously
+    # after staging is Verified. Both have wave: 1.
+    - name: prod-eu
+      path: environments/prod-eu
+      wave: 1
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 20m
+      bake:
+        minutes: 720  # 12-hour production bake
+
+    - name: prod-us
+      path: environments/prod-us
+      wave: 1
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 20m
+      bake:
+        minutes: 720
+
+    # Stage 4: Wave 2 — prod-ap starts after BOTH prod-eu and prod-us
+    # are Verified. The translator generates the edges automatically.
+    - name: prod-ap
+      path: environments/prod-ap
+      wave: 2
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 20m
+      bake:
+        minutes: 480
