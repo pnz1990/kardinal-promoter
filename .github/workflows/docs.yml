@@ -42,7 +42,7 @@ jobs:
           GOFLAGS: -mod=mod
 
       - name: Upload generated CLI docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: generated-cli-docs
           path: docs/reference/cli/
@@ -92,7 +92,7 @@ jobs:
             -v 4 2>&1 || echo "Generation completed (warnings expected for unresolved types)"
 
       - name: Upload generated API docs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: generated-api-docs
           path: docs/reference/api.md
@@ -144,7 +144,7 @@ jobs:
           MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload site artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: docs-site
           path: site/
