@@ -6,13 +6,28 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [v0.6.0] — 2026-04-14
+
+**Live-cluster validation infrastructure, J7 multi-tenant self-service, OCI/Git source watchers, pipeline deployment metrics**
 
 ### Added
-- krocodile upgraded to commit `948ad6c`: DNS-1123 node ID validation, drift timers (30min), propagation hash includes `propagateWhen` state
-- Multi-tenant self-service: ApplicationSet + Pipeline template bootstrap (J7)
+
+- **Multi-tenant self-service (J7)** — ApplicationSet + Pipeline template bootstrap; team onboarding via Git directory; org PolicyGates automatically inherited (#489)
+- **OCI + Git source watchers** — `OCIWatcher` and `GitWatcher` Subscription reconcilers poll registries and Git branches, creating Bundles on new images/commits (#491, #493)
+- **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498)
+- **`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates (#506)
+- **krocodile upgraded to `948ad6c`** — DNS-1123 node ID validation, drift timers (30 min), propagation hash includes `propagateWhen` state
+- **Cardinal logo** — added across docs site, UI sidebar, and README
+
+### Fixed
+
+- `kardinal-promoter` controller image rebuilt correctly when Graph CR is deleted externally (#490)
+- PDCA live-cluster validation workflow: fixed pipeline name mismatch, missing `platform-policies` namespace, missing controller install step (#514)
+- CI: `enforce_admins: true` on branch protection; 8 required status checks; concurrency guards on Docs and E2E workflows (#513)
 
 ---
+
+## [Unreleased]
 
 ## [v0.5.0] — 2026-04-13
 
