@@ -119,6 +119,12 @@ type BundleStatus struct {
 	// Populated by the BundleReconciler when all environments reach Verified.
 	// +optional
 	Metrics *BundleMetrics `json:"metrics,omitempty"`
+
+	// GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG.
+	// Populated by the BundleReconciler when the Graph is first created.
+	// Used to detect Graph deletion and trigger recreation.
+	// +optional
+	GraphRef string `json:"graphRef,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).

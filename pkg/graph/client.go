@@ -69,6 +69,20 @@ func (c *GraphClient) Get(ctx context.Context, namespace, name string) (*Graph, 
 	return g, nil
 }
 
+// GraphExists returns true if a Graph CR with the given name exists in the given namespace.
+// Returns false (not an error) when the Graph is not found (HTTP 404).
+// Used by the Bundle reconciler to detect external Graph deletions (#490).
+func (c *GraphClient) GraphExists(ctx context.Context, namespace, name string) (bool, error) {
+	_, err := c.dynamic.Resource(GraphGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("graph.GraphExists %s/%s: %w", namespace, name, err)
+	}
+	return true, nil
+}
+
 // Delete deletes a Graph CR. Returns nil if the Graph is not found.
 func (c *GraphClient) Delete(ctx context.Context, namespace, name string) error {
 	err := c.dynamic.Resource(GraphGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})

@@ -167,8 +167,9 @@ func main() {
 	gitClient := scm.NewExecGitClient()
 
 	if err := (&bundlereconciler.Reconciler{
-		Client:     mgr.GetClient(),
-		Translator: newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
+		Client:       mgr.GetClient(),
+		Translator:   newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
+		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -398,6 +399,17 @@ func newTranslator(cfg *rest.Config, k8s sigs_client.Reader,
 	graphClient := graphpkg.NewGraphClient(dynClient, log)
 	builder := graphpkg.NewBuilder()
 	return translator.New(graphClient, builder, k8s, policyNS, log)
+}
+
+// newGraphClient constructs a GraphClient for use as a GraphChecker in the Bundle reconciler.
+// A separate dynamic client is created so the Translator and BundleReconciler each have
+// their own client handle (avoids sharing state across goroutines).
+func newGraphClient(cfg *rest.Config, log zerolog.Logger) *graphpkg.GraphClient {
+	dynClient, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Fatal().Err(err).Msg("unable to create dynamic client for graph checker")
+	}
+	return graphpkg.NewGraphClient(dynClient, log)
 }
 
 // splitCSV splits a comma-separated string into a trimmed slice.

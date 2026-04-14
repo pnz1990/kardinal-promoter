@@ -709,6 +709,13 @@ func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 
 // --- naming helpers ---
 
+// GraphNameFrom returns the deterministic Graph CR name for a (pipeline, bundle) pair.
+// This is exported so the Bundle reconciler can compute the expected graph name
+// without importing translator-layer code.
+func GraphNameFrom(pipeline, bundle string) string {
+	return graphNameFrom(pipeline, bundle)
+}
+
 // graphNameFrom generates a Graph name from the pipeline and bundle names.
 // Both names are slugified (lowercased, non-alphanumeric → dash).
 // Truncates to 63 chars (Kubernetes name limit).

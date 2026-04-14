@@ -1154,3 +1154,167 @@ func TestBundleReconciler_MetricsComputedOnVerified(t *testing.T) {
 			"commitToProductionMinutes must be < 200 (should be ~120-130m)")
 	}
 }
+
+// --- GraphChecker mock ---
+
+// mockGraphChecker is a test double for bundle.GraphChecker.
+type mockGraphChecker struct {
+	exists    bool
+	err       error
+	callCount int
+}
+
+func (m *mockGraphChecker) GraphExists(_ context.Context, _, _ string) (bool, error) {
+	m.callCount++
+	return m.exists, m.err
+}
+
+// TestBundleReconciler_GraphRefStoredOnPromotion verifies that Bundle.status.graphRef
+// is set when the bundle transitions to Promoting (fixes #490 prerequisite).
+func TestBundleReconciler_GraphRefStoredOnPromotion(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme()).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	require.True(t, translator.called, "translator must be called")
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &got))
+	assert.Equal(t, "Promoting", got.Status.Phase)
+	assert.Equal(t, "my-app-my-app-v1", got.Status.GraphRef,
+		"GraphRef must be set in Bundle.status when advancing to Promoting")
+}
+
+// TestBundleReconciler_GraphRecreatedAfterDeletion verifies that when a Promoting
+// Bundle's Graph is deleted externally, the reconciler detects this via GraphChecker
+// and calls Translate to recreate it (#490).
+func TestBundleReconciler_GraphRecreatedAfterDeletion(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase:    "Promoting",
+			GraphRef: "my-app-my-app-v1",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme()).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	// Graph does NOT exist — simulates manual kubectl delete graph.
+	checker := &mockGraphChecker{exists: false}
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
+	r := &bundle.Reconciler{Client: c, Translator: translator, GraphChecker: checker}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, checker.callCount, "GraphChecker.GraphExists must be called once")
+	assert.True(t, translator.called,
+		"Translator.Translate must be called when graph is missing")
+}
+
+// TestBundleReconciler_GraphNotRecreatedWhenPresent verifies that when the Graph
+// exists, the translator is NOT called again (idempotency).
+func TestBundleReconciler_GraphNotRecreatedWhenPresent(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase:    "Promoting",
+			GraphRef: "my-app-my-app-v1",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme()).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	// Graph EXISTS — normal operating condition.
+	checker := &mockGraphChecker{exists: true}
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
+	r := &bundle.Reconciler{Client: c, Translator: translator, GraphChecker: checker}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, checker.callCount, "GraphChecker must be called once")
+	assert.False(t, translator.called,
+		"Translator must NOT be called when graph already exists")
+}
+
+// TestBundleReconciler_GraphCheckerErrorIsNonFatal verifies that a GraphChecker
+// error does not fail the reconcile — evidence sync still proceeds.
+func TestBundleReconciler_GraphCheckerErrorIsNonFatal(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase:    "Promoting",
+			GraphRef: "my-app-my-app-v1",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme()).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	// GraphChecker returns an error — must not propagate.
+	checker := &mockGraphChecker{exists: false, err: fmt.Errorf("connection refused")}
+	r := &bundle.Reconciler{Client: c, GraphChecker: checker}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	// Error should NOT propagate — GraphChecker failures are non-fatal.
+	require.NoError(t, err,
+		"GraphChecker error must be non-fatal — reconcile should not return error")
+}
