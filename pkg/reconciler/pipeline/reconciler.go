@@ -9,6 +9,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,10 +63,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	desiredPhase := DerivePhase(stepList.Items)
 
+	// Compute aggregate deployment metrics from Bundles + PromotionSteps.
+	// Graph-first: reads only CRD status fields written by their own reconcilers.
+	// Writes only to Pipeline.status.deploymentMetrics (our own CRD).
+	var bundleList kardinalv1alpha1.BundleList
+	if listErr := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); listErr != nil {
+		log.Warn().Err(listErr).Msg("failed to list Bundles for metrics computation, skipping")
+	}
+	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
+
 	// Idempotency: only patch if something changed.
 	condMatch := conditionMatches(p.Status.Conditions, desiredReason)
 	phaseMatch := p.Status.Phase == desiredPhase
-	if condMatch && phaseMatch {
+	metricsMatch := deploymentMetricsEqual(p.Status.DeploymentMetrics, desiredMetrics)
+	if condMatch && phaseMatch && metricsMatch {
 		log.Debug().
 			Str("reason", desiredReason).
 			Str("phase", desiredPhase).
@@ -84,6 +95,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			LastTransitionTime: metav1.Now(),
 		},
 	}
+	p.Status.DeploymentMetrics = desiredMetrics
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pipeline status: %w", err)
@@ -220,4 +232,24 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 		).
 		Complete(r)
+}
+
+// deploymentMetricsEqual returns true when a and b represent the same metrics.
+// We compare the scalar fields; ComputedAt is intentionally excluded from the
+// equality check to avoid patching on every reconcile when no data changed.
+// SampleSize IS included: if more Bundles become available, we want to recompute.
+func deploymentMetricsEqual(a, b *kardinalv1alpha1.PipelineDeploymentMetrics) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.RolloutsLast30Days == b.RolloutsLast30Days &&
+		a.P50CommitToProdMinutes == b.P50CommitToProdMinutes &&
+		a.P90CommitToProdMinutes == b.P90CommitToProdMinutes &&
+		a.AutoRollbackRateMillis == b.AutoRollbackRateMillis &&
+		a.OperatorInterventionRateMillis == b.OperatorInterventionRateMillis &&
+		a.StaleProdDays == b.StaleProdDays &&
+		a.SampleSize == b.SampleSize
 }

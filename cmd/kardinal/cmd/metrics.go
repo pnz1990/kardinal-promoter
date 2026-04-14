@@ -56,6 +56,17 @@ Example:
 // metricsFn is the testable implementation.
 func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, env string, days int) error {
 	ctx := context.Background()
+
+	// Prefer Pipeline.status.deploymentMetrics when available — avoids N+1 list queries
+	// and provides pre-computed p50/p90 percentiles from the PipelineReconciler.
+	var p v1alpha1.Pipeline
+	if getErr := c.Get(ctx, sigs_client.ObjectKey{Name: pipeline, Namespace: ns}, &p); getErr == nil {
+		if dm := p.Status.DeploymentMetrics; dm != nil && dm.SampleSize > 0 {
+			return renderFromCRD(w, pipeline, env, dm)
+		}
+	}
+
+	// Fallback: compute in-memory from Bundle + PromotionStep CRD reads.
 	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 
 	// List all bundles for this pipeline.
@@ -202,4 +213,27 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 	}
 	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+
+// renderFromCRD renders the pre-computed PipelineDeploymentMetrics from CRD status.
+// Used when Pipeline.status.deploymentMetrics is populated by the PipelineReconciler.
+func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env string,
+	dm *v1alpha1.PipelineDeploymentMetrics) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	_, _ = fmt.Fprintf(tw, "METRIC\tVALUE\tNOTES\n")
+	_, _ = fmt.Fprintf(tw, "pipeline\t%s\t(sample=%d bundles)\n", pipelineName, dm.SampleSize)
+	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
+	_, _ = fmt.Fprintf(tw, "rollouts_last_30d\t%d\t\n", dm.RolloutsLast30Days)
+	_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
+	_, _ = fmt.Fprintf(tw, "p90_commit_to_prod\t%dm\t\n", dm.P90CommitToProdMinutes)
+	_, _ = fmt.Fprintf(tw, "auto_rollback_rate\t%.1f%%\t(%d per thousand)\n",
+		float64(dm.AutoRollbackRateMillis)/10, dm.AutoRollbackRateMillis)
+	_, _ = fmt.Fprintf(tw, "operator_intervention_rate\t%.1f%%\t(%d per thousand)\n",
+		float64(dm.OperatorInterventionRateMillis)/10, dm.OperatorInterventionRateMillis)
+	_, _ = fmt.Fprintf(tw, "stale_prod_days\t%d\t\n", dm.StaleProdDays)
+	if dm.ComputedAt != nil {
+		_, _ = fmt.Fprintf(tw, "metrics_age\t%s\t(last computed by controller)\n",
+			formatDuration(time.Since(dm.ComputedAt.Time)))
+	}
+	return tw.Flush()
 }

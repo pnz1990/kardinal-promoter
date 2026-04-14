@@ -307,6 +307,11 @@ spec:
                       environment reaching Verified. Indicates total promotion pipeline latency.
                     format: int64
                     type: integer
+                  operatorInterventions:
+                    description: |-
+                      OperatorInterventions is the number of PolicyGate overrides applied during
+                      this Bundle's promotion across all environments.
+                    type: integer
                 type: object
               phase:
                 description: Phase is the bundle promotion phase.
