@@ -280,6 +280,12 @@ spec:
                   - name
                   type: object
                 type: array
+              graphRef:
+                description: |-
+                  GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG.
+                  Populated by the BundleReconciler when the Graph is first created.
+                  Used to detect Graph deletion and trigger recreation.
+                type: string
               metrics:
                 description: |-
                   Metrics holds deployment efficiency metrics for this Bundle (K-05).
