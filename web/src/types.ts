@@ -88,6 +88,12 @@ export interface PromotionStep {
     message?: string
     lastTransitionTime?: string
   }>
+  /** #501: Bake countdown — contiguous healthy minutes elapsed (from CRD status). */
+  bakeElapsedMinutes?: number
+  /** #501: Bake target minutes from Pipeline spec (0 = no bake configured). */
+  bakeTargetMinutes?: number
+  /** #501: Number of bake timer resets due to health alarms. */
+  bakeResets?: number
 }
 
 export interface PolicyGate {
