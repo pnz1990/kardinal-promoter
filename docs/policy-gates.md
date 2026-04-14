@@ -193,6 +193,34 @@ expression: '!schedule.isWeekend && bundle.pr["staging"].isApproved'
 When no PRStatus exists for the named stage (e.g. the `open-pr` step has not run yet),
 `bundle.pr["staging"]` returns an empty map — `isApproved` evaluates to `false` (fail-closed).
 
+### ChangeWindow attributes (K-04)
+
+The `changewindow` variable is a map populated from all `ChangeWindow` CRDs in the cluster.
+Active windows evaluate to `true`; inactive windows evaluate to `false`.
+
+Two equivalent syntaxes are available:
+
+| Syntax | Returns | Description |
+|---|---|---|
+| `changewindow["window-name"]` | bool | `true` when the window is currently active (blocking) |
+| `changewindow.isBlocked("window-name")` | bool | Same as above — method-call alias |
+| `changewindow.isAllowed("window-name")` | bool | `true` when the window is NOT active (passes during active window) |
+
+If the named window does not exist, `isBlocked` returns `false` and `isAllowed` returns `true` (fail-open for missing windows).
+
+Examples:
+
+```yaml
+# Block prod during Q4 holiday freeze
+expression: '!changewindow.isBlocked("q4-holiday-freeze")'
+
+# Equivalent legacy syntax
+expression: '!changewindow["q4-holiday-freeze"]'
+
+# Require no active freeze window
+expression: 'changewindow.isAllowed("q4-holiday-freeze") && schedule.hour >= 9 && schedule.hour < 17'
+```
+
 ### Planned attributes (not yet available)
 
 !!! warning "Not yet implemented"

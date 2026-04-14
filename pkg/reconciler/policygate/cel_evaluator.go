@@ -29,6 +29,8 @@ import (
 	"sync"
 
 	goccel "github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
@@ -63,6 +65,8 @@ type evaluator struct {
 //   - maps.merge(map1, map2)
 //   - lists.setAtIndex / insertAtIndex / removeAtIndex
 //   - random.seededInt(min, max, seed)
+//   - changewindow.isAllowed(name) → bool  (true when the named window is NOT active/blocking)
+//   - changewindow.isBlocked(name) → bool  (true when the named window IS active/blocking)
 //
 // Context variables (populated by buildContext):
 //   - bundle, schedule, environment, metrics, upstream, previousBundle, changewindow
@@ -81,6 +85,56 @@ func newEvaluator() (*evaluator, error) {
 		library.Lists(),
 		library.Random(),
 		library.Omit(),
+		// changewindow.isAllowed(name) → bool
+		// Returns true when the named ChangeWindow is NOT currently blocking.
+		// Equivalent to: !changewindow["name"]
+		// Example: changewindow.isAllowed("business-hours") — passes during business hours
+		goccel.Function("isAllowed",
+			goccel.MemberOverload(
+				"changewindow_isAllowed_string",
+				[]*goccel.Type{goccel.DynType, goccel.StringType},
+				goccel.BoolType,
+				goccel.BinaryBinding(func(mapVal ref.Val, nameVal ref.Val) ref.Val {
+					name, ok := nameVal.Value().(string)
+					if !ok {
+						return types.Bool(false)
+					}
+					cwMap, ok := mapVal.Value().(map[string]interface{})
+					if !ok {
+						// changewindow variable is not a map — fail-closed (deny).
+						return types.Bool(false)
+					}
+					active, _ := cwMap[name].(bool)
+					// isAllowed → window must NOT be active (blocking).
+					return types.Bool(!active)
+				}),
+			),
+		),
+		// changewindow.isBlocked(name) → bool
+		// Returns true when the named ChangeWindow IS currently blocking.
+		// Equivalent to: changewindow["name"]
+		// Example: !changewindow.isBlocked("holiday-freeze") — passes when freeze is not active
+		goccel.Function("isBlocked",
+			goccel.MemberOverload(
+				"changewindow_isBlocked_string",
+				[]*goccel.Type{goccel.DynType, goccel.StringType},
+				goccel.BoolType,
+				goccel.BinaryBinding(func(mapVal ref.Val, nameVal ref.Val) ref.Val {
+					name, ok := nameVal.Value().(string)
+					if !ok {
+						return types.Bool(false)
+					}
+					cwMap, ok := mapVal.Value().(map[string]interface{})
+					if !ok {
+						// changewindow variable is not a map — fail-closed (active/blocked).
+						return types.Bool(true)
+					}
+					active, _ := cwMap[name].(bool)
+					// isBlocked → window is active (blocking).
+					return types.Bool(active)
+				}),
+			),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("cel.NewEnv: %w", err)

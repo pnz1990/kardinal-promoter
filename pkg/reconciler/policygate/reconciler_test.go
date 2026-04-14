@@ -824,6 +824,128 @@ func TestPolicyGateReconciler_ChangeWindowAllowed(t *testing.T) {
 	assert.True(t, got.Status.Ready, "gate must be ready when no active change window")
 }
 
+// TestPolicyGateReconciler_ChangeWindowIsBlocked_MethodSyntax verifies that
+// changewindow.isBlocked("name") returns true when the window is active (#506).
+func TestPolicyGateReconciler_ChangeWindowIsBlocked_MethodSyntax(t *testing.T) {
+	scheme := newScheme()
+
+	cw := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "q4-freeze", Namespace: "kardinal-system"},
+		Spec: kardinalv1alpha1.ChangeWindowSpec{
+			Type:  "blackout",
+			Start: metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+			End:   metav1.NewTime(time.Now().Add(1 * time.Hour)),
+		},
+	}
+	gate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cw-method-blocked", Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/bundle":      "bundle-1",
+				"kardinal.io/pipeline":    "my-app",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: `!changewindow.isBlocked("q4-freeze")`},
+	}
+	bundle := makeBundle("bundle-1", "default")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(gate, bundle, cw).WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-method-blocked", Namespace: "default"}}
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var gotBlocked kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &gotBlocked))
+	assert.False(t, gotBlocked.Status.Ready,
+		"gate must block when isBlocked returns true for active window")
+}
+
+// TestPolicyGateReconciler_ChangeWindowIsAllowed_MethodSyntax verifies that
+// changewindow.isAllowed("name") returns true when the window is NOT active (#506).
+func TestPolicyGateReconciler_ChangeWindowIsAllowed_MethodSyntax(t *testing.T) {
+	scheme := newScheme()
+
+	cw := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "business-hours", Namespace: "kardinal-system"},
+		Spec: kardinalv1alpha1.ChangeWindowSpec{
+			Type:  "blackout",
+			Start: metav1.NewTime(time.Now().Add(-2 * time.Hour)),
+			End:   metav1.NewTime(time.Now().Add(-1 * time.Hour)),
+		},
+	}
+	gate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cw-method-allowed", Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/bundle":      "bundle-1",
+				"kardinal.io/pipeline":    "my-app",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: `changewindow.isAllowed("business-hours")`},
+	}
+	bundle := makeBundle("bundle-1", "default")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(gate, bundle, cw).WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).Build()
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-method-allowed", Namespace: "default"}}
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	var gotAllowed kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &gotAllowed))
+	assert.True(t, gotAllowed.Status.Ready,
+		"gate must pass when isAllowed returns true for inactive window")
+}
+
+// TestPolicyGateReconciler_ChangeWindowBothSyntaxesEquivalent verifies that
+// map-access and method-call syntax are semantically equivalent for the same ChangeWindow (#506).
+func TestPolicyGateReconciler_ChangeWindowBothSyntaxesEquivalent(t *testing.T) {
+	// Build context with one active window.
+	cwCtx := map[string]interface{}{"my-freeze": true}
+	ctx := map[string]interface{}{
+		"bundle":         map[string]interface{}{},
+		"schedule":       map[string]interface{}{"isWeekend": false, "hour": 10, "dayOfWeek": "Tuesday"},
+		"environment":    map[string]interface{}{"name": "prod"},
+		"metrics":        map[string]interface{}{},
+		"upstream":       map[string]interface{}{},
+		"previousBundle": map[string]interface{}{},
+		"changewindow":   cwCtx,
+	}
+
+	tableTests := []struct {
+		name       string
+		expression string
+		wantPass   bool
+	}{
+		// Map-access (legacy syntax — still works)
+		{"map-blocked", `changewindow["my-freeze"]`, true},
+		{"map-not-blocked", `!changewindow["my-freeze"]`, false},
+		// Method syntax (new in #506)
+		{"isBlocked-true", `changewindow.isBlocked("my-freeze")`, true},
+		{"not-isBlocked", `!changewindow.isBlocked("my-freeze")`, false},
+		{"isAllowed-false", `changewindow.isAllowed("my-freeze")`, false},
+		{"not-isAllowed", `!changewindow.isAllowed("my-freeze")`, true},
+		// Missing window — defaults to inactive (isBlocked=false, isAllowed=true)
+		{"missing-isBlocked", `changewindow.isBlocked("nonexistent")`, false},
+		{"missing-isAllowed", `changewindow.isAllowed("nonexistent")`, true},
+	}
+
+	for _, tt := range tableTests {
+		t.Run(tt.name, func(t *testing.T) {
+			pass, _, err := policygate.EvaluateForTest(tt.expression, ctx)
+			require.NoError(t, err, "expression must evaluate without error: %s", tt.expression)
+			assert.Equal(t, tt.wantPass, pass, "expression %q result mismatch", tt.expression)
+		})
+	}
+}
+
 // TestReconciler_OverrideActive verifies that a non-expired override causes
 // the gate to pass immediately without evaluating CEL (K-09).
 func TestReconciler_OverrideActive(t *testing.T) {

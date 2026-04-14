@@ -138,19 +138,20 @@ status:
 
 ### `changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions
 
-[#506](https://github.com/pnz1990/kardinal-promoter/issues/506) adds named-argument CEL
-library functions as a cleaner alternative to map-access syntax:
+These named-argument CEL functions are now implemented (#506) as a cleaner alternative to map-access syntax:
 
 ```
-changewindow.isAllowed("business-hours")    # true when window is currently active
-changewindow.isBlocked("holiday-freeze")    # true when window is currently blocking
+changewindow.isAllowed("business-hours")    # true when the window is NOT currently blocking
+changewindow.isBlocked("holiday-freeze")    # true when the window IS currently blocking
 ```
 
-Until this lands, use the existing map-access syntax:
+Both syntaxes work and are semantically equivalent:
 
 ```
-changewindow["business-hours"]     # true when active
-!changewindow["holiday-freeze"]    # passes when window is inactive
+# Equivalent expressions — both pass when holiday-freeze is inactive:
+!changewindow["holiday-freeze"]
+!changewindow.isBlocked("holiday-freeze")
+changewindow.isAllowed("holiday-freeze")
 ```
 
 ---
