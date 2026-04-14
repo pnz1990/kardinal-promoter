@@ -515,7 +515,7 @@ Manual coordinator comments alone do NOT count as evidence.
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
 | 1: Quickstart | ✅ | 2026-04-13 | TestJourney1Quickstart PASS in CI (E2E run 24362344722). TestPRBodyDocumentedFields adds PR body field coverage (PR #438). |
-| 2: Multi-cluster fleet | ❌ Not started | — | Requires Stages 0-8, 11, 14 |
+| 2: Multi-cluster fleet | ✅ | 2026-04-14 | TestJourney2MultiClusterFleet PASS — dependsOn fan-out: test → pre-prod → [prod-eu, prod-us] parallel. PR #488. Real multi-cluster E2E tracked in #245. |
 | 3: Policy governance | ✅ | 2026-04-13 | TestJourney3PolicyGovernance PASS in CI (E2E run 24362344722). No-weekend and soak gates verified. |
 | 4: Rollback | ✅ | 2026-04-13 | TestJourney4Rollback PASS in CI (E2E run 24362344722). Auto-rollback + manual rollback + pause/resume complete. |
 | 5: CLI workflow | ✅ | 2026-04-13 | TestJourney5CLI PASS in CI (E2E run 24363674266). Binary built in CI step; version, policy simulate, policy test all verified. |
