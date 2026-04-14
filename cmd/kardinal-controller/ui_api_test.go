@@ -547,3 +547,109 @@ func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
 	assert.True(t, resp[0].Paused, "paused pipeline must have Paused=true in API response")
 	assert.Equal(t, "my-app", resp[0].Name)
 }
+
+// TestUIAPI_ListPipelines_BlockedCount verifies that BlockedCount is set to the
+// number of Failed environments in the active bundle (#462).
+func TestUIAPI_ListPipelines_BlockedCount(t *testing.T) {
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "uat"}, {Name: "prod"}},
+		},
+	}
+	// Active bundle with 2 failed environments
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default",
+			CreationTimestamp: metav1.Now()},
+		Spec: v1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+		Status: v1alpha1.BundleStatus{
+			Phase: "Promoting",
+			Environments: []v1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified"},
+				{Name: "uat", Phase: "Failed"},
+				{Name: "prod", Phase: "Failed"},
+			},
+		},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(p, b).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, 2, resp[0].BlockedCount, "BlockedCount must equal Failed environment count")
+}
+
+// TestUIAPI_ListPipelines_NoBundleZeroBlockedCount verifies that BlockedCount is
+// 0 and LastBundleAgeSeconds is 0 when there is no active bundle (#462).
+func TestUIAPI_ListPipelines_NoBundleZeroBlockedCount(t *testing.T) {
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(p).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, 0, resp[0].BlockedCount, "BlockedCount must be 0 when no bundle")
+	assert.Equal(t, int64(0), resp[0].LastBundleAgeSeconds, "LastBundleAgeSeconds must be 0 when no bundle")
+}
+
+// TestUIAPI_ListPipelines_AgeSeconds verifies that LastBundleAgeSeconds is
+// populated from the active bundle's creation time (#462).
+func TestUIAPI_ListPipelines_AgeSeconds(t *testing.T) {
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default",
+			CreationTimestamp: metav1.Now()},
+		Spec:   v1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(p, b).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	// Age should be >= 0 (very recent bundle) and populated
+	assert.GreaterOrEqual(t, resp[0].LastBundleAgeSeconds, int64(0),
+		"LastBundleAgeSeconds must be non-negative")
+	assert.NotEmpty(t, resp[0].ActiveBundleCreatedAt,
+		"ActiveBundleCreatedAt must be set when bundle exists")
+}

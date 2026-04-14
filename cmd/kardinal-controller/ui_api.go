@@ -46,6 +46,14 @@ type uiPipelineResponse struct {
 	// Derived from the active Bundle's status.environments.
 	// Keys are environment names, values are the promotion phase.
 	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
+	// #462: Operations view — sortable health columns.
+	// BlockedCount is the number of environments currently in Failed or blocked state.
+	BlockedCount int `json:"blockedCount,omitempty"`
+	// LastBundleAgeSeconds is seconds since the active bundle was created.
+	// Zero means no active bundle.
+	LastBundleAgeSeconds int64 `json:"lastBundleAgeSeconds,omitempty"`
+	// ActiveBundleCreatedAt is the ISO 8601 creation time of the active bundle.
+	ActiveBundleCreatedAt string `json:"activeBundleCreatedAt,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -170,8 +178,11 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	_ = s.client.List(r.Context(), &bundleList)
 	// Index: pipelineName → active bundle (prefer Promoting > Available > Verified)
 	type activeBundleEntry struct {
-		name      string
-		envStates map[string]string
+		name         string
+		envStates    map[string]string
+		blockedCount int   // #462: number of Failed environments
+		createdAt    int64 // #462: Unix timestamp of bundle creation
+		createdAtISO string
 	}
 	activeBundles := make(map[string]*activeBundleEntry)
 	phaseOrder := map[string]int{"Promoting": 3, "Available": 2, "Verified": 1, "Failed": 0, "Superseded": -1}
@@ -193,18 +204,26 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 		if existing == nil || newScore > existingScore {
 			envStates := make(map[string]string, len(b.Status.Environments))
+			blockedCount := 0
 			for _, env := range b.Status.Environments {
 				if env.Phase != "" {
 					envStates[env.Name] = env.Phase
 				}
+				if env.Phase == "Failed" {
+					blockedCount++
+				}
 			}
 			activeBundles[key] = &activeBundleEntry{
-				name:      b.Name,
-				envStates: envStates,
+				name:         b.Name,
+				envStates:    envStates,
+				blockedCount: blockedCount,
+				createdAt:    b.CreationTimestamp.Unix(),
+				createdAtISO: b.CreationTimestamp.UTC().Format("2006-01-02T15:04:05Z"),
 			}
 		}
 	}
 
+	now := metav1.Now()
 	result := make([]uiPipelineResponse, 0, len(list.Items))
 	for _, p := range list.Items {
 		key := fmt.Sprintf("%s/%s", p.Namespace, p.Name)
@@ -219,6 +238,11 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			resp.ActiveBundleName = ab.name
 			if len(ab.envStates) > 0 {
 				resp.EnvironmentStates = ab.envStates
+			}
+			resp.BlockedCount = ab.blockedCount
+			if ab.createdAt > 0 {
+				resp.LastBundleAgeSeconds = now.Unix() - ab.createdAt
+				resp.ActiveBundleCreatedAt = ab.createdAtISO
 			}
 		}
 		result = append(result, resp)

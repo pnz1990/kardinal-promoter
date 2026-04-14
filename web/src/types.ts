@@ -11,6 +11,12 @@ export interface Pipeline {
   /** #342: per-environment promotion phases from active Bundle status.
    * Keys are environment names, values are the promotion phase (Promoting, Verified, etc.) */
   environmentStates?: Record<string, string>
+  /** #462: Number of environments currently in Failed state. */
+  blockedCount?: number
+  /** #462: Seconds since the active bundle was created (0 = no active bundle). */
+  lastBundleAgeSeconds?: number
+  /** #462: ISO 8601 creation time of the active bundle. */
+  activeBundleCreatedAt?: string
 }
 
 export interface Bundle {
