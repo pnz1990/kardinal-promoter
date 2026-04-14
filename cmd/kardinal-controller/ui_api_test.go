@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -709,4 +710,82 @@ func TestUIAPI_GetSteps_NoBakeFieldsWhenNoPipeline(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Len(t, resp, 1)
 	assert.Equal(t, 0, resp[0].BakeTargetMinutes, "BakeTargetMinutes must be 0 when no bake config")
+}
+
+// TestUIAPI_ListGates_OverrideHistory verifies that PolicyGate override records
+// are included in the gate response (#502).
+func TestUIAPI_ListGates_OverrideHistory(t *testing.T) {
+	future := metav1.NewTime(time.Now().Add(time.Hour))
+	past := metav1.NewTime(time.Now().Add(-time.Hour))
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "default"},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression: "!schedule.isWeekend()",
+			Overrides: []v1alpha1.PolicyGateOverride{
+				{
+					Reason:    "P0 incident",
+					Stage:     "prod",
+					ExpiresAt: future,
+					CreatedBy: "alice",
+				},
+				{
+					Reason:    "old override",
+					ExpiresAt: past,
+					CreatedBy: "bob",
+				},
+			},
+		},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/gates", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiGateResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Len(t, resp[0].Overrides, 2, "both overrides must be returned")
+
+	// Active override
+	active := resp[0].Overrides[0]
+	assert.Equal(t, "P0 incident", active.Reason)
+	assert.Equal(t, "alice", active.CreatedBy)
+	assert.Equal(t, "prod", active.Stage)
+	assert.NotEmpty(t, active.ExpiresAt, "ExpiresAt must be set")
+
+	// Expired override
+	expired := resp[0].Overrides[1]
+	assert.Equal(t, "old override", expired.Reason)
+	assert.Equal(t, "bob", expired.CreatedBy)
+}
+
+// TestUIAPI_ListGates_NoOverrides verifies that Overrides is omitted when empty (#502).
+func TestUIAPI_ListGates_NoOverrides(t *testing.T) {
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "default"},
+		Spec:       v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend()"},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/gates", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiGateResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Empty(t, resp[0].Overrides, "empty overrides must return nil/empty slice")
 }

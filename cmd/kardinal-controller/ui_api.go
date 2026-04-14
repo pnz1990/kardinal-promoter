@@ -143,6 +143,17 @@ type uiGateResponse struct {
 	Ready           bool   `json:"ready"`
 	Reason          string `json:"reason,omitempty"`
 	LastEvaluatedAt string `json:"lastEvaluatedAt,omitempty"`
+	// #502: Override history from spec.overrides[] — shown in GateDetailPanel.
+	Overrides []uiGateOverride `json:"overrides,omitempty"`
+}
+
+// uiGateOverride is the JSON shape for a PolicyGateOverride (K-09 audit record).
+type uiGateOverride struct {
+	Reason    string `json:"reason"`
+	Stage     string `json:"stage,omitempty"`
+	ExpiresAt string `json:"expiresAt,omitempty"`
+	CreatedAt string `json:"createdAt,omitempty"`
+	CreatedBy string `json:"createdBy,omitempty"`
 }
 
 // uiAPIServer serves the read-only REST API for the embedded UI.
@@ -648,6 +659,21 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		// #502: Populate override history from spec.overrides[].
+		for _, ov := range g.Spec.Overrides {
+			o := uiGateOverride{
+				Reason:    ov.Reason,
+				Stage:     ov.Stage,
+				CreatedBy: ov.CreatedBy,
+			}
+			if !ov.ExpiresAt.IsZero() {
+				o.ExpiresAt = ov.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z")
+			}
+			if !ov.CreatedAt.IsZero() {
+				o.CreatedAt = ov.CreatedAt.UTC().Format("2006-01-02T15:04:05Z")
+			}
+			resp.Overrides = append(resp.Overrides, o)
 		}
 		result = append(result, resp)
 	}

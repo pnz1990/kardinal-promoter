@@ -103,4 +103,15 @@ export interface PolicyGate {
   ready: boolean
   reason?: string
   lastEvaluatedAt?: string
+  /** #502: Override history from spec.overrides[] — shown in GateDetailPanel. */
+  overrides?: PolicyGateOverride[]
+}
+
+/** #502: A time-limited emergency override record (K-09 audit record). */
+export interface PolicyGateOverride {
+  reason: string
+  stage?: string
+  expiresAt?: string
+  createdAt?: string
+  createdBy?: string
 }
