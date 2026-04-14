@@ -49,7 +49,14 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 | PR evidence body (structured) | ✅ | ❌ | ✅ basic |
 | GitOps-agnostic (ArgoCD + Flux) | ✅ | ArgoCD only | Flux only |
 | Auto-rollback on health failure | ✅ | ❌ | ❌ |
+| Contiguous healthy soak (`bake.minutes`) | ✅ | ❌ elapsed only | ❌ elapsed only |
+| Wave topology for multi-region rollouts | ✅ | ❌ | ❌ |
+| Change freeze management (`ChangeWindow` CRD) | ✅ | ❌ | ❌ |
+| Pre-deploy gate type | ✅ | ❌ | ❌ |
 | DORA metrics built-in | ✅ | ❌ | ❌ |
+| Integration test step | ✅ | ❌ | ❌ |
+| Emergency override with audit record | ✅ | ❌ | ❌ |
+| Cross-stage history in gates | ✅ | ❌ | ❌ |
 | Graph-first architecture (krocodile) | ✅ | ❌ | ❌ |
 
 See [detailed comparison →](comparison.md)
