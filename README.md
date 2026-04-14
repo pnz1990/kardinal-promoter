@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://pnz1990.github.io/kardinal-promoter/">
-    <img src="kardinal-logo.png" alt="Kardinal Promoter" width="120" />
+    <img src="kardinal-logo.png" alt="Kardinal Promoter" width="280" />
   </a>
 </p>
 

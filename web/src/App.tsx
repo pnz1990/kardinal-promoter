@@ -236,7 +236,7 @@ export function App() {
             <img
               src="/logo.png"
               alt="Kardinal"
-              style={{ width: '24px', height: '24px', objectFit: 'contain' }}
+              style={{ width: '32px', height: '32px', objectFit: 'contain' }}
             />
             <span style={{
               fontWeight: 700,

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Kardinal Promoter" width="96" style="margin-bottom: 1rem;" />
+  <img src="assets/logo.png" alt="Kardinal Promoter" width="200" style="margin-bottom: 1rem;" />
 </p>
 
 # kardinal-promoter
