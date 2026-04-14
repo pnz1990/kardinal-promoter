@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T03:12:26Z",
+  "last_updated": "2026-04-14T03:29:09Z",
   "current_queue": "queue-018",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -693,8 +693,8 @@
       "dependency_mode": "merged"
     },
     "504-ui-release-metrics": {
-      "state": "in_review",
-      "pr_merged": false,
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 481,
       "dependency_mode": "merged",
       "branch": "feat/504-ui-release-metrics"
@@ -706,8 +706,8 @@
       "dependency_mode": "merged"
     },
     "506-ui-actions": {
-      "state": "in_review",
-      "pr_merged": false,
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 482,
       "dependency_mode": "merged",
       "branch": "feat/506-ui-actions"
@@ -724,14 +724,11 @@
     }
   },
   "handoff": {
-    "fixed_at": "2026-04-13T23:16:52Z",
-    "reason": "Collision fix applied. Branch-push locking now in effect.",
-    "resume_with": "/otherness.run",
-    "note": "otherness updated: git push branch = distributed lock. No slot IDs needed. Each session claims an item by successfully pushing feat/<item-id> to remote. If push fails, pick another item.",
-    "remaining_items": [
-      "402-pr-review-gate",
-      "403-kardinal-override (PR #471 needs CI green)",
-      "404-cross-stage-history-cel"
-    ]
+    "completed_at": "2026-04-14T03:29:09Z",
+    "queues_complete": [
+      "queue-017",
+      "queue-018"
+    ],
+    "note": "All queue-017 and queue-018 items merged. Queue 018 complete: 500-506 all done. Next: BATCH_COMPLETE audit, generate next queue."
   }
 }
