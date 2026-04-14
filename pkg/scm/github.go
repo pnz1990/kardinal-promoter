@@ -144,6 +144,52 @@ func (g *GitHubProvider) GetPRStatus(ctx context.Context, repo string, prNumber 
 	return result.Merged, result.State == "open", nil
 }
 
+// GetPRReviewStatus returns review approval state for a pull request.
+// approved is true when at least one approving review exists and no change-request
+// review is outstanding. approvalCount counts distinct approving reviewers.
+//
+// The GitHub Reviews API returns all reviews in submission order; we process
+// them chronologically so the last review from each user wins.
+func (g *GitHubProvider) GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (bool, int, error) {
+	var reviews []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		State string `json:"state"`
+	}
+	if err := g.do(ctx, http.MethodGet,
+		fmt.Sprintf("/repos/%s/pulls/%d/reviews", repo, prNumber), nil, &reviews); err != nil {
+		return false, 0, fmt.Errorf("get PR reviews %s#%d: %w", repo, prNumber, err)
+	}
+
+	// Track the most recent state per reviewer login.
+	latestByUser := make(map[string]string, len(reviews))
+	for _, r := range reviews {
+		if r.User.Login == "" {
+			continue
+		}
+		// Only APPROVED and CHANGES_REQUESTED affect the approval decision.
+		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED":
+			latestByUser[r.User.Login] = r.State
+		}
+	}
+
+	approvalCount := 0
+	hasChangeRequest := false
+	for _, state := range latestByUser {
+		switch state {
+		case "APPROVED":
+			approvalCount++
+		case "CHANGES_REQUESTED":
+			hasChangeRequest = true
+		}
+	}
+
+	approved := approvalCount > 0 && !hasChangeRequest
+	return approved, approvalCount, nil
+}
+
 // ParseWebhookEvent parses a GitHub webhook payload and validates the HMAC-SHA256 signature.
 func (g *GitHubProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
 	if g.WebhookSecret != "" {

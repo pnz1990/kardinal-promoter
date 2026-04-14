@@ -58,6 +58,9 @@ func (n *noopSCM) CommentOnPR(_ context.Context, _ string, _ int, _ string) erro
 func (n *noopSCM) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
 	return false, false, nil
 }
+func (n *noopSCM) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
+	return false, 0, nil
+}
 func (n *noopSCM) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
 	return scm.WebhookEvent{}, nil
 }

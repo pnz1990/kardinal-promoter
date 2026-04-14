@@ -48,6 +48,12 @@ type SCMProvider interface {
 	// GetPRStatus returns whether the PR has been merged and whether it is still open.
 	GetPRStatus(ctx context.Context, repo string, prNumber int) (merged bool, open bool, err error)
 
+	// GetPRReviewStatus returns the review approval state of the PR.
+	// approved is true when at least one approving review exists and no
+	// change-request review is outstanding.
+	// approvalCount is the number of distinct approving reviews.
+	GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (approved bool, approvalCount int, err error)
+
 	// ParseWebhookEvent parses a raw webhook payload and validates the HMAC signature.
 	ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error)
 

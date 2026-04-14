@@ -50,6 +50,9 @@ func (m *mockSCMProvider) CommentOnPR(_ context.Context, _ string, _ int, _ stri
 func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
 	return m.event.Merged, true, nil
 }
+func (m *mockSCMProvider) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
+	return false, 0, nil
+}
 func (m *mockSCMProvider) ParseWebhookEvent(payload []byte, _ string) (scm.WebhookEvent, error) {
 	return m.event, m.err
 }

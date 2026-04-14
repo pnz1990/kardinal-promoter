@@ -17,6 +17,7 @@ package prstatus_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,17 +34,26 @@ import (
 )
 
 // fakeSCM implements scm.SCMProvider for testing.
-// Only GetPRStatus is exercised; all other methods are no-ops.
+// Both GetPRStatus and GetPRReviewStatus are exercised by test cases.
 type fakeSCM struct {
-	merged bool
-	open   bool
-	err    error
-	calls  int
+	merged        bool
+	open          bool
+	err           error
+	calls         int
+	approved      bool
+	approvalCount int
+	reviewErr     error
+	reviewCalls   int
 }
 
 func (f *fakeSCM) GetPRStatus(_ context.Context, _ string, _ int) (merged, open bool, err error) {
 	f.calls++
 	return f.merged, f.open, f.err
+}
+
+func (f *fakeSCM) GetPRReviewStatus(_ context.Context, _ string, _ int) (approved bool, approvalCount int, err error) {
+	f.reviewCalls++
+	return f.approved, f.approvalCount, f.reviewErr
 }
 
 func (f *fakeSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
@@ -361,4 +371,91 @@ func TestReconciler_ZeroPRNumber_NoSCMCall(t *testing.T) {
 	require.NoError(t, err, "zero prNumber must not error (#276 regression)")
 	assert.Equal(t, 0, scm.calls,
 		"GetPRStatus must NOT be called for PRStatus with prNumber=0 (#276 regression)")
+}
+
+// TestReconciler_ReviewStatus_PollsApprovedState verifies that the reconciler
+// calls GetPRReviewStatus and writes status.approved + status.approvalCount.
+func TestReconciler_ReviewStatus_PollsApprovedState(t *testing.T) {
+	tests := []struct {
+		name                string
+		approved            bool
+		approvalCount       int
+		expectApproved      bool
+		expectApprovalCount int
+	}{
+		{"no approvals", false, 0, false, 0},
+		{"one approval", true, 1, true, 1},
+		{"two approvals", true, 2, true, 2},
+		{"change requested blocks", false, 1, false, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := buildScheme(t)
+			prs := &v1alpha1.PRStatus{
+				ObjectMeta: metav1.ObjectMeta{Name: "pr-reviews", Namespace: "default"},
+				Spec: v1alpha1.PRStatusSpec{
+					PRURL: "https://github.com/owner/repo/pull/7", PRNumber: 7, Repo: "owner/repo",
+				},
+			}
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(prs).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			fakeSCM := &fakeSCM{
+				merged:        false,
+				open:          true,
+				approved:      tt.approved,
+				approvalCount: tt.approvalCount,
+			}
+			r := &prstatus.Reconciler{Client: fakeClient, SCM: fakeSCM}
+
+			_, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "pr-reviews", Namespace: "default"},
+			})
+			require.NoError(t, err)
+
+			var updated v1alpha1.PRStatus
+			require.NoError(t, fakeClient.Get(context.Background(),
+				types.NamespacedName{Name: "pr-reviews", Namespace: "default"}, &updated))
+
+			assert.Equal(t, tt.expectApproved, updated.Status.Approved, "status.approved")
+			assert.Equal(t, tt.expectApprovalCount, updated.Status.ApprovalCount, "status.approvalCount")
+			assert.Equal(t, 1, fakeSCM.reviewCalls, "GetPRReviewStatus should be called once")
+		})
+	}
+}
+
+// TestReconciler_ReviewStatus_FallbackOnError verifies that when GetPRReviewStatus
+// fails, the reconciler preserves the previous approved state and does not error.
+func TestReconciler_ReviewStatus_FallbackOnError(t *testing.T) {
+	scheme := buildScheme(t)
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "pr-fallback", Namespace: "default"},
+		Spec: v1alpha1.PRStatusSpec{
+			PRURL: "https://github.com/owner/repo/pull/9", PRNumber: 9, Repo: "owner/repo",
+		},
+		Status: v1alpha1.PRStatusStatus{
+			Approved: true, ApprovalCount: 2, // pre-existing good state
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(prs).
+		WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+	fakeSCM := &fakeSCM{
+		merged:    false,
+		open:      true,
+		reviewErr: fmt.Errorf("GitHub API 503"),
+	}
+	r := &prstatus.Reconciler{Client: fakeClient, SCM: fakeSCM}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "pr-fallback", Namespace: "default"},
+	})
+	require.NoError(t, err, "review error must not propagate")
+
+	var updated v1alpha1.PRStatus
+	require.NoError(t, fakeClient.Get(context.Background(),
+		types.NamespacedName{Name: "pr-fallback", Namespace: "default"}, &updated))
+
+	// Must preserve previous approved state when review poll fails.
+	assert.True(t, updated.Status.Approved, "approved must be preserved on review error")
+	assert.Equal(t, 2, updated.Status.ApprovalCount, "approvalCount must be preserved on review error")
 }

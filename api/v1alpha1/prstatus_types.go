@@ -52,6 +52,17 @@ type PRStatusStatus struct {
 	// +optional
 	Open bool `json:"open,omitempty"`
 
+	// Approved is true when the pull request has at least one approved review
+	// and no outstanding change-request reviews. Written by PRStatusReconciler.
+	// CEL: bundle.pr["staging"].isApproved
+	// +optional
+	Approved bool `json:"approved,omitempty"`
+
+	// ApprovalCount is the number of distinct approved reviews on this PR.
+	// Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount >= 2
+	// +optional
+	ApprovalCount int `json:"approvalCount,omitempty"`
+
 	// LastCheckedAt records the timestamp of the most recent SCM API poll.
 	// +optional
 	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
@@ -62,6 +73,8 @@ type PRStatusStatus struct {
 // +kubebuilder:resource:scope=Namespaced,shortName=prs
 // +kubebuilder:printcolumn:name="Merged",type=boolean,JSONPath=`.status.merged`
 // +kubebuilder:printcolumn:name="Open",type=boolean,JSONPath=`.status.open`
+// +kubebuilder:printcolumn:name="Approved",type=boolean,JSONPath=`.status.approved`
+// +kubebuilder:printcolumn:name="Approvals",type=integer,JSONPath=`.status.approvalCount`
 // +kubebuilder:printcolumn:name="PR",type=integer,JSONPath=`.spec.prNumber`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

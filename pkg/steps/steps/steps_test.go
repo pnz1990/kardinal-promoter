@@ -98,6 +98,10 @@ func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool,
 	return m.merged, m.open, m.getPRErr
 }
 
+func (m *mockSCMProvider) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
+	return false, 0, nil
+}
+
 func (m *mockSCMProvider) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error) {
 	return scm.WebhookEvent{}, nil
 }

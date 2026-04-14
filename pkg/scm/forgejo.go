@@ -182,6 +182,51 @@ func (f *ForgejoProvider) GetPRStatus(ctx context.Context, repo string, prNumber
 	return result.Merged, open, nil
 }
 
+// GetPRReviewStatus returns review approval state for a Forgejo/Gitea pull request.
+// Forgejo's review API returns all reviews; we take the latest state per user.
+// approved is true when at least one approving review exists and no
+// change-request review is outstanding. approvalCount is distinct approvers.
+func (f *ForgejoProvider) GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (bool, int, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return false, 0, err
+	}
+	var reviews []struct {
+		User struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		State string `json:"state"`
+	}
+	if err := f.do(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", owner, name, prNumber), nil, &reviews); err != nil {
+		return false, 0, fmt.Errorf("get PR reviews %s#%d: %w", repo, prNumber, err)
+	}
+
+	// Take the most recent review per user.
+	latestByUser := make(map[string]string, len(reviews))
+	for _, r := range reviews {
+		if r.User.Login == "" {
+			continue
+		}
+		switch r.State {
+		case "APPROVED", "REQUEST_CHANGES":
+			latestByUser[r.User.Login] = r.State
+		}
+	}
+
+	approvalCount := 0
+	hasChangeRequest := false
+	for _, state := range latestByUser {
+		switch state {
+		case "APPROVED":
+			approvalCount++
+		case "REQUEST_CHANGES":
+			hasChangeRequest = true
+		}
+	}
+	return approvalCount > 0 && !hasChangeRequest, approvalCount, nil
+}
+
 // ParseWebhookEvent parses a Forgejo/Gitea pull request webhook payload.
 // Forgejo signs payloads with HMAC-SHA256 and sends the hex digest in
 // the X-Gitea-Signature header (same algorithm as GitHub's X-Hub-Signature-256).

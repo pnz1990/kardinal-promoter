@@ -161,6 +161,27 @@ func (g *GitLabProvider) GetPRStatus(ctx context.Context, repo string, prNumber 
 	return merged, open, nil
 }
 
+// GetPRReviewStatus returns review approval state for a GitLab merge request.
+// GitLab MR approvals require the Approvals API (available on all tiers).
+// approved is true when the MR has at least one approval.
+// approvalCount is the number of distinct approvers.
+func (g *GitLabProvider) GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (bool, int, error) {
+	projectID := encodeProjectID(repo)
+	var result struct {
+		ApprovedBy []struct {
+			User struct {
+				Username string `json:"username"`
+			} `json:"user"`
+		} `json:"approved_by"`
+	}
+	if err := g.do(ctx, http.MethodGet,
+		fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d/approvals", projectID, prNumber), nil, &result); err != nil {
+		return false, 0, fmt.Errorf("get MR approvals %s!%d: %w", repo, prNumber, err)
+	}
+	count := len(result.ApprovedBy)
+	return count > 0, count, nil
+}
+
 // ParseWebhookEvent parses a GitLab merge request webhook payload and validates
 // the X-Gitlab-Token header using constant-time comparison.
 // The caller must pass the value of the X-Gitlab-Token header as signature.
