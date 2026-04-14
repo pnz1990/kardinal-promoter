@@ -123,3 +123,11 @@ krocodile:
 # Full CEL syntax validation requires a validating webhook.
 validatingAdmissionPolicy:
   enabled: true
+
+# -- ScheduleClock configuration.
+# One ScheduleClock is deployed per cluster to generate watch events for
+# PolicyGates with schedule.* expressions. This eliminates the per-gate
+# RequeueAfter timer loop.
+scheduleClock:
+  enabled: true
+  interval: "1m"

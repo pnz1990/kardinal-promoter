@@ -287,9 +287,42 @@ Without any SkipPermission PolicyGate, skipping an environment that has org gate
 
 ## Re-evaluation
 
-PolicyGates are re-evaluated periodically at the configured `recheckInterval`. This is necessary for time-based gates (e.g., weekend checks, soak time) where the gate may become passing without any cluster state change.
+PolicyGates are re-evaluated when any of the following occurs:
 
-The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph's `readyWhen` includes a freshness check. If the controller restarts and has not yet re-evaluated a gate, `lastEvaluatedAt` will be stale and Graph treats the gate as not-ready until the controller catches up.
+1. **ScheduleClock tick** (primary mechanism) — A `ScheduleClock` object in `kardinal-system`
+   writes `status.tick` every minute by default. The PolicyGate reconciler watches all `ScheduleClock`
+   objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide.
+   This is the recommended pattern for time-based gates (`schedule.isWeekend`, `schedule.hour`, etc.).
+
+2. **`recheckInterval`** (fallback) — When no `ScheduleClock` is installed, the controller
+   re-evaluates gates at the configured `recheckInterval`. This is a polling fallback.
+
+The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph's `readyWhen`
+includes a freshness check. If the controller restarts and has not yet re-evaluated a gate,
+`lastEvaluatedAt` will be stale and Graph treats the gate as not-ready until the controller
+catches up.
+
+### ScheduleClock setup
+
+A default `ScheduleClock` is automatically created by the Helm chart in the controller's namespace:
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: ScheduleClock
+metadata:
+  name: kardinal-clock
+  namespace: kardinal-system
+spec:
+  interval: 1m   # all time-based gates re-evaluate every minute
+```
+
+To verify it is running:
+
+```bash
+kubectl get scheduleclock kardinal-clock -n kardinal-system
+# NAME             INTERVAL   LAST-TICK                   AGE
+# kardinal-clock   1m         2026-04-14T12:00:00Z         5m
+```
 
 ## Mid-Flight Policy Changes
 
