@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T03:48:59Z",
+  "last_updated": "2026-04-14T03:58:03Z",
   "current_queue": "queue-019",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -720,9 +720,9 @@
       "branch": "feat/601-scheduleclock-crd"
     },
     "602-subscription-crd": {
-      "state": "in_progress",
+      "state": "in_review",
       "pr_merged": false,
-      "pr_number": null,
+      "pr_number": 485,
       "dependency_mode": "merged",
       "assigned_to": "STANDALONE-602-subscription-crd",
       "assigned_at": "2026-04-14T03:48:59Z",
