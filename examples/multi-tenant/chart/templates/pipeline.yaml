@@ -1,0 +1,25 @@
+# chart/templates/pipeline.yaml — Helm template for team Pipeline CRD.
+# Rendered by the ApplicationSet for each team folder.
+# Values come from teams/<name>/pipeline-values.yaml.
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: {{ .Values.appName | default .Release.Namespace }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    kardinal.io/managed-by: appset
+    kardinal.io/team: {{ .Release.Namespace }}
+spec:
+  git:
+    url: {{ .Values.gitRepo }}
+    branch: {{ .Values.gitBranch | default "main" }}
+  policyNamespaces:
+    - platform-policies  # always inherit org-level gates
+    - {{ .Release.Namespace }}
+  environments:
+  {{- range .Values.environments }}
+    - name: {{ .name }}
+      path: environments/{{ .name }}
+      approvalMode: {{ .approval | default "auto" }}
+  {{- end }}
+  historyLimit: {{ .Values.historyLimit | default 10 }}

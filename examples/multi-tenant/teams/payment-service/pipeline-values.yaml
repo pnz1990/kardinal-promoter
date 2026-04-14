@@ -1,0 +1,15 @@
+# teams/payment-service/pipeline-values.yaml — Team-specific Pipeline configuration.
+# This file is committed by the team to their service folder.
+# The ApplicationSet renders a Pipeline CRD from these values.
+
+appName: payment-service
+gitRepo: https://github.com/pnz1990/kardinal-demo
+gitBranch: main
+
+environments:
+  - name: dev
+    approval: auto
+  - name: staging
+    approval: auto
+  - name: prod
+    approval: pr-review

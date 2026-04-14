@@ -1,0 +1,22 @@
+# chart/values.yaml — Default values for the team Pipeline Helm chart.
+# Override in teams/<name>/pipeline-values.yaml.
+
+# appName is the Pipeline name. Defaults to the namespace (team) name.
+appName: ""
+
+# gitRepo is the GitOps repository URL.
+gitRepo: https://github.com/pnz1990/kardinal-demo
+
+# gitBranch is the base branch.
+gitBranch: main
+
+# environments lists the promotion environments.
+# Each entry: {name: <env>, approval: auto|pr-review}
+environments:
+  - name: dev
+  - name: staging
+  - name: prod
+    approval: pr-review
+
+# historyLimit is the number of Bundle history entries to retain.
+historyLimit: 10
