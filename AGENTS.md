@@ -464,6 +464,66 @@ When the upstream change lands: upgrade our pin, remove the workaround, close th
 kardinal issue, update the history table in `docs/aide/vision.md §Upstream Issue
 and PR Protocol`.
 
+## Branch Policy — What May Go Directly to main
+
+Branch protection enforces `enforce_admins: true`. **No push bypasses the PR requirement,
+including the agent account.** The only exception is the state branch `_state`.
+
+| Allowed direct to `main` | Must go through PR |
+|---|---|
+| `state: …` commits to `_state` branch | All code changes |
+| — | All docs changes |
+| — | All workflow changes |
+| — | All coordinator queue/state updates |
+| — | Everything else |
+
+The agent process generates many housekeeping commits (queue generation, docs audits,
+state updates). These are not exempt. They must be squash-merged via PR like everything
+else. There is no "trivial docs fix" exception.
+
+**Consequence**: if you find yourself tempted to push directly to main, that is a sign
+the task is too small to warrant tracking and should be batched into the next PR that
+touches the same area.
+
+---
+
+## Journey Validation Standard
+
+**A journey is NOT done until there is live-cluster evidence.** Fake-client tests
+(`fake.NewClientBuilder()`) are unit tests, not E2E validation. They prove reconciler
+logic; they do not prove the full stack works on a real cluster with real images.
+
+### What counts as evidence
+
+A journey is marked ✅ in `docs/aide/definition-of-done.md` only when **one** of:
+
+1. The `PDCA Validation` GitHub Actions workflow posts `[PDCA AUTOMATED]` to Issue #1
+   with PASS for that scenario (uses a live kind cluster + real `kardinal-test-app` image).
+2. A human or agent posts `[LIVE CLUSTER VALIDATED]` to Issue #1 with:
+   - The exact commands run
+   - The exact terminal output
+   - The kind/EKS cluster version
+   - The `kardinal-test-app` image SHA used
+
+### What does NOT count as evidence
+
+- `TestJourneyN` passing in CI (fake client — proves logic, not cluster integration)
+- A comment like "all tests pass" without output
+- Marking the checkbox based on PR merge alone
+
+### Triggering live validation
+
+```bash
+# Trigger the PDCA workflow manually for a specific scenario
+gh workflow run pdca.yml --repo pnz1990/kardinal-promoter \
+  -f scenario=1   # or 2, 3, 4, 5, 6, or all
+
+# Check the result
+gh run list --repo pnz1990/kardinal-promoter --workflow=pdca.yml --limit 3
+```
+
+---
+
 ## Journey Self-Validation Commands (Engineer step 3)
 
 Engineer reads definition-of-done.md and runs the relevant journey steps:

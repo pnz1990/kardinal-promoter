@@ -23,6 +23,12 @@ permissions:
   pages: write
   id-token: write
 
+# Serialise gh-pages deploys — never cancel an in-flight deploy (would corrupt
+# the gh-pages branch); queue the next one instead (cancel-in-progress: false).
+concurrency:
+  group: docs-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ── Step 1: Generate CLI reference from Cobra ──────────────────────────────
   generate-cli-docs:
