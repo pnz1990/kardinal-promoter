@@ -11,6 +11,16 @@ export interface Pipeline {
   /** #342: per-environment promotion phases from active Bundle status.
    * Keys are environment names, values are the promotion phase (Promoting, Verified, etc.) */
   environmentStates?: Record<string, string>
+  /** #462: number of PolicyGates with ready=false for the active bundle. */
+  blockerCount?: number
+  /** #462: number of PromotionSteps with state=Failed for the active bundle. */
+  failedStepCount?: number
+  /** #462: days since the active bundle was created (stale inventory indicator). */
+  inventoryAgeDays?: number
+  /** #462: RFC3339 timestamp of the last environment that reached Verified. */
+  lastMergedAt?: string
+  /** #462: CD automation level derived from PolicyGate count. */
+  cdLevel?: 'full-cd' | 'mostly-cd' | 'manual'
 }
 
 export interface Bundle {

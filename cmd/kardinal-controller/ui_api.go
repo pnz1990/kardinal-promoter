@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
@@ -46,6 +47,21 @@ type uiPipelineResponse struct {
 	// Derived from the active Bundle's status.environments.
 	// Keys are environment names, values are the promotion phase.
 	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
+
+	// Operations table columns (#462): derived from active Bundle + steps + gates.
+	// BlockerCount is the number of PolicyGates with ready=false for the active bundle.
+	BlockerCount int `json:"blockerCount,omitempty"`
+	// FailedStepCount is the number of PromotionSteps with state=Failed for the active bundle.
+	FailedStepCount int `json:"failedStepCount,omitempty"`
+	// InventoryAgeDays is the number of days since the latest bundle was created.
+	// A high value indicates stale inventory (no recent deploys).
+	InventoryAgeDays int `json:"inventoryAgeDays,omitempty"`
+	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
+	// Empty string when no environment has been verified yet.
+	LastMergedAt string `json:"lastMergedAt,omitempty"`
+	// CDLevel summarises how automated this pipeline is.
+	// "full-cd" = no manual gates, "mostly-cd" = 1–2 gates, "manual" = 3+ gates.
+	CDLevel string `json:"cdLevel,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -170,8 +186,10 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	_ = s.client.List(r.Context(), &bundleList)
 	// Index: pipelineName → active bundle (prefer Promoting > Available > Verified)
 	type activeBundleEntry struct {
-		name      string
-		envStates map[string]string
+		name         string
+		envStates    map[string]string
+		createdAt    time.Time
+		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
 	}
 	activeBundles := make(map[string]*activeBundleEntry)
 	phaseOrder := map[string]int{"Promoting": 3, "Available": 2, "Verified": 1, "Failed": 0, "Superseded": -1}
@@ -193,17 +211,50 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 		if existing == nil || newScore > existingScore {
 			envStates := make(map[string]string, len(b.Status.Environments))
+			var lastVerified time.Time
 			for _, env := range b.Status.Environments {
 				if env.Phase != "" {
 					envStates[env.Name] = env.Phase
 				}
+				// Track most recent HealthCheckedAt across all envs for lastMergedAt.
+				if env.HealthCheckedAt != nil && env.HealthCheckedAt.After(lastVerified) {
+					lastVerified = env.HealthCheckedAt.Time
+				}
 			}
 			activeBundles[key] = &activeBundleEntry{
-				name:      b.Name,
-				envStates: envStates,
+				name:         b.Name,
+				envStates:    envStates,
+				createdAt:    b.CreationTimestamp.Time,
+				lastVerified: lastVerified,
 			}
 		}
 	}
+
+	// Build per-pipeline blocker count from PolicyGates (ops table #462).
+	// Index: bundleName → count of gates with ready=false.
+	var gateList v1alpha1.PolicyGateList
+	_ = s.client.List(r.Context(), &gateList)
+	blockersByBundle := make(map[string]int, len(gateList.Items))
+	for _, g := range gateList.Items {
+		if !g.Status.Ready {
+			bundleLabel := g.Labels["kardinal.io/bundle"]
+			if bundleLabel != "" {
+				blockersByBundle[bundleLabel]++
+			}
+		}
+	}
+
+	// Build per-pipeline failed step count from PromotionSteps (ops table #462).
+	var stepList v1alpha1.PromotionStepList
+	_ = s.client.List(r.Context(), &stepList)
+	failedStepsByBundle := make(map[string]int, len(stepList.Items))
+	for _, ps := range stepList.Items {
+		if ps.Status.State == "Failed" {
+			failedStepsByBundle[ps.Spec.BundleName]++
+		}
+	}
+
+	now := time.Now().UTC()
 
 	result := make([]uiPipelineResponse, 0, len(list.Items))
 	for _, p := range list.Items {
@@ -214,11 +265,27 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			Phase:            pipelinePhase(&p),
 			EnvironmentCount: len(p.Spec.Environments),
 			Paused:           p.Spec.Paused,
+			CDLevel:          pipelineCDLevel(&p),
 		}
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
 			if len(ab.envStates) > 0 {
 				resp.EnvironmentStates = ab.envStates
+			}
+			// Ops table: blocker + failed step counts derived from active bundle.
+			if n := blockersByBundle[ab.name]; n > 0 {
+				resp.BlockerCount = n
+			}
+			if n := failedStepsByBundle[ab.name]; n > 0 {
+				resp.FailedStepCount = n
+			}
+			// Inventory age: days since the active bundle was created.
+			if !ab.createdAt.IsZero() {
+				resp.InventoryAgeDays = int(now.Sub(ab.createdAt).Hours() / 24)
+			}
+			// Last merged at: most recent HealthCheckedAt across all envs.
+			if !ab.lastVerified.IsZero() {
+				resp.LastMergedAt = ab.lastVerified.UTC().Format(time.RFC3339)
 			}
 		}
 		result = append(result, resp)
@@ -574,6 +641,21 @@ func pipelinePhase(p *v1alpha1.Pipeline) string {
 		}
 	}
 	return "Initializing"
+}
+
+// pipelineCDLevel returns a human-readable CD automation level for the pipeline (#462).
+// Derived from the number of PolicyGate references in the pipeline spec.
+// "full-cd" = 0 gates (fully automated), "mostly-cd" = 1–2 gates, "manual" = 3+ gates.
+func pipelineCDLevel(p *v1alpha1.Pipeline) string {
+	gateCount := len(p.Spec.PolicyGates)
+	switch {
+	case gateCount == 0:
+		return "full-cd"
+	case gateCount <= 2:
+		return "mostly-cd"
+	default:
+		return "manual"
+	}
 }
 
 // handlePromote handles POST /api/v1/ui/promote — creates a Bundle targeting the

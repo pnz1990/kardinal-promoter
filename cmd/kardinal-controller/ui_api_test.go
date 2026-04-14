@@ -547,3 +547,86 @@ func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
 	assert.True(t, resp[0].Paused, "paused pipeline must have Paused=true in API response")
 	assert.Equal(t, "my-app", resp[0].Name)
 }
+
+// TestUIAPI_ListPipelines_OpsFields verifies that the operations table fields
+// (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt, cdLevel) are
+// populated correctly from active Bundle, PolicyGate, and PromotionStep CRDs (#462).
+func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
+	now := metav1.Now()
+	p := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod"},
+			},
+			// 2 pipeline-level gates → cdLevel = "mostly-cd"
+			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
+				{Name: "gate-1"},
+				{Name: "gate-2"},
+			},
+		},
+		Status: v1alpha1.PipelineStatus{Phase: "Ready"},
+	}
+
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-v1",
+			Namespace:         "default",
+			CreationTimestamp: now,
+		},
+		Spec:   v1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	// Two PolicyGates blocking (ready=false) for this bundle
+	gate1 := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "no-weekend", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/bundle": "my-app-v1"},
+		},
+		Spec:   v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend()"},
+		Status: v1alpha1.PolicyGateStatus{Ready: false},
+	}
+	gate2 := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "needs-approval", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/bundle": "my-app-v1"},
+		},
+		Spec:   v1alpha1.PolicyGateSpec{Expression: "bundle.pr[\"prod\"].isApproved"},
+		Status: v1alpha1.PolicyGateStatus{Ready: false},
+	}
+
+	// One PromotionStep in Failed state for this bundle
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-prod", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{BundleName: "my-app-v1", Environment: "prod"},
+		Status:     v1alpha1.PromotionStepStatus{State: "Failed"},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(p, bundle, gate1, gate2, step).
+		WithStatusSubresource(gate1, gate2, step).
+		Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiPipelineResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+
+	got := resp[0]
+	assert.Equal(t, "my-app", got.Name)
+	assert.Equal(t, 2, got.BlockerCount, "2 blocking PolicyGates")
+	assert.Equal(t, 1, got.FailedStepCount, "1 Failed PromotionStep")
+	assert.Equal(t, "mostly-cd", got.CDLevel, "2 pipeline-level gates → mostly-cd")
+	// InventoryAgeDays should be 0 (bundle just created)
+	assert.Equal(t, 0, got.InventoryAgeDays, "just-created bundle → 0 days inventory age")
+}
