@@ -76,7 +76,7 @@ func TestPolicyGateReconciler_WeekdayGatePasses(t *testing.T) {
 
 	// Tuesday
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return tuesday }
 
@@ -105,7 +105,7 @@ func TestPolicyGateReconciler_WeekendGateBlocks(t *testing.T) {
 
 	// Saturday
 	saturday := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return saturday }
 
@@ -129,7 +129,7 @@ func TestPolicyGateReconciler_BundleNotFound(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -163,7 +163,7 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 		WithStatusSubresource(template).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -193,7 +193,7 @@ func TestPolicyGateReconciler_RequeueAfterRecheckInterval(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -232,7 +232,7 @@ func TestPolicyGateReconciler_Idempotent(t *testing.T) {
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return tuesday }
 
@@ -287,7 +287,7 @@ func TestPolicyGateReconciler_MetricsContext_PassWhenMetricPasses(t *testing.T) 
 		WithStatusSubresource(gate, mc).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -315,7 +315,7 @@ func TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails(t *testing.T) 
 		WithStatusSubresource(gate, mc).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -350,7 +350,7 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return now }
 
@@ -383,7 +383,7 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return now }
 
@@ -414,7 +414,7 @@ func TestPolicyGateReconciler_MetricsContext_NamespaceIsolation(t *testing.T) {
 		WithStatusSubresource(gate, mcSameNS, mcOtherNS).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -445,7 +445,7 @@ func TestPolicyGateReconciler_MetricsContext_EmptyWhenNoMetricChecks(t *testing.
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return tuesday }
 
@@ -474,7 +474,7 @@ func TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked(t *te
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -516,7 +516,7 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return now }
 
@@ -550,7 +550,7 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return now }
 
@@ -580,7 +580,7 @@ func TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -619,7 +619,7 @@ func TestPolicyGateReconciler_StatusReasonContainsVersion(t *testing.T) {
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return tuesday }
 
@@ -668,7 +668,7 @@ func TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -699,7 +699,7 @@ func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-		r, err := policygate.NewReconciler(c)
+	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
@@ -837,8 +837,8 @@ func TestReconciler_OverrideActive(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -863,8 +863,8 @@ func TestReconciler_OverrideExpired(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -888,8 +888,8 @@ func TestReconciler_OverrideWrongStage(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -987,8 +987,8 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount(t *testing.T)
 			c := fake.NewClientBuilder().WithScheme(s).
 				WithObjects(allObjects...).WithStatusSubresource(gate).Build()
 			r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+			require.NoError(t, err)
+			r.NowFn = time.Now
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 			_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1021,8 +1021,8 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount(t *testing.T)
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, currentBundle, hist1, hist2).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1053,8 +1053,8 @@ func TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, currentBundle).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1077,8 +1077,8 @@ func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1118,8 +1118,8 @@ func TestPolicyGateReconciler_PRReviewGate_Approved(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1142,8 +1142,8 @@ func TestPolicyGateReconciler_PRReviewGate_NotApproved(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1177,8 +1177,8 @@ func TestPolicyGateReconciler_PRReviewGate_MinReviewers(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(s).
 				WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
 			r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+			require.NoError(t, err)
+			r.NowFn = time.Now
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 			_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1203,8 +1203,8 @@ func TestPolicyGateReconciler_PRReviewGate_NoPRStatus(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
-		require.NoError(t, err)
-		r.NowFn = time.Now
+	require.NoError(t, err)
+	r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
