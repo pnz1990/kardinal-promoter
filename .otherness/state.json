@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-13T22:52:01Z",
+  "last_updated": "2026-04-14T02:51:19Z",
   "current_queue": "queue-017",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -640,24 +640,24 @@
       "pr_merged": true
     },
     "402-pr-review-gate": {
-      "state": "assigned",
-      "assigned_to": "STANDALONE-402-pr-review-gate",
+      "state": "todo",
+      "assigned_to": null,
       "assigned_at": "2026-04-13T23:35:08Z",
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": null,
       "pr_merged": false,
-      "branch": "feat/402-pr-review-gate",
-      "worktree": "../kardinal-promoter.402-pr-review-gate"
+      "branch": null,
+      "worktree": null
     },
     "403-kardinal-override": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": null,
       "assigned_at": null,
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": 471,
-      "pr_merged": false
+      "pr_merged": true
     },
     "404-cross-stage-history-cel": {
       "state": "todo",
