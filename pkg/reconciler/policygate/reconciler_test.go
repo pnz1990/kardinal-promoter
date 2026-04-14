@@ -1234,7 +1234,6 @@ func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
 	require.NoError(t, reconcileErr, "missing pipeline label must not crash reconciler")
 }
 
-
 // makePRStatus creates a PRStatus with the given bundle, environment and approval state.
 func makePRStatus(name, ns, bundleName, envName string, approved bool, approvalCount int) *kardinalv1alpha1.PRStatus {
 	return &kardinalv1alpha1.PRStatus{
