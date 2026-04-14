@@ -12,6 +12,7 @@ import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
+import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -485,6 +486,11 @@ export function App() {
                   )}
                 </div>
               )}
+
+              {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
+              <div style={{ marginBottom: '1rem' }}>
+                <ReleaseMetricsBar bundles={bundles} />
+              </div>
 
               {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
                   Receives bundles from parent state — no independent fetch (#321). */}

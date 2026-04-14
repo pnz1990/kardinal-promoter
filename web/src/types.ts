@@ -34,6 +34,8 @@ export interface Bundle {
   provenance?: Provenance
   /** #503: Per-environment promotion statuses for the timeline view. */
   environments?: BundleEnvStatus[]
+  /** #504: True when this bundle was created as a rollback of a previous bundle. */
+  isRollback?: boolean
 }
 
 /** #503: Per-environment promotion status for a Bundle. */
