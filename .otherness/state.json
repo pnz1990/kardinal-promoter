@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T03:29:09Z",
-  "current_queue": "queue-018",
+  "last_updated": "2026-04-14T03:34:22Z",
+  "current_queue": "queue-019",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -711,6 +711,19 @@
       "pr_number": 482,
       "dependency_mode": "merged",
       "branch": "feat/506-ui-actions"
+    },
+    "601-scheduleclock-crd": {
+      "state": "in_review",
+      "pr_merged": false,
+      "pr_number": 484,
+      "dependency_mode": "merged",
+      "branch": "feat/601-scheduleclock-crd"
+    },
+    "602-subscription-crd": {
+      "state": "todo",
+      "pr_merged": false,
+      "pr_number": null,
+      "dependency_mode": "merged"
     }
   },
   "session_heartbeats": {
@@ -724,11 +737,7 @@
     }
   },
   "handoff": {
-    "completed_at": "2026-04-14T03:29:09Z",
-    "queues_complete": [
-      "queue-017",
-      "queue-018"
-    ],
-    "note": "All queue-017 and queue-018 items merged. Queue 018 complete: 500-506 all done. Next: BATCH_COMPLETE audit, generate next queue."
+    "note": "Queue-017+018 complete. Queue-019 active: 601(scheduleclock, PR#484 in CI) + 602(subscription, todo).",
+    "updated_at": "2026-04-14T03:34:22Z"
   }
 }
