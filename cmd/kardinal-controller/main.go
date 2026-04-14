@@ -235,19 +235,12 @@ func main() {
 				if sub.Spec.Image == nil {
 					return nil, fmt.Errorf("image subscription missing spec.image")
 				}
-				return &source.OCIWatcher{
-					Registry:  sub.Spec.Image.Registry,
-					TagFilter: sub.Spec.Image.TagFilter,
-				}, nil
+				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
 			case kardinalv1alpha1.SubscriptionTypeGit:
 				if sub.Spec.Git == nil {
 					return nil, fmt.Errorf("git subscription missing spec.git")
 				}
-				return &source.GitWatcher{
-					RepoURL:  sub.Spec.Git.RepoURL,
-					Branch:   sub.Spec.Git.Branch,
-					PathGlob: sub.Spec.Git.PathGlob,
-				}, nil
+				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
 			default:
 				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
 			}

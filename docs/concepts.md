@@ -312,9 +312,6 @@ health:
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
-!!! warning "Source watchers in active development"
-    The OCI image watcher (`type: image`) and Git watcher (`type: git`) are currently stubs that always return `Changed: false`. A Subscription will enter `status.phase = Watching` but will not trigger Bundle creation until the real polling is implemented. See [subscription.md](subscription.md) for details.
-
 **Image Subscription** (watches OCI registries for new image tags):
 
 ```yaml

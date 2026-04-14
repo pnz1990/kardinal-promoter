@@ -16,8 +16,8 @@
 // Package source provides interfaces and implementations for watching artifact sources.
 //
 // The Watcher interface is the pluggable integration point for artifact discovery.
-// Phase 1 ships stub implementations that return placeholder values; real OCI and
-// Git implementations will be added in subsequent phases.
+// OCIWatcher uses the OCI Distribution Specification API to list tags and read digests.
+// GitWatcher uses the Git Smart HTTP protocol to read branch HEAD SHAs without cloning.
 package source
 
 import "context"
