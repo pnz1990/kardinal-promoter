@@ -825,7 +825,7 @@ None — this is the foundation.
 | 15 | MetricCheck CRD and upstream soak time | ✅ Complete |
 | 16 | Custom promotion steps via webhook | ✅ Complete |
 | 17 | GitLab support | ✅ Complete |
-| 18 | Subscription CRD | 📋 Planned |
+| 18 | Subscription CRD | ✅ Complete |
 | 19 | Security hardening and production readiness | 📋 Planned |
 | 20 | Contiguous healthy soak + `bake:` shorthand (K-01) | ✅ Complete |
 | 21 | Pre-deploy gate type `when: pre-deploy` (K-02) | ✅ Complete |

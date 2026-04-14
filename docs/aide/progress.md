@@ -32,7 +32,7 @@
 | 15 | MetricCheck CRD and Upstream Soak Time | ✅ Complete | Item 027 merged: PR #114. MetricCheck CRD, Prometheus evaluator, CEL soak time context. |
 | 16 | Custom Promotion Steps via Webhook | ✅ Complete | Item 028 merged: PR #124. CustomWebhookStep, registry fallback, 10 tests, example server + Pipeline, docs/custom-steps.md. |
 | 17 | GitLab Support | ✅ Complete | PR #165. GitLabProvider implementing SCMProvider, docs/scm-providers.md, Forgejo support. |
-| 18 | Subscription CRD | 📋 Planned | Depends on Stage 6 |
+| 18 | Subscription CRD | ✅ Complete | PR #485. Subscription CRD + SubscriptionReconciler + OCIWatcher + GitWatcher stubs. docs/subscription.md. |
 | 19 | Security Hardening and Production Readiness | 📋 Planned | Depends on all prior stages |
 
 ---
