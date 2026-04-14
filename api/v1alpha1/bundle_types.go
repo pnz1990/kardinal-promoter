@@ -143,6 +143,11 @@ type BundleMetrics struct {
 	// this Bundle's promotion.
 	// +optional
 	AutoRollbacks int `json:"autoRollbacks,omitempty"`
+
+	// OperatorInterventions is the number of PolicyGate overrides applied during
+	// this Bundle's promotion across all environments.
+	// +optional
+	OperatorInterventions int `json:"operatorInterventions,omitempty"`
 }
 
 // EnvironmentStatus captures per-environment promotion evidence for a Bundle.

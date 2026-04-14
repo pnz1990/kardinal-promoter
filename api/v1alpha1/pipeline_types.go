@@ -309,6 +309,56 @@ type PipelineStatus struct {
 	// Conditions holds status conditions.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// DeploymentMetrics holds aggregate DORA-style metrics computed from the
+	// last 30 Verified Bundles for this Pipeline. Written by PipelineReconciler.
+	// +optional
+	DeploymentMetrics *PipelineDeploymentMetrics `json:"deploymentMetrics,omitempty"`
+}
+
+// PipelineDeploymentMetrics holds aggregate promotion efficiency metrics for a Pipeline.
+// Computed by PipelineReconciler from the last 30 Verified Bundles for this pipeline.
+// Displayed by `kardinal metrics` and the UI pipeline detail view.
+type PipelineDeploymentMetrics struct {
+	// RolloutsLast30Days is the number of successful (Verified) promotions to
+	// the final pipeline environment in the last 30 calendar days.
+	// +optional
+	RolloutsLast30Days int `json:"rolloutsLast30Days,omitempty"`
+
+	// P50CommitToProdMinutes is the median time (minutes) from Bundle creation
+	// to the final environment reaching Verified, over the sample window.
+	// +optional
+	P50CommitToProdMinutes int64 `json:"p50CommitToProdMinutes,omitempty"`
+
+	// P90CommitToProdMinutes is the 90th-percentile time (minutes) from Bundle
+	// creation to the final environment reaching Verified, over the sample window.
+	// +optional
+	P90CommitToProdMinutes int64 `json:"p90CommitToProdMinutes,omitempty"`
+
+	// AutoRollbackRateMillis is the fraction of sampled Bundles that triggered an
+	// automatic rollback, expressed as integer thousandths (e.g. 83 = 8.3%).
+	// Stored as integer to avoid floating-point in CRD YAML.
+	// +optional
+	AutoRollbackRateMillis int `json:"autoRollbackRateMillis,omitempty"`
+
+	// OperatorInterventionRateMillis is the fraction of sampled Bundles that had
+	// at least one PolicyGate override applied, expressed as integer thousandths.
+	// +optional
+	OperatorInterventionRateMillis int `json:"operatorInterventionRateMillis,omitempty"`
+
+	// StaleProdDays is the number of days since the last successful promotion to
+	// the final pipeline environment. 0 means a promotion completed today.
+	// -1 means no promotion has ever completed.
+	// +optional
+	StaleProdDays int `json:"staleProdDays,omitempty"`
+
+	// SampleSize is the number of Bundles included in this computation.
+	// +optional
+	SampleSize int `json:"sampleSize,omitempty"`
+
+	// ComputedAt is when these metrics were last written by the PipelineReconciler.
+	// +optional
+	ComputedAt *metav1.Time `json:"computedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
