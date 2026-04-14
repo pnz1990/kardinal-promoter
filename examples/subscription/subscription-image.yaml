@@ -1,0 +1,19 @@
+# subscription-image.yaml — OCI image subscription example.
+# Watches ghcr.io/pnz1990/kardinal-test-app for new tags matching "^sha-".
+# Creates a Bundle when a new tag is detected.
+#
+# Usage:
+#   kubectl apply -f subscription-image.yaml
+#   kubectl get subscriptions
+apiVersion: kardinal.io/v1alpha1
+kind: Subscription
+metadata:
+  name: kardinal-test-app-image
+  namespace: default
+spec:
+  type: image
+  pipeline: kardinal-test-app
+  image:
+    registry: ghcr.io/pnz1990/kardinal-test-app
+    tagFilter: "^sha-"
+    interval: 5m

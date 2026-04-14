@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
@@ -54,7 +55,9 @@ import (
 	prstatusrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	rbprecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 	scheduleclockrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
+	subscriptionrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
@@ -224,6 +227,37 @@ func main() {
 		Client: mgr.GetClient(),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ScheduleClockReconciler")
+	}
+
+	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval
+	// and creates Bundle CRDs when new artifacts are detected.
+	if err := (&subscriptionrecon.Reconciler{
+		Client: mgr.GetClient(),
+		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+			switch sub.Spec.Type {
+			case kardinalv1alpha1.SubscriptionTypeImage:
+				if sub.Spec.Image == nil {
+					return nil, fmt.Errorf("image subscription missing spec.image")
+				}
+				return &source.OCIWatcher{
+					Registry:  sub.Spec.Image.Registry,
+					TagFilter: sub.Spec.Image.TagFilter,
+				}, nil
+			case kardinalv1alpha1.SubscriptionTypeGit:
+				if sub.Spec.Git == nil {
+					return nil, fmt.Errorf("git subscription missing spec.git")
+				}
+				return &source.GitWatcher{
+					RepoURL:  sub.Spec.Git.RepoURL,
+					Branch:   sub.Spec.Git.Branch,
+					PathGlob: sub.Spec.Git.PathGlob,
+				}, nil
+			default:
+				return nil, fmt.Errorf("unknown subscription type %q", sub.Spec.Type)
+			}
+		},
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up SubscriptionReconciler")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

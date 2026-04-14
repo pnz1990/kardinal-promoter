@@ -1,0 +1,20 @@
+# subscription-git.yaml — Git repository subscription example.
+# Watches the main branch of kardinal-demo for new commits touching the "app/" path.
+# Creates a config Bundle when a new commit is detected.
+#
+# Usage:
+#   kubectl apply -f subscription-git.yaml
+#   kubectl get subscriptions
+apiVersion: kardinal.io/v1alpha1
+kind: Subscription
+metadata:
+  name: kardinal-demo-git
+  namespace: default
+spec:
+  type: git
+  pipeline: kardinal-test-app
+  git:
+    repoURL: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    pathGlob: "app/**"
+    interval: 5m

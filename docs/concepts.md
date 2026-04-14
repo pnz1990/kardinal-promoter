@@ -310,11 +310,6 @@ health:
 
 ## Subscription
 
-!!! warning "Not yet implemented — planned for a future release"
-    The Subscription CRD is on the roadmap but not yet available. The spec below shows the intended API.
-    Today, Bundles are created by CI (via webhook or CLI). When Subscription ships, it will provide
-    a passive trigger alternative.
-
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
 **Image Subscription** (watches OCI registries for new image tags):
@@ -325,13 +320,12 @@ kind: Subscription
 metadata:
   name: my-app-image-watch
 spec:
+  type: image
   pipeline: my-app
-  source:
-    type: image
-    image:
-      repository: ghcr.io/myorg/my-app
-      constraint: ">=1.0.0"
-      interval: 5m
+  image:
+    registry: ghcr.io/myorg/my-app
+    tagFilter: "^sha-"
+    interval: 5m
 ```
 
 **Git Subscription** (watches a Git repository for config changes, creates config Bundles):
@@ -342,14 +336,13 @@ kind: Subscription
 metadata:
   name: my-app-config-watch
 spec:
+  type: git
   pipeline: my-app
-  source:
-    type: gitCommit
-    gitCommit:
-      repository: https://github.com/myorg/app-config
-      branch: main
-      path: configs/my-app/
-      interval: 5m
+  git:
+    repoURL: https://github.com/myorg/app-config
+    branch: main
+    pathGlob: "configs/my-app/**"
+    interval: 5m
 ```
 
 When a new image tag or Git commit is discovered, a Bundle of the appropriate type (`image` or `config`) is created automatically.
