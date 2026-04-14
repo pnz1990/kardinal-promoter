@@ -1,7 +1,7 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: nginx-demo
+  name: kardinal-test-app
   namespace: default
 spec:
   git:
