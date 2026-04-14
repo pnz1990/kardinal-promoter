@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-13T22:52:01Z",
-  "current_queue": "queue-017",
+  "last_updated": "2026-04-14T03:58:03Z",
+  "current_queue": "queue-019",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -640,33 +640,94 @@
       "pr_merged": true
     },
     "402-pr-review-gate": {
-      "state": "assigned",
-      "assigned_to": "STANDALONE-402-pr-review-gate",
-      "assigned_at": "2026-04-13T23:35:08Z",
+      "state": "done",
+      "assigned_to": null,
+      "assigned_at": "2026-04-14T02:52:09Z",
       "worktree_path": null,
       "dependency_mode": "merged",
-      "pr_number": null,
-      "pr_merged": false,
-      "branch": "feat/402-pr-review-gate",
-      "worktree": "../kardinal-promoter.402-pr-review-gate"
+      "pr_number": 472,
+      "pr_merged": true,
+      "branch": null,
+      "worktree": null
     },
     "403-kardinal-override": {
-      "state": "in_review",
+      "state": "done",
       "assigned_to": null,
       "assigned_at": null,
       "worktree_path": null,
       "dependency_mode": "merged",
       "pr_number": 471,
-      "pr_merged": false
+      "pr_merged": true
     },
     "404-cross-stage-history-cel": {
-      "state": "todo",
+      "state": "done",
       "assigned_to": null,
       "assigned_at": null,
       "worktree_path": null,
       "dependency_mode": "merged",
-      "pr_number": null,
-      "pr_merged": false
+      "pr_number": 473,
+      "pr_merged": true
+    },
+    "500-ui-pipeline-ops-view": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 475,
+      "dependency_mode": "merged"
+    },
+    "501-ui-stage-detail": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 476,
+      "dependency_mode": "merged"
+    },
+    "502-ui-gate-detail": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 477,
+      "dependency_mode": "merged"
+    },
+    "503-ui-bundle-timeline": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 478,
+      "dependency_mode": "merged"
+    },
+    "504-ui-release-metrics": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 481,
+      "dependency_mode": "merged",
+      "branch": "feat/504-ui-release-metrics"
+    },
+    "505-ui-fleet-dashboard": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 480,
+      "dependency_mode": "merged"
+    },
+    "506-ui-actions": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 482,
+      "dependency_mode": "merged",
+      "branch": "feat/506-ui-actions"
+    },
+    "601-scheduleclock-crd": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 484,
+      "dependency_mode": "merged",
+      "branch": "feat/601-scheduleclock-crd"
+    },
+    "602-subscription-crd": {
+      "state": "in_review",
+      "pr_merged": false,
+      "pr_number": 485,
+      "dependency_mode": "merged",
+      "assigned_to": "STANDALONE-602-subscription-crd",
+      "assigned_at": "2026-04-14T03:48:59Z",
+      "branch": "feat/602-subscription-crd",
+      "worktree": "../kardinal-promoter.602-subscription-crd"
     }
   },
   "session_heartbeats": {
@@ -680,14 +741,7 @@
     }
   },
   "handoff": {
-    "fixed_at": "2026-04-13T23:16:52Z",
-    "reason": "Collision fix applied. Branch-push locking now in effect.",
-    "resume_with": "/otherness.run",
-    "note": "otherness updated: git push branch = distributed lock. No slot IDs needed. Each session claims an item by successfully pushing feat/<item-id> to remote. If push fails, pick another item.",
-    "remaining_items": [
-      "402-pr-review-gate",
-      "403-kardinal-override (PR #471 needs CI green)",
-      "404-cross-stage-history-cel"
-    ]
+    "note": "Queue-017+018 complete. Queue-019 active: 601(scheduleclock, PR#484 in CI) + 602(subscription, todo).",
+    "updated_at": "2026-04-14T03:34:22Z"
   }
 }
