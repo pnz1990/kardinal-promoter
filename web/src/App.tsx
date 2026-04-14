@@ -14,6 +14,7 @@ import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
 import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
+import { ActionBar } from './components/ActionBar'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -442,6 +443,16 @@ export function App() {
                   </div>
                 )}
               </div>
+
+              {/* #506: ActionBar — pause/resume buttons for the selected pipeline. */}
+              {activePipeline && (
+                <ActionBar
+                  pipelineName={activePipeline.name}
+                  namespace={activePipeline.namespace ?? 'default'}
+                  paused={activePipeline.paused ?? false}
+                  onRefresh={manualRefresh}
+                />
+              )}
 
               {/* Blocked PolicyGate banner */}
               <BlockedBanner

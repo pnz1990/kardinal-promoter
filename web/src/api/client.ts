@@ -37,6 +37,15 @@ export const api = {
   /** Trigger a rollback for the given pipeline (#331). */
   rollback: (pipeline: string, environment: string, namespace = 'default', toBundle?: string) =>
     post<{ bundle: string; message: string }>('/rollback', { pipeline, environment, namespace, toBundle }),
+  /** Pause a pipeline — sets spec.paused=true (#506). */
+  pause: (pipeline: string, namespace = 'default') =>
+    post<{ message: string }>('/pause', { pipeline, namespace }),
+  /** Resume a paused pipeline — sets spec.paused=false (#506). */
+  resume: (pipeline: string, namespace = 'default') =>
+    post<{ message: string }>('/resume', { pipeline, namespace }),
+  /** Approve (override) a PolicyGate with a reason and expiry (#506). */
+  approveGate: (gateName: string, gateNamespace = 'default', reason: string, expiresInMinutes = 60) =>
+    post<{ message: string }>(`/gates/${gateNamespace}/${gateName}/approve`, { reason, expiresInMinutes }),
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),
