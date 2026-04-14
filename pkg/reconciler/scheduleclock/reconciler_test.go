@@ -142,7 +142,7 @@ func TestReconcile_NotFound(t *testing.T) {
 
 	r := &scheduleclock.Reconciler{
 		Client: client,
-		NowFn:  func() time.Time { return time.Now() },
+		NowFn:  time.Now,
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
