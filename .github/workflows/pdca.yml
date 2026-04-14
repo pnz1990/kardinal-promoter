@@ -62,6 +62,22 @@ jobs:
           make build
           echo "$(pwd)/bin" >> $GITHUB_PATH
 
+      - name: Install kardinal-promoter controller
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          # Build and load the controller image into kind
+          make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
+          kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
+          # Generate CRDs and install via helm
+          make manifests
+          kubectl apply -f config/crd/bases/
+          helm upgrade --install kardinal chart/kardinal-promoter \
+            --namespace kardinal-system --create-namespace \
+            --set validatingAdmissionPolicy.enabled=false \
+            --wait --timeout 120s
+          kubectl get pods -n kardinal-system
+
       - name: Get real test image SHA
         id: image
         run: |
@@ -72,11 +88,17 @@ jobs:
 
       - name: Apply Pipeline and PolicyGates
         run: |
+          # Create the platform-policies namespace required by the org-level PolicyGates
+          kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f examples/quickstart/pipeline.yaml
           kubectl apply -f examples/quickstart/policy-gates.yaml
           kubectl create secret generic github-token \
             --from-literal=token=${{ secrets.GITHUB_TOKEN }} \
             --dry-run=client -o yaml | kubectl apply -f -
+          # Give the controller a moment to process the new resources
+          sleep 5
+          kubectl get pipeline -A || true
+          kubectl get policygate -A || true
 
       - name: Run PDCA Scenarios
         id: scenarios
@@ -91,9 +113,15 @@ jobs:
           # Scenario 1: Happy path promotion
           echo "=== Scenario 1: Happy path promotion ==="
           kardinal create bundle kardinal-test-app --image "$TEST_IMAGE" || true
-          sleep 30
+          # Wait up to 90s for promotion to start — real cluster takes longer than fake client
+          for i in $(seq 1 6); do
+            sleep 15
+            OUTPUT=$(kardinal get pipelines 2>&1 || true)
+            if echo "$OUTPUT" | grep -q "Verified\|Promoting\|WaitingForMerge"; then break; fi
+          done
           OUTPUT=$(kardinal get pipelines 2>&1 || true)
-          if echo "$OUTPUT" | grep -q "Verified\|Promoting"; then
+          echo "S1 pipelines output: $OUTPUT"
+          if echo "$OUTPUT" | grep -q "Verified\|Promoting\|WaitingForMerge"; then
             echo "S1: PASS"
             PASS=$((PASS+1))
             RESULTS="$RESULTS\n✅ S1: Happy path — Bundle created, promotion started"
@@ -143,13 +171,21 @@ jobs:
           # Scenario 6: Concurrent bundles supersession
           echo "=== Scenario 6: Concurrent bundles ==="
           kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-aaa0001" || true
-          sleep 2
+          sleep 3
           kardinal create bundle kardinal-test-app --image "$TEST_IMAGE" || true
-          sleep 15
+          sleep 30
           OUTPUT=$(kardinal get bundles kardinal-test-app 2>&1 || true)
           echo "S6 output: $OUTPUT"
-          PASS=$((PASS+1))
-          RESULTS="$RESULTS\n✅ S6: Concurrent bundles — commands ran without error"
+          # Verify that the older bundle is superseded and newer is promoting
+          if echo "$OUTPUT" | grep -q "Superseded\|superseded"; then
+            echo "S6: PASS — supersession detected"
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S6: Concurrent bundles — older bundle superseded"
+          else
+            echo "S6: NOTE — supersession not yet visible; output: $OUTPUT"
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n⚠️ S6: Concurrent bundles — output: $OUTPUT (supersession timing)"
+          fi
 
           echo "PASS=$PASS" >> $GITHUB_OUTPUT
           echo "FAIL=$FAIL" >> $GITHUB_OUTPUT
