@@ -535,6 +535,12 @@ func (r *Reconciler) now() time.Time {
 // same namespace are queued for re-evaluation. This is the controller-runtime
 // equivalent of a "Watch node" — the PolicyGate reconciler reacts to MetricCheck
 // status changes rather than waiting for recheckInterval alone.
+//
+// It also adds a Watch on ScheduleClock objects: when a ScheduleClock's status.tick
+// changes (updated on each interval by the ScheduleClockReconciler), all PolicyGate
+// instances in ALL namespaces are re-evaluated. This replaces the per-gate
+// ctrl.Result{RequeueAfter: recheckInterval} timer loop for schedule.* expressions.
+// (PG-4 from docs/design/11-graph-purity-tech-debt.md)
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// metricCheckMapper enqueues all PolicyGates in the same namespace as the
 	// changed MetricCheck. This ensures PolicyGates with metrics.* expressions
@@ -561,6 +567,29 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return reqs
 	}
 
+	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
+	// when any ScheduleClock ticks. This ensures schedule.* expressions are
+	// re-evaluated on every clock interval without a per-gate RequeueAfter timer.
+	scheduleClockMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
+		var gateList kardinalv1alpha1.PolicyGateList
+		if err := r.List(ctx, &gateList); err != nil {
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0, len(gateList.Items))
+		for _, gate := range gateList.Items {
+			if gate.Labels[labelBundle] == "" {
+				continue
+			}
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      gate.Name,
+					Namespace: gate.Namespace,
+				},
+			})
+		}
+		return reqs
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.PolicyGate{}).
 		// Watch MetricCheck objects: when a MetricCheck status changes (Pass/Fail),
@@ -568,6 +597,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// This replaces the polling-only model with an event-driven one,
 		// moving toward the Graph-first Watch node architecture.
 		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(metricCheckMapper)).
+		// Watch ScheduleClock objects: when status.tick changes, all PolicyGate instances
+		// are re-evaluated cluster-wide. This replaces RequeueAfter for schedule.* gates.
+		// (PG-4 elimination — see docs/design/11-graph-purity-tech-debt.md)
+		Watches(&kardinalv1alpha1.ScheduleClock{}, handler.EnqueueRequestsFromMapFunc(scheduleClockMapper)).
 		Complete(r)
 }
 

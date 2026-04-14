@@ -1,0 +1,13 @@
+# kardinal-clock — one ScheduleClock per cluster is sufficient.
+# Deploy to kardinal-system. All PolicyGates with schedule.* expressions
+# will be re-evaluated on every tick without a per-gate RequeueAfter timer.
+#
+# Default interval: 1 minute. Gates that care about business hours don't
+# need sub-minute precision.
+apiVersion: kardinal.io/v1alpha1
+kind: ScheduleClock
+metadata:
+  name: kardinal-clock
+  namespace: kardinal-system
+spec:
+  interval: 1m
