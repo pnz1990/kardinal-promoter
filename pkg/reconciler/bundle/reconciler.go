@@ -28,18 +28,27 @@ import (
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // BundleTranslator is the interface the BundleReconciler uses to translate a
 // Bundle+Pipeline into a kro Graph. Abstracted as an interface for testability.
 type BundleTranslator interface {
 	Translate(ctx context.Context, pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) (string, error)
+}
+
+// GraphChecker checks whether a kro Graph exists by name in a given namespace.
+// Abstracted as an interface for testability without a real Kubernetes cluster.
+type GraphChecker interface {
+	GraphExists(ctx context.Context, namespace, name string) (bool, error)
 }
 
 // Reconciler watches Bundle objects, sets Available phase, triggers translation,
@@ -50,6 +59,9 @@ type Reconciler struct {
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
 	// May be nil in test environments where translation is not needed.
 	Translator BundleTranslator
+	// GraphChecker detects whether the Graph CR still exists.
+	// When nil, graph recreation is skipped (backward-compatible).
+	GraphChecker GraphChecker
 }
 
 // Reconcile is called whenever a Bundle is created, updated, or deleted,
@@ -123,8 +135,78 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				log.Warn().Err(err).Msg("failed to check parent pipeline (non-fatal), continuing sync")
 			}
 		}
+		// For Promoting bundles: ensure the Graph still exists and recreate if needed.
+		// Fixes issue #490: manual Graph deletion left bundles stuck in Promoting.
+		if b.Status.Phase == "Promoting" {
+			if err := r.ensureGraphExists(ctx, log, &b); err != nil {
+				log.Error().Err(err).Msg("graph recreation failed — requeuing")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+		}
 		return r.handleSyncEvidence(ctx, log, &b)
 	}
+}
+
+// ensureGraphExists checks whether the Graph for a Promoting Bundle still exists,
+// and recreates it via the Translator if it has been deleted.
+//
+// This fixes issue #490: manual `kubectl delete graph <name>` left Bundles stuck
+// in Promoting indefinitely. Graph CR deletion now triggers re-reconciliation
+// (via the Graph Watch in SetupWithManager) and this method handles recreation.
+//
+// Graph-first: we only write to our own CRD status (GraphRef). The Translator
+// is idempotent — if the Graph already exists it returns nil without creating again.
+func (r *Reconciler) ensureGraphExists(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle) error {
+	if r.Translator == nil || r.GraphChecker == nil {
+		return nil // no-op in test environments without real translator
+	}
+
+	// Compute expected graph name — deterministic from (pipeline, bundle).
+	expectedName := b.Status.GraphRef
+	if expectedName == "" {
+		// Fallback: recompute from known naming convention.
+		expectedName = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
+	}
+
+	exists, err := r.GraphChecker.GraphExists(ctx, b.Namespace, expectedName)
+	if err != nil {
+		// Non-fatal: log and continue. Graph check failure should not block evidence sync.
+		log.Warn().Err(err).Str("graph", expectedName).Msg("failed to check graph existence (non-fatal)")
+		return nil
+	}
+	if exists {
+		return nil // nothing to do
+	}
+
+	// Graph is missing — look up the Pipeline and recreate.
+	log.Info().Str("graph", expectedName).Msg("graph deleted externally — recreating")
+
+	var pipeline kardinalv1alpha1.Pipeline
+	if err := r.Get(ctx, client.ObjectKey{Name: b.Spec.Pipeline, Namespace: b.Namespace}, &pipeline); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Pipeline deleted — Bundle orphan guard will handle cleanup on next reconcile.
+			return nil
+		}
+		return fmt.Errorf("ensureGraphExists: get pipeline: %w", err)
+	}
+
+	graphName, err := r.Translator.Translate(ctx, &pipeline, b)
+	if err != nil {
+		return fmt.Errorf("ensureGraphExists: recreate graph: %w", err)
+	}
+
+	// Update GraphRef if it changed (shouldn't happen, but keep it current).
+	if b.Status.GraphRef != graphName {
+		patch := client.MergeFrom(b.DeepCopy())
+		b.Status.GraphRef = graphName
+		if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
+			log.Warn().Err(patchErr).Msg("failed to update GraphRef after recreation (non-fatal)")
+		}
+	}
+
+	log.Info().Str("graph", graphName).Msg("graph recreated after external deletion")
+	return nil
 }
 
 // handleNew sets the phase to Available on a newly-created Bundle.
@@ -261,7 +343,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Advance to Promoting
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Promoting"
-	_ = graphName // GraphRef will be stored in BundleStatus in a future stage
+	b.Status.GraphRef = graphName // store for recreation detection (#490)
 
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -454,9 +536,11 @@ func (r *Reconciler) Start(ctx context.Context) error {
 // It also registers the reconciler as a Runnable so that Start() is called after
 // cache sync to perform startup reconciliation.
 //
-// It adds a Watch on PromotionStep objects: when any PromotionStep for a Bundle
-// changes state (e.g. Verified, Failed), the Bundle is re-queued to sync evidence.
-// This replaces the PromotionStep reconciler's cross-CRD copyEvidenceToBundle write.
+// It adds Watches for:
+//   - PromotionStep changes: when a PromotionStep state changes, re-queue the Bundle
+//     to sync evidence. Replaces the old cross-CRD copyEvidenceToBundle.
+//   - Graph deletion: when the kro Graph backing a Bundle is deleted externally,
+//     re-queue the Bundle so it can recreate the Graph (#490).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.Add(r); err != nil {
 		return fmt.Errorf("add reconciler as runnable: %w", err)
@@ -477,9 +561,37 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}
 
+	// graphMapper maps a kro Graph change event to a Bundle reconcile request.
+	// When a Graph is deleted externally (kubectl delete graph <name>), the owning
+	// Bundle is re-queued so ensureGraphExists can recreate it (#490).
+	// Reads the kardinal.io/bundle label set by the Graph builder.
+	graphMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		bundleName := obj.GetLabels()["kardinal.io/bundle"]
+		if bundleName == "" {
+			return nil
+		}
+		return []reconcile.Request{
+			{NamespacedName: client.ObjectKey{
+				Name:      bundleName,
+				Namespace: obj.GetNamespace(),
+			}},
+		}
+	}
+
+	// graphObject is an unstructured placeholder for the kro Graph CRD.
+	// We use unstructured to avoid a compile-time dependency on the kro module.
+	graphObject := &unstructured.Unstructured{}
+	graphObject.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "experimental.kro.run",
+		Version: "v1alpha1",
+		Kind:    "Graph",
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Bundle{}).
 		// Watch PromotionSteps: evidence sync when PS state changes.
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(promotionStepMapper)).
+		// Watch Graphs: recreate when Graph is deleted externally (#490).
+		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(graphMapper)).
 		Complete(r)
 }
