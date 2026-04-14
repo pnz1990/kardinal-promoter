@@ -170,7 +170,7 @@ describe('StageDetailPanel', () => {
   it('shows step list with 8 steps', () => {
     const node = makeNode()
     const step = makeStep()
-    const { getAllByRole } = render(<StageDetailPanel node={node} steps={[step]} onClose={() => {}} />)
+    render(<StageDetailPanel node={node} steps={[step]} onClose={() => {}} />)
     // 8 step rows in the list plus the close button and optional PR link
     const listItems = screen.queryAllByText(/Git clone|Set image|Git commit|Git push|Open PR|Wait for merge|Health check/)
     expect(listItems.length).toBeGreaterThanOrEqual(1)
