@@ -298,6 +298,129 @@ Do not implement a workaround. Do not reference `pkg/cel` in new code.
 The only permitted exception is `pkg/cel/` in `pkg/reconciler/policygate` — documented as a
 transitional workaround in `docs/design/10-graph-first-architecture.md`. It must not grow.
 
+---
+
+## krocodile Upgrade Cadence
+
+krocodile evolves autonomously and continuously. Breaking changes arrive without
+deprecation windows. New primitives eliminate existing workarounds. The pinned
+commit in `hack/install-krocodile.sh` is the single source of truth for which
+krocodile version kardinal targets. **Agents must actively manage this.**
+
+### Every batch: check for new commits
+
+Before generating any work queue, the coordinator runs:
+
+```bash
+PINNED=$(grep 'KROCODILE_COMMIT:-' hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,40\}')
+AHEAD=$(cd /tmp/kro-review 2>/dev/null && git fetch -q origin krocodile && \
+  git log ${PINNED}..origin/krocodile --oneline 2>/dev/null | wc -l || echo "?")
+
+echo "We are $AHEAD commits behind HEAD krocodile"
+```
+
+**If $AHEAD ≥ 5**: add a `chore(graph): review and upgrade krocodile` item to the
+queue. This is mandatory, not optional. See the upgrade protocol below.
+
+**If $AHEAD = 0**: no action needed.
+
+### Upgrade protocol (when assigned)
+
+```bash
+# 1. Clone at HEAD and read the log since our pin
+PINNED=$(grep 'KROCODILE_COMMIT:-' hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,40\}')
+git clone -q --depth=200 https://github.com/ellistarn/kro.git /tmp/kro-review -b krocodile
+cd /tmp/kro-review && git checkout -q $(git rev-parse origin/krocodile)
+
+NEW_COMMITS=$(git log ${PINNED}..HEAD --oneline)
+echo "$NEW_COMMITS"
+
+# 2. Read diffs for the three change surfaces most likely to break kardinal
+git diff ${PINNED}..HEAD -- experimental/controller/types.go
+git diff ${PINNED}..HEAD -- experimental/controller/labels.go
+git diff ${PINNED}..HEAD -- experimental/controller/dag.go
+git diff ${PINNED}..HEAD -- experimental/controller/controller.go | head -200
+
+# 3. For each breaking change found, identify the kardinal file and line that needs updating.
+#    Common breakage vectors:
+#    - Node ID format requirements (labels.go, types.go)
+#    - Graph condition type renames (types.go)
+#    - Label key scheme changes (labels.go, apply.go)
+#    - readyWhen/propagateWhen semantic changes (controller.go, design docs)
+#    - New node reference types replacing old shape names (types.go, node.go)
+```
+
+After analysis, either:
+- **Open a kardinal PR** with the compat fixes (update celSafeSlug, label guards,
+  node ID invariants, comment updates, test fixture updates, pin bump)
+- **Open a krocodile issue** if the change is a krocodile bug (see §Upstream Issues below)
+- **Both** if the change is a krocodile design evolution that requires coordination
+
+### Primitive rethink (every 5th upgrade or on major krocodile releases)
+
+When a krocodile upgrade introduces a substantial new capability (Definition nodes,
+new Watch semantics, new CEL functions, new propagation model), the upgrading engineer
+must also answer — in the PR description or as a follow-up issue:
+
+> **Does this new krocodile capability let us delete or simplify something in kardinal?**
+
+Specifically check:
+- Can any `pkg/reconciler/*` reconciler be deleted because krocodile now handles
+  the pattern natively?
+- Can `pkg/translator/translator.go` be simplified because krocodile now expresses
+  something that required hand-built Graph specs?
+- Do any `blocked-on-krocodile` GitHub issues now have a solution?
+  ```bash
+  gh issue list --repo pnz1990/kardinal-promoter --label blocked-on-krocodile --state open
+  ```
+- Are our `celSafeSlug`, `propagateWhen` patterns, and node ID conventions still
+  idiomatic, or does the new krocodile suggest a cleaner approach?
+
+If a simplification is found: open a `kind/enhancement,area/graph` issue describing
+it. Do not gold-plate the upgrade PR itself — file the simplification separately.
+
+### Upstream issues and PRs
+
+When kardinal hits a krocodile bug or missing primitive, engage upstream directly.
+krocodile is autonomous development — new features and fixes land fast when motivated
+by real usage. Do not silently work around krocodile limitations.
+
+**Open a krocodile issue when:**
+- A krocodile bug causes a kardinal feature to fail
+- A krocodile API change breaks our integration in a way that seems unintentional
+- krocodile's runtime behavior diverges from its own design docs in `experimental/docs/design/`
+
+**Open a krocodile PR when:**
+- A missing primitive forces a workaround that violates Graph-first architecture
+- A validation is wrong for real-world use (we've already done this: PR #109)
+- The fix is small, well-scoped, and has a test case
+
+```bash
+# Issue template
+gh issue create --repo ellistarn/kro \
+  --title "fix: <specific symptom in terms of krocodile internals>" \
+  --body "## What kardinal-promoter observed
+<concrete behaviour, ideally with a minimal Graph spec that reproduces it>
+
+## Root cause (from source reading)
+<specific file:line and why>
+
+## Suggested fix
+<if known — a diff is ideal>"
+
+# PR: fork, branch, fix, test, open
+gh repo fork ellistarn/kro --clone
+cd kro && git checkout -b fix/<name>
+# ... fix ...
+gh pr create --repo ellistarn/kro --title "fix: ..." --body "..."
+```
+
+After opening: cross-link the krocodile issue/PR in the kardinal issue that motivated
+it. Label the kardinal issue `blocked-on-krocodile` if we must wait for upstream.
+When the upstream change lands: upgrade our pin, remove the workaround, close the
+kardinal issue, update the history table in `docs/aide/vision.md §Upstream Issue
+and PR Protocol`.
+
 ## Journey Self-Validation Commands (Engineer step 3)
 
 Engineer reads definition-of-done.md and runs the relevant journey steps:

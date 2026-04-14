@@ -136,30 +136,152 @@ Reference: [ellistarn/kro — krocodile branch](https://github.com/ellistarn/kro
 
 ### kro Tracking and Contribution Policy
 
-The krocodile/experimental branch is under active development. The Graph API and semantics are evolving continuously (20+ commits/day observed in early April 2026). Every engineer and coordinator must:
+The krocodile/experimental branch is under **autonomous, continuous development** —
+commits land multiple times per day, entire subsystems are rewritten in a single PR,
+and breaking API changes arrive without deprecation windows. This is intentional:
+the project is pre-1.0 and moving fast. Our agents must treat krocodile as a
+first-class dependency that requires active stewardship, not a stable library.
+
+**Every engineer and coordinator must:**
 
 1. **Check the krocodile git log before implementing any Graph integration.** Run:
    ```bash
    gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=20' \
      --jq '.[] | {sha: .sha[0:8], message: .commit.message[0:80], date: .commit.committer.date}'
    ```
-   Look for changes to `experimental/docs/design/`, `experimental/crds/`, and `experimental/controller/`.
+   Look for changes to `experimental/docs/design/`, `experimental/crds/`, and
+   `experimental/controller/`. If more than 10 new commits have landed since our
+   pinned commit, treat it as a mandatory upgrade task before proceeding.
 
-2. **Read the design docs before implementing.** The canonical source of truth for Graph semantics is `experimental/docs/design/` in the krocodile branch, not our own docs. When they disagree, the krocodile docs win.
+2. **Read the design docs before implementing.** The canonical source of truth for
+   Graph semantics is `experimental/docs/design/` in the krocodile branch, not our
+   own docs. When they disagree, the krocodile docs win.
 
-3. **Contribute upstream rather than work around.** If Graph does not support a capability that kardinal-promoter needs (e.g., native `recheckAfter`, explicit `dependsOn`), open a PR to krocodile first. A contribution that lands upstream eliminates a workaround from our codebase. Workarounds are accepted only when a contribution would block progress for more than one sprint.
+3. **Contribute upstream rather than work around.** If Graph lacks a capability
+   kardinal-promoter needs, open a PR to krocodile first. A contribution that lands
+   upstream eliminates a workaround from our codebase permanently. Workarounds are
+   accepted only when a contribution would block progress for more than one sprint.
+   See §Upstream Issue and PR Protocol below for how to do this.
 
-4. **Pin the Graph CRD version in our Helm chart and test infrastructure.** Install krocodile at a specific commit in all test clusters (CI and local kind) to catch breakage early. When krocodile updates break our tests, file a GitHub issue with the breaking change before it blocks a sprint.
+4. **Pin the Graph CRD version in our Helm chart and test infrastructure.** Install
+   krocodile at a specific commit hash in all test clusters (CI and local kind) via
+   `hack/install-krocodile.sh`. When krocodile updates break our tests, file a GitHub
+   issue labelled `kind/bug,area/graph` with the breaking commit and impact before it
+   blocks a sprint.
 
-5. **Update our design docs when Graph semantics change.** The sections most likely to drift are design-v2.1.md §3.5 (`readyWhen` vs `propagateWhen`), §3.6 (dependency edge mechanism), spec 01 (Graph CRD schema), and spec 02 (node templates).
+5. **Update our design docs when Graph semantics change.** The sections most likely
+   to drift are `design-v2.1.md` §3.5 (`readyWhen` vs `propagateWhen`), §3.6
+   (dependency edge mechanism), spec 01 (Graph CRD schema), and spec 02 (node
+   templates). Stale design docs are a bug.
 
-Key semantic facts as of 2026-04-10 (verify against krocodile before implementing):
+### Periodic krocodile Review (Coordinator responsibility)
+
+**Every batch cycle**, before generating the work queue, the coordinator must:
+
+```bash
+# 1. Check new commits since our pin
+PINNED=$(grep "KROCODILE_COMMIT:-" hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,\}')
+gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=50' \
+  --jq ".[] | select(.sha | startswith(\"$PINNED\") | not) | \
+    {sha: .sha[0:8], message: .commit.message[0:100]}"
+
+# 2. Read the diff of the controller and types
+cd /tmp && git clone -q --depth=200 https://github.com/ellistarn/kro.git kro-review -b krocodile
+git -C /tmp/kro-review log $PINNED..HEAD --oneline -- experimental/controller/ experimental/docs/
+```
+
+For each batch that has ≥5 new krocodile commits, the coordinator **must** include
+a `chore(graph): upgrade krocodile to <newsha>` item in the queue. This is not
+optional. An unreviewed krocodile gap accumulates silent breakage.
+
+### Primitive Rethink (Quarterly or after major krocodile releases)
+
+**At least once per quarter**, a dedicated agent session must answer these questions:
+
+> **Are our primitives still the right ones given what krocodile now provides?**
+
+Specifically:
+
+| Question | Why it matters |
+|---|---|
+| Can `PromotionStep` become a pure krocodile Watch node instead of an Owned reconciler? | Every new krocodile Watch capability potentially eliminates reconciler code |
+| Can any `pkg/reconciler/*` be deleted because krocodile now handles that pattern natively? | krocodile adds Definition nodes, drift timers, CEL AST path extraction — these eliminate workarounds |
+| Does `pkg/translator/translator.go` still need to hand-build Graph specs, or can krocodile generate from higher-level input? | The translator is our biggest complexity surface |
+| Are our node ID schemes, CEL expression patterns, and propagateWhen conventions still idiomatic given the latest krocodile design docs? | Conventions drift silently |
+| Do any of our current `blocked-on-krocodile` GitHub issues now have a solution in HEAD? | New krocodile features often close our blocked issues |
+
+The output of a rethink session must be:
+- At least one GitHub issue opened (`kind/enhancement,area/graph`) if a simplification is found
+- A comment on the report issue (Issue #1) with findings, even if the answer is "no changes needed"
+- Updated `docs/design/10-graph-first-architecture.md` if any architectural commitment changes
+
+### Upstream Issue and PR Protocol
+
+When kardinal-promoter hits a krocodile limitation or bug, agents must engage
+upstream rather than work around it locally. The krocodile maintainer (Ellis Tarn,
+`@ellistarn`) is responsive and the project benefits from real-world usage reports.
+
+**When to open a krocodile issue:**
+- A bug in krocodile causes a kardinal feature to fail (e.g., propagateWhen stuck state)
+- An API contract changes in a way that breaks our integration (e.g., node ID format)
+- krocodile's behavior differs from its own design docs
+
+**When to open a krocodile PR:**
+- A missing primitive forces a workaround that violates Graph-first architecture
+- A validation is too strict or too loose for real-world use (e.g., node ID format enforcement)
+- A bug has a clear, small fix that we can provide
+
+**How to do it:**
+```bash
+# Clone at our pinned commit
+git clone https://github.com/ellistarn/kro.git /tmp/kro-upstream -b krocodile
+cd /tmp/kro-upstream
+
+# For issues: use the GitHub CLI with the krocodile repo
+gh issue create --repo ellistarn/kro \
+  --title "<clear title referencing the specific controller file/function>" \
+  --body "## Summary
+<what kardinal-promoter observed>
+
+## Root cause
+<specific file:line in krocodile>
+
+## Reproduction
+<minimal Graph spec or test case>
+
+## Suggested fix
+<if known>"
+
+# For PRs: create a branch, make the fix, open PR
+git checkout -b fix/<descriptive-name>
+# ... make the fix ...
+gh pr create --repo ellistarn/kro \
+  --title "fix: <description>" \
+  --body "<summary, root cause, test coverage>"
+```
+
+**After upstream engagement:**
+- Record the issue/PR URL in the kardinal issue that motivated it (cross-link)
+- Label the kardinal issue `blocked-on-krocodile` if we must wait
+- Check the upstream issue/PR every batch cycle and update when it lands
+- When it lands: upgrade our pin, remove the workaround, close the kardinal issue
+
+**Krocodile issue/PR history** (update this table as we engage):
+
+| Date | krocodile issue/PR | Cardinal issue | Status |
+|---|---|---|---|
+| 2026-04-14 | [#109](https://github.com/ellistarn/kro/pull/109) DNS label validation | bdb6968 compat fix | Merged, we're on 948ad6c |
+| 2026-04-14 | propagateWhen stuck state (reported via DM) | propagation bug | Under investigation by Ellis |
+
+Key semantic facts as of 2026-04-14 (verify against krocodile before implementing):
 - `readyWhen` = health signal (UI, `kubectl get graph`) — does NOT block downstream
 - `propagateWhen` = data-flow gate — DOES block downstream when unsatisfied
 - `spec.nodes` (not `spec.resources`) is the field name for the node list
-- `experimental.kro.run` is the API group for Graph CRDs (changed from `kro.run` in krocodile commit `48224264`)
-- Bug fix (2026-04-10 commit `94a24fa5`): `dep.ready()` in `readyWhen` was not re-evaluating after dep became ready — now fixed. Our `propagateWhen` usage is unaffected.
-- Bug fix (2026-04-10 commit `1b0ce353`): double-dispatch race in DAG coordinator — now fixed in krocodile. **Pinned krocodile commit: `1b0ce353` (minimum required).**
+- `experimental.kro.run` is the API group for Graph CRDs
+- Node IDs must be valid DNS-1123 labels after `strings.ToLower()` — no underscores, no hyphens, ≤63 chars (PR #109)
+- Drift timers (default 30min) replace unconditional 1s requeues — watch events are primary
+- Propagation hash includes `propagateWhen` state — gate transitions trigger downstream (commit `0b609d0`)
+- **Pinned krocodile commit: `948ad6c`** (validates DNS labels in node IDs, includes drift timers and propagation hash fix)
 
 ### Graph-First: The Core Architectural Commitment
 
