@@ -117,6 +117,14 @@ type uiStepResponse struct {
 	CurrentStepIndex int               `json:"currentStepIndex"` // index into step sequence (#359)
 	// #341: Kubernetes conditions — shown in NodeDetail conditions panel.
 	Conditions []uiCondition `json:"conditions,omitempty"`
+	// #501: Bake countdown fields — shown in StageDetailPanel.
+	// BakeElapsedMinutes is contiguous healthy minutes so far in the current bake window.
+	BakeElapsedMinutes int64 `json:"bakeElapsedMinutes,omitempty"`
+	// BakeTargetMinutes is the required contiguous healthy duration from Pipeline spec.
+	// Zero means no bake is configured for this environment.
+	BakeTargetMinutes int `json:"bakeTargetMinutes,omitempty"`
+	// BakeResets is the number of times the bake timer was reset due to a health alarm.
+	BakeResets int `json:"bakeResets,omitempty"`
 }
 
 // uiCondition is the JSON shape for a Kubernetes condition.
@@ -571,24 +579,48 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+
+	// Build a bake target index: pipelineName+envName → bake minutes.
+	// Populated lazily from the first step's Pipeline reference (#501).
+	bakeTarget := make(map[string]int) // key: "pipelineName/envName"
+	pipelinesLoaded := make(map[string]bool)
+
 	result := make([]uiStepResponse, 0)
 	for _, ps := range list.Items {
 		if ps.Spec.BundleName != bundleName {
 			continue
 		}
+		// Load bake target minutes from Pipeline spec (once per pipeline) (#501).
+		plKey := ps.Namespace + "/" + ps.Spec.PipelineName
+		if !pipelinesLoaded[plKey] {
+			pipelinesLoaded[plKey] = true
+			var pl v1alpha1.Pipeline
+			if err := s.client.Get(r.Context(),
+				client.ObjectKey{Name: ps.Spec.PipelineName, Namespace: ps.Namespace}, &pl); err == nil {
+				for _, env := range pl.Spec.Environments {
+					if env.Bake != nil {
+						bakeTarget[ps.Spec.PipelineName+"/"+env.Name] = env.Bake.Minutes
+					}
+				}
+			}
+		}
+		bakeMinutes := bakeTarget[ps.Spec.PipelineName+"/"+ps.Spec.Environment]
 		result = append(result, uiStepResponse{
-			Name:             ps.Name,
-			Namespace:        ps.Namespace,
-			Pipeline:         ps.Spec.PipelineName,
-			Bundle:           ps.Spec.BundleName,
-			Environment:      ps.Spec.Environment,
-			StepType:         ps.Spec.StepType,
-			State:            ps.Status.State,
-			Message:          ps.Status.Message,
-			PRURL:            ps.Status.PRURL,
-			Outputs:          ps.Status.Outputs,
-			CurrentStepIndex: ps.Status.CurrentStepIndex,
-			Conditions:       buildUIConditions(ps.Status.Conditions),
+			Name:               ps.Name,
+			Namespace:          ps.Namespace,
+			Pipeline:           ps.Spec.PipelineName,
+			Bundle:             ps.Spec.BundleName,
+			Environment:        ps.Spec.Environment,
+			StepType:           ps.Spec.StepType,
+			State:              ps.Status.State,
+			Message:            ps.Status.Message,
+			PRURL:              ps.Status.PRURL,
+			Outputs:            ps.Status.Outputs,
+			CurrentStepIndex:   ps.Status.CurrentStepIndex,
+			Conditions:         buildUIConditions(ps.Status.Conditions),
+			BakeElapsedMinutes: ps.Status.BakeElapsedMinutes,
+			BakeTargetMinutes:  bakeMinutes,
+			BakeResets:         ps.Status.BakeResets,
 		})
 	}
 	writeJSON(w, result)

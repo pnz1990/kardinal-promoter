@@ -630,3 +630,83 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	// InventoryAgeDays should be 0 (bundle just created)
 	assert.Equal(t, 0, got.InventoryAgeDays, "just-created bundle → 0 days inventory age")
 }
+
+// TestUIAPI_GetSteps_BakeFields verifies that bake countdown fields are populated
+// from PromotionStep.status and Pipeline spec (#501).
+func TestUIAPI_GetSteps_BakeFields(t *testing.T) {
+	pl := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{
+					Name: "prod",
+					Bake: &v1alpha1.BakeConfig{Minutes: 30},
+				},
+			},
+		},
+	}
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "prod",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State:              "HealthChecking",
+			BakeElapsedMinutes: 15,
+			BakeResets:         1,
+		},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pl, ps).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/bundles/my-app-v1/steps", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiStepResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, int64(15), resp[0].BakeElapsedMinutes, "BakeElapsedMinutes from step status")
+	assert.Equal(t, 30, resp[0].BakeTargetMinutes, "BakeTargetMinutes from pipeline spec")
+	assert.Equal(t, 1, resp[0].BakeResets, "BakeResets from step status")
+}
+
+// TestUIAPI_GetSteps_NoBakeFieldsWhenNoPipeline verifies that bake target is 0
+// when the Pipeline spec has no bake configuration (#501).
+func TestUIAPI_GetSteps_NoBakeFieldsWhenNoPipeline(t *testing.T) {
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-test", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "my-app",
+			BundleName:   "my-app-v1",
+			Environment:  "test",
+			StepType:     "health-check",
+		},
+		Status: v1alpha1.PromotionStepStatus{State: "HealthChecking"},
+	}
+	// No Pipeline object created — bake target should default to 0
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ps).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/bundles/my-app-v1/steps", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiStepResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	assert.Equal(t, 0, resp[0].BakeTargetMinutes, "BakeTargetMinutes must be 0 when no bake config")
+}
