@@ -7,7 +7,7 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.5.0)
+## Currently Available (v0.6.0)
 
 All of the following are implemented and shipped:
 
@@ -107,64 +107,22 @@ All of the following are implemented and shipped:
 
 **Distributed mode** — shard routing: `shard:` field on Pipeline environments routes PromotionSteps to the correct controller instance. The `kardinal-agent` standalone binary (for running in spoke clusters without inbound connectivity) is near-term (#508).
 
----
+**Multi-tenant self-service** — ApplicationSet + Pipeline template bootstrap; team onboarding by committing a folder to Git; org PolicyGates automatically inherited; namespace isolation enforced by RBAC.
 
-## Near-Term (v0.6.0 — active development)
+**Subscription CRD + source watchers** — `OCIWatcher` polls container registries; `GitWatcher` polls Git branches; Bundles are created automatically on new images or commits. No CI pipeline integration needed.
 
-### Subscription source watchers
+**Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` persisted by the PipelineReconciler: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate`.
 
-The `Subscription` CRD is implemented but source watchers are stubs:
-
-- **OCI image watcher** ([#491](https://github.com/pnz1990/kardinal-promoter/issues/491)) — use `google/go-containerregistry` to poll registries for new tags
-- **Git watcher** ([#493](https://github.com/pnz1990/kardinal-promoter/issues/493)) — use `go-git` to fetch the latest commit SHA on a watched branch
-
-Until these land, use `kardinal create bundle` or the CI webhook to create Bundles.
-
-### Pipeline aggregate deployment metrics
-
-`kardinal metrics` aggregates DORA stats in-memory from CRD reads.
-[#498](https://github.com/pnz1990/kardinal-promoter/issues/498) moves this computation to
-`PipelineReconciler` so that `Pipeline.status.deploymentMetrics` is persisted and available
-to the UI trend chart:
-
-```yaml
-status:
-  deploymentMetrics:
-    rolloutsLast30Days: 12
-    p50CommitToProdMinutes: 420
-    p90CommitToProdMinutes: 960
-    autoRollbackRate: 0.08
-```
-
-### `changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions
-
-These named-argument CEL functions are now implemented (#506) as a cleaner alternative to map-access syntax:
+**`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates:
 
 ```
 changewindow.isAllowed("business-hours")    # true when the window is NOT currently blocking
 changewindow.isBlocked("holiday-freeze")    # true when the window IS currently blocking
 ```
 
-Both syntaxes work and are semantically equivalent:
-
-```
-# Equivalent expressions — both pass when holiday-freeze is inactive:
-!changewindow["holiday-freeze"]
-!changewindow.isBlocked("holiday-freeze")
-changewindow.isAllowed("holiday-freeze")
-```
-
-### `kardinal-agent` standalone binary
-
-The `shard:` field on Pipeline environments routes PromotionSteps to a specific controller
-instance. The missing piece is a lightweight `kardinal-agent` binary that runs inside spoke
-clusters (behind firewalls, no inbound connectivity), watches only its own shard, and reports
-results back to the control plane. The reconciler logic is already shard-aware; the agent is
-a thin wrapper binary around it.
-
 ---
 
-## Planned (v0.7.0+)
+## Near-Term (v0.7.0 — active development)
 
 ### Flat DAG compilation ([#496](https://github.com/pnz1990/kardinal-promoter/issues/496))
 
@@ -173,15 +131,20 @@ Graph nodes — each step (`git-clone`, `kustomize-set-image`, etc.) becomes a s
 node with its own `readyWhen` expression. This is the final major Graph-first architecture
 improvement.
 
-### Library-based kustomize and git ([#494](https://github.com/pnz1990/kardinal-promoter/issues/494), [#495](https://github.com/pnz1990/kardinal-promoter/issues/495))
+### Library-based git operations ([#495](https://github.com/pnz1990/kardinal-promoter/issues/495))
 
-Replace `exec.Command("kustomize")` with `sigs.k8s.io/kustomize` library and
-`exec.Command("git")` with `go-git` library. Eliminates subprocess dependencies and
-improves performance and portability.
+Replace `exec.Command("git")` with the `go-git` library. Eliminates the hard dependency on
+a `git` binary in the controller container, improves performance and portability.
+(`exec.Command("kustomize")` was replaced in v0.6.0 via #494.)
+
+### `kardinal-agent` standalone binary
+
+Lightweight `kardinal-agent` binary for spoke clusters behind firewalls. The reconciler is
+already shard-aware; the agent is a thin wrapper around it.
 
 ---
 
-## UI — Full Control Plane (shipped v0.5.0)
+## UI — Full Control Plane (shipped v0.5.0–v0.6.0)
 
 All 7 UI issues (#462–#468) are implemented and shipped.
 
