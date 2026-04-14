@@ -20,7 +20,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 )
 
 const (
@@ -41,10 +40,24 @@ const (
 // Template PolicyGates (no bundle label) are ignored.
 type Reconciler struct {
 	client.Client
-	// Evaluator evaluates CEL expressions.
-	Evaluator *cel.Evaluator
+	// eval is the CEL evaluator, created once at construction time.
+	// Unexported: callers should use NewReconciler to get a properly initialized Reconciler.
+	eval *evaluator
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+}
+
+// NewReconciler creates a Reconciler with an initialized CEL evaluator.
+// Use this instead of struct literal construction.
+func NewReconciler(c client.Client) (*Reconciler, error) {
+	ev, err := newEvaluator()
+	if err != nil {
+		return nil, fmt.Errorf("new policygate evaluator: %w", err)
+	}
+	return &Reconciler{
+		Client: c,
+		eval:   ev,
+	}, nil
 }
 
 // Reconcile evaluates the CEL expression on a PolicyGate instance.
@@ -108,7 +121,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Evaluate CEL expression
-	pass, reason, evalErr := r.Evaluator.Evaluate(gate.Spec.Expression, celCtx)
+	pass, reason, evalErr := r.eval.evaluate(gate.Spec.Expression, celCtx)
 	if evalErr != nil {
 		// Fail-closed on evaluation error
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
@@ -162,7 +175,7 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 	// Using Validate() instead of Evaluate() avoids false positives: a syntactically
 	// valid expression like bundle.metadata.annotations["team"] would fail evaluation
 	// with an empty bundle map, but that's a runtime concern, not a syntax error.
-	celErr := r.Evaluator.Validate(gate.Spec.Expression)
+	celErr := r.eval.validate(gate.Spec.Expression)
 
 	var reason string
 	if celErr != nil {

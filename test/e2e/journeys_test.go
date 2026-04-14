@@ -42,7 +42,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	pgrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psrec "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -161,9 +160,6 @@ func TestJourney2MultiClusterFleet(t *testing.T) {
 // Uses the real CEL evaluator and PolicyGate reconciler with a fake Kubernetes client.
 func TestJourney3PolicyGovernance(t *testing.T) {
 	s := journeyScheme(t)
-	celEnv, err := cel.NewCELEnvironment()
-	require.NoError(t, err)
-	evaluator := cel.NewEvaluator(celEnv)
 
 	bundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
@@ -195,11 +191,9 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 
 	// Inject a Saturday timestamp via NowFn.
 	saturday := time.Date(2026, 4, 12, 15, 0, 0, 0, time.UTC) // Saturday April 12, 2026
-	rec := &pgrec.Reconciler{
-		Client:    c,
-		Evaluator: evaluator,
-		NowFn:     func() time.Time { return saturday },
-	}
+	rec, err := pgrec.NewReconciler(c)
+	require.NoError(t, err)
+	rec.NowFn = func() time.Time { return saturday }
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "no-weekend-deploys", Namespace: "default"}}
 	_, err = rec.Reconcile(context.Background(), req)
@@ -218,7 +212,9 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 		WithObjects(bundle, weekendGate.DeepCopy()).
 		WithStatusSubresource(&v1alpha1.PolicyGate{}).
 		Build()
-	rec2 := &pgrec.Reconciler{Client: c2, Evaluator: evaluator, NowFn: func() time.Time { return tuesday }}
+	rec2, err := pgrec.NewReconciler(c2)
+	require.NoError(t, err)
+	rec2.NowFn = func() time.Time { return tuesday }
 	_, err = rec2.Reconcile(context.Background(), req)
 	require.NoError(t, err)
 
@@ -238,7 +234,7 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 		"metrics":        map[string]interface{}{},
 		"previousBundle": map[string]interface{}{},
 	}
-	blocked, reason, err := evaluator.Evaluate("!schedule.isWeekend", satCtx)
+	blocked, reason, err := pgrec.EvaluateForTest("!schedule.isWeekend", satCtx)
 	require.NoError(t, err)
 	assert.False(t, blocked, "journey 3: simulate Saturday must return BLOCKED")
 	t.Logf("journey 3: policy simulate Saturday 3pm → RESULT: BLOCKED (reason: %s) ✅", reason)
@@ -305,7 +301,7 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 	}
 
 	for _, tc := range kroTests {
-		pass, kroReason, evalErr := evaluator.Evaluate(tc.expr, kroLibCtx)
+		pass, kroReason, evalErr := pgrec.EvaluateForTest(tc.expr, kroLibCtx)
 		require.NoError(t, evalErr, "journey 3: kro function %q must compile without error", tc.name)
 		assert.Equal(t, tc.want, pass,
 			"journey 3: kro function %q: got %v want %v (reason: %s)", tc.name, pass, tc.want, kroReason)
