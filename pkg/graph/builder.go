@@ -860,12 +860,13 @@ func celSafeSlug(s string) string {
 				b.WriteRune(c)
 			}
 		case c >= 'A' && c <= 'Z':
-			if b.Len() == 0 {
+			switch {
+			case b.Len() == 0:
 				b.WriteRune(c - 'A' + 'a') // first char always lowercase
-			} else if upperNext {
+			case upperNext:
 				b.WriteRune(c) // already upper — preserve
 				upperNext = false
-			} else {
+			default:
 				b.WriteRune(c)
 			}
 		case c >= '0' && c <= '9':
