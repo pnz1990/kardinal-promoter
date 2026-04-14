@@ -74,13 +74,6 @@ func (s *kustomizeSetImageStep) Execute(ctx context.Context, state *parentsteps.
 	}, nil
 }
 
-// kustomizationFile is the subset of kustomization.yaml we care about.
-// We unmarshal only the images list; all other fields are preserved as-is
-// via round-trip through the raw map.
-type kustomizationFile struct {
-	Images []kustomizationImage `json:"images,omitempty" yaml:"images,omitempty"`
-}
-
 // kustomizationImage mirrors the kustomize images entry.
 // https://kubectl.docs.kubernetes.io/references/kustomize/kustomization/images/
 type kustomizationImage struct {
