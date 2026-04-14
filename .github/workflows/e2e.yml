@@ -17,7 +17,14 @@ on:
         type: choice
         options: ['all', '1', '2', '3', '4', '5', '6', '7']
 
+# Cancel in-progress runs on new main pushes; keep scheduled/manual runs independent.
+concurrency:
+  group: e2e-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 jobs:
+  # Cancel any in-progress e2e run when a new push to main supersedes it.
+  # Scheduled and manual runs get unique groups so they are never cancelled.
   e2e:
     name: e2e journey ${{ github.event.inputs.journey || 'all' }}
     runs-on: ubuntu-latest
