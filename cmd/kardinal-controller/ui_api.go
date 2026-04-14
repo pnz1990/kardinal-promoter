@@ -73,6 +73,15 @@ type uiBundleResponse struct {
 	Pipeline   string                     `json:"pipeline"`
 	CreatedAt  string                     `json:"createdAt,omitempty"` // ISO 8601 creation time for timeline sorting (#337)
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
+	// #503: Per-environment statuses for the bundle timeline view.
+	Environments []uiBundleEnvStatus `json:"environments,omitempty"`
+}
+
+// uiBundleEnvStatus is the per-environment status summary for the timeline (#503).
+type uiBundleEnvStatus struct {
+	Name  string `json:"name"`
+	Phase string `json:"phase,omitempty"`
+	PRURL string `json:"prURL,omitempty"`
 }
 
 // uiGraphNode is a node in the promotion DAG.
@@ -339,7 +348,16 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 		if b.Spec.Pipeline != pipelineName {
 			continue
 		}
-		result = append(result, uiBundleResponse{
+		// #503: Per-environment statuses for the timeline view.
+		envStatuses := make([]uiBundleEnvStatus, 0, len(b.Status.Environments))
+		for _, env := range b.Status.Environments {
+			envStatuses = append(envStatuses, uiBundleEnvStatus{
+				Name:  env.Name,
+				Phase: env.Phase,
+				PRURL: env.PRURL,
+			})
+		}
+		resp := uiBundleResponse{
 			Name:       b.Name,
 			Namespace:  b.Namespace,
 			Phase:      b.Status.Phase,
@@ -347,7 +365,11 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			Pipeline:   b.Spec.Pipeline,
 			CreatedAt:  b.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Provenance: b.Spec.Provenance,
-		})
+		}
+		if len(envStatuses) > 0 {
+			resp.Environments = envStatuses
+		}
+		result = append(result, resp)
 	}
 	writeJSON(w, result)
 }

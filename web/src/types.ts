@@ -32,6 +32,15 @@ export interface Bundle {
   /** ISO 8601 creation timestamp for timeline sorting (#337). */
   createdAt?: string
   provenance?: Provenance
+  /** #503: Per-environment promotion statuses for the timeline view. */
+  environments?: BundleEnvStatus[]
+}
+
+/** #503: Per-environment promotion status for a Bundle. */
+export interface BundleEnvStatus {
+  name: string
+  phase?: string
+  prURL?: string
 }
 
 export interface Provenance {

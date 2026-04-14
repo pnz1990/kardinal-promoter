@@ -122,6 +122,51 @@ func TestUIAPI_ListBundles(t *testing.T) {
 	assert.Equal(t, "Promoting", resp[0].Phase)
 }
 
+// TestUIAPI_ListBundles_Environments verifies that per-environment statuses
+// including PR URLs are included in bundle responses (#503).
+func TestUIAPI_ListBundles_Environments(t *testing.T) {
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: v1alpha1.BundleStatus{
+			Phase: "Promoting",
+			Environments: []v1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified"},
+				{Name: "prod", Phase: "WaitingForMerge",
+					PRURL: "https://github.com/org/repo/pull/42"},
+			},
+		},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines/nginx-demo/bundles", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiBundleResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	require.Len(t, resp[0].Environments, 2, "both environment statuses must be returned")
+
+	// test environment
+	testEnv := resp[0].Environments[0]
+	assert.Equal(t, "test", testEnv.Name)
+	assert.Equal(t, "Verified", testEnv.Phase)
+	assert.Empty(t, testEnv.PRURL, "no PR for test")
+
+	// prod environment with PR link
+	prodEnv := resp[0].Environments[1]
+	assert.Equal(t, "prod", prodEnv.Name)
+	assert.Equal(t, "WaitingForMerge", prodEnv.Phase)
+	assert.Equal(t, "https://github.com/org/repo/pull/42", prodEnv.PRURL, "PR URL must be set")
+}
+
 // TestUIAPI_GetSteps verifies that GET /api/v1/ui/bundles/{name}/steps
 // returns PromotionSteps for that bundle only.
 func TestUIAPI_GetSteps(t *testing.T) {
