@@ -57,7 +57,6 @@ func ComputeDeploymentMetrics(
 
 	// Build map: bundleName → time it was Verified in finalEnv
 	// Uses PromotionStep.status conditions for precision; falls back to step creation time.
-	type stepKey struct{ bundle, env string }
 	finalVerifiedAt := make(map[string]time.Time)
 	for i := range steps {
 		s := &steps[i]
