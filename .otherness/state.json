@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T02:58:48Z",
-  "current_queue": "queue-017",
+  "last_updated": "2026-04-14T03:12:26Z",
+  "current_queue": "queue-018",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -667,6 +667,50 @@
       "dependency_mode": "merged",
       "pr_number": 473,
       "pr_merged": true
+    },
+    "500-ui-pipeline-ops-view": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 475,
+      "dependency_mode": "merged"
+    },
+    "501-ui-stage-detail": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 476,
+      "dependency_mode": "merged"
+    },
+    "502-ui-gate-detail": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 477,
+      "dependency_mode": "merged"
+    },
+    "503-ui-bundle-timeline": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 478,
+      "dependency_mode": "merged"
+    },
+    "504-ui-release-metrics": {
+      "state": "in_review",
+      "pr_merged": false,
+      "pr_number": 481,
+      "dependency_mode": "merged",
+      "branch": "feat/504-ui-release-metrics"
+    },
+    "505-ui-fleet-dashboard": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 480,
+      "dependency_mode": "merged"
+    },
+    "506-ui-actions": {
+      "state": "in_review",
+      "pr_merged": false,
+      "pr_number": 482,
+      "dependency_mode": "merged",
+      "branch": "feat/506-ui-actions"
     }
   },
   "session_heartbeats": {
