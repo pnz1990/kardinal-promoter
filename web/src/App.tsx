@@ -12,6 +12,7 @@ import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
 import { PipelineLaneView } from './components/PipelineLaneView'
+import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -65,6 +66,10 @@ export function App() {
 
   // #462: view mode toggle — 'list' (sidebar) | 'ops-table' (full-width operations table).
   const [viewMode, setViewMode] = useState<'list' | 'ops-table'>('list')
+
+  // #505: Fleet filter — drives which pipelines are visible in the sidebar list.
+  const [fleetFilter, setFleetFilter] = useState<FleetFilter>('all')
+  const filteredPipelines = filterPipelines(pipelines, fleetFilter)
 
   // Shared fetch function — called by both interval poll and manual refresh.
   const doFetchAll = useCallback(async () => {
@@ -297,8 +302,18 @@ export function App() {
           </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
+          {/* #505: Fleet health bar — above pipeline list in sidebar */}
+          {pipelines.length > 0 && (
+            <div style={{ padding: '0.5rem 0.75rem 0' }}>
+              <FleetHealthBar
+                pipelines={pipelines}
+                activeFilter={fleetFilter}
+                onFilterChange={setFleetFilter}
+              />
+            </div>
+          )}
           <PipelineList
-            pipelines={pipelines}
+            pipelines={filteredPipelines}
             selected={selectedPipeline}
             onSelect={name => { handleSelectPipeline(name); if (viewMode === 'ops-table') setViewMode('list') }}
             loading={pipelinesLoading}
