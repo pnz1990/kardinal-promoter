@@ -1,6 +1,6 @@
-<p align="center">
-  <img src="assets/logo.png" alt="Kardinal Promoter" width="200" style="margin-bottom: 1rem;" />
-</p>
+<div align="center" markdown>
+  ![Kardinal Promoter](assets/logo.png){ width="200" }
+</div>
 
 # kardinal-promoter
 
