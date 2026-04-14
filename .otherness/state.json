@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T03:34:22Z",
+  "last_updated": "2026-04-14T03:48:59Z",
   "current_queue": "queue-019",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -713,17 +713,21 @@
       "branch": "feat/506-ui-actions"
     },
     "601-scheduleclock-crd": {
-      "state": "in_review",
-      "pr_merged": false,
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 484,
       "dependency_mode": "merged",
       "branch": "feat/601-scheduleclock-crd"
     },
     "602-subscription-crd": {
-      "state": "todo",
+      "state": "in_progress",
       "pr_merged": false,
       "pr_number": null,
-      "dependency_mode": "merged"
+      "dependency_mode": "merged",
+      "assigned_to": "STANDALONE-602-subscription-crd",
+      "assigned_at": "2026-04-14T03:48:59Z",
+      "branch": "feat/602-subscription-crd",
+      "worktree": "../kardinal-promoter.602-subscription-crd"
     }
   },
   "session_heartbeats": {
