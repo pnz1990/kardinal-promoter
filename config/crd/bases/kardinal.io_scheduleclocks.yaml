@@ -29,14 +29,31 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ScheduleClock is an Owned node that writes a timestamp to status.tick
-          on a configurable interval, generating Kubernetes watch events. PolicyGates
-          with schedule.* expressions reference the ScheduleClock in their Graph scope;
+        description: |-
+          ScheduleClock is an Owned node that writes a timestamp to status.tick on a
+          configurable interval, generating Kubernetes watch events. PolicyGates with
+          schedule.* expressions reference the ScheduleClock in their Graph scope;
           each tick causes the Graph controller to re-evaluate all dependant nodes.
+
+          One ScheduleClock per cluster is sufficient. Deploy to kardinal-system.
+
+          This CRD eliminates the ctrl.Result{RequeueAfter} timer loop in the
+          PolicyGate reconciler (PG-4 in docs/design/11-graph-purity-tech-debt.md).
         properties:
           apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
@@ -45,17 +62,25 @@ spec:
             properties:
               interval:
                 default: 1m
-                description: Interval is how often the ScheduleClock updates status.tick.
-                  Uses Go duration format (e.g. "1m", "30s"). Minimum recommended
-                  value is 30s.
+                description: |-
+                  Interval is how often the ScheduleClock updates status.tick.
+                  Uses Go duration format (e.g. "1m", "30s").
+                  Minimum recommended value is 30s; sub-minute precision is rarely needed
+                  for business-hour gates.
                 type: string
             type: object
           status:
             description: ScheduleClockStatus defines the observed state of a ScheduleClock.
             properties:
               tick:
-                description: Tick is the RFC3339 timestamp written by the reconciler
-                  on every interval. This field generates Kubernetes watch events.
+                description: |-
+                  Tick is the RFC3339 timestamp written by the reconciler on every interval.
+                  PolicyGate nodes that reference this ScheduleClock in their Graph scope
+                  will re-evaluate their readyWhen expressions each time Tick changes, because
+                  the Graph controller watches all nodes in scope for watch events.
+                  This is the sole purpose of this field: to generate Kubernetes watch events
+                  on a regular interval so that time-based PolicyGate expressions are
+                  re-evaluated without a dedicated recheckAfter primitive in krocodile.
                 type: string
             type: object
         type: object
