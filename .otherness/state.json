@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T03:58:03Z",
-  "current_queue": "queue-019",
+  "last_updated": "2026-04-14T04:10:55Z",
+  "current_queue": "queue-020",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -720,14 +720,33 @@
       "branch": "feat/601-scheduleclock-crd"
     },
     "602-subscription-crd": {
-      "state": "in_review",
-      "pr_merged": false,
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 485,
       "dependency_mode": "merged",
       "assigned_to": "STANDALONE-602-subscription-crd",
       "assigned_at": "2026-04-14T03:48:59Z",
       "branch": "feat/602-subscription-crd",
       "worktree": "../kardinal-promoter.602-subscription-crd"
+    },
+    "700-policy-simulate-fix": {
+      "state": "assigned",
+      "assigned_to": "STANDALONE-700",
+      "assigned_at": "2026-04-14T04:10:55Z",
+      "worktree_path": "../kardinal-promoter.700-policy-simulate-fix",
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false,
+      "branch": "feat/700-policy-simulate-fix"
+    },
+    "701-eliminate-pkg-cel": {
+      "state": "todo",
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree_path": null,
+      "dependency_mode": "merged",
+      "pr_number": null,
+      "pr_merged": false
     }
   },
   "session_heartbeats": {
