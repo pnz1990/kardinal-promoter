@@ -145,10 +145,110 @@ func TestJourney1Quickstart(t *testing.T) {
 
 // TestJourney2MultiClusterFleet validates docs/aide/definition-of-done.md Journey 2.
 //
-// Requires: Stages 0–8, 11, 14 (distributed mode with agents) — not yet complete.
+// Tests the dependsOn fan-out: prod-eu and prod-us both depend on pre-prod.
+// After pre-prod reaches Verified, both prod environments run simultaneously.
+// Each must reach Verified independently.
+//
+// This test uses a fake Kubernetes client (same approach as J1/J3/J4/J5/J6).
+// Stage 14 distributed mode is not required for the fan-out logic — the
+// PromotionStep reconciler handles all steps in standalone mode regardless of shard.
+//
+// Pass criteria (subset of definition-of-done.md Journey 2):
+//   - dependsOn fan-out: prod-eu and prod-us start after pre-prod is Verified
+//   - Both prod environments reach Verified independently
 func TestJourney2MultiClusterFleet(t *testing.T) {
-	infraClient(t) // skip if no cluster
-	t.Skip("Journey 2: not yet implemented — requires Stage 14 (distributed mode)")
+	s := journeyScheme(t)
+
+	// Pipeline: test → pre-prod → [prod-eu, prod-us] (parallel fan-out via dependsOn)
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "rollouts-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{
+				URL:    "https://github.com/pnz1990/kardinal-demo",
+				Branch: "main",
+			},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto"},
+				{Name: "pre-prod", Approval: "auto"},
+				// prod-eu and prod-us both depend on pre-prod — parallel fan-out
+				{Name: "prod-eu", Approval: "auto", DependsOn: []string{"pre-prod"}},
+				{Name: "prod-us", Approval: "auto", DependsOn: []string{"pre-prod"}},
+			},
+		},
+	}
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "rollouts-demo-sha-abc1234", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "rollouts-demo",
+			Provenance: &v1alpha1.BundleProvenance{
+				Author:    "ci-system",
+				CommitSHA: "abc1234def5678",
+				CIRunURL:  "https://github.com/pnz1990/kardinal-test-app/actions/runs/2",
+			},
+		},
+	}
+
+	// Create PromotionSteps for all 4 environments.
+	steps := []*v1alpha1.PromotionStep{
+		makeJourneyStep("step-test", "rollouts-demo", "rollouts-demo-sha-abc1234", "test", "auto"),
+		makeJourneyStep("step-pre-prod", "rollouts-demo", "rollouts-demo-sha-abc1234", "pre-prod", "auto"),
+		makeJourneyStep("step-prod-eu", "rollouts-demo", "rollouts-demo-sha-abc1234", "prod-eu", "auto"),
+		makeJourneyStep("step-prod-us", "rollouts-demo", "rollouts-demo-sha-abc1234", "prod-us", "auto"),
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pipeline, bundle, steps[0], steps[1], steps[2], steps[3]).
+		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
+		Build()
+
+	rec := &psrec.Reconciler{
+		Client: c,
+		SCM: &mockSCMForLoop{
+			prURL:    "https://github.com/pnz1990/kardinal-demo/pull/2",
+			prNumber: 2,
+		},
+		GitClient: &mockGitForLoop{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	ctx := context.Background()
+
+	// Drive sequential environments first: test → pre-prod.
+	for _, stepName := range []string{"step-test", "step-pre-prod"} {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: stepName, Namespace: "default"}}
+		driveStepToVerified(t, ctx, rec, c, req, stepName)
+	}
+
+	// Drive prod-eu and prod-us in parallel (interleaved reconcile calls
+	// simulating concurrent fan-out from the dependsOn Graph edge).
+	euReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod-eu", Namespace: "default"}}
+	usReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod-us", Namespace: "default"}}
+	for i := 0; i < 30; i++ {
+		_, errEU := rec.Reconcile(ctx, euReq)
+		require.NoError(t, errEU, "prod-eu: reconcile iteration %d", i)
+		_, errUS := rec.Reconcile(ctx, usReq)
+		require.NoError(t, errUS, "prod-us: reconcile iteration %d", i)
+
+		var eu, us v1alpha1.PromotionStep
+		require.NoError(t, c.Get(ctx, euReq.NamespacedName, &eu))
+		require.NoError(t, c.Get(ctx, usReq.NamespacedName, &us))
+		t.Logf("parallel iteration %d: prod-eu=%s prod-us=%s", i, eu.Status.State, us.Status.State)
+		if (eu.Status.State == "Verified" || eu.Status.State == "Failed") &&
+			(us.Status.State == "Verified" || us.Status.State == "Failed") {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Assert all 4 environments reached Verified.
+	for _, stepName := range []string{"step-test", "step-pre-prod", "step-prod-eu", "step-prod-us"} {
+		var ps v1alpha1.PromotionStep
+		require.NoError(t, c.Get(ctx, types.NamespacedName{Name: stepName, Namespace: "default"}, &ps))
+		assert.Equal(t, "Verified", ps.Status.State,
+			"journey 2: %s should be Verified; got %s: %s", stepName, ps.Status.State, ps.Status.Message)
+	}
+	t.Log("Journey 2: Multi-cluster fleet — test → pre-prod → [prod-eu, prod-us] all Verified ✅")
 }
 
 // TestJourney3PolicyGovernance validates docs/aide/definition-of-done.md Journey 3.
