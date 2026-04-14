@@ -181,8 +181,11 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/pipelines/", s.handlePipelinesSubpath)
 	mux.HandleFunc("/api/v1/ui/bundles/", s.handleBundleSubresource)
 	mux.HandleFunc("/api/v1/ui/gates", s.handleGates)
+	mux.HandleFunc("/api/v1/ui/gates/", s.handleGatesSubpath)
 	mux.HandleFunc("/api/v1/ui/promote", s.handlePromote)
 	mux.HandleFunc("/api/v1/ui/rollback", s.handleRollback)
+	mux.HandleFunc("/api/v1/ui/pause", s.handlePause)
+	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
 }
 
@@ -997,6 +1000,173 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"valid": true,
+	})
+}
+
+// handleGatesSubpath handles:
+//
+//	POST /api/v1/ui/gates/{name}/approve — add a time-limited override to a PolicyGate.
+//	POST /api/v1/ui/gates/{namespace}/{name}/approve
+//
+// Request body (JSON):
+//
+//	{"reason": "emergency deploy", "namespace": "default", "expiresInMinutes": 60}
+//
+// Response (JSON on success):
+//
+//	{"message": "gate overridden until 2026-04-14T15:04:05Z"}
+func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request) {
+	// path = "{name}/approve" or "{namespace}/{name}/approve"
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/ui/gates/")
+	parts := strings.Split(path, "/")
+
+	var gateName, gateNS, action string
+	switch len(parts) {
+	case 2: // {name}/approve
+		gateName = parts[0]
+		action = parts[1]
+		gateNS = "default"
+	case 3: // {namespace}/{name}/approve
+		gateNS = parts[0]
+		gateName = parts[1]
+		action = parts[2]
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	if action != "approve" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Reason           string `json:"reason"`
+		Namespace        string `json:"namespace"`
+		Stage            string `json:"stage"`
+		ExpiresInMinutes int    `json:"expiresInMinutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Reason == "" {
+		http.Error(w, "reason is required", http.StatusBadRequest)
+		return
+	}
+	if req.Namespace != "" {
+		gateNS = req.Namespace
+	}
+	expiresMins := req.ExpiresInMinutes
+	if expiresMins <= 0 {
+		expiresMins = 60 // default 1h
+	}
+
+	var gate v1alpha1.PolicyGate
+	if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
+		http.Error(w, "gate not found", http.StatusNotFound)
+		return
+	}
+
+	now := time.Now().UTC()
+	expiresAt := metav1.Time{Time: now.Add(time.Duration(expiresMins) * time.Minute)}
+	createdAt := metav1.Time{Time: now}
+	override := v1alpha1.PolicyGateOverride{
+		Reason:    req.Reason,
+		Stage:     req.Stage,
+		ExpiresAt: expiresAt,
+		CreatedAt: &createdAt,
+		CreatedBy: "ui-action",
+	}
+	gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+	if err := s.client.Update(r.Context(), &gate); err != nil {
+		s.log.Error().Err(err).Str("gate", gateName).Msg("ui: approve gate")
+		http.Error(w, "failed to update gate", http.StatusInternalServerError)
+		return
+	}
+
+	s.log.Info().
+		Str("gate", gateName).
+		Str("reason", req.Reason).
+		Time("expiresAt", expiresAt.Time).
+		Msg("ui: gate approved via override")
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"message": "gate overridden until " + expiresAt.UTC().Format(time.RFC3339),
+	})
+}
+
+// handlePause handles POST /api/v1/ui/pause — sets Pipeline.spec.paused=true.
+//
+// Request body (JSON):
+//
+//	{"pipeline": "nginx-demo", "namespace": "default"}
+//
+// Response (JSON on success):
+//
+//	{"message": "pipeline nginx-demo paused"}
+func (s *uiAPIServer) handlePause(w http.ResponseWriter, r *http.Request) {
+	s.handlePauseResume(w, r, true)
+}
+
+// handleResume handles POST /api/v1/ui/resume — sets Pipeline.spec.paused=false.
+func (s *uiAPIServer) handleResume(w http.ResponseWriter, r *http.Request) {
+	s.handlePauseResume(w, r, false)
+}
+
+func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, pause bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Pipeline  string `json:"pipeline"`
+		Namespace string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Pipeline == "" {
+		http.Error(w, "pipeline is required", http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	var pl v1alpha1.Pipeline
+	if err := s.client.Get(r.Context(), client.ObjectKey{Name: req.Pipeline, Namespace: ns}, &pl); err != nil {
+		http.Error(w, "pipeline not found", http.StatusNotFound)
+		return
+	}
+
+	pl.Spec.Paused = pause
+	if err := s.client.Update(r.Context(), &pl); err != nil {
+		action := "pause"
+		if !pause {
+			action = "resume"
+		}
+		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: " + action + " pipeline")
+		http.Error(w, "failed to update pipeline", http.StatusInternalServerError)
+		return
+	}
+
+	action := "paused"
+	if !pause {
+		action = "resumed"
+	}
+	s.log.Info().Str("pipeline", req.Pipeline).Bool("paused", pause).Msg("ui: pipeline " + action)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"message": "pipeline " + req.Pipeline + " " + action,
 	})
 }
 
