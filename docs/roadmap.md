@@ -14,7 +14,7 @@ All of the following are implemented and shipped:
 **Core promotion engine**
 - Pipeline CRD with DAG-native stage ordering and fan-out
 - Bundle CRD with image and config artifact types
-- PolicyGate CRD with CEL expressions (kro library: schedule, soak, metrics, upstream)
+- PolicyGate CRD with CEL expressions (kro library: schedule, soak, metrics, upstream, changewindow)
 - PromotionStep reconciler — full git-clone → kustomize/helm → commit → PR → merge → health loop
 - Graph-first architecture via krocodile
 
@@ -33,13 +33,67 @@ All of the following are implemented and shipped:
 **SCM providers**
 - GitHub (webhooks + polling)
 - GitLab (webhooks + polling)
+- Forgejo/Gitea (webhooks + polling)
 
 **Gates and policies**
-- CEL context: schedule, bundle metadata, upstream soak time, metrics
+- CEL context: schedule, bundle metadata, upstream soak time, metrics, changewindow
 - MetricCheck CRD (PromQL-based metric injection into CEL)
 - Org-level gates (mandatory, cannot be bypassed by teams)
 - Team-level gates (additive)
 - SkipPermission gates
+
+**K-01: Contiguous healthy soak**
+- `bake.minutes` + `bake.policy: reset-on-alarm` on environment spec
+- `BakeElapsedMinutes` and `BakeResets` tracked in PromotionStep status
+- Bake timer resets on health alarm when `policy=reset-on-alarm`
+
+**K-02: Pre-deploy gate type**
+- `when: pre-deploy` on PolicyGate spec — evaluated before `git-clone` starts
+- Blocks PromotionStep in `Waiting` state without opening a PR
+
+**K-03: Auto-rollback with ABORT vs ROLLBACK distinction**
+- `onHealthFailure: rollback | abort | none` on environment spec
+- Rollback creates a new Bundle at the previous image version
+- Abort freezes the deployment, requiring human decision
+
+**K-04: ChangeWindow CRD**
+- Cluster-scoped blackout (`type: blackout`) and recurring (`type: recurring`) windows
+- CEL context: `changewindow["window-name"]` evaluates to `true` when the window is active/blocking
+- `ScheduleClock` CRD drives time-based re-evaluation via Kubernetes watch events
+
+**K-05: Deployment metrics**
+- `Bundle.status.metrics` — commitToFirstStageMinutes, commitToProductionMinutes, bakeResets, operatorInterventions
+- `kardinal metrics` CLI command displays per-Bundle DORA metrics
+
+**K-06: Wave topology**
+- `wave: N` field on environment spec — Wave N stages automatically depend on all Wave N-1 stages
+- Composable with explicit `dependsOn`
+
+**K-07: Integration test step**
+- Built-in `integration-test` step runs a Kubernetes Job as part of the promotion
+- Watches completion; triggers `onFailure: abort | rollback` policy on failure
+
+**K-08: PR review gate**
+- `bundle.pr["staging"].isApproved` and `bundle.pr["staging"].approvalCount` in CEL context
+- Reads `PRStatus` CRD; no external SCM API calls in the reconciler hot path
+
+**K-09: `kardinal override` with audit record**
+- `kardinal override` patches PolicyGate with a time-limited override
+- Override record written to Bundle status and surfaced in PR evidence body
+
+**K-10: Subscription CRD (passive Bundle creation)**
+- `Subscription` CRD definition complete; reconciler creates Bundles on new artifacts
+
+    !!! warning "Source watchers are stubs"
+        OCI and Git source watchers always return `Changed: false`. Bundle auto-creation
+        from Subscriptions does not work yet. See [#491](https://github.com/pnz1990/kardinal-promoter/issues/491)
+        and [#493](https://github.com/pnz1990/kardinal-promoter/issues/493).
+
+**K-11: Cross-stage history CEL functions**
+- `upstream.staging.soakMinutes` — elapsed minutes since upstream Verified
+- `upstream.staging.recentSuccessCount` — successful promotions in last N days
+- `upstream.staging.recentFailureCount` — failed promotions in last N days
+- `upstream.staging.lastPromotedAt` — RFC3339 timestamp of last Verified promotion
 
 **Operations**
 - `RollbackPolicy` CRD + automated rollback PR
@@ -47,265 +101,74 @@ All of the following are implemented and shipped:
 - Supersession for concurrent Bundles
 - Multi-cluster via kubeconfig Secrets
 
-**CLI** — full command set: `get`, `explain`, `create`, `rollback`, `approve`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`
+**CLI** — full command set: `get`, `explain`, `create`, `rollback`, `approve`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
 **UI** — embedded React DAG visualization with gate states, bundle timeline, health chips
 
-**Distributed mode** — controller + shard agents (in progress, Stage 14)
+**Distributed mode** — controller + shard agents
 
 ---
 
 ## Near-Term (v0.5.0 — active development)
 
-### K-01: Contiguous healthy soak
+### Subscription source watchers
 
-`soakMinutes` today counts total elapsed time since the upstream environment was verified.
-This will change to count **contiguous healthy minutes** — if health fails during the soak
-window, the timer resets to zero.
+The `Subscription` CRD is implemented but source watchers are stubs:
 
-New stage-level shorthand:
+- **OCI image watcher** ([#491](https://github.com/pnz1990/kardinal-promoter/issues/491)) — use `google/go-containerregistry` to poll registries for new tags
+- **Git watcher** ([#493](https://github.com/pnz1990/kardinal-promoter/issues/493)) — use `go-git` to fetch the latest commit SHA on a watched branch
 
-```yaml
-spec:
-  environments:
-    - name: prod
-      bake:
-        minutes: 200
-        policy: reset-on-alarm   # reset timer if health event occurs
-```
+Until these land, use `kardinal create bundle` or the CI webhook to create Bundles.
 
-Under the hood `bake:` generates the correct `soakMinutes` PolicyGate automatically.
-`soakMinutes` in CEL expressions continues to work as-is; users who write it manually
-get the new contiguous semantics.
+### Pipeline aggregate deployment metrics
 
-**Why**: The difference between "the service has been running for 60 minutes" and "the
-service has been *healthy* for 60 contiguous minutes" is operationally critical.
-
----
-
-### K-02: Pre-deploy gate type
-
-PolicyGates today are evaluated after a deployment starts (post-deploy). A `when: pre-deploy`
-gate is evaluated *before* the deployment begins — if it fails, the PromotionStep stays in
-`Waiting` and never opens a PR.
+`kardinal metrics` aggregates DORA stats in-memory from CRD reads.
+[#498](https://github.com/pnz1990/kardinal-promoter/issues/498) moves this computation to
+`PipelineReconciler` so that `Pipeline.status.deploymentMetrics` is persisted and available
+to the UI trend chart:
 
 ```yaml
-kind: PolicyGate
-spec:
-  when: pre-deploy   # evaluated before git-clone starts
-  expression: 'health.deployment("my-app", "staging").errorRate < 0.01'
+status:
+  deploymentMetrics:
+    rolloutsLast30Days: 12
+    p50CommitToProdMinutes: 420
+    p90CommitToProdMinutes: 960
+    autoRollbackRate: 0.08
 ```
 
-This maps to the "alarm blocker" pattern — health must be green in the upstream environment
-before the next deployment even starts.
+### `changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions
 
----
+[#506](https://github.com/pnz1990/kardinal-promoter/issues/506) adds named-argument CEL
+library functions as a cleaner alternative to map-access syntax:
 
-### K-03: Auto-rollback with ABORT vs ROLLBACK distinction
-
-Stage-level `onHealthFailure` policy:
-
-```yaml
-spec:
-  environments:
-    - name: prod
-      onHealthFailure: rollback   # vs. abort | none
+```
+changewindow.isAllowed("business-hours")    # true when window is currently active
+changewindow.isBlocked("holiday-freeze")    # true when window is currently blocking
 ```
 
-`rollback` — automatically creates a new Bundle at the previous image version when health
-fails during the soak window. The rollback Bundle travels the full pipeline with evidence.
+Until this lands, use the existing map-access syntax:
 
-`abort` — freezes the deployment in its current state. Requires a human decision before anything
-continues. Used when the health failure might be a false positive.
-
-`none` — current behavior (stage fails, downstream stops).
-
----
-
-### K-04: ChangeWindow CRD
-
-A cluster-scoped `ChangeWindow` resource in the `kardinal-system` namespace. When active,
-blocks all pipeline promotions in the cluster automatically — no per-pipeline configuration needed.
-
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: ChangeWindow
-metadata:
-  name: q4-holiday-freeze
-  namespace: kardinal-system
-spec:
-  type: blackout
-  start: "2026-11-25T00:00:00Z"
-  end:   "2026-11-29T00:00:00Z"
-  reason: "Q4 holiday freeze"
----
-kind: ChangeWindow
-metadata:
-  name: business-hours
-spec:
-  type: recurring
-  schedule:
-    timezone: America/Los_Angeles
-    allowedDays: [Mon, Tue, Wed, Thu]
-    allowedHours: "09:00-17:00"
 ```
-
-CEL:
+changewindow["business-hours"]     # true when active
+!changewindow["holiday-freeze"]    # passes when window is inactive
 ```
-changewindow.isAllowed("business-hours") && !changewindow.isBlocked("q4-holiday-freeze")
-```
-
-**Why**: Platform teams need a single lever to freeze all pipelines during incidents,
-releases, or planned maintenance. Today this requires updating every Pipeline or every
-PolicyGate manually.
-
----
-
-### K-05: Deployment metrics
-
-Bundle and Pipeline status will include deployment efficiency metrics:
-
-```yaml
-# Bundle.status.metrics
-metrics:
-  commitToFirstStageMinutes: 12
-  commitToProductionMinutes: 847
-  bakeResets: 1            # how many times health reset the soak timer
-  operatorInterventions: 0 # how many gates were manually overridden
-
-# Pipeline.status.deploymentMetrics (aggregate over last 30 Bundles)
-deploymentMetrics:
-  rolloutsLast30Days: 12
-  p50CommitToProdMinutes: 420
-  p90CommitToProdMinutes: 960
-  autoRollbackRate: 0.08
-  operatorInterventionRate: 0.0
-  staleProdDays: 3
-```
-
-Surfaced in the UI as a trend chart on the pipeline view. High P90 = something is regularly
-blocking deployments. High rollback rate = health checks are catching real problems (good)
-or are too sensitive (needs tuning).
 
 ---
 
 ## Planned (v0.6.0+)
 
-### K-06: Wave topology
+### Flat DAG compilation ([#496](https://github.com/pnz1990/kardinal-promoter/issues/496))
 
-Syntactic sugar over DAG `dependsOn` for multi-region production rollouts:
+Replace the in-process step mini-scheduler with a full flat DAG of `PromotionStepTask`
+Graph nodes — each step (`git-clone`, `kustomize-set-image`, etc.) becomes a separate CRD
+node with its own `readyWhen` expression. This is the final major Graph-first architecture
+improvement.
 
-```yaml
-spec:
-  environments:
-    - name: prod-wave-1
-      wave: 1
-      bake: { minutes: 720 }
-    - name: prod-wave-2
-      wave: 2
-      bake: { minutes: 200 }
-    - name: prod-wave-3
-      wave: 3
-      bake: { minutes: 200 }
-```
+### Library-based kustomize and git ([#494](https://github.com/pnz1990/kardinal-promoter/issues/494), [#495](https://github.com/pnz1990/kardinal-promoter/issues/495))
 
-Wave N stages automatically depend on all Wave N-1 stages. The Pipeline translator
-generates the DAG edges. This is pure syntactic sugar — it generates the same graph
-users can write manually with `dependsOn`.
-
----
-
-### K-07: Integration test step
-
-A built-in step type that runs a Kubernetes Job as part of the promotion:
-
-```yaml
-steps:
-  - uses: integration-test
-    config:
-      image: ghcr.io/myorg/integration-tests:latest
-      command: ["./run-tests.sh", "--env", "staging"]
-      timeout: 30m
-      onFailure: abort   # vs. rollback
-```
-
-The step creates a Job, watches completion, and writes the result to PromotionStep status.
-On failure, triggers the `onFailure` policy.
-
----
-
-### K-08: PR review gate
-
-Check that the PR for a given stage has been reviewed and approved before advancing:
-
-```yaml
-kind: PolicyGate
-spec:
-  when: pre-deploy
-  expression: 'bundle.pr("staging").isApproved() && bundle.pr("staging").hasMinReviewers(1)'
-```
-
-Reads existing `PRStatus` CRD. No new infrastructure.
-
----
-
-### K-09: `kardinal override` with audit record
-
-Emergency escape hatch for production incidents:
-
-```bash
-kardinal override my-app --stage prod --gate no-weekend-deploy \
-  --reason "P0 hotfix — incident #4521"
-```
-
-Patches the PolicyGate with a time-limited override and writes a mandatory audit record
-to Bundle status:
-
-```yaml
-status:
-  gateOverrides:
-    - gate: no-weekend-deploy
-      stage: prod
-      reason: "P0 hotfix — incident #4521"
-      at: "2026-04-13T02:34:00Z"
-```
-
-The override record appears in the PR evidence body.
-
----
-
-### K-10: Subscription CRD (passive Bundle creation)
-
-!!! warning "Under design"
-    The Subscription CRD is under design. The spec below is illustrative.
-
-Watches external sources and auto-creates Bundles without CI modification:
-
-```yaml
-kind: Subscription
-spec:
-  pipeline: my-app
-  source:
-    type: image
-    image:
-      repository: ghcr.io/myorg/my-app
-      constraint: ">=1.0.0"
-      interval: 5m
-```
-
----
-
-### K-11: Cross-stage history CEL functions
-
-New CEL functions that query pipeline history within a gate expression:
-
-```
-upstream.staging.lastNPromotionsSucceeded(3)   # last 3 staging promotions all passed health
-upstream.staging.healthContiguousMinutes        # contiguous healthy minutes (live)
-```
-
-These deepen the Graph-first moat — gates can encode organizational deployment wisdom
-as code that competitors cannot express.
+Replace `exec.Command("kustomize")` with `sigs.k8s.io/kustomize` library and
+`exec.Command("git")` with `go-git` library. Eliminates subprocess dependencies and
+improves performance and portability.
 
 ---
 

@@ -286,17 +286,17 @@ spec:
 
 ## Health Verification
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable and auto-detected.
+After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. The `health.type` field is required in every Pipeline environment. Health adapters are pluggable.
 
 | Adapter | What it checks | When to use |
 |---|---|---|
-| `resource` (default) | Deployment Available condition | Clusters without a GitOps tool |
-| `argocd` | Argo CD Application health + sync status | Argo CD users (auto-detected) |
-| `flux` | Flux Kustomization Ready condition | Flux users (auto-detected) |
+| `resource` | Deployment Available condition | Clusters without a GitOps tool |
+| `argocd` | Argo CD Application health + sync status | Argo CD users |
+| `flux` | Flux Kustomization Ready condition | Flux users |
 | `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments |
 | `flagger` | Flagger Canary phase | Canary deployments |
 
-Most teams do not need to configure health adapters. If Argo CD is installed, the controller detects it and uses the `argocd` adapter automatically. Same for Flux.
+`health.type` must be set explicitly in each Pipeline environment — there is no auto-detection. This prevents misconfigurations from being silently masked.
 
 For multi-cluster deployments where the workload is in a different cluster, add a `cluster` field referencing a kubeconfig Secret:
 
@@ -311,6 +311,9 @@ health:
 ## Subscription
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
+
+!!! warning "Source watchers in active development"
+    The OCI image watcher (`type: image`) and Git watcher (`type: git`) are currently stubs that always return `Changed: false`. A Subscription will enter `status.phase = Watching` but will not trigger Bundle creation until the real polling is implemented. See [subscription.md](subscription.md) for details.
 
 **Image Subscription** (watches OCI registries for new image tags):
 

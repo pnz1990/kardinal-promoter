@@ -20,10 +20,7 @@ spec:
         strategy: kustomize
       approval: auto
       health:
-        type: argocd
-        argocd:
-          name: rollouts-demo-test
-          namespace: argocd
+        type: argocd   # Application name defaults to rollouts-demo-test in namespace argocd
 
     # Pre-prod: PR approval, instant deploy
     - name: pre-prod
@@ -32,10 +29,7 @@ spec:
         strategy: kustomize
       approval: pr-review
       health:
-        type: argocd
-        argocd:
-          name: rollouts-demo-pre-prod
-          namespace: argocd
+        type: argocd   # Application name defaults to rollouts-demo-pre-prod in namespace argocd
 
     # Prod EU: PR approval, Argo Rollouts canary, parallel with prod-us
     - name: prod-eu
