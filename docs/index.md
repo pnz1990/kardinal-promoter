@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Kardinal Promoter" width="96" style="margin-bottom: 1rem;" />
+</p>
+
 # kardinal-promoter
 
 **GitOps promotion pipelines with visible policy gates and PR evidence.**

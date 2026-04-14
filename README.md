@@ -1,4 +1,19 @@
-# kardinal-promoter
+<p align="center">
+  <a href="https://pnz1990.github.io/kardinal-promoter/">
+    <img src="kardinal-logo.png" alt="Kardinal Promoter" width="120" />
+  </a>
+</p>
+
+<h1 align="center">kardinal-promoter</h1>
+
+<p align="center">
+  Kubernetes-native promotion controller with DAG pipelines and visible policy gates.<br/>
+  <a href="https://pnz1990.github.io/kardinal-promoter/">Docs</a> ·
+  <a href="https://pnz1990.github.io/kardinal-promoter/quickstart/">Quickstart</a> ·
+  <a href="https://pnz1990.github.io/kardinal-promoter/comparison/">Comparison</a>
+</p>
+
+---
 
 Kubernetes-native promotion controller built on [kro's Graph primitive](https://github.com/ellistarn/kro/tree/krocodile/experimental). Moves versioned artifact bundles through environment pipelines using Git pull requests as the approval mechanism, with policy gates expressed as CEL and represented as visible nodes in the promotion DAG.
 

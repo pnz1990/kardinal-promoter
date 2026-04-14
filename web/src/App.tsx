@@ -231,14 +231,22 @@ export function App() {
           justifyContent: 'space-between',
           alignItems: 'center',
         }}>
-          <span style={{
-            fontWeight: 700,
-            fontSize: '0.9rem',
-            color: '#6366f1',
-            letterSpacing: '0.05em',
-          }}>
-            KARDINAL
-          </span>
+          {/* Brand: logo + wordmark */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <img
+              src="/logo.png"
+              alt="Kardinal"
+              style={{ width: '24px', height: '24px', objectFit: 'contain' }}
+            />
+            <span style={{
+              fontWeight: 700,
+              fontSize: '0.9rem',
+              color: '#e2e8f0',
+              letterSpacing: '0.05em',
+            }}>
+              KARDINAL
+            </span>
+          </div>
           {/* Staleness indicator with manual refresh button (#362) */}
           <button
             onClick={manualRefresh}
