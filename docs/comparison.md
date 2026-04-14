@@ -27,7 +27,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Change freeze management** | Yes — `ChangeWindow` CRD blocks all pipelines cluster-wide | No | Manual CommitStatus |
 | **Wave topology** | Yes — `wave:` field generates multi-region DAG edges automatically | No | No |
 | **CLI** | Full `kardinal` CLI incl. `override`, `metrics`, `logs` | `kargo` CLI | No CLI |
-| **UI dashboard** | Embedded React UI (DAG, gate states, bake countdown, fleet dashboard) | Polished Kargo UI | No UI |
+| **UI dashboard** | Full control plane UI: fleet dashboard, ops view, bake countdown, gate detail panel, bundle timeline, metrics bar, in-UI approve/rollback/override | Polished Kargo UI | No UI |
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
 | **Integration test step** | Yes — `integration-test` step runs a Kubernetes Job | No | No |

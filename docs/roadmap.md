@@ -103,7 +103,7 @@ All of the following are implemented and shipped:
 
 **CLI** — full command set: `get`, `explain`, `create`, `rollback`, `approve`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
-**UI** — embedded React DAG visualization with gate states, bundle timeline, health chips
+**UI** — full control plane UI: fleet health dashboard, pipeline operations view, per-stage bake countdown, bundle promotion timeline, policy gate detail panel, release efficiency metrics bar, in-UI actions (approve/pause/resume/rollback/override)
 
 **Distributed mode** — controller + shard agents
 
@@ -172,33 +172,24 @@ improves performance and portability.
 
 ---
 
-## UI — From Status Display to Control Plane
+## UI — Full Control Plane (shipped v0.4.0)
 
-The current UI shows pipeline state. The target is a control plane where operators can understand and act without the CLI.
+All 7 UI issues (#462–#468) are implemented and shipped.
 
 ### Currently available
 
 - DAG visualization with per-node health states
-- Bundle timeline (basic)
-- PolicyGate expression display
+- Bundle timeline with env status chips, PR links, pagination
+- PolicyGate expression display with CEL highlighting
 - HealthChip status chips
 - Live polling with staleness indicator
-
-### Planned: UI as control plane (issues #462–#468)
-
-**Fleet-wide health dashboard (#467)** — home page shows all pipelines in a sortable table: blocked count, CI red count, interventions pending. Recent activity feed on the side.
-
-**Pipeline operations view (#462)** — per-pipeline list with health columns: inventory age, last merge, blockage time, interventions/deploy, failed steps. Sortable, filterable, color-coded.
-
-**Per-stage workflow detail (#463)** — bake countdown with health overlay, integration test pass rates, override history, alarm events that reset bake.
-
-**In-UI actions (#464, priority/critical)** — approve gates, pause/resume bundles, rollback, override a gate with mandatory reason, restart failed steps. A user must be able to operate kardinal entirely from the UI during an incident.
-
-**Release efficiency metrics (#465)** — inline metrics bar on pipeline detail: inventory age, P50/P90 commit-to-prod, rollback rate, operator interventions. Sparkline chart for trends.
-
-**Bundle promotion timeline (#466)** — full artifact history: what version is in each environment, when was it deployed, what changed, who approved overrides, rollback records.
-
-**Policy gate detail (#468)** — per-gate expansion showing current CEL variable values, evaluation history, time until unblocked.
+- **Fleet-wide health dashboard (#467)** — home page sortable table: blocked count, CI red, interventions pending, recent activity feed
+- **Pipeline operations view (#462)** — per-pipeline list with sortable health columns: inventory age, last merge, blockage time, interventions/deploy
+- **Per-stage workflow detail (#463)** — step list, bake countdown with health overlay, override history
+- **In-UI actions (#464)** — approve gates, pause/resume bundles, rollback, override with mandatory reason, restart failed steps
+- **Release efficiency metrics bar (#465)** — inline P50/P90 commit-to-prod, rollback rate, operator interventions
+- **Bundle promotion timeline (#466)** — full artifact history with diff links, rollback records, override audit trail
+- **Policy gate detail panel (#468)** — CEL expression highlighting, current variable values, blocking duration, override history
 
 ---
 

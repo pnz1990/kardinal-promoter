@@ -402,7 +402,7 @@ Create Bundles (via CI webhook or CLI) to trigger promotions. Review and merge p
 
 Use `kardinal rollback` and `kardinal pause` during incidents. Monitor promotion health via the UI and controller metrics. Configure shard assignments for distributed deployments.
 
-**The UI must be a control plane, not a status display.** Operators need to act during incidents without switching tools. The UI target state:
+**The UI is a control plane, not a status display.** Operators act during incidents without switching tools. All of the following are shipped:
 - Fleet-wide health dashboard: blocked pipelines, CI red, human interventions pending — all scannable in one table
 - Per-pipeline operations view: sortable health columns (inventory age, last merge, blockage time, interventions/deploy)
 - Per-stage detail: bake countdown, integration test pass rates, override history, alarm events
@@ -410,9 +410,7 @@ Use `kardinal rollback` and `kardinal pause` during incidents. Monitor promotion
 - Bundle promotion timeline: artifact history with diff links, rollback records, override audit trail
 - Policy gate detail: current CEL variable values, evaluation history, time until unblocked
 
-A user who has never seen the CLI must be able to operate kardinal entirely from the UI during an incident.
-
-Issues: #462 (operations view), #463 (stage workflow detail), #464 (in-UI actions), #465 (release metrics), #466 (bundle timeline), #467 (fleet dashboard), #468 (gate detail)
+A user who has never seen the CLI can operate kardinal entirely from the UI during an incident.
 
 ## Core Features
 
