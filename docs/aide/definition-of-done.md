@@ -520,7 +520,7 @@ Manual coordinator comments alone do NOT count as evidence.
 | 4: Rollback | ✅ | 2026-04-13 | TestJourney4Rollback PASS in CI (E2E run 24362344722). Auto-rollback + manual rollback + pause/resume complete. |
 | 5: CLI workflow | ✅ | 2026-04-13 | TestJourney5CLI PASS in CI (E2E run 24363674266). Binary built in CI step; version, policy simulate, policy test all verified. |
 | 6: Rendered manifests | ✅ | 2026-04-13 | TestJourney6RenderedManifests PASS in CI (E2E run 24363674266). layout:branch step sequence with kustomize-build verified. |
-| 7: Multi-tenant self-service | ❌ Not started | — | Requires ApplicationSet controller integration |
+| 7: Multi-tenant self-service | ✅ | 2026-04-14 | TestJourney7MultiTenantSelfService PASS — namespace isolation, org gate inheritance, all-namespaces listing verified. ApplicationSet + Pipeline Helm template in examples/multi-tenant/. PR #489. |
 
 ---
 
