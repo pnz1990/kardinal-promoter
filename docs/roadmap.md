@@ -180,7 +180,7 @@ improves performance and portability.
 
 ---
 
-## UI — Full Control Plane (shipped v0.4.0)
+## UI — Full Control Plane (shipped v0.5.0)
 
 All 7 UI issues (#462–#468) are implemented and shipped.
 
