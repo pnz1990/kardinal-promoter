@@ -112,6 +112,49 @@ The PM knows the full product:
   - https://github.com/akuity/kargo/issues (what Kargo users are asking for that we don't have)
   - https://github.com/argoproj-labs/gitops-promoter/issues
 
+**Public website audit — every batch:**
+
+The public docs site is https://pnz1990.github.io/kardinal-promoter/. Every batch the PM
+must audit it against the actual codebase. This is mandatory, not optional.
+
+The four pages most likely to drift:
+1. `/roadmap/` — "Currently Available" version number and feature list; "Near-Term" items
+   must not describe features that are already shipped; "Planned" must not describe features
+   from milestones with 0 open issues.
+2. `/comparison/` — maturity row version number (must match latest git tag); feature matrix
+   rows (a shipped feature showing ❌ for kardinal is a competitive mis-statement).
+3. `/` (home page) — feature table rows; any inline version numbers.
+4. `/changelog/` — must have an entry for every git tag. Missing entries confuse adopters.
+
+Ground truth, checked in this order:
+```bash
+# 1. What is the latest released version?
+git tag --list "v*" | sort -V | tail -1
+
+# 2. What milestones are done (0 open issues)?
+gh api repos/pnz1990/kardinal-promoter/milestones \
+  --jq '.[] | "\(.title): open=\(.open_issues) closed=\(.closed_issues)"'
+
+# 3. What features merged since the last tag?
+git log $(git tag --list "v*" | sort -V | tail -1)..HEAD --oneline \
+  | grep -E "feat|fix" | grep -v "state:\|chore(coord)"
+
+# 4. Is a claimed feature actually implemented (not a stub)?
+grep -rn "<feature-keyword>" pkg/ cmd/ | grep -v "_test\|//"
+```
+
+Common failure patterns to look for:
+- Version still says v0.X when v0.X+1 is tagged
+- Feature listed as "Planned (v0.X)" when that milestone has 0 open issues
+- Feature listed as "Near-Term" when the implementation is already in pkg/
+- Feature described as "coming soon" but code + tests exist
+- Changelog has no entry for a released tag
+- A "stub" warning on a feature that was actually completed (check the `Watch()` return value)
+
+When you find a discrepancy: fix and push immediately. Do not accumulate fixes.
+Docs CI deploys automatically on push to main (workflow: docs.yml, ~2 min).
+Verify the deploy: `gh run list --repo pnz1990/kardinal-promoter --workflow=docs.yml --limit 1`
+
 PM must NOT know about: SDLC process, team.yml, sdlc.md, templates, otherness-config.
 
 ---

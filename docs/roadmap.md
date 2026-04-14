@@ -7,7 +7,7 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.4.0)
+## Currently Available (v0.5.0)
 
 All of the following are implemented and shipped:
 
@@ -105,11 +105,11 @@ All of the following are implemented and shipped:
 
 **UI** — full control plane UI: fleet health dashboard, pipeline operations view, per-stage bake countdown, bundle promotion timeline, policy gate detail panel, release efficiency metrics bar, in-UI actions (approve/pause/resume/rollback/override)
 
-**Distributed mode** — controller + shard agents
+**Distributed mode** — shard routing: `shard:` field on Pipeline environments routes PromotionSteps to the correct controller instance. The `kardinal-agent` standalone binary (for running in spoke clusters without inbound connectivity) is near-term (#508).
 
 ---
 
-## Near-Term (v0.5.0 — active development)
+## Near-Term (v0.6.0 — active development)
 
 ### Subscription source watchers
 
@@ -153,9 +153,17 @@ changewindow["business-hours"]     # true when active
 !changewindow["holiday-freeze"]    # passes when window is inactive
 ```
 
+### `kardinal-agent` standalone binary
+
+The `shard:` field on Pipeline environments routes PromotionSteps to a specific controller
+instance. The missing piece is a lightweight `kardinal-agent` binary that runs inside spoke
+clusters (behind firewalls, no inbound connectivity), watches only its own shard, and reports
+results back to the control plane. The reconciler logic is already shard-aware; the agent is
+a thin wrapper binary around it.
+
 ---
 
-## Planned (v0.6.0+)
+## Planned (v0.7.0+)
 
 ### Flat DAG compilation ([#496](https://github.com/pnz1990/kardinal-promoter/issues/496))
 

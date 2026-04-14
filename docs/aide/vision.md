@@ -598,13 +598,13 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 
 ## Success Criteria
 
-### Delivered (v0.4.0 — Stages 0–17 complete)
+### Delivered (v0.5.0 — Stages 0–18 complete)
 
 - A user can apply a Pipeline CRD and a Bundle, and see the promotion flow through 3 environments (test, uat, prod) with correct ordering.
 - PolicyGates block production promotion on weekends and enforce upstream soak time and metrics.
 - PRs contain promotion evidence (provenance, upstream verification, policy compliance).
 - `kardinal explain` shows which gates are blocking and why.
-- kardinal-ui renders the promotion DAG with per-node state.
+- kardinal-ui renders the promotion DAG with per-node state; full control plane UI (fleet dashboard, ops view, bake countdown, gate detail, bundle timeline, metrics bar, in-UI actions).
 - Health verification works with Argo CD, Flux, bare Kubernetes, Argo Rollouts, and Flagger (auto-detected).
 - Multi-cluster health via remote kubeconfig Secrets.
 - `kardinal init` generates a Pipeline from 8 lines of config.
@@ -616,23 +616,31 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 - MetricCheck CRD with Prometheus.
 - `kardinal policy simulate`.
 - GitLab support.
-
-### Next (v0.5.0)
-
 - Contiguous healthy soak (`bake:` stage field, reset-on-alarm)
 - Pre-deploy gate type (`when: pre-deploy` on PolicyGate)
-- Auto-rollback with ABORT vs ROLLBACK distinction
+- Auto-rollback with ABORT vs ROLLBACK distinction (`onHealthFailure`)
 - ChangeWindow CRD for fleet-wide freeze management
-- Deployment metrics on Bundle and Pipeline status
-
-### Planned (v0.6.0+)
-
+- Deployment metrics on Bundle status (`Bundle.status.metrics`)
 - Wave topology (`wave:` field on stages)
 - Integration test step (Kubernetes Job as promotion step)
-- PR review gate (`bundle.pr().isApproved()`)
+- PR review gate (`bundle.pr["env"].isApproved`)
 - `kardinal override` with audit record
-- Cross-stage history CEL functions
-- Subscription CRD for registry and Git watching
+- Cross-stage history CEL functions (`upstream.<env>.recentSuccessCount`)
+- Subscription CRD scaffolded (source watchers are stubs — see Near-Term)
+- ScheduleClock CRD for event-driven schedule re-evaluation
+- ValidatingAdmissionPolicy for CEL expression validation at apply time
+
+### Near-Term (v0.6.0)
+
+- Subscription OCI and Git source watchers (stubs today, see #491/#493)
+- Pipeline aggregate deployment metrics persisted to `Pipeline.status.deploymentMetrics` (#498)
+- `changewindow.isAllowed()` / `changewindow.isBlocked()` named CEL functions (#506)
+- `kardinal-agent` standalone binary for spoke-cluster distributed mode (#508)
+
+### Planned (v0.7.0+)
+
+- Flat DAG compilation — each promotion step as a separate Graph node (#496)
+- Library-based kustomize and git (replace exec.Command) (#494, #495)
 - Security hardening and production readiness
 
 ## Competitive Landscape

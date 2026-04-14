@@ -38,7 +38,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Artifact discovery** | Bundle created by CI/CLI; Subscription CRD (OCI watcher: coming soon) | Warehouse (automatic OCI/git scanning) | Git commit-based |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight) | No |
 | **Architecture** | Graph-first (krocodile DAG) | Stage/controller | Controller |
-| **Maturity** | v0.4.0, active development | v1.9.x, production-grade | v0.26.x, experimental |
+| **Maturity** | v0.5.0, active development | v1.9.x, production-grade | v0.26.x, experimental |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 
 ---

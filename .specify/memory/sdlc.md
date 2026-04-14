@@ -554,15 +554,69 @@ REVIEW CYCLE:
    Do NOT create specs directly — proposals go to the human for prioritization,
    then to coordinator to generate specs.
 
-6. USER DOC FRESHNESS
-   For each user doc page (docs/*.md):
-   □ Does it describe what the current code actually does?
-   □ Are all code examples current?
-   □ Are there undocumented behaviors that users would encounter?
+6. USER DOC AND PUBLIC WEBSITE FRESHNESS
+
+   **Every batch — local docs (docs/*.md):**
+   For each user-facing doc page:
+   □ Does it describe what the current code actually does (not aspirational)?
+   □ Are all feature labels correct — "available" for shipped, "near-term" / "coming soon"
+     for genuinely not-yet-implemented?
+   □ Are all code examples runnable against the current API?
+   □ Are there undocumented behaviors a user would hit?
    If stale: commit the fix directly to main — no PR required.
      git add docs/...
      git commit -m "docs(<scope>): <description>"
      git push origin main
+
+   **Every batch — public website (if project has one):**
+   The PM is responsible for keeping the DEPLOYED website accurate. A user who visits the
+   public docs must never read a feature as "coming soon" if it shipped, or "available" if
+   it hasn't. This is a correctness requirement, not a polish task.
+
+   For projects with a docs site (GitHub Pages, Vercel, Netlify, etc.):
+
+   a) DISCOVER the deployed URL from AGENTS.md or the repo's GitHub Pages settings.
+      If unclear: `gh api repos/<owner>/<repo>/pages --jq '.html_url'`
+
+   b) READ every page that describes features, roadmaps, or version state. Browser or curl.
+      Focus on: roadmap/changelog, comparison/landing page, any "What's New" section.
+
+   c) CROSS-CHECK against ground truth — in this order:
+      1. Git tags: `git tag --list "v*" | sort -V | tail -3`
+         → The latest tag is the current released version.
+      2. Changelog: does docs/changelog.md have an entry for the latest tag?
+      3. Open GitHub milestones: `gh api repos/<owner>/<repo>/milestones --jq '.[] | {title,state,open_issues,closed_issues}'`
+         → A milestone with 0 open issues = DONE regardless of whether the tag was cut.
+      4. Feature code: search the codebase to confirm whether a feature is real or a stub.
+         A doc saying "shipped" for an unimplemented stub is as wrong as "planned" for shipped code.
+
+   d) FIX every discrepancy found:
+      - Feature shown as "planned/coming soon" but shipped → move to "Available" section
+      - Feature shown as "available" but is a stub → add a warning admonition
+      - Version number stale (e.g. site says v0.4.0 when v0.5.0 is tagged) → update
+      - Changelog missing a released version → add the entry
+      - Near-term section describes items from a milestone with 0 open issues → promote or restructure
+      Commit directly to main with `git push origin main`. The docs CI deploys automatically.
+
+   e) VERIFY the deploy completed:
+      `gh run list --workflow=docs.yml --limit 1 --json status,conclusion --jq '.[0]'`
+      Then reload the public URL and confirm the change is live.
+
+   f) RECORD findings in the [PRODUCT REVIEW] report (step 7):
+      - URL audited
+      - Pages checked
+      - Discrepancies found
+      - Fixes committed (commit SHA)
+      - Deploy status
+
+   **When to escalate vs fix directly:**
+   - Wrong "planned"/"available" label → fix directly (no PR needed)
+   - Missing changelog entry → write and commit directly
+   - Wrong version number → fix directly
+   - Feature described incorrectly in technical detail → open a GitHub Issue first if unsure,
+     then fix. If you know the correct behavior from the code: fix directly.
+   - A "planned" item that has NO code at all and you're unsure if it was intentionally dropped
+     → open a `product-proposal` issue asking: "Is this still planned or should we remove it?"
 
 7. REPORT
    Post [PRODUCT REVIEW] to report issue with:
@@ -570,6 +624,7 @@ REVIEW CYCLE:
    - Journey coverage (which journeys are ✅ vs ❌)
    - Spec gaps found
    - User doc issues found or fixed
+   - Public website audit: URL, pages checked, discrepancies fixed (or "no issues found")
    - Competitive findings (if analysis ran)
    - Product proposals opened
 
