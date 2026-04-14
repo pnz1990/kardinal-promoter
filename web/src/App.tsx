@@ -3,6 +3,7 @@
 // sibling of DAGView rather than a position:fixed overlay.
 import { useState, useCallback, useMemo, useRef } from 'react'
 import { PipelineList } from './components/PipelineList'
+import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
 import { NodeDetail } from './components/NodeDetail'
 import { HealthChip } from './components/HealthChip'
@@ -61,6 +62,9 @@ export function App() {
 
   // Blocked gate filter state.
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
+
+  // #462: view mode toggle — 'list' (sidebar) | 'ops-table' (full-width operations table).
+  const [viewMode, setViewMode] = useState<'list' | 'ops-table'>('list')
 
   // Shared fetch function — called by both interval poll and manual refresh.
   const doFetchAll = useCallback(async () => {
@@ -259,33 +263,64 @@ export function App() {
         </div>
         <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#475569', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>PIPELINES</span>
-          {currentNamespace && (
-            <span style={{
-              fontSize: '0.65rem',
-              color: '#334155',
-              background: '#1e293b',
-              borderRadius: '4px',
-              padding: '1px 5px',
-              fontWeight: 400,
-              fontFamily: 'monospace',
-            }} title={`Namespace: ${currentNamespace}`}>
-              {currentNamespace}
-            </span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {/* #462: view mode toggle — list sidebar vs ops table */}
+            <button
+              onClick={() => setViewMode(v => v === 'list' ? 'ops-table' : 'list')}
+              title={viewMode === 'list' ? 'Switch to Operations Table' : 'Switch to List View'}
+              aria-label={viewMode === 'list' ? 'Switch to Operations Table' : 'Switch to List View'}
+              style={{
+                background: viewMode === 'ops-table' ? '#1e293b' : 'none',
+                border: '1px solid ' + (viewMode === 'ops-table' ? '#6366f1' : '#334155'),
+                borderRadius: '4px',
+                cursor: 'pointer',
+                padding: '1px 5px',
+                fontSize: '0.65rem',
+                color: viewMode === 'ops-table' ? '#a5b4fc' : '#475569',
+              }}
+            >
+              {viewMode === 'list' ? '⊞ Ops' : '☰ List'}
+            </button>
+            {currentNamespace && (
+              <span style={{
+                fontSize: '0.65rem',
+                color: '#334155',
+                background: '#1e293b',
+                borderRadius: '4px',
+                padding: '1px 5px',
+                fontWeight: 400,
+                fontFamily: 'monospace',
+              }} title={`Namespace: ${currentNamespace}`}>
+                {currentNamespace}
+              </span>
+            )}
+          </div>
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           <PipelineList
             pipelines={pipelines}
             selected={selectedPipeline}
-            onSelect={handleSelectPipeline}
+            onSelect={name => { handleSelectPipeline(name); if (viewMode === 'ops-table') setViewMode('list') }}
             loading={pipelinesLoading}
             error={pipelinesError}
           />
         </div>
       </aside>
 
-      {/* Main area — column layout for header + content row */}
-      <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#0f172a' }}>
+      {/* Ops table mode — full-width table replaces the main content area */}
+      {viewMode === 'ops-table' ? (
+        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#050d1a' }}>
+          <PipelineOpsTable
+            pipelines={pipelines}
+            selected={selectedPipeline}
+            onSelect={name => { handleSelectPipeline(name); setViewMode('list') }}
+            loading={pipelinesLoading}
+            error={pipelinesError}
+          />
+        </main>
+      ) : (
+        <>{/* Main area — column layout for header + content row */}
+        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#0f172a' }}>
         {!selectedPipeline ? (
           <div style={{ color: '#475569', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
@@ -540,6 +575,8 @@ export function App() {
           </>
         )}
       </main>
+        </>
+      )}
     </div>
   )
 }
