@@ -91,7 +91,7 @@ func TestReconcile_DefaultInterval(t *testing.T) {
 
 	r := &scheduleclock.Reconciler{
 		Client: client,
-		NowFn:  func() time.Time { return time.Now() },
+		NowFn:  time.Now,
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -108,7 +108,7 @@ func TestReconcile_CustomInterval(t *testing.T) {
 
 	r := &scheduleclock.Reconciler{
 		Client: client,
-		NowFn:  func() time.Time { return time.Now() },
+		NowFn:  time.Now,
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -125,7 +125,7 @@ func TestReconcile_MinimumInterval(t *testing.T) {
 
 	r := &scheduleclock.Reconciler{
 		Client: client,
-		NowFn:  func() time.Time { return time.Now() },
+		NowFn:  time.Now,
 	}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
