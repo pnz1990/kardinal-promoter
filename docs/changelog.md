@@ -18,16 +18,27 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [v0.4.0] — 2026-04-12
 
-**Distributed Mode, Argo Rollouts delegation, graph purity**
+**Distributed Mode, Argo Rollouts delegation, graph purity, K-series features**
 
 ### Added
 
 - **Distributed mode** — `--shard` flag routes PromotionSteps to matching shard agents; supports multi-cluster deployments where each spoke cluster runs its own agent
 - **Argo Rollouts delivery delegation** — `delivery.delegate: argo-rollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource
-- **GitLab SCM provider** — `scm.provider: gitlab` in Pipeline spec; supports GitLab hosted and self-managed
+- **GitLab + Forgejo/Gitea SCM providers** — `scm.provider: gitlab` and `scm.provider: forgejo` in Pipeline spec
 - **PRStatus CRD** — makes PR merge/close signal observable by the Graph (eliminates 6 GitHub API call paths from the reconciler hot path)
 - **RollbackPolicy CRD** — auto-rollback threshold comparison moved to dedicated reconciler
 - **Graph purity milestone** — all 41 krocodile-independent logic leaks eliminated (see `docs/design/11-graph-purity-tech-debt.md`)
+- **K-01: Contiguous bake timer** — `bake.minutes` + `bake.policy: reset-on-alarm` on environment spec; `BakeElapsedMinutes` and `BakeResets` in PromotionStep status
+- **K-02: Pre-deploy gates** — `when: pre-deploy` on PolicyGate spec; blocks before `git-clone` starts
+- **K-03: onHealthFailure policy** — `rollback | abort | none` per environment; rollback auto-creates a new Bundle at the previous image version
+- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; CEL context `changewindow["name"]`
+- **K-05: Bundle.status.metrics** — commitToFirstStageMinutes, commitToProductionMinutes, bakeResets, operatorInterventions
+- **K-06: Wave topology** — `wave: N` field on environment spec; Wave N automatically depends on all Wave N-1 stages
+- **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job inline during promotion
+- **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` CEL attributes via PRStatus CRD
+- **K-09: kardinal override** — emergency gate override with mandatory reason; override record in PR evidence body
+- **K-10: Subscription CRD** — reconciler scaffolded; source watchers (OCI, Git) are stubs pending #491/#493
+- **K-11: Cross-stage history CEL** — `upstream.staging.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in CEL context
 
 ### Fixed
 
@@ -67,7 +78,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **PRStatus CRD** — replaces in-reconciler GitHub API polling for PR state
 - **RollbackPolicy CRD** — moves auto-rollback threshold logic out of PromotionStepReconciler
-- **SoakTimer CRD** — moves `time.Now()` calls from PolicyGate reconciler into dedicated CRD status
+- **ScheduleClock CRD** — writes `status.tick` on a configurable interval to drive time-based policy gate re-evaluation via real Kubernetes watch events; replaces the `ctrl.Result{RequeueAfter}` timer loop pattern
 
 ### Fixed
 

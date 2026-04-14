@@ -2,18 +2,23 @@
 
 After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy before marking the PromotionStep as Verified. Health verification uses pluggable adapters that check the appropriate Kubernetes resource status.
 
-## Auto-Detection
+## Selecting an Adapter
 
-On startup, the controller checks which CRDs are installed in the cluster:
+The `health.type` field is **required** in every Pipeline environment. There is no auto-detection — explicit configuration prevents misconfigurations from being silently masked.
 
-1. If `Application` CRD (`argoproj.io/v1alpha1`) exists, the `argocd` adapter is available.
-2. If `Kustomization` CRD (`kustomize.toolkit.fluxcd.io/v1`) exists, the `flux` adapter is available.
-3. If `Rollout` CRD (`argoproj.io/v1alpha1`) exists, the `argoRollouts` adapter is available.
-4. If `Canary` CRD (`flagger.app/v1beta1`) exists, the `flagger` adapter is available.
+```yaml
+environments:
+  - name: prod
+    health:
+      type: argocd   # required: one of resource | argocd | flux | argoRollouts | flagger
+```
 
-When a Pipeline environment does not specify `health.type`, the controller uses the first available adapter in priority order: `argocd`, `flux`, `resource`.
+If `health.type` is omitted, the controller returns a validation error at reconcile time:
 
-Auto-detection results are cached and re-checked every 5 minutes (CRDs can be installed at runtime).
+```
+health.type is required in Pipeline spec environments:
+set health.type to one of [resource, argocd, flux, argoRollouts, flagger]
+```
 
 ## Adapter: resource (default)
 
@@ -32,7 +37,7 @@ health:
 
 **Healthy when:** `Available=True` and `Progressing` is not stalled (either `Progressing=True` with reason `NewReplicaSetAvailable`, or the Progressing condition is absent).
 
-**When to use:** Clusters without Argo CD or Flux. Also used as a fallback when auto-detection finds no GitOps tool.
+**When to use:** Clusters without Argo CD or Flux, or as a reliable baseline when only Kubernetes Deployments are available.
 
 **Limitations:** Only checks that the Deployment itself is healthy. Does not verify that the image was actually updated (the old Deployment may still report Available if the new image fails to pull). For reliable verification, use the `argocd` or `flux` adapter.
 
@@ -192,11 +197,11 @@ Default: `10m`. Recommended for Argo Rollouts canary environments: `30m` (canary
 
 ## Health Check Defaults
 
-When the `health` field is omitted from an environment, the controller applies these defaults:
+When `health.type` is set but sub-fields are omitted, the controller applies these defaults:
 
 | Default | Value |
 |---|---|
-| type | Auto-detected (argocd > flux > resource) |
+| type | **Required** — must be explicitly set |
 | resource.kind | Deployment |
 | resource.name | Pipeline.metadata.name |
 | resource.namespace | Environment name |

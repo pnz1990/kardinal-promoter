@@ -3,6 +3,16 @@
 The `Subscription` CRD automatically creates Bundle CRDs when new artifacts are detected
 in an OCI registry or Git repository. This removes the CI dependency for artifact discovery.
 
+!!! warning "Source watchers in active development"
+    The OCI image watcher (`type: image`) and Git watcher (`type: git`) are currently stubs.
+    A Subscription can be created and will enter `status.phase = Watching`, but it will not
+    discover new tags or commits yet — `Changed: false` is always returned.
+
+    Real polling is being implemented (GitHub issues
+    [#491](https://github.com/pnz1990/kardinal-promoter/issues/491) for OCI,
+    [#493](https://github.com/pnz1990/kardinal-promoter/issues/493) for Git).
+    Until those land, create Bundles manually with `kardinal create bundle` or the CI webhook.
+
 ## Overview
 
 Without a Subscription, Bundles must be created manually (`kardinal create bundle`) or

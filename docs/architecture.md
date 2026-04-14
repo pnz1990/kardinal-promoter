@@ -42,14 +42,19 @@ graph TD
 
 ### Controller (`cmd/kardinal-controller`)
 
-The controller manager runs three reconcilers:
+The controller manager runs these reconcilers:
 
 | Reconciler | CRD | Responsibility |
 |---|---|---|
 | `BundleReconciler` | `Bundle` | Calls the translator to build a kro Graph; watches Graph status |
+| `PipelineReconciler` | `Pipeline` | Validates pipeline config; computes aggregate pipeline status |
 | `PromotionStepReconciler` | `PromotionStep` | Runs the steps engine: git-clone → image update → PR → health check |
 | `PolicyGateReconciler` | `PolicyGate` (instances) | Evaluates CEL expression; writes `status.ready` |
 | `MetricCheckReconciler` | `MetricCheck` | Queries Prometheus; writes result to status |
+| `PRStatusReconciler` | `PRStatus` | Polls SCM for PR merge/close signal; writes `status.merged` |
+| `RollbackPolicyReconciler` | `RollbackPolicy` | Evaluates auto-rollback threshold; creates rollback Bundle |
+| `ScheduleClockReconciler` | `ScheduleClock` | Writes `status.tick` on a configurable interval for time-based gates |
+| `SubscriptionReconciler` | `Subscription` | Polls OCI/Git sources; creates Bundles on new artifacts |
 
 ### Translator (`pkg/translator`)
 
@@ -84,14 +89,17 @@ Built-in step implementations:
 
 | Step | Description |
 |---|---|
-| `kustomize-set-image` | Runs `kustomize edit set image` and writes the result to a new Git branch |
+| `git-clone` | Clones the GitOps repo (and optionally a config source repo) to a temporary work directory |
+| `kustomize-set-image` | Runs `kustomize edit set-image` to update the image reference |
+| `kustomize-build` | Runs `kustomize build` and writes rendered plain YAML (rendered-manifests pattern) |
 | `helm-set-image` | Updates `values.yaml` image tag for Helm-based repos |
+| `config-merge` | Cherry-picks or overlays a Git commit into the environment directory (config Bundles) |
 | `git-commit` | Commits changes to the environment branch |
-| `open-pr` | Opens a pull request via the SCM provider |
-| `wait-for-merge` | Polls the PR until it is merged or closed |
-| `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux sync status |
-| `metric-check` | Evaluates a PromQL query against Prometheus (uses `MetricCheck` CRD) |
-| `http-check` | Calls a configurable HTTP endpoint and checks the response |
+| `git-push` | Pushes the branch; idempotent if already pushed |
+| `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
+| `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
+| `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |
+| `integration-test` | Runs a Kubernetes Job as part of the promotion; waits for completion |
 | `custom-step` | Calls a user-defined webhook with the promotion context |
 
 ### PolicyGate Evaluator (`pkg/reconciler/policygate`)
@@ -111,6 +119,7 @@ Abstracts Git hosting operations. Current implementations:
 |---|---|
 | GitHub | GA |
 | GitLab | Beta |
+| Forgejo/Gitea | Beta |
 
 ### Health Adapters (`pkg/health`)
 
@@ -122,6 +131,7 @@ Checks whether a promotion is healthy after merging:
 | ArgoCD `Application` sync status | GA |
 | Argo Rollouts `Rollout` status | Beta |
 | Flux `Kustomization` ready status | GA |
+| Flagger `Canary` phase | Beta |
 
 ---
 
@@ -181,9 +191,12 @@ All state is stored in Kubernetes CRDs:
 | `Bundle` | Immutable deployment unit; created by CI |
 | `PromotionStep` | Per-environment promotion progress; owned by Graph |
 | `PolicyGate` | Policy check template (cluster-scoped or namespace-scoped) |
-| `PRStatus` | Tracks GitHub PR open/merged/closed state |
+| `PRStatus` | Tracks GitHub/GitLab PR open/merged/closed state |
 | `RollbackPolicy` | Auto-rollback configuration for a Pipeline |
 | `MetricCheck` | Prometheus query check, created as a DAG node |
+| `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
+| `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
+| `Subscription` | Watches OCI registries or Git repos; auto-creates Bundles on new artifacts |
 
 The controller is **stateless**: it can be restarted at any time without data loss. All
 state is recovered by re-reading CRDs.

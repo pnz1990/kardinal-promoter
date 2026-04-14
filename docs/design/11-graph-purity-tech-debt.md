@@ -2,7 +2,7 @@
 
 > Status: Active — every logic leak is tracked here
 > Related: `docs/design/10-graph-first-architecture.md`
-> Last audited: 2026-04-11
+> Last audited: 2026-04-14
 
 ---
 
@@ -10,21 +10,17 @@
 
 **Read this document at the start of every queue generation. It overrides any other scope.**
 
-### What to work on now (milestone `v0.2.1`)
+### Milestone v0.2.1: COMPLETE
 
-Fix every logic leak in the **FIXABLE WITHOUT KROCODILE** section below. These are issues in milestone `v0.2.1`. The coordinator must prioritize these as the next queue after Workshop 1 execution is confirmed.
+All 41 krocodile-independent logic leaks have been eliminated (issues #131–#155 resolved).
+The v0.2.1 queue is closed. Do not re-open these items.
 
-**Recommended order:**
-1. **Issue #133** (PRStatus CRD) — eliminates 6 GitHub API call paths at once. Highest ROI.
-2. **Issue #137** (CLI imports pkg/cel) — removes banned `pkg/cel` usage from CLI.
-3. **Issue #131** (MetricCheck Watch nodes) — removes cross-CRD aggregation from PolicyGate.
-4. **Issue #139** (Pipeline.Spec.Paused) — one fix in two places.
-5. **Issue #155** (PolicyGate three-way state, MetricCheck CEL expression) — small, clean.
-6. Remaining issues in any order.
+### What to work on now
 
-### What NOT to work on (blocked on krocodile)
-
-Issues #130, #132, #136, #138 require upstream krocodile changes. Do not implement workarounds for these. Do not start them. They are labeled `blocked-on-krocodile`.
+Active open items are tracked in GitHub issues. Check the current open issue list.
+The remaining logic leaks require either:
+1. krocodile upstream changes (labeled `blocked-on-krocodile`) — do not workaround
+2. Large architectural work: flat DAG compilation (#496), go-git migration (#495), kustomize library migration (#494)
 
 ### Hard rule: no new logic leaks
 
@@ -54,9 +50,10 @@ Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, con
 
 ---
 
-## Fixable Without Krocodile (Milestone v0.2.1)
+## Fixable Without Krocodile (Milestone v0.2.1 — COMPLETE)
 
-41 of the 57 cataloged leaks can be eliminated without any krocodile changes. These are in milestone `v0.2.1`.
+All 41 fixable leaks below were resolved in v0.2.1. Issues #131–#155 are closed.
+This section is preserved for historical reference.
 
 ### CRITICAL (fix first)
 
