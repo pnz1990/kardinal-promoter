@@ -231,7 +231,7 @@ func TestSubscriptionReconciler_GitType_Changed(t *testing.T) {
 	var bundleList kardinalv1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList))
 	require.Len(t, bundleList.Items, 1)
-	assert.Equal(t, "config", string(bundleList.Items[0].Spec.Type), "git → config Bundle")
+	assert.Equal(t, "config", bundleList.Items[0].Spec.Type, "git → config Bundle")
 }
 
 // TestSubscriptionReconciler_Idempotent verifies safe re-run after crash.

@@ -40,11 +40,8 @@ func (w *GitWatcher) Watch(_ context.Context, lastDigest string) (*WatchResult, 
 	if w.RepoURL == "" {
 		return nil, fmt.Errorf("GitWatcher: repoURL must not be empty")
 	}
-	branch := w.Branch
-	if branch == "" {
-		branch = "main"
-	}
 	// Phase 1 stub: no real polling yet.
+	// w.Branch (default "main") and w.PathGlob will be used by the real implementation.
 	return &WatchResult{
 		Digest:  lastDigest,
 		Tag:     "",
