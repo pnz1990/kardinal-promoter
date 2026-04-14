@@ -94,17 +94,17 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	// Find the health Watch node
 	var watchNode *graph.GraphNode
 	for i := range g.Spec.Nodes {
-		if strings.HasPrefix(g.Spec.Nodes[i].ID, "health_") {
+		if strings.HasPrefix(g.Spec.Nodes[i].ID, "health") {
 			watchNode = &g.Spec.Nodes[i]
 			break
 		}
 	}
 	require.NotNil(t, watchNode, "health Watch node must exist")
 
-	// Node ID follows "health_<envSlug>" pattern
-	assert.Equal(t, "health_prod", watchNode.ID)
+	// Node ID follows "health<TitleCaseEnvSlug>" camelCase pattern
+	assert.Equal(t, "healthProd", watchNode.ID)
 
-	// Template must be identity-only (ShapeWatch auto-detection):
+	// Template must be identity-only (Watch-reference auto-detection):
 	// Only apiVersion, kind, metadata.name/namespace
 	tmpl := watchNode.Template
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
@@ -113,7 +113,7 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	assert.Equal(t, "nginx", md["name"], "deployment name = pipeline name")
 	assert.Equal(t, "prod", md["namespace"], "deployment namespace = env name")
 
-	// Template must NOT have spec or other fields (would make it ShapeOwns/ShapeContribute)
+	// Template must NOT have spec or other fields (would make it Own/Contribute reference)
 	_, hasSpec := tmpl["spec"]
 	assert.False(t, hasSpec, "identity-only template must not have spec field")
 	for k := range tmpl {
@@ -122,12 +122,12 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	}
 	for k := range md {
 		assert.Contains(t, []string{"name", "namespace"}, k,
-			"metadata must only have name/namespace for ShapeWatch detection")
+			"metadata must only have name/namespace for Watch-reference detection")
 	}
 
 	// ReadyWhen must reference the actual node ID (not the placeholder "healthNode")
 	require.NotEmpty(t, watchNode.ReadyWhen)
-	assert.Contains(t, watchNode.ReadyWhen[0], "health_prod", "readyWhen must reference node ID")
+	assert.Contains(t, watchNode.ReadyWhen[0], "healthProd", "readyWhen must reference node ID")
 	assert.NotContains(t, watchNode.ReadyWhen[0], "healthNode", "placeholder must be substituted")
 	assert.Contains(t, watchNode.ReadyWhen[0], "Available", "readyWhen checks Available condition")
 }
@@ -196,7 +196,7 @@ func TestInjectHealthWatchNodes_ArgoRollouts(t *testing.T) {
 
 	watchNode := findHealthNode(g, "prod-eu")
 	require.NotNil(t, watchNode)
-	assert.Equal(t, "health_prod_eu", watchNode.ID, "hyphens in env name become underscores")
+	assert.Equal(t, "healthProdEu", watchNode.ID, "hyphens in env name become camelCase word boundaries")
 
 	tmpl := watchNode.Template
 	assert.Equal(t, "argoproj.io/v1alpha1", tmpl["apiVersion"])
@@ -244,11 +244,11 @@ func TestInjectHealthWatchNodes_MultipleEnvs(t *testing.T) {
 
 	uatNode := findHealthNode(g, "uat")
 	require.NotNil(t, uatNode)
-	assert.Equal(t, "health_uat", uatNode.ID)
+	assert.Equal(t, "healthUat", uatNode.ID)
 
 	prodNode := findHealthNode(g, "prod")
 	require.NotNil(t, prodNode)
-	assert.Equal(t, "health_prod", prodNode.ID)
+	assert.Equal(t, "healthProd", prodNode.ID)
 }
 
 // TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated verifies that the
@@ -288,7 +288,7 @@ func TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated(t *testing.T) {
 
 	// The new condition must reference the health Watch node ID
 	newCond := stepNode.ReadyWhen[len(stepNode.ReadyWhen)-1]
-	assert.Contains(t, newCond, "health_prod", "new readyWhen condition must reference health node ID")
+	assert.Contains(t, newCond, "healthProd", "new readyWhen condition must reference health node ID")
 	assert.Contains(t, newCond, "Available", "resource readyWhen checks Available condition")
 }
 
@@ -409,29 +409,41 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 	}
 }
 
-// TestCelSafeSlug verifies celSafeSlug produces CEL-valid identifiers.
+// TestCelSafeSlug verifies celSafeSlug produces identifiers valid as both
+// CEL variable names AND DNS labels (after strings.ToLower), as required by
+// krocodile e082fe9+ which embeds node IDs in DNS subdomain label key prefixes.
 func TestCelSafeSlug(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
 	}{
+		// Simple names: unchanged
 		{"prod", "prod"},
-		{"prod-eu", "prod_eu"},
-		{"prod-eu-2", "prod_eu_2"},
-		{"PROD", "prod"},
-		{"0prod", "_0prod"},
-		{"my.env", "my_env"},
+		// Hyphenated: camelCase (hyphens become word boundaries)
+		{"prod-eu", "prodEu"},
+		{"prod-eu-2", "prodEu2"},
+		// All-uppercase: first char lowercased, rest preserved (valid camelCase)
+		{"PROD", "pROD"},
+		// Leading digit: guarded with "x" prefix (not "_" — underscores invalid in DNS label)
+		{"0prod", "x0prod"},
+		// Dot-separated: camelCase (dots become word boundaries)
+		{"my.env", "myEnv"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
-			assert.Equal(t, tc.want, celSafeSlug(tc.input))
+			got := celSafeSlug(tc.input)
+			assert.Equal(t, tc.want, got)
+			// Invariant: result must be a valid CEL identifier
+			assert.Regexp(t, `^[a-zA-Z_][a-zA-Z0-9_]*$`, got, "must be valid CEL identifier")
+			// Invariant: lowercase result must be a valid DNS label
+			assert.Regexp(t, `^[a-z0-9][a-z0-9]*$`, strings.ToLower(got), "toLower must be valid DNS label")
 		})
 	}
 }
 
 // findHealthNode finds the health Watch node for a given environment in the graph.
 func findHealthNode(g *graph.Graph, envName string) *graph.GraphNode {
-	target := "health_" + celSafeSlug(envName)
+	target := "health" + strings.ToUpper(celSafeSlug(envName)[:1]) + celSafeSlug(envName)[1:]
 	for i := range g.Spec.Nodes {
 		if g.Spec.Nodes[i].ID == target {
 			return &g.Spec.Nodes[i]

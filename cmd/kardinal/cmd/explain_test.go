@@ -200,9 +200,10 @@ func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 			Labels: map[string]string{
 				"kardinal.io/pipeline":    "my-app",
 				"kardinal.io/environment": "prod",
-				// Per-bundle Graph instance — must be filtered out by explain (#297)
-				"kardinal.io/bundle":          "old-bundle",
-				"internal.kro.run/graph-name": "my-app-old-bundle",
+				// Per-bundle Graph instance — must be filtered out by explain (#297).
+				// The kardinal.io/bundle label is the sole guard (krocodile e082fe9+
+				// no longer stamps internal.kro.run/graph-name on managed resources).
+				"kardinal.io/bundle": "old-bundle",
 			},
 		},
 		Spec:   v1alpha1.PolicyGateSpec{Expression: "true"},

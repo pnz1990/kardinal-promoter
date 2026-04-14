@@ -171,9 +171,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	for _, g := range gates.Items {
 		// Filter out Graph-managed per-bundle instances (#297).
 		// Only show user-defined template gates (same filter as policy list/simulate).
-		if _, isGraphInstance := g.Labels["internal.kro.run/graph-name"]; isGraphInstance {
-			continue
-		}
+		// kardinal.io/bundle is set on every Graph-managed PolicyGate by buildPolicyGateNode.
 		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
 			continue
 		}

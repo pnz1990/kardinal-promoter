@@ -4,6 +4,8 @@
 package graph_test
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,7 +119,7 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 
 	// Verify PolicyGate nodes have propagateWhen set
 	for _, n := range result.Graph.Spec.Nodes {
-		if containsStr(n.ID, "no_weekend_deploys") || containsStr(n.ID, "staging_soak_30m") {
+		if containsStr(n.ID, "noWeekendDeploys") || containsStr(n.ID, "stagingSoak30m") {
 			assert.NotEmpty(t, n.PropagateWhen,
 				"PolicyGate node %q must have PropagateWhen set", n.ID)
 		}
@@ -147,9 +149,9 @@ func TestBuilder_FanOut(t *testing.T) {
 
 	// Both prod nodes must reference staging (using CEL-safe underscore IDs)
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	assert.True(t, containsCELRef(nodeMap["prod_us"].Template, "staging"),
+	assert.True(t, containsCELRef(nodeMap["prodUs"].Template, "staging"),
 		"prod-us must depend on staging")
-	assert.True(t, containsCELRef(nodeMap["prod_eu"].Template, "staging"),
+	assert.True(t, containsCELRef(nodeMap["prodEu"].Template, "staging"),
 		"prod-eu must depend on staging")
 }
 
@@ -381,10 +383,10 @@ func TestBuilder_PropagateWhenOnPolicyGates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Find the gate node (IDs use underscores for CEL safety: "no-weekend" → "no_weekend")
+	// Find the gate node (IDs use camelCase: "no-weekend" → "noWeekend")
 	var gateNode *graph.GraphNode
 	for i := range result.Graph.Spec.Nodes {
-		if containsStr(result.Graph.Spec.Nodes[i].ID, "no_weekend") {
+		if containsStr(result.Graph.Spec.Nodes[i].ID, "noWeekend") {
 			gateNode = &result.Graph.Spec.Nodes[i]
 			break
 		}
@@ -581,7 +583,7 @@ func TestBuilder_PolicyGateScopeLabelsPropagate(t *testing.T) {
 	var gateNode *graph.GraphNode
 	for i := range result.Graph.Spec.Nodes {
 		n := result.Graph.Spec.Nodes[i]
-		if containsStr(n.ID, "no_weekend_deploys") {
+		if containsStr(n.ID, "noWeekendDeploys") {
 			gateNode = &n
 			break
 		}
@@ -634,7 +636,7 @@ func TestBuilder_PolicyGateScopeDefault(t *testing.T) {
 	var gateNode *graph.GraphNode
 	for i := range result.Graph.Spec.Nodes {
 		n := result.Graph.Spec.Nodes[i]
-		if containsStr(n.ID, "team_gate") {
+		if containsStr(n.ID, "teamGate") {
 			gateNode = &n
 			break
 		}
@@ -678,15 +680,15 @@ func TestBuilder_WaveTopology_3Waves(t *testing.T) {
 	}
 
 	// prod-eu and prod-us must both depend on staging
-	assert.True(t, containsCELRef(nodeMap["prod_eu"].Template, "staging"),
+	assert.True(t, containsCELRef(nodeMap["prodEu"].Template, "staging"),
 		"prod-eu must depend on staging (wave 2 depends on wave 1)")
-	assert.True(t, containsCELRef(nodeMap["prod_us"].Template, "staging"),
+	assert.True(t, containsCELRef(nodeMap["prodUs"].Template, "staging"),
 		"prod-us must depend on staging (wave 2 depends on wave 1)")
 
 	// prod-ap must depend on both prod-eu and prod-us
-	assert.True(t, containsCELRef(nodeMap["prod_ap"].Template, "prod_eu"),
+	assert.True(t, containsCELRef(nodeMap["prodAp"].Template, "prodEu"),
 		"prod-ap must depend on prod-eu (wave 3 depends on wave 2)")
-	assert.True(t, containsCELRef(nodeMap["prod_ap"].Template, "prod_us"),
+	assert.True(t, containsCELRef(nodeMap["prodAp"].Template, "prodUs"),
 		"prod-ap must depend on prod-us (wave 3 depends on wave 2)")
 }
 
@@ -754,10 +756,10 @@ func TestBuilder_WaveTopology_WithExplicitDependsOn(t *testing.T) {
 		nodeMap[n.ID] = n
 	}
 
-	combined := nodeMap["prod_combined"]
-	assert.True(t, containsCELRef(combined.Template, "eu_1"),
+	combined := nodeMap["prodCombined"]
+	assert.True(t, containsCELRef(combined.Template, "eu1"),
 		"prod-combined must depend on eu-1 via wave")
-	assert.True(t, containsCELRef(combined.Template, "us_1"),
+	assert.True(t, containsCELRef(combined.Template, "us1"),
 		"prod-combined must depend on us-1 via wave (no duplicate)")
 }
 
@@ -786,4 +788,99 @@ func TestBuilder_WaveTopology_NoWave_BackwardCompat(t *testing.T) {
 	require.NotNil(t, prodNode)
 	assert.True(t, containsCELRef(prodNode.Template, "uat"),
 		"prod must depend on uat in sequential (no-wave) pipeline")
+}
+
+// ---------------------------------------------------------------------------
+// Node ID invariant tests — krocodile e082fe9+ embeds node IDs in DNS subdomain
+// label key prefixes. These must satisfy BOTH:
+//   - CEL identifier: [a-zA-Z_][a-zA-Z0-9_]* (no hyphens)
+//   - DNS label after strings.ToLower(): [a-z0-9]+ (no underscores or hyphens)
+//
+// i.e., all generated node IDs must be camelCase [a-zA-Z][a-zA-Z0-9]*.
+// ---------------------------------------------------------------------------
+
+// reCELIdent matches a valid CEL identifier.
+var reCELIdent = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+// reDNSLabel matches a valid RFC 1123 DNS label after strings.ToLower.
+var reDNSLabel = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$`)
+
+// assertNodeIDsValid checks that every node ID in a built Graph satisfies the
+// CEL and DNS label constraints required by krocodile e082fe9+ / PR #109.
+func assertNodeIDsValid(t *testing.T, nodes []graph.GraphNode) {
+	t.Helper()
+	for _, n := range nodes {
+		id := n.ID
+		// CEL identifier check.
+		assert.True(t, reCELIdent.MatchString(id),
+			"node ID %q is not a valid CEL identifier (must match [a-zA-Z_][a-zA-Z0-9_]*)", id)
+		// DNS label check (after toLower, as krocodile does in nodeLabelPrefix).
+		lowered := strings.ToLower(id)
+		assert.True(t, reDNSLabel.MatchString(lowered),
+			"node ID %q lowercased to %q which is not a valid RFC 1123 DNS label "+
+				"(must match [a-z0-9][a-z0-9-]*[a-z0-9] or [a-z0-9]): "+
+				"krocodile embeds node IDs in DNS subdomain label key prefixes", id, lowered)
+		// No underscores (would be invalid in DNS label key prefix).
+		assert.NotContains(t, lowered, "_",
+			"node ID %q contains an underscore after lowercasing — invalid in krocodile label key prefix", id)
+		// No hyphens (would be invalid in CEL identifier).
+		assert.NotContains(t, id, "-",
+			"node ID %q contains a hyphen — invalid as a CEL identifier", id)
+		// 63-char limit per DNS label segment (PR #109: IsDNS1123Label enforced in parseNodeList).
+		assert.LessOrEqual(t, len(lowered), 63,
+			"node ID %q lowercases to %d chars — exceeds the 63-char DNS label segment limit", id, len(lowered))
+	}
+}
+
+// TestNodeIDs_CELAndDNSSafe verifies that all node IDs emitted by the builder
+// for typical real-world env names satisfy the CEL + DNS label constraints.
+func TestNodeIDs_CELAndDNSSafe(t *testing.T) {
+	cases := []struct {
+		name string
+		envs []string
+	}{
+		{"simple", []string{"test", "uat", "prod"}},
+		{"hyphenated", []string{"kardinal-test-app-test", "kardinal-test-app-uat", "kardinal-test-app-prod"}},
+		{"mixed", []string{"dev", "pre-prod", "prod-eu", "prod-us"}},
+		{"numeric-suffix", []string{"env-1", "env-2", "env-3"}},
+		{"uppercase-input", []string{"Dev", "UAT", "Prod"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := makeLinearPipeline("my-app", tc.envs...)
+			bundle := makeBundle("my-app-abc123", "my-app")
+			b := graph.NewBuilder()
+			result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+			require.NoError(t, err)
+			assertNodeIDsValid(t, result.Graph.Spec.Nodes)
+		})
+	}
+}
+
+// TestNodeIDs_LongGateNodeTruncation verifies that gate node IDs exceeding
+// the 63-char DNS label limit are truncated to exactly 63 chars via the
+// truncateNodeID function (PR #109 compliance).
+func TestNodeIDs_LongGateNodeTruncation(t *testing.T) {
+	// This pipeline has long names in all components: gate name, namespace,
+	// env name, and bundle name — which would produce a composite gate node ID
+	// well over 63 chars without truncation.
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-application", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "kardinal-test-app-prod"},
+			},
+			// Gates at pipeline level with a long name in a named namespace.
+			PolicyGates: []kardinalv1alpha1.PipelinePolicyGateRef{
+				{Name: "no-weekend-deploys", Namespace: "platform-policies"},
+				{Name: "require-uat-soak-30m", Namespace: "platform-policies"},
+			},
+		},
+	}
+	bundle := makeBundle("my-application-abc123456", "my-application")
+	b := graph.NewBuilder()
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+	assertNodeIDsValid(t, result.Graph.Spec.Nodes)
 }

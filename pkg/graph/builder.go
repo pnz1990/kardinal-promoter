@@ -4,6 +4,7 @@
 package graph
 
 import (
+	"crypto/sha1" //nolint:gosec // SHA-1 used for content addressing only, not cryptographic security
 	"fmt"
 	"strings"
 
@@ -725,17 +726,34 @@ func graphNameFrom(pipeline, bundle string) string {
 // gateNodeName generates a unique node ID for a PolicyGate instance.
 // The ID is used as both the Kubernetes resource name (metadata.name) and as
 // the CEL variable name in readyWhen/propagateWhen expressions. CEL identifiers
-// must not contain hyphens, so we use underscores.
+// must not contain hyphens, so we use camelCase (see celSafeSlug).
 // Includes namespace to prevent collisions when same gate name exists in
 // multiple namespaces.
+//
+// Components are slugged individually with celSafeSlug then joined with digit
+// separators ("0" between parts, "00" before the bundle suffix). Digit separators
+// survive camelCase without creating word boundaries (digits don't trigger
+// capitalisation), preserving uniqueness across different (name, ns, env, bundle)
+// combinations.
+//
+// krocodile (e082fe9+, PR #109) validates node IDs via IsDNS1123Label(strings.ToLower(id)),
+// which enforces a 63-character limit per DNS label segment. If the full composed ID
+// exceeds this limit, it is truncated to 54 chars and an 8-char SHA-1 hash suffix
+// is appended (54 + "0" + 8 = 63 chars), preserving uniqueness.
 func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string {
 	ns := gateNS
 	if ns == "" {
 		ns = "default"
 	}
-	// Use celSafeSlug so the ID is valid as a CEL identifier (underscores).
-	raw := fmt.Sprintf("%s_%s_%s__%s", gateName, ns, envName, bundleSlug)
-	return celSafeSlug(raw)
+	// Slug each component individually, then join with digit separators so that
+	// two components whose camelCase forms would otherwise collide remain distinct.
+	// Example: gateName="a", ns="bC", env="d" → "a0bC0d00<bundle>"
+	//          gateName="aB", ns="c", env="d" → "aB0c0d00<bundle>"  (no collision)
+	full := celSafeSlug(gateName) + "0" +
+		celSafeSlug(ns) + "0" +
+		celSafeSlug(envName) + "00" +
+		bundleSlug
+	return truncateNodeID(full)
 }
 
 // gateNodeK8sName generates the Kubernetes resource name (hyphens, RFC 1123) for a
@@ -751,7 +769,7 @@ func gateNodeK8sName(bundleSlugK8s, gateName, gateNS, envName string) string {
 // bundleVersionSlug returns a CEL-safe slug from the bundle name for use in node IDs.
 //
 // Dual-slug convention (GB-3/GB-4 in docs/design/11-graph-purity-tech-debt.md):
-//   - celSafeSlug / bundleVersionSlug → underscores, valid CEL identifiers
+//   - celSafeSlug / bundleVersionSlug → camelCase, valid CEL identifiers AND DNS labels
 //     Used in: node IDs, readyWhen/propagateWhen CEL expressions, gateNodeName
 //   - slugify → hyphens, valid Kubernetes resource names
 //     Used in: metadata.name fields only
@@ -781,25 +799,88 @@ func slugify(s string) string {
 	return b.String()
 }
 
-// celSafeSlug creates an identifier safe for use as a CEL variable name.
-// CEL identifiers follow Go rules: letters, digits, underscores; must not
-// start with a digit. Hyphens and other special chars are replaced with '_'.
-// See dual-slug convention in bundleVersionSlug doc comment.
+// truncateNodeID ensures a graph node ID fits within the 63-character DNS label
+// limit enforced by krocodile (e082fe9+, PR #109) via IsDNS1123Label(strings.ToLower(id)).
+//
+// When the ID is short enough it is returned unchanged. When it exceeds 63 chars,
+// the first 54 characters are kept and an 8-hex-char SHA-1 digest of the full ID
+// is appended with a "0" separator: 54 + "0" + 8 = 63 chars exactly.
+// The hash preserves uniqueness — two different long IDs that share the same 54-char
+// prefix will have different hash suffixes.
+func truncateNodeID(id string) string {
+	const maxLen = 63
+	const prefixLen = 54
+	if len(id) <= maxLen {
+		return id
+	}
+	h := sha1.New() //nolint:gosec
+	h.Write([]byte(id))
+	return id[:prefixLen] + "0" + fmt.Sprintf("%x", h.Sum(nil))[:8]
+}
+
+// celSafeSlug creates an identifier safe for use as both a CEL variable name
+// and as a krocodile graph node ID.
+//
+// krocodile (e082fe9+) embeds node IDs into Kubernetes label key prefixes using
+// the format "<nodeID>.<graphName>.<namespace>.internal.kro.run/reference".
+// Kubernetes label key prefixes must be valid RFC 1123 DNS subdomains, which
+// means each dot-separated segment may only contain [a-z0-9-] — no underscores.
+// krocodile calls strings.ToLower(nodeID) when constructing the prefix, so the
+// result of celSafeSlug must contain no underscores or hyphens after lowercasing.
+//
+// CEL identifier rules additionally forbid hyphens (only [a-zA-Z0-9_] allowed).
+//
+// Solution: camelCase. Non-alphanumeric characters (hyphens, underscores, dots,
+// etc.) become word boundaries — the following letter is capitalised and the
+// separator is dropped. This satisfies both constraints simultaneously:
+//   - Valid CEL identifier: [a-zA-Z][a-zA-Z0-9]* ✓
+//   - Valid DNS label after strings.ToLower(): [a-z0-9]+ ✓
+//
+// Examples:
+//
+//	"kardinal-test-app-uat"  → "kardinalTestAppUat"
+//	"no_weekend_deploys"     → "noWeekendDeploys"
+//	"prod-eu"                → "prodEu"
+//	"0bad"                   → "x0bad"  (leading digit guarded by "x" prefix)
+//	"MyApp"                  → "myApp"  (leading uppercase lowercased)
+//
+// IMPORTANT: This function exists in two places and must be kept identical:
+//   - pkg/graph/builder.go
+//   - pkg/translator/translator.go
 func celSafeSlug(s string) string {
 	var b strings.Builder
-	for i, c := range s {
+	upperNext := false
+	for _, c := range s {
 		switch {
-		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9' && i > 0) || c == '_':
-			b.WriteRune(c)
+		case c >= 'a' && c <= 'z':
+			if upperNext {
+				b.WriteRune(c - 'a' + 'A')
+				upperNext = false
+			} else {
+				b.WriteRune(c)
+			}
 		case c >= 'A' && c <= 'Z':
-			b.WriteRune(c - 'A' + 'a')
-		case c == '0' && i == 0:
-			// Leading digit — prefix with underscore
-			b.WriteRune('_')
+			if b.Len() == 0 {
+				b.WriteRune(c - 'A' + 'a') // first char always lowercase
+			} else if upperNext {
+				b.WriteRune(c) // already upper — preserve
+				upperNext = false
+			} else {
+				b.WriteRune(c)
+			}
+		case c >= '0' && c <= '9':
+			if b.Len() == 0 {
+				b.WriteString("x") // guard leading digit with a safe prefix
+			}
 			b.WriteRune(c)
+			upperNext = false
 		default:
-			b.WriteRune('_')
+			// hyphens, underscores, spaces, dots → camelCase word boundary
+			upperNext = true
 		}
+	}
+	if b.Len() == 0 {
+		return "x"
 	}
 	return b.String()
 }
@@ -867,9 +948,11 @@ func containsStr(s []string, target string) bool {
 }
 
 // prStatusNodeName generates the CEL-safe node ID for a PRStatus Watch node.
-// Format: prstatus_<bundleSlug>_<envSlug>
+// Format: prstatus0<bundleSlug>0<envSlug>
+// Uses digit separator "0" (not underscore) because celSafeSlug now produces
+// camelCase where underscores are invalid DNS label characters.
 func prStatusNodeName(bundleSlug, envName string) string {
-	return "prstatus_" + celSafeSlug(bundleSlug) + "_" + celSafeSlug(envName)
+	return "prstatus0" + bundleSlug + "0" + celSafeSlug(envName)
 }
 
 // prStatusNodeK8sName generates the Kubernetes resource name (hyphens) for a

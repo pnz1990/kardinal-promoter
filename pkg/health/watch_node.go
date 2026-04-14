@@ -19,14 +19,14 @@ import (
 	"fmt"
 )
 
-// WatchNodeSpec describes a krocodile ShapeWatch node template for health verification.
+// WatchNodeSpec describes a krocodile Watch-reference node template for health verification.
 //
 // The translator uses this struct to emit a Watch node in the Graph spec instead of
 // calling the Go health adapter at reconcile time. This moves health verification
 // into the Graph layer (HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md).
 //
 // The node variable name in ReadyWhen is always "healthNode" — the translator assigns
-// a unique Graph node ID (e.g. "health_prod") and must substitute "healthNode" with
+// a unique Graph node ID (e.g. "healthProd") and must substitute "healthNode" with
 // the actual ID when generating the Graph spec.
 type WatchNodeSpec struct {
 	// APIVersion is the Kubernetes API version of the resource to watch.
@@ -56,7 +56,7 @@ type WatchNodeSpec struct {
 	HealthType string
 }
 
-// WatchNodeTemplate returns a krocodile ShapeWatch node spec for the given health type
+// WatchNodeTemplate returns a krocodile Watch-reference node spec for the given health type
 // and configuration. The translator calls this function to get the Watch node template
 // and readyWhen CEL expression for a Pipeline environment's health check.
 //

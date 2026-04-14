@@ -16,9 +16,11 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    9c18aa34 (2026-04-11 — fix execution design: trigger terminology, hash precision)
+# Last verified:    948ad6c (2026-04-14 — fix: validate node IDs produce valid DNS-1123 label
+#                           key prefixes; adds IsDNS1123Label check in parseNodeList and
+#                           IsDNS1123Subdomain check in validateIdentityLabelKey)
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-9c18aa34}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-948ad6c}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 

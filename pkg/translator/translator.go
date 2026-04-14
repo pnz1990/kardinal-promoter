@@ -93,13 +93,13 @@ func (t *Translator) Translate(ctx context.Context,
 
 	// Inject health Watch nodes for each environment that has health.type configured.
 	// HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md:
-	// The translator emits krocodile ShapeWatch nodes (identity-only template:
+	// The translator emits krocodile Watch-reference nodes (identity-only template:
 	// apiVersion+kind+metadata.name) for health verification so the Graph can
 	// observe real K8s resource health without the PromotionStep reconciler
 	// calling health adapters on the hot path.
 	//
 	// Each health Watch node:
-	//   - Has an identity-only template → krocodile auto-detects it as ShapeWatch
+	//   - Has an identity-only template → krocodile auto-detects it as a Watch reference
 	//   - Has a readyWhen expression evaluating the K8s resource's health status
 	//   - Updates the companion PromotionStep node's readyWhen to surface
 	//     real-resource health in the Graph's UI signal
@@ -124,18 +124,18 @@ func (t *Translator) Translate(ctx context.Context,
 	return result.Graph.Name, nil
 }
 
-// injectHealthWatchNodes post-processes the Graph spec to add krocodile ShapeWatch
+// injectHealthWatchNodes post-processes the Graph spec to add krocodile Watch-reference
 // nodes for each environment with a configured health.type.
 //
 // This is the translator-layer implementation of HE-1, HE-2, HE-3 from
-// docs/design/11-graph-purity-tech-debt.md. ShapeWatch nodes exist in krocodile
-// (confirmed HEAD commit 8ac56202) — they are auto-detected by krocodile when a
-// node template contains only apiVersion, kind, and metadata.name/namespace.
+// docs/design/11-graph-purity-tech-debt.md. Watch-reference nodes are auto-detected
+// by krocodile (e082fe9+, Reference=Watch) when a node template contains only
+// apiVersion, kind, and metadata.name/namespace.
 //
 // For each environment env with health.type set:
 //  1. Build a WatchNodeSpec from pkg/health.WatchNodeTemplate
-//  2. Build the Graph node ID: "health_<envSlug>"
-//  3. Append a ShapeWatch node to the Graph spec
+//  2. Build the Graph node ID: "health<EnvSlug>" (camelCase via celSafeSlug)
+//  3. Append a Watch-reference node to the Graph spec
 //  4. Update the PromotionStep node's readyWhen to include the health condition
 //     (UI signal: the Graph shows the step as "ready" only when the K8s resource
 //     is also healthy — not just when the reconciler set state=Verified)
@@ -179,14 +179,22 @@ func injectHealthWatchNodes(
 			continue
 		}
 
-		nodeID := "health_" + celSafeSlug(env.Name)
+		// Node ID: "health" + TitleCase(celSafeSlug(env.Name))
+		// e.g. "prod-eu" → celSafeSlug → "prodEu" → "healthProdEu"
+		// The "health" prefix + TitleCase produces a camelCase ID with no underscores,
+		// satisfying both CEL identifier rules and DNS label rules.
+		envSlug := celSafeSlug(env.Name)
+		if len(envSlug) > 0 {
+			envSlug = strings.ToUpper(envSlug[:1]) + envSlug[1:]
+		}
+		nodeID := "health" + envSlug
 
 		// Substitute the "healthNode" placeholder in ReadyWhen with the actual node ID.
 		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
 
-		// Build an identity-only template so krocodile detects it as ShapeWatch.
-		// ShapeWatch detection (experimental/controller/types.go): only apiVersion,
-		// kind, metadata.name, optionally metadata.namespace.
+		// Build an identity-only template so krocodile detects it as a Watch reference.
+		// Watch reference detection (experimental/controller/types.go: DetectReference):
+		// template has apiVersion + kind + metadata.name; no spec or other fields.
 		watchNode := graph.GraphNode{
 			ID: nodeID,
 			Template: map[string]interface{}{
@@ -256,24 +264,45 @@ func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec)
 	}
 }
 
-// celSafeSlug produces an identifier safe for use in CEL expressions.
-// Mirrors graph.celSafeSlug exactly — must be kept in sync.
-// Hyphens and other non-alphanumeric chars become underscores; uppercase → lowercase.
-// A leading digit gets a prefixed underscore.
+// celSafeSlug produces an identifier safe for use as both a CEL variable name
+// and as a krocodile graph node ID. Mirrors graph.celSafeSlug exactly — must
+// be kept in sync with pkg/graph/builder.go.
+//
+// See graph.celSafeSlug for full documentation. Summary: produces camelCase so
+// the result is valid as a CEL identifier AND as a DNS label after strings.ToLower().
 func celSafeSlug(s string) string {
 	var b strings.Builder
-	for i, c := range s {
+	upperNext := false
+	for _, c := range s {
 		switch {
-		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9' && i > 0) || c == '_':
-			b.WriteRune(c)
+		case c >= 'a' && c <= 'z':
+			if upperNext {
+				b.WriteRune(c - 'a' + 'A')
+				upperNext = false
+			} else {
+				b.WriteRune(c)
+			}
 		case c >= 'A' && c <= 'Z':
-			b.WriteRune(c - 'A' + 'a')
-		case c == '0' && i == 0:
-			b.WriteRune('_')
+			if b.Len() == 0 {
+				b.WriteRune(c - 'A' + 'a')
+			} else if upperNext {
+				b.WriteRune(c)
+				upperNext = false
+			} else {
+				b.WriteRune(c)
+			}
+		case c >= '0' && c <= '9':
+			if b.Len() == 0 {
+				b.WriteString("x")
+			}
 			b.WriteRune(c)
+			upperNext = false
 		default:
-			b.WriteRune('_')
+			upperNext = true
 		}
+	}
+	if b.Len() == 0 {
+		return "x"
 	}
 	return b.String()
 }

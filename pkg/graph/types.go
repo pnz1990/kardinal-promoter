@@ -149,6 +149,10 @@ type GraphStatus struct {
 	Phase string `json:"phase,omitempty"`
 
 	// Conditions holds Graph-level status conditions.
+	// krocodile e082fe9+ emits two condition types:
+	//   "Compiled" — graph spec parsed and CEL programs compiled (was "Accepted" ≤9c18aa34).
+	//   "Ready"    — all nodes have converged.
+	// Do not check for "Accepted"; use "Compiled" for spec validation status.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
