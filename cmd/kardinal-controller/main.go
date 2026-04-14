@@ -44,7 +44,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	celpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -179,14 +178,11 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
 	}
 
-	celEnv, err := celpkg.NewCELEnvironment()
+	pgReconciler, err := policygaterecon.NewReconciler(mgr.GetClient())
 	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create CEL environment")
+		logger.Fatal().Err(err).Msg("unable to create PolicyGateReconciler (CEL env init failed)")
 	}
-	if err := (&policygaterecon.Reconciler{
-		Client:    mgr.GetClient(),
-		Evaluator: celpkg.NewEvaluator(celEnv),
-	}).SetupWithManager(mgr); err != nil {
+	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
 

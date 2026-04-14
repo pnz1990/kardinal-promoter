@@ -19,7 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	celpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/cel"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -68,11 +67,6 @@ func makeBundle(name, ns string) *kardinalv1alpha1.Bundle {
 func TestPolicyGateReconciler_WeekdayGatePasses(t *testing.T) {
 	gate := makeGateInstance("no-weekend", "default", "nginx-demo-v1", "!schedule.isWeekend", "5m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -82,11 +76,9 @@ func TestPolicyGateReconciler_WeekdayGatePasses(t *testing.T) {
 
 	// Tuesday
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return tuesday },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return tuesday }
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "no-weekend", Namespace: "default"},
@@ -104,11 +96,6 @@ func TestPolicyGateReconciler_WeekdayGatePasses(t *testing.T) {
 func TestPolicyGateReconciler_WeekendGateBlocks(t *testing.T) {
 	gate := makeGateInstance("no-weekend", "default", "nginx-demo-v1", "!schedule.isWeekend", "5m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -118,11 +105,9 @@ func TestPolicyGateReconciler_WeekendGateBlocks(t *testing.T) {
 
 	// Saturday
 	saturday := time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC)
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return saturday },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return saturday }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "no-weekend", Namespace: "default"},
@@ -137,11 +122,6 @@ func TestPolicyGateReconciler_WeekendGateBlocks(t *testing.T) {
 // TestPolicyGateReconciler_BundleNotFound verifies fail-closed when bundle is missing.
 func TestPolicyGateReconciler_BundleNotFound(t *testing.T) {
 	gate := makeGateInstance("no-weekend", "default", "missing-bundle", "!schedule.isWeekend", "5m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -149,11 +129,9 @@ func TestPolicyGateReconciler_BundleNotFound(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "no-weekend", Namespace: "default"},
@@ -178,11 +156,6 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 		},
 		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 	}
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -190,11 +163,9 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 		WithStatusSubresource(template).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "no-weekend-template", Namespace: "platform-policies"},
@@ -215,11 +186,6 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 func TestPolicyGateReconciler_RequeueAfterRecheckInterval(t *testing.T) {
 	gate := makeGateInstance("recheck-gate", "default", "nginx-demo-v1", "!schedule.isWeekend", "10m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -227,11 +193,9 @@ func TestPolicyGateReconciler_RequeueAfterRecheckInterval(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "recheck-gate", Namespace: "default"},
@@ -242,14 +206,12 @@ func TestPolicyGateReconciler_RequeueAfterRecheckInterval(t *testing.T) {
 
 // TestPolicyGateReconciler_GateNotFound verifies no error when gate is deleted.
 func TestPolicyGateReconciler_GateNotFound(t *testing.T) {
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
-	r := &policygate.Reconciler{Client: c, Evaluator: eval, NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = time.Now
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "gone", Namespace: "default"},
@@ -262,11 +224,6 @@ func TestPolicyGateReconciler_GateNotFound(t *testing.T) {
 func TestPolicyGateReconciler_Idempotent(t *testing.T) {
 	gate := makeGateInstance("idem-gate", "default", "nginx-demo-v1", "!schedule.isWeekend", "5m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -275,11 +232,9 @@ func TestPolicyGateReconciler_Idempotent(t *testing.T) {
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return tuesday },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return tuesday }
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "idem-gate", Namespace: "default"}}
 
@@ -325,11 +280,6 @@ func TestPolicyGateReconciler_MetricsContext_PassWhenMetricPasses(t *testing.T) 
 	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1",
 		`metrics["error-rate"].result == "Pass"`, "1m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -337,11 +287,9 @@ func TestPolicyGateReconciler_MetricsContext_PassWhenMetricPasses(t *testing.T) 
 		WithStatusSubresource(gate, mc).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"},
@@ -360,11 +308,6 @@ func TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails(t *testing.T) 
 	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1",
 		`metrics["error-rate"].result == "Pass"`, "1m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -372,11 +315,9 @@ func TestPolicyGateReconciler_MetricsContext_BlockWhenMetricFails(t *testing.T) 
 		WithStatusSubresource(gate, mc).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"},
@@ -402,11 +343,6 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`upstream["uat"].soakMinutes >= 30`, "2m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -414,11 +350,9 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Passes(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return now },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return now }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
@@ -442,11 +376,6 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`upstream["uat"].soakMinutes >= 30`, "2m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -454,11 +383,9 @@ func TestPolicyGateReconciler_UpstreamSoakContext_Blocks(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return now },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return now }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
@@ -480,11 +407,6 @@ func TestPolicyGateReconciler_MetricsContext_NamespaceIsolation(t *testing.T) {
 	gate := makeGateInstance("metric-gate", "default", "nginx-demo-v1",
 		`metrics["error-rate"].result == "Pass"`, "1m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -492,11 +414,9 @@ func TestPolicyGateReconciler_MetricsContext_NamespaceIsolation(t *testing.T) {
 		WithStatusSubresource(gate, mcSameNS, mcOtherNS).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "metric-gate", Namespace: "default"},
@@ -517,11 +437,6 @@ func TestPolicyGateReconciler_MetricsContext_EmptyWhenNoMetricChecks(t *testing.
 		`!schedule.isWeekend`, "5m")
 	bundle := makeBundle("nginx-demo-v1", "default")
 	// No MetricCheck objects created
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -530,11 +445,9 @@ func TestPolicyGateReconciler_MetricsContext_EmptyWhenNoMetricChecks(t *testing.
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return tuesday },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return tuesday }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "no-metric-gate", Namespace: "default"},
@@ -554,11 +467,6 @@ func TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked(t *te
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`upstream["uat"].soakMinutes >= 30`, "2m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -566,11 +474,9 @@ func TestPolicyGateReconciler_UpstreamSoakContext_ZeroWhenNotHealthChecked(t *te
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
@@ -603,11 +509,6 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes(t *testing.T) {
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`bundle.upstreamSoakMinutes >= 30`, "1m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -615,11 +516,9 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return now },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return now }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
@@ -644,11 +543,6 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
 	})
 	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
 		`bundle.upstreamSoakMinutes >= 30`, "1m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -656,11 +550,9 @@ func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
 		WithStatusSubresource(gate, bundle).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return now },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return now }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
@@ -681,11 +573,6 @@ func TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus(t *testing.T) {
 	gate := makeGateInstance("bad-cel-gate", "default", "nginx-demo-v1",
 		`this is not valid CEL !!!`, "5m")
 	bundle := makeBundle("nginx-demo-v1", "default")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -693,11 +580,9 @@ func TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "bad-cel-gate", Namespace: "default"},
@@ -726,11 +611,6 @@ func TestPolicyGateReconciler_StatusReasonContainsVersion(t *testing.T) {
 	bundle := makeBundleWithImage("nginx-demo-v1", "default", "ghcr.io/nginx/nginx", "1.29.0")
 	gate := makeGateInstance("version-gate", "default", "nginx-demo-v1",
 		`!schedule.isWeekend`, "5m")
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -739,11 +619,9 @@ func TestPolicyGateReconciler_StatusReasonContainsVersion(t *testing.T) {
 		Build()
 
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return tuesday },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return tuesday }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "version-gate", Namespace: "default"},
@@ -783,11 +661,6 @@ func makeGateTemplate(name, ns, expression string) *kardinalv1alpha1.PolicyGate 
 // This is issue #315 for template gates (the existing test covers instances).
 func TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError(t *testing.T) {
 	gate := makeGateTemplate("bad-template", "platform-policies", `this is not valid CEL !!!`)
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -795,11 +668,9 @@ func TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "bad-template", Namespace: "platform-policies"},
@@ -821,11 +692,6 @@ func TestPolicyGateReconciler_Template_InvalidCEL_SurfacesError(t *testing.T) {
 // PolicyGate with valid CEL sets status.reason to indicate valid syntax.
 func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 	gate := makeGateTemplate("valid-template", "platform-policies", `!schedule.isWeekend`)
-
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval := celpkg.NewEvaluator(env)
-
 	s := newScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(s).
@@ -833,11 +699,9 @@ func TestPolicyGateReconciler_Template_ValidCEL_StatusShowsValid(t *testing.T) {
 		WithStatusSubresource(gate).
 		Build()
 
-	r := &policygate.Reconciler{
-		Client:    c,
-		Evaluator: eval,
-		NowFn:     func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) },
-	}
+		r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = func() time.Time { return time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC) }
 
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "valid-template", Namespace: "platform-policies"},
@@ -897,11 +761,8 @@ func TestPolicyGateReconciler_ChangeWindowBlocked(t *testing.T) {
 		WithObjects(gate, bundle, cw).
 		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
 		Build()
-
-	env1, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-	eval1 := celpkg.NewEvaluator(env1)
-	r := &policygate.Reconciler{Client: c, Evaluator: eval1}
+	r, err1 := policygate.NewReconciler(c)
+	require.NoError(t, err1)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
 	_, reconcileErr1 := r.Reconcile(context.Background(), req)
 	require.NoError(t, reconcileErr1)
@@ -951,11 +812,8 @@ func TestPolicyGateReconciler_ChangeWindowAllowed(t *testing.T) {
 		WithObjects(gate, bundle, cw).
 		WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
 		Build()
-
-	env2, err2 := celpkg.NewCELEnvironment()
+	r, err2 := policygate.NewReconciler(c)
 	require.NoError(t, err2)
-	eval2 := celpkg.NewEvaluator(env2)
-	r := &policygate.Reconciler{Client: c, Evaluator: eval2}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate-ok", Namespace: "default"}}
 	_, reconcileErr2 := r.Reconcile(context.Background(), req)
 	require.NoError(t, reconcileErr2)
@@ -978,10 +836,9 @@ func TestReconciler_OverrideActive(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1005,10 +862,9 @@ func TestReconciler_OverrideExpired(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1031,10 +887,9 @@ func TestReconciler_OverrideWrongStage(t *testing.T) {
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1131,10 +986,9 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentSuccessCount(t *testing.T)
 			s := newScheme()
 			c := fake.NewClientBuilder().WithScheme(s).
 				WithObjects(allObjects...).WithStatusSubresource(gate).Build()
-			env, err := celpkg.NewCELEnvironment()
-			require.NoError(t, err)
-
-			r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+			r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 			_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1166,10 +1020,9 @@ func TestPolicyGateReconciler_CrossStageHistory_RecentFailureCount(t *testing.T)
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, currentBundle, hist1, hist2).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1199,10 +1052,9 @@ func TestPolicyGateReconciler_CrossStageHistory_LastPromotedAt(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, currentBundle).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1224,10 +1076,9 @@ func TestPolicyGateReconciler_CrossStageHistory_NoPipelineLabel(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1266,10 +1117,9 @@ func TestPolicyGateReconciler_PRReviewGate_Approved(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1291,10 +1141,9 @@ func TestPolicyGateReconciler_PRReviewGate_NotApproved(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1327,10 +1176,9 @@ func TestPolicyGateReconciler_PRReviewGate_MinReviewers(t *testing.T) {
 			s := newScheme()
 			c := fake.NewClientBuilder().WithScheme(s).
 				WithObjects(gate, bundle, prs).WithStatusSubresource(gate).Build()
-			env, err := celpkg.NewCELEnvironment()
-			require.NoError(t, err)
-
-			r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+			r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 			_, reconcileErr := r.Reconcile(context.Background(), req)
@@ -1354,10 +1202,9 @@ func TestPolicyGateReconciler_PRReviewGate_NoPRStatus(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
-	env, err := celpkg.NewCELEnvironment()
-	require.NoError(t, err)
-
-	r := &policygate.Reconciler{Client: c, Evaluator: celpkg.NewEvaluator(env), NowFn: time.Now}
+	r, err := policygate.NewReconciler(c)
+		require.NoError(t, err)
+		r.NowFn = time.Now
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 
 	_, reconcileErr := r.Reconcile(context.Background(), req)

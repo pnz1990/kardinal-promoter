@@ -156,30 +156,31 @@ These are known violations of the Graph-first principle that exist as intentiona
 transitional workarounds. Each must be tracked to resolution. **No new exceptions
 are permitted without explicit human approval.**
 
-### Exception 1: `pkg/cel/` — standalone CEL evaluator
+### Exception 1: ~~`pkg/cel/` — standalone CEL evaluator~~ RESOLVED (#130)
 
-**What it is:** A standalone CEL evaluator in `pkg/cel/` used by the PolicyGate
-reconciler to evaluate policy expressions (`!schedule.isWeekend`,
-`bundle.provenance.author != "dependabot[bot]"`, etc.).
+**Status: RESOLVED** — PR #487. The `pkg/cel/evaluator.go` and `pkg/cel/environment.go`
+files have been deleted. The CEL evaluator is now inline in `pkg/reconciler/policygate/`
+as a package-private implementation detail. `pkg/cel` now contains only the kro library
+extensions (library/, conversion/, sentinels/) which are explicitly allowed.
 
-**Why it exists:** Two reasons:
-1. krocodile's `propagateWhen` only has access to the node's own Kubernetes object
-   state. It cannot evaluate `!schedule.isWeekend` because `schedule` is not a
-   Kubernetes resource — it's a domain concept.
-2. krocodile has no `recheckAfter` primitive. Time-based gates require periodic
-   re-evaluation driven by the PolicyGate reconciler's `ctrl.Result{RequeueAfter}`.
+The ScheduleClock CRD (PR #484) provides watch-driven re-evaluation, eliminating the
+need for a separate recheckAfter primitive.
 
-**The path to elimination:**
-1. Contribute `recheckAfter` to krocodile. Once landed, time-based gates can use
-   a `schedule` CEL library extension on the Graph environment — no external
-   reconciler needed.
-2. For pure resource-attribute gates (bundle author, environment name checks):
-   migrate these to Watch nodes reading the Bundle CR directly. `pkg/cel` is not
-   needed for these — they are pure Graph CEL expressions.
-3. For metric gates: design a `MetricGate` CRD and reconciler (analogous to Argo
-   Rollouts `AnalysisTemplate/AnalysisRun`). The Graph watches `MetricGate.status.ready`.
-   `pkg/cel` is not needed for this either.
-4. Once all gate types are migrated: delete `pkg/cel`.
+**Historical note:**
+
+**What it was:** A standalone CEL evaluator in `pkg/cel/` used by the PolicyGate
+reconciler to evaluate policy expressions.
+
+**Why it existed:**
+1. krocodile's `propagateWhen` only has access to the node's own Kubernetes object state.
+2. krocodile had no `recheckAfter` primitive (now replaced by ScheduleClock pattern).
+
+**Resolution path taken:**
+1. ScheduleClock CRD provides watch-driven re-evaluation (PR #484 — closes the recheckAfter gap).
+2. CEL evaluator moved inline to `pkg/reconciler/policygate/cel_evaluator.go` (PR #487).
+3. `pkg/cel/environment.go` and `pkg/cel/evaluator.go` deleted.
+
+**Remaining work**: None. pkg/cel is now library-only. The library package imports are allowed.
 
 **Resolution target:** `recheckAfter` contribution to krocodile + migration sprint.
 
