@@ -1,0 +1,64 @@
+# root-appset.yaml — Root ApplicationSet for multi-tenant Pipeline provisioning.
+#
+# Platform team applies this once. When a developer creates a new folder under
+# teams/ with a pipeline-values.yaml file, this ApplicationSet automatically:
+#   1. Creates a Namespace for the team
+#   2. Deploys a kardinal Pipeline using the team's pipeline-values.yaml
+#
+# Prerequisite: the platform-pipeline Helm chart must be installed or available
+# at the referenced path. See chart/ in this directory.
+#
+# Usage:
+#   kubectl apply -f root-appset.yaml
+#   # Then create a team folder:
+#   mkdir teams/my-service && cat > teams/my-service/pipeline-values.yaml << EOF
+#   appName: my-service
+#   gitRepo: https://github.com/myorg/my-gitops-repo
+#   environments:
+#     - name: dev
+#     - name: staging
+#     - name: prod
+#       approval: pr-review
+#   EOF
+#   git add . && git commit -m "feat: add my-service" && git push
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: team-pipelines
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/pnz1990/kardinal-demo
+        revision: main
+        directories:
+          - path: teams/*
+  template:
+    metadata:
+      name: "{{path.basename}}-pipeline"
+      labels:
+        kardinal.io/managed-by: team-pipelines
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/pnz1990/kardinal-demo
+        targetRevision: main
+        path: "teams/{{path.basename}}"
+        helm:
+          releaseName: "{{path.basename}}"
+          valueFiles:
+            - pipeline-values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{path.basename}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+      ignoreDifferences:
+        - group: kardinal.io
+          kind: Pipeline
+          jsonPointers:
+            - /status

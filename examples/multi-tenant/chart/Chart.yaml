@@ -1,0 +1,11 @@
+# chart/Chart.yaml — Helm chart for team Pipeline CRD provisioning.
+apiVersion: v2
+name: team-pipeline
+description: Creates a kardinal Pipeline CRD in a team namespace
+type: application
+version: 0.1.0
+appVersion: "1.0"
+keywords:
+  - kardinal
+  - promotion
+  - pipeline

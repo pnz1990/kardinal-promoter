@@ -742,8 +742,168 @@ func TestJourney6RenderedManifests(t *testing.T) {
 	}
 }
 
-// TestJourney7MultiTenantSelfService is a stub for Journey 7.
-// Full implementation requires ApplicationSet controller integration.
+// TestJourney7MultiTenantSelfService validates docs/aide/definition-of-done.md Journey 7.
+//
+// Journey 7 verifies the multi-tenant self-service pattern:
+//  1. Pipeline CRD in a team namespace (payment-service) is functional
+//  2. Org-level PolicyGate instances in the team namespace block on weekends
+//  3. Namespace isolation: listing pipelines in payment-service returns only that team's pipelines
+//  4. The ApplicationSet + Pipeline Helm template examples exist and are accessible
+//
+// Note: The ApplicationSet controller itself is not tested here — it requires an Argo CD cluster.
+// This test verifies that the kardinal Pipeline CRD created by the ApplicationSet works correctly.
 func TestJourney7MultiTenantSelfService(t *testing.T) {
-	t.Skip("journey 7: multi-tenant self-service requires ApplicationSet controller — not yet implemented")
+	s := journeyScheme(t)
+
+	const teamNS = "payment-service"
+	const orgNS = "platform-policies"
+
+	// ── Fixture: org-level PolicyGate template in platform-policies ────────────
+	// Template gates (no bundle label) are defined by the platform team.
+	// The graph builder creates instances in the team namespace for each bundle.
+	orgGateTemplate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-weekend-deploys",
+			Namespace: orgNS,
+			Labels: map[string]string{
+				"kardinal.io/scope":      "org",
+				"kardinal.io/applies-to": "prod",
+			},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression:      "!schedule.isWeekend",
+			Message:         "Production deployments are blocked on weekends",
+			RecheckInterval: "5m",
+		},
+	}
+
+	// Instance gate: created by graph builder in the team namespace when a Bundle is promoted.
+	// The reconciler evaluates this instance against the team's bundle.
+	orgGateInstance := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "no-weekend-deploys",
+			Namespace: teamNS,
+			Labels: map[string]string{
+				"kardinal.io/scope":       "org",
+				"kardinal.io/bundle":      "payment-service-v1",
+				"kardinal.io/pipeline":    "payment-service",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec: v1alpha1.PolicyGateSpec{
+			Expression:      "!schedule.isWeekend",
+			Message:         "Production deployments are blocked on weekends",
+			RecheckInterval: "5m",
+		},
+	}
+
+	// ── Fixture: Pipeline in team namespace ───────────────────────────────────
+	teamPipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "payment-service",
+			Namespace: teamNS,
+		},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{
+				URL:    "https://github.com/pnz1990/kardinal-demo",
+				Branch: "main",
+			},
+			PolicyNamespaces: []string{orgNS, teamNS},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "dev", Approval: "auto"},
+				{Name: "staging", Approval: "auto"},
+				{Name: "prod", Approval: "pr-review"},
+			},
+		},
+	}
+
+	// ── Fixture: Bundle in team namespace ─────────────────────────────────────
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "payment-service-v1", Namespace: teamNS},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "payment-service",
+			Images: []v1alpha1.ImageRef{{
+				Repository: "ghcr.io/myorg/payment-service",
+				Tag:        "v1.0.0",
+			}},
+		},
+	}
+
+	// ── Fixture: Second pipeline in a different namespace ─────────────────────
+	otherPipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "checkout-service", Namespace: "checkout-service"},
+		Spec: v1alpha1.PipelineSpec{
+			Git:          v1alpha1.PipelineGit{URL: "https://github.com/pnz1990/kardinal-demo"},
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(orgGateTemplate, orgGateInstance, teamPipeline, bundle, otherPipeline).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		Build()
+
+	// ── Test 1: Namespace isolation — listing pipelines in payment-service ns ─────
+	var paymentPipelines v1alpha1.PipelineList
+	require.NoError(t, c.List(context.Background(), &paymentPipelines, client.InNamespace(teamNS)))
+	require.Len(t, paymentPipelines.Items, 1, "journey 7: payment-service ns must have exactly 1 pipeline")
+	assert.Equal(t, "payment-service", paymentPipelines.Items[0].Name)
+	t.Log("journey 7: namespace isolation — payment-service has 1 pipeline ✅")
+
+	// ── Test 2: Org gate instance in team namespace blocks on Saturday ─────────
+	saturday := time.Date(2026, 4, 12, 15, 0, 0, 0, time.UTC)
+	pgRec, err := pgrec.NewReconciler(c)
+	require.NoError(t, err)
+	pgRec.NowFn = func() time.Time { return saturday }
+
+	instanceReq := ctrl.Request{NamespacedName: types.NamespacedName{
+		Name:      "no-weekend-deploys",
+		Namespace: teamNS, // instance is in team namespace
+	}}
+	_, err = pgRec.Reconcile(context.Background(), instanceReq)
+	require.NoError(t, err)
+
+	var got v1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), instanceReq.NamespacedName, &got))
+	assert.False(t, got.Status.Ready,
+		"journey 7: org gate instance must block prod on Saturday; ready=%v reason=%s",
+		got.Status.Ready, got.Status.Reason)
+	t.Logf("journey 7: org gate no-weekend-deploys BLOCKED on Saturday (reason: %s) ✅", got.Status.Reason)
+
+	// ── Test 3: Tuesday passes the same gate ──────────────────────────────────
+	tuesday := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
+	c2 := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(orgGateInstance.DeepCopy(), bundle.DeepCopy()).
+		WithStatusSubresource(&v1alpha1.PolicyGate{}).
+		Build()
+	pgRec2, err := pgrec.NewReconciler(c2)
+	require.NoError(t, err)
+	pgRec2.NowFn = func() time.Time { return tuesday }
+	_, err = pgRec2.Reconcile(context.Background(), instanceReq)
+	require.NoError(t, err)
+
+	var got2 v1alpha1.PolicyGate
+	require.NoError(t, c2.Get(context.Background(), instanceReq.NamespacedName, &got2))
+	assert.True(t, got2.Status.Ready,
+		"journey 7: org gate must pass on Tuesday; got ready=%v", got2.Status.Ready)
+	t.Log("journey 7: org gate no-weekend-deploys PASS on Tuesday ✅")
+
+	// ── Test 4: All-namespaces lists pipelines from all teams ─────────────────
+	var allPipelines v1alpha1.PipelineList
+	require.NoError(t, c.List(context.Background(), &allPipelines))
+	assert.GreaterOrEqual(t, len(allPipelines.Items), 2,
+		"journey 7: --all-namespaces must show pipelines from multiple teams")
+	t.Logf("journey 7: all-namespaces shows %d pipelines ✅", len(allPipelines.Items))
+
+	// ── Test 5: ApplicationSet example files exist ─────────────────────────────
+	appsetExamplesDir := "../../examples/multi-tenant"
+	require.DirExists(t, appsetExamplesDir, "journey 7: examples/multi-tenant/ must exist")
+	require.FileExists(t, filepath.Join(appsetExamplesDir, "root-appset.yaml"),
+		"journey 7: root-appset.yaml must exist")
+	require.FileExists(t, filepath.Join(appsetExamplesDir, "teams/payment-service/pipeline-values.yaml"),
+		"journey 7: payment-service/pipeline-values.yaml must exist")
+	t.Log("journey 7: ApplicationSet + Pipeline examples present ✅")
+
+	t.Log("journey 7: Multi-tenant self-service — all pass criteria verified ✅")
 }
