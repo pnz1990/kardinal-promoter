@@ -1,7 +1,7 @@
 # kardinal-promoter: Progress
 
 > Created: 2026-04-09
-> Last updated: 2026-04-13T19:45Z
+> Last updated: 2026-04-14T01:30Z
 > Based on: docs/aide/roadmap.md
 
 ## Status Icons
@@ -242,7 +242,26 @@
 
 ---
 
-## Spec Status
+## v0.6.0 — Pipeline Expressiveness (K-Series + UI)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| K-01 | Contiguous healthy soak + bake shorthand | ✅ Complete | #455 merged | bake:, soakMinutes, ScheduleClock pattern |
+| K-02 | Pre-deploy gate type `when: pre-deploy` | ✅ Complete | #457 merged | pre-deploy gate field in Pipeline spec |
+| K-03 | Auto-rollback: ABORT vs ROLLBACK on health failure | ✅ Complete | #458 merged | onHealthFailure: abort|rollback field |
+| K-04 | ChangeWindow CRD for fleet-wide freeze management | ✅ Complete | #460 merged | ChangeWindow CRD + reconciler |
+| K-05 | Deployment metrics on Bundle + Pipeline status | ✅ Complete | #461 merged | successRate, leadTime, MTTR fields |
+| K-06 | Wave topology `wave:` field | ✅ Complete | #469 merged | docs + examples for wave topology |
+| K-07 | Integration test step — Kubernetes Job | ✅ Complete | #470 merged | integration-test step type, K8s Job reconciler |
+| K-08 | PR review gate — bundle.pr[stage].isApproved | ✅ Complete | #472 merged | PRReviewGate CEL function |
+| K-09 | kardinal override with mandatory audit record | ✅ Complete | #471 merged | override command + AuditRecord CRD |
+| K-10 | Cross-stage history CEL context | ✅ Complete | #473 merged | upstream.<env>.recentSuccessCount CEL |
+| UI-1 | Pipeline list operations view — sortable health columns | ✅ Complete | #475 merged | |
+| UI-2 | Per-stage approval workflow detail | ✅ Complete | #476 merged | step list + bake countdown |
+| UI-3 | Policy gate detail panel — CEL highlighting | ✅ Complete | #477 merged | blocking duration, override history |
+| UI-4 | Bundle promotion timeline — env chips, PR links | ✅ Complete | #478 merged | pagination |
+
+
 
 | Spec | Title | Status | Notes |
 |---|---|---|---|

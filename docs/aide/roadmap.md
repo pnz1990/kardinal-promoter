@@ -827,13 +827,13 @@ None — this is the foundation.
 | 17 | GitLab support | ✅ Complete |
 | 18 | Subscription CRD | 📋 Planned |
 | 19 | Security hardening and production readiness | 📋 Planned |
-| 20 | Contiguous healthy soak + `bake:` shorthand (K-01) | 📋 Planned |
-| 21 | Pre-deploy gate type `when: pre-deploy` (K-02) | 📋 Planned |
-| 22 | Auto-rollback: ABORT vs ROLLBACK (K-03) | 📋 Planned |
-| 23 | ChangeWindow CRD (K-04) | 📋 Planned |
-| 24 | Deployment metrics on Bundle + Pipeline (K-05) | 📋 Planned |
-| 25 | Wave topology `wave:` field (K-06) | 📋 Planned |
-| 26 | Integration test step (K-07) | 📋 Planned |
-| 27 | PR review gate (K-08) | 📋 Planned |
-| 28 | `kardinal override` with audit record (K-09) | 📋 Planned |
-| 29 | Cross-stage history CEL functions (K-10) | 📋 Planned |
+| 20 | Contiguous healthy soak + `bake:` shorthand (K-01) | ✅ Complete |
+| 21 | Pre-deploy gate type `when: pre-deploy` (K-02) | ✅ Complete |
+| 22 | Auto-rollback: ABORT vs ROLLBACK (K-03) | ✅ Complete |
+| 23 | ChangeWindow CRD (K-04) | ✅ Complete |
+| 24 | Deployment metrics on Bundle + Pipeline (K-05) | ✅ Complete |
+| 25 | Wave topology `wave:` field (K-06) | ✅ Complete |
+| 26 | Integration test step (K-07) | ✅ Complete |
+| 27 | PR review gate (K-08) | ✅ Complete |
+| 28 | `kardinal override` with audit record (K-09) | ✅ Complete |
+| 29 | Cross-stage history CEL functions (K-10) | ✅ Complete |
