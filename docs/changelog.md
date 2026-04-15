@@ -29,7 +29,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [v0.5.0] — 2026-04-13
+### Added
+
+- **Library-based git operations** — replaced `exec.Command("git")` with `go-git` library (`#517`). Controller no longer requires a `git` binary. Improves portability (distroless images) and performance.
+
+
 
 **Enterprise CD patterns, UI control plane, ScheduleClock, Subscription CRD**
 
@@ -179,7 +183,7 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ---
 
-[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.6.0...HEAD
 [v0.5.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.4.0...v0.5.0
 [v0.4.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.3.0...v0.4.0
 [v0.3.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.2.1...v0.3.0
