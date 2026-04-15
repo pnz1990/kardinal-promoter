@@ -7,10 +7,12 @@
 // #334: DAG legend strip explains node shapes and state colors.
 // #521: computeLayout is memoized — only re-runs when topology (IDs + edges) changes.
 // #532: DAG node state is expressed via CSS classes (dag-node--{state}).
-import { useState, useEffect, useMemo } from 'react'
+// #526: Portal tooltip replaces native SVG <title> tooltips.
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
 import { kardinalStateToHealth, healthChipColors, healthStateClass } from './HealthChip'
+import DAGTooltip, { type DAGTooltipTarget } from './DAGTooltip'
 import '../styles/DAGView.css'
 
 /** Active states that warrant an elapsed-time display (#330). */
@@ -166,11 +168,15 @@ function DAGNode({
   isSelected,
   isHighlighted,
   onSelectNode,
+  onHoverStart,
+  onHoverEnd,
 }: {
   node: LayoutNode
   isSelected: boolean
   isHighlighted: boolean
   onSelectNode?: (node: GraphNode | null) => void
+  onHoverStart?: (node: GraphNode, rect: DOMRect) => void
+  onHoverEnd?: () => void
 }) {
   const health = kardinalStateToHealth(node.state, node.type)
   const { bg, border, text } = healthChipColors(health)
@@ -203,6 +209,11 @@ function DAGNode({
       tabIndex={0}
       aria-label={`${node.environment} — ${node.state}`}
       aria-pressed={isSelected}
+      onMouseEnter={e => {
+        const rect = (e.currentTarget as SVGGElement).getBoundingClientRect()
+        onHoverStart?.(node, rect)
+      }}
+      onMouseLeave={onHoverEnd}
       onKeyDown={e => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
@@ -226,13 +237,8 @@ function DAGNode({
         }
       }}
     >
-      {/* SVG title provides native browser tooltip on hover (#327) */}
-      <title>
-        {node.type === 'PolicyGate'
-          ? `${node.label}\nState: ${node.state}${node.expression ? `\nExpression: ${node.expression}` : ''}${node.message ? `\nReason: ${node.message}` : ''}`
-          : `${node.environment} — ${node.state}${node.message ? `\n${node.message}` : ''}${node.prURL ? `\nPR: ${node.prURL}` : ''}`
-        }
-      </title>
+      {/* Portal tooltip replaces native SVG <title> (#526). 
+          See DAGTooltip rendered by DAGView parent. */}
       <rect
         width={NODE_WIDTH}
         height={NODE_HEIGHT}
@@ -300,6 +306,31 @@ function DAGNode({
 }
 
 export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode, isStaticTopology }: Props) {
+  // #526: Portal tooltip state — shared across all DAGNode instances.
+  const [tooltipTarget, setTooltipTarget] = useState<DAGTooltipTarget | null>(null)
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleHoverStart = useCallback((node: GraphNode, rect: DOMRect) => {
+    if (hideTimerRef.current !== null) {
+      clearTimeout(hideTimerRef.current)
+      hideTimerRef.current = null
+    }
+    setTooltipTarget({ node, rect })
+  }, [])
+
+  const handleHoverEnd = useCallback(() => {
+    hideTimerRef.current = setTimeout(() => {
+      setTooltipTarget(null)
+      hideTimerRef.current = null
+    }, 150)
+  }, [])
+
+  // Clean up hide timer on unmount
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
+    }
+  }, [])
   if (loading) {
     return (
       <div>
@@ -398,6 +429,8 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
               isSelected={selectedNode?.id === node.id}
               isHighlighted={highlightNodeIds?.has(node.id) ?? false}
               onSelectNode={onSelectNode}
+              onHoverStart={handleHoverStart}
+              onHoverEnd={handleHoverEnd}
             />
           ))}
         </svg>
@@ -405,6 +438,18 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
 
       {/* #334: DAG legend strip */}
       <DAGLegend />
+
+      {/* #526: Portal tooltip — rendered outside SVG to avoid clipping */}
+      <DAGTooltip
+        target={tooltipTarget}
+        onMouseEnter={() => {
+          if (hideTimerRef.current !== null) {
+            clearTimeout(hideTimerRef.current)
+            hideTimerRef.current = null
+          }
+        }}
+        onMouseLeave={handleHoverEnd}
+      />
     </div>
   )
 }
