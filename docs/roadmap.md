@@ -133,9 +133,11 @@ improvement.
 
 ### Library-based git operations ([#495](https://github.com/pnz1990/kardinal-promoter/issues/495))
 
-Replace `exec.Command("git")` with the `go-git` library. Eliminates the hard dependency on
-a `git` binary in the controller container, improves performance and portability.
-(`exec.Command("kustomize")` was replaced in v0.6.0 via #494.)
+**Implementation complete — will ship in v0.7.0.**
+
+Replaced `exec.Command("git")` with the `go-git` library (`#517`, merged). Eliminates
+the hard dependency on a `git` binary in the controller container, improves performance
+and portability. (`exec.Command("kustomize")` was replaced in v0.6.0 via `#494`.)
 
 ### `kardinal-agent` standalone binary
 
