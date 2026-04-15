@@ -67,22 +67,25 @@ jobs:
         run: |
           make build
           echo "$(pwd)/bin" >> $GITHUB_PATH
+          # Pre-generate CRD manifests here (installs controller-gen ~2min) so
+          # the controller install step only needs docker-build + kind load + helm.
+          make manifests
 
       - name: Install kardinal-promoter controller
         env:
           GOTOOLCHAIN: local
+        timeout-minutes: 10
         run: |
           # Build and load the controller image into kind
           make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
-          # Generate CRDs and install via helm
-          # Use 180s timeout (docker-build + kind load takes ~3-4min, leaving enough time)
-          make manifests
+          # Apply CRDs (pre-generated above) and install via helm
+          # 300s gives the pod ~5min to start after docker-build (~2min) + kind load (~10s)
           kubectl apply -f config/crd/bases/
           helm upgrade --install kardinal chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
             --set validatingAdmissionPolicy.enabled=false \
-            --wait --timeout 180s
+            --wait --timeout 300s
           kubectl get pods -n kardinal-system
 
       - name: Get real test image SHA
