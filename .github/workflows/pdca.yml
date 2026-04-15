@@ -152,10 +152,11 @@ jobs:
             RESULTS="$RESULTS\n✅ S1: Happy path — Bundle created, promotion started"
           else
             echo "S1: FAIL — output: $OUTPUT"
-            # Dump controller logs to help diagnose step failures
-            echo "--- Controller logs (last 100 lines) ---"
-            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=100 2>/dev/null || true
-            echo "--- PromotionStep describe ---"
+            # Dump controller logs — use --since to get step execution logs, not just startup
+            echo "--- Controller logs (--since=10m, captures step execution) ---"
+            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --since=10m 2>/dev/null || \
+              kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=200 2>/dev/null || true
+            echo "--- PromotionStep describe (shows State + Message) ---"
             for ps in $(kubectl get promotionstep -A -o name 2>/dev/null); do
               echo "=== $ps ==="
               kubectl describe $ps 2>/dev/null | grep -A3 "State:\|Message:\|Conditions:" || true
