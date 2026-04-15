@@ -11,10 +11,13 @@
 //
 // #333: CEL expression syntax highlighting — keywords=yellow, strings=green,
 //       identifiers=blue, operators=white, functions=cyan, comments=gray.
+//
+// #527: EventsPanel — K8s events stream fetched per step when node is selected.
 import { useState, useEffect, useCallback } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { api } from '../api/client'
+import EventsPanel, { type StepEvent } from './EventsPanel'
 
 interface Props {
   node: GraphNode | null
@@ -344,6 +347,8 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const [celError, setCelError] = useState<string | null>(null)
   // #330: tick counter to update elapsed timers every second while panel is open.
   const [, setTick] = useState(0)
+  // #527: Kubernetes events for the selected PromotionStep — fetched once on node selection.
+  const [stepEvents, setStepEvents] = useState<StepEvent[] | null>(null)
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
@@ -399,6 +404,25 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       .catch(() => setStepDetail(null))
       .finally(() => setStepLoading(false))
   }, [node?.id, isPromotionStep, steps, bundleName])
+
+  // #527: Fetch Kubernetes events for the selected PromotionStep.
+  // Uses stepDetail.name (the CRD resource name) and stepDetail.namespace.
+  // Fetched once on node selection; stale events are acceptable (debug aid).
+  useEffect(() => {
+    if (!isPromotionStep) {
+      setStepEvents(null)
+      return
+    }
+    const stepName = stepDetail?.name
+    const stepNs = stepDetail?.namespace ?? namespace ?? 'default'
+    if (!stepName) {
+      setStepEvents(null)
+      return
+    }
+    api.getStepEvents(stepNs, stepName)
+      .then(evs => setStepEvents(evs))
+      .catch(() => setStepEvents([]))
+  }, [isPromotionStep, stepDetail?.name, stepDetail?.namespace, namespace])
 
   /** Trigger a new promotion for this environment. */
   function handlePromote() {
@@ -741,10 +765,19 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                     </div>
                   )}
                 </div>
-              </div>
+               </div>
             ))}
           </div>
         </div>
+      )}
+
+      {/* #527: Kubernetes events stream — shown for PromotionStep nodes */}
+      {isPromotionStep && (
+        <EventsPanel
+          events={stepEvents}
+          stepName={stepDetail?.name}
+          namespace={stepDetail?.namespace ?? namespace ?? 'default'}
+        />
       )}
     </div>
   )
