@@ -5,10 +5,13 @@
 // #326: selectedNode is lifted to the parent (App) so NodeDetail can be rendered
 // as a proper split panel sibling rather than a position:fixed overlay.
 // #334: DAG legend strip explains node shapes and state colors.
+// #521: computeLayout is memoized — only re-runs when topology (IDs + edges) changes.
+// #532: DAG node state is expressed via CSS classes (dag-node--{state}).
 import { useState, useEffect, useMemo } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
-import { kardinalStateToHealth, healthChipColors } from './HealthChip'
+import { kardinalStateToHealth, healthChipColors, healthStateClass } from './HealthChip'
+import '../styles/DAGView.css'
 
 /** Active states that warrant an elapsed-time display (#330). */
 const ACTIVE_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
@@ -48,6 +51,8 @@ interface Props {
   selectedNode?: GraphNode | null
   /** Called when a node is clicked — parent updates selected state (#326). */
   onSelectNode?: (node: GraphNode | null) => void
+  /** #532: When true, shows a .dag-static-banner indicating no active bundle. */
+  isStaticTopology?: boolean
 }
 
 const NODE_WIDTH = 180
@@ -178,11 +183,22 @@ function DAGNode({
   const prNumber = node.prURL ? extractPRNumber(node.prURL) : null
   const showPRBadge = prNumber !== null
 
+  // #532: compose CSS class list for the node group — enables class-based assertions in tests
+  const nodeClass = [
+    'dag-node',
+    `dag-node--${healthStateClass(health).replace('health-chip--', '')}`,
+    isSelected ? 'dag-node--selected' : '',
+    isHighlighted ? 'dag-node--highlighted' : '',
+  ].filter(Boolean).join(' ')
+
   return (
     <g
       transform={`translate(${node.x - NODE_WIDTH / 2}, ${node.y - NODE_HEIGHT / 2})`}
       onClick={() => onSelectNode?.(isSelected ? null : node)}
       style={{ cursor: 'pointer', outline: 'none' }}
+      className={nodeClass}
+      data-node-id={node.id}
+      data-health-state={health}
       role="button"
       tabIndex={0}
       aria-label={`${node.environment} — ${node.state}`}
@@ -283,7 +299,7 @@ function DAGNode({
   )
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode }: Props) {
+export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode, isStaticTopology }: Props) {
   if (loading) {
     return (
       <div>
@@ -330,6 +346,13 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
 
   return (
     <div>
+      {/* #532: Static topology banner — uses .dag-static-banner CSS class */}
+      {isStaticTopology && (
+        <div className="dag-static-banner" data-testid="dag-static-banner">
+          <span style={{ color: '#334155' }}>◦</span>
+          Pipeline topology — no active bundle. Create one to start promoting.
+        </div>
+      )}
       <div style={{ overflow: 'auto' }}>
         <svg
           width={svgW}

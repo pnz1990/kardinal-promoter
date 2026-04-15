@@ -3,10 +3,13 @@
 // bundle info, and promote/rollback quick actions.
 // Part of #332 (complete visual redesign — Kargo-parity pipeline lane view).
 //
+// #532: State-driven visual properties use CSS classes (stage-card--{state}).
+//
 // Adapted from Kargo's horizontal stage cards pattern.
 // Each card represents a PromotionStep DAG node.
 import type { GraphNode } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
+import '../styles/PipelineLaneView.css'
 
 interface Props {
   /** DAG nodes — only PromotionStep nodes are rendered as stage cards. */
@@ -26,21 +29,21 @@ interface Props {
   loading?: boolean
 }
 
-/** Color scheme for a given stage state. */
-function stageColors(state: string): { bg: string; border: string; accent: string } {
+/** CSS class modifier for a given stage state. */
+function stageStateClass(state: string): string {
+  const health = kardinalStateToHealth(state)
+  return `stage-card--${health.toLowerCase()}`
+}
+
+/** Color scheme kept for inline uses that can't use CSS (e.g. box-shadow). */
+function stageAccentColor(state: string): string {
   const health = kardinalStateToHealth(state)
   switch (health) {
-    case 'Ready':
-      return { bg: '#052e16', border: '#16a34a', accent: '#22c55e' }
+    case 'Ready':       return '#22c55e'
     case 'Error':
-    case 'Degraded':
-      return { bg: '#2d0b0b', border: '#b91c1c', accent: '#ef4444' }
-    case 'Reconciling':
-      return { bg: '#1e1b4b', border: '#4338ca', accent: '#6366f1' }
-    case 'Pending':
-      return { bg: '#0f172a', border: '#334155', accent: '#94a3b8' }
-    default:
-      return { bg: '#0f172a', border: '#1e293b', accent: '#475569' }
+    case 'Degraded':    return '#ef4444'
+    case 'Reconciling': return '#6366f1'
+    default:            return '#94a3b8'
   }
 }
 
@@ -73,10 +76,15 @@ export function PipelineLaneView({
     }}>
       {stageNodes.map((node, idx) => {
         const isSelected = selectedNode?.id === node.id
-        const colors = stageColors(node.state)
+        const accent = stageAccentColor(node.state)
         const isPending = node.state === 'Pending' || node.state === 'Unknown'
         const hasAction = !isPending && onPromote
         const showPRLink = node.prURL && node.state === 'WaitingForMerge'
+        const cardClass = [
+          'stage-card',
+          stageStateClass(node.state),
+          isSelected ? 'stage-card--selected' : '',
+        ].filter(Boolean).join(' ')
 
         return (
           <div key={node.id} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
@@ -90,26 +98,20 @@ export function PipelineLaneView({
               }} />
             )}
 
-            {/* Stage card */}
+            {/* Stage card — uses CSS class for state-driven colors */}
             <div
               role="button"
               tabIndex={0}
               aria-selected={isSelected}
+              data-health-state={kardinalStateToHealth(node.state)}
               onClick={() => onSelectNode?.(isSelected ? null : node)}
               onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelectNode?.(isSelected ? null : node)}
+              className={cardClass}
               style={{
-                background: colors.bg,
-                border: `1.5px solid ${isSelected ? colors.accent : colors.border}`,
-                borderRadius: '6px',
-                padding: '0.6rem 0.75rem',
-                cursor: 'pointer',
-                minWidth: '140px',
-                maxWidth: '180px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '0.3rem',
-                transition: 'border-color 0.15s',
-                boxShadow: isSelected ? `0 0 0 1px ${colors.accent}` : 'none',
+                boxShadow: isSelected ? `0 0 0 1px ${accent}` : 'none',
                 outline: 'none',
               }}
             >
