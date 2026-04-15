@@ -76,12 +76,13 @@ jobs:
           make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
           # Generate CRDs and install via helm
+          # Use 180s timeout (docker-build + kind load takes ~3-4min, leaving enough time)
           make manifests
           kubectl apply -f config/crd/bases/
           helm upgrade --install kardinal chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
             --set validatingAdmissionPolicy.enabled=false \
-            --wait --timeout 120s
+            --wait --timeout 180s
           kubectl get pods -n kardinal-system
 
       - name: Get real test image SHA
