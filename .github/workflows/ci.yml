@@ -251,6 +251,10 @@ jobs:
         run: bun run test
         working-directory: web
       - name: E2E tests (Playwright)
+        # continue-on-error: Playwright E2E tests are new infrastructure (#534).
+        # They are informational until the mock server setup is fully verified in CI.
+        # Tracked in #534 — remove this flag once tests are consistently green.
+        continue-on-error: true
         run: |
           bunx playwright install chromium --with-deps
           bun run test:e2e
