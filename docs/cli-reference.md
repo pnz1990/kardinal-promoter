@@ -484,6 +484,28 @@ Controller: v0.1.0
 Graph:      v0.9.1 (kro)
 ```
 
+### kardinal completion
+
+Generate shell completion scripts for bash, zsh, fish, or PowerShell. (#579)
+
+```bash
+# Bash (Linux/macOS)
+kardinal completion bash > ~/.bash_completion.d/kardinal
+# or source directly:
+source <(kardinal completion bash)
+
+# Zsh
+kardinal completion zsh > "${fpath[1]}/_kardinal"
+# or source directly:
+source <(kardinal completion zsh)
+
+# Fish
+kardinal completion fish > ~/.config/fish/completions/kardinal.fish
+
+# PowerShell
+kardinal completion powershell | Out-String | Invoke-Expression
+```
+
 ## Global Flags
 
 | Flag | Description |
