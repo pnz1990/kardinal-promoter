@@ -1,6 +1,7 @@
 // components/PolicyGatesPanel.tsx — Collapsible panel showing all active PolicyGates.
 // Wires up api.listGates() to display gate state with CEL expressions (#340).
-import { useState } from 'react'
+// #524: auto-expands when any gate is blocked.
+import { useState, useEffect } from 'react'
 import type { PolicyGate } from '../types'
 import { HealthChip } from './HealthChip'
 
@@ -44,7 +45,17 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
 }
 
 export function PolicyGatesPanel({ gates, loading }: Props) {
-  const [open, setOpen] = useState(false)
+  // #524: auto-expand when any gate is blocked; collapse when all pass.
+  const hasBlocked = gates.some(g => !g.ready)
+  const [open, setOpen] = useState(hasBlocked)
+
+  // Re-open automatically when a previously-passing panel gets a blocked gate.
+  // This handles the polling case: gates start passing, then one becomes blocked.
+  useEffect(() => {
+    if (hasBlocked) {
+      setOpen(true)
+    }
+  }, [hasBlocked])
 
   if (loading) {
     return (
