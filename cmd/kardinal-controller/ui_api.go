@@ -28,6 +28,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -203,6 +204,8 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/pause", s.handlePause)
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
+	// #527: Kubernetes Events stream for PromotionStep nodes in NodeDetail
+	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepSubresource)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -688,6 +691,93 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 			BakeTargetMinutes:  bakeMinutes,
 			BakeResets:         ps.Status.BakeResets,
 		})
+	}
+	writeJSON(w, result)
+}
+
+// uiEventResponse is the JSON shape for a Kubernetes Event in the UI API (#527).
+type uiEventResponse struct {
+	// Type is "Normal" or "Warning".
+	Type string `json:"type"`
+	// Reason is the short, machine-readable event reason (e.g. "GitClone", "PROpened").
+	Reason string `json:"reason"`
+	// Message is the human-readable event message.
+	Message string `json:"message"`
+	// Count is the number of times this event has been seen.
+	Count int32 `json:"count"`
+	// FirstTimestamp is the ISO 8601 time when the event was first seen.
+	FirstTimestamp string `json:"firstTimestamp,omitempty"`
+	// LastTimestamp is the ISO 8601 time when the event was most recently seen.
+	LastTimestamp string `json:"lastTimestamp,omitempty"`
+}
+
+// handleStepSubresource handles:
+//
+//	GET /api/v1/ui/steps/{namespace}/{name}/events
+func (s *uiAPIServer) handleStepSubresource(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Path: /api/v1/ui/steps/{namespace}/{name}/events
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/ui/steps/")
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) != 3 || parts[2] != "events" {
+		http.NotFound(w, r)
+		return
+	}
+	namespace, stepName := parts[0], parts[1]
+	s.handleStepEvents(w, r, namespace, stepName)
+}
+
+// handleStepEvents returns the last 20 Kubernetes Events for a PromotionStep,
+// sorted by lastTimestamp descending. This gives NodeDetail a live event log.
+func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, namespace, stepName string) {
+	var eventList corev1.EventList
+	if err := s.client.List(r.Context(), &eventList, client.InNamespace(namespace)); err != nil {
+		s.log.Error().Err(err).Str("step", stepName).Msg("ui: list events for step")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Filter to events where involvedObject.name == stepName.
+	var filtered []corev1.Event
+	for i := range eventList.Items {
+		ev := &eventList.Items[i]
+		if ev.InvolvedObject.Name == stepName &&
+			(ev.InvolvedObject.Kind == "PromotionStep" || ev.InvolvedObject.Kind == "") {
+			filtered = append(filtered, *ev)
+		}
+	}
+
+	// Sort by lastTimestamp descending (most recent first).
+	sort.Slice(filtered, func(i, j int) bool {
+		ti := filtered[i].LastTimestamp.Time
+		tj := filtered[j].LastTimestamp.Time
+		return ti.After(tj)
+	})
+
+	// Cap at 20 events.
+	const maxEvents = 20
+	if len(filtered) > maxEvents {
+		filtered = filtered[:maxEvents]
+	}
+
+	result := make([]uiEventResponse, 0, len(filtered))
+	for _, ev := range filtered {
+		resp := uiEventResponse{
+			Type:    ev.Type,
+			Reason:  ev.Reason,
+			Message: ev.Message,
+			Count:   ev.Count,
+		}
+		if !ev.FirstTimestamp.IsZero() {
+			resp.FirstTimestamp = ev.FirstTimestamp.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		if !ev.LastTimestamp.IsZero() {
+			resp.LastTimestamp = ev.LastTimestamp.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		result = append(result, resp)
 	}
 	writeJSON(w, result)
 }

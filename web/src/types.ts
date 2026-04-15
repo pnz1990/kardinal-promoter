@@ -135,3 +135,19 @@ export interface PolicyGateOverride {
   createdAt?: string
   createdBy?: string
 }
+
+/** #527: A Kubernetes Event for a PromotionStep node. */
+export interface StepEvent {
+  /** "Normal" or "Warning" */
+  type: string
+  /** Short, machine-readable reason (e.g. "GitClone", "PROpened") */
+  reason: string
+  /** Human-readable event message */
+  message: string
+  /** Number of occurrences */
+  count: number
+  /** ISO 8601 first occurrence */
+  firstTimestamp?: string
+  /** ISO 8601 most recent occurrence */
+  lastTimestamp?: string
+}

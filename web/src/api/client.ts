@@ -1,6 +1,6 @@
 // api/client.ts — Typed fetch wrappers for the kardinal UI backend API.
 
-import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate } from '../types'
+import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate, StepEvent } from '../types'
 
 const BASE = '/api/v1/ui'
 
@@ -49,4 +49,7 @@ export const api = {
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),
+  /** #527: Kubernetes Events for a PromotionStep — shown in NodeDetail event log. */
+  getStepEvents: (namespace: string, stepName: string) =>
+    get<StepEvent[]>(`/steps/${namespace}/${stepName}/events`),
 }
