@@ -67,22 +67,21 @@ See [detailed comparison →](comparison.md)
 
 ## Quick install
 
-```bash
-# 1. Install krocodile (Graph controller dependency)
-bash hack/install-krocodile.sh
+Since v0.6.0, kardinal-promoter bundles the krocodile Graph controller — a single Helm install is all you need.
 
-# 2. Create GitHub token secret
+```bash
+# 1. Create GitHub token secret
 kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-# 3. Install kardinal-promoter
+# 2. Install kardinal-promoter (includes krocodile Graph controller)
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
 
-# 4. Verify
+# 3. Verify
 kardinal version
 ```
 

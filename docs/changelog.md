@@ -31,6 +31,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **krocodile bundled in Helm chart** — single `helm install` now installs both kardinal-promoter and the krocodile Graph controller; no separate `hack/install-krocodile.sh` step needed (#590)
 - **Library-based git operations** — replaced `exec.Command("git")` with `go-git` library (`#517`). Controller no longer requires a `git` binary. Improves portability (distroless images) and performance.
 
 
