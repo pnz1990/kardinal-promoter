@@ -48,6 +48,10 @@ type uiPipelineResponse struct {
 	// Keys are environment names, values are the promotion phase.
 	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
 
+	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.
+	// Each entry is one environment in pipeline order with its dependsOn edges.
+	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
+
 	// Operations table columns (#462): derived from active Bundle + steps + gates.
 	// BlockerCount is the number of PolicyGates with ready=false for the active bundle.
 	BlockerCount int `json:"blockerCount,omitempty"`
@@ -62,6 +66,18 @@ type uiPipelineResponse struct {
 	// CDLevel summarises how automated this pipeline is.
 	// "full-cd" = no manual gates, "mostly-cd" = 1–2 gates, "manual" = 3+ gates.
 	CDLevel string `json:"cdLevel,omitempty"`
+}
+
+// uiEnvironmentNode is the static topology shape for one environment in a Pipeline.
+// Used by the frontend to render the DAG when no active Bundle is promoting (#525).
+type uiEnvironmentNode struct {
+	// Name is the environment name (e.g. "test", "uat", "prod").
+	Name string `json:"name"`
+	// DependsOn is the list of environment names this one depends on.
+	// Empty means this environment starts at the root of the DAG.
+	DependsOn []string `json:"dependsOn,omitempty"`
+	// Approval is "auto" or "pr-review" — shown as a badge on the node.
+	Approval string `json:"approval,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -297,6 +313,20 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			EnvironmentCount: len(p.Spec.Environments),
 			Paused:           p.Spec.Paused,
 			CDLevel:          pipelineCDLevel(&p),
+		}
+		// #525: build static environment topology from Pipeline.Spec so the UI can render
+		// the DAG even when no Bundle is actively promoting.
+		if len(p.Spec.Environments) > 0 {
+			topo := make([]uiEnvironmentNode, 0, len(p.Spec.Environments))
+			for _, env := range p.Spec.Environments {
+				node := uiEnvironmentNode{
+					Name:      env.Name,
+					DependsOn: env.DependsOn,
+					Approval:  env.Approval,
+				}
+				topo = append(topo, node)
+			}
+			resp.EnvironmentTopology = topo
 		}
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
