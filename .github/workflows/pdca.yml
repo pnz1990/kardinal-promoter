@@ -153,9 +153,14 @@ jobs:
           else
             echo "S1: FAIL — output: $OUTPUT"
             # Dump controller logs to help diagnose step failures
-            echo "--- Controller logs (last 50 lines) ---"
-            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=50 2>/dev/null || true
-            echo "--- PromotionStep status ---"
+            echo "--- Controller logs (last 100 lines) ---"
+            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=100 2>/dev/null || true
+            echo "--- PromotionStep describe ---"
+            for ps in $(kubectl get promotionstep -A -o name 2>/dev/null); do
+              echo "=== $ps ==="
+              kubectl describe $ps 2>/dev/null | grep -A3 "State:\|Message:\|Conditions:" || true
+            done
+            echo "--- PromotionStep status (wide) ---"
             kubectl get promotionstep -A -o wide 2>/dev/null || true
             FAIL=$((FAIL+1))
             RESULTS="$RESULTS\n❌ S1: Happy path — Expected Verified/Promoting; got: $OUTPUT"
