@@ -8,6 +8,9 @@ export interface Pipeline {
   activeBundleName?: string
   /** True when the pipeline has spec.paused=true (#328). */
   paused?: boolean
+  /** #525: Ordered list of environment names from Pipeline.spec.environments.
+   * Populated by the API to enable static DAG topology rendering when no bundle exists. */
+  environments?: string[]
   /** #342: per-environment promotion phases from active Bundle status.
    * Keys are environment names, values are the promotion phase (Promoting, Verified, etc.) */
   environmentStates?: Record<string, string>

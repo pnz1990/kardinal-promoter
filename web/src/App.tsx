@@ -31,6 +31,50 @@ function formatElapsed(seconds: number | null): string {
   return `${mins}m ago`
 }
 
+/**
+ * #525: Build a static pipeline topology graph when no Bundle is available.
+ *
+ * Uses the ordered environment list from Pipeline.environments (if present),
+ * falling back to environmentStates keys, then generating numbered placeholders
+ * from environmentCount.
+ *
+ * All nodes are set to 'NotStarted' state to indicate no promotion is in progress.
+ * Returns a GraphResponse with a simple linear chain of environments.
+ */
+export function buildStaticPipelineGraph(pipeline: {
+  environmentCount: number
+  environments?: string[]
+  environmentStates?: Record<string, string>
+}): GraphResponse {
+  // Determine environment names in order.
+  let envNames: string[] = []
+  if (pipeline.environments && pipeline.environments.length > 0) {
+    envNames = pipeline.environments
+  } else if (pipeline.environmentStates && Object.keys(pipeline.environmentStates).length > 0) {
+    envNames = Object.keys(pipeline.environmentStates)
+  } else if (pipeline.environmentCount > 0) {
+    // Fallback: generate numbered placeholders
+    envNames = Array.from({ length: pipeline.environmentCount }, (_, i) => `env-${i + 1}`)
+  }
+
+  if (envNames.length === 0) return { nodes: [], edges: [] }
+
+  const nodes: GraphNode[] = envNames.map(name => ({
+    id: `step-${name}`,
+    type: 'PromotionStep' as const,
+    label: name,
+    environment: name,
+    state: 'NotStarted',
+  }))
+
+  const edges = envNames.slice(0, -1).map((name, i) => ({
+    from: `step-${name}`,
+    to: `step-${envNames[i + 1]}`,
+  }))
+
+  return { nodes, edges }
+}
+
 export function App() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [pipelinesLoading, setPipelinesLoading] = useState(true)
@@ -104,6 +148,21 @@ export function App() {
         setGraph(g)
         setActiveSteps(steps)
         setGraphError(undefined)
+      } else {
+        // #525: No bundles exist — synthesise a static topology from Pipeline spec.
+        // Use the activePipeline from state (already fetched by doFetchAll).
+        setPipelines(prev => {
+          const pipeline = prev.find(p => p.name === pipelineName)
+          if (pipeline) {
+            const staticGraph = buildStaticPipelineGraph(pipeline)
+            if (staticGraph.nodes.length > 0) {
+              setGraph(staticGraph)
+              setActiveSteps([])
+              setGraphError(undefined)
+            }
+          }
+          return prev
+        })
       }
       onPollSuccess()
     } catch (e) {
@@ -154,6 +213,20 @@ export function App() {
             setGraph(g)
             setActiveSteps(steps)
           })
+        } else {
+          // #525: No bundles yet — synthesise a static topology from Pipeline spec.
+          // pipelines state is already populated from the initial poll.
+          setPipelines(prev => {
+            const pipeline = prev.find(p => p.name === name)
+            if (pipeline) {
+              const staticGraph = buildStaticPipelineGraph(pipeline)
+              if (staticGraph.nodes.length > 0) {
+                setGraph(staticGraph)
+              }
+            }
+            return prev
+          })
+          return Promise.resolve()
         }
       })
       .catch(e => setGraphError(String(e)))
@@ -248,7 +321,14 @@ export function App() {
   }, [activePipeline?.environmentTopology])
 
   // Use the bundle graph when available; fall back to static topology (#525).
-  const displayGraph = graph ?? staticGraph
+  // Also fall back to buildStaticPipelineGraph if environmentTopology is absent.
+  const displayGraph = graph ?? staticGraph ??
+    (activePipeline ? buildStaticPipelineGraph(activePipeline) : undefined)
+
+  // #525: Detect static topology mode — no bundles, all nodes are NotStarted/Idle.
+  const isStaticTopology = bundles.length === 0 &&
+    (displayGraph?.nodes ?? []).length > 0 &&
+    (displayGraph?.nodes ?? []).every(n => n.state === 'NotStarted' || n.state === 'Idle')
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
@@ -597,7 +677,7 @@ export function App() {
             {/* #332: Pipeline lane view — horizontal stage cards (Kargo-parity).
                 Shows each PromotionStep environment as a card with state chip, bundle, and actions. */}
             <PipelineLaneView
-              nodes={graph?.nodes ?? []}
+              nodes={displayGraph?.nodes ?? []}
               selectedNode={selectedNode}
               onSelectNode={setSelectedNode}
               activeBundleName={activeBundle?.name}
@@ -635,6 +715,7 @@ export function App() {
                   highlightNodeIds={highlightIds}
                   selectedNode={selectedNode}
                   onSelectNode={setSelectedNode}
+                  isStaticTopology={isStaticTopology}
                 />
               </div>
 

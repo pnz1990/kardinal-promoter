@@ -48,6 +48,8 @@ interface Props {
   selectedNode?: GraphNode | null
   /** Called when a node is clicked — parent updates selected state (#326). */
   onSelectNode?: (node: GraphNode | null) => void
+  /** #525: When true, shows a "no active bundle" indicator above the static topology. */
+  isStaticTopology?: boolean
 }
 
 const NODE_WIDTH = 180
@@ -283,7 +285,7 @@ function DAGNode({
   )
 }
 
-export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode }: Props) {
+export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode, isStaticTopology }: Props) {
   if (loading) {
     return (
       <div>
@@ -328,6 +330,26 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
 
   return (
     <div>
+      {/* #525: Static topology banner — shown when no active bundle exists */}
+      {isStaticTopology && (
+        <div style={{
+          padding: '0.35rem 0.75rem',
+          marginBottom: '0.5rem',
+          background: '#0f172a',
+          border: '1px solid #1e293b',
+          borderRadius: '4px',
+          fontSize: '0.72rem',
+          color: '#64748b',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.4rem',
+        }}
+          data-testid="static-topology-banner"
+        >
+          <span style={{ color: '#334155' }}>◦</span>
+          Pipeline topology — no active bundle. Create one to start promoting.
+        </div>
+      )}
       <div style={{ overflow: 'auto' }}>
         <svg
           width={svgW}
