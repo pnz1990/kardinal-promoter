@@ -48,6 +48,12 @@ jobs:
         run: |
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
+      - name: Create kind cluster
+        run: |
+          kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
+          # Wait for the API server to be fully ready before proceeding
+          kubectl wait --for=condition=Ready nodes --all --timeout=120s
+
       - name: Setup E2E environment (kind + krocodile + ArgoCD)
         env:
           GOTOOLCHAIN: auto
