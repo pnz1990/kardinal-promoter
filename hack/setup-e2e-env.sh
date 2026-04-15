@@ -40,7 +40,9 @@ if [ "$SKIP_ARGOCD" != "1" ]; then
 
   echo "Waiting for ArgoCD to be ready..."
   kubectl rollout status deployment/argocd-server -n argocd --timeout=180s
-  kubectl rollout status deployment/argocd-application-controller -n argocd --timeout=180s
+  # argocd-application-controller is a StatefulSet in ArgoCD v2.x, not a Deployment.
+  # Use kubectl rollout status statefulset instead.
+  kubectl rollout status statefulset/argocd-application-controller -n argocd --timeout=180s
   echo "ArgoCD ready."
 else
   echo "[2/5] Skipping ArgoCD (SKIP_ARGOCD=1)"
