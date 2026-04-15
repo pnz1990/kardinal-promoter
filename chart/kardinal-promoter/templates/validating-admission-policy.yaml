@@ -1,19 +1,21 @@
 {{/*
-ValidatingAdmissionPolicy for PolicyGate CEL expression validation.
+ValidatingAdmissionPolicy for PolicyGate validation.
 Requires Kubernetes 1.28+ (ValidatingAdmissionPolicy graduated to GA in 1.30).
-Rejects PolicyGate resources with empty spec.expression at admission time.
 
-Note: This policy validates that spec.expression is non-empty. Full CEL syntax
-validation requires a validating webhook (issue #317) with server-side compilation.
-This policy catches the most common mistake (missing expression field) at apply time.
+Validates:
+  1. spec.expression is non-empty (catches most common mistake).
+  2. spec.recheckInterval, if set, matches Go duration format (e.g. "5m", "30s").
+     Rejects obviously invalid values like "1hour" or "2 minutes" at admission time.
+     Full CEL syntax validation requires a server-side webhook — see issue #317.
 
-Enabled by default. Set validatingAdmissionPolicy.enabled=false to disable.
+Enabled by default. Set validatingAdmissionPolicy.enabled=false to disable (required for
+kind/k8s < 1.28 or when using --validate=false flag).
 */}}
 {{- if .Values.validatingAdmissionPolicy.enabled }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
-  name: kardinal-policygate-expression-required
+  name: kardinal-policygate-validation
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 spec:
@@ -28,14 +30,20 @@ spec:
   - expression: "object.spec.expression != ''"
     message: "spec.expression must not be empty — provide a CEL expression (e.g. '!schedule.isWeekend')"
     reason: Invalid
+  - expression: >
+      !has(object.spec.recheckInterval) ||
+      object.spec.recheckInterval == '' ||
+      object.spec.recheckInterval.matches('^[0-9]+(ns|us|ms|s|m|h)$')
+    message: "spec.recheckInterval must be a valid Go duration (e.g. '5m', '30s', '1h') — spaces and words like 'hour' are not valid"
+    reason: Invalid
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
-  name: kardinal-policygate-expression-required
+  name: kardinal-policygate-validation
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 spec:
-  policyName: kardinal-policygate-expression-required
+  policyName: kardinal-policygate-validation
   validationActions: [Deny]
 {{- end }}

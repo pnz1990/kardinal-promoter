@@ -236,6 +236,39 @@ For long-term audit retention, forward Events to your SIEM using a log aggregato
 
 ---
 
+## NetworkPolicy
+
+By default, no NetworkPolicy is applied. In environments with a NetworkPolicy-capable CNI (Calico, Cilium, etc.), enable the built-in policy to restrict the controller's network access:
+
+```bash
+helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+  --set networkPolicy.enabled=true
+```
+
+The policy allows:
+- **Ingress**: kubelet health probes (port 8081) and Prometheus scraping (port 8080)
+- **Egress**: Kubernetes API server (`:443`, `:6443`), DNS (`:53`), HTTPS for SCM providers and go-git operations (`:443`), and traffic to `kro-system` for krocodile communication
+
+Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
+
+---
+
+## Admission Validation
+
+The `ValidatingAdmissionPolicy` (Kubernetes 1.28+, enabled by default) validates `PolicyGate` resources at admission time:
+
+1. `spec.expression` must not be empty
+2. `spec.recheckInterval`, if set, must match Go duration format (e.g. `5m`, `30s`, `1h`)
+
+Full CEL syntax validation (catching invalid CEL expressions) requires a validating webhook — see issue #317.
+
+Disable for clusters without VAP support:
+```bash
+helm upgrade kardinal ... --set validatingAdmissionPolicy.enabled=false
+```
+
+---
+
 ## Further Reading
 
 - [Installation](../installation.md) — Helm values reference

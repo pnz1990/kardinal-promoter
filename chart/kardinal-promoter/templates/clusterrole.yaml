@@ -4,7 +4,9 @@ Licensed under the Apache License, Version 2.0
 */}}
 # ClusterRole for kardinal-promoter controller.
 # Grants the minimum permissions required to reconcile Pipelines, Bundles,
-# PolicyGates, and PromotionSteps. Expanded in Stage 1 (CRD types).
+# PolicyGates, PromotionSteps, and all supporting kardinal.io CRD types.
+# Audit note: "resources: *" replaced with explicit resource list per
+# enterprise least-privilege requirements (issue #516).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -14,16 +16,53 @@ metadata:
 rules:
   # Core Kubernetes resources the controller reads/writes
   - apiGroups: [""]
-    resources: ["events", "secrets", "configmaps", "namespaces"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps", "namespaces"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
   # Coordination for leader election
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # All kardinal.io CRDs (Pipelines, Bundles, PolicyGates, PromotionSteps)
+  # kardinal.io CRDs — user-created resources (read/write)
   - apiGroups: ["kardinal.io"]
-    resources: ["*"]
+    resources:
+      - pipelines
+      - bundles
+      - policygates
+      - changewindows
+      - rollbackpolicies
+      - subscriptions
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # kardinal.io CRDs — status subresources (write-back from reconcilers)
+  - apiGroups: ["kardinal.io"]
+    resources:
+      - pipelines/status
+      - bundles/status
+      - policygates/status
+      - changewindows/status
+      - rollbackpolicies/status
+      - subscriptions/status
+    verbs: ["get", "update", "patch"]
+  # kardinal.io CRDs — controller-internal resources (owned by controller)
+  - apiGroups: ["kardinal.io"]
+    resources:
+      - promotionsteps
+      - prstatuses
+      - metricchecks
+      - scheduleclocks
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kardinal.io"]
+    resources:
+      - promotionsteps/status
+      - prstatuses/status
+      - metricchecks/status
+      - scheduleclocks/status
+    verbs: ["get", "update", "patch"]
   # kro Graph CRDs (generated promotion DAGs) — experimental.kro.run API group
   # as of krocodile commit 48224264 (2026-04-10). Update when krocodile API group changes.
   - apiGroups: ["experimental.kro.run"]
