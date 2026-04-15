@@ -131,6 +131,24 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --reuse-values
 ```
 
+## Graceful shutdown
+
+The controller handles `SIGTERM` gracefully: it stops accepting new reconcile requests
+and allows in-flight reconcile loops up to **30 seconds** to complete before exiting.
+This prevents mid-step interruptions during rolling updates or node evictions — for
+example, a git-push that was 5 seconds from finishing will complete rather than leaving
+the PromotionStep in an inconsistent state.
+
+The Helm chart sets `terminationGracePeriodSeconds: 60` (double the shutdown timeout)
+so Kubernetes sends `SIGKILL` only after the controller has had a full 30 seconds to drain.
+
+To adjust the timeout:
+
+```yaml
+# values.yaml
+terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take >30s
+```
+
 This upgrades both the kardinal-promoter controller and the bundled krocodile controller
 to the versions pinned in the new chart version.
 

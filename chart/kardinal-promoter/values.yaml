@@ -4,6 +4,11 @@
 # -- Number of controller replicas
 replicaCount: 1
 
+# -- Pod termination grace period in seconds.
+# Must be at least 2× the controller's GracefulShutdownTimeout (30s) to allow
+# in-flight reconcile loops to complete before SIGKILL. (#574)
+terminationGracePeriodSeconds: 60
+
 image:
   # -- Container image repository
   repository: ghcr.io/pnz1990/kardinal-promoter/controller
