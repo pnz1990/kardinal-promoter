@@ -1,9 +1,23 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 // components/HealthChip.tsx — Reusable health state chip with 7-state color coding.
 //
-// Adapts the kro-ui health chip pattern (Ready/Degraded/Reconciling/Pending/Error/Unknown)
-// to kardinal's promotion states, plus a Paused state for suspended pipelines.
-// All ad-hoc phaseBadgeColor and nodeColor functions should be replaced with
-// HealthChip or healthChipColors() calls.
+// #532: State-driven visual properties are now CSS classes (health-chip--{state})
+// so tests can assert class names, not hex color strings.
+// healthChipColors() is retained for SVG contexts (DAGView) that require inline colors.
+
+import '../styles/HealthChip.css'
 
 /** The 7 canonical health chip states. */
 export type HealthState =
@@ -53,7 +67,49 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
   }
 }
 
-/** Returns the background and text colors for a given HealthState. */
+/**
+ * #523: pipelinePhaseLabel translates the backend Pipeline.phase into a
+ * display-friendly string for the sidebar chip.
+ *
+ * The backend DerivePhase() returns "Unknown" as the default (non-Ready,
+ * non-Degraded) state, which renders as "Unknown — Unknown" in the chip
+ * and confuses users. This function provides context-aware translation:
+ *
+ * - "Unknown" + no active bundle/environmentStates → "Idle"
+ * - "Unknown" + environmentStates present (active bundle) → "Promoting"
+ * - All other phases → pass through unchanged
+ */
+export function pipelinePhaseLabel(pipeline: {
+  phase: string
+  environmentCount?: number
+  environmentStates?: Record<string, string>
+  activeBundleName?: string
+}): string {
+  if (pipeline.phase !== 'Unknown') return pipeline.phase
+
+  // Any environmentStates means there's an active bundle — show "Promoting"
+  const hasActiveBundleData = pipeline.environmentStates &&
+    Object.keys(pipeline.environmentStates).length > 0
+  if (hasActiveBundleData) return 'Promoting'
+
+  // active bundle name also indicates activity
+  if (pipeline.activeBundleName) return 'Promoting'
+
+  return 'Idle'
+}
+
+/**
+ * Returns the CSS class modifier for a given HealthState.
+ * Used to apply health-chip--{state} class to the chip element.
+ */
+export function healthStateClass(state: HealthState): string {
+  return `health-chip--${state.toLowerCase()}`
+}
+
+/**
+ * Returns the background and text colors for a given HealthState.
+ * Retained for SVG rendering contexts (DAGView) that cannot use CSS classes.
+ */
 export function healthChipColors(state: HealthState): { bg: string; text: string; border: string } {
   switch (state) {
     case 'Ready':
@@ -88,32 +144,20 @@ interface HealthChipProps {
 /**
  * HealthChip renders a pill badge with health state color coding.
  *
- * Replaces the ad-hoc phaseBadgeColor / nodeColor / stateColor inline functions
- * across DAGView, NodeDetail, and PipelineList.
+ * #532: Uses CSS classes (health-chip--{state}) instead of inline styles.
+ * Tests should assert className, not background-color.
  */
 export function HealthChip({ state, nodeType, label, size = 'sm' }: HealthChipProps) {
   const health = kardinalStateToHealth(state, nodeType)
-  const { bg, text, border } = healthChipColors(health)
-
-  const fontSize = size === 'md' ? '0.75rem' : '0.65rem'
-  const padding = size === 'md' ? '2px 8px' : '1px 5px'
+  const stateClass = healthStateClass(health)
+  const sizeClass = `health-chip--${size}`
 
   return (
     <span
-      style={{
-        display: 'inline-block',
-        background: bg,
-        color: text,
-        border: `1px solid ${border}`,
-        fontSize,
-        padding,
-        borderRadius: '9999px',
-        fontWeight: 600,
-        whiteSpace: 'nowrap',
-        lineHeight: '1.4',
-      }}
+      className={`health-chip ${stateClass} ${sizeClass}`}
       title={`${state} (${health})`}
       aria-label={`${label ?? state} — ${health}`}
+      data-health-state={health}
     >
       {label ?? state}
     </span>

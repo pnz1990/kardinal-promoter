@@ -1,0 +1,70 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * PipelineLaneView.css — CSS classes for pipeline stage cards (#532).
+ */
+
+/* ── Stage card base ────────────────────────────────────────────────────── */
+.stage-card {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  min-width: 130px;
+  max-width: 200px;
+  cursor: pointer;
+  transition: border-color 0.1s ease;
+  flex-shrink: 0;
+}
+
+.stage-card--selected {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
+/* ── Stage state variants ────────────────────────────────────────────────── */
+.stage-card--ready {
+  background: #052e16;
+  border-color: #16a34a;
+}
+
+.stage-card--error,
+.stage-card--degraded {
+  background: #2d0b0b;
+  border-color: #b91c1c;
+}
+
+.stage-card--reconciling {
+  background: #1e1b4b;
+  border-color: #4338ca;
+}
+
+.stage-card--pending {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+.stage-card--unknown {
+  background: #0f172a;
+  border-color: #1e293b;
+}
+
+.stage-card--paused {
+  background: #1e1b4b;
+  border-color: #6366f1;
+}
+
+/* ── Stage loading skeleton ──────────────────────────────────────────────── */
+.stage-card-skeleton {
+  height: 80px;
+  border-radius: 8px;
+  min-width: 130px;
+  background: linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%);
+  background-size: 200% 100%;
+  animation: stage-shimmer 1.5s infinite;
+}
+
+@keyframes stage-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

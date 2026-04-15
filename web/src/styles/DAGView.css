@@ -1,0 +1,85 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * DAGView.css — CSS classes for the DAG node visualization (#532).
+ * The SVG node rect colors are set via CSS custom properties so tests
+ * can assert class names and computed values without hex literals.
+ */
+
+/* ── DAG node wrapper ────────────────────────────────────────────────────── */
+.dag-node {
+  cursor: pointer;
+}
+
+/* ── Node state classes (applied to <g> elements via className) ──────────── */
+/* These define the --dag-node-bg and --dag-node-border custom properties.
+   The DAGNode component reads these via inline style to apply to the SVG rect.
+   Inline styles are required for SVG <rect> — CSS classes alone don't apply fill. */
+
+.dag-node--ready {
+  --dag-node-bg: #14532d;
+  --dag-node-border: #22c55e;
+  --dag-node-text: #4ade80;
+}
+
+.dag-node--reconciling {
+  --dag-node-bg: #1e1b4b;
+  --dag-node-border: #6366f1;
+  --dag-node-text: #a5b4fc;
+}
+
+.dag-node--error {
+  --dag-node-bg: #450a0a;
+  --dag-node-border: #dc2626;
+  --dag-node-text: #fca5a5;
+}
+
+.dag-node--pending {
+  --dag-node-bg: #1e293b;
+  --dag-node-border: #475569;
+  --dag-node-text: #94a3b8;
+}
+
+.dag-node--degraded {
+  --dag-node-bg: #7c2d12;
+  --dag-node-border: #f97316;
+  --dag-node-text: #fb923c;
+}
+
+.dag-node--paused {
+  --dag-node-bg: #1e1b4b;
+  --dag-node-border: #6366f1;
+  --dag-node-text: #a5b4fc;
+}
+
+.dag-node--unknown {
+  --dag-node-bg: #1e293b;
+  --dag-node-border: #334155;
+  --dag-node-text: #64748b;
+}
+
+/* ── Selected node ring ──────────────────────────────────────────────────── */
+.dag-node--selected .dag-node__rect {
+  stroke-width: 2.5;
+}
+
+/* ── Highlighted node (blocked gate) ────────────────────────────────────── */
+.dag-node--highlighted {
+  --dag-node-border: #fbbf24;
+  --dag-node-highlight-stroke-width: 2.5;
+}
+
+/* ── DAG static topology banner ─────────────────────────────────────────── */
+.dag-static-banner {
+  padding: 0.35rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
