@@ -105,6 +105,7 @@ export interface PromotionStep {
   conditions?: Array<{
     type: string
     status: string
+    reason?: string
     message?: string
     lastTransitionTime?: string
   }>

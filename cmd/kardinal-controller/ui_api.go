@@ -157,6 +157,7 @@ type uiStepResponse struct {
 type uiCondition struct {
 	Type               string `json:"type"`
 	Status             string `json:"status"`
+	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
@@ -1203,6 +1204,7 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 }
 
 // buildUIConditions converts Kubernetes metav1.Condition slice to UI-friendly shape (#341).
+// Sorted: failing/unknown conditions first, healthy (True) conditions last (#529).
 func buildUIConditions(conditions []metav1.Condition) []uiCondition {
 	if len(conditions) == 0 {
 		return nil
@@ -1212,6 +1214,7 @@ func buildUIConditions(conditions []metav1.Condition) []uiCondition {
 		uc := uiCondition{
 			Type:    c.Type,
 			Status:  string(c.Status),
+			Reason:  c.Reason,
 			Message: c.Message,
 		}
 		if !c.LastTransitionTime.IsZero() {
@@ -1219,7 +1222,28 @@ func buildUIConditions(conditions []metav1.Condition) []uiCondition {
 		}
 		result = append(result, uc)
 	}
+	// Sort: False/Unknown conditions first, True last (#529).
+	sort.Slice(result, func(i, j int) bool {
+		si := conditionSortKey(result[i].Status)
+		sj := conditionSortKey(result[j].Status)
+		if si != sj {
+			return si < sj
+		}
+		return result[i].Type < result[j].Type
+	})
 	return result
+}
+
+// conditionSortKey returns a sort priority: False=0, Unknown=1, True=2.
+func conditionSortKey(status string) int {
+	switch status {
+	case "False":
+		return 0
+	case "Unknown":
+		return 1
+	default:
+		return 2
+	}
 }
 
 // uiEventResponse is the JSON shape for a Kubernetes event in the UI API (#527).

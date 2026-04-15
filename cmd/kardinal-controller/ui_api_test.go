@@ -837,6 +837,46 @@ func TestUIAPI_ListGates_NoOverrides(t *testing.T) {
 	assert.Empty(t, resp[0].Overrides, "empty overrides must return nil/empty slice")
 }
 
+// TestBuildUIConditions_ReasonAndSort verifies that buildUIConditions includes the reason field
+// and sorts conditions with failing/unknown first, healthy last (#529).
+func TestBuildUIConditions_ReasonAndSort(t *testing.T) {
+	now := metav1.Now()
+	conditions := []metav1.Condition{
+		{Type: "Ready", Status: "True", Reason: "AllHealthy", Message: "step healthy", LastTransitionTime: now},
+		{Type: "GitPushed", Status: "False", Reason: "GitPushFailed", Message: "auth error", LastTransitionTime: now},
+		{Type: "HealthChecked", Status: "Unknown", Reason: "HealthCheckPending", Message: "waiting", LastTransitionTime: now},
+	}
+
+	result := buildUIConditions(conditions)
+	require.Len(t, result, 3)
+
+	// Order: False first, Unknown second, True last
+	assert.Equal(t, "False", result[0].Status)
+	assert.Equal(t, "GitPushFailed", result[0].Reason)
+	assert.Equal(t, "auth error", result[0].Message)
+
+	assert.Equal(t, "Unknown", result[1].Status)
+	assert.Equal(t, "HealthCheckPending", result[1].Reason)
+
+	assert.Equal(t, "True", result[2].Status)
+	assert.Equal(t, "AllHealthy", result[2].Reason)
+}
+
+// TestBuildUIConditions_EmptyReasonOmitted verifies that empty reason is not included in JSON.
+func TestBuildUIConditions_EmptyReasonOmitted(t *testing.T) {
+	conditions := []metav1.Condition{
+		{Type: "Ready", Status: "True", Reason: "", Message: "", LastTransitionTime: metav1.Now()},
+	}
+	result := buildUIConditions(conditions)
+	require.Len(t, result, 1)
+	assert.Empty(t, result[0].Reason)
+
+	// Verify JSON omits empty reason
+	b, err := json.Marshal(result[0])
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), `"reason"`)
+}
+
 // TestUIAPI_StepEvents_ReturnsSortedEvents verifies that GET
 // /api/v1/ui/steps/{namespace}/{name}/events returns events sorted newest-first
 // and capped at 20 (#527).
