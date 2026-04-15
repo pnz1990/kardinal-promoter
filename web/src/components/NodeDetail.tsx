@@ -703,12 +703,32 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         </div>
       )}
 
-      {/* #341: Kubernetes conditions panel — show condition history from step status */}
+      {/* #341/#529: Kubernetes conditions panel — show condition history from step status */}
       {isPromotionStep && stepDetail?.conditions && stepDetail.conditions.length > 0 && (
         <div style={{ marginBottom: '0.75rem' }}>
-          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
-            Conditions
-          </h4>
+          {/* #529: Summary header — healthy count at a glance */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>
+              Conditions
+            </h4>
+            {(() => {
+              const total = stepDetail.conditions!.length
+              const trueCount = stepDetail.conditions!.filter(c => c.status === 'True').length
+              const allHealthy = trueCount === total
+              return (
+                <span
+                  data-testid="conditions-summary"
+                  style={{
+                    fontSize: '0.7rem',
+                    color: allHealthy ? '#86efac' : '#fca5a5',
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {trueCount}/{total} healthy
+                </span>
+              )
+            })()}
+          </div>
           <div style={{
             background: '#0f172a',
             border: '1px solid #1e293b',
@@ -732,6 +752,20 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 </span>
                 <div>
                   <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{cond.type}</span>
+                  {/* #529: reason field — CamelCase code for quick triage */}
+                  {cond.reason && (
+                    <span
+                      data-testid="condition-reason"
+                      style={{
+                        color: '#64748b',
+                        marginLeft: '0.4rem',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                      }}
+                    >
+                      [{cond.reason}]
+                    </span>
+                  )}
                   {cond.message && (
                     <span style={{ color: '#94a3b8', marginLeft: '0.4rem' }}>— {cond.message}</span>
                   )}
