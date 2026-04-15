@@ -21,7 +21,7 @@ IMG ?= kardinal-promoter:dev
         install-krocodile \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
-        kind-up kind-down tools help
+        kind-up kind-down tools help lint-local
 
 all: generate build test lint
 
@@ -58,6 +58,17 @@ test-cover:
 ## Lint / Vet
 vet:
 	$(GO) vet ./...
+
+## lint-local: run go vet + staticcheck locally (faster than golangci-lint, catches QF1008-class issues)
+## Install staticcheck: go install honnef.co/go/tools/cmd/staticcheck@latest
+lint-local:
+	$(GO) vet ./...
+	@if command -v staticcheck >/dev/null 2>&1; then \
+		staticcheck ./...; \
+	else \
+		echo "staticcheck not found — install with: go install honnef.co/go/tools/cmd/staticcheck@latest"; \
+		exit 1; \
+	fi
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run ./...
