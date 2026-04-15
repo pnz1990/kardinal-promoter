@@ -198,3 +198,56 @@ func TestDockerfileContent(t *testing.T) {
 	assert.Contains(t, content, "kardinal-controller", "must build kardinal-controller binary")
 	assert.Contains(t, content, "ENTRYPOINT", "must set ENTRYPOINT")
 }
+
+func TestHelmTemplatePDBCreatedForMultiReplica(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// With replicaCount=2, PDB must be created
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "replicaCount=2",
+		"--set", "pdb.enabled=true")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template with replicaCount=2 must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.Contains(t, rendered, "kind: PodDisruptionBudget",
+		"PDB must be rendered when replicaCount=2")
+	assert.Contains(t, rendered, "minAvailable: 1",
+		"PDB must set minAvailable: 1 by default")
+}
+
+func TestHelmTemplatePDBNotCreatedForSingleReplica(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// With replicaCount=1 (default), PDB must NOT be created
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.NotContains(t, rendered, "kind: PodDisruptionBudget",
+		"PDB must NOT be rendered when replicaCount=1 (single replica)")
+}
+
+func TestHelmTemplateTopologySpreadForMultiReplica(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// With replicaCount=2, topology spread constraints must be added
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "replicaCount=2",
+		"--set", "topologySpread.enabled=true")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template with replicaCount=2 must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.Contains(t, rendered, "topologySpreadConstraints",
+		"topology spread constraints must be added when replicaCount=2")
+	assert.Contains(t, rendered, "topology.kubernetes.io/zone",
+		"topology spread must use zone topology key")
+}

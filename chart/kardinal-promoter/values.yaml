@@ -180,3 +180,17 @@ networkPolicy:
 scheduleClock:
   enabled: true
   interval: "1m"
+
+# -- PodDisruptionBudget for the controller.
+# Only created when replicaCount > 1 to ensure at least one replica is
+# available during node maintenance or rolling updates.
+pdb:
+  enabled: true
+  # -- Minimum number of pods that must be available during disruption.
+  minAvailable: 1
+
+# -- Topology spread constraints for multi-replica deployments.
+# When enabled and replicaCount > 1, spreads replicas across availability
+# zones to prevent both replicas from landing on the same node.
+topologySpread:
+  enabled: true
