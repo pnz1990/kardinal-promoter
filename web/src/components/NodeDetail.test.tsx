@@ -25,6 +25,7 @@ vi.mock('../api/client', () => ({
     promote: vi.fn().mockResolvedValue({ bundle: 'b', message: 'ok' }),
     rollback: vi.fn().mockResolvedValue({ bundle: 'b', message: 'ok' }),
     getSteps: vi.fn().mockResolvedValue([]),
+    getStepEvents: vi.fn().mockResolvedValue([]),
   },
 }))
 
