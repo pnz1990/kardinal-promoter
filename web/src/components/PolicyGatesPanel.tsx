@@ -1,6 +1,6 @@
 // components/PolicyGatesPanel.tsx — Collapsible panel showing all active PolicyGates.
 // Wires up api.listGates() to display gate state with CEL expressions (#340).
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { PolicyGate } from '../types'
 import { HealthChip } from './HealthChip'
 
@@ -44,7 +44,13 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
 }
 
 export function PolicyGatesPanel({ gates, loading }: Props) {
+  const blockedCount = gates.filter(g => !g.ready).length
+  // #524: auto-expand when any gates are blocked — the blocked state is the most
+  // important information on screen and should not be hidden behind a click.
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    if (blockedCount > 0) setOpen(true)
+  }, [blockedCount])
 
   if (loading) {
     return (

@@ -5,7 +5,7 @@
 // #326: selectedNode is lifted to the parent (App) so NodeDetail can be rendered
 // as a proper split panel sibling rather than a position:fixed overlay.
 // #334: DAG legend strip explains node shapes and state colors.
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
 import { kardinalStateToHealth, healthChipColors } from './HealthChip'
@@ -320,7 +320,9 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     return <div style={{ padding: '2rem', color: '#94a3b8' }}>No active promotion found.</div>
   }
 
-  const layout = computeLayout(nodes, edges)
+  // #521: memoize dagre layout so it only recomputes when nodes/edges change,
+  // not on every 5-second poll when only node states (colors) change.
+  const layout = useMemo(() => computeLayout(nodes, edges), [nodes, edges])
   const maxX = Math.max(...layout.map(n => n.x + NODE_WIDTH / 2)) + MARGIN
   const maxY = Math.max(...layout.map(n => n.y + NODE_HEIGHT / 2)) + MARGIN
   const svgW = Math.max(maxX, 400)
