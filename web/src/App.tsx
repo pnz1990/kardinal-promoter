@@ -84,12 +84,14 @@ export function App() {
       setGates(gs)
       setGatesLoading(false)
       setPipelinesError(undefined)
+      // #522: mark successful fetch so the staleness indicator clears "Loading..."
+      onPollSuccess()
     } catch (e) {
       setPipelinesError(String(e))
     } finally {
       setPipelinesLoading(false)
     }
-  }, [])
+  }, [onPollSuccess])
 
   const doFetchGraph = useCallback(async (pipelineName: string) => {
     try {
