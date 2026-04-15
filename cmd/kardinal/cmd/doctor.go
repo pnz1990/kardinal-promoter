@@ -85,20 +85,20 @@ func runDoctor(w io.Writer, pipeline string) error {
 	}
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {
-		fmt.Fprintf(w, "\n%s Could not build kubeconfig: %v\n", doctorFail, err)
-		fmt.Fprintf(w, "Hint: ensure kubectl is configured and pointing at the correct cluster.\n")
+		_, _ = fmt.Fprintf(w, "\n%s Could not build kubeconfig: %v\n", doctorFail, err)
+		_, _ = fmt.Fprintf(w, "Hint: ensure kubectl is configured and pointing at the correct cluster.\n")
 		return fmt.Errorf("build kubeconfig: %w", err)
 	}
 
 	client, _, err := buildClient()
 	if err != nil {
-		fmt.Fprintf(w, "\n%s Could not connect to cluster: %v\n", doctorFail, err)
+		_, _ = fmt.Fprintf(w, "\n%s Could not connect to cluster: %v\n", doctorFail, err)
 		return fmt.Errorf("could not connect to cluster: %w", err)
 	}
 
 	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		fmt.Fprintf(w, "\n%s Could not build discovery client: %v\n", doctorFail, err)
+		_, _ = fmt.Fprintf(w, "\n%s Could not build discovery client: %v\n", doctorFail, err)
 		return fmt.Errorf("discovery client: %w", err)
 	}
 
@@ -126,16 +126,16 @@ func runDoctor(w io.Writer, pipeline string) error {
 	}
 
 	// Print header
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "kardinal-promoter pre-flight check")
-	fmt.Fprintln(w, strings.Repeat("=", 50))
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "kardinal-promoter pre-flight check")
+	_, _ = fmt.Fprintln(w, strings.Repeat("=", 50))
 
 	passed, warned, failed := 0, 0, 0
 	for _, r := range results {
-		fmt.Fprintf(w, "%s  %-*s  %s\n", r.icon, doctorColWidth, r.label, r.detail)
+		_, _ = fmt.Fprintf(w, "%s  %-*s  %s\n", r.icon, doctorColWidth, r.label, r.detail)
 		if r.hint != "" {
 			indent := strings.Repeat(" ", 4+doctorColWidth+2)
-			fmt.Fprintf(w, "%s%s\n", indent, r.hint)
+			_, _ = fmt.Fprintf(w, "%s%s\n", indent, r.hint)
 		}
 		switch {
 		case r.failed:
@@ -147,7 +147,7 @@ func runDoctor(w io.Writer, pipeline string) error {
 		}
 	}
 
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 	summary := fmt.Sprintf("%d check(s) passed", passed)
 	if warned > 0 {
 		summary += fmt.Sprintf(", %d warning(s)", warned)
@@ -155,7 +155,7 @@ func runDoctor(w io.Writer, pipeline string) error {
 	if failed > 0 {
 		summary += fmt.Sprintf(", %d failed", failed)
 	}
-	fmt.Fprintln(w, summary)
+	_, _ = fmt.Fprintln(w, summary)
 
 	if failed > 0 {
 		return fmt.Errorf("%d pre-flight check(s) failed", failed)
@@ -320,7 +320,7 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, name st
 		r.failed = true
 		return r
 	}
-	phase := string(p.Status.Phase)
+	phase := p.Status.Phase
 	if phase == "" {
 		phase = "Pending"
 	}
