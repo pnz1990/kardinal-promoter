@@ -5,7 +5,8 @@
 // #326: selectedNode is lifted to the parent (App) so NodeDetail can be rendered
 // as a proper split panel sibling rather than a position:fixed overlay.
 // #334: DAG legend strip explains node shapes and state colors.
-import { useState, useEffect } from 'react'
+// #521: computeLayout is memoized — only re-runs when topology (IDs + edges) changes.
+import { useState, useEffect, useMemo } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
 import { kardinalStateToHealth, healthChipColors } from './HealthChip'
@@ -284,6 +285,21 @@ function DAGNode({
 }
 
 export function DAGView({ nodes, edges, loading, error, highlightNodeIds, selectedNode, onSelectNode }: Props) {
+  // #521: Memoize layout computation — dagre is expensive (O(n*m)).
+  // Re-compute only when topology (node IDs + edge pairs) changes, NOT on
+  // every state update (state changes every 5s poll tick).
+  const topologyKey = useMemo(
+    () =>
+      nodes.map(n => n.id).join(',') + '|' +
+      edges.map(e => `${e.from}->${e.to}`).join(','),
+    [nodes, edges],
+  )
+  const layout = useMemo(
+    () => (nodes.length > 0 ? computeLayout(nodes, edges) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [topologyKey], // only recompute when topology structure changes
+  )
+
   if (loading) {
     return (
       <div>
@@ -320,7 +336,6 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     return <div style={{ padding: '2rem', color: '#94a3b8' }}>No active promotion found.</div>
   }
 
-  const layout = computeLayout(nodes, edges)
   const maxX = Math.max(...layout.map(n => n.x + NODE_WIDTH / 2)) + MARGIN
   const maxY = Math.max(...layout.map(n => n.y + NODE_HEIGHT / 2)) + MARGIN
   const svgW = Math.max(maxX, 400)
