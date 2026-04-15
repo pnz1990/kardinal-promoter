@@ -164,7 +164,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create SCM provider")
 	}
-	gitClient := scm.NewExecGitClient()
+	gitClient := scm.NewGoGitClient()
 
 	if err := (&bundlereconciler.Reconciler{
 		Client:       mgr.GetClient(),

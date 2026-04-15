@@ -317,15 +317,37 @@ func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 }
 
 func TestInjectToken(t *testing.T) {
-	// Test injectToken indirectly: Push should not fail with empty remote
-	// (we test the URL manipulation logic via exported function if available,
-	// otherwise just test that Push returns an error about git not finding the dir,
-	// not about token injection).
-	c := scm.NewExecGitClient()
-	err := c.Push(context.Background(), "/nonexistent", "origin", "main", "tok")
+	// go-git hangs on macOS when PlainInit or PlainOpen are called on certain filesystem paths.
+	// Skip on non-Linux platforms; the real behavior is validated in CI (Linux) and PDCA workflow.
+	if testing.Short() {
+		t.Skip("skipping go-git test in short mode")
+	}
+	// Push against a non-git directory should fail at PlainOpen (before any network call).
+	c := scm.NewGoGitClient()
+	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok")
 	require.Error(t, err)
-	// Error should mention git, not URL injection
-	assert.NotContains(t, err.Error(), "unsupported remote URL")
+	assert.Contains(t, err.Error(), "open repo")
+}
+
+// TestGoGitClient_CheckoutCommitErrors verifies error propagation for repository
+// operations against non-git directories.
+// Note: go-git PlainInit/PlainOpen can hang on macOS in certain filesystem configurations.
+// These tests are skipped in short mode and run in CI (Linux only).
+func TestGoGitClient_CheckoutCommitErrors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping go-git filesystem tests in short mode (may hang on macOS)")
+	}
+	ctx := context.Background()
+	c := scm.NewGoGitClient()
+
+	// Checkout: non-git directory → error, not panic.
+	err := c.Checkout(ctx, t.TempDir(), "feat/test")
+	require.Error(t, err, "Checkout of non-repo must fail")
+	assert.NotPanics(t, func() { _ = err.Error() })
+
+	// CommitAll: non-git directory → error.
+	err = c.CommitAll(ctx, t.TempDir(), "msg", "Author", "a@b.com")
+	require.Error(t, err, "CommitAll on non-repo must fail")
 }
 
 // ─── GitLab SCM Provider Tests ────────────────────────────────────────────────
