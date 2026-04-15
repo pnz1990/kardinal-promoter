@@ -35,10 +35,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       -o /bin/kardinal-controller \
       ./cmd/kardinal-controller
 
-# ── Stage 3: runtime with git + kustomize (required for promotion steps) ─────
+# ── Stage 3: runtime (kustomize only — git binary no longer required) ────────
 FROM alpine:3.19
 
-RUN apk add --no-cache git ca-certificates curl && \
+RUN apk add --no-cache ca-certificates curl && \
     KUSTOMIZE_VER=v5.4.3 && \
     curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VER}/kustomize_${KUSTOMIZE_VER}_linux_amd64.tar.gz" \
       | tar -xz -C /usr/local/bin kustomize && \

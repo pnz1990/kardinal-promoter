@@ -17,151 +17,131 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
+	"time"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 )
 
-// ExecGitClient implements GitClient using os/exec to call the system git binary.
-// Shallow cloning with --depth=1 keeps clone times under 2 seconds for typical repos.
-type ExecGitClient struct{}
+// GoGitClient implements GitClient using the go-git library.
+// All git operations run in-process — no git binary is required in the controller container.
+type GoGitClient struct{}
 
-// NewExecGitClient constructs a new ExecGitClient.
-func NewExecGitClient() *ExecGitClient {
-	return &ExecGitClient{}
+// NewGoGitClient constructs a new GoGitClient.
+func NewGoGitClient() *GoGitClient {
+	return &GoGitClient{}
 }
 
-// Clone performs a shallow (--depth=1) clone of the repo into dir.
-func (c *ExecGitClient) Clone(ctx context.Context, url, branch, dir string) error {
-	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
-		return fmt.Errorf("create parent dir for clone: %w", err)
+// Clone performs a shallow (depth=1) clone of the repo into dir.
+func (c *GoGitClient) Clone(ctx context.Context, url, branch, dir string) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return fmt.Errorf("create clone dir: %w", err)
 	}
-	args := []string{"clone", "--depth=1", "--single-branch"}
+
+	opts := &gogit.CloneOptions{
+		URL:          url,
+		Depth:        1,
+		SingleBranch: true,
+	}
 	if branch != "" {
-		args = append(args, "--branch", branch)
+		opts.ReferenceName = plumbing.NewBranchReferenceName(branch)
 	}
-	args = append(args, url, dir)
-	if err := runGit(ctx, "", args...); err != nil {
+
+	if _, err := gogit.PlainCloneContext(ctx, dir, false, opts); err != nil {
 		return fmt.Errorf("git clone %s: %w", url, err)
 	}
 	return nil
 }
 
-// Checkout creates or switches to branch in dir. If the branch does not exist,
-// it creates it from the current HEAD.
-func (c *ExecGitClient) Checkout(ctx context.Context, dir, branch string) error {
+// Checkout creates or switches to branch in the repo at dir.
+// If the branch does not exist, it is created from the current HEAD.
+func (c *GoGitClient) Checkout(ctx context.Context, dir, branch string) error {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return fmt.Errorf("open repo at %s: %w", dir, err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("get worktree: %w", err)
+	}
+
 	// Try to switch to an existing branch first.
-	err := runGit(ctx, dir, "checkout", branch)
-	if err == nil {
+	checkoutErr := wt.Checkout(&gogit.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(branch),
+		Force:  false,
+	})
+	if checkoutErr == nil {
 		return nil
 	}
-	// Branch does not exist — create it.
-	if err2 := runGit(ctx, dir, "checkout", "-b", branch); err2 != nil {
-		return fmt.Errorf("git checkout -b %s: %w", branch, err2)
+
+	// Branch does not exist — create it from HEAD.
+	if err := wt.Checkout(&gogit.CheckoutOptions{
+		Branch: plumbing.NewBranchReferenceName(branch),
+		Create: true,
+	}); err != nil {
+		return fmt.Errorf("git checkout -b %s: %w", branch, err)
 	}
 	return nil
 }
 
-// CommitAll stages all changes and creates a signed commit with the given message.
-func (c *ExecGitClient) CommitAll(ctx context.Context, dir, message, authorName, authorEmail string) error {
-	if err := runGit(ctx, dir, "add", "--all"); err != nil {
-		return fmt.Errorf("git add: %w", err)
+// CommitAll stages all changes and creates a commit with the given message and author.
+func (c *GoGitClient) CommitAll(ctx context.Context, dir, message, authorName, authorEmail string) error {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return fmt.Errorf("open repo at %s: %w", dir, err)
 	}
-	env := []string{
-		"GIT_AUTHOR_NAME=" + authorName,
-		"GIT_AUTHOR_EMAIL=" + authorEmail,
-		"GIT_COMMITTER_NAME=" + authorName,
-		"GIT_COMMITTER_EMAIL=" + authorEmail,
+	wt, err := repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("get worktree: %w", err)
 	}
-	if err := runGitWithEnv(ctx, dir, env, "commit", "--allow-empty", "-m", message); err != nil {
+
+	// Stage all changes.
+	if _, err := wt.Add("."); err != nil {
+		return fmt.Errorf("git add .: %w", err)
+	}
+
+	sig := &object.Signature{
+		Name:  authorName,
+		Email: authorEmail,
+		When:  time.Now(),
+	}
+	if _, err := wt.Commit(message, &gogit.CommitOptions{
+		Author:            sig,
+		Committer:         sig,
+		AllowEmptyCommits: true,
+	}); err != nil {
 		return fmt.Errorf("git commit: %w", err)
 	}
 	return nil
 }
 
-// Push pushes the branch to the remote, embedding the token in the remote URL
-// for HTTPS authentication.
-func (c *ExecGitClient) Push(ctx context.Context, dir, remote, branch, token string) error {
-	// Embed token in remote URL for HTTPS auth.
-	// Only set the URL temporarily using git config.
-	if token != "" {
-		// Get the current remote URL and inject the token.
-		out, err := runGitOutput(ctx, dir, "remote", "get-url", remote)
-		if err != nil {
-			return fmt.Errorf("get remote url: %w", err)
-		}
-		remoteURL := strings.TrimSpace(out)
-		authedURL, err := injectToken(remoteURL, token)
-		if err != nil {
-			return fmt.Errorf("inject token: %w", err)
-		}
-		// Temporarily override remote URL.
-		if err := runGit(ctx, dir, "remote", "set-url", remote, authedURL); err != nil {
-			return fmt.Errorf("set remote url: %w", err)
-		}
-		// Restore original URL after push regardless of success.
-		defer func() { _ = runGit(ctx, dir, "remote", "set-url", remote, remoteURL) }()
+// Push pushes HEAD to the remote branch using token-based HTTPS authentication.
+func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token string) error {
+	repo, err := gogit.PlainOpen(dir)
+	if err != nil {
+		return fmt.Errorf("open repo at %s: %w", dir, err)
 	}
 
-	// Push HEAD to the specified remote branch name.
-	// Using "HEAD:<branch>" allows pushing from the current branch to any
-	// remote branch name regardless of local branch state.
-	if err := runGit(ctx, dir, "push", remote, "HEAD:"+branch); err != nil {
+	pushOpts := &gogit.PushOptions{
+		RemoteName: remote,
+		RefSpecs:   []config.RefSpec{config.RefSpec("HEAD:refs/heads/" + branch)},
+		Force:      false,
+	}
+	if token != "" {
+		pushOpts.Auth = &gogithttp.BasicAuth{
+			Username: "x-access-token",
+			Password: token,
+		}
+	}
+
+	if err := repo.PushContext(ctx, pushOpts); err != nil {
+		if err == gogit.NoErrAlreadyUpToDate {
+			return nil
+		}
 		return fmt.Errorf("git push %s %s: %w", remote, branch, err)
 	}
 	return nil
-}
-
-// injectToken inserts a token into an HTTPS git URL as the password component.
-func injectToken(rawURL, token string) (string, error) {
-	// Support https://github.com/... → https://x-access-token:TOKEN@github.com/...
-	for _, prefix := range []string{"https://", "http://"} {
-		if strings.HasPrefix(rawURL, prefix) {
-			return prefix + "x-access-token:" + token + "@" + strings.TrimPrefix(rawURL, prefix), nil
-		}
-	}
-	return "", fmt.Errorf("unsupported remote URL scheme (expected https://): %s", rawURL)
-}
-
-// runGit runs a git subcommand in the given directory.
-func runGit(ctx context.Context, dir string, args ...string) error {
-	_, err := runGitOutputErr(ctx, dir, nil, args...)
-	return err
-}
-
-// runGitWithEnv runs a git subcommand with additional environment variables.
-func runGitWithEnv(ctx context.Context, dir string, env []string, args ...string) error {
-	_, err := runGitOutputErr(ctx, dir, env, args...)
-	return err
-}
-
-// runGitOutput runs a git subcommand and returns stdout.
-func runGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	return runGitOutputErr(ctx, dir, nil, args...)
-}
-
-func runGitOutputErr(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = dir
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
-	}
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if ok := isExitError(err, &exitErr); ok {
-			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, string(exitErr.Stderr))
-		}
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-	}
-	return string(out), nil
-}
-
-// isExitError is a helper to avoid direct cast in error checking.
-func isExitError(err error, target **exec.ExitError) bool {
-	if e, ok := err.(*exec.ExitError); ok {
-		*target = e
-		return true
-	}
-	return false
 }
