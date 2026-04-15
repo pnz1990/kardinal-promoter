@@ -83,9 +83,14 @@ jobs:
           # VAP graduates to stable in k8s 1.30; re-enable when cluster is upgraded.
           make manifests
           kubectl apply -f config/crd/bases/
+          # krocodile is already installed by the prior step (hack/install-krocodile.sh).
+          # Disabling krocodile.enabled prevents Helm from trying to adopt the existing
+          # kro-system namespace (which lacks Helm management labels) and failing with
+          # "invalid ownership metadata".
           helm upgrade --install kardinal chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
-            --set validatingAdmissionPolicy.enabled=false
+            --set validatingAdmissionPolicy.enabled=false \
+            --set krocodile.enabled=false
 
       - name: Verify both controllers are running
         run: |
