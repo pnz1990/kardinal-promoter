@@ -212,6 +212,44 @@ export function App() {
   // When showBlockedOnly is active, pass the blocked IDs to DAGView for highlight.
   const highlightIds = showBlockedOnly ? blockedGateIds : undefined
 
+  // #525: Build a static topology graph from Pipeline.environmentTopology when no
+  // active bundle graph is available. This ensures the DAG always renders the
+  // pipeline structure even when nothing is currently promoting.
+  const staticGraph = useMemo<GraphResponse | undefined>(() => {
+    const topo = activePipeline?.environmentTopology
+    if (!topo || topo.length === 0) return undefined
+    const nodes: GraphNode[] = topo.map(env => ({
+      id: env.name,
+      type: 'PromotionStep' as const,
+      label: env.name,
+      environment: env.name,
+      state: 'Idle',
+      message: env.approval === 'pr-review' ? 'Manual approval required' : undefined,
+    }))
+    // Build edges: if dependsOn is set, draw edges from each dependency; otherwise
+    // draw sequential edges (previous → current) for environments without dependsOn.
+    const edges: { from: string; to: string }[] = []
+    for (let i = 0; i < topo.length; i++) {
+      const env = topo[i]
+      if (env.dependsOn && env.dependsOn.length > 0) {
+        for (const dep of env.dependsOn) {
+          edges.push({ from: dep, to: env.name })
+        }
+      } else if (i > 0) {
+        // No explicit dependsOn: assume sequential after the previous environment
+        // that also has no explicit dependsOn. Matches default Pipeline ordering.
+        const prev = topo[i - 1]
+        if (!prev.dependsOn || prev.dependsOn.length === 0) {
+          edges.push({ from: prev.name, to: env.name })
+        }
+      }
+    }
+    return { nodes, edges }
+  }, [activePipeline?.environmentTopology])
+
+  // Use the bundle graph when available; fall back to static topology (#525).
+  const displayGraph = graph ?? staticGraph
+
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       {/* Sidebar */}
@@ -590,8 +628,8 @@ export function App() {
                 overflow: 'auto',
               }}>
                 <DAGView
-                  nodes={graph?.nodes ?? []}
-                  edges={graph?.edges ?? []}
+                  nodes={displayGraph?.nodes ?? []}
+                  edges={displayGraph?.edges ?? []}
                   loading={graphLoading}
                   error={graphError}
                   highlightNodeIds={highlightIds}

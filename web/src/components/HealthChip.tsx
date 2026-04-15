@@ -46,6 +46,8 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       return 'Unknown'
     case 'Paused':
       return 'Paused'
+    case 'Idle':
+      return 'Unknown'  // Idle environments shown as gray (not yet started)
     default:
       return 'Unknown'
   }
