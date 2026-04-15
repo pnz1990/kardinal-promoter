@@ -11,10 +11,12 @@
 //
 // #333: CEL expression syntax highlighting — keywords=yellow, strings=green,
 //       identifiers=blue, operators=white, functions=cyan, comments=gray.
+// #529: Conditions summary header + reason field + inverted condition support.
 import { useState, useEffect, useCallback } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { api } from '../api/client'
+import { isHealthyCondition, conditionStatusLabel, sortConditions, conditionsSummary } from '../lib/conditions'
 
 interface Props {
   node: GraphNode | null
@@ -703,49 +705,82 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         </div>
       )}
 
-      {/* #341: Kubernetes conditions panel — show condition history from step status */}
-      {isPromotionStep && stepDetail?.conditions && stepDetail.conditions.length > 0 && (
-        <div style={{ marginBottom: '0.75rem' }}>
-          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
-            Conditions
-          </h4>
-          <div style={{
-            background: '#0f172a',
-            border: '1px solid #1e293b',
-            borderRadius: '4px',
-            padding: '0.4rem 0.6rem',
-          }}>
-            {stepDetail.conditions.map((cond, i) => (
-              <div key={i} style={{
-                display: 'flex',
-                gap: '0.5rem',
-                alignItems: 'flex-start',
-                fontSize: '0.75rem',
-                marginBottom: i < stepDetail.conditions!.length - 1 ? '0.3rem' : 0,
-              }}>
-                <span style={{
-                  color: cond.status === 'True' ? '#86efac' : cond.status === 'False' ? '#fca5a5' : '#94a3b8',
-                  flexShrink: 0,
-                  fontFamily: 'monospace',
-                }}>
-                  {cond.status === 'True' ? '✓' : cond.status === 'False' ? '✗' : '?'}
-                </span>
-                <div>
-                  <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{cond.type}</span>
-                  {cond.message && (
-                    <span style={{ color: '#94a3b8', marginLeft: '0.4rem' }}>— {cond.message}</span>
-                  )}
-                  {cond.lastTransitionTime && (
-                    <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: '0.1rem' }}>
-                      {formatTimestamp(cond.lastTransitionTime)}
+      {/* #341/#529: Kubernetes conditions panel with summary header, reason field, and sorted order */}
+      {isPromotionStep && stepDetail?.conditions && stepDetail.conditions.length > 0 && (() => {
+        const sorted = sortConditions(stepDetail.conditions)
+        const { healthy, total } = conditionsSummary(stepDetail.conditions)
+        const allHealthy = healthy === total
+        return (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+              <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>
+                Conditions
+              </h4>
+              {/* #529: Summary header */}
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  color: allHealthy ? '#86efac' : '#fca5a5',
+                  fontWeight: 600,
+                }}
+                data-testid="conditions-summary"
+              >
+                {healthy}/{total} healthy
+              </span>
+            </div>
+            <div style={{
+              background: '#0f172a',
+              border: '1px solid #1e293b',
+              borderRadius: '4px',
+              padding: '0.4rem 0.6rem',
+            }}>
+              {sorted.map((cond, i) => {
+                const isHealthy = isHealthyCondition(cond.type, cond.status)
+                const label = conditionStatusLabel(cond.type, cond.status)
+                return (
+                  <div key={i} style={{
+                    display: 'flex',
+                    gap: '0.5rem',
+                    alignItems: 'flex-start',
+                    fontSize: '0.75rem',
+                    marginBottom: i < sorted.length - 1 ? '0.3rem' : 0,
+                  }}>
+                    <span style={{
+                      color: isHealthy ? '#86efac' : cond.status === 'Unknown' ? '#94a3b8' : '#fca5a5',
+                      flexShrink: 0,
+                      fontFamily: 'monospace',
+                    }}>
+                      {label}
+                    </span>
+                    <div>
+                      <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{cond.type}</span>
+                      {/* #529: Show reason field for non-True conditions */}
+                      {!isHealthy && (cond as { reason?: string }).reason && (
+                        <span style={{
+                          color: '#f87171',
+                          marginLeft: '0.4rem',
+                          fontFamily: 'monospace',
+                          fontSize: '0.7rem',
+                        }}>
+                          [{(cond as { reason?: string }).reason}]
+                        </span>
+                      )}
+                      {cond.message && (
+                        <span style={{ color: '#94a3b8', marginLeft: '0.4rem' }}>— {cond.message}</span>
+                      )}
+                      {cond.lastTransitionTime && (
+                        <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: '0.1rem' }}>
+                          {formatTimestamp(cond.lastTransitionTime)}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
-            ))}
+                  </div>
+                )
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
