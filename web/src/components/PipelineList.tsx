@@ -285,7 +285,15 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                     PAUSED
                   </span>
                 )}
-                {p.phase && <HealthChip state={p.paused ? 'Paused' : p.phase} size="sm" />}
+                {p.phase && (
+                  // #523: pipelines with phase "Unknown" have no active promotion — show
+                  // "Idle" as a more descriptive label than "Unknown" to users.
+                  <HealthChip
+                    state={p.paused ? 'Paused' : p.phase}
+                    label={p.paused ? undefined : p.phase === 'Unknown' ? 'Idle' : undefined}
+                    size="sm"
+                  />
+                )}
               </div>
             </div>
 
