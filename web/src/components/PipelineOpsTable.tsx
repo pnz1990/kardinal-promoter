@@ -7,7 +7,7 @@
 
 import { useState, useMemo } from 'react'
 import type { Pipeline } from '../types'
-import { HealthChip } from './HealthChip'
+import { HealthChip, pipelinePhaseLabel } from './HealthChip'
 
 type SortColumn =
   | 'name'
@@ -305,7 +305,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
 
                   {/* Status */}
                   <td style={CELL}>
-                    <HealthChip state={p.paused ? 'Paused' : p.phase} size="sm" />
+                    <HealthChip state={p.paused ? 'Paused' : pipelinePhaseLabel(p)} size="sm" />
                   </td>
 
                   {/* Blockers */}

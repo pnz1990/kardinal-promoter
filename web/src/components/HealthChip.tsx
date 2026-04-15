@@ -53,6 +53,37 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
   }
 }
 
+/**
+ * #523: pipelinePhaseLabel translates the backend Pipeline.phase into a
+ * display-friendly string for the sidebar chip.
+ *
+ * The backend DerivePhase() returns "Unknown" as the default (non-Ready,
+ * non-Degraded) state, which renders as "Unknown — Unknown" in the chip
+ * and confuses users. This function provides context-aware translation:
+ *
+ * - "Unknown" + no active bundle/environmentStates → "Idle"
+ * - "Unknown" + environmentStates present (active bundle) → "Promoting"
+ * - All other phases → pass through unchanged
+ */
+export function pipelinePhaseLabel(pipeline: {
+  phase: string
+  environmentCount?: number
+  environmentStates?: Record<string, string>
+  activeBundleName?: string
+}): string {
+  if (pipeline.phase !== 'Unknown') return pipeline.phase
+
+  // Any environmentStates means there's an active bundle — show "Promoting"
+  const hasActiveBundleData = pipeline.environmentStates &&
+    Object.keys(pipeline.environmentStates).length > 0
+  if (hasActiveBundleData) return 'Promoting'
+
+  // active bundle name also indicates activity
+  if (pipeline.activeBundleName) return 'Promoting'
+
+  return 'Idle'
+}
+
 /** Returns the background and text colors for a given HealthState. */
 export function healthChipColors(state: HealthState): { bg: string; text: string; border: string } {
   switch (state) {

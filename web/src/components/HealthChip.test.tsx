@@ -17,6 +17,7 @@ import {
   kardinalStateToHealth,
   healthChipColors,
   HealthChip,
+  pipelinePhaseLabel,
   type HealthState,
 } from './HealthChip'
 
@@ -135,5 +136,53 @@ describe('HealthChip component', () => {
     const { getByLabelText } = render(<HealthChip state="Block" nodeType="PolicyGate" />)
     // aria-label should say "Error" health state
     expect(getByLabelText('Block — Error')).toBeInTheDocument()
+  })
+})
+
+// ─── pipelinePhaseLabel (#523) ────────────────────────────────────────────────
+
+describe('pipelinePhaseLabel (#523)', () => {
+  it('passes through non-Unknown phases unchanged', () => {
+    expect(pipelinePhaseLabel({ phase: 'Ready', environmentCount: 3 })).toBe('Ready')
+    expect(pipelinePhaseLabel({ phase: 'Degraded', environmentCount: 3 })).toBe('Degraded')
+    expect(pipelinePhaseLabel({ phase: 'Initializing', environmentCount: 0 })).toBe('Initializing')
+  })
+
+  it('maps Unknown + no active bundle + no environmentStates → Idle', () => {
+    expect(pipelinePhaseLabel({ phase: 'Unknown', environmentCount: 3 })).toBe('Idle')
+  })
+
+  it('maps Unknown + empty environmentStates → Idle', () => {
+    expect(pipelinePhaseLabel({
+      phase: 'Unknown',
+      environmentCount: 3,
+      environmentStates: {},
+    })).toBe('Idle')
+  })
+
+  it('maps Unknown + environmentStates with Promoting → Promoting', () => {
+    expect(pipelinePhaseLabel({
+      phase: 'Unknown',
+      environmentCount: 3,
+      environmentStates: { test: 'Verified', uat: 'Promoting', prod: 'Pending' },
+    })).toBe('Promoting')
+  })
+
+  it('maps Unknown + environmentStates all Verified → Ready (override)', () => {
+    // If backend says Unknown but all envs are Verified, show Promoting
+    // (transient state before reconciler updates phase)
+    expect(pipelinePhaseLabel({
+      phase: 'Unknown',
+      environmentCount: 3,
+      environmentStates: { test: 'Verified', uat: 'Verified', prod: 'Verified' },
+    })).toBe('Promoting')  // has active bundle, so not Idle
+  })
+
+  it('maps Unknown + environmentStates with WaitingForMerge → Promoting', () => {
+    expect(pipelinePhaseLabel({
+      phase: 'Unknown',
+      environmentCount: 3,
+      environmentStates: { test: 'Verified', prod: 'WaitingForMerge' },
+    })).toBe('Promoting')
   })
 })

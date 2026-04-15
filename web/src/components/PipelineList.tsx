@@ -4,7 +4,7 @@
 // #345: debounced search/filter input at the top.
 import { useState, useCallback, useRef } from 'react'
 import type { Pipeline } from '../types'
-import { HealthChip } from './HealthChip'
+import { HealthChip, pipelinePhaseLabel } from './HealthChip'
 
 interface Props {
   pipelines: Pipeline[]
@@ -285,7 +285,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                     PAUSED
                   </span>
                 )}
-                {p.phase && <HealthChip state={p.paused ? 'Paused' : p.phase} size="sm" />}
+                {p.phase && <HealthChip state={p.paused ? 'Paused' : pipelinePhaseLabel(p)} size="sm" />}
               </div>
             </div>
 
