@@ -1,0 +1,70 @@
+/otherness.run.bounded
+
+AGENT_NAME=UI Overhaul Agent
+AGENT_ID=STANDALONE-UI
+SCOPE=Fix all UI bugs, build regression prevention infrastructure, then implement UI enhancements — issues #521–#534 under epic #531
+ALLOWED_AREAS=area/ui
+ALLOWED_MILESTONES=
+ALLOWED_PACKAGES=web/src,web/test
+DENY_PACKAGES=cmd,pkg,api,config,hack,terraform,examples
+
+---
+
+## Context for this agent
+
+You are working on the Kardinal Promoter UI. Your entire scope is `web/` — the embedded React dashboard served by the controller at port 8082. You do not touch any Go code except `cmd/kardinal-controller/ui_api.go` when a new API endpoint is explicitly required by a filed issue.
+
+### What you must read before starting
+
+1. `web/src/App.tsx` — main app shell, routing, data fetching
+2. `web/src/components/` — all 16 components
+3. `web/src/types.ts` — all data types from the API
+4. `web/src/usePolling.ts` — polling hook
+5. `~/Projects/kro-ui/web/src/components/` — reference implementations to ADAPT (not copy verbatim). Key files: `HealthChip.tsx`, `ConditionsPanel.tsx`, `LiveDAG.tsx`, `DAGTooltip.tsx`, `EventsPanel.tsx`, `EventRow.tsx`, `AnomalyBanner.tsx`, `ErrorsTab.tsx`
+6. `docs/aide/vision.md` — product context
+
+### Issue priority order — work in this exact sequence
+
+#### PHASE 1: Critical bugs (fix first, these break the product)
+
+**#525** — Empty DAG. The DAG never renders for most pipelines. Clicking any pipeline shows "No active promotion found" and no visualization. This is the product's core value prop. Investigate why the DAG component does not render when there is no active Bundle — the pipeline topology (environments + edges from `Pipeline.spec`) should render regardless of Bundle state. The DAG should show the static pipeline structure as a baseline; an active Bundle's position is an overlay on top, not a prerequisite.
+
+**#523** — `Unknown — Unknown` status chips. 3 of 4 pipelines show `Unknown — Unknown`. Only `kardinal-test-app` shows `Ready`. Trace where the secondary health status is derived and why it always returns Unknown.
+
+**#522** — `● Loading...` never clears. The loading indicator persists in the header even after data has loaded. The freshness timestamp (`● just now`) renders simultaneously alongside `● Loading...`. Trace `usePolling.ts` and `App.tsx` — the loading state is not cleared after first successful fetch.
+
+**#524** — Policy gates collapsed when blocked. When `blockedCount > 0`, the policy gates section must auto-expand. Currently collapsed by default even when 10/12 gates are BLOCKED. Also verify the expand/collapse click handler is actually wired.
+
+**#521** — DAG layout memoization. `computeLayout(nodes, edges)` is called unconditionally on every render. Wrap in `useMemo` keyed on topology (node IDs + edge pairs), not on node states. Layout must only re-run when the graph topology changes.
+
+#### PHASE 2: Regression prevention (build before enhancements — this is non-negotiable)
+
+**#532** — Replace inline styles with CSS classes. Every state-driven visual property must become a CSS class. Start with `HealthChip.tsx` (all 7 states → `health-chip--{state}` classes), then `DAGView.tsx` node states, then `PipelineLaneView.tsx`, then `BundleTimeline.tsx`. Update existing unit tests to assert CSS classes, not hex color strings.
+
+**#533** — Vitest unit tests for 8 untested components: `DAGView`, `NodeDetail`, `PolicyGatesPanel`, `PipelineList`, `BlockedBanner`, `BundleDiffPanel`, `BundleTimeline`, `PipelineLaneView`. Every health/status state, every `data-testid`, every interactive handler, every empty/loading/error branch. Use `userEvent` not `fireEvent`.
+
+**#534** — Playwright E2E infrastructure. Create `web/test/e2e/` with Playwright config (based on `~/Projects/kro-ui/web/test/e2e/playwright.config.ts` as reference). Build a mock API server serving deterministic fixtures (no real cluster required). Implement 8 baseline journeys: 001 pipeline-list, 002 dag-node-click, 003 health-chip-states, 004 policy-gates, 005 bundle-timeline, 006 pause-resume, 007 empty-state, 008 loading-state. Add `make ui-test-e2e` to Makefile. Wire to `.github/workflows/ci.yml`.
+
+#### PHASE 3: Enhancements (implement after Phase 2 is green)
+
+Work through these in order. Each must have passing tests (Phase 2 infrastructure) before the PR is opened.
+
+**#529** — Conditions summary header. Add `{trueCount}/{total} conditions healthy` header. Display the `reason` field for non-True conditions. Implement `isHealthyCondition(type, status)` helper for inverted conditions. Sort: failing first.
+
+**#530** — Empty state onboarding. Replace the bare empty state in `App.tsx` with an onboarding card: one-sentence explanation, copyable `kubectl apply` command (extract `CopyButton` from `NodeDetail.tsx` into its own component), docs link, watching spinner.
+
+**#526** — Portal tooltips. Replace `<title>` SVG tooltips with styled React portal tooltips. 150ms debounced hide, viewport clamping. PromotionStep: env name, state, timer, PR link. PolicyGate: CEL expression with syntax highlighting, last evaluated, status.
+
+**#527** — Events stream in NodeDetail. Add `GET /api/v1/steps/{namespace}/{name}/events` endpoint reading `corev1.EventList`. Add `EventsPanel` section to NodeDetail with grouped events, `{count}x` for repeats, relative timestamps.
+
+**#528** — Cross-environment error aggregation. Add `PromotionErrorsPanel` rendered at top of pipeline detail when `failedStepCount > 0`. Group failures by `(stepType, message-prefix)`, show affected environment count, link each to NodeDetail. Adapt kro-ui `ErrorsTab.groupErrorPatterns()` logic.
+
+### Hard rules for this agent
+
+- **Tests before PR.** Every issue must have tests. `npm test` and `npm run lint` must exit 0 before opening a PR. `npm run test:e2e` must exit 0 for Phase 2+ PRs.
+- **One issue = one PR.** Do not batch multiple issues into one PR. Each issue gets its own branch, its own PR, its own CI run.
+- **kro-ui is a reference, not a copy.** Read it for patterns and adapt to kardinal's domain. Do not copy component files verbatim.
+- **Do not touch Go packages** listed in DENY_PACKAGES. The only Go exception is `cmd/kardinal-controller/ui_api.go` for issue #527 (events endpoint), and only after the frontend is ready to consume it.
+- **Phase 2 before Phase 3.** Do not open any Phase 3 PR until all Phase 2 PRs are merged and CI is green.
+- **Browser extension verification required.** Before opening any PR in Phase 1 or Phase 3, start the dev server safely (see standalone.md Phase 2e dev server pattern), navigate to `http://localhost:8082/ui/` using the browser extension, take `browser_screenshot`, verify the change looks correct, kill the server, include the screenshot in the PR body.
+- **No `npm run dev &` without PID capture and trap.** See standalone.md Phase 2e for the correct safe dev server pattern.
