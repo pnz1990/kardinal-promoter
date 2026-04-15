@@ -15,6 +15,7 @@ import { PipelineLaneView } from './components/PipelineLaneView'
 import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
+import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -598,6 +599,14 @@ export function App() {
 
             {/* #332: Pipeline lane view — horizontal stage cards (Kargo-parity).
                 Shows each PromotionStep environment as a card with state chip, bundle, and actions. */}
+            {/* #528: Cross-environment error aggregation — shown above lane view when steps fail */}
+            <PromotionErrorsPanel
+              steps={activeSteps}
+              onSelectEnvironment={(env) => {
+                const node = graph?.nodes.find(n => n.environment === env && n.type === 'PromotionStep')
+                if (node) setSelectedNode(node)
+              }}
+            />
             <PipelineLaneView
               nodes={graph?.nodes ?? []}
               selectedNode={selectedNode}
