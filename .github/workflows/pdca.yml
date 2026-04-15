@@ -24,6 +24,9 @@ jobs:
     name: PDCA validation (${{ github.event.inputs.scenario || 'all' }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      issues: write
+      contents: read
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -109,8 +112,13 @@ jobs:
           kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f examples/quickstart/pipeline.yaml
           kubectl apply -f examples/quickstart/policy-gates.yaml
+          # Use KARDINAL_DEMO_PAT if available (required for cross-repo push to kardinal-demo).
+          # Falls back to GITHUB_TOKEN which works for read-only scenarios (S3/S4/S6).
+          # See issue #558 for why GITHUB_TOKEN alone cannot push to pnz1990/kardinal-demo.
+          DEMO_TOKEN="${{ secrets.KARDINAL_DEMO_PAT }}"
+          if [ -z "$DEMO_TOKEN" ]; then DEMO_TOKEN="${{ secrets.GITHUB_TOKEN }}"; fi
           kubectl create secret generic github-token \
-            --from-literal=token=${{ secrets.GITHUB_TOKEN }} \
+            --from-literal=token="$DEMO_TOKEN" \
             --dry-run=client -o yaml | kubectl apply -f -
           # Give the controller a moment to process the new resources
           sleep 5
@@ -130,8 +138,8 @@ jobs:
           # Scenario 1: Happy path promotion
           echo "=== Scenario 1: Happy path promotion ==="
           kardinal create bundle kardinal-test-app --image "$TEST_IMAGE" || true
-          # Wait up to 90s for promotion to start — real cluster takes longer than fake client
-          for i in $(seq 1 6); do
+          # Wait up to 3 minutes for promotion to start — real cluster takes longer than fake client
+          for i in $(seq 1 12); do
             sleep 15
             OUTPUT=$(kardinal get pipelines 2>&1 || true)
             if echo "$OUTPUT" | grep -q "Verified\|Promoting\|WaitingForMerge"; then break; fi
@@ -144,6 +152,11 @@ jobs:
             RESULTS="$RESULTS\n✅ S1: Happy path — Bundle created, promotion started"
           else
             echo "S1: FAIL — output: $OUTPUT"
+            # Dump controller logs to help diagnose step failures
+            echo "--- Controller logs (last 50 lines) ---"
+            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=50 2>/dev/null || true
+            echo "--- PromotionStep status ---"
+            kubectl get promotionstep -A -o wide 2>/dev/null || true
             FAIL=$((FAIL+1))
             RESULTS="$RESULTS\n❌ S1: Happy path — Expected Verified/Promoting; got: $OUTPUT"
           fi
