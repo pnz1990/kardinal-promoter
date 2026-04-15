@@ -95,6 +95,7 @@ jobs:
             --set image.tag=dev \
             --set image.pullPolicy=Never \
             --set validatingAdmissionPolicy.enabled=false \
+            --set krocodile.enabled=false \
             --wait --timeout 300s
           kubectl get pods -n kardinal-system
 
