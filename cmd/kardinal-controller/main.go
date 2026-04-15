@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -154,6 +155,10 @@ func main() {
 		HealthProbeBindAddress: healthProbeBindAddress,
 		LeaderElection:         leaderElect,
 		LeaderElectionID:       "kardinal-promoter-leader",
+		// GracefulShutdownTimeout allows in-flight reconcile loops to complete
+		// before the controller exits. Set to 30s — half the pod's
+		// terminationGracePeriodSeconds (60s) to leave room for cleanup. (#574)
+		GracefulShutdownTimeout: ptr(30 * time.Second),
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
@@ -430,3 +435,6 @@ func splitCSV(s string) []string {
 	}
 	return result
 }
+
+// ptr returns a pointer to v — used for optional ctrl.Options fields. (#574)
+func ptr[T any](v T) *T { return &v }

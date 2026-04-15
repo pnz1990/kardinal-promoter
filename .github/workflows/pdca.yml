@@ -89,12 +89,17 @@ jobs:
           # under a different release name ("kardinal"), Helm rejects the install because
           # the existing namespace has ownership labels pointing to "kardinal-promoter".
           kubectl apply -f config/crd/bases/
+          # IMPORTANT: use "kardinal-promoter" as the release name to match setup-e2e-env.sh.
+          # setup-e2e-env.sh creates the ScheduleClock "kardinal-clock" with annotation
+          # meta.helm.sh/release-name=kardinal-promoter. Using a different release name
+          # ("kardinal") causes a Helm ownership conflict on the second upgrade.
           helm upgrade --install kardinal-promoter chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
             --set image.repository=ghcr.io/pnz1990/kardinal-promoter \
             --set image.tag=dev \
             --set image.pullPolicy=Never \
             --set validatingAdmissionPolicy.enabled=false \
+            --set krocodile.enabled=false \
             --wait --timeout 300s
           kubectl get pods -n kardinal-system
 
