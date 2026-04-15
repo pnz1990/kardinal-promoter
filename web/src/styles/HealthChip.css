@@ -1,0 +1,80 @@
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * HealthChip.css — CSS classes for the HealthChip component (#532).
+ * Replaces inline style objects so tests can assert CSS classes instead
+ * of hex color strings, and theming becomes possible.
+ */
+
+/* ── Base chip ──────────────────────────────────────────────────────────── */
+.health-chip {
+  display: inline-block;
+  border-radius: 9999px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.4;
+  border: 1px solid transparent;
+}
+
+/* ── Size variants ───────────────────────────────────────────────────────── */
+.health-chip--sm {
+  font-size: 0.65rem;
+  padding: 1px 5px;
+}
+
+.health-chip--md {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+}
+
+/* ── State variants ──────────────────────────────────────────────────────── */
+
+/* Ready — green */
+.health-chip--ready {
+  background: #14532d;
+  color: #4ade80;
+  border-color: #22c55e;
+}
+
+/* Reconciling — amber */
+.health-chip--reconciling {
+  background: #78350f;
+  color: #fbbf24;
+  border-color: #f59e0b;
+}
+
+/* Error — red */
+.health-chip--error {
+  background: #7f1d1d;
+  color: #f87171;
+  border-color: #ef4444;
+}
+
+/* Pending — slate */
+.health-chip--pending {
+  background: #1e293b;
+  color: #94a3b8;
+  border-color: #475569;
+}
+
+/* Degraded — orange */
+.health-chip--degraded {
+  background: #7c2d12;
+  color: #fb923c;
+  border-color: #f97316;
+}
+
+/* Paused — indigo */
+.health-chip--paused {
+  background: #1e1b4b;
+  color: #a5b4fc;
+  border-color: #6366f1;
+}
+
+/* Unknown — gray (default) */
+.health-chip--unknown {
+  background: #1e293b;
+  color: #64748b;
+  border-color: #334155;
+}

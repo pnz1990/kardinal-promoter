@@ -16,12 +16,12 @@ GOPROXY          ?= https://proxy.golang.org
 # Docker image
 IMG ?= kardinal-promoter:dev
 
-.PHONY: all build build-controller build-cli ui ui-test test test-integration lint vet generate manifests \
+.PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration lint vet generate manifests \
         install uninstall docker-build helm-lint \
         install-krocodile \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
-        kind-up kind-down tools help
+        kind-up kind-down tools help lint-local
 
 all: generate build test lint
 
@@ -41,6 +41,9 @@ ui: ## Build the embedded React UI (requires Node.js and npm)
 ui-test: ## Run React component unit tests (vitest, requires Node.js and npm)
 	cd web && npm ci && npm test
 
+ui-test-e2e: ## Run Playwright E2E tests (requires Node.js, npm, and a built dist/)
+	cd web && npm ci && npm run build && npx playwright install chromium --with-deps && npm run test:e2e
+
 ## Test
 test:
 	$(GO) test ./... -race -count=1 -timeout 120s
@@ -55,6 +58,17 @@ test-cover:
 ## Lint / Vet
 vet:
 	$(GO) vet ./...
+
+## lint-local: run go vet + staticcheck locally (faster than golangci-lint, catches QF1008-class issues)
+## Install staticcheck: go install honnef.co/go/tools/cmd/staticcheck@latest
+lint-local:
+	$(GO) vet ./...
+	@if command -v staticcheck >/dev/null 2>&1; then \
+		staticcheck ./...; \
+	else \
+		echo "staticcheck not found — install with: go install honnef.co/go/tools/cmd/staticcheck@latest"; \
+		exit 1; \
+	fi
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run ./...

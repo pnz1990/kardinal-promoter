@@ -7,7 +7,9 @@
 //
 // #338: Shift-click selects a second bundle for comparison.
 // When two bundles are selected, a "Compare" button appears.
+// #532: Phase-driven visual properties use CSS classes (bundle-chip--{phase}).
 import type { Bundle } from '../types'
+import '../styles/BundleTimeline.css'
 
 interface Props {
   /** Bundles for this pipeline — managed by the parent (App). */
@@ -24,8 +26,13 @@ interface Props {
   onCompare?: () => void
 }
 
-/** Color for a bundle phase. */
-function phaseColor(phase: string): string {
+/** CSS class modifier for a given bundle phase. */
+function phaseCSSClass(phase: string): string {
+  return `bundle-chip--${phase.toLowerCase()}`
+}
+
+/** Accent color for glow/dot — kept for inline uses (boxShadow, dot fill). */
+function phaseAccentColor(phase: string): string {
   switch (phase) {
     case 'Promoting': return '#6366f1'
     case 'Verified':  return '#22c55e'
@@ -119,7 +126,15 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
         {sorted.map(b => {
           const isSelected = b.name === selectedBundle
           const isCompare = b.name === compareBundle
-          const color = phaseColor(b.phase)
+          const accentColor = phaseAccentColor(b.phase)
+          // #532: CSS classes for state-driven styling
+          const chipClass = [
+            'bundle-chip',
+            phaseCSSClass(b.phase),
+            isSelected ? 'bundle-chip--selected' : '',
+            isCompare ? 'bundle-chip--compare' : '',
+          ].filter(Boolean).join(' ')
+
           return (
             <button
               key={b.name}
@@ -132,16 +147,13 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
                 }
               }}
               title={`${b.name}: ${b.phase}${isCompare ? ' (comparison target)' : ''}${'\nShift-click to compare'}`}
+              className={chipClass}
+              data-bundle-phase={b.phase}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 gap: '2px',
-                padding: '0.3rem 0.5rem',
-                background: isCompare ? '#1e1b4b' : isSelected ? '#1e293b' : 'transparent',
-                border: `1px solid ${isCompare ? '#4338ca' : isSelected ? color : '#334155'}`,
-                borderRadius: '4px',
-                cursor: 'pointer',
                 minWidth: '56px',
                 outline: isCompare ? '1px solid #6366f1' : 'none',
               }}
@@ -149,8 +161,8 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Phase dot */}
               <div style={{
                 width: '8px', height: '8px', borderRadius: '50%',
-                background: color,
-                boxShadow: isSelected ? `0 0 6px ${color}` : 'none',
+                background: accentColor,
+                boxShadow: isSelected ? `0 0 6px ${accentColor}` : 'none',
               }} />
               {/* Short name */}
               <span style={{
@@ -164,7 +176,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Phase label */}
               <span style={{
                 fontSize: '0.75rem',
-                color,
+                color: accentColor,
               }}>
                 {b.phase === 'Superseded' ? 'Sup' : b.phase}
               </span>

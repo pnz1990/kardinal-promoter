@@ -11,10 +11,13 @@
 //
 // #333: CEL expression syntax highlighting — keywords=yellow, strings=green,
 //       identifiers=blue, operators=white, functions=cyan, comments=gray.
+//
+// #527: EventsPanel — K8s events stream fetched per step when node is selected.
 import { useState, useEffect, useCallback } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { api } from '../api/client'
+import EventsPanel, { type StepEvent } from './EventsPanel'
 
 interface Props {
   node: GraphNode | null
@@ -344,6 +347,8 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const [celError, setCelError] = useState<string | null>(null)
   // #330: tick counter to update elapsed timers every second while panel is open.
   const [, setTick] = useState(0)
+  // #527: Kubernetes events for the selected PromotionStep — fetched once on node selection.
+  const [stepEvents, setStepEvents] = useState<StepEvent[] | null>(null)
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
@@ -399,6 +404,25 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       .catch(() => setStepDetail(null))
       .finally(() => setStepLoading(false))
   }, [node?.id, isPromotionStep, steps, bundleName])
+
+  // #527: Fetch Kubernetes events for the selected PromotionStep.
+  // Uses stepDetail.name (the CRD resource name) and stepDetail.namespace.
+  // Fetched once on node selection; stale events are acceptable (debug aid).
+  useEffect(() => {
+    if (!isPromotionStep) {
+      setStepEvents(null)
+      return
+    }
+    const stepName = stepDetail?.name
+    const stepNs = stepDetail?.namespace ?? namespace ?? 'default'
+    if (!stepName) {
+      setStepEvents(null)
+      return
+    }
+    api.getStepEvents(stepNs, stepName)
+      .then(evs => setStepEvents(evs))
+      .catch(() => setStepEvents([]))
+  }, [isPromotionStep, stepDetail?.name, stepDetail?.namespace, namespace])
 
   /** Trigger a new promotion for this environment. */
   function handlePromote() {
@@ -703,12 +727,32 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         </div>
       )}
 
-      {/* #341: Kubernetes conditions panel — show condition history from step status */}
+      {/* #341/#529: Kubernetes conditions panel — show condition history from step status */}
       {isPromotionStep && stepDetail?.conditions && stepDetail.conditions.length > 0 && (
         <div style={{ marginBottom: '0.75rem' }}>
-          <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
-            Conditions
-          </h4>
+          {/* #529: Summary header — healthy count at a glance */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>
+              Conditions
+            </h4>
+            {(() => {
+              const total = stepDetail.conditions!.length
+              const trueCount = stepDetail.conditions!.filter(c => c.status === 'True').length
+              const allHealthy = trueCount === total
+              return (
+                <span
+                  data-testid="conditions-summary"
+                  style={{
+                    fontSize: '0.7rem',
+                    color: allHealthy ? '#86efac' : '#fca5a5',
+                    fontFamily: 'monospace',
+                  }}
+                >
+                  {trueCount}/{total} healthy
+                </span>
+              )
+            })()}
+          </div>
           <div style={{
             background: '#0f172a',
             border: '1px solid #1e293b',
@@ -732,6 +776,20 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 </span>
                 <div>
                   <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{cond.type}</span>
+                  {/* #529: reason field — CamelCase code for quick triage */}
+                  {cond.reason && (
+                    <span
+                      data-testid="condition-reason"
+                      style={{
+                        color: '#64748b',
+                        marginLeft: '0.4rem',
+                        fontFamily: 'monospace',
+                        fontSize: '0.7rem',
+                      }}
+                    >
+                      [{cond.reason}]
+                    </span>
+                  )}
                   {cond.message && (
                     <span style={{ color: '#94a3b8', marginLeft: '0.4rem' }}>— {cond.message}</span>
                   )}
@@ -741,10 +799,19 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                     </div>
                   )}
                 </div>
-              </div>
+               </div>
             ))}
           </div>
         </div>
+      )}
+
+      {/* #527: Kubernetes events stream — shown for PromotionStep nodes */}
+      {isPromotionStep && (
+        <EventsPanel
+          events={stepEvents}
+          stepName={stepDetail?.name}
+          namespace={stepDetail?.namespace ?? namespace ?? 'default'}
+        />
       )}
     </div>
   )

@@ -28,6 +28,7 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -48,6 +49,10 @@ type uiPipelineResponse struct {
 	// Keys are environment names, values are the promotion phase.
 	EnvironmentStates map[string]string `json:"environmentStates,omitempty"`
 
+	// #525: static pipeline topology from spec — rendered even when no Bundle is promoting.
+	// Each entry is one environment in pipeline order with its dependsOn edges.
+	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
+
 	// Operations table columns (#462): derived from active Bundle + steps + gates.
 	// BlockerCount is the number of PolicyGates with ready=false for the active bundle.
 	BlockerCount int `json:"blockerCount,omitempty"`
@@ -62,6 +67,18 @@ type uiPipelineResponse struct {
 	// CDLevel summarises how automated this pipeline is.
 	// "full-cd" = no manual gates, "mostly-cd" = 1–2 gates, "manual" = 3+ gates.
 	CDLevel string `json:"cdLevel,omitempty"`
+}
+
+// uiEnvironmentNode is the static topology shape for one environment in a Pipeline.
+// Used by the frontend to render the DAG when no active Bundle is promoting (#525).
+type uiEnvironmentNode struct {
+	// Name is the environment name (e.g. "test", "uat", "prod").
+	Name string `json:"name"`
+	// DependsOn is the list of environment names this one depends on.
+	// Empty means this environment starts at the root of the DAG.
+	DependsOn []string `json:"dependsOn,omitempty"`
+	// Approval is "auto" or "pr-review" — shown as a badge on the node.
+	Approval string `json:"approval,omitempty"`
 }
 
 // uiBundleResponse is the JSON shape for a Bundle in the UI API.
@@ -140,6 +157,7 @@ type uiStepResponse struct {
 type uiCondition struct {
 	Type               string `json:"type"`
 	Status             string `json:"status"`
+	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
 }
@@ -187,6 +205,7 @@ func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/pause", s.handlePause)
 	mux.HandleFunc("/api/v1/ui/resume", s.handleResume)
 	mux.HandleFunc("/api/v1/ui/validate-cel", s.handleValidateCEL)
+	mux.HandleFunc("/api/v1/ui/steps/", s.handleStepsSubpath)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -297,6 +316,20 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			EnvironmentCount: len(p.Spec.Environments),
 			Paused:           p.Spec.Paused,
 			CDLevel:          pipelineCDLevel(&p),
+		}
+		// #525: build static environment topology from Pipeline.Spec so the UI can render
+		// the DAG even when no Bundle is actively promoting.
+		if len(p.Spec.Environments) > 0 {
+			topo := make([]uiEnvironmentNode, 0, len(p.Spec.Environments))
+			for _, env := range p.Spec.Environments {
+				node := uiEnvironmentNode{
+					Name:      env.Name,
+					DependsOn: env.DependsOn,
+					Approval:  env.Approval,
+				}
+				topo = append(topo, node)
+			}
+			resp.EnvironmentTopology = topo
 		}
 		if ab := activeBundles[key]; ab != nil {
 			resp.ActiveBundleName = ab.name
@@ -1171,6 +1204,7 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 }
 
 // buildUIConditions converts Kubernetes metav1.Condition slice to UI-friendly shape (#341).
+// Sorted: failing/unknown conditions first, healthy (True) conditions last (#529).
 func buildUIConditions(conditions []metav1.Condition) []uiCondition {
 	if len(conditions) == 0 {
 		return nil
@@ -1180,6 +1214,7 @@ func buildUIConditions(conditions []metav1.Condition) []uiCondition {
 		uc := uiCondition{
 			Type:    c.Type,
 			Status:  string(c.Status),
+			Reason:  c.Reason,
 			Message: c.Message,
 		}
 		if !c.LastTransitionTime.IsZero() {
@@ -1187,5 +1222,125 @@ func buildUIConditions(conditions []metav1.Condition) []uiCondition {
 		}
 		result = append(result, uc)
 	}
+	// Sort: False/Unknown conditions first, True last (#529).
+	sort.Slice(result, func(i, j int) bool {
+		si := conditionSortKey(result[i].Status)
+		sj := conditionSortKey(result[j].Status)
+		if si != sj {
+			return si < sj
+		}
+		return result[i].Type < result[j].Type
+	})
 	return result
+}
+
+// conditionSortKey returns a sort priority: False=0, Unknown=1, True=2.
+func conditionSortKey(status string) int {
+	switch status {
+	case "False":
+		return 0
+	case "Unknown":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// uiEventResponse is the JSON shape for a Kubernetes event in the UI API (#527).
+type uiEventResponse struct {
+	Type           string `json:"type"`           // Normal or Warning
+	Reason         string `json:"reason"`         // short CamelCase reason
+	Message        string `json:"message"`        // human-readable event message
+	Count          int32  `json:"count"`          // number of times event occurred
+	FirstTimestamp string `json:"firstTimestamp"` // RFC3339 of first occurrence
+	LastTimestamp  string `json:"lastTimestamp"`  // RFC3339 of most recent occurrence
+}
+
+// handleStepsSubpath routes /api/v1/ui/steps/{namespace}/{name}/events (#527).
+func (s *uiAPIServer) handleStepsSubpath(w http.ResponseWriter, r *http.Request) {
+	// Path: /api/v1/ui/steps/{namespace}/{name}/events
+	trimmed := strings.TrimPrefix(r.URL.Path, "/api/v1/ui/steps/")
+	parts := strings.SplitN(trimmed, "/", 3)
+	if len(parts) != 3 || parts[2] != "events" {
+		http.NotFound(w, r)
+		return
+	}
+	namespace := parts[0]
+	stepName := parts[1]
+	if namespace == "" || stepName == "" {
+		http.Error(w, "namespace and name required", http.StatusBadRequest)
+		return
+	}
+	s.handleStepEvents(w, r, namespace, stepName)
+}
+
+// handleStepEvents returns the last 20 Kubernetes events for the named PromotionStep,
+// sorted by lastTimestamp descending (newest first) (#527).
+func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, namespace, stepName string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var eventList corev1.EventList
+	if err := s.client.List(r.Context(), &eventList,
+		client.InNamespace(namespace),
+		client.MatchingFields{"involvedObject.name": stepName},
+	); err != nil {
+		// Graceful fallback: field-indexed listing may not be supported in all setups.
+		// Re-try with a full list and filter client-side.
+		var fallbackList corev1.EventList
+		if ferr := s.client.List(r.Context(), &fallbackList, client.InNamespace(namespace)); ferr != nil {
+			s.log.Warn().Err(ferr).Str("step", stepName).Msg("ui: failed to list events")
+			writeJSON(w, []uiEventResponse{})
+			return
+		}
+		for _, ev := range fallbackList.Items {
+			if ev.InvolvedObject.Name == stepName {
+				eventList.Items = append(eventList.Items, ev)
+			}
+		}
+	}
+
+	// Filter to only events where involvedObject.name matches (field index may not filter).
+	filtered := make([]corev1.Event, 0, len(eventList.Items))
+	for _, ev := range eventList.Items {
+		if ev.InvolvedObject.Name == stepName {
+			filtered = append(filtered, ev)
+		}
+	}
+
+	// Sort by lastTimestamp descending (newest first).
+	sort.Slice(filtered, func(i, j int) bool {
+		ti := filtered[i].LastTimestamp.Time
+		tj := filtered[j].LastTimestamp.Time
+		if ti.Equal(tj) {
+			return filtered[i].EventTime.After(filtered[j].EventTime.Time)
+		}
+		return ti.After(tj)
+	})
+
+	// Cap at 20 events.
+	const maxEvents = 20
+	if len(filtered) > maxEvents {
+		filtered = filtered[:maxEvents]
+	}
+
+	result := make([]uiEventResponse, 0, len(filtered))
+	for _, ev := range filtered {
+		r := uiEventResponse{
+			Type:    ev.Type,
+			Reason:  ev.Reason,
+			Message: ev.Message,
+			Count:   ev.Count,
+		}
+		if !ev.FirstTimestamp.IsZero() {
+			r.FirstTimestamp = ev.FirstTimestamp.UTC().Format(time.RFC3339)
+		}
+		if !ev.LastTimestamp.IsZero() {
+			r.LastTimestamp = ev.LastTimestamp.UTC().Format(time.RFC3339)
+		}
+		result = append(result, r)
+	}
+	writeJSON(w, result)
 }

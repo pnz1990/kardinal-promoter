@@ -1,6 +1,7 @@
 // api/client.ts — Typed fetch wrappers for the kardinal UI backend API.
 
 import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate } from '../types'
+import type { StepEvent } from '../components/EventsPanel'
 
 const BASE = '/api/v1/ui'
 
@@ -31,6 +32,9 @@ export const api = {
   getGraph: (bundleName: string) => get<GraphResponse>(`/bundles/${bundleName}/graph`),
   getSteps: (bundleName: string) => get<PromotionStep[]>(`/bundles/${bundleName}/steps`),
   listGates: () => get<PolicyGate[]>('/gates'),
+  /** Kubernetes events for a PromotionStep node — newest-first, capped at 20 (#527). */
+  getStepEvents: (namespace: string, stepName: string) =>
+    get<StepEvent[]>(`/steps/${namespace}/${stepName}/events`),
   /** Trigger a new promotion for the given pipeline+environment (UI promote button). */
   promote: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ bundle: string; message: string }>('/promote', { pipeline, environment, namespace }),
