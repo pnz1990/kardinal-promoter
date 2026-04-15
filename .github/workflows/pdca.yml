@@ -89,7 +89,11 @@ jobs:
           # locally loaded image (ghcr.io/pnz1990/kardinal-promoter:dev).
           # pullPolicy=Never ensures kind never tries to pull from ghcr.io for the dev tag.
           kubectl apply -f config/crd/bases/
-          helm upgrade --install kardinal chart/kardinal-promoter \
+          # IMPORTANT: use "kardinal-promoter" as the release name to match setup-e2e-env.sh.
+          # setup-e2e-env.sh creates the ScheduleClock "kardinal-clock" with annotation
+          # meta.helm.sh/release-name=kardinal-promoter. Using a different release name
+          # ("kardinal") causes a Helm ownership conflict on the second upgrade.
+          helm upgrade --install kardinal-promoter chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
             --set image.repository=ghcr.io/pnz1990/kardinal-promoter \
             --set image.tag=dev \
