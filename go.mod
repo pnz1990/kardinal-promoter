@@ -5,6 +5,7 @@ go 1.25.0
 toolchain go1.25.9
 
 require (
+	github.com/go-git/go-git/v5 v5.13.2
 	github.com/google/cel-go v0.28.0
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
@@ -34,7 +35,6 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.6.2 // indirect
-	github.com/go-git/go-git/v5 v5.13.2 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
