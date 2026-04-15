@@ -1,0 +1,68 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+*/}}
+{{/*
+NetworkPolicy for the kardinal-promoter controller.
+
+When enabled, the controller:
+  Ingress: accepts only connections from the Kubernetes API server
+           (kubelet health probes on port 8081, metrics on port 8080).
+  Egress:
+    - Kubernetes API server (HTTPS :443 and :6443) — required for CRD reconciliation
+    - DNS (UDP/TCP :53) — required for SCM provider hostname resolution
+    - HTTPS (:443) — required for GitHub/GitLab/Forgejo API calls and git push
+    - Any pod in kro-system namespace — required to communicate with krocodile
+
+Disabled by default — requires a CNI that supports NetworkPolicy (Calico, Cilium, etc.).
+Enable with: --set networkPolicy.enabled=true
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kardinal-promoter.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow kubelet health probes (liveness/readiness on port 8081)
+    - ports:
+        - port: 8081
+          protocol: TCP
+    # Allow Prometheus metrics scraping (port 8080)
+    - ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # DNS resolution (SCM provider hostnames, registry hostnames)
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Kubernetes API server (CRD reconciliation, leader election)
+    - ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP
+    # SCM providers (GitHub, GitLab, Forgejo) and container registry APIs
+    # All use HTTPS on standard port 443 (already covered above).
+    # kustomize binary fetch and go-git HTTPS clone also use port 443.
+    # Leaving explicit for documentation clarity.
+    - ports:
+        - port: 443
+          protocol: TCP
+    # krocodile Graph controller (kro-system namespace)
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kro-system
+{{- end }}

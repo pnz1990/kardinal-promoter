@@ -117,12 +117,19 @@ krocodile:
   # Namespace where the Graph controller runs
   namespace: "kro-system"
 
-# -- ValidatingAdmissionPolicy for PolicyGate CEL expression validation.
-# Requires Kubernetes 1.28+. When enabled, prevents PolicyGates with empty
-# spec.expression from being created or updated (issue #317).
-# Full CEL syntax validation requires a validating webhook.
+# -- ValidatingAdmissionPolicy for PolicyGate validation.
+# Requires Kubernetes 1.28+. When enabled, validates PolicyGate spec.expression
+# (non-empty) and spec.recheckInterval (Go duration format) at admission time.
+# Disable for kind/k8s < 1.28 or when using --validate=false.
 validatingAdmissionPolicy:
   enabled: true
+
+# -- NetworkPolicy for the controller namespace.
+# When enabled, restricts controller ingress (Kubernetes API server only)
+# and egress (Kubernetes API server + HTTPS for SCM providers + DNS).
+# Disable if your CNI does not support NetworkPolicy.
+networkPolicy:
+  enabled: false
 
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster to generate watch events for
