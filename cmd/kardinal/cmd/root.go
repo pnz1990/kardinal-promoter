@@ -77,6 +77,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.AddCommand(newDiffCmd())
 	root.AddCommand(newMetricsCmd())
 	root.AddCommand(newApproveCmd())
+	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newRefreshCmd())
 	root.AddCommand(newDashboardCmd())
 	root.AddCommand(newLogsCmd())

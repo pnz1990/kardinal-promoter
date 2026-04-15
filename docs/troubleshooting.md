@@ -2,6 +2,22 @@
 
 Common problems and how to diagnose them.
 
+## Start here: `kardinal doctor`
+
+Before diving into specific issues, run the pre-flight check to rule out common
+configuration problems:
+
+```bash
+kardinal doctor
+```
+
+This checks: controller reachability, CRDs, krocodile, and the GitHub token secret.
+If any check fails, the output includes a remediation hint.
+
+For a specific pipeline: `kardinal doctor --pipeline my-app`
+
+---
+
 ## Promotion is stuck
 
 ### Symptom: PromotionStep stays in "Pending"
