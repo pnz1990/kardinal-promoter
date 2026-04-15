@@ -322,7 +322,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				node := uiEnvironmentNode{
 					Name:      env.Name,
 					DependsOn: env.DependsOn,
-					Approval:  string(env.Approval),
+					Approval:  env.Approval,
 				}
 				topo = append(topo, node)
 			}
