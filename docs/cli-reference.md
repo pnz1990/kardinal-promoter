@@ -469,6 +469,37 @@ Flags:
 - `--env <env>`: filter by environment
 - `--bundle <name>`: show logs for a specific Bundle (default: most recent active)
 
+### kardinal doctor
+
+Run pre-flight checks to verify the cluster is correctly configured for
+kardinal-promoter. Use this as the first troubleshooting step. (#578)
+
+```bash
+kardinal doctor
+# also check a specific pipeline:
+kardinal doctor --pipeline my-app
+```
+
+Output:
+```
+kardinal-promoter pre-flight check
+==================================================
+✅  Controller reachable          kardinal-promoter v0.6.0 in kardinal-system
+✅  CRDs installed                pipelines, bundles, promotionsteps, policygates, prstatuses
+✅  krocodile running             graph-controller 948ad6c in kro-system
+✅  krocodile CRDs installed      group experimental.kro.run registered
+⚠️  GitHub token                  secret github-token not found in kardinal-system
+                                  Create: kubectl create secret generic github-token --namespace kardinal-system --from-literal=token=<PAT>
+
+4 check(s) passed, 1 warning(s)
+```
+
+Exits with code 1 if any check fails (warnings do not trigger non-zero exit).
+
+| Flag | Description |
+|------|-------------|
+| `--pipeline <name>` | Also check health of this Pipeline |
+
 ### kardinal version
 
 Print the CLI and controller versions.
