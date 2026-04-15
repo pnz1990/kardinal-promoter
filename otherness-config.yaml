@@ -8,6 +8,7 @@ project:
   report_issue: 1
   board_url: https://github.com/users/pnz1990/projects/1
   pr_label: kardinal
+  job_family: FEE
 
 # ── MAQA runtime ──────────────────────────────────────────────────────────────
 maqa:
