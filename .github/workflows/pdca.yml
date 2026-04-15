@@ -80,10 +80,17 @@ jobs:
           make docker-build IMG=ghcr.io/pnz1990/kardinal-promoter:dev
           kind load docker-image ghcr.io/pnz1990/kardinal-promoter:dev --name kardinal-e2e
           # Apply CRDs (pre-generated above) and install via helm
-          # 300s gives the pod ~5min to start after docker-build (~2min) + kind load (~10s)
+          # Override image.repository, image.tag, and image.pullPolicy to use the locally-built
+          # dev image loaded into kind. Without --set image.repository and --set image.tag, helm
+          # uses the default values.yaml (ghcr.io/*/controller:latest) which doesn't match the
+          # locally loaded image (ghcr.io/pnz1990/kardinal-promoter:dev).
+          # pullPolicy=Never ensures kind never tries to pull from ghcr.io for the dev tag.
           kubectl apply -f config/crd/bases/
           helm upgrade --install kardinal chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
+            --set image.repository=ghcr.io/pnz1990/kardinal-promoter \
+            --set image.tag=dev \
+            --set image.pullPolicy=Never \
             --set validatingAdmissionPolicy.enabled=false \
             --wait --timeout 300s
           kubectl get pods -n kardinal-system
