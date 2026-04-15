@@ -76,6 +76,7 @@ func TestRequiredTemplatesExist(t *testing.T) {
 		"clusterrole.yaml",
 		"clusterrolebinding.yaml",
 		"service.yaml",
+		"krocodile.yaml",
 		"_helpers.tpl",
 	}
 	for _, tmpl := range templates {
@@ -113,6 +114,28 @@ func TestHelmTemplate(t *testing.T) {
 	assert.Contains(t, rendered, "kind: ClusterRole", "must render a ClusterRole")
 	assert.Contains(t, rendered, "kind: ClusterRoleBinding", "must render a ClusterRoleBinding")
 	assert.Contains(t, rendered, "kind: Service", "must render a Service")
+	// krocodile resources must be present when enabled (default)
+	assert.Contains(t, rendered, "graph-controller", "must render krocodile Deployment")
+	assert.Contains(t, rendered, "graphs.experimental.kro.run", "must render Graph CRD")
+	assert.Contains(t, rendered, "graphrevisions.experimental.kro.run", "must render GraphRevision CRD")
+}
+
+func TestHelmTemplateKrocodileDisabled(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// When krocodile.enabled=false, no krocodile resources should be rendered
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "krocodile.enabled=false")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template with krocodile disabled must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.NotContains(t, rendered, "graph-controller",
+		"krocodile Deployment must NOT be rendered when disabled")
+	assert.NotContains(t, rendered, "graphs.experimental.kro.run",
+		"Graph CRD must NOT be rendered when disabled")
 }
 
 func TestHelmTemplateContainerImage(t *testing.T) {

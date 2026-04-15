@@ -1,0 +1,27 @@
+# Copyright 2026 The kardinal-promoter Authors.
+# Licensed under the Apache License, Version 2.0
+#
+# Dockerfile.krocodile
+#
+# Builds the krocodile Graph controller image for bundling with kardinal-promoter.
+# This Dockerfile is used by the release pipeline (release.yml) — NOT by local dev.
+#
+# The release workflow builds the binary OUTSIDE this Dockerfile (cross-compilation
+# via GOOS/GOARCH go build), then copies the pre-built binaries here.
+# This avoids needing Go 1.26+ in the Docker build context.
+#
+# Expected build context: the /tmp/kro directory (krocodile checkout)
+# Expected files in context:
+#   bin/graph-controller-amd64   (built by release workflow for linux/amd64)
+#   bin/graph-controller-arm64   (built by release workflow for linux/arm64)
+
+FROM gcr.io/distroless/static:nonroot
+
+# The build platform selects which pre-built binary to use.
+ARG TARGETARCH
+
+COPY bin/graph-controller-${TARGETARCH} /graph-controller
+
+USER nonroot:nonroot
+
+ENTRYPOINT ["/graph-controller"]

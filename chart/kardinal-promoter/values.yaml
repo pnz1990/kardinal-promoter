@@ -10,7 +10,7 @@ image:
   # -- Image pull policy
   pullPolicy: IfNotPresent
   # -- Image tag (defaults to chart appVersion)
-  tag: "latest"
+  tag: ""
 
 # -- Image pull secrets for private registries
 imagePullSecrets: []
@@ -102,20 +102,57 @@ github:
     namespace: ""
     key: "token"
 
-# -- krocodile Graph controller dependency.
-# kardinal-promoter requires the krocodile Graph controller to be installed
-# in the cluster. This section documents the required version for reference —
-# installation is handled separately via hack/install-krocodile.sh or make install-krocodile.
+# -- krocodile Graph controller.
+# kardinal-promoter builds and vendors the krocodile Graph controller as part
+# of its own release. A single `helm install` installs both controllers —
+# no separate install script required.
+#
+# The krocodile image is built from a pinned commit of github.com/ellistarn/kro
+# (krocodile branch) and published to ghcr.io/pnz1990/kardinal-promoter/krocodile
+# at release time. The image is co-versioned with each kardinal-promoter release.
+#
+# Set enabled: false if you already run krocodile independently in your cluster.
 krocodile:
-  # Pinned commit from github.com/ellistarn/kro (krocodile branch).
-  # Update this when intentionally upgrading krocodile.
-  # See hack/install-krocodile.sh for the actual install logic.
-  # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-  pinnedCommit: "9c18aa34"
-  # API group for Graph CRDs (as of commit 48224264, 2026-04-10)
+  # -- Install krocodile Graph controller alongside kardinal-promoter.
+  # Set to false if krocodile is already installed in the cluster.
+  enabled: true
+
+  # -- Number of krocodile controller replicas.
+  replicaCount: 1
+
+  # Pinned source commit from github.com/ellistarn/kro (krocodile branch).
+  # This is the commit the release pipeline built the image from.
+  # Used as the default image tag when image.tag is not set.
+  # Update via the krocodile upgrade protocol in AGENTS.md.
+  pinnedCommit: "948ad6c"
+
+  # -- API group for Graph CRDs.
   apiGroup: "experimental.kro.run"
-  # Namespace where the Graph controller runs
+
+  # -- Namespace where the krocodile Graph controller runs.
   namespace: "kro-system"
+
+  image:
+    # -- krocodile controller image repository.
+    # Built and published by the kardinal-promoter release pipeline.
+    repository: ghcr.io/pnz1990/kardinal-promoter/krocodile
+    # -- Image tag. Defaults to krocodile.pinnedCommit when empty.
+    tag: ""
+    # -- Image pull policy.
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  # -- Node selector for the krocodile Pod.
+  nodeSelector: {}
+
+  # -- Tolerations for the krocodile Pod.
+  tolerations: []
 
 # -- ValidatingAdmissionPolicy for PolicyGate validation.
 # Requires Kubernetes 1.28+. When enabled, validates PolicyGate spec.expression

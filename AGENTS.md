@@ -5,7 +5,7 @@
 A Kubernetes-native promotion controller. Go 1.23+ backend + React 19 frontend,
 embedded via `go:embed`. All state in Kubernetes CRDs. No external database.
 
-**Status**: Pre-release. Design and specs complete. Implementation not started.
+**Status**: Active development. v0.6.0 released. All 7 journeys passing.
 
 ---
 
@@ -346,9 +346,20 @@ transitional workaround in `docs/design/10-graph-first-architecture.md`. It must
 ## krocodile Upgrade Cadence
 
 krocodile evolves autonomously and continuously. Breaking changes arrive without
-deprecation windows. New primitives eliminate existing workarounds. The pinned
-commit in `hack/install-krocodile.sh` is the single source of truth for which
-krocodile version kardinal targets. **Agents must actively manage this.**
+deprecation windows. New primitives eliminate existing workarounds.
+
+**We now build and vendor krocodile as part of our releases.** The pinned commit
+in `hack/install-krocodile.sh` is the single source of truth for which krocodile
+version kardinal targets. The release CI (`release.yml`) builds the krocodile image
+from this commit and pushes to `ghcr.io/pnz1990/kardinal-promoter/krocodile:<commit>`.
+The Helm chart bundles this image under `krocodile.image.repository`.
+
+**Agents must actively manage krocodile upgrades.** An upgrade is:
+1. Update the `KROCODILE_COMMIT` in `hack/install-krocodile.sh`
+2. Update `krocodile.pinnedCommit` in `chart/kardinal-promoter/values.yaml`
+3. Update `krocodile.commit` annotation in `chart/kardinal-promoter/Chart.yaml`
+4. Run compat checks (see upgrade protocol)
+5. Open a PR — CI will build and push the new krocodile image on release
 
 ### Every batch: check for new commits
 
@@ -394,8 +405,9 @@ git diff ${PINNED}..HEAD -- experimental/controller/controller.go | head -200
 ```
 
 After analysis, either:
-- **Open a kardinal PR** with the compat fixes (update celSafeSlug, label guards,
-  node ID invariants, comment updates, test fixture updates, pin bump)
+- **Open a kardinal PR** with the compat fixes (update `hack/install-krocodile.sh` commit,
+  `chart/kardinal-promoter/values.yaml` pinnedCommit, `Chart.yaml` annotation,
+  celSafeSlug, label guards, node ID invariants, comment updates, test fixture updates)
 - **Open a krocodile issue** if the change is a krocodile bug (see §Upstream Issues below)
 - **Both** if the change is a krocodile design evolution that requires coordination
 

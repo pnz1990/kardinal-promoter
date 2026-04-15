@@ -64,3 +64,13 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+krocodile image reference.
+Uses krocodile.image.tag if set, otherwise falls back to krocodile.pinnedCommit.
+This ensures the bundled krocodile version is always deterministic.
+*/}}
+{{- define "krocodile.image" -}}
+{{- $tag := .Values.krocodile.image.tag | default .Values.krocodile.pinnedCommit -}}
+{{- printf "%s:%s" .Values.krocodile.image.repository $tag -}}
+{{- end }}
