@@ -639,8 +639,8 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 
 ### Planned (v0.7.0+)
 
-- Flat DAG compilation — each promotion step as a separate Graph node (#496)
-- Library-based kustomize and git (replace exec.Command) (#494, #495)
+- Per-step progress observability — `status.steps[]` in PromotionStep (#592)
+- Library-based kustomize and git (replace exec.Command) (#494, #495, both complete in v0.6.0)
 - Security hardening and production readiness
 
 ## Competitive Landscape

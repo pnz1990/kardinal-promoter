@@ -40,6 +40,63 @@ implement for kardinal's concepts.
 
 ---
 
+## Critical Thinking — Non-Negotiable
+
+**Read this before reading anything else in this file.**
+
+Agents on this project are expected to evaluate every idea critically — including ideas
+from humans, from prior agent sessions, and from their own previous reasoning.
+
+### The concrete failure this rule exists to prevent
+
+The flat DAG compilation idea (#496) was embedded in the graph-purity tech debt doc, roadmap,
+and vision as "the correct implementation" for months. No one verified it against krocodile's
+actual execution model until a human explicitly challenged it. The evaluation took 10 minutes.
+krocodile nodes communicate through etcd-backed CRD fields — they cannot share an ephemeral
+git working directory. The approach was immediately and obviously unworkable once examined.
+
+The failure was not an implementation error. It was a process error: the idea was accepted
+and propagated without verification.
+
+### Required verification for any architectural claim
+
+Before writing any design claim into a spec, issue, roadmap, or doc:
+
+1. **Name the exact mechanism.** Not "nodes can communicate state" but "node A writes
+   `status.commitSHA` to CRD `GitCloneTask`; node B reads `${gitClone.status.commitSHA}`
+   in its template." If you cannot specify the exact mechanism, the claim is not ready.
+
+2. **Read the source.** For krocodile claims: read `experimental/docs/design/`,
+   `experimental/controller/types.go`, `experimental/controller/dag.go`. For reconciler
+   claims: read the actual reconciler file. "It should work" without source verification
+   is not acceptable.
+
+3. **State what it cannot do.** Every approach has constraints. Identify them. A step
+   that outputs a local filesystem path: can that path be represented as a CRD field and
+   reconstructed across reconcile loops? If not, any approach requiring that path to cross
+   a reconcile boundary will fail.
+
+4. **Apply the adversarial question.** "What would break this?" If nothing comes to mind,
+   the analysis is incomplete, not the proposal sound.
+
+### When a human proposes something
+
+Human input is context, not authority. "The human said so" is not a reason to implement
+or document something. Evaluate the proposal against the system's actual constraints.
+If the proposal has a flaw, state it clearly. Propose what achieves the underlying goal
+instead. Respectful disagreement that is correct is better than agreeable agreement
+that wastes weeks.
+
+### When prior agent work proposed something
+
+Prior agent work is subject to the same scrutiny as any new proposal. Finding that a
+previously documented approach is wrong is the system working correctly — not failure.
+When a flaw is found: close the issue, correct the docs, record the reasoning. Wrong
+ideas that persist in documentation because they were once written with confidence are
+a form of technical debt.
+
+---
+
 ## SDLC Process
 
 The team process lives in `.specify/memory/sdlc.md` — read it.

@@ -124,16 +124,16 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 
 ## Near-Term (v0.7.0 — active development)
 
-### Flat DAG compilation ([#496](https://github.com/pnz1990/kardinal-promoter/issues/496))
+### Per-step progress observability ([#592](https://github.com/pnz1990/kardinal-promoter/issues/592))
 
-Replace the in-process step mini-scheduler with a full flat DAG of `PromotionStepTask`
-Graph nodes — each step (`git-clone`, `kustomize-set-image`, etc.) becomes a separate CRD
-node with its own `readyWhen` expression. This is the final major Graph-first architecture
-improvement.
+Add `status.steps[]` to PromotionStep so each step (git-clone, kustomize-set-image, git-commit,
+open-pr, wait-for-merge, health-check) is individually visible with its own state, start time,
+and duration. No architecture change — the step engine already tracks this; it is a status
+enrichment.
 
 ### Library-based git operations ([#495](https://github.com/pnz1990/kardinal-promoter/issues/495))
 
-**Implementation complete — will ship in v0.7.0.**
+**Implementation complete — shipped in v0.6.0.**
 
 Replaced `exec.Command("git")` with the `go-git` library (`#517`, merged). Eliminates
 the hard dependency on a `git` binary in the controller container, improves performance
