@@ -8,6 +8,8 @@ import { test, expect } from '@playwright/test'
 test.describe('Journey 005 — Bundle timeline interaction', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
+    // Wait for React hydration and first API poll
+    await page.waitForLoadState('networkidle')
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(800) // wait for bundle data
   })

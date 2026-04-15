@@ -8,6 +8,8 @@ import { test, expect } from '@playwright/test'
 test.describe('Journey 002 — DAG node click opens NodeDetail', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
+    // Wait for React hydration and first API poll
+    await page.waitForLoadState('networkidle')
     await page.getByText('kardinal-test-app').first().click()
     // Wait for DAG to render
     await expect(page.locator('svg')).toBeVisible()

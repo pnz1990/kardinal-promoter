@@ -9,6 +9,8 @@ import { test, expect } from '@playwright/test'
 test.describe('Journey 007 — Empty state onboarding', () => {
   test('Step 1: Default state shows pipelines (not empty)', async ({ page }) => {
     await page.goto('/')
+    // Wait for React hydration and first API poll
+    await page.waitForLoadState('networkidle')
     // Fixture returns 2 pipelines, so should NOT show empty state
     await expect(page.getByText('kardinal-test-app')).toBeVisible()
     await expect(page.getByText(/No pipelines found/i)).not.toBeVisible()

@@ -9,6 +9,8 @@ import { test, expect } from '@playwright/test'
 test.describe('Journey 003 — Health chip CSS class regression guard (#532)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
+    // Wait for React hydration and first API poll
+    await page.waitForLoadState('networkidle')
     // Wait for pipeline list to render
     await expect(page.getByText('kardinal-test-app')).toBeVisible()
   })

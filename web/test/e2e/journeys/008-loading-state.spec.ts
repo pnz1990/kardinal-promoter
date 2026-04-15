@@ -9,6 +9,8 @@ import { test, expect } from '@playwright/test'
 test.describe('Journey 008 — Loading state clears (#522 regression guard)', () => {
   test('Step 1: Page loads without perpetual Loading... indicator', async ({ page }) => {
     await page.goto('/')
+    // Wait for React hydration and first API poll
+    await page.waitForLoadState('networkidle')
 
     // Wait up to 5s for the loading indicator to clear
     // After first successful fetch, "Loading..." should be replaced with "just now"

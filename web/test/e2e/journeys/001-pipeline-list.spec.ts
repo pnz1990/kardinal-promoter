@@ -8,6 +8,8 @@ import { test, expect } from '@playwright/test'
 test.describe('Journey 001 — Pipeline list', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
+    // Wait for the React app to fully hydrate and the first API poll to complete
+    await page.waitForLoadState('networkidle')
   })
 
   test('Step 1: Pipeline list renders with pipeline names', async ({ page }) => {
