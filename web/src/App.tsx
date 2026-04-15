@@ -15,6 +15,7 @@ import { PipelineLaneView } from './components/PipelineLaneView'
 import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
+import { EmptyState } from './components/EmptyState'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -396,26 +397,8 @@ export function App() {
                 </p>
               </>
             ) : (
-              <>
-                <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-                  No pipelines found. Apply a Pipeline to get started:
-                </p>
-                <code style={{
-                  display: 'block',
-                  background: '#1e293b',
-                  border: '1px solid #334155',
-                  borderRadius: '6px',
-                  padding: '0.6rem 1rem',
-                  fontSize: '0.8rem',
-                  color: '#7dd3fc',
-                  fontFamily: 'monospace',
-                  textAlign: 'left',
-                  maxWidth: '480px',
-                  margin: '0 auto',
-                }}>
-                  kubectl apply -f examples/quickstart/pipeline.yaml
-                </code>
-              </>
+              // #530: Replace bare empty state with onboarding card
+              <EmptyState />
             )}
           </div>
         ) : (

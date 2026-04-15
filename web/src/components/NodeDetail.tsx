@@ -11,9 +11,11 @@
 //
 // #333: CEL expression syntax highlighting — keywords=yellow, strings=green,
 //       identifiers=blue, operators=white, functions=cyan, comments=gray.
-import { useState, useEffect, useCallback } from 'react'
+// #530: CopyButton extracted to its own component (CopyButton.tsx).
+import { useState, useEffect } from 'react'
 import type { GraphNode, PromotionStep } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
+import { CopyButton } from './CopyButton'
 import { api } from '../api/client'
 
 interface Props {
@@ -102,47 +104,8 @@ function stepIconColor(index: number, currentIndex: number, stepState: string, i
   return '#334155'
 }
 
-/** #339: Copy-to-clipboard button. Shows 📋 → ✓ on success for 2s. */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {
-      // Fallback for environments without clipboard API
-      const el = document.createElement('textarea')
-      el.value = text
-      el.style.position = 'fixed'
-      el.style.opacity = '0'
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand('copy')
-      document.body.removeChild(el)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [text])
-  return (
-    <button
-      onClick={handleCopy}
-      title={copied ? 'Copied!' : 'Copy to clipboard'}
-      style={{
-        background: 'none',
-        border: '1px solid #334155',
-        borderRadius: '4px',
-        padding: '1px 6px',
-        cursor: 'pointer',
-        fontSize: '0.7rem',
-        color: copied ? '#86efac' : '#94a3b8',
-        transition: 'color 0.2s',
-        lineHeight: 1.4,
-      }}
-    >
-      {copied ? '✓' : '📋'}
-    </button>
-  )
-}
+/** #339/#530: Copy-to-clipboard button — now imported from CopyButton.tsx. */
+// CopyButton is imported above from './CopyButton'
 
 // ── #333: CEL syntax highlighter ─────────────────────────────────────────────
 // Tokenizes a CEL expression for basic keyword/identifier/string/operator coloring.
