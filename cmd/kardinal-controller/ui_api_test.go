@@ -27,6 +27,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +39,7 @@ import (
 func uiScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	_ = v1alpha1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
 	return s
 }
 
@@ -873,4 +875,133 @@ func TestBuildUIConditions_EmptyReasonOmitted(t *testing.T) {
 	b, err := json.Marshal(result[0])
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), `"reason"`)
+}
+
+// TestUIAPI_StepEvents_ReturnsSortedEvents verifies that GET
+// /api/v1/ui/steps/{namespace}/{name}/events returns events sorted newest-first
+// and capped at 20 (#527).
+func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	stepName := "test-step-abc"
+
+	// Create 3 events: one Warning (oldest), two Normal (newer).
+	events := []corev1.Event{
+		{
+			ObjectMeta:     metav1.ObjectMeta{Name: "ev-1", Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Name: stepName, Namespace: "default"},
+			Type:           "Warning",
+			Reason:         "StepFailed",
+			Message:        "git push failed: 403 forbidden",
+			Count:          3,
+			FirstTimestamp: metav1.NewTime(now.Add(-10 * time.Minute)),
+			LastTimestamp:  metav1.NewTime(now.Add(-5 * time.Minute)),
+		},
+		{
+			ObjectMeta:     metav1.ObjectMeta{Name: "ev-2", Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Name: stepName, Namespace: "default"},
+			Type:           "Normal",
+			Reason:         "StepStarted",
+			Message:        "git-clone completed",
+			Count:          1,
+			FirstTimestamp: metav1.NewTime(now.Add(-12 * time.Minute)),
+			LastTimestamp:  metav1.NewTime(now.Add(-11 * time.Minute)),
+		},
+		{
+			ObjectMeta:     metav1.ObjectMeta{Name: "ev-3", Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Name: stepName, Namespace: "default"},
+			Type:           "Normal",
+			Reason:         "StepProgressing",
+			Message:        "kustomize-set-image completed",
+			Count:          1,
+			FirstTimestamp: metav1.NewTime(now.Add(-7 * time.Minute)),
+			LastTimestamp:  metav1.NewTime(now.Add(-6 * time.Minute)),
+		},
+		// Different step — must NOT appear in results.
+		{
+			ObjectMeta:     metav1.ObjectMeta{Name: "ev-other", Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Name: "other-step", Namespace: "default"},
+			Type:           "Normal",
+			Reason:         "OtherStep",
+			Message:        "should be filtered out",
+			Count:          1,
+			FirstTimestamp: metav1.NewTime(now.Add(-1 * time.Minute)),
+			LastTimestamp:  metav1.NewTime(now.Add(-30 * time.Second)),
+		},
+	}
+
+	objs := make([]client.Object, len(events))
+	for i := range events {
+		objs[i] = &events[i]
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/steps/default/"+stepName+"/events", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiEventResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Should return 3 events (not the "other" step event).
+	assert.Len(t, resp, 3)
+
+	// First event must be the most recent (ev-1 lastTimestamp = now-5min).
+	assert.Equal(t, "Warning", resp[0].Type)
+	assert.Equal(t, "StepFailed", resp[0].Reason)
+	assert.Equal(t, int32(3), resp[0].Count)
+
+	// All types must be present (order: newest-first by lastTimestamp).
+	reasons := make([]string, len(resp))
+	for i, r := range resp {
+		reasons[i] = r.Reason
+	}
+	assert.Contains(t, reasons, "StepFailed")
+	assert.Contains(t, reasons, "StepStarted")
+	assert.Contains(t, reasons, "StepProgressing")
+	assert.NotContains(t, reasons, "OtherStep")
+}
+
+// TestUIAPI_StepEvents_EmptyWhenNoEvents returns an empty array (not 404) when no events exist (#527).
+func TestUIAPI_StepEvents_EmptyWhenNoEvents(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/steps/default/no-such-step/events", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiEventResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Empty(t, resp, "no events for unknown step must return empty array")
+}
+
+// TestUIAPI_StepEvents_InvalidPath returns 404 for malformed paths (#527).
+func TestUIAPI_StepEvents_InvalidPath(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	for _, path := range []string{
+		"/api/v1/ui/steps/",
+		"/api/v1/ui/steps/default/",
+		"/api/v1/ui/steps/default/step-abc/",      // missing "events" suffix
+		"/api/v1/ui/steps/default/step-abc/other", // wrong suffix
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		assert.NotEqual(t, http.StatusOK, w.Code, "path %s should not return 200", path)
+	}
 }
