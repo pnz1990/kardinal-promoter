@@ -54,8 +54,10 @@ if [ -n "$CHART_VERSION" ]; then
 else
   # Install from local chart (development).
   # CRDs must be applied first — the Helm chart includes CRD-dependent resources
-  # (ScheduleClock, ValidatingAdmissionPolicy) that require CRDs to exist before
-  # the chart can be rendered by the API server. (#593)
+  # (ScheduleClock) that require CRDs to exist before the chart can be rendered. (#593)
+  # ValidatingAdmissionPolicy is disabled here because it requires k8s 1.30+ (GA) or
+  # the beta feature gate enabled on 1.28/1.29 kind clusters. The PDCA "Install controller"
+  # step handles this correctly with --set validatingAdmissionPolicy.enabled=false.
   kubectl apply -f config/crd/bases/ 2>/dev/null || true
 
   helm upgrade --install kardinal-promoter \
@@ -64,6 +66,7 @@ else
     --set github.secretRef.name=github-token \
     --set krocodile.image.repository=krocodile-graph-controller \
     --set "krocodile.image.tag=${KROCODILE_COMMIT:-948ad6c}" \
+    --set validatingAdmissionPolicy.enabled=false \
     --wait --timeout 180s || {
     echo ""
     echo "[WARNING] Helm install with --wait timed out or failed."
@@ -73,7 +76,8 @@ else
       chart/kardinal-promoter \
       --namespace kardinal-system --create-namespace \
       --set github.secretRef.name=github-token \
-      --set krocodile.enabled=false
+      --set krocodile.enabled=false \
+      --set validatingAdmissionPolicy.enabled=false
     KROCODILE_COMMIT="${KROCODILE_COMMIT:-948ad6c}" KIND_CLUSTER=$KIND_CLUSTER \
       bash hack/install-krocodile.sh
   }
