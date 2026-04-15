@@ -2,6 +2,18 @@
 
 Run pre-flight checks to verify the cluster is correctly configured
 
+### Synopsis
+
+Run pre-flight checks for kardinal-promoter:
+
+  ✅ Controller reachable      version ConfigMap found
+  ✅ CRDs installed            kardinal.io resource groups registered
+  ✅ krocodile running         graph-controller pod in kro-system
+  ✅ krocodile CRDs installed  experimental.kro.run groups registered
+  ✅ GitHub token              github-token secret present
+
+Use 'kardinal doctor' as the first troubleshooting step.
+
 ```
 kardinal doctor [flags]
 ```
