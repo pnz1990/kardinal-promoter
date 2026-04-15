@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write   # required for OIDC-based cosign keyless signing (future)
 
 jobs:
   release:
@@ -26,13 +27,23 @@ jobs:
       - name: Set version from tag
         run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
 
+      - name: Set up Docker Buildx (multi-arch)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run tests
         run: go test ./... -race -count=1 -timeout 120s
 
-      - name: Build binaries
+      - name: Build CLI and controller binaries
         run: |
           mkdir -p dist
-          # Controller
+          # Controller (linux only — packaged in Docker image)
           GOOS=linux GOARCH=amd64 go build \
             -ldflags="-X main.version=${VERSION} -X main.commit=${GITHUB_SHA}" \
             -o dist/kardinal-controller-linux-amd64 \
@@ -41,38 +52,105 @@ jobs:
             -ldflags="-X main.version=${VERSION} -X main.commit=${GITHUB_SHA}" \
             -o dist/kardinal-controller-linux-arm64 \
             ./cmd/kardinal-controller/
-          # CLI
+          # CLI (multi-platform)
           GOOS=linux   GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-linux-amd64   ./cmd/kardinal/
           GOOS=linux   GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-linux-arm64   ./cmd/kardinal/
           GOOS=darwin  GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-darwin-amd64  ./cmd/kardinal/
           GOOS=darwin  GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-darwin-arm64  ./cmd/kardinal/
           GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-windows-amd64.exe ./cmd/kardinal/
 
-      - name: Build and push Docker image
+      # ── Build krocodile image ──────────────────────────────────────────────
+      # We build and push the krocodile Graph controller image ourselves so
+      # that every kardinal release bundles a known-good, versioned krocodile
+      # image. Users do not need to run hack/install-krocodile.sh.
+      - name: Read pinned krocodile commit
+        id: krocodile
+        run: |
+          COMMIT=$(grep 'KROCODILE_COMMIT:-' hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,40\}' | head -1)
+          echo "KROCODILE_COMMIT=${COMMIT}" >> $GITHUB_ENV
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "Pinned krocodile commit: ${COMMIT}"
+
+      - name: Clone krocodile at pinned commit
+        run: |
+          git clone --quiet --no-tags --depth=500 \
+            https://github.com/ellistarn/kro.git /tmp/kro -b krocodile
+          git -C /tmp/kro fetch --depth=1 origin ${{ steps.krocodile.outputs.commit }} || \
+            git -C /tmp/kro fetch --unshallow
+          git -C /tmp/kro checkout ${{ steps.krocodile.outputs.commit }}
+          echo "krocodile checked out at $(git -C /tmp/kro rev-parse --short HEAD)"
+
+      - name: Build krocodile binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            GOTOOLCHAIN=auto go build \
+            -ldflags="-w -s" \
+            -o /tmp/kro/bin/graph-controller-amd64 \
+            /tmp/kro/experimental/cmd/
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            GOTOOLCHAIN=auto go build \
+            -ldflags="-w -s" \
+            -o /tmp/kro/bin/graph-controller-arm64 \
+            /tmp/kro/experimental/cmd/
+        working-directory: /tmp/kro
+
+      - name: Build and push krocodile image (multi-arch)
+        uses: docker/build-push-action@v7
+        with:
+          context: /tmp/kro
+          file: hack/Dockerfile.krocodile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.KROCODILE_COMMIT }}
+            ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.title=krocodile-graph-controller
+            org.opencontainers.image.description=krocodile Graph controller bundled with kardinal-promoter
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.revision=${{ env.KROCODILE_COMMIT }}
+            org.opencontainers.image.source=https://github.com/ellistarn/kro/tree/krocodile
+
+      # ── Build kardinal-promoter controller image ───────────────────────────
+      - name: Build and push kardinal-promoter controller image (multi-arch)
         uses: docker/build-push-action@v7
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/pnz1990/kardinal-promoter:${{ env.VERSION }}
-            ghcr.io/pnz1990/kardinal-promoter:latest
+            ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
+            ghcr.io/pnz1990/kardinal-promoter/controller:latest
           labels: |
+            org.opencontainers.image.title=kardinal-promoter-controller
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
-        env:
-          DOCKER_BUILDKIT: 1
+
+      # ── Package and publish Helm chart ─────────────────────────────────────
+      - name: Update chart version and krocodile tag
+        run: |
+          # Stamp chart version and krocodile image tag into values.yaml
+          sed -i "s|tag: \"\"  # defaults to krocodile.pinnedCommit|tag: \"${KROCODILE_COMMIT}\"|g" \
+            chart/kardinal-promoter/values.yaml || true
+          # The chart uses the tag from values.yaml; also update Chart.yaml
+          sed -i "s|^appVersion:.*|appVersion: \"${VERSION}\"|" chart/kardinal-promoter/Chart.yaml
+          sed -i "s|^version:.*|version: ${VERSION#v}|" chart/kardinal-promoter/Chart.yaml
 
       - name: Package Helm chart
         run: |
-          helm package charts/kardinal-promoter \
+          helm package chart/kardinal-promoter \
             --version ${VERSION#v} \
             --app-version ${VERSION} \
             --destination dist/
 
+      - name: Push Helm chart to OCI registry
+        run: |
+          helm push dist/kardinal-promoter-*.tgz oci://ghcr.io/pnz1990/charts
+
+      # ── GitHub release ─────────────────────────────────────────────────────
       - name: Generate changelog
         id: changelog
         run: |
-          # Get commits since last tag
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
             COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
@@ -94,24 +172,41 @@ jobs:
             ### Changes
             ${{ env.CHANGELOG }}
 
-            ### Install
+            ### Install (single command — includes krocodile)
 
             ```bash
-            # CLI
-            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)
-            chmod +x kardinal-*
-            sudo mv kardinal-* /usr/local/bin/kardinal
+            helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+              --namespace kardinal-system --create-namespace \
+              --version ${{ env.VERSION }} \
+              --set github.secretRef.name=github-token
             ```
+
+            > No separate krocodile install needed. The chart bundles and installs
+            > krocodile (commit `${{ env.KROCODILE_COMMIT }}`) automatically.
+            > Use `--set krocodile.enabled=false` if you already run krocodile.
+
+            ### CLI
 
             ```bash
-            # Helm chart
-            helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart --version ${{ env.VERSION }}
+            # macOS (Apple Silicon)
+            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-darwin-arm64
+            chmod +x kardinal-darwin-arm64 && sudo mv kardinal-darwin-arm64 /usr/local/bin/kardinal
+
+            # macOS (Intel)
+            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-darwin-amd64
+            chmod +x kardinal-darwin-amd64 && sudo mv kardinal-darwin-amd64 /usr/local/bin/kardinal
+
+            # Linux
+            curl -LO https://github.com/pnz1990/kardinal-promoter/releases/download/${{ env.VERSION }}/kardinal-linux-amd64
+            chmod +x kardinal-linux-amd64 && sudo mv kardinal-linux-amd64 /usr/local/bin/kardinal
             ```
 
-            ### Docker image
-            ```
-            ghcr.io/pnz1990/kardinal-promoter:${{ env.VERSION }}
-            ```
+            ### Container images
+
+            | Image | Tag | Platform |
+            |---|---|---|
+            | `ghcr.io/pnz1990/kardinal-promoter/controller` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
+            | `ghcr.io/pnz1990/kardinal-promoter/krocodile` | `${{ env.KROCODILE_COMMIT }}` | linux/amd64, linux/arm64 |
           files: dist/*
           draft: false
           prerelease: ${{ contains(env.VERSION, '-') }}

@@ -107,13 +107,15 @@ helm-lint:
 	helm lint chart/kardinal-promoter
 
 ## Kind cluster for E2E
-kind-up: ## Create local kind cluster and install krocodile + kardinal-promoter
+kind-up: ## Create local kind cluster and install kardinal-promoter (with bundled krocodile)
 	kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
 	kubectl config use-context kind-kardinal-e2e
 	$(MAKE) install-krocodile
 	$(MAKE) install
 
-install-krocodile: ## Build and install the krocodile Graph controller (pinned commit — see hack/install-krocodile.sh)
+install-krocodile: ## Build and load krocodile image into kind (local dev only — not needed for Helm chart install)
+	@echo "Note: In production, krocodile is bundled in the Helm chart (krocodile.enabled=true)."
+	@echo "This target is for local development when using 'make install' with a local chart."
 	bash hack/install-krocodile.sh
 
 setup-e2e-env: ## Full single-cluster E2E: kind + krocodile + ArgoCD + test app in test/uat/prod

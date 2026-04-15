@@ -2,18 +2,27 @@
 # Licensed under the Apache License, Version 2.0
 apiVersion: v2
 name: kardinal-promoter
-description: A Kubernetes-native promotion controller with DAG pipelines and policy gates
+description: |
+  A Kubernetes-native promotion controller with DAG pipelines and policy gates.
+  Bundles the krocodile Graph controller — a single helm install installs everything.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.6.0
+appVersion: "v0.6.0"
 keywords:
   - kubernetes
   - promotion
   - gitops
   - policy
+  - dag
+  - cicd
 home: https://github.com/pnz1990/kardinal-promoter
 sources:
   - https://github.com/pnz1990/kardinal-promoter
+  - https://github.com/ellistarn/kro
 maintainers:
   - name: kardinal-promoter authors
     url: https://github.com/pnz1990/kardinal-promoter
+annotations:
+  # The krocodile commit bundled in this chart version.
+  # Built and pushed to ghcr.io/pnz1990/kardinal-promoter/krocodile:<commit>
+  krocodile.commit: "948ad6c"

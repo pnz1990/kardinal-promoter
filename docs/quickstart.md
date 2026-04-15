@@ -36,34 +36,39 @@ graph LR
 
 ## Install kardinal-promoter
 
-kardinal-promoter requires the kro Graph controller to be available in the cluster.
+Starting with v0.6.0, kardinal-promoter bundles the krocodile Graph controller directly in the Helm chart. A single `helm install` installs everything — no separate krocodile step needed.
 
 ```bash
-# Install the Graph controller from the krocodile experimental branch
-# Pin to commit 1b0ce353 (minimum required for propagateWhen fix)
-kubectl apply -f https://raw.githubusercontent.com/ellistarn/kro/1b0ce353/experimental/crds/graph.yaml
-
-# Install kardinal-promoter with GitHub token for SCM operations
-# Option A: pass the token directly (for development/testing)
-helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
-  --namespace kardinal-system --create-namespace \
-  --set github.token=$GITHUB_PAT
-
-# Option B: reference an existing Secret (recommended for production)
-kubectl create secret generic kardinal-github-token \
+# Option A: reference an existing Secret (recommended for production)
+kubectl create secret generic github-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT \
+  --dry-run=client -o yaml | kubectl apply -f - --namespace kardinal-system 2>/dev/null || \
+kubectl create namespace kardinal-system && \
+kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
-helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace \
-  --set github.secretRef.name=kardinal-github-token
+  --set github.secretRef.name=github-token
+
+# Option B: pass the token directly (development/testing only)
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  --namespace kardinal-system --create-namespace \
+  --set github.token=$GITHUB_PAT
 ```
 
 Verify the installation:
 
 ```bash
 kubectl get pods -n kardinal-system
-# NAME                                    READY   STATUS    RESTARTS   AGE
-# kardinal-controller-7f8d9c-xxxxx        1/1     Running   0          30s
+# NAME                                              READY   STATUS    RESTARTS   AGE
+# kardinal-promoter-controller-7f8d9c-xxxxx         1/1     Running   0          30s
+
+kubectl get pods -n kro-system
+# NAME                              READY   STATUS    RESTARTS   AGE
+# graph-controller-7d4b8f9f5-xk2pq  1/1     Running   0          30s
 
 kardinal version
 # CLI:        v0.1.0

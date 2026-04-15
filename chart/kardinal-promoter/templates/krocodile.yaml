@@ -1,0 +1,211 @@
+{{/*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+*/}}
+{{- if .Values.krocodile.enabled }}
+# krocodile Graph controller — bundled and vendored by kardinal-promoter.
+#
+# This manifest installs the krocodile Graph controller (from
+# github.com/ellistarn/kro krocodile branch) using an OCI image built and
+# published by the kardinal-promoter release pipeline. Users do NOT need to
+# run hack/install-krocodile.sh — a single helm install installs everything.
+#
+# The image is built at release time from a pinned commit and published to:
+#   ghcr.io/pnz1990/kardinal-promoter/krocodile:<commit>
+#
+# Override with --set krocodile.image.repository and krocodile.image.tag.
+# Disable with --set krocodile.enabled=false if you already run krocodile.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.krocodile.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+---
+# ── CRDs ──────────────────────────────────────────────────────────────────────
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: graphs.experimental.kro.run
+  labels:
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+spec:
+  group: experimental.kro.run
+  names:
+    plural: graphs
+    singular: graph
+    kind: Graph
+    listKind: GraphList
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: graphrevisions.experimental.kro.run
+  labels:
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+spec:
+  group: experimental.kro.run
+  names:
+    plural: graphrevisions
+    singular: graphrevision
+    kind: GraphRevision
+    listKind: GraphRevisionList
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              x-kubernetes-validations:
+                - rule: "self == oldSelf"
+                  message: "GraphRevision spec is immutable"
+      subresources:
+        status: {}
+---
+# ── RBAC ──────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: graph-controller
+  namespace: {{ .Values.krocodile.namespace }}
+  labels:
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kardinal-graph-controller
+  labels:
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+rules:
+  # Graph and GraphRevision — full CRUD
+  - apiGroups: ["experimental.kro.run"]
+    resources: ["graphs", "graphs/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["experimental.kro.run"]
+    resources: ["graphrevisions", "graphrevisions/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Managed resources — the Graph controller applies arbitrary resource types
+  # via SSA. The specific types are determined at runtime by Graph specs.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
+  # Status subresource on managed resources
+  - apiGroups: ["*"]
+    resources: ["*/status"]
+    verbs: ["get", "patch"]
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kardinal-graph-controller
+  labels:
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kardinal-graph-controller
+subjects:
+  - kind: ServiceAccount
+    name: graph-controller
+    namespace: {{ .Values.krocodile.namespace }}
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graph-controller
+  namespace: {{ .Values.krocodile.namespace }}
+  labels:
+    app: graph-controller
+    app.kubernetes.io/managed-by: kardinal-promoter
+    app.kubernetes.io/component: krocodile
+    app.kubernetes.io/version: {{ .Values.krocodile.image.tag | default .Values.krocodile.pinnedCommit | quote }}
+spec:
+  replicas: {{ .Values.krocodile.replicaCount }}
+  selector:
+    matchLabels:
+      app: graph-controller
+  template:
+    metadata:
+      labels:
+        app: graph-controller
+        app.kubernetes.io/component: krocodile
+        app.kubernetes.io/version: {{ .Values.krocodile.image.tag | default .Values.krocodile.pinnedCommit | quote }}
+    spec:
+      serviceAccountName: graph-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: graph-controller
+          image: "{{ .Values.krocodile.image.repository }}:{{ .Values.krocodile.image.tag | default .Values.krocodile.pinnedCommit }}"
+          imagePullPolicy: {{ .Values.krocodile.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.krocodile.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      {{- with .Values.krocodile.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.krocodile.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
