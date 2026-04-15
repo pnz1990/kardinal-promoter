@@ -1291,7 +1291,7 @@ func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, n
 		ti := filtered[i].LastTimestamp.Time
 		tj := filtered[j].LastTimestamp.Time
 		if ti.Equal(tj) {
-			return filtered[i].EventTime.Time.After(filtered[j].EventTime.Time)
+			return filtered[i].EventTime.After(filtered[j].EventTime.Time)
 		}
 		return ti.After(tj)
 	})
