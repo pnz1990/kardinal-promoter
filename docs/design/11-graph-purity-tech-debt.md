@@ -20,7 +20,10 @@ The v0.2.1 queue is closed. Do not re-open these items.
 Active open items are tracked in GitHub issues. Check the current open issue list.
 The remaining logic leaks require either:
 1. krocodile upstream changes (labeled `blocked-on-krocodile`) — do not workaround
-2. Large architectural work: flat DAG compilation (#496), go-git migration (#495), kustomize library migration (#494)
+2. Large architectural work: go-git migration (#495, complete), kustomize library migration (#494, complete)
+
+**Note:** Flat DAG compilation (#496) was evaluated and closed as architecturally unsound.
+See §Flat DAG Compilation — Why It Does Not Work below.
 
 ### Hard rule: no new logic leaks
 
@@ -133,11 +136,13 @@ stateless, cheap, synchronous). No `recheckAfter` krocodile primitive required.
 
 See §ScheduleClock Implementation below for the full spec.
 
-### #132 (step-as-Graph-node): unblocked via flat DAG compilation
+### #132 (step-as-Graph-node): **closed — not viable**
 
-See §Flat DAG Compilation below. Bundle type is known at creation time — the full step DAG
-can be generated statically. No runtime Graph mutation. No krocodile changes required.
-Performance at scale is a benchmark question, not a correctness blocker.
+~~See §Flat DAG Compilation below.~~ This approach was evaluated and rejected.
+See §Flat DAG Compilation — Why It Does Not Work below.
+
+The observable-progress gap this issue was trying to address is solved by #592:
+adding `status.steps[]` to PromotionStep (no architecture change needed).
 
 ### #130 and #68 (eliminate pkg/cel): fully unblocked
 
@@ -249,79 +254,61 @@ sub-minute precision.
 
 ---
 
-## Flat DAG Compilation — #132 is Unblocked
+## Flat DAG Compilation — Why It Does Not Work
 
-> This section documents the resolution of why #132 was labeled blocked-on-krocodile and
-> establishes the correct implementation approach.
+> **Status: Closed / Not Viable** — Issue #496 closed 2026-04-15
+> Previously this section argued for flat DAG compilation. That argument was wrong.
+> This section now documents the analysis so the mistake is not repeated.
 
-### The original concern
+### The original claim (incorrect)
 
-Issue #132 was labeled `blocked-on-krocodile` citing two concerns:
-1. Large node counts degrading the Graph controller
-2. Dynamic step sequences requiring runtime Graph mutation
+That each promotion step (git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge,
+health-check) could become a separate krocodile Graph node — a `PromotionStepTask` CRD — and
+the Graph controller would sequence them via `readyWhen` expressions.
 
-### Why it is not actually blocked
+### Why it does not work
 
-**Dynamic node count is not the problem.** The Graph is generated *per-Bundle* at Bundle creation time. At that point the Bundle type is known (image, config, helm), so the complete flat step DAG can be generated statically in the Pipeline translator. The resulting Graph is immutable for that Bundle's lifetime — correct behavior, no runtime mutation needed.
+krocodile Graph nodes communicate **exclusively through Kubernetes resource fields written to
+etcd**. A node manages a CR, the CR signals ready via its `status`, the Graph advances.
+That is the entire inter-node contract.
 
-**Large node counts are a performance concern, not a correctness blocker.** A 5-environment pipeline with 7 steps per environment = 35 Graph nodes. krocodile handles this today. Benchmark before optimizing, not before building.
+The step engine is a **sequential pipeline of imperative side effects with shared mutable
+filesystem state**:
 
-### The correct implementation
+- `git-clone` produces a local temp directory → consumed by `kustomize-set-image`
+- `kustomize-set-image` mutates files in that directory → consumed by `git-commit`
+- `git-commit` produces a commit SHA → consumed by `open-pr`
+- `open-pr` produces a PR URL → consumed by `wait-for-merge`
 
-At Bundle creation, the Pipeline translator generates a **fully flat DAG** where each step is a Graph node:
+**This state cannot flow through CRD fields in etcd.** A git working directory is not a
+Kubernetes resource. A commit SHA could theoretically be written to a CRD status field,
+but the working directory it was committed from does not persist between reconcile loops.
 
-```
-# For one environment "prod" with image Bundle:
-GitCloneTask(prod)      → SetImageTask(prod)
-SetImageTask(prod)      → GitCommitTask(prod)
-GitCommitTask(prod)     → GitPushTask(prod)
-GitPushTask(prod)       → OpenPRTask(prod)
-OpenPRTask(prod)        → WaitForMergeTask(prod)   [Watch on PRStatus]
-WaitForMergeTask(prod)  → HealthCheckTask(prod)    [Watch on Deployment/App/Kustomization]
-HealthCheckTask(prod)   → [next environment's GitCloneTask, or final verified node]
-```
+Workarounds all make things worse:
+- Re-clone at each step: expensive, fragile, doubles network I/O per promotion
+- Shared PVC: requires a storage provisioner, adds volume lifecycle management,
+  does not work with multiple controller replicas
+- Encode the whole working tree in CRD fields: absurd — you would be storing git repos in etcd
 
-Step type selection (`kustomize-set-image` vs `helm-set-image` vs `config-merge`) is encoded as `includeWhen` conditions on Graph nodes — config Bundle includes `ConfigMergeTask`, excludes `SetImageTask`, etc. The Graph controller handles the conditional inclusion natively.
+**krocodile nested Graphs do not help.** A child Graph is independently reconciled in its own
+loop. You cannot pipe ephemeral local state from one reconcile loop to another. Nesting adds
+scopes, not shared memory.
 
-**CRD design decision (resolved):** Use a generic `PromotionStepTask` CRD with a `type` field, not separate CRD types per step. Rationale: RBAC, observability, and reconciler registration are simpler with one CRD. The `type` field drives behavior.
+### What the current architecture gets right
 
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: PromotionStepTask
-metadata:
-  name: prod-git-clone-abc123
-  labels:
-    kardinal.io/bundle: abc123
-    kardinal.io/environment: prod
-    kardinal.io/step: git-clone
-spec:
-  type: git-clone           # git-clone | set-image | git-commit | git-push |
-                            # open-pr | wait-merge | health-check | config-merge |
-                            # helm-set-image | custom-webhook
-  bundleRef: abc123
-  environmentRef: prod
-  config: {}                # step-specific config from Pipeline spec
-status:
-  phase: Pending | Running | Succeeded | Failed
-  outputs: {}               # passed to downstream steps via Graph scope
-  startedAt: ""
-  completedAt: ""
-```
+`PromotionStep` is the correct unit of Graph-observable state. It encapsulates the full
+sequential pipeline for one environment and exposes a single `status.state = Verified`.
+The Graph sees that signal and advances downstream environments.
 
-### What this eliminates
+An Owned-node reconciler that internally sequences imperative operations before writing its
+final status is **correct reconciler design**, not a Graph-first violation. The logic-leak
+classification of `Engine.ExecuteFrom()` as a violation was wrong.
 
-Completing #132 with the flat DAG approach eliminates these logic leaks in one PR:
-- PS-1: `DefaultSequenceForBundle()` Go routing algorithm
-- PS-10: `StepState.Outputs` in-memory map (step outputs become CRD status fields in Graph scope)
-- ST-1: `DefaultSequenceForBundle()` in steps package
-- ST-2: `Engine.ExecuteFrom()` mini-scheduler
-- ST-5 through ST-12: all `exec.Command` calls move to dedicated reconcilers per step type
+### The correct fix for the observable-progress gap
 
-### Performance note
-
-Before implementation, benchmark krocodile with a synthetic Graph of 50+ nodes to confirm no
-controller performance regression. If a regression is found, report upstream with the benchmark
-data — do not work around it by keeping the Go step engine.
+Issue #592: add `status.steps[]` to PromotionStep. No new CRD, no architecture change,
+no risk. The step engine already tracks per-step execution. Writing that state to CRD
+status is a small delta that gives full observability without any structural change.
 
 ---
 
