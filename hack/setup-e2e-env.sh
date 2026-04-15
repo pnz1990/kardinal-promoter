@@ -52,7 +52,12 @@ if [ -n "$CHART_VERSION" ]; then
     --set github.secretRef.name=github-token \
     --wait --timeout 120s
 else
-  # Install from local chart (development)
+  # Install from local chart (development).
+  # CRDs must be applied first — the Helm chart includes CRD-dependent resources
+  # (ScheduleClock, ValidatingAdmissionPolicy) that require CRDs to exist before
+  # the chart can be rendered by the API server. (#593)
+  kubectl apply -f config/crd/bases/ 2>/dev/null || true
+
   helm upgrade --install kardinal-promoter \
     chart/kardinal-promoter \
     --namespace kardinal-system --create-namespace \
