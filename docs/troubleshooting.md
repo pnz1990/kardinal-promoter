@@ -257,3 +257,230 @@ kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 kubectl get pipelines,bundles,promotionsteps,policygates -o wide
 kubectl get graph -l kardinal.io/pipeline=my-app
 ```
+
+---
+
+## PolicyGate never becomes Ready
+
+### Symptom: PolicyGate stays in FAIL or shows "CEL error"
+
+```bash
+# Check the gate's current status
+kubectl get policygate my-gate -o yaml | grep -A10 status
+
+# Show the expression and current evaluation
+kardinal explain my-app --env prod
+```
+
+**CEL syntax error:** The expression failed to compile. Common mistakes:
+- Parentheses mismatch: `!schedule.isWeekend` (correct) vs `!schedule.isWeekend()` (wrong — it's a map field, not a function)
+- Unknown variable: `bundle.spec.images[0].tag` (correct) vs `bundle.images.tag` (wrong field path)
+- Type mismatch: comparing string to int without casting
+
+Test your expression before applying:
+```bash
+kardinal policy simulate --pipeline my-app --env prod --time "Tuesday 10am"
+```
+
+**gate.recheckInterval too long:** The gate evaluates on each ScheduleClock tick. The default cluster clock interval is 1 minute. If your gate has `recheckInterval: 10m`, it will only re-evaluate every 10 minutes. For testing, reduce to `recheckInterval: 30s`.
+
+**Gate expression references an upstream environment that hasn't verified yet:**
+```bash
+# Check upstream soak minutes — must be > 0 for soak gates to work
+kubectl get promotionstep -l kardinal.io/bundle=my-app-v1 -o jsonpath='{range .items[*]}{.metadata.name}: {.status.state}{"\n"}{end}'
+```
+
+### Symptom: PolicyGate stays FAIL even when condition should pass
+
+```bash
+# Force re-evaluation by annotating the gate
+kubectl annotate policygate no-weekend-deploys \
+  kardinal.io/force-recheck=$(date +%s) --overwrite
+
+# Or trigger a ScheduleClock tick
+kubectl annotate scheduleclock kardinal-clock \
+  kardinal.io/manual-tick=$(date +%s) -n kardinal-system --overwrite
+```
+
+---
+
+## SCM provider failures
+
+### Symptom: "git push failed: 403 Forbidden" or "remote: Permission to ... denied"
+
+The GitHub PAT has expired or lacks the required scope.
+
+```bash
+# Check the token secret exists
+kubectl get secret github-token -o yaml
+
+# Verify token scope — must have 'repo' scope (or 'contents:write' for fine-grained tokens)
+# Test the token directly:
+TOKEN=$(kubectl get secret github-token -o jsonpath='{.data.token}' | base64 -d)
+curl -s -H "Authorization: token $TOKEN" https://api.github.com/user | jq .login
+```
+
+To rotate the token:
+```bash
+kubectl create secret generic github-token \
+  --from-literal=token=<new-token> \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The controller will automatically retry the failed step on the next reconcile (within 30 seconds).
+
+### Symptom: "403 rate limit exceeded" in controller logs
+
+GitHub's API rate limit (5000 req/hr for authenticated requests) has been hit. This typically happens when many pipelines are active simultaneously.
+
+```bash
+# Check current rate limit
+TOKEN=$(kubectl get secret github-token -o jsonpath='{.data.token}' | base64 -d)
+curl -s -H "Authorization: token $TOKEN" https://api.github.com/rate_limit | jq .rate
+```
+
+The SCM circuit breaker (PR #571, near-term) will handle this automatically once shipped. Until then: reduce the number of concurrent active Bundles, or use a GitHub App token (higher rate limits).
+
+### Symptom: Push succeeds but PR is not opened
+
+Check the controller logs for the PR creation call:
+```bash
+kubectl logs -n kardinal-system deploy/kardinal-controller | grep "open-pr\|pull_request" | tail -20
+```
+
+Common causes:
+- The base branch does not exist in the GitOps repo (check `spec.environments[*].branch`)
+- The commit SHA is empty (a previous git-commit step failed silently — check its status)
+- The GitOps repo is private and the token lacks `repo` scope
+
+---
+
+## RBAC debugging
+
+### Symptom: "forbidden: User ... cannot list resource ... in API group ..."
+
+The controller ServiceAccount lacks a required RBAC permission.
+
+```bash
+# Check what the controller can do
+kubectl auth can-i --list \
+  --as=system:serviceaccount:kardinal-system:kardinal-controller-manager
+
+# Check for RBAC errors in logs
+kubectl logs -n kardinal-system deploy/kardinal-controller | grep -i "forbidden\|permission"
+```
+
+The Helm chart installs a ClusterRole with all required permissions. If you customized RBAC or installed in a restricted namespace, re-apply the Helm chart:
+```bash
+helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+  --namespace kardinal-system --reuse-values
+```
+
+### Symptom: Team cannot create PolicyGates in another team's namespace
+
+This is expected behavior. RBAC isolation prevents cross-namespace modifications:
+- Org gates live in `platform-policies` — only platform admins can write there
+- Team gates live in the team's own namespace
+
+Verify the ClusterRole bindings:
+```bash
+kubectl get rolebinding -A | grep policygate
+```
+
+---
+
+## krocodile / Graph controller issues
+
+### Symptom: Graph shows "GraphRevision: Error" with "CEL compile error"
+
+The Graph spec contains an invalid CEL expression in a `readyWhen` or `propagateWhen` clause.
+
+```bash
+# Check the Graph status
+kubectl get graph -l kardinal.io/bundle=my-app-v1 -o yaml | grep -A20 conditions
+
+# Check krocodile logs
+kubectl logs -n kro-system -l app=kro-controller --tail=100 | grep -i error
+```
+
+This usually means a node template contains malformed `${...}` expressions. Check the translator output by looking at the Graph spec's nodes.
+
+### Symptom: Graph is created but reconciler does not advance (stuck in "Reconciling")
+
+```bash
+# Check Graph revision status
+kubectl get graphrevisions -l kardinal.io/pipeline=my-app 2>/dev/null
+
+# Check for CRD schema issues
+kubectl get crd policygates.kardinal.io -o jsonpath='{.status.conditions}' | python3 -m json.tool
+
+# Verify krocodile is running
+kubectl get pods -n kro-system
+```
+
+If krocodile is in CrashLoopBackOff:
+```bash
+kubectl describe pod -n kro-system -l app=kro-controller
+kubectl logs -n kro-system -l app=kro-controller --previous
+```
+
+### Symptom: PromotionStep CRDs are not created even though Graph exists
+
+The Graph controller creates PromotionSteps only when `propagateWhen` is satisfied for the preceding node. Check the Graph's node statuses:
+```bash
+kubectl get graph -l kardinal.io/bundle=my-app-v1 -o jsonpath='{.items[0].status.nodes}'
+```
+
+If a PolicyGate node is not ready, downstream PromotionSteps will not be created until it passes.
+
+---
+
+## Performance tuning (large-scale deployments)
+
+### 50+ environments / 100+ concurrent Bundles
+
+The controller handles each Bundle independently via a dedicated Graph. For very large deployments, consider:
+
+**1. Increase controller replicas and resource limits:**
+```yaml
+# values.yaml
+controller:
+  replicas: 3
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+```
+
+**2. Tune reconcile concurrency** (controller-runtime default is 1 worker per CRD type):
+```yaml
+controller:
+  extraArgs:
+    - --concurrent-reconcilers=5
+```
+
+**3. Reduce ScheduleClock tick frequency** for pipelines that don't need sub-minute gate re-evaluation:
+```bash
+# Slow the cluster clock to 5m for non-time-sensitive pipelines
+kubectl patch scheduleclock kardinal-clock -n kardinal-system \
+  --type=merge -p '{"spec":{"interval":"5m"}}'
+```
+
+**4. Bundle supersession cleanup** — old Superseded Bundles accumulate. The controller retains 10 Bundles per pipeline by default. Adjust via:
+```yaml
+controller:
+  bundleRetentionCount: 5  # retain only 5 Bundles per pipeline
+```
+
+**5. Monitor controller performance:**
+```bash
+# Check reconcile queue depth (via Prometheus if PrometheusRule is installed)
+kubectl port-forward svc/kardinal-metrics -n kardinal-system 8080:8080
+curl http://localhost:8080/metrics | grep controller_runtime_reconcile_queue_length
+
+# Or use the built-in Prometheus alerts
+kubectl get prometheusrule kardinal-alerts -n kardinal-system -o yaml
+```
