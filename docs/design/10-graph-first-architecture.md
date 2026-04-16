@@ -137,23 +137,27 @@ must be eliminated by migrating to one of the patterns above.
 
 ## Upstream Contribution Policy
 
-Two capabilities are currently missing from krocodile that would eliminate
-transitional workarounds:
+One capability is currently missing from krocodile that would eliminate an existing
+workaround. A second was resolved via the `ScheduleClock` pattern.
 
-### Contribution 1: `recheckAfter` (critical)
+### ~~Contribution 1: `recheckAfter`~~ — RESOLVED via ScheduleClock pattern (#641)
 
-**Problem:** Time-based and metric-based gates need periodic re-evaluation.
-Currently the PolicyGate reconciler implements this via `ctrl.Result{RequeueAfter: N}`
-which triggers a watch event that causes the Graph to re-evaluate. This is a
-workaround — it couples the re-evaluation cadence to the PolicyGate reconciler
-rather than expressing it as a Graph primitive.
+> **Status: Superseded.** The `ScheduleClock` CRD (PR #484) provides watch-driven
+> re-evaluation without a krocodile-native `recheckAfter` primitive. This contribution
+> is now **nice-to-have** for the broader krocodile ecosystem, not a kardinal prerequisite.
+> See `docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation` and
+> §Pending Upstream Contributions for context.
 
-**Solution:** A native `recheckAfter` field on Graph nodes. When a node's
-`readyWhen` evaluates to false, the Graph controller automatically re-queues the
-node after the specified duration. No external controller needed for time-based gates.
+~~**Problem:** Time-based and metric-based gates need periodic re-evaluation.
+Currently the PolicyGate reconciler implements this via `ctrl.Result{RequeueAfter: N}`...~~
 
-**Upstream target:** `experimental/docs/design/` in krocodile branch.
-Track as: https://github.com/ellistarn/kro/issues (open a proposal)
+The kardinal solution: `ScheduleClock` is an Owned node reconciler that writes
+`status.tick` on a configurable interval, generating real Kubernetes watch events.
+PolicyGate nodes that need periodic re-evaluation Watch the `ScheduleClock` object —
+no `recheckAfter` primitive required.
+
+If contributing upstream to krocodile is desired, the target is
+`experimental/docs/design/` in the krocodile branch. It is not blocking any kardinal work.
 
 ### Contribution 2: `dependsOn` (explicit edges)
 
