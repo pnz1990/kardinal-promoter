@@ -94,11 +94,12 @@ nav:
     - PR Evidence: pr-evidence.md
     - Custom Steps: custom-steps.md
     - Rendered Manifests: rendered-manifests.md
-    - Multi-Cluster: distributed-mode.md
-    - SCM Providers: scm-providers.md
-    - Advanced Patterns: advanced-patterns.md
-    - Security: guides/security.md
-    - Monitoring: guides/monitoring.md
+     - Multi-Cluster: distributed-mode.md
+     - SCM Providers: scm-providers.md
+     - Advanced Patterns: advanced-patterns.md
+     - Security: guides/security.md
+     - Monitoring: guides/monitoring.md
+     - Migrating from Kargo: guides/migrating-from-kargo.md
   - Reference:
     - CLI Reference: cli-reference.md
     - Pipeline CRD: pipeline-reference.md
