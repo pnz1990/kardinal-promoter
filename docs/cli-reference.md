@@ -54,6 +54,7 @@ List all Pipelines with the current Bundle and per-environment status.
 
 ```bash
 kardinal get pipelines
+kardinal get pipelines --watch  # live updates, Ctrl-C to quit
 ```
 
 Output:
@@ -67,6 +68,7 @@ frontend     v2.1.0    Verified   Verified   Verified       1d
 Flags:
 - `-n, --namespace <ns>`: filter by namespace (default: current context namespace)
 - `-A, --all-namespaces`: list across all namespaces
+- `-w, --watch`: stream live updates (polls every 2s, Ctrl-C to quit)
 - `-o, --output <format>`: output format (`table`, `json`, `yaml`)
 
 ### kardinal get steps
@@ -75,6 +77,7 @@ Show all PromotionSteps and PolicyGates for a Pipeline's current promotion.
 
 ```bash
 kardinal get steps <pipeline>
+kardinal get steps <pipeline> --watch  # live updates, Ctrl-C to quit
 ```
 
 Output:
@@ -87,6 +90,7 @@ prod          kustomize-set-image   WaitingForMerge   PR #144 open
 
 Flags:
 - `--bundle <version>`: show steps for a specific Bundle (default: latest active)
+- `-w, --watch`: stream live updates (polls every 2s, Ctrl-C to quit)
 
 ### kardinal get bundles
 

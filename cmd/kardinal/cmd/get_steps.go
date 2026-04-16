@@ -16,6 +16,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,26 +26,54 @@ import (
 )
 
 func newGetStepsCmd() *cobra.Command {
-	return &cobra.Command{
+	var watchFlag bool
+
+	cmd := &cobra.Command{
 		Use:     "steps <pipeline>",
 		Aliases: []string{"step"},
 		Short:   "List PromotionSteps for a pipeline",
-		Args:    cobra.ExactArgs(1),
-		RunE:    runGetSteps,
+		Long: `List PromotionSteps for a pipeline.
+
+Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runGetSteps(cmd, args, watchFlag)
+		},
 	}
+	cmd.Flags().BoolVarP(&watchFlag, "watch", "w", false,
+		"Stream live updates (polls every 2s, Ctrl-C to quit)")
+	return cmd
 }
 
-func runGetSteps(cmd *cobra.Command, args []string) error {
-	client, ns, err := buildClient()
+func runGetSteps(cmd *cobra.Command, args []string, watch bool) error {
+	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get steps: %w", err)
 	}
 
 	pipeline := args[0]
+
+	if !watch {
+		return getStepsOnce(cmd.OutOrStdout(), c, ns, pipeline)
+	}
+
+	// Watch mode: poll every 2s and refresh the terminal output.
+	for {
+		_, _ = fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
+		if err := getStepsOnce(cmd.OutOrStdout(), c, ns, pipeline); err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
+		time.Sleep(getPipelinesWatchInterval) // reuse 2s constant from get_pipelines.go
+	}
+}
+
+// getStepsOnce fetches and renders a single snapshot of PromotionStep status.
+func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
 	ctx := context.Background()
 
 	var steps v1alpha1.PromotionStepList
-	if err := client.List(ctx, &steps,
+	if err := c.List(ctx, &steps,
 		sigs_client.InNamespace(ns),
 		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
 	); err != nil {
@@ -55,7 +85,7 @@ func runGetSteps(cmd *cobra.Command, args []string) error {
 	// non-Superseded bundle names, then filter steps accordingly.
 	activeBundles := make(map[string]bool)
 	var bundles v1alpha1.BundleList
-	if listErr := client.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr == nil {
+	if listErr := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr == nil {
 		for _, b := range bundles.Items {
 			if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
 				activeBundles[b.Name] = true
@@ -76,13 +106,12 @@ func runGetSteps(cmd *cobra.Command, args []string) error {
 		activeSteps = steps.Items
 	}
 
-	out := cmd.OutOrStdout()
 	switch OutputFormat() {
 	case "json":
-		return WriteJSON(out, activeSteps)
+		return WriteJSON(w, activeSteps)
 	case "yaml":
-		return WriteYAML(out, activeSteps)
+		return WriteYAML(w, activeSteps)
 	default:
-		return FormatStepsTable(out, activeSteps)
+		return FormatStepsTable(w, activeSteps)
 	}
 }
