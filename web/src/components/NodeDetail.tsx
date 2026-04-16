@@ -14,7 +14,7 @@
 //
 // #527: EventsPanel — K8s events stream fetched per step when node is selected.
 import { useState, useEffect, useCallback } from 'react'
-import type { GraphNode, PromotionStep } from '../types'
+import type { GraphNode, PromotionStep, Bundle } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
@@ -30,6 +30,8 @@ interface Props {
   namespace?: string
   /** Steps for the active bundle — from parent poll, no independent fetch needed (#322). */
   steps?: PromotionStep[]
+  /** Active bundle — used for the image diff preview in Promoting/WaitingForMerge state (#563). */
+  activeBundle?: Bundle
 }
 
 /** Format an ISO timestamp to a human-readable string. */
@@ -336,7 +338,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
   )
 }
 
-export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps }: Props) {
+export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
   const [stepLoading, setStepLoading] = useState(false)
   const [promoteState, setPromoteState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -664,6 +666,38 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       {node.message && (
         <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
           <strong style={{ color: '#cbd5e1' }}>Message:</strong> {node.message}
+         </div>
+      )}
+
+      {/* #563: Image diff preview — shown when environment is actively promoting.
+          Surfaces "what will change" without requiring the operator to open the PR. */}
+      {activeBundle?.images && activeBundle.images.length > 0 &&
+        ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(node.state) && (
+        <div style={{
+          marginBottom: '0.75rem',
+          padding: '0.6rem 0.75rem',
+          background: '#1e293b',
+          borderRadius: '6px',
+          border: '1px solid #334155',
+        }}>
+          <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.4rem', fontWeight: 600 }}>
+            Promoting Image{activeBundle.images.length > 1 ? 's' : ''}
+          </div>
+          {activeBundle.images.map((img, i) => (
+            <div key={i} style={{
+              fontFamily: 'monospace',
+              fontSize: '0.78rem',
+              color: '#e2e8f0',
+              wordBreak: 'break-all',
+              marginBottom: i < activeBundle.images!.length - 1 ? '0.3rem' : 0,
+            }}>
+              {img.repository && <span style={{ color: '#7dd3fc' }}>{img.repository}</span>}
+              {img.tag && <><span style={{ color: '#94a3b8' }}>:</span><span style={{ color: '#4ade80' }}>{img.tag}</span></>}
+              {!img.tag && img.digest && (
+                <><span style={{ color: '#94a3b8' }}>@</span><span style={{ color: '#a78bfa' }}>{img.digest.slice(0, 16)}…</span></>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

@@ -641,6 +641,7 @@ export function App() {
                   pipelineName={selectedPipeline}
                   namespace={activePipeline?.namespace ?? 'default'}
                   steps={activeSteps}
+                  activeBundle={activeBundle}
                 />
               )}
             </div>
