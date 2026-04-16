@@ -20,7 +20,7 @@ set -euo pipefail
 #                           key prefixes; adds IsDNS1123Label check in parseNodeList and
 #                           IsDNS1123Subdomain check in validateIdentityLabelKey)
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-948ad6c}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-745998f}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 
