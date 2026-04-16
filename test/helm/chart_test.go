@@ -251,3 +251,68 @@ func TestHelmTemplateTopologySpreadForMultiReplica(t *testing.T) {
 	assert.Contains(t, rendered, "topology.kubernetes.io/zone",
 		"topology spread must use zone topology key")
 }
+
+func TestHelmTemplatePrometheusRuleDisabledByDefault(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// PrometheusRule must NOT be created by default (requires Prometheus Operator)
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.NotContains(t, rendered, "kind: PrometheusRule",
+		"PrometheusRule must NOT be rendered by default (disabled)")
+}
+
+func TestHelmTemplatePrometheusRuleEnabledWhenConfigured(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// PrometheusRule must be created when enabled
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "prometheusRule.enabled=true")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template with prometheusRule.enabled=true must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.Contains(t, rendered, "kind: PrometheusRule",
+		"PrometheusRule must be rendered when prometheusRule.enabled=true")
+	assert.Contains(t, rendered, "monitoring.coreos.com/v1",
+		"PrometheusRule must use monitoring.coreos.com/v1 apiVersion")
+	assert.Contains(t, rendered, "KardinalControllerDown",
+		"PrometheusRule must include KardinalControllerDown alert")
+	assert.Contains(t, rendered, "KardinalHighReconcileErrors",
+		"PrometheusRule must include KardinalHighReconcileErrors alert")
+	assert.Contains(t, rendered, "KardinalBundleReconcilerStalled",
+		"PrometheusRule must include KardinalBundleReconcilerStalled alert")
+	assert.Contains(t, rendered, "KardinalWorkQueueBacklog",
+		"PrometheusRule must include KardinalWorkQueueBacklog alert")
+	assert.Contains(t, rendered, "KardinalPolicyGateReconcileSlow",
+		"PrometheusRule must include KardinalPolicyGateReconcileSlow alert")
+	assert.Contains(t, rendered, "KardinalWebhookErrors",
+		"PrometheusRule must include KardinalWebhookErrors alert")
+	// Every alert must have a runbook_url
+	assert.Contains(t, rendered, "runbook_url",
+		"All alerts must include runbook_url annotation")
+}
+
+func TestHelmTemplatePrometheusRuleAdditionalLabels(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	// Additional labels must be propagated to the PrometheusRule
+	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "prometheusRule.enabled=true",
+		"--set", "prometheusRule.additionalLabels.release=kube-prometheus-stack")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "helm template with additionalLabels must succeed:\n%s", string(out))
+
+	rendered := string(out)
+	assert.Contains(t, rendered, "release: kube-prometheus-stack",
+		"additionalLabels must be propagated to the PrometheusRule metadata")
+}

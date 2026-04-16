@@ -159,31 +159,70 @@ my-app     prod   30d      2.1/day       45m avg       3.2%        1
 
 ---
 
-## Alerting Examples
+## Alerting Rules — PrometheusRule (Helm)
 
-### Controller is not reconciling
+kardinal-promoter ships a `PrometheusRule` resource that works with the [Prometheus Operator](https://github.com/prometheus-operator/prometheus-operator) (kube-prometheus-stack, Victoria Metrics Operator, etc.).
+
+### Enable via Helm
+
+```yaml
+# values.yaml
+prometheusRule:
+  enabled: true
+  # Match your Prometheus Operator's selector labels:
+  additionalLabels:
+    release: kube-prometheus-stack
+```
+
+Install or upgrade:
+
+```bash
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+  --set prometheusRule.enabled=true \
+  --set 'prometheusRule.additionalLabels.release=kube-prometheus-stack'
+```
+
+### Included alerts
+
+| Alert | Expression | Severity | Description |
+|---|---|---|---|
+| `KardinalControllerDown` | `up{job="kardinal-promoter"} == 0` for 5m | critical | Controller unreachable; promotions stalled |
+| `KardinalHighReconcileErrors` | reconcile error rate > 0.1/s for 5m | warning | Reconciler failing; promotions may be stuck |
+| `KardinalBundleReconcilerStalled` | no bundle reconciles for 10m | warning | Controller idle; possible leader election issue |
+| `KardinalWorkQueueBacklog` | work queue depth > 100 for 5m | warning | Controller overloaded or starved of CPU |
+| `KardinalPolicyGateReconcileSlow` | PolicyGate P99 latency > 10s | warning | Gate evaluations stale; promotions blocked late |
+| `KardinalWebhookErrors` | webhook 5xx rate > 0 for 5m | warning | Bundle creation API failing; CI pipelines cannot promote |
+
+Every alert includes a `runbook_url` annotation pointing to the relevant section in [troubleshooting.md](../troubleshooting.md).
+
+### Manual alerting (without Prometheus Operator)
+
+If you don't use the Prometheus Operator, copy the rules into your `prometheus.yml`:
 
 ```yaml
 groups:
-  - name: kardinal
+  - name: kardinal-promoter
     rules:
-      - alert: KardinalControllerNotReconciling
-        expr: |
-          rate(controller_runtime_reconcile_total{controller="bundle"}[10m]) == 0
-        for: 10m
+      - alert: KardinalControllerDown
+        expr: up{job="kardinal-promoter"} == 0
+        for: 5m
         labels:
-          severity: warning
+          severity: critical
         annotations:
-          summary: "kardinal BundleReconciler has not run in 10 minutes"
+          summary: "kardinal-promoter controller is not scraping"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#controller-not-running"
 
       - alert: KardinalHighReconcileErrors
         expr: |
-          rate(controller_runtime_reconcile_errors_total[5m]) > 0.1
+          sum by (controller) (
+            rate(controller_runtime_reconcile_errors_total[5m])
+          ) > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "kardinal reconcile error rate > 0.1/s for {{ $labels.controller }}"
+          summary: "kardinal {{ $labels.controller }} reconcile error rate elevated"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#reconcile-errors"
 
       - alert: KardinalWorkQueueBacklog
         expr: workqueue_depth{name=~"bundle|promotionstep|policygate"} > 100
@@ -192,6 +231,7 @@ groups:
           severity: warning
         annotations:
           summary: "kardinal work queue depth > 100 for {{ $labels.name }}"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#work-queue-backlog"
 ```
 
 ---

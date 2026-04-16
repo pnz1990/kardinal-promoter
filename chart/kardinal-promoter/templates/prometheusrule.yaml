@@ -1,0 +1,90 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}
+  namespace: {{ .Values.prometheusRule.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: kardinal-promoter
+      rules:
+        # Controller availability
+        - alert: KardinalControllerDown
+          expr: up{job="{{ include "kardinal-promoter.fullname" . }}"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "kardinal-promoter controller is not scraping"
+            description: "The kardinal-promoter controller has been unreachable for more than 5 minutes. Promotions are stalled."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#controller-not-running"
+
+        # Reconcile errors — any controller error rate above 0.1/s for 5m
+        - alert: KardinalHighReconcileErrors
+          expr: |
+            sum by (controller) (
+              rate(controller_runtime_reconcile_errors_total[5m])
+            ) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "kardinal {{ "{{" }} $labels.controller {{ "}}" }} reconciler error rate is elevated"
+            description: "The {{ "{{" }} $labels.controller {{ "}}" }} reconciler is failing at {{ "{{" }} $value | humanize {{ "}}" }} errors/s. Promotions may be stuck or failing silently."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#reconcile-errors"
+
+        # PromotionStep stuck: BundleReconciler has not run for 10 minutes
+        - alert: KardinalBundleReconcilerStalled
+          expr: |
+            rate(controller_runtime_reconcile_total{controller="bundle"}[10m]) == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "kardinal BundleReconciler has not run in 10 minutes"
+            description: "No Bundle reconcile events in the last 10 minutes. The controller may be stuck, leader election may be broken, or there may be no active Bundles."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#bundle-reconciler-stalled"
+
+        # Work queue backlog — controller is falling behind
+        - alert: KardinalWorkQueueBacklog
+          expr: |
+            workqueue_depth{name=~"bundle|promotionstep|policygate"} > 100
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "kardinal {{ "{{" }} $labels.name {{ "}}" }} work queue depth > 100"
+            description: "The {{ "{{" }} $labels.name {{ "}}" }} work queue has {{ "{{" }} $value | humanize {{ "}}" }} items pending for more than 5 minutes. Controller may be overloaded."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#work-queue-backlog"
+
+        # PolicyGate reconciler slow — gates may be blocking promotions with stale evaluations
+        - alert: KardinalPolicyGateReconcileSlow
+          expr: |
+            histogram_quantile(0.99,
+              rate(controller_runtime_reconcile_time_seconds_bucket{controller="policygate"}[5m])
+            ) > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "kardinal PolicyGate reconcile P99 latency is above 10s"
+            description: "PolicyGate reconciles are taking more than 10s at P99. Gates may be stale and blocking or unblocking promotions late."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#policygate-slow"
+
+        # Webhook error rate — Bundle creation API is failing
+        - alert: KardinalWebhookErrors
+          expr: |
+            rate(controller_runtime_webhook_requests_total{code=~"5.."}[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "kardinal Bundle creation webhook is returning 5xx errors"
+            description: "The /api/v1/bundles webhook is returning {{ "{{" }} $value | humanize {{ "}}" }} 5xx errors/s. CI pipelines calling the webhook will fail to create Bundles."
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#webhook-errors"
+{{- end }}
