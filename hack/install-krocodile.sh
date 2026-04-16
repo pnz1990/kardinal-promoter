@@ -16,9 +16,10 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    948ad6c (2026-04-14 — fix: validate node IDs produce valid DNS-1123 label
-#                           key prefixes; adds IsDNS1123Label check in parseNodeList and
-#                           IsDNS1123Subdomain check in validateIdentityLabelKey)
+# Last verified:    745998f (2026-04-15 — stdlib: Decorator as bootstrap primitive, Kind built on
+#                           Decorator; watch-kind → watchKind rename; forEach array format support;
+#                           DAG finalizer guard for non-resource nodes; Definition compile-time
+#                           type inference via SchemaResolver)
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
 KROCODILE_COMMIT="${KROCODILE_COMMIT:-745998f}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
