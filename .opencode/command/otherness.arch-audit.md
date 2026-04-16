@@ -15,4 +15,4 @@ for line in open('otherness-config.yaml'):
 " 2>/dev/null || echo "$HOME/.otherness/agents")
 ```
 
-Read and follow `$AGENTS_PATH/arch-audit.md`.
+Read and follow `$AGENTS_PATH/otherness.arch-audit.md`.
