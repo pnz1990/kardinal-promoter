@@ -379,7 +379,13 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
 	// Update per-step status to reflect what executed this reconcile.
-	updateStepStatuses(ps, eng.StepNames(), ps.Status.CurrentStepIndex, execErr != nil, result.Message)
+	failMsg := ""
+	if execErr != nil {
+		failMsg = execErr.Error()
+	} else if result.Status == steps.StepFailed {
+		failMsg = result.Message
+	}
+	updateStepStatuses(ps, eng.StepNames(), ps.Status.CurrentStepIndex, execErr != nil, failMsg)
 
 	if execErr != nil {
 		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
