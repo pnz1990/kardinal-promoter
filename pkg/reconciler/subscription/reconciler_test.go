@@ -278,7 +278,6 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
 
-	callCount := 0
 	r := &subscription.Reconciler{
 		Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
@@ -291,14 +290,12 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 	// First reconcile — creates the Bundle
 	_, err := r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	callCount++
 
 	// Second reconcile with the SAME digest (simulating concurrent/restart scenario)
 	// — the status may not yet reflect the new digest on the second call.
 	// The label-selector check must prevent a duplicate.
 	_, err = r.Reconcile(context.Background(), req)
 	require.NoError(t, err)
-	callCount++
 
 	var bundleList kardinalv1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList,
