@@ -132,10 +132,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 // createBundle creates a Bundle CRD from the WatchResult.
 // Returns the created Bundle's name on success.
+//
+// Deduplication: before creating, checks for an existing Bundle with label
+// kardinal.io/source-digest=<digest> and kardinal.io/subscription=<name>.
+// This is safe under HA and concurrent reconciles — unlike the status.lastSeenDigest
+// comparison, which has a read-compare-write race (#620).
 func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Subscription, result *source.WatchResult, now time.Time) (string, error) {
 	ns := sub.Spec.Namespace
 	if ns == "" {
 		ns = sub.Namespace
+	}
+
+	// Short-circuit: check if a Bundle for this digest already exists in the API server.
+	// Uses a label selector — safe under concurrent reconciles and HA deployments.
+	if result.Digest != "" {
+		existingName, err := r.findExistingBundleForDigest(ctx, ns, sub.Name, result.Digest)
+		if err != nil {
+			return "", fmt.Errorf("createBundle: check for existing bundle: %w", err)
+		}
+		if existingName != "" {
+			zerolog.Ctx(ctx).Debug().
+				Str("bundle", existingName).
+				Str("digest", result.Digest).
+				Msg("bundle already exists for digest — skipping creation")
+			return existingName, nil
+		}
 	}
 
 	// Derive bundle name from subscription name + short digest.
@@ -164,6 +185,10 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 			Labels: map[string]string{
 				"kardinal.io/pipeline":     sub.Spec.Pipeline,
 				"kardinal.io/subscription": sub.Name,
+				// source-digest enables idempotent dedup by label selector (#620):
+				// any reconcile (including concurrent HA replicas) can find this
+				// bundle before creating a duplicate.
+				"kardinal.io/source-digest": sanitizeLabelValue(result.Digest),
 			},
 		},
 		Spec: kardinalv1alpha1.BundleSpec{
@@ -255,6 +280,53 @@ func (r *Reconciler) now() time.Time {
 		return r.NowFn()
 	}
 	return time.Now().UTC()
+}
+
+// findExistingBundleForDigest looks up a Bundle by label selector for the given
+// subscription + digest combination. Returns the Bundle name if found, or "" if not.
+//
+// Using a label selector is safe under HA and concurrent reconciles — it reads from
+// the API server (or cache) without a read-compare-write race on status fields (#620).
+func (r *Reconciler) findExistingBundleForDigest(ctx context.Context, namespace, subscriptionName, digest string) (string, error) {
+	safeDigest := sanitizeLabelValue(digest)
+	if safeDigest == "" {
+		return "", nil
+	}
+
+	var list kardinalv1alpha1.BundleList
+	if err := r.List(ctx, &list,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			"kardinal.io/subscription":  subscriptionName,
+			"kardinal.io/source-digest": safeDigest,
+		},
+	); err != nil {
+		return "", fmt.Errorf("findExistingBundleForDigest: list: %w", err)
+	}
+	if len(list.Items) == 0 {
+		return "", nil
+	}
+	// Return the first match. Under normal operation there is at most one.
+	return list.Items[0].Name, nil
+}
+
+// sanitizeLabelValue truncates and sanitizes a string for use as a Kubernetes label value.
+// Label values must be 63 characters or fewer, and may only contain alphanumerics,
+// hyphens, underscores, and dots, starting and ending with an alphanumeric.
+// Digests (SHA-256 hex, OCI sha256:...) are shortened to the last 40 hex chars.
+func sanitizeLabelValue(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Strip common prefixes like "sha256:"
+	if len(s) > 7 && s[:7] == "sha256:" {
+		s = s[7:]
+	}
+	// Kubernetes label values must be <= 63 chars.
+	if len(s) > 63 {
+		s = s[len(s)-63:]
+	}
+	return s
 }
 
 // SetupWithManager registers the SubscriptionReconciler with the controller-runtime Manager.
