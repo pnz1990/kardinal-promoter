@@ -2,7 +2,28 @@
 
 > Status: Active — every logic leak is tracked here
 > Related: `docs/design/10-graph-first-architecture.md`
-> Last audited: 2026-04-14
+> Last audited: 2026-04-15
+
+---
+
+## New Findings — 2026-04-15 Architectural Review
+
+The following items were identified in a full architecture review against krocodile 745998f.
+All are tracked as GitHub issues.
+
+| ID | Issue | Description | Priority |
+|---|---|---|---|
+| SCHED-1 | #616 | `schedule.*` CEL variables are map injection in PolicyGate reconciler, NOT a kro library on Graph DefaultEnvironment — docs claim otherwise | HIGH |
+| GB-BUNDLE | #626 | Bundle reconciler does not watch Pipeline changes — Graph goes stale when Pipeline spec is edited | HIGH |
+| AGENTS-CEL | #627 | AGENTS.md claims `pkg/cel/NewCELEnvironment()` exists and `schedule.*` are Graph functions — both false | HIGH (FIXED) |
+| GB-INCLUDE | #619 | `filterByIntent` Go filtering should be Graph `includeWhen` expressions | MEDIUM |
+| PS-UP | #625 | `spec.upstreamVerifiedN` in PromotionStep is redundant — Graph `propagateWhen` already handles sequencing | MEDIUM |
+| PG-UP | #618 | `spec.upstreamEnvironment` in PolicyGate is Graph wiring, not gate logic — confuses users | MEDIUM |
+| GB-WATCH | #622 | Bundle is not a Watch node in the Graph — image/intent changes are invisible to the Graph | MEDIUM |
+| SUB-DUP | #620 | Subscription deduplication uses status field, not idempotent label selector | MEDIUM |
+| GB-DEF | #617 | Naming computation in Go (celSafeSlug, etc.) should move to Definition nodes | LOW |
+| DEC-RESEARCH | #623 | Research spike: can krocodile Decorator replace the Go translator entirely? | LOW |
+| PRST-DOC | #624 | PRStatus uses readyWhen not propagateWhen — design intent needs documentation | LOW |
 
 ---
 

@@ -88,15 +88,20 @@ This is the correct pattern for:
 
 **Q3. Can this be expressed as a CEL extension on the Graph's CEL environment?**
 
-Custom CEL libraries (`schedule.isWeekend()`, `quantity.parse()`) can be registered
-on the Graph's CEL environment via `WithCustomDeclarations`. This is appropriate for
-**stateless, cheap, synchronous** computations (time functions, string utilities,
-Kubernetes quantity parsing).
+Custom CEL libraries can be registered on the Graph's CEL environment via
+`WithCustomDeclarations`. This is appropriate for **stateless, cheap, synchronous**
+computations (string utilities, Kubernetes quantity parsing).
+
+**Important caveat on `schedule.*`:** `schedule.isWeekend`, `schedule.hour`, and
+`schedule.dayOfWeek` are NOT currently registered as Graph CEL extensions. They are
+context map variables injected by the PolicyGate reconciler. They are not available
+in krocodile Graph `readyWhen`/`propagateWhen` expressions. See issue #616 for
+the path to making these available Graph-wide.
 
 This is **not** appropriate for:
 - HTTP calls (blocks reconcile loop)
 - External API queries (no retry, no backoff, no timeout injection)
-- Non-deterministic operations
+- Non-deterministic operations that need retry semantics
 
 **If none of Q1-Q3 apply: STOP. This requires human architectural input.**
 
