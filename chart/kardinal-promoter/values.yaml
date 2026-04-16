@@ -194,3 +194,16 @@ pdb:
 # zones to prevent both replicas from landing on the same node.
 topologySpread:
   enabled: true
+
+# -- PrometheusRule for Prometheus Operator.
+# Creates a PrometheusRule CR with pre-built alerting rules for kardinal-promoter.
+# Requires the Prometheus Operator CRD (monitoring.coreos.com/v1/PrometheusRule).
+# Disabled by default — enable when using kube-prometheus-stack or similar.
+prometheusRule:
+  # -- Create the PrometheusRule resource. Requires Prometheus Operator CRD.
+  enabled: false
+  # -- Additional labels to add to the PrometheusRule (for Prometheus selector matching).
+  # Example: { "release": "kube-prometheus-stack" }
+  additionalLabels: {}
+  # -- Namespace to deploy the PrometheusRule into. Defaults to Release.Namespace.
+  namespace: ""
