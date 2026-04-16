@@ -7,7 +7,9 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.6.0)
+## Currently Available (v0.6.0+)
+
+> v0.6.0 released 2026-04-14. Post-v0.6.0 features (per-step observability, `--watch`, `kardinal doctor`, PrometheusRule CRD) are on main and will be released as v0.7.0.
 
 All of the following are implemented and shipped:
 
@@ -120,24 +122,19 @@ changewindow.isAllowed("business-hours")    # true when the window is NOT curren
 changewindow.isBlocked("holiday-freeze")    # true when the window IS currently blocking
 ```
 
+**Per-step progress observability** — `PromotionStep.status.steps[]` exposes each step (git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check) with individual state, start time, and duration. (#630)
+
+**`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh. (#629)
+
+**`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, krocodile, RBAC, and GitHub token. (#607)
+
+**Shell completion** — bash, zsh, fish, and PowerShell completion via `kardinal completion <shell>`. (#606)
+
+**PrometheusRule CRD in Helm chart** — 6 pre-built alerting rules: promotion stuck, high rollback rate, policy gate blocked, SCM errors. (#621)
+
 ---
 
 ## Near-Term (v0.7.0 — active development)
-
-### Per-step progress observability ([#592](https://github.com/pnz1990/kardinal-promoter/issues/592))
-
-Add `status.steps[]` to PromotionStep so each step (git-clone, kustomize-set-image, git-commit,
-open-pr, wait-for-merge, health-check) is individually visible with its own state, start time,
-and duration. No architecture change — the step engine already tracks this; it is a status
-enrichment.
-
-### Library-based git operations ([#495](https://github.com/pnz1990/kardinal-promoter/issues/495))
-
-**Implementation complete — shipped in v0.6.0.**
-
-Replaced `exec.Command("git")` with the `go-git` library (`#517`, merged). Eliminates
-the hard dependency on a `git` binary in the controller container, improves performance
-and portability. (`exec.Command("kustomize")` was replaced in v0.6.0 via `#494`.)
 
 ### `kardinal-agent` standalone binary
 
