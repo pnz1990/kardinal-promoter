@@ -25,7 +25,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DIST = path.join(__dirname, '../../dist')
+// server.mjs lives at web/test/e2e/mock-server/server.mjs
+// dist/ lives at web/dist/ — need to go up 3 levels from __dirname
+const DIST = path.join(__dirname, '../../../dist')
 const PORT = parseInt(process.env.KARDINAL_E2E_PORT ?? '3001', 10)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────

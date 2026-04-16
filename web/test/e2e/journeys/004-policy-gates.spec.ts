@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Journey 004 — Policy gates auto-expand when blocked (#524)', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     // Select the pipeline that has blocked gates (kardinal-test-app)
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(800) // wait for data load

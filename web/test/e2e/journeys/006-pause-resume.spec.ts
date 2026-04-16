@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Journey 006 — Pause and Resume pipeline', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(500)
   })

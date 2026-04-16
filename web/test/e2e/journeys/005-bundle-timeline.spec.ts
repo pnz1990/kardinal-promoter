@@ -7,7 +7,7 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Journey 005 — Bundle timeline interaction', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(800) // wait for bundle data
   })

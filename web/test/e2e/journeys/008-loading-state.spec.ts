@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Journey 008 — Loading state clears (#522 regression guard)', () => {
   test('Step 1: Page loads without perpetual Loading... indicator', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
 
     // Wait up to 5s for the loading indicator to clear
     // After first successful fetch, "Loading..." should be replaced with "just now"
@@ -16,13 +16,13 @@ test.describe('Journey 008 — Loading state clears (#522 regression guard)', ()
   })
 
   test('Step 2: Freshness indicator shows "just now" after initial load', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     // After data loads, the indicator should say "just now" or "Xs ago"
     await expect(page.getByText(/just now|ago/i)).toBeVisible({ timeout: 5000 })
   })
 
   test('Step 3: No dual "Loading..." + "just now" simultaneous render', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     await page.waitForTimeout(1000) // let data load
 
     // Should never see both "Loading..." AND a timestamp at the same time
@@ -36,7 +36,7 @@ test.describe('Journey 008 — Loading state clears (#522 regression guard)', ()
   })
 
   test('Step 4: After pipeline selection, DAG loads without persistent spinner', async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     await page.getByText('kardinal-test-app').first().click()
 
     // DAG should render within 3s

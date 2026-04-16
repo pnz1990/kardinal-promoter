@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test'
 
 test.describe('Journey 003 — Health chip CSS class regression guard (#532)', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
+    await page.goto('./') // #632: was '/' which resolves to host root; './'' resolves to baseURL
     // Wait for pipeline list to render
     await expect(page.getByText('kardinal-test-app')).toBeVisible()
   })
