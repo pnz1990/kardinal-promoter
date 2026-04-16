@@ -99,6 +99,7 @@ nav:
     - Advanced Patterns: advanced-patterns.md
     - Security: guides/security.md
     - Monitoring: guides/monitoring.md
+    - Migrating from Kargo: guides/migrating-from-kargo.md
   - Reference:
     - CLI Reference: cli-reference.md
     - Pipeline CRD: pipeline-reference.md
