@@ -22,7 +22,7 @@ spec:
           annotations:
             summary: "kardinal-promoter controller is not scraping"
             description: "The kardinal-promoter controller has been unreachable for more than 5 minutes. Promotions are stalled."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#controller-not-running"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#start-here-kardinal-doctor"
 
         # Reconcile errors — any controller error rate above 0.1/s for 5m
         - alert: KardinalHighReconcileErrors
@@ -36,7 +36,7 @@ spec:
           annotations:
             summary: "kardinal {{ "{{" }} $labels.controller {{ "}}" }} reconciler error rate is elevated"
             description: "The {{ "{{" }} $labels.controller {{ "}}" }} reconciler is failing at {{ "{{" }} $value | humanize {{ "}}" }} errors/s. Promotions may be stuck or failing silently."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#reconcile-errors"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#promotion-is-stuck"
 
         # PromotionStep stuck: BundleReconciler has not run for 10 minutes
         - alert: KardinalBundleReconcilerStalled
@@ -48,7 +48,7 @@ spec:
           annotations:
             summary: "kardinal BundleReconciler has not run in 10 minutes"
             description: "No Bundle reconcile events in the last 10 minutes. The controller may be stuck, leader election may be broken, or there may be no active Bundles."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#bundle-reconciler-stalled"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#bundle-not-promoting"
 
         # Work queue backlog — controller is falling behind
         - alert: KardinalWorkQueueBacklog
@@ -60,7 +60,7 @@ spec:
           annotations:
             summary: "kardinal {{ "{{" }} $labels.name {{ "}}" }} work queue depth > 100"
             description: "The {{ "{{" }} $labels.name {{ "}}" }} work queue has {{ "{{" }} $value | humanize {{ "}}" }} items pending for more than 5 minutes. Controller may be overloaded."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#work-queue-backlog"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#graph-controller-issues"
 
         # PolicyGate reconciler slow — gates may be blocking promotions with stale evaluations
         - alert: KardinalPolicyGateReconcileSlow
@@ -74,7 +74,7 @@ spec:
           annotations:
             summary: "kardinal PolicyGate reconcile P99 latency is above 10s"
             description: "PolicyGate reconciles are taking more than 10s at P99. Gates may be stale and blocking or unblocking promotions late."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#policygate-slow"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#promotion-is-stuck"
 
         # Webhook error rate — Bundle creation API is failing
         - alert: KardinalWebhookErrors
@@ -86,5 +86,5 @@ spec:
           annotations:
             summary: "kardinal Bundle creation webhook is returning 5xx errors"
             description: "The /api/v1/bundles webhook is returning {{ "{{" }} $value | humanize {{ "}}" }} 5xx errors/s. CI pipelines calling the webhook will fail to create Bundles."
-            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#webhook-errors"
+            runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#webhook-issues"
 {{- end }}
