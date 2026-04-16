@@ -192,19 +192,40 @@ func injectHealthWatchNodes(
 		// Substitute the "healthNode" placeholder in ReadyWhen with the actual node ID.
 		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
 
-		// Build an identity-only template so krocodile detects it as a Watch reference.
-		// Watch reference detection (experimental/controller/types.go: DetectReference):
-		// template has apiVersion + kind + metadata.name; no spec or other fields.
-		watchNode := graph.GraphNode{
-			ID: nodeID,
-			Template: map[string]interface{}{
+		// Build the Graph node template.
+		// krocodile auto-detects the reference type from the template structure
+		// (experimental/controller/types.go: DetectReference):
+		//   - Watch:     apiVersion + kind + metadata.name  (single named resource)
+		//   - WatchKind: apiVersion + kind, no metadata.name (collection by selector)
+		var nodeTemplate map[string]interface{}
+		if spec.UseWatchKind {
+			// WatchKind: no metadata.name — krocodile watches all resources matching
+			// the label selector in the given namespace. The spec.labelSelector field
+			// carries the selector; krocodile uses it when listing the collection.
+			nodeTemplate = map[string]interface{}{
+				"apiVersion": spec.APIVersion,
+				"kind":       spec.Kind,
+				"spec": map[string]interface{}{
+					"namespace":     spec.Namespace,
+					"labelSelector": spec.LabelSelector,
+				},
+			}
+		} else {
+			// Watch: identity-only template (apiVersion + kind + metadata.name).
+			// Existing behavior — unchanged.
+			nodeTemplate = map[string]interface{}{
 				"apiVersion": spec.APIVersion,
 				"kind":       spec.Kind,
 				"metadata": map[string]interface{}{
 					"name":      spec.Name,
 					"namespace": spec.Namespace,
 				},
-			},
+			}
+		}
+
+		watchNode := graph.GraphNode{
+			ID:        nodeID,
+			Template:  nodeTemplate,
 			ReadyWhen: []string{readyWhen},
 		}
 		g.Spec.Nodes = append(g.Spec.Nodes, watchNode)
@@ -241,9 +262,10 @@ func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec)
 	return health.CheckOptions{
 		Type: env.Health.Type,
 		Resource: health.ResourceConfig{
-			Name:      pipelineName,
-			Namespace: env.Name,
-			Condition: "Available",
+			Name:          pipelineName,
+			Namespace:     env.Name,
+			Condition:     "Available",
+			LabelSelector: env.Health.LabelSelector, // non-nil → WatchKind mode
 		},
 		ArgoCD: health.ArgoCDConfig{
 			Name:      pipelineName + "-" + env.Name,

@@ -451,3 +451,98 @@ func findHealthNode(g *graph.Graph, envName string) *graph.GraphNode {
 	}
 	return nil
 }
+
+// TestInjectHealthWatchNodes_ResourceWatchKind verifies that health.type=resource with
+// health.labelSelector emits a WatchKind node (no metadata.name, spec.labelSelector present)
+// and uses list.all() in the readyWhen CEL expression.
+func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
+	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
+		{
+			Name: "prod",
+			Health: kardinalv1alpha1.HealthConfig{
+				Type: "resource",
+				LabelSelector: map[string]string{
+					"app":                  "nginx",
+					"kardinal.io/pipeline": "nginx",
+				},
+			},
+		},
+	})
+	g := makeTestGraph("prod")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	watchNode := findHealthNode(g, "prod")
+	require.NotNil(t, watchNode, "health node for prod must be present")
+
+	tmpl := watchNode.Template
+	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
+	assert.Equal(t, "Deployment", tmpl["kind"])
+
+	// WatchKind: must NOT have metadata.name — krocodile detects WatchKind by its absence.
+	md, hasMetadata := tmpl["metadata"].(map[string]interface{})
+	if hasMetadata {
+		_, hasName := md["name"]
+		assert.False(t, hasName, "WatchKind node template must NOT have metadata.name")
+	}
+
+	// WatchKind: must have spec.labelSelector.
+	spec, ok := tmpl["spec"].(map[string]interface{})
+	require.True(t, ok, "WatchKind node template must have a spec field")
+	labelSelector, ok := spec["labelSelector"].(map[string]string)
+	require.True(t, ok, "WatchKind spec must have labelSelector of type map[string]string")
+	assert.Equal(t, "nginx", labelSelector["app"])
+	assert.Equal(t, "nginx", labelSelector["kardinal.io/pipeline"])
+
+	// ReadyWhen must use list.all() form.
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], ".all(",
+		"WatchKind readyWhen must use .all() to check all items")
+	assert.NotContains(t, watchNode.ReadyWhen[0], "healthProd.status",
+		"WatchKind readyWhen must not use single-object path")
+}
+
+// TestInjectHealthWatchNodes_ResourceWatchKindVsWatch verifies that adding a LabelSelector
+// switches from Watch to WatchKind without affecting the Watch case for the same health type.
+func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
+	// Watch case: no LabelSelector
+	watchPipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "uat", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+	})
+	gWatch := makeTestGraph("uat")
+	_, err := injectHealthWatchNodes(watchPipeline, gWatch)
+	require.NoError(t, err)
+
+	watchNode := findHealthNode(gWatch, "uat")
+	require.NotNil(t, watchNode)
+	tmplWatch := watchNode.Template
+	// Watch: must have metadata.name
+	md := tmplWatch["metadata"].(map[string]interface{})
+	assert.Equal(t, "myapp", md["name"])
+	assert.Contains(t, watchNode.ReadyWhen[0], "healthUat.status.conditions.exists(")
+
+	// WatchKind case: with LabelSelector
+	watchKindPipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+		{
+			Name: "uat",
+			Health: kardinalv1alpha1.HealthConfig{
+				Type:          "resource",
+				LabelSelector: map[string]string{"app": "myapp"},
+			},
+		},
+	})
+	gWatchKind := makeTestGraph("uat")
+	_, err = injectHealthWatchNodes(watchKindPipeline, gWatchKind)
+	require.NoError(t, err)
+
+	watchKindNode := findHealthNode(gWatchKind, "uat")
+	require.NotNil(t, watchKindNode)
+	tmplWatchKind := watchKindNode.Template
+	// WatchKind: must NOT have metadata.name
+	_, hasMetadata := tmplWatchKind["metadata"].(map[string]interface{})
+	assert.False(t, hasMetadata, "WatchKind node must not have a metadata block")
+	assert.Contains(t, watchKindNode.ReadyWhen[0], ".all(",
+		"WatchKind readyWhen must use .all() predicate")
+}

@@ -75,11 +75,15 @@ type CheckOptions struct {
 // ResourceConfig is the health check configuration for a Kubernetes Deployment.
 type ResourceConfig struct {
 	// Name is the Deployment name. Defaults to pipeline name.
+	// Ignored when LabelSelector is set.
 	Name string
 	// Namespace is the Deployment namespace. Defaults to environment name.
 	Namespace string
 	// Condition is the condition type to check. Default: "Available".
 	Condition string
+	// LabelSelector enables WatchKind mode — watches all Deployments with these labels.
+	// When non-empty, Name is ignored and a WatchKind node is emitted by the translator.
+	LabelSelector map[string]string
 }
 
 // ArgoCDConfig is the health check configuration for an Argo CD Application.
