@@ -125,6 +125,14 @@ type BundleStatus struct {
 	// Used to detect Graph deletion and trigger recreation.
 	// +optional
 	GraphRef string `json:"graphRef,omitempty"`
+
+	// PipelineSpecHash is the SHA-256 hash of the Pipeline spec at the time the
+	// Graph was last created for this Bundle. When the Bundle reconciler is
+	// re-queued by a Pipeline watch event, it compares the current Pipeline spec
+	// hash to this field. A mismatch triggers Graph deletion so Translate
+	// recreates it with the updated spec.
+	// +optional
+	PipelineSpecHash string `json:"pipelineSpecHash,omitempty"`
 }
 
 // BundleMetrics holds deployment efficiency metrics for a single Bundle (K-05).
