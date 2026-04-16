@@ -70,6 +70,27 @@ On controller restart: the reconciler lists all open PRs with the `kardinal` lab
 Transition to HealthChecking: when `status.prMerged = true`.
 Transition to Failed: when the PR is closed without merge (`status.prClosed = true, status.prMerged = false`). The promotion is cancelled.
 
+> **Architecture note — why `readyWhen` not `propagateWhen` on the PRStatus Graph node:**
+>
+> The PRStatus Watch node in the Graph uses `readyWhen: ${prstatus.status.merged == true}`.
+> This is intentional. Using `propagateWhen` instead would create a circular dependency:
+> the PromotionStep node includes `${prstatus.metadata.name}` in its template, creating
+> a data-flow edge from PRStatus to PromotionStep. If PRStatus had `propagateWhen: false`,
+> the PromotionStep could never start (it depends on PRStatus propagating).
+>
+> The `WaitingForMerge → HealthChecking` transition is enforced by the PromotionStep
+> reconciler state machine, not by Graph `propagateWhen`. The PRStatus `readyWhen` node
+> provides a UI signal (shows green when the PR is merged) and drives the `prStatusRef`
+> field in the PromotionStep template so the reconciler can find the PRStatus CRD by
+> name without polling GitHub. This is not a design flaw — it is an intentional consequence
+> of the flat DAG topology (see docs/design/11-graph-purity-tech-debt.md §Flat DAG
+> Compilation — Why It Does Not Work).
+>
+> A future architecture change that splits HealthChecking into a separate CRD/reconciler
+> would allow using `propagateWhen` on PRStatus to gate health checks at the Graph level.
+> Until then, the state machine enforces sequencing correctly; the Graph provides
+> observability.
+
 ### State: HealthChecking
 
 The `health-check` step is executing. The health adapter (see 05-health-adapters) verifies the target environment is healthy.
