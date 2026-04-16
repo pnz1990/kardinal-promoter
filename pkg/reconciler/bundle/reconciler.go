@@ -22,6 +22,9 @@ package bundle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -46,9 +49,11 @@ type BundleTranslator interface {
 }
 
 // GraphChecker checks whether a kro Graph exists by name in a given namespace.
-// Abstracted as an interface for testability without a real Kubernetes cluster.
+// Also supports Graph deletion for pipeline spec change handling (#626).
 type GraphChecker interface {
 	GraphExists(ctx context.Context, namespace, name string) (bool, error)
+	// DeleteGraph deletes the Graph CR. Returns nil if the Graph does not exist.
+	DeleteGraph(ctx context.Context, namespace, name string) error
 }
 
 // Reconciler watches Bundle objects, sets Available phase, triggers translation,
@@ -135,9 +140,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				log.Warn().Err(err).Msg("failed to check parent pipeline (non-fatal), continuing sync")
 			}
 		}
-		// For Promoting bundles: ensure the Graph still exists and recreate if needed.
-		// Fixes issue #490: manual Graph deletion left bundles stuck in Promoting.
+		// For Promoting bundles: check if Pipeline spec changed (#626) and if so
+		// delete the Graph so it gets recreated with the updated spec. Also ensure
+		// the Graph still exists in case of external deletion (#490).
 		if b.Status.Phase == "Promoting" {
+			if err := r.ensurePipelineSpecCurrent(ctx, log, &b); err != nil {
+				log.Error().Err(err).Msg("pipeline spec sync failed — requeuing")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
 			if err := r.ensureGraphExists(ctx, log, &b); err != nil {
 				log.Error().Err(err).Msg("graph recreation failed — requeuing")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -206,6 +216,70 @@ func (r *Reconciler) ensureGraphExists(ctx context.Context, log zerolog.Logger,
 	}
 
 	log.Info().Str("graph", graphName).Msg("graph recreated after external deletion")
+	return nil
+}
+
+// ensurePipelineSpecCurrent detects when a Pipeline spec has changed since the Graph
+// was last created, and deletes the Graph so ensureGraphExists recreates it with the
+// updated spec.
+//
+// This fixes issue #626: Pipeline spec changes (new environments, changed policyNamespaces,
+// updated git config) were invisible to in-flight Bundles because the Graph spec is
+// static — it is a Kubernetes resource set at creation time.
+//
+// Mechanism:
+//  1. Hash the current Pipeline spec.
+//  2. Compare to Bundle.status.pipelineSpecHash (set when the Graph was created).
+//  3. If different: delete the Graph. ensureGraphExists runs next and recreates it.
+//  4. Update Bundle.status.pipelineSpecHash to the new hash.
+//
+// Graph-first: we only write to our own CRD status (pipelineSpecHash). We delete
+// the Graph because the Bundle is the ownerReference — we own the Graph lifecycle.
+// Cross-CRD mutation rule: deleting the Graph (which we own) is permitted by the
+// ownerReference relationship; it is not "writing to CRD B's status."
+func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.Logger,
+	b *kardinalv1alpha1.Bundle) error {
+	if r.Translator == nil || r.GraphChecker == nil {
+		return nil
+	}
+
+	var pipeline kardinalv1alpha1.Pipeline
+	if err := r.Get(ctx, client.ObjectKey{Name: b.Spec.Pipeline, Namespace: b.Namespace}, &pipeline); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // Pipeline deleted — orphan guard will clean up on next reconcile
+		}
+		return fmt.Errorf("ensurePipelineSpecCurrent: get pipeline: %w", err)
+	}
+
+	currentHash := pipelineSpecHashFor(&pipeline)
+	if currentHash == "" || currentHash == b.Status.PipelineSpecHash {
+		return nil // no change or hash computation failed
+	}
+
+	// Pipeline spec changed. Delete the existing Graph so ensureGraphExists recreates it.
+	graphName := b.Status.GraphRef
+	if graphName == "" {
+		graphName = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
+	}
+
+	log.Info().
+		Str("graph", graphName).
+		Str("oldHash", b.Status.PipelineSpecHash).
+		Str("newHash", currentHash).
+		Msg("pipeline spec changed — deleting Graph for regeneration")
+
+	if delErr := r.GraphChecker.DeleteGraph(ctx, b.Namespace, graphName); delErr != nil {
+		// Non-fatal: log and return nil so ensureGraphExists can still try to recreate.
+		log.Warn().Err(delErr).Str("graph", graphName).Msg("failed to delete stale Graph (non-fatal)")
+	}
+
+	// Update the stored hash so we don't re-trigger on the next reconcile.
+	patch := client.MergeFrom(b.DeepCopy())
+	b.Status.PipelineSpecHash = currentHash
+	if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
+		log.Warn().Err(patchErr).Msg("failed to update PipelineSpecHash (non-fatal)")
+	}
+
 	return nil
 }
 
@@ -343,7 +417,8 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// Advance to Promoting
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Promoting"
-	b.Status.GraphRef = graphName // store for recreation detection (#490)
+	b.Status.GraphRef = graphName                              // store for recreation detection (#490)
+	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // store for change detection (#626)
 
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -532,6 +607,20 @@ func (r *Reconciler) Start(ctx context.Context) error {
 	return nil
 }
 
+// pipelineSpecHashFor returns a stable SHA-256 hex hash of the given Pipeline spec.
+// Used to detect Pipeline spec changes that require Graph regeneration (#626).
+// The hash covers only spec fields (not metadata or status) to avoid spurious
+// recompilations from label/annotation updates or status writes.
+func pipelineSpecHashFor(pipeline *kardinalv1alpha1.Pipeline) string {
+	b, err := json.Marshal(pipeline.Spec)
+	if err != nil {
+		// Should never happen for a valid Pipeline object.
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // SetupWithManager registers the BundleReconciler with the controller-runtime Manager.
 // It also registers the reconciler as a Runnable so that Start() is called after
 // cache sync to perform startup reconciliation.
@@ -541,9 +630,27 @@ func (r *Reconciler) Start(ctx context.Context) error {
 //     to sync evidence. Replaces the old cross-CRD copyEvidenceToBundle.
 //   - Graph deletion: when the kro Graph backing a Bundle is deleted externally,
 //     re-queue the Bundle so it can recreate the Graph (#490).
+//   - Pipeline changes: when a Pipeline spec changes, re-queue all referencing
+//     Bundles so the Graph is regenerated with the updated spec (#626).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.Add(r); err != nil {
 		return fmt.Errorf("add reconciler as runnable: %w", err)
+	}
+
+	// Index Bundles by spec.pipeline for efficient lookup in pipelineMapper.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&kardinalv1alpha1.Bundle{},
+		"spec.pipeline",
+		func(obj client.Object) []string {
+			b, ok := obj.(*kardinalv1alpha1.Bundle)
+			if !ok || b.Spec.Pipeline == "" {
+				return nil
+			}
+			return []string{b.Spec.Pipeline}
+		},
+	); err != nil {
+		return fmt.Errorf("index Bundle by spec.pipeline: %w", err)
 	}
 
 	// promotionStepMapper maps a PromotionStep change event to a Bundle reconcile request.
@@ -587,11 +694,42 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Kind:    "Graph",
 	})
 
+	// pipelineMapper maps a Pipeline change event to reconcile requests for all
+	// Bundles that reference that Pipeline. When a Pipeline spec changes, each
+	// referencing Bundle is re-queued. The reconciler then compares the stored
+	// PipelineSpecHash against the current spec; a mismatch deletes the Graph
+	// so Translate recreates it with the updated spec (#626).
+	pipelineMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var bundles kardinalv1alpha1.BundleList
+		if err := r.List(ctx, &bundles,
+			client.InNamespace(obj.GetNamespace()),
+			client.MatchingFields{"spec.pipeline": obj.GetName()},
+		); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).
+				Str("pipeline", obj.GetName()).
+				Msg("pipelineMapper: list bundles failed — pipeline changes may not propagate")
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0, len(bundles.Items))
+		for i := range bundles.Items {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: client.ObjectKey{
+					Name:      bundles.Items[i].Name,
+					Namespace: bundles.Items[i].Namespace,
+				},
+			})
+		}
+		return reqs
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Bundle{}).
 		// Watch PromotionSteps: evidence sync when PS state changes.
 		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(promotionStepMapper)).
 		// Watch Graphs: recreate when Graph is deleted externally (#490).
 		Watches(graphObject, handler.EnqueueRequestsFromMapFunc(graphMapper)).
+		// Watch Pipelines: re-queue Bundles when Pipeline spec changes so the
+		// Graph is regenerated to reflect the new Pipeline configuration (#626).
+		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(pipelineMapper)).
 		Complete(r)
 }

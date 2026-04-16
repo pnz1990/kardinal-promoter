@@ -99,6 +99,13 @@ func (c *GraphClient) Delete(ctx context.Context, namespace, name string) error 
 	return nil
 }
 
+// DeleteGraph deletes a Graph CR by namespace and name, returning nil if not found.
+// This is the same as Delete; provided so GraphClient satisfies the bundle.GraphChecker
+// interface without requiring a type assertion (#626).
+func (c *GraphClient) DeleteGraph(ctx context.Context, namespace, name string) error {
+	return c.Delete(ctx, namespace, name)
+}
+
 // List lists all Graph CRs in a namespace matching the given labels.
 func (c *GraphClient) List(ctx context.Context, namespace string,
 	matchLabels map[string]string) ([]*Graph, error) {

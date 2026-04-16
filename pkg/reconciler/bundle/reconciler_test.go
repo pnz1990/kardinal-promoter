@@ -5,6 +5,9 @@ package bundle_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -1169,6 +1172,10 @@ func (m *mockGraphChecker) GraphExists(_ context.Context, _, _ string) (bool, er
 	return m.exists, m.err
 }
 
+func (m *mockGraphChecker) DeleteGraph(_ context.Context, _, _ string) error {
+	return nil // no-op for tests that only need GraphExists
+}
+
 // TestBundleReconciler_GraphRefStoredOnPromotion verifies that Bundle.status.graphRef
 // is set when the bundle transitions to Promoting (fixes #490 prerequisite).
 func TestBundleReconciler_GraphRefStoredOnPromotion(t *testing.T) {
@@ -1317,4 +1324,191 @@ func TestBundleReconciler_GraphCheckerErrorIsNonFatal(t *testing.T) {
 	// Error should NOT propagate — GraphChecker failures are non-fatal.
 	require.NoError(t, err,
 		"GraphChecker error must be non-fatal — reconcile should not return error")
+}
+
+// --- Pipeline spec change detection tests (#626) ---
+
+// mockGraphCheckerV2 extends the GraphChecker interface with DeleteGraph support.
+// Used to test pipeline spec change detection.
+type mockGraphCheckerV2 struct {
+	exists      bool
+	existsErr   error
+	existsCount int
+	deleteCount int
+	deleteErr   error
+}
+
+func (m *mockGraphCheckerV2) GraphExists(_ context.Context, _, _ string) (bool, error) {
+	m.existsCount++
+	return m.exists, m.existsErr
+}
+
+func (m *mockGraphCheckerV2) DeleteGraph(_ context.Context, _, _ string) error {
+	m.deleteCount++
+	return m.deleteErr
+}
+
+// TestBundleReconciler_PipelineSpecChange_DeletesGraph verifies that when a Pipeline
+// spec changes (different from the stored PipelineSpecHash), the reconciler deletes
+// the existing Graph so it is regenerated with the updated spec (#626).
+func TestBundleReconciler_PipelineSpecChange_DeletesGraph(t *testing.T) {
+	scheme := newScheme()
+
+	// Pipeline with NEW spec (two environments)
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod"},
+			},
+		},
+	}
+
+	// Bundle that was created with OLD spec (one environment)
+	// The stored hash will differ from the current pipeline spec hash.
+	bndl := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Pipeline: "my-app",
+			Type:     "image",
+		},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase:            "Promoting",
+			GraphRef:         "my-app-my-app-v1",
+			PipelineSpecHash: "stale-hash-from-old-spec", // deliberately stale
+		},
+	}
+
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
+	checker := &mockGraphCheckerV2{exists: true} // graph exists but spec is stale
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pipeline, bndl).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
+		Build()
+
+	r := &bundle.Reconciler{
+		Client:       c,
+		Translator:   translator,
+		GraphChecker: checker,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Graph must have been deleted
+	assert.Equal(t, 1, checker.deleteCount,
+		"Graph must be deleted when Pipeline spec hash changes")
+
+	// Bundle status must have updated hash
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &updated))
+	assert.NotEqual(t, "stale-hash-from-old-spec", updated.Status.PipelineSpecHash,
+		"PipelineSpecHash must be updated to current spec hash")
+	assert.NotEmpty(t, updated.Status.PipelineSpecHash,
+		"PipelineSpecHash must not be empty after update")
+}
+
+// TestBundleReconciler_PipelineSpecUnchanged_NoDelete verifies that when the Pipeline
+// spec hash matches the stored hash, no Graph deletion occurs.
+func TestBundleReconciler_PipelineSpecUnchanged_NoDelete(t *testing.T) {
+	scheme := newScheme()
+
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	// Store the correct hash for the current Pipeline spec
+	specBytes, _ := json.Marshal(pipeline.Spec)
+	hashSum := sha256.Sum256(specBytes)
+	currentHash := hex.EncodeToString(hashSum[:])
+
+	bndl := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Pipeline: "my-app",
+			Type:     "image",
+		},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase:            "Promoting",
+			GraphRef:         "my-app-my-app-v1",
+			PipelineSpecHash: currentHash, // already up to date
+		},
+	}
+
+	checker := &mockGraphCheckerV2{exists: true}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pipeline, bndl).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
+		Build()
+
+	r := &bundle.Reconciler{
+		Client:       c,
+		GraphChecker: checker,
+		Translator:   &mockTranslator{graphName: "my-app-my-app-v1"},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, checker.deleteCount,
+		"Graph must NOT be deleted when Pipeline spec is unchanged")
+}
+
+// TestBundleReconciler_PipelineSpecHashStoredOnPromotion verifies that when a Bundle
+// transitions from Available to Promoting, the PipelineSpecHash is stored (#626).
+func TestBundleReconciler_PipelineSpecHashStoredOnPromotion(t *testing.T) {
+	scheme := newScheme()
+
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	bndl := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec: kardinalv1alpha1.BundleSpec{
+			Pipeline: "my-app",
+			Type:     "image",
+		},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase: "Available", // will transition to Promoting
+		},
+	}
+
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(pipeline, bndl).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
+		Build()
+
+	r := &bundle.Reconciler{
+		Client:     c,
+		Translator: translator,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &updated))
+
+	assert.Equal(t, "Promoting", updated.Status.Phase)
+	assert.NotEmpty(t, updated.Status.PipelineSpecHash,
+		"PipelineSpecHash must be stored when bundle transitions to Promoting")
 }
