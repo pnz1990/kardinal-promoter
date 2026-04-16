@@ -2,6 +2,12 @@
 
 List Pipelines
 
+### Synopsis
+
+List Pipelines and their per-environment promotion status.
+
+Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
+
 ```
 kardinal get pipelines [name] [flags]
 ```
@@ -11,6 +17,7 @@ kardinal get pipelines [name] [flags]
 ```
   -A, --all-namespaces   List pipelines across all namespaces (adds NAMESPACE column)
   -h, --help             help for pipelines
+  -w, --watch            Stream live updates (polls every 2s, Ctrl-C to quit)
 ```
 
 ### Options inherited from parent commands
