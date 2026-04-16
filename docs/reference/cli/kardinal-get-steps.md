@@ -2,6 +2,12 @@
 
 List PromotionSteps for a pipeline
 
+### Synopsis
+
+List PromotionSteps for a pipeline.
+
+Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
+
 ```
 kardinal get steps <pipeline> [flags]
 ```
@@ -9,7 +15,8 @@ kardinal get steps <pipeline> [flags]
 ### Options
 
 ```
-  -h, --help   help for steps
+  -h, --help    help for steps
+  -w, --watch   Stream live updates (polls every 2s, Ctrl-C to quit)
 ```
 
 ### Options inherited from parent commands
