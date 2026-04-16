@@ -45,6 +45,15 @@ export interface Bundle {
   environments?: BundleEnvStatus[]
   /** #504: True when this bundle was created as a rollback of a previous bundle. */
   isRollback?: boolean
+  /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
+  images?: ImageRef[]
+}
+
+/** #563: A container image reference — repository, tag, and optional digest. */
+export interface ImageRef {
+  repository?: string
+  tag?: string
+  digest?: string
 }
 
 /** #503: Per-environment promotion status for a Bundle. */

@@ -1005,3 +1005,37 @@ func TestUIAPI_StepEvents_InvalidPath(t *testing.T) {
 		assert.NotEqual(t, http.StatusOK, w.Code, "path %s should not return 200", path)
 	}
 }
+
+// TestUIAPI_ListBundles_ImagesIncluded verifies that container images are included
+// in the bundle response for the NodeDetail diff preview (#563).
+func TestUIAPI_ListBundles_ImagesIncluded(t *testing.T) {
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v2", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "my-app",
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/pnz1990/kardinal-test-app", Tag: "sha-9349a3f"},
+			},
+		},
+		Status: v1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines/my-app/bundles", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiBundleResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 1)
+	require.Len(t, resp[0].Images, 1, "images must be included in bundle response")
+	assert.Equal(t, "ghcr.io/pnz1990/kardinal-test-app", resp[0].Images[0].Repository)
+	assert.Equal(t, "sha-9349a3f", resp[0].Images[0].Tag)
+}

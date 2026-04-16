@@ -92,6 +92,8 @@ type uiBundleResponse struct {
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
 	// #503: Per-environment statuses for the bundle timeline view.
 	Environments []uiBundleEnvStatus `json:"environments,omitempty"`
+	// #563: Container images in this Bundle — used by NodeDetail diff preview.
+	Images []v1alpha1.ImageRef `json:"images,omitempty"`
 }
 
 // uiBundleEnvStatus is the per-environment status summary for the timeline (#503).
@@ -401,6 +403,7 @@ func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Re
 			Pipeline:   b.Spec.Pipeline,
 			CreatedAt:  b.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00"),
 			Provenance: b.Spec.Provenance,
+			Images:     b.Spec.Images, // #563: expose images for diff preview
 		}
 		if len(envStatuses) > 0 {
 			resp.Environments = envStatuses
