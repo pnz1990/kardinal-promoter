@@ -31,15 +31,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **krocodile upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
+- **Shell completion** — bash, zsh, fish, and PowerShell completion scripts via `kardinal completion <shell>` (#606)
+- **`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, krocodile, RBAC, and GitHub token before first use (#607)
+- **Graceful shutdown** — controller drains in-flight reconcile loops on SIGTERM; no promotion steps interrupted by pod restarts (#605)
+- **PodDisruptionBudget + topology spread** — minAvailable: 1 PDB and `topologySpreadConstraints` in Helm chart for HA deployments (#598)
 - **krocodile bundled in Helm chart** — single `helm install` now installs both kardinal-promoter and the krocodile Graph controller; no separate `hack/install-krocodile.sh` step needed (#590)
 - **Library-based git operations** — replaced `exec.Command("git")` with `go-git` library (`#517`). Controller no longer requires a `git` binary. Improves portability (distroless images) and performance.
-
-
-
-**Enterprise CD patterns, UI control plane, ScheduleClock, Subscription CRD**
-
-### Added
-
 - **K-07: Integration test step** — `integration-test` built-in step runs a Kubernetes Job inline during promotion; triggers `onFailure: abort | rollback` on failure
 - **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD; no external SCM API calls in the hot path
 - **K-09: `kardinal override`** — emergency gate override with mandatory reason + time limit; audit record written to Bundle status and surfaced in PR evidence body
@@ -57,6 +55,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Controller `/tmp` mount — `emptyDir` volume added for git-clone with `readOnlyRootFilesystem: true` (#609)
 - `policy simulate` now searches all namespaces — org-level gates in `platform-policies` were never found
 - `pkg/cel` standalone CEL evaluator eliminated — evaluation moved inline to PolicyGate reconciler
 - Rollback PR title and body now include rollback notice and the `kardinal/rollback` label
