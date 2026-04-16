@@ -67,9 +67,35 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Controller `/tmp` mount — `emptyDir` volume added for git-clone with `readOnlyRootFilesystem: true` (#609)
 - `policy simulate` now searches all namespaces — org-level gates in `platform-policies` were never found
 - `pkg/cel` standalone CEL evaluator eliminated — evaluation moved inline to PolicyGate reconciler
-- Rollback PR title and body now include rollback notice and the `kardinal/rollback` label
+ - Rollback PR title and body now include rollback notice and the `kardinal/rollback` label
 
 ---
+
+## [v0.5.0] — 2026-04-13
+
+**Pipeline Expressiveness (K-Series), Enterprise UI Control Plane, krocodile upgrade**
+
+### Added
+
+- **K-01: Contiguous healthy soak** — `bake.minutes` + `bake.policy: reset-on-alarm` on environment spec; `BakeElapsedMinutes` and `BakeResets` tracked in PromotionStep status
+- **K-02: Pre-deploy gate type** — `when: pre-deploy` on PolicyGate spec; blocks PromotionStep in `Waiting` state before `git-clone` starts
+- **K-03: Auto-rollback with ABORT vs ROLLBACK distinction** — `onHealthFailure: rollback | abort | none` per environment
+- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL function evaluates to `true` when the window is active/blocking
+- **K-05: Bundle.status.metrics** — commitToFirstStageMinutes, commitToProductionMinutes, bakeResets, operatorInterventions; `kardinal metrics` CLI command
+- **K-06: Wave topology** — `wave: N` field on environment spec; Wave N automatically depends on all Wave N-1 stages
+- **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence
+- **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD
+- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; override record in Bundle status and PR evidence body
+- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions
+- **UI control plane** — all 7 UI issues shipped (#462–#468): fleet health dashboard, pipeline ops view, per-stage bake countdown, in-UI actions (pause/resume/rollback/override), release metrics bar, bundle timeline, policy gate detail panel
+
+### Fixed
+
+- krocodile upgraded to `948ad6c` — DNS-1123 node ID validation, drift timers, propagation hash improvements
+- `changewindow.isAllowed()` / `changewindow.isBlocked()` CEL helpers added alongside the map-style access
+
+---
+
 
 ## [v0.4.0] — 2026-04-12
 

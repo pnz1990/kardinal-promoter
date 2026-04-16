@@ -39,11 +39,12 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       case 'Pending': return 'Pending'
       default:       return 'Unknown'
     }
-  }
+   }
   switch (state) {
     case 'Succeeded':
     case 'Verified':
     case 'Pass':
+    case 'Ready':
       return 'Ready'
     case 'Running':
     case 'Promoting':

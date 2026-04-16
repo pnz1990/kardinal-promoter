@@ -29,7 +29,9 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const PORT = parseInt(process.env.KARDINAL_E2E_PORT ?? '3001', 10)
-const BASE_URL = `http://localhost:${PORT}/ui/`
+// Use origin as baseURL so page.goto('/') hits the root redirect → /ui/.
+// Tests use page.goto('/') which the mock server redirects to /ui/ automatically.
+const BASE_URL = `http://localhost:${PORT}`
 
 export default defineConfig({
   testDir: './test/e2e/journeys',

@@ -33,6 +33,7 @@ test.describe('Journey 001 — Pipeline list', () => {
   })
 
   test('Step 5: KARDINAL brand is visible in sidebar', async ({ page }) => {
-    await expect(page.getByText('KARDINAL')).toBeVisible()
+    // Use exact match to avoid matching pipeline names that contain "kardinal"
+    await expect(page.getByText('KARDINAL', { exact: true })).toBeVisible()
   })
 })

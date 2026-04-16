@@ -29,8 +29,7 @@ test.describe('Journey 006 — Pause and Resume pipeline', () => {
   })
 
   test('Step 3: Resume button is present (for paused pipeline)', async ({ page }) => {
-    // Both pause and resume buttons should exist in the ActionBar
-    // The component renders both, toggling between them
-    await expect(page.locator('[role="button"]').filter({ hasText: /pause|resume/i }).first()).toBeVisible()
+    // The ActionBar renders both Pause and Resume buttons — use role=button with name match
+    await expect(page.getByRole('button', { name: /pause/i }).first()).toBeVisible()
   })
 })
