@@ -56,8 +56,9 @@ type evaluator struct {
 }
 
 // newEvaluator creates an Evaluator backed by a CEL environment that includes
-// all kro library extensions — the same function set as kro Graph readyWhen
-// expressions. This ensures PolicyGate expressions are compatible with Graph CEL.
+// all kro library extensions — the same extended function set as kro's Graph CEL.
+// (Note: kro Graph expressions and PolicyGate expressions share the same library
+// functions, but they run in separate environments and have different context variables.)
 //
 // Functions available in expressions:
 //   - Standard strings (cel-go/ext)
@@ -68,8 +69,13 @@ type evaluator struct {
 //   - changewindow.isAllowed(name) → bool  (true when the named window is NOT active/blocking)
 //   - changewindow.isBlocked(name) → bool  (true when the named window IS active/blocking)
 //
-// Context variables (populated by buildContext):
-//   - bundle, schedule, environment, metrics, upstream, previousBundle, changewindow
+// Context variables (populated by buildContext in reconciler.go):
+//   - bundle, environment, metrics, upstream, previousBundle, changewindow
+//   - schedule — a plain map variable {isWeekend:bool, hour:int, dayOfWeek:string}
+//     NOTE: schedule.* is a map injection, NOT a CEL library function.
+//     It is only available here (PolicyGate CEL context), not in krocodile
+//     Graph readyWhen/propagateWhen expressions. See issue #616 and
+//     docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation.
 func newEvaluator() (*evaluator, error) {
 	env, err := goccel.NewEnv(
 		goccel.Variable("bundle", goccel.DynType),

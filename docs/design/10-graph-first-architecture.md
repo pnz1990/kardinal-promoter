@@ -88,10 +88,18 @@ This is the correct pattern for:
 
 **Q3. Can this be expressed as a CEL extension on the Graph's CEL environment?**
 
-Custom CEL libraries (`schedule.isWeekend()`, `quantity.parse()`) can be registered
-on the Graph's CEL environment via `WithCustomDeclarations`. This is appropriate for
-**stateless, cheap, synchronous** computations (time functions, string utilities,
-Kubernetes quantity parsing).
+Custom CEL libraries (`quantity.parse()`, string utilities) can be registered on the
+Graph's CEL environment via `WithCustomDeclarations`. This is appropriate for
+**stateless, cheap, synchronous** computations.
+
+> **Current status of `schedule.*`:** `schedule.isWeekend`, `schedule.hour`,
+> `schedule.dayOfWeek` are **NOT yet implemented as CEL library extensions**.
+> They are plain map variables injected into the PolicyGate CEL context by the
+> PolicyGate reconciler. They are available in PolicyGate expressions only — they
+> do NOT work in krocodile Graph `readyWhen`/`propagateWhen` expressions.
+> Registering them as a proper Q3 CEL library on the Graph DefaultEnvironment is
+> tracked in `docs/design/11-graph-purity-tech-debt.md` §ScheduleClock Implementation
+> (design goal, not yet shipped).
 
 This is **not** appropriate for:
 - HTTP calls (blocks reconcile loop)
@@ -111,6 +119,15 @@ evaluation in kardinal is either:
 1. A **reconciler that computes a result and writes it to a CRD status** (so Graph
    can read the result via readyWhen), or
 2. A **CEL library extension** registered on the Graph's environment.
+
+> **Note on `pkg/cel/`:** There is no `pkg/cel/NewCELEnvironment()` function.
+> The CEL environment for PolicyGate evaluation is constructed in
+> `pkg/reconciler/policygate/cel_evaluator.go:newEvaluator()` using `cel.NewEnv()`
+> directly, importing `github.com/kubernetes-sigs/kro/pkg/cel/library` extensions.
+> `pkg/cel/` contains only the library sub-package, conversion utilities, and
+> sentinels — it is not a facade with a constructor. Any new feature that needs CEL
+> evaluation must call `cel.NewEnv(...)` directly with explicit library imports, as
+> done in `cel_evaluator.go`. The `pkg/cel/` directory must not grow.
 
 There is no separate "kardinal CEL evaluator" at steady state. `pkg/cel` in its
 current form exists as a transitional artifact (see Known Exceptions below) and

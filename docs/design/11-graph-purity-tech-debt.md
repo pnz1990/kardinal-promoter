@@ -144,12 +144,16 @@ See §Flat DAG Compilation — Why It Does Not Work below.
 The observable-progress gap this issue was trying to address is solved by #592:
 adding `status.steps[]` to PromotionStep (no architecture change needed).
 
-### #130 and #68 (eliminate pkg/cel): fully unblocked
+### #130 and #68 (eliminate pkg/cel): partially complete
 
-With `ScheduleClock` + `schedule.*` CEL library (from #138 solution), `pkg/cel` can be deleted
-entirely:
-- Non-time-based expressions → Graph Watch nodes (no krocodile needed)
-- Time-based expressions (`schedule.*`) → CEL library on Graph DefaultEnvironment + ScheduleClock trigger
+`pkg/cel/` no longer has an `environment.go` or a `NewCELEnvironment()` constructor — that
+was deleted in #701 and the CEL environment construction moved to
+`pkg/reconciler/policygate/cel_evaluator.go`. What remains in `pkg/cel/` is:
+- `library/` — the kro library sub-package (ALLOWED — imported by cel_evaluator.go)
+- `conversion/` and `sentinels/` — utilities
+
+Full elimination of `pkg/cel/` (moving library imports directly into cel_evaluator.go)
+is blocked on `schedule.*` CEL library (#616) and is tracked there.
 
 ### #400 (Journey 2 multi-cluster): unblocked via Stage 14 implementation
 
@@ -158,17 +162,28 @@ a kardinal implementation task. Journey 2 test can be written once Stage 14 ship
 
 ---
 
-## ScheduleClock Implementation — #138 Unblocked
+## ScheduleClock Implementation — #138 Unblocked (Design Goal, Not Yet Shipped)
 
-> Closes: #138, #130, #68 (eliminates `pkg/cel` entirely)
+> **Status: Design approved. `ScheduleClock` CRD and reconciler are implemented.**
+> **`schedule.*` CEL library extension (Part 2 below) is NOT yet implemented.**
+> **Current state: `schedule.*` values are map variables in the PolicyGate reconciler,**
+> **not CEL library functions on the Graph DefaultEnvironment. See issue #616.**
+>
+> Closes: #138, #130, #68 (eliminates `pkg/cel` entirely) — pending Part 2
 > Suggested by: Ellis Tarn (krocodile author)
 > Architecture: ✅ Pure — Q2 (Owned node) + Q3 (CEL library extension)
 
 ### Problem
 
-Time-based PolicyGate expressions (`!schedule.isWeekend()`, `schedule.hour >= 9`) need
+Time-based PolicyGate expressions (`!schedule.isWeekend`, `schedule.hour >= 9`) need
 periodic re-evaluation. Nothing in the cluster changes when the clock advances — no watch
 event fires, so the Graph never re-evaluates these nodes.
+
+> **Current workaround (in production today):** The PolicyGate reconciler injects
+> `schedule.*` as a plain map variable into the CEL evaluation context. The
+> `ScheduleClock` reconciler re-enqueues all PolicyGates on each tick, triggering
+> re-evaluation. This works, but `schedule.*` is not available in Graph
+> `readyWhen`/`propagateWhen` expressions — only in the PolicyGate CEL context.
 
 ### Solution
 
@@ -213,10 +228,11 @@ status:
   tick: "2026-04-13T14:00:00Z"   # updated every interval
 ```
 
-**2. `schedule.*` CEL library on Graph DefaultEnvironment** — stateless functions:
+**2. `schedule.*` CEL library on Graph DefaultEnvironment** — stateless functions
+**(NOT YET IMPLEMENTED — design goal, tracked in issue #616):**
 
 ```go
-// pkg/cel/schedule/library.go
+// pkg/cel/schedule/library.go  ← does not exist yet
 // Registered on the Graph's DefaultEnvironment via WithCustomDeclarations.
 // schedule.isWeekend() — true if Saturday or Sunday UTC
 // schedule.hour()      — current UTC hour (0-23)
@@ -239,12 +255,11 @@ contains `schedule.` gets an automatic data-flow reference to the `ScheduleClock
     #  clock reference creates a data-flow edge — re-evaluated on every tick
 ```
 
-### What this eliminates
+### What this eliminates (when Part 2 ships)
 
-- `pkg/cel/environment.go` — deleted entirely (#130, #68)
-- `ctrl.Result{RequeueAfter: N}` timer loop in PolicyGate reconciler
-- `pkg/cel/` import in CLI (`cmd/kardinal/policy.go`) — CLI calls server API instead
-- All `time.Now()` / weekday/hour computation in `policygate/reconciler.go`
+- `ctrl.Result{RequeueAfter: N}` timer loop in PolicyGate reconciler (already eliminated — ScheduleClock handles this)
+- All inline `time.Now()` / weekday/hour map computation in `policygate/reconciler.go`
+- `schedule.*` scope limited to PolicyGate (once it's a Graph CEL library, it's available everywhere)
 
 ### One ScheduleClock per cluster is sufficient
 

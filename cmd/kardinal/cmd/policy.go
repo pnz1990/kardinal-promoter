@@ -439,8 +439,9 @@ func trimSpace(s string) string {
 }
 
 // newSimulateCELEnvironment creates a CEL environment for policy simulation in the CLI.
-// It registers the same variables and library extensions as pkg/cel.NewCELEnvironment()
-// so that complex expressions using json.*, maps.*, lists.*, random.* work correctly.
+// It registers the same variables and library extensions as
+// pkg/reconciler/policygate/cel_evaluator.go:newEvaluator(), so that complex
+// expressions using json.*, maps.*, lists.*, random.* work correctly in simulate.
 //
 // The import of pkg/cel/library is allowed (see AGENTS.md — only pkg/cel itself is banned
 // outside pkg/reconciler/policygate). pkg/cel/library has no dependency on pkg/cel.
@@ -452,7 +453,7 @@ func newSimulateCELEnvironment() (*cel.Env, error) {
 		cel.Variable("metrics", cel.DynType),
 		cel.Variable("upstream", cel.DynType),
 		cel.Variable("previousBundle", cel.DynType),
-		// kro CEL library extensions — same set as pkg/cel.NewCELEnvironment().
+		// kro CEL library extensions — same set as pkg/reconciler/policygate/cel_evaluator.go.
 		// Ensures expressions like json.unmarshal(...), map1.merge(map2), etc. work in simulate.
 		library.JSON(),
 		library.Maps(),
@@ -467,7 +468,7 @@ func newSimulateCELEnvironment() (*cel.Env, error) {
 
 // simulateCELEvaluate compiles and evaluates a single CEL expression against the given context.
 // Returns (pass, reason, error). Errors are fail-closed (pass=false on error).
-// This is the CLI-local equivalent of pkg/cel.Evaluator.Evaluate() to avoid the banned import.
+// This mirrors pkg/reconciler/policygate/cel_evaluator.go:evaluate() in the CLI context.
 func simulateCELEvaluate(env *cel.Env, expr string, ctx map[string]interface{}) (bool, string, error) {
 	ast, issues := env.Compile(expr)
 	if issues != nil && issues.Err() != nil {
