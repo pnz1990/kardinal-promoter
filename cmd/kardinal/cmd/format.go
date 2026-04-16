@@ -284,27 +284,79 @@ func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
 	}
 	sort.Strings(envOrder)
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE"); err != nil {
-		return fmt.Errorf("write steps table header: %w", err)
+	// Determine if any PromotionStep has per-step detail populated.
+	hasSubSteps := false
+	for _, e := range best {
+		if len(e.step.Status.Steps) > 0 {
+			hasSubSteps = true
+			break
+		}
 	}
-	for _, env := range envOrder {
-		s := best[stepKey{env: env}].step
-		state := s.Status.State
-		if state == "" {
-			state = "Pending"
+
+	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	if hasSubSteps {
+		if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP\tSTATE\tDURATION\tMESSAGE"); err != nil {
+			return fmt.Errorf("write steps table header: %w", err)
 		}
-		msg := s.Status.Message
-		if msg == "" {
-			msg = "-"
+		for _, env := range envOrder {
+			s := best[stepKey{env: env}].step
+			if len(s.Status.Steps) == 0 {
+				// Fallback: no per-step detail, show environment-level row.
+				state := s.Status.State
+				if state == "" {
+					state = "Pending"
+				}
+				msg := s.Status.Message
+				if msg == "" {
+					msg = "-"
+				}
+				if _, err := fmt.Fprintf(tw, "%s\t(no step detail)\t%s\t-\t%s\n", env, state, msg); err != nil {
+					return fmt.Errorf("write step row: %w", err)
+				}
+				continue
+			}
+			for i, ss := range s.Status.Steps {
+				dur := "-"
+				if ss.DurationMs > 0 {
+					dur = fmt.Sprintf("%dms", ss.DurationMs)
+				}
+				msg := ss.Message
+				if msg == "" {
+					msg = "-"
+				}
+				envCol := env
+				if i > 0 {
+					envCol = "" // only print env once per step group
+				}
+				if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+					envCol, ss.Name, string(ss.State), dur, msg,
+				); err != nil {
+					return fmt.Errorf("write sub-step row: %w", err)
+				}
+			}
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
-			s.Spec.Environment,
-			s.Spec.StepType,
-			state,
-			msg,
-		); err != nil {
-			return fmt.Errorf("write step row: %w", err)
+	} else {
+		if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tSTEP-TYPE\tSTATE\tMESSAGE"); err != nil {
+			return fmt.Errorf("write steps table header: %w", err)
+		}
+		for _, env := range envOrder {
+			s := best[stepKey{env: env}].step
+			state := s.Status.State
+			if state == "" {
+				state = "Pending"
+			}
+			msg := s.Status.Message
+			if msg == "" {
+				msg = "-"
+			}
+			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+				s.Spec.Environment,
+				s.Spec.StepType,
+				state,
+				msg,
+			); err != nil {
+				return fmt.Errorf("write step row: %w", err)
+			}
 		}
 	}
 	if err := tw.Flush(); err != nil {

@@ -292,6 +292,8 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	ps.Status.State = StatePromoting
 	ps.Status.CurrentStepIndex = 0
 	ps.Status.Message = fmt.Sprintf("initialized with %d steps", len(seq))
+	// Initialize per-step status: all steps start as Pending.
+	ps.Status.Steps = initStepStatuses(seq)
 	// Persist workDir to status (ST-7/ST-8/ST-9 short-term mitigation):
 	// a restarted controller reads this field instead of recomputing the path,
 	// enabling crash-recovery without re-cloning.
@@ -376,6 +378,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	patch := client.MergeFrom(ps.DeepCopy())
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
+	// Update per-step status to reflect what executed this reconcile.
+	updateStepStatuses(ps, eng.StepNames(), ps.Status.CurrentStepIndex, execErr != nil, result.Message)
 
 	if execErr != nil {
 		log.Error().Err(execErr).Str("env", ps.Spec.Environment).Msg("step engine failed")
@@ -1215,4 +1219,109 @@ func appendCondition(conditions []metav1.Condition, condType string, status meta
 		Message:            message,
 		LastTransitionTime: now,
 	})
+}
+
+// initStepStatuses returns a slice of StepStatus with every step in Pending state.
+// Called when the PromotionStep transitions from Pending → Promoting.
+func initStepStatuses(seq []string) []v1alpha1.StepStatus {
+	ss := make([]v1alpha1.StepStatus, len(seq))
+	for i, name := range seq {
+		ss[i] = v1alpha1.StepStatus{
+			Name:  name,
+			State: v1alpha1.StepExecutionPending,
+		}
+	}
+	return ss
+}
+
+// updateStepStatuses updates ps.Status.Steps to reflect the result of the most
+// recent ExecuteFrom call.
+//
+// Contract:
+//   - stepNames is the full ordered step sequence (len == len(ps.Status.Steps) or 0).
+//   - currentIdx is the index returned by ExecuteFrom (next step to execute on
+//     the next reconcile, or len(stepNames) if all steps completed successfully).
+//   - failed == true means ExecuteFrom returned an error at currentIdx.
+//
+// The reconciler writes to ps.Status before calling Status().Patch, so timing
+// (startedAt/completedAt) is derived from time.Now() here — consistent with
+// the pattern used by HealthCheckExpiry and BakeStartedAt elsewhere in the
+// reconciler.
+func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentIdx int, failed bool, failMessage string) {
+	if len(ps.Status.Steps) == 0 {
+		// Steps not yet initialized (e.g. crash before initStepStatuses ran).
+		// Reconstruct the Pending slice so updates have something to apply to.
+		ps.Status.Steps = initStepStatuses(stepNames)
+	}
+
+	now := metav1.Now()
+
+	for i := range ps.Status.Steps {
+		step := &ps.Status.Steps[i]
+		switch {
+		case i < currentIdx:
+			// Steps before the current index completed in a previous reconcile.
+			// Only update if not already marked Completed (idempotent).
+			if step.State != v1alpha1.StepExecutionCompleted {
+				step.State = v1alpha1.StepExecutionCompleted
+				if step.StartedAt == nil {
+					step.StartedAt = &now
+				}
+				if step.CompletedAt == nil {
+					step.CompletedAt = &now
+				}
+				if step.StartedAt != nil && step.CompletedAt != nil {
+					d := step.CompletedAt.Sub(step.StartedAt.Time)
+					if d > 0 {
+						step.DurationMs = d.Milliseconds()
+					}
+				}
+			}
+		case i == currentIdx:
+			if failed {
+				// This step failed.
+				if step.State != v1alpha1.StepExecutionFailed {
+					step.State = v1alpha1.StepExecutionFailed
+					if step.StartedAt == nil {
+						step.StartedAt = &now
+					}
+					step.CompletedAt = &now
+					if step.StartedAt != nil {
+						d := step.CompletedAt.Sub(step.StartedAt.Time)
+						if d > 0 {
+							step.DurationMs = d.Milliseconds()
+						}
+					}
+					step.Message = failMessage
+				}
+			} else if currentIdx < len(ps.Status.Steps) {
+				// This step is in progress (StepPending result means "still running").
+				if step.State == v1alpha1.StepExecutionPending {
+					step.State = v1alpha1.StepExecutionInProgress
+					step.StartedAt = &now
+				}
+			}
+			// currentIdx == len(stepNames): all steps done; nothing to update here.
+		case i > currentIdx:
+			// Future steps: leave as Pending.
+		}
+	}
+
+	// If currentIdx == len(stepNames) (all done), mark the last step Completed
+	// if it isn't already.
+	if !failed && currentIdx > 0 && currentIdx == len(ps.Status.Steps) {
+		last := &ps.Status.Steps[currentIdx-1]
+		if last.State != v1alpha1.StepExecutionCompleted {
+			last.State = v1alpha1.StepExecutionCompleted
+			if last.CompletedAt == nil {
+				last.CompletedAt = &now
+			}
+			if last.StartedAt != nil && last.CompletedAt != nil {
+				d := last.CompletedAt.Sub(last.StartedAt.Time)
+				if d > 0 {
+					last.DurationMs = d.Milliseconds()
+				}
+			}
+		}
+	}
 }
