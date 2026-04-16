@@ -31,6 +31,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Per-step progress observability** — `PromotionStep.status.steps[]` exposes each step with individual state, start time, and duration (#630)
+- **`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh (#629)
+- **PrometheusRule CRD** — 6 pre-built alerting rules in Helm chart: promotion stuck, high rollback rate, policy gate blocked, SCM errors (#621)
 - **krocodile upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
 - **Shell completion** — bash, zsh, fish, and PowerShell completion scripts via `kardinal completion <shell>` (#606)
 - **`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, krocodile, RBAC, and GitHub token before first use (#607)
