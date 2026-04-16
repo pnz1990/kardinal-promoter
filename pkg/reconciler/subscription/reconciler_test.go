@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -260,4 +261,53 @@ func TestSubscriptionReconciler_Idempotent(t *testing.T) {
 	var bundleList kardinalv1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundleList))
 	assert.Empty(t, bundleList.Items, "no Bundles for unchanged digest")
+}
+
+// TestSubscriptionReconciler_LabelSelectorDedup verifies that the label-selector
+// deduplication prevents duplicate Bundle creation under concurrent reconciles (#620).
+//
+// This simulates the HA race: two reconcile calls see Changed=true because the
+// status.lastSeenDigest hasn't been updated yet. The label-selector check must
+// prevent the second call from creating a duplicate Bundle.
+func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
+	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abc1"
+	sub := makeImageSub("sub-ha", "default", "my-pipeline", "ghcr.io/test/app")
+	// LastSeenDigest is EMPTY — simulating first run or HA split-brain
+	sub.Status.LastSeenDigest = ""
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
+
+	callCount := 0
+	r := &subscription.Reconciler{
+		Client: c,
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+			return &changedWatcher{digest: digest, tag: "v2.0.0"}, nil
+		},
+		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+
+	// First reconcile — creates the Bundle
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	callCount++
+
+	// Second reconcile with the SAME digest (simulating concurrent/restart scenario)
+	// — the status may not yet reflect the new digest on the second call.
+	// The label-selector check must prevent a duplicate.
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	callCount++
+
+	var bundleList kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundleList,
+		client.InNamespace("default"),
+	))
+	assert.Len(t, bundleList.Items, 1,
+		"exactly 1 Bundle should exist — label-selector dedup must prevent duplicates")
+
+	// Verify the source-digest label is set (sanitized: sha256: prefix stripped, truncated to 63)
+	assert.NotEmpty(t, bundleList.Items[0].Labels["kardinal.io/source-digest"],
+		"source-digest label must be set")
 }
