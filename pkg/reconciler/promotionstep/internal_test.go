@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // TestExtractRepo verifies that GitHub PR URLs are parsed into "owner/repo" format.
@@ -114,4 +116,92 @@ func TestAppendCondition_ObservedGeneration(t *testing.T) {
 	now := time.Now()
 	conditions := appendCondition(nil, "Ready", metav1.ConditionTrue, "Verified", "ok", now)
 	assert.Equal(t, int64(0), conditions[0].ObservedGeneration)
+}
+
+// TestInitStepStatuses verifies that all steps start as Pending.
+func TestInitStepStatuses(t *testing.T) {
+	seq := []string{"git-clone", "kustomize-set-image", "open-pr"}
+	ss := initStepStatuses(seq)
+
+	require.Len(t, ss, 3)
+	for i, s := range ss {
+		assert.Equal(t, seq[i], s.Name, "step %d name", i)
+		assert.Equal(t, v1alpha1.StepExecutionPending, s.State, "step %d state", i)
+		assert.Nil(t, s.StartedAt, "step %d startedAt", i)
+		assert.Nil(t, s.CompletedAt, "step %d completedAt", i)
+	}
+}
+
+// TestUpdateStepStatuses_CurrentStepInProgress verifies that the active step
+// is marked InProgress and prior steps are Completed.
+func TestUpdateStepStatuses_CurrentStepInProgress(t *testing.T) {
+	seq := []string{"git-clone", "open-pr", "health-check"}
+	ps := &v1alpha1.PromotionStep{
+		Status: v1alpha1.PromotionStepStatus{
+			Steps: initStepStatuses(seq),
+		},
+	}
+
+	// ExecuteFrom returns nextIdx=1 (step 0 ran, step 1 is now in progress)
+	updateStepStatuses(ps, seq, 1, false, "")
+
+	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "step 0 must be Completed")
+	assert.Equal(t, v1alpha1.StepExecutionInProgress, ps.Status.Steps[1].State, "step 1 must be InProgress")
+	assert.Equal(t, v1alpha1.StepExecutionPending, ps.Status.Steps[2].State, "step 2 must be Pending")
+	assert.NotNil(t, ps.Status.Steps[1].StartedAt, "InProgress step must have startedAt")
+}
+
+// TestUpdateStepStatuses_Failed verifies that the failing step is marked Failed.
+func TestUpdateStepStatuses_Failed(t *testing.T) {
+	seq := []string{"git-clone", "open-pr"}
+	ps := &v1alpha1.PromotionStep{
+		Status: v1alpha1.PromotionStepStatus{
+			Steps: initStepStatuses(seq),
+		},
+	}
+
+	// ExecuteFrom returned nextIdx=1, failed=true (step 1 failed)
+	updateStepStatuses(ps, seq, 1, true, "push rejected")
+
+	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "step 0 must be Completed")
+	assert.Equal(t, v1alpha1.StepExecutionFailed, ps.Status.Steps[1].State, "step 1 must be Failed")
+	assert.Equal(t, "push rejected", ps.Status.Steps[1].Message, "failure message propagated")
+	assert.NotNil(t, ps.Status.Steps[1].CompletedAt, "Failed step must have completedAt")
+}
+
+// TestUpdateStepStatuses_AllComplete verifies all steps are Completed when nextIdx==len(seq).
+func TestUpdateStepStatuses_AllComplete(t *testing.T) {
+	seq := []string{"git-clone", "open-pr"}
+	ps := &v1alpha1.PromotionStep{
+		Status: v1alpha1.PromotionStepStatus{
+			Steps: initStepStatuses(seq),
+		},
+	}
+
+	// ExecuteFrom returned nextIdx=2 (all complete)
+	updateStepStatuses(ps, seq, 2, false, "")
+
+	for i, s := range ps.Status.Steps {
+		assert.Equal(t, v1alpha1.StepExecutionCompleted, s.State, "step %d must be Completed", i)
+	}
+}
+
+// TestUpdateStepStatuses_Idempotent verifies that calling updateStepStatuses again
+// does not flip a Completed step back to another state.
+func TestUpdateStepStatuses_Idempotent(t *testing.T) {
+	seq := []string{"git-clone", "open-pr"}
+	ps := &v1alpha1.PromotionStep{
+		Status: v1alpha1.PromotionStepStatus{
+			Steps: initStepStatuses(seq),
+		},
+	}
+
+	// First call: step 0 completed, step 1 in progress.
+	updateStepStatuses(ps, seq, 1, false, "")
+	firstCompletedAt := ps.Status.Steps[0].CompletedAt
+
+	// Second call with same index: step 0 must stay Completed with same timestamp.
+	updateStepStatuses(ps, seq, 1, false, "")
+	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "idempotent: step 0 stays Completed")
+	assert.Equal(t, firstCompletedAt, ps.Status.Steps[0].CompletedAt, "idempotent: completedAt unchanged")
 }

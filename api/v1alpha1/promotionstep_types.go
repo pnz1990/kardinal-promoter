@@ -57,6 +57,48 @@ type PromotionStepSpec struct {
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 }
 
+// StepExecutionState is the execution state of a single step within a PromotionStep.
+// +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed
+type StepExecutionState string
+
+const (
+	// StepExecutionPending means the step has not started yet.
+	StepExecutionPending StepExecutionState = "Pending"
+	// StepExecutionInProgress means the step is currently executing.
+	StepExecutionInProgress StepExecutionState = "InProgress"
+	// StepExecutionCompleted means the step finished successfully.
+	StepExecutionCompleted StepExecutionState = "Completed"
+	// StepExecutionFailed means the step encountered a terminal error.
+	StepExecutionFailed StepExecutionState = "Failed"
+)
+
+// StepStatus captures the observable state of one step in the promotion sequence.
+type StepStatus struct {
+	// Name is the step type identifier (e.g. "git-clone", "open-pr").
+	Name string `json:"name"`
+
+	// State is the execution state of this step.
+	// +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed
+	State StepExecutionState `json:"state"`
+
+	// StartedAt is when the step began executing.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// CompletedAt is when the step finished (success or failure).
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// DurationMs is the wall-clock duration in milliseconds from startedAt to completedAt.
+	// Zero when the step has not completed.
+	// +optional
+	DurationMs int64 `json:"durationMs,omitempty"`
+
+	// Message provides human-readable detail for Failed steps.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // PromotionStepStatus defines the observed state of a PromotionStep.
 type PromotionStepStatus struct {
 	// State is the step execution state.
@@ -128,6 +170,13 @@ type PromotionStepStatus struct {
 	// health alarm during the current bake window (K-01).
 	// +optional
 	BakeResets int `json:"bakeResets,omitempty"`
+
+	// Steps is the per-step execution history for this PromotionStep.
+	// Populated by the reconciler as each step in the sequence starts, completes, or fails.
+	// Provides fine-grained visibility into which sub-step is running without reading
+	// controller logs. Initialized when the step sequence starts (state → Promoting).
+	// +optional
+	Steps []StepStatus `json:"steps,omitempty"`
 }
 
 // +kubebuilder:object:root=true

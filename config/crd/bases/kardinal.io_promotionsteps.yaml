@@ -241,6 +241,58 @@ spec:
                 - AbortedByAlarm
                 - RollingBack
                 type: string
+              steps:
+                description: |-
+                  Steps is the per-step execution history for this PromotionStep.
+                  Populated by the reconciler as each step in the sequence starts, completes, or fails.
+                  Provides fine-grained visibility into which sub-step is running without reading
+                  controller logs. Initialized when the step sequence starts (state → Promoting).
+                items:
+                  description: StepStatus captures the observable state of one step
+                    in the promotion sequence.
+                  properties:
+                    completedAt:
+                      description: CompletedAt is when the step finished (success
+                        or failure).
+                      format: date-time
+                      type: string
+                    durationMs:
+                      description: |-
+                        DurationMs is the wall-clock duration in milliseconds from startedAt to completedAt.
+                        Zero when the step has not completed.
+                      format: int64
+                      type: integer
+                    message:
+                      description: Message provides human-readable detail for Failed
+                        steps.
+                      type: string
+                    name:
+                      description: Name is the step type identifier (e.g. "git-clone",
+                        "open-pr").
+                      type: string
+                    startedAt:
+                      description: StartedAt is when the step began executing.
+                      format: date-time
+                      type: string
+                    state:
+                      allOf:
+                      - enum:
+                        - Pending
+                        - InProgress
+                        - Completed
+                        - Failed
+                      - enum:
+                        - Pending
+                        - InProgress
+                        - Completed
+                        - Failed
+                      description: State is the execution state of this step.
+                      type: string
+                  required:
+                  - name
+                  - state
+                  type: object
+                type: array
               workDir:
                 description: |-
                   WorkDir is the working directory on the controller node used for git operations
