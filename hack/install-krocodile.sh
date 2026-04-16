@@ -16,11 +16,20 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    948ad6c (2026-04-14 — fix: validate node IDs produce valid DNS-1123 label
-#                           key prefixes; adds IsDNS1123Label check in parseNodeList and
-#                           IsDNS1123Subdomain check in validateIdentityLabelKey)
+# Last verified:    745998f (2026-04-15 — stdlib: Decorator as bootstrap primitive,
+#                           Kind built on Decorator; also picks up:
+#                           - compilation failure fallback to previous revision (#125)
+#                           - forEach propagateWhen evaluated per-item (#125)
+#                           - WatchKind O(1) incremental cache (#118)
+#                           - SystemError exponential backoff (#118)
+#                           - readiness state included in propagation hash (#118)
+#                           - compile-time CEL type inference via SchemaResolver (#119)
+#                           - ErrEvaluation sentinel fixes misclassification (#111)
+#                           - graph_reconcile_duration_seconds + graph_node_eval_duration_seconds metrics (#111)
+#                           - finalizer validation: rejects finalizes on Watch/WatchKind/Definition (#111)
+#                           - forEach accepts both flat-map and upstream array format (#124))
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-948ad6c}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-745998f}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 
