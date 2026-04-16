@@ -275,12 +275,18 @@ spec:
                       format: date-time
                       type: string
                     state:
+                      allOf:
+                      - enum:
+                        - Pending
+                        - InProgress
+                        - Completed
+                        - Failed
+                      - enum:
+                        - Pending
+                        - InProgress
+                        - Completed
+                        - Failed
                       description: State is the execution state of this step.
-                      enum:
-                      - Pending
-                      - InProgress
-                      - Completed
-                      - Failed
                       type: string
                   required:
                   - name
