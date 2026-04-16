@@ -193,8 +193,9 @@ func injectHealthWatchNodes(
 		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
 
 		// Build an identity-only template so krocodile detects it as a Watch reference.
-		// Watch reference detection (experimental/controller/types.go: DetectReference):
-		// template has apiVersion + kind + metadata.name; no spec or other fields.
+		// An identity-only template (apiVersion + kind + metadata.name/namespace, no spec
+		// or other fields) is classified ReferenceWatch by krocodile's node.Reference()
+		// method (experimental/controller/types.go:deriveReference — internal).
 		watchNode := graph.GraphNode{
 			ID: nodeID,
 			Template: map[string]interface{}{

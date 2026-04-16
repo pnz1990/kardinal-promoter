@@ -144,7 +144,7 @@ See §Flat DAG Compilation — Why It Does Not Work below.
 The observable-progress gap this issue was trying to address is solved by #592:
 adding `status.steps[]` to PromotionStep (no architecture change needed).
 
-### #130 and #68 (eliminate pkg/cel): partially complete
+### #130 and #68 (eliminate pkg/cel): **partially complete — schedule.* library untracked**
 
 `pkg/cel/` no longer has an `environment.go` or a `NewCELEnvironment()` constructor — that
 was deleted in #701 and the CEL environment construction moved to
@@ -152,8 +152,12 @@ was deleted in #701 and the CEL environment construction moved to
 - `library/` — the kro library sub-package (ALLOWED — imported by cel_evaluator.go)
 - `conversion/` and `sentinels/` — utilities
 
-Full elimination of `pkg/cel/` (moving library imports directly into cel_evaluator.go)
-is blocked on `schedule.*` CEL library (#616) and is tracked there.
+The schedule.* CEL library extension (Part 2 of the ScheduleClock design) was tracked in
+issue #616, which is now **closed**. The `schedule.*` functions were NOT promoted to a CEL
+library during that work — they remain as plain map variables injected by the PolicyGate
+reconciler. The blocking condition has changed: this is now unblocked (no krocodile change
+required) but untriaged. If schedule.* as a proper Graph CEL library function is still desired,
+open a new issue — see #645 for context.
 
 ### #400 (Journey 2 multi-cluster): unblocked via Stage 14 implementation
 
@@ -327,28 +331,35 @@ status is a small delta that gives full observability without any structural cha
 
 ---
 
-## Aggregated API Adoption Plan (ellistarn/kro#80)
+## Aggregated API — Future Migration Path (ellistarn/kro#80 Closed Without Merging)
 
-> This section tracks the planned adoption of krocodile's aggregated API design for
-> external system integration. See: https://github.com/ellistarn/kro/pull/80
+> **Status: No upstream implementation.** `ellistarn/kro#80` was closed as a design
+> document without code changes on 2026-04-16 (state: closed, merged_at: null).
+> There is no aggregated API provider in krocodile. See #643 for the audit finding.
+>
+> The PRStatus CRD workaround (#133) was implemented as planned and is in production.
+> Do not block any SCM-related work on the aggregated API — it has no current timeline.
 
-### What it is
+This section describes the migration path **if and when** a krocodile aggregated API
+provider is contributed. It is a future design, not an imminent dependency.
+
+### What the aggregated API design described
 
 A design by the krocodile author for serving external system state as native Kubernetes
-resources via the Kubernetes API Aggregation Layer. The first provider is GitHub (`api.github.com`),
-exposing `GithubArtifact` and `GithubAuthentication` resources. Graphs consume these through
+resources via the Kubernetes API Aggregation Layer. The first provider was to be GitHub (`api.github.com`),
+exposing `GithubArtifact` and `GithubAuthentication` resources. Graphs would consume these through
 existing Watch semantics — no new krocodile primitives required.
 
-Key properties:
+Key properties described:
 - **No CRD sync drift** — state is served live via aggregated apiserver, not copied into CRDs
 - **Request deduplication** — N Graphs watching the same GitHub path produce one upstream API call
 - **ETag-based caching** — `If-None-Match` avoids counting polls against rate limits
 - **Content-hash resourceVersion** — watch events fire only when data actually changes
 - **OAuth device flow** — no PAT management; `kubectl get githubartifacts` shows the auth URL
 
-### What this eliminates in kardinal
+### What this would eliminate in kardinal
 
-When this lands in krocodile, kardinal should refactor the following **in a single PR**:
+If an aggregated API provider for GitHub were contributed to krocodile, kardinal could refactor:
 
 | Logic leak | Current (purity violation) | With aggregated API (pure) |
 |---|---|---|
@@ -362,9 +373,9 @@ When this lands in krocodile, kardinal should refactor the following **in a sing
 This single aggregated API adoption PR would close issues **#128, #133, #140, #143, #149**
 and unblock the Subscription CRD implementation as a clean Watch node.
 
-### Migration path
+### Future migration path
 
-When `ellistarn/kro#80` merges into krocodile mainline:
+If `ellistarn/kro#80` or equivalent is ever contributed to krocodile mainline:
 
 1. Deploy the `github-provider` aggregated API server alongside the kardinal controller
    (ship as an optional component in the kardinal Helm chart — off by default, enabled via
@@ -375,10 +386,7 @@ When `ellistarn/kro#80` merges into krocodile mainline:
 5. Update `kardinal init` to guide users through OAuth device flow instead of PAT creation
 6. Implement Subscription CRD as a Graph watching `GithubArtifact` for SHA changes
 
-**Do not implement the `PRStatus` CRD workaround (#133) if the aggregated API is imminent.**
-If `ellistarn/kro#80` is within 2–3 milestones of merging, skip the workaround and wait for
-the clean path. If it stalls, implement `PRStatus` CRD as a transitional measure and migrate
-when the aggregated API lands.
+**Do not defer any current SCM work on expectation of this landing — it has no timeline.**
 
 ### GitLab provider
 
