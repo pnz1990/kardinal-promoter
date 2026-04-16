@@ -14,9 +14,10 @@ test.describe('Journey 002 — DAG node click opens NodeDetail', () => {
   })
 
   test('Step 1: DAG renders environment nodes', async ({ page }) => {
-    await expect(page.getByText('test')).toBeVisible()
-    await expect(page.getByText('uat')).toBeVisible()
-    await expect(page.getByText('prod')).toBeVisible()
+    // Use SVG text nodes inside the DAG to avoid ambiguity with pipeline/bundle names
+    await expect(page.locator('svg text').filter({ hasText: /^test$/ })).toBeVisible()
+    await expect(page.locator('svg text').filter({ hasText: /^uat$/ })).toBeVisible()
+    await expect(page.locator('svg text').filter({ hasText: /^prod$/ })).toBeVisible()
   })
 
   test('Step 2: Clicking a DAG node opens NodeDetail panel', async ({ page }) => {
@@ -35,7 +36,7 @@ test.describe('Journey 002 — DAG node click opens NodeDetail', () => {
   })
 
   test('Step 4: PolicyGate node renders with lock prefix', async ({ page }) => {
-    // Gate node should show its label
-    await expect(page.getByText('no-weekend-deploys')).toBeVisible()
+    // Gate node label is in the PolicyGates panel or DAG SVG — use first() to avoid strict violations
+    await expect(page.getByText('no-weekend-deploys').first()).toBeVisible()
   })
 })

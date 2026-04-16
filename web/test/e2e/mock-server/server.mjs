@@ -25,7 +25,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DIST = path.join(__dirname, '../../dist')
+const DIST = path.join(__dirname, '../../../dist')
 const PORT = parseInt(process.env.KARDINAL_E2E_PORT ?? '3001', 10)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -211,6 +211,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── Static assets ───────────────────────────────────────────────────────────
+  // Redirect root to the UI so tests can use page.goto('/') with baseURL set to the origin.
+  if (url === '/' || url === '') {
+    res.writeHead(302, { Location: '/ui/' })
+    res.end(); return
+  }
   if (url === '/logo.png') {
     res.writeHead(200, { 'Content-Type': 'image/png' })
     res.end(LOGO_PNG); return
