@@ -4,7 +4,11 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": "queue-021",
+  "current_queue": [
+    "644-promotionstep-watch",
+    "625-remove-upstream-verified",
+    "656-watchkind-docs"
+  ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -752,6 +756,46 @@
       "pr_merged": true,
       "pr_number": 489,
       "dependency_mode": "merged"
+    },
+    "901-watchkind-refactor": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 652,
+      "issue": "611",
+      "title": "WatchKind health nodes"
+    },
+    "646-krocodile-upgrade": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 654,
+      "issue": "646",
+      "title": "krocodile upgrade to 81c5a03"
+    },
+    "643-doc11-stale-refs": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 648,
+      "issue": "643",
+      "title": "doc-11 stale refs",
+      "note": "Already fixed by arch-audit PR #648"
+    },
+    "644-promotionstep-watch": {
+      "state": "todo",
+      "issue": "644",
+      "title": "fix(controller): add Watch on PRStatus and PolicyGate to PromotionStep reconciler",
+      "size": "s"
+    },
+    "625-remove-upstream-verified": {
+      "state": "todo",
+      "issue": "625",
+      "title": "refactor(graph): remove spec.upstreamVerifiedN fields",
+      "size": "s"
+    },
+    "656-watchkind-docs": {
+      "state": "todo",
+      "issue": "656",
+      "title": "docs(pipeline): document health.labelSelector field (WatchKind mode)",
+      "size": "xs"
     }
   },
   "session_heartbeats": {
