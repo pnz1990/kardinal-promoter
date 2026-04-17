@@ -4,7 +4,10 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": "queue-021",
+  "current_queue": [
+    "698-trivy-krocodile",
+    "706-slsa-provenance"
+  ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -935,16 +938,19 @@
     },
     "699-cosign-signing": {
       "state": "done",
-      "pr_merged": true,
+      "issue": 699,
       "pr_number": 700,
-      "issue": "699",
-      "title": "cosign keyless signing"
+      "title": "feat(security): cosign keyless image signing",
+      "branch": "feat/699-cosign-signing",
+      "pr_merged": true
     },
     "702-sbom-generation": {
-      "state": "todo",
+      "state": "done",
       "issue": "702",
       "title": "feat(security): Syft SBOM generation \u2014 attach to OCI artifact",
-      "size": "s"
+      "size": "s",
+      "pr_merged": true,
+      "pr_number": 703
     },
     "698-krocodile-trivy": {
       "state": "in_review",
@@ -952,6 +958,22 @@
       "issue": "698",
       "title": "krocodile trivy scan",
       "qa_approved": true
+    },
+    "698-trivy-krocodile": {
+      "state": "in_review",
+      "issue": 698,
+      "pr_number": 701,
+      "title": "trivy scan for krocodile image"
+    },
+    "702-sbom-cosign-attach": {
+      "state": "done",
+      "note": "Superseded by PR #703 which was already merged"
+    },
+    "706-slsa-provenance": {
+      "state": "in_review",
+      "issue": 706,
+      "pr_number": 707,
+      "title": "SLSA Level 2 provenance via GitHub attestation"
     }
   },
   "session_heartbeats": {
@@ -965,14 +987,13 @@
     }
   },
   "handoff": {
-    "batch": "batch-039",
-    "completed_at": "2026-04-17T08:39:20Z",
+    "batch": "batch-042",
+    "completed_at": "2026-04-17T08:53:51Z",
     "open_prs": [
-      696,
-      697,
-      700
+      701,
+      707
     ],
     "status": "in_progress",
-    "note": "Security sprint: trivy (#696), SBOM (#697), cosign (#700) all CI green and QA approved. Generate next queue."
+    "note": "Security sprint near-complete. PRs #701 (krocodile trivy) and #707 (SLSA) awaiting human review. Generate new queue from roadmap after these merge."
   }
 }
