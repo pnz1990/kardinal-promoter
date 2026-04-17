@@ -29,6 +29,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **AuditEvent CRD** — immutable promotion event log. Records `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `GateEvaluated` (on ready-flip), `RollbackStarted`. Fire-and-forget, never blocks promotion. (#679, #681)
+- **krocodile `05db829`** — explicit-keyword schema (`ref:`, `watch:`, `def:`, `patch:`). Breaking change; kardinal compat fixes included. (#677)
+
+### Fixed
+
+- **Pipeline/Bundle ValidatingAdmissionPolicy** — extended to cover Pipeline and Bundle CRDs. (#670)
+
 ---
 
 ## [v0.7.0] — 2026-04-17
