@@ -1,7 +1,8 @@
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
 // #326: selectedNode is lifted here so NodeDetail renders as a split panel
 // sibling of DAGView rather than a position:fixed overlay.
-import { useState, useCallback, useMemo, useRef } from 'react'
+// #740: URL routing — pipeline and node selection persisted in hash fragment.
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
 import { DAGView } from './components/DAGView'
@@ -21,6 +22,7 @@ import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme } from './ThemeContext'
+import { useUrlState } from './useUrlState'
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 
 const POLL_INTERVAL_MS = 5000
@@ -36,11 +38,16 @@ function formatElapsed(seconds: number | null): string {
 
 export function App() {
   const { theme, toggleTheme } = useTheme()
+  // #740: URL routing — pipeline and node selection backed by hash fragment.
+  const [urlState, setUrlState] = useUrlState()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [pipelinesLoading, setPipelinesLoading] = useState(true)
   const [pipelinesError, setPipelinesError] = useState<string | undefined>()
 
-  const [selectedPipeline, setSelectedPipeline] = useState<string | undefined>()
+  const [selectedPipeline, setSelectedPipeline] = [
+    urlState.pipeline,
+    (name: string | undefined) => setUrlState({ pipeline: name }),
+  ] as const
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [bundleHistoryOpen, setBundleHistoryOpen] = useState(false)
   // Bundle selected via timeline — overrides the automatic activeBundle selection.
@@ -58,7 +65,24 @@ export function App() {
   const [gatesLoading, setGatesLoading] = useState(true)
 
   // #326: selectedNode lifted from DAGView so NodeDetail is a split-panel sibling.
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  // #740: selectedNode ID is persisted in URL hash (node= param); full GraphNode object in local state.
+  const [selectedNode, setSelectedNodeLocal] = useState<GraphNode | null>(null)
+
+  /** Update both local state and URL hash when a node is selected. */
+  const setSelectedNode = useCallback((node: GraphNode | null) => {
+    setSelectedNodeLocal(node)
+    setUrlState({ node: node?.id ?? undefined })
+  }, [setUrlState])
+
+  // #740: When graph data changes, restore selectedNode from URL if a node= param is present
+  // and the current selectedNode doesn't already match.
+  useEffect(() => {
+    const nodeId = urlState.node
+    if (!nodeId || !graph) return
+    if (selectedNode?.id === nodeId) return
+    const node = graph.nodes?.find(n => n.id === nodeId)
+    if (node) setSelectedNodeLocal(node)
+  }, [graph, urlState.node, selectedNode?.id])
 
   // #338: Bundle diff comparison state.
   const [compareBundle, setCompareBundle] = useState<string | undefined>()
