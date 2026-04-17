@@ -897,10 +897,12 @@
       "branch": "feat/576-audit-step1"
     },
     "680-audit-step2": {
-      "state": "todo",
+      "state": "in_review",
+      "pr_number": 682,
       "issue": "680",
-      "title": "feat(api): AuditEvent step 2 \u2014 gate and rollback events",
-      "size": "xs"
+      "title": "AuditEvent step 2 \u2014 gate and rollback events",
+      "qa_approved": true,
+      "awaiting_human_review": true
     }
   },
   "session_heartbeats": {
