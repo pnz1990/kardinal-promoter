@@ -126,6 +126,15 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      # ── SBOM generation ──────────────────────────────────────────────────────
+      - name: Generate SBOM with syft (CycloneDX JSON)
+        uses: anchore/sbom-action@v0.17.2
+        with:
+          image: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
+          format: cyclonedx-json
+          output-file: dist/kardinal-promoter-${{ env.VERSION }}-sbom.json
+          upload-artifact: false
+
       # ── Package and publish Helm chart ─────────────────────────────────────
       - name: Update chart version and krocodile tag
         run: |
