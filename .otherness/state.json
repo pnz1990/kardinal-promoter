@@ -905,6 +905,13 @@
       "awaiting_human_review": true,
       "pr_merged": true,
       "note": "Merged as PR #681 by parallel session; my PR #682 was duplicate and closed"
+    },
+    "683-audit-cli": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 684,
+      "issue": "683",
+      "title": "kardinal get auditevents CLI command"
     }
   },
   "session_heartbeats": {
