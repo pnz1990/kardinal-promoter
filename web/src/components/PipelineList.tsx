@@ -40,7 +40,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-info)',
         marginBottom: '0.5rem',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
@@ -55,7 +55,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-info)',
         marginBottom: '0.75rem',
       }}>
         kardinal init

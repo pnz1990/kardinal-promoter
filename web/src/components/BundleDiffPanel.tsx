@@ -150,10 +150,10 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           padding: '0.4rem 0.6rem',
         }}>
           <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Name</span>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#7dd3fc' }} title={bundleA.name}>
+          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-info)' }} title={bundleA.name}>
             {truncate(bundleA.name, 28)}
           </span>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#7dd3fc' }} title={bundleB.name}>
+          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-info)' }} title={bundleB.name}>
             {truncate(bundleB.name, 28)}
           </span>
         </div>

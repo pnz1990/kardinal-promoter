@@ -251,7 +251,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
       <SummaryBadge
         label="Promoting"
         count={s.promoting}
-        color="#7dd3fc"
+        color="var(--color-info)"
         bgColor="#0c1a2e"
         borderColor="#075985"
         active={activeFilter === 'promoting'}
