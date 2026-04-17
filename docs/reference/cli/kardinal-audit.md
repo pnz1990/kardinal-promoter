@@ -1,11 +1,11 @@
-## kardinal get
+## kardinal audit
 
-Display one or more kardinal resources
+Audit log commands — view and summarize promotion events
 
 ### Options
 
 ```
-  -h, --help   help for get
+  -h, --help   help for audit
 ```
 
 ### Options inherited from parent commands
@@ -20,8 +20,5 @@ Display one or more kardinal resources
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal get auditevents](kardinal_get_auditevents.md)	 - List AuditEvent records — immutable promotion event log
-* [kardinal get bundles](kardinal_get_bundles.md)	 - List Bundles, optionally filtered by pipeline name
-* [kardinal get pipelines](kardinal_get_pipelines.md)	 - List Pipelines
-* [kardinal get steps](kardinal_get_steps.md)	 - List PromotionSteps for a pipeline
+* [kardinal audit summary](kardinal_audit_summary.md)	 - Aggregate promotion metrics from AuditEvent records
 

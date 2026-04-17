@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -225,7 +226,22 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	if len(rows) == 0 {
 		var emptyMsg string
 		if envFilter != "" {
-			emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q environment %q\n", pipeline, envFilter)
+			// Fetch the Pipeline spec to surface available environment names.
+			var pipe v1alpha1.Pipeline
+			var available []string
+			if getErr := c.Get(ctx, sigs_client.ObjectKey{Namespace: ns, Name: pipeline}, &pipe); getErr == nil {
+				for _, e := range pipe.Spec.Environments {
+					available = append(available, e.Name)
+				}
+			}
+			if len(available) > 0 {
+				emptyMsg = fmt.Sprintf(
+					"environment %q not found in pipeline %q.\nAvailable environments: %s\n",
+					envFilter, pipeline, strings.Join(available, ", "),
+				)
+			} else {
+				emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q environment %q\n", pipeline, envFilter)
+			}
 		} else {
 			emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q\n", pipeline)
 		}

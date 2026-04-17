@@ -1,11 +1,26 @@
-## kardinal get
+## kardinal status
 
-Display one or more kardinal resources
+Show controller health and cluster resource summary
+
+### Synopsis
+
+Show the health of the kardinal controller and a summary of managed resources.
+
+Displays:
+  - Controller pod status and version
+  - Count of Pipelines and active Bundles
+  - Any pipelines currently in a failed/stuck state
+
+For detailed diagnostics, use 'kardinal doctor'.
+
+```
+kardinal status [flags]
+```
 
 ### Options
 
 ```
-  -h, --help   help for get
+  -h, --help   help for status
 ```
 
 ### Options inherited from parent commands
@@ -20,8 +35,4 @@ Display one or more kardinal resources
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal get auditevents](kardinal_get_auditevents.md)	 - List AuditEvent records — immutable promotion event log
-* [kardinal get bundles](kardinal_get_bundles.md)	 - List Bundles, optionally filtered by pipeline name
-* [kardinal get pipelines](kardinal_get_pipelines.md)	 - List Pipelines
-* [kardinal get steps](kardinal_get_steps.md)	 - List PromotionSteps for a pipeline
 

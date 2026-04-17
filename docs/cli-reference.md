@@ -215,6 +215,13 @@ Flags:
 - `--bundle <version>`: explain a specific Bundle (default: latest active)
 - `--env <env>`: filter by environment
 
+If the environment name is not found, the command prints the available environments:
+
+```
+environment "bogus" not found in pipeline "nginx-demo".
+Available environments: test, uat, prod
+```
+
 ### kardinal rollback
 
 Roll back an environment to the previous verified Bundle. This creates a new Bundle targeting the prior version and runs it through the same pipeline.

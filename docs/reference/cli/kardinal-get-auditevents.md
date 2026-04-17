@@ -38,5 +38,5 @@ kardinal get auditevents [flags]
 
 ### SEE ALSO
 
-* [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
+* [kardinal get](kardinal_get.md)	 - Display one or more kardinal resources
 
