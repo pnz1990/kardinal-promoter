@@ -9,6 +9,7 @@ It shows the current state, reason, and any PR URLs for each environment.
 
 Use --env to filter to a specific environment.
 Use --watch to stream live updates.
+Use --color to force ANSI color output (auto-detected when writing to a TTY).
 
 ```
 kardinal explain <pipeline> [flags]
@@ -17,6 +18,7 @@ kardinal explain <pipeline> [flags]
 ### Options
 
 ```
+      --color        Force ANSI color output (auto-detected when TTY)
       --env string   Filter to a specific environment
   -h, --help         help for explain
       --watch        Stream updates (polling)

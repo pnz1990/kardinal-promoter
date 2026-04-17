@@ -18,13 +18,16 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // imageRepoPattern matches valid OCI image repository references.
@@ -46,6 +49,7 @@ func newCreateBundleCmd() *cobra.Command {
 	var (
 		images     []string
 		bundleType string
+		dryRun     bool
 	)
 
 	cmd := &cobra.Command{
@@ -54,12 +58,17 @@ func newCreateBundleCmd() *cobra.Command {
 		Long: `Create a Bundle to trigger promotion through a Pipeline.
 
 The pipeline name is a required positional argument.
-Specify one or more container images with --image.`,
+Specify one or more container images with --image.
+
+Use --dry-run to preview the promotion graph without creating any resources.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("create bundle: %w", err)
+			}
+			if dryRun {
+				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], images, bundleType)
 			}
 			return createBundleFn(cmd.OutOrStdout(), c, ns, args[0], images, bundleType)
 		},
@@ -67,6 +76,8 @@ Specify one or more container images with --image.`,
 
 	cmd.Flags().StringArrayVar(&images, "image", nil, "Container image reference (can be specified multiple times)")
 	cmd.Flags().StringVar(&bundleType, "type", "image", "Bundle type: image, config, or mixed")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
+		"Preview the promotion graph without creating any cluster resources")
 
 	return cmd
 }
@@ -112,6 +123,78 @@ func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 		return fmt.Errorf("write output: %w", err)
 	}
 
+	return nil
+}
+
+// createBundleDryRun previews the promotion graph that would be created for a Bundle,
+// without writing any resources to the cluster. It fetches the Pipeline CRD,
+// builds an in-memory Bundle, runs it through graph.Builder.Build, and prints
+// the resulting graph summary.
+func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName string, images []string, bundleType string) error {
+	// Validate images
+	var imageRefs []v1alpha1.ImageRef
+	for _, img := range images {
+		repo, tag := splitImageRef(img)
+		if repo != "" && !imageRepoPattern.MatchString(repo) {
+			return fmt.Errorf("invalid image repository %q: must match [a-zA-Z0-9][a-zA-Z0-9._-/]* (e.g. ghcr.io/org/image)", repo)
+		}
+		imageRefs = append(imageRefs, v1alpha1.ImageRef{
+			Repository: repo,
+			Tag:        tag,
+		})
+	}
+
+	// Fetch the Pipeline from the cluster (read-only — dry-run is cluster-aware but not cluster-mutating)
+	var pipe v1alpha1.Pipeline
+	if err := c.Get(context.Background(), sigs_client.ObjectKey{Namespace: ns, Name: pipelineName}, &pipe); err != nil {
+		return fmt.Errorf("dry-run: fetch pipeline %q: %w", pipelineName, err)
+	}
+
+	// Build an in-memory Bundle (not created on cluster)
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pipelineName + "-dry-run",
+			Namespace: ns,
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:     bundleType,
+			Pipeline: pipelineName,
+			Images:   imageRefs,
+		},
+	}
+
+	// Run graph.Builder.Build — pure function, no cluster writes
+	b := graph.NewBuilder()
+	result, err := b.Build(graph.BuildInput{
+		Pipeline:    &pipe,
+		Bundle:      bundle,
+		PolicyGates: nil, // dry-run uses no gates (preview mode)
+	})
+	if err != nil {
+		return fmt.Errorf("dry-run: graph build failed: %w", err)
+	}
+
+	// Print a human-readable summary
+	_, _ = fmt.Fprintf(w, "[DRY-RUN] Bundle %q for pipeline %q\n", bundle.Name, pipelineName)
+	_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
+	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
+
+	// Show the environments by iterating the graph nodes
+	seen := map[string]bool{}
+	for _, node := range result.Graph.Spec.Nodes {
+		// Node IDs have format: <celSafeSlug(pipeline)>-<env>-<type>
+		// Split on first two hyphens to extract the environment segment.
+		parts := strings.SplitN(node.ID, "-", 3)
+		if len(parts) >= 2 {
+			env := parts[1]
+			if !seen[env] {
+				seen[env] = true
+				_, _ = fmt.Fprintf(w, "  \u2022 %s\n", env)
+			}
+		}
+	}
+
+	_, _ = fmt.Fprintf(w, "\nNo resources were created. Remove --dry-run to apply.\n")
 	return nil
 }
 

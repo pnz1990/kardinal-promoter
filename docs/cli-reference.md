@@ -175,6 +175,26 @@ Bundle my-app-v1-29-0-1712567890 created.
   Next:   dev (gate: auto)
 ```
 
+Use `--dry-run` to preview the promotion graph without creating any resources:
+
+```bash
+kardinal create bundle my-app --image ghcr.io/myorg/my-app:1.29.0 --dry-run
+```
+
+Output:
+```
+[DRY-RUN] Bundle "my-app-dry-run" for pipeline "my-app"
+
+Promotion graph: 7 node(s)
+
+Environments in promotion order:
+  • dev
+  • staging
+  • prod
+
+No resources were created. Remove --dry-run to apply.
+```
+
 ### kardinal promote
 
 Manually trigger promotion by creating a Bundle targeting a specific environment. The Bundle flows through all upstream environments before reaching the target environment. PolicyGates and approval mode apply as configured.
