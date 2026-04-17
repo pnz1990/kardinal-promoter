@@ -819,16 +819,23 @@
       "size": "xs"
     },
     "618-remove-upstream-env": {
-      "state": "done",
+      "state": "todo",
       "issue": "618",
-      "title": "refactor: remove spec.upstreamEnvironment",
-      "note": "WONTFIX: analysis shows upstreamEnvironment IS necessary for correct sequencing. Posted [NEEDS HUMAN] on issue."
+      "title": "refactor(policygate): remove spec.upstreamEnvironment \u2014 Graph wiring not gate logic",
+      "size": "s"
     },
     "571-scm-circuit-breaker": {
       "state": "todo",
       "issue": "571",
       "title": "feat(scm): circuit breaker \u2014 exponential backoff, rate-limit respect, per-provider error budget",
       "size": "s"
+    },
+    "618-policygate-upstream-env": {
+      "state": "in_review",
+      "issue": 618,
+      "pr_number": 663,
+      "title": "refactor(policygate): move upstreamEnvironment from spec to annotation",
+      "branch": "feat/618-policygate-upstream-env"
     }
   },
   "session_heartbeats": {
@@ -847,15 +854,14 @@
     }
   },
   "handoff": {
-    "batch": "batch-026",
-    "completed_at": "2026-04-17T04:42:54Z",
+    "batch": "batch-027",
+    "completed_at": "2026-04-17T04:58:00Z",
     "open_prs": [
-      655,
-      658,
-      659,
-      660
+      661,
+      663,
+      664
     ],
     "status": "in_progress",
-    "note": "All 4 open PRs CI green and QA reviewed. Awaiting human approval."
+    "note": "PR #663 (policygate annotation) CI green, QA approved. v0.7.0 release PR #664 in CI. Next queue: 571-scm-circuit-breaker, 619-bundle-intent-filter."
   }
 }
