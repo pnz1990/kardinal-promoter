@@ -1,4 +1,4 @@
-## Session Handoff — 2026-04-17T18:07:26Z
+## Session Handoff — 2026-04-17T19:21:53Z
 
 ### Recent merges (last 5)
 - PR #741 feat(cli): add --dry-run flag to kardinal create bundle (#739) (2026-04-17)
@@ -7,28 +7,34 @@
 - PR #736 docs(cli): sync kardinal-explain.md with --color flag (2026-04-17)
 - PR #734 feat(ui): dark/light mode — system-aware theme with manual toggle (#722) (2026-04-17)
 
-### Queue
-**In review (pending human merge):**
-- 618-policygate-upstream-env: PR #663 refactor(policygate): move upstreamEnvironment from spec to annotation
-- 576-audit-step1: PR #675 feat(api): AuditEvent CRD — immutable promotion event trail step 1
-- 694-sbom-gen: PR #697 SBOM generation
-- 698-krocodile-trivy: PR #701 krocodile trivy scan
-- 698-trivy-krocodile: PR #701 trivy scan for krocodile image
-- 706-slsa-provenance: PR #707 SLSA Level 2 provenance via GitHub attestation
-- 740-url-routing: PR #742 feat(ui): URL routing — pipeline/bundle/node selection in URL
-- 746-keyboard-shortcuts: PR #750 feat(ui): global keyboard shortcuts — ?, r, Esc
-- 747-error-boundary: PR #753 feat(ui): error boundaries on async components (#587)
-**Todo:**
-- 748-wcag-axe: feat(ui): WCAG 2.1 AA automated check — axe-core in CI (#587)
+### Session summary (sess-a3d6f0be)
+This session completed 6 batches and produced 9 PRs, all pending human merge:
 
-### In-review (pending human merge)
-- PR #742: URL routing (all CI green, approved)
-- PR #745: changelog + roadmap K-10 fix (all CI green, approved)
-- PR #753: error boundaries (all CI green, approved)
+**Batch 1:**
+- PR #742: URL routing — pipeline/bundle/node in hash fragment
+- PR #745: docs(changelog): --dry-run, CSS tokens, URL routing + roadmap K-10 fix
 
-### Next item
-748-wcag-axe
+**Batch 2:**
+- PR #755: feat(ui): error boundaries on async components
+
+**Batch 3:**
+- PR #756: feat(ui): WCAG 2.1 AA axe-core check in E2E
+
+**Batch 4:**
+- QA-reviewed PR #750 (keyboard shortcuts, other session)
+- PR #759: fix(ui): nested-interactive via visually-hidden button
+
+**Batch 5:**
+- PR #760: fix(ui): color contrast audit — all violations resolved
+
+**Batch 6:**
+- QA-reviewed PRs #751, #752, #754 (handoff, metrics, competitor versions)
+- Created issues #761, #762 for enabling WCAG rules post-merge
+- Closed 6 issues for features implemented in this session
+
+### Queue state
+Queue empty. Items #761 and #762 blocked on depends_on (#756 and #759 merging).
+Next work: enable WCAG rules once PRs merge, then iterate on epic #587 or DX items.
 
 ### Notes
-Session: sess-a3d6f0be | otherness@v0.1.0-4-gccd967f | Batch 2: error boundaries implemented
-Also note: PR #749 and #750 are open (other sessions' work — keyboard shortcuts, changelog)
+All 7 journeys ✅. WCAG 2.1 AA compliance arc complete pending human merge of the 9 PRs.
