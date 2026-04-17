@@ -869,17 +869,18 @@
       "pr_number": 670
     },
     "676-krocodile-explicit-keyword": {
-      "state": "in_review",
-      "issue": 676,
-      "pr_number": 678,
-      "title": "chore(graph): upgrade krocodile 81c5a03 \u2192 05db829 \u2014 explicit-keyword schema",
-      "branch": "feat/676-krocodile-explicit-keyword"
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 677,
+      "issue": "676",
+      "title": "krocodile 05db829 explicit-keyword schema"
     },
     "673-audit-log-step1": {
-      "state": "todo",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 679,
       "issue": "673",
-      "title": "feat(api): AuditEvent CRD + write path \u2014 structured audit log step 1",
-      "size": "s"
+      "title": "AuditEvent CRD"
     },
     "673-audit-log": {
       "state": "done",
