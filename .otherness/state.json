@@ -5,7 +5,7 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": [
-    "676-krocodile-explicit-keyword"
+    "680-audit-step2"
   ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -895,6 +895,12 @@
       "pr_number": 675,
       "title": "feat(api): AuditEvent CRD \u2014 immutable promotion event trail step 1",
       "branch": "feat/576-audit-step1"
+    },
+    "680-audit-step2": {
+      "state": "todo",
+      "issue": "680",
+      "title": "feat(api): AuditEvent step 2 \u2014 gate and rollback events",
+      "size": "xs"
     }
   },
   "session_heartbeats": {
