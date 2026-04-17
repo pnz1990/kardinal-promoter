@@ -100,5 +100,4 @@ describe('PipelineLaneView — stage cards', () => {
     const card = screen.getByRole('button', { name: /env/i })
     expect(card).toHaveAttribute('aria-pressed', 'true')
   })
-  })
 })
