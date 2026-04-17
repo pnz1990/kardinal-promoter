@@ -375,6 +375,9 @@ func TestBuilder_CircularDependency(t *testing.T) {
 	_, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "circular", "circular dependency must error")
+	// New in #710: error message must show the cycle path
+	assert.Contains(t, err.Error(), "→", "error must show cycle path with arrows")
+	assert.Contains(t, err.Error(), "Fix:", "error must include fix hint")
 }
 
 // Test 12: PropagateWhen on PolicyGate nodes is set correctly.

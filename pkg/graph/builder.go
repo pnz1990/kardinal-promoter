@@ -151,7 +151,7 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 }
 
 // topoSort performs Kahn's topological sort on the dependency graph.
-// Returns an error if a cycle is detected.
+// Returns an error with the cycle path if a cycle is detected.
 func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error) {
 	// Compute in-degree
 	inDegree := make(map[string]int, len(nodes))
@@ -195,9 +195,68 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error)
 	}
 
 	if len(sorted) != len(nodes) {
-		return nil, fmt.Errorf("build: circular dependency detected in pipeline environments")
+		// Find a cycle and report the path for better diagnostics.
+		cycle := findCycle(nodes, deps, sorted)
+		return nil, fmt.Errorf("build: circular dependency in pipeline environments: %s\n  Fix: remove one of the dependsOn references to break the cycle", cycle)
 	}
 	return sorted, nil
+}
+
+// findCycle finds a cycle in the dependency graph and returns a human-readable
+// path string like "prod → uat → prod (cycle!)". Uses the set of nodes that
+// were NOT sorted (i.e., those still in the cycle) to start the search.
+func findCycle(nodes map[string]bool, deps map[string][]string, sorted []string) string {
+	// Identify nodes that are part of a cycle (not in sorted output).
+	sortedSet := make(map[string]bool, len(sorted))
+	for _, n := range sorted {
+		sortedSet[n] = true
+	}
+
+	// Pick any node not in sorted — it's part of a cycle.
+	var start string
+	for n := range nodes {
+		if !sortedSet[n] {
+			start = n
+			break
+		}
+	}
+	if start == "" {
+		return "(unknown cycle)"
+	}
+
+	// Follow dependencies from start until we revisit a node.
+	visited := make(map[string]bool)
+	path := []string{start}
+	current := start
+
+	for {
+		visited[current] = true
+		// Find a dep of current that is also in the cycle (not sorted).
+		moved := false
+		for _, dep := range deps[current] {
+			if !sortedSet[dep] {
+				if visited[dep] {
+					// Found the cycle start — trim path to show just the cycle.
+					for i, n := range path {
+						if n == dep {
+							cycle := path[i:]
+							// path[i:] ends just before dep is repeated, so add "(cycle!)"
+							return strings.Join(cycle, " → ") + " → " + dep + " (cycle!)"
+						}
+					}
+					break
+				}
+				path = append(path, dep)
+				current = dep
+				moved = true
+				break
+			}
+		}
+		if !moved {
+			break
+		}
+	}
+	return strings.Join(path, " → ") + " (cycle!)"
 }
 
 // --- Step 2: filter environments by Bundle intent ---
