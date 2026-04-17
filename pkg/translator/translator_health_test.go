@@ -481,20 +481,20 @@ func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
 	assert.Equal(t, "Deployment", tmpl["kind"])
 
-	// WatchKind: must NOT have metadata.name — krocodile detects WatchKind by its absence.
-	md, hasMetadata := tmpl["metadata"].(map[string]interface{})
-	if hasMetadata {
-		_, hasName := md["name"]
-		assert.False(t, hasName, "WatchKind node template must NOT have metadata.name")
-	}
+	// WatchKind: must NOT have metadata block (krocodile WatchKind detection requires no metadata.name).
+	_, hasMetadata := tmpl["metadata"]
+	assert.False(t, hasMetadata, "WatchKind node template must NOT have metadata block")
 
-	// WatchKind: must have spec.labelSelector.
-	spec, ok := tmpl["spec"].(map[string]interface{})
-	require.True(t, ok, "WatchKind node template must have a spec field")
-	labelSelector, ok := spec["labelSelector"].(map[string]string)
-	require.True(t, ok, "WatchKind spec must have labelSelector of type map[string]string")
+	// WatchKind: must have top-level "selector" field (krocodile node.go:reconcileWatchKind
+	// extracts selector from tmpl["selector"] or tmpl["metadata"]["selector"]).
+	labelSelector, ok := tmpl["selector"].(map[string]string)
+	require.True(t, ok, "WatchKind node template must have top-level 'selector' of type map[string]string")
 	assert.Equal(t, "nginx", labelSelector["app"])
 	assert.Equal(t, "nginx", labelSelector["kardinal.io/pipeline"])
+
+	// WatchKind: must NOT have metadata block (krocodile WatchKind detection requires no metadata.name).
+	_, hasMetadata = tmpl["metadata"]
+	assert.False(t, hasMetadata, "WatchKind node template must NOT have metadata block")
 
 	// ReadyWhen must use list.all() form.
 	require.NotEmpty(t, watchNode.ReadyWhen)
@@ -540,9 +540,12 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 	watchKindNode := findHealthNode(gWatchKind, "uat")
 	require.NotNil(t, watchKindNode)
 	tmplWatchKind := watchKindNode.Template
-	// WatchKind: must NOT have metadata.name
-	_, hasMetadata := tmplWatchKind["metadata"].(map[string]interface{})
+	// WatchKind: must NOT have metadata block (krocodile WatchKind has no metadata.name)
+	_, hasMetadata := tmplWatchKind["metadata"]
 	assert.False(t, hasMetadata, "WatchKind node must not have a metadata block")
+	// WatchKind: must have top-level selector
+	_, hasSelector := tmplWatchKind["selector"]
+	assert.True(t, hasSelector, "WatchKind node must have top-level selector")
 	assert.Contains(t, watchKindNode.ReadyWhen[0], ".all(",
 		"WatchKind readyWhen must use .all() predicate")
 }

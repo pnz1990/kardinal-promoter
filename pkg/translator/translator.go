@@ -200,15 +200,21 @@ func injectHealthWatchNodes(
 		var nodeTemplate map[string]interface{}
 		if spec.UseWatchKind {
 			// WatchKind: no metadata.name — krocodile watches all resources matching
-			// the label selector in the given namespace. The spec.labelSelector field
-			// carries the selector; krocodile uses it when listing the collection.
+			// the label selector.
+			//
+			// krocodile (node.go:reconcileWatchKind) extracts the selector from
+			// tmpl["selector"] (flat top-level key) or tmpl["metadata"]["selector"].
+			// We use the flat top-level form as it is simpler and matches the
+			// krocodile source exactly.
+			//
+			// The namespace is passed separately via graph.GetNamespace() in krocodile
+			// (the Graph object's namespace drives the list namespace). We do NOT
+			// include namespace in the template to avoid conflicting with krocodile's
+			// namespace handling.
 			nodeTemplate = map[string]interface{}{
 				"apiVersion": spec.APIVersion,
 				"kind":       spec.Kind,
-				"spec": map[string]interface{}{
-					"namespace":     spec.Namespace,
-					"labelSelector": spec.LabelSelector,
-				},
+				"selector":   spec.LabelSelector,
 			}
 		} else {
 			// Watch: identity-only template (apiVersion + kind + metadata.name).
