@@ -897,12 +897,14 @@
       "branch": "feat/576-audit-step1"
     },
     "680-audit-step2": {
-      "state": "in_review",
-      "pr_number": 682,
+      "state": "done",
+      "pr_number": 681,
       "issue": "680",
       "title": "AuditEvent step 2 \u2014 gate and rollback events",
       "qa_approved": true,
-      "awaiting_human_review": true
+      "awaiting_human_review": true,
+      "pr_merged": true,
+      "note": "Merged as PR #681 by parallel session; my PR #682 was duplicate and closed"
     }
   },
   "session_heartbeats": {
