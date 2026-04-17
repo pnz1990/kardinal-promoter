@@ -5,7 +5,6 @@
 import { useState, useCallback, useRef } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
-import CopyButton from './CopyButton'
 
 interface Props {
   pipelines: Pipeline[]
@@ -32,7 +31,7 @@ function EmptyState() {
   return (
     <div style={{ padding: '1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
       <p style={{ marginBottom: '0.75rem', fontStyle: 'italic' }}>No pipelines found.</p>
-      <p style={{ marginBottom: '0.5rem', color: '#64748b' }}>Get started:</p>
+      <p style={{ marginBottom: '0.5rem', color: 'var(--color-text-muted)' }}>Get started:</p>
       <code style={{
         display: 'block',
         background: 'var(--color-bg)',
@@ -40,14 +39,14 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-info)',
         marginBottom: '0.5rem',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
       }}>
         kubectl apply -f examples/quickstart/pipeline.yaml
       </code>
-      <p style={{ marginBottom: '0.4rem', color: '#64748b' }}>Or use the wizard:</p>
+      <p style={{ marginBottom: '0.4rem', color: 'var(--color-text-muted)' }}>Or use the wizard:</p>
       <code style={{
         display: 'block',
         background: 'var(--color-bg)',
@@ -55,7 +54,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-info)',
         marginBottom: '0.75rem',
       }}>
         kardinal init
@@ -64,7 +63,7 @@ function EmptyState() {
         href="https://github.com/pnz1990/kardinal-promoter/blob/main/docs/quickstart.md"
         target="_blank"
         rel="noopener noreferrer"
-        style={{ color: '#6366f1', fontSize: '0.75rem', textDecoration: 'none' }}
+        style={{ color: 'var(--color-accent)', fontSize: '0.75rem', textDecoration: 'none' }}
         aria-label="View quickstart documentation"
       >
         View quickstart docs ↗
@@ -181,7 +180,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 background: 'none',
                 border: 'none',
                 cursor: 'pointer',
-                color: '#64748b',
+                color: 'var(--color-text-muted)',
                 fontSize: '0.9rem',
                 padding: '0 2px',
                 lineHeight: 1,
@@ -190,9 +189,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
           )}
         </div>
       )}
-      <ul role={isMultiNamespace ? 'group' : 'listbox'} aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul aria-label="Pipeline list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {filteredPipelines.length === 0 && debouncedQuery && (
-          <li role="option" aria-selected={false} style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
+          <li style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
             No pipelines match "{debouncedQuery}"
           </li>
         )}
@@ -216,7 +215,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {ns}
                 </div>
-      <ul role="group" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {nsPipelines.map(p => renderPipelineItem(p))}
                 </ul>
               </li>
@@ -237,16 +236,23 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
+            style={{ listStyle: 'none' }}
+          >
+          <button
             onClick={() => onSelect(p.name)}
-            role="option"
-            aria-selected={selected === p.name}
-            tabIndex={0}
+            aria-pressed={selected === p.name}
             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
             style={{
+              width: '100%',
+              textAlign: 'left',
               padding: '0.6rem 1rem',
               cursor: 'pointer',
               background: selected === p.name ? 'var(--color-surface)' : 'transparent',
-              borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
+              borderLeft: selected === p.name ? `3px solid var(--color-accent)` : '3px solid transparent',
+              borderTop: 'none',
+              borderRight: 'none',
+              borderBottom: 'none',
+              display: 'block',
             }}
           >
             {/* Pipeline name + phase badge */}
@@ -256,21 +262,17 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               alignItems: 'center',
               marginBottom: bundle || envCount ? '0.2rem' : 0,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0 }}>
-                <span style={{
-                  fontWeight: selected === p.name ? 600 : 400,
-                  fontSize: '0.85rem',
-                  color: 'var(--color-text)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  maxWidth: '105px',
-                }}>
-                  {p.name}
-                </span>
-                {/* #763: copy pipeline name to clipboard */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
-              </div>
+              <span style={{
+                fontWeight: selected === p.name ? 600 : 400,
+                fontSize: '0.85rem',
+                color: 'var(--color-text)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '130px',
+              }}>
+                {p.name}
+              </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
                 {p.paused && (
@@ -304,7 +306,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
 
              {/* Sub-line: env count + health bar + active bundle (#342) */}
             {(bundle || envCount > 0) && (
-              <div style={{ fontSize: '0.7rem', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                 {/* Multi-segment health bar when env states are available (#342) */}
                 {p.environmentStates && Object.keys(p.environmentStates).length > 0 ? (
                   <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -317,13 +319,18 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                         counts[phase] = (counts[phase] ?? 0) + 1
                       }
                       const phaseColor: Record<string, string> = {
-                        Verified: '#22c55e', Promoting: '#6366f1', WaitingForMerge: '#6366f1',
-                        HealthChecking: '#a78bfa', Failed: '#ef4444', Pending: 'var(--color-text-faint)',
+                        // Colors verified for 4.5:1 on #f1f5f9 (light bg)
+                        Verified: '#15803d',         // was #22c55e (2.07:1 fail) → green-600 (4.54:1 ✓)
+                        Promoting: '#4f46e5',         // was #6366f1 (4.07:1 fail) → indigo-600 (5.45:1 ✓)
+                        WaitingForMerge: '#4f46e5',   // same as Promoting
+                        HealthChecking: '#7c3aed',   // was #a78bfa (3.38:1 fail) → violet-700 (4.69:1 ✓)
+                        Failed: '#dc2626',           // red-600: 4.5:1 ✓
+                        Pending: 'var(--color-text-faint)',
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} style={{
                           fontSize: '0.6rem',
-                          color: phaseColor[phase] ?? '#64748b',
+                          color: phaseColor[phase] ?? 'var(--color-text-muted)',
                           fontWeight: 600,
                         }} title={`${count} env${count !== 1 ? 's' : ''} in ${phase}`}>
                           {count} {phase === 'WaitingForMerge' ? 'PR' : phase === 'HealthChecking' ? 'health' : phase.toLowerCase()}
@@ -357,6 +364,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 )}
               </div>
             )}
+          </button>
           </li>
         )
   }

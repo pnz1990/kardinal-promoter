@@ -469,7 +469,7 @@ export function App() {
             {pipelines.length > 0 ? (
               <>
                 <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>←</div>
-                <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>
                   Select a pipeline to view its promotion DAG.
                 </p>
               </>
@@ -515,7 +515,7 @@ export function App() {
                     color: 'var(--color-text-muted)',
                   }}>
                     <span>
-                      Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                      Bundle: <span style={{ color: 'var(--color-info)', fontFamily: 'monospace' }}>{activeBundle.name}</span>
                       {/* #763: copy bundle name */}
                       <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>
@@ -545,7 +545,7 @@ export function App() {
                           href={activeBundle.provenance.ciRunURL}
                           target="_blank"
                           rel="noopener noreferrer"
-                          style={{ color: '#6366f1', fontSize: '0.78rem' }}
+                          style={{ color: 'var(--color-accent)', fontSize: '0.78rem' }}
                           title="CI run"
                         >
                           CI run ↗
@@ -614,7 +614,7 @@ export function App() {
                           <HealthChip state={b.phase} size="sm" />
                           <span style={{ fontFamily: 'monospace', color: 'var(--color-text)' }}>{b.name}</span>
                           {b.provenance?.commitSHA && (
-                            <span style={{ color: '#64748b', fontFamily: 'monospace' }}>
+                            <span style={{ color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>
                               {b.provenance.commitSHA.slice(0, 8)}
                             </span>
                           )}

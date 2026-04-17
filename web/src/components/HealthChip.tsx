@@ -120,14 +120,14 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
     case 'Error':
       return { bg: '#7f1d1d', text: 'var(--color-error)', border: '#ef4444' }
     case 'Pending':
-      return { bg: 'var(--color-surface)', text: 'var(--color-text-muted)', border: 'var(--color-text-faint)' }
+      return { bg: 'var(--color-surface)', text: 'var(--color-text-faint)', border: 'var(--color-border)' }
     case 'Degraded':
       return { bg: '#7c2d12', text: '#fb923c', border: '#f97316' }
     case 'Paused':
-      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: '#6366f1' }
+      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: 'var(--color-accent)' }
     case 'Unknown':
     default:
-      return { bg: 'var(--color-surface)', text: '#64748b', border: 'var(--color-border)' }
+      return { bg: 'var(--color-surface)', text: 'var(--color-text-muted)', border: 'var(--color-border)' }
   }
 }
 

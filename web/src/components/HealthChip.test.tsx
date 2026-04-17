@@ -85,7 +85,7 @@ describe('healthChipColors', () => {
 
   it('Unknown → gray palette', () => {
     const { text } = healthChipColors('Unknown')
-    expect(text).toContain('64748b')
+    expect(text).toContain('color-text-muted')
   })
 
   it('all 7 states return distinct text colors', () => {

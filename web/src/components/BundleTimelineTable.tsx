@@ -178,12 +178,12 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
                       ? b.environments.map(env => (
                           <EnvChip key={env.name} name={env.name} phase={env.phase} prURL={env.prURL} />
                         ))
-                      : <span style={{ color: 'var(--color-border)', fontSize: '0.7rem' }}>—</span>
+                      : <span style={{ color: 'var(--color-text-faint)', fontSize: '0.7rem' }}>—</span>
                     }
                   </div>
                 </td>
                 <td style={{ padding: '0.4rem 0.75rem', verticalAlign: 'middle' }}>
-                  <span style={{ color: dimmed ? 'var(--color-border)' : '#64748b', fontSize: '0.72rem' }}>
+                  <span style={{ color: dimmed ? 'var(--color-border)' : 'var(--color-text-muted)', fontSize: '0.72rem' }}>
                     {b.provenance?.author ?? '—'}
                   </span>
                 </td>
@@ -209,7 +209,7 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
             style={{
               background: 'none',
               border: 'none',
-              color: '#6366f1',
+              color: 'var(--color-accent)',
               cursor: 'pointer',
               fontSize: '0.75rem',
               padding: '0',

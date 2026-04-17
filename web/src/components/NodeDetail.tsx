@@ -98,11 +98,11 @@ function stepIcon(index: number, currentIndex: number, stepState: string, isActi
 function stepIconColor(index: number, currentIndex: number, stepState: string, isActive: boolean): string {
   if (index < currentIndex) return '#22c55e'
   if (index === currentIndex) {
-    if (!isActive) return '#6366f1'  // indigo for pending-current
+    if (!isActive) return 'var(--color-accent)'  // indigo for pending-current
     const health = kardinalStateToHealth(stepState)
     if (health === 'Error') return '#ef4444'
     if (health === 'Reconciling') return '#f59e0b'
-    return '#6366f1'
+    return 'var(--color-accent)'
   }
   return 'var(--color-border)'
 }
@@ -253,7 +253,7 @@ const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
   operator: 'var(--color-text)',   // white — operators
   boolean: 'var(--color-warning)',    // yellow — boolean literals
   identifier: '#93c5fd', // blue — identifiers (bundle.X, schedule.X)
-  plain: '#7dd3fc',      // light blue — default
+  plain: 'var(--color-info)',      // light blue — default
 }
 
 /** #333: Syntax-highlighted CEL expression block. */
@@ -319,7 +319,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
             </span>
             <span style={{
               fontSize: '0.75rem',
-              color: i === currentIndex ? 'var(--color-text)' : i < currentIndex ? '#86efac' : '#64748b',
+              color: i === currentIndex ? 'var(--color-text)' : i < currentIndex ? '#86efac' : 'var(--color-text-muted)',
               fontFamily: 'monospace',
               fontWeight: i === currentIndex ? 600 : 400,
             }}>
@@ -691,7 +691,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               wordBreak: 'break-all',
               marginBottom: i < activeBundle.images!.length - 1 ? '0.3rem' : 0,
             }}>
-              {img.repository && <span style={{ color: '#7dd3fc' }}>{img.repository}</span>}
+              {img.repository && <span style={{ color: 'var(--color-info)' }}>{img.repository}</span>}
               {img.tag && <><span style={{ color: 'var(--color-text-muted)' }}>:</span><span style={{ color: 'var(--color-success)' }}>{img.tag}</span></>}
               {!img.tag && img.digest && (
                 <><span style={{ color: 'var(--color-text-muted)' }}>@</span><span style={{ color: '#a78bfa' }}>{img.digest.slice(0, 16)}…</span></>
@@ -730,7 +730,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               href={node.prURL}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: '#6366f1', fontSize: '0.85rem' }}
+              style={{ color: 'var(--color-accent)', fontSize: '0.85rem' }}
             >
               View Pull Request ↗
             </a>
@@ -748,9 +748,9 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           </div>
           {Object.entries(node.outputs).map(([k, v]) => (
             <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem' }}>
-              <span style={{ color: '#7dd3fc' }}>{k}</span>:{' '}
+              <span style={{ color: 'var(--color-info)' }}>{k}</span>:{' '}
               {k.toLowerCase().includes('url') ? (
-                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>
+                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }}>
                   {v.length > 40 ? v.slice(0, 37) + '…' : v}
                 </a>
               ) : (
@@ -815,7 +815,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                     <span
                       data-testid="condition-reason"
                       style={{
-                        color: '#64748b',
+                        color: 'var(--color-text-muted)',
                         marginLeft: '0.4rem',
                         fontFamily: 'monospace',
                         fontSize: '0.7rem',

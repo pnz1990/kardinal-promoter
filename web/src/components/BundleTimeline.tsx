@@ -34,12 +34,24 @@ function phaseCSSClass(phase: string): string {
 /** Accent color for glow/dot — kept for inline uses (boxShadow, dot fill). */
 function phaseAccentColor(phase: string): string {
   switch (phase) {
-    case 'Promoting': return '#6366f1'
+    case 'Promoting': return 'var(--color-accent)'
     case 'Verified':  return '#22c55e'
     case 'Failed':    return '#ef4444'
     case 'Superseded': return 'var(--color-text-faint)'
     case 'Available': return '#f59e0b'
-    default: return '#64748b'
+    default: return 'var(--color-text-muted)'
+  }
+}
+
+/** Text color for phase label — always readable on dark chip backgrounds. */
+function phaseTextColor(phase: string): string {
+  switch (phase) {
+    case 'Promoting': return '#a5b4fc'  /* 8.7:1 on #1e1b4b or #0f172a */
+    case 'Verified':  return '#86efac'  /* 9.2:1 on #052e16/#0f172a */
+    case 'Failed':    return '#fca5a5'  /* 5.1:1 on #7f1d1d/#0f172a */
+    case 'Superseded': return '#94a3b8' /* 7.5:1 on dark bg */
+    case 'Available': return '#fcd34d'  /* 7.5:1 on dark bg */
+    default: return '#94a3b8'
   }
 }
 
@@ -106,7 +118,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
             style={{
               fontSize: '0.65rem',
               background: 'none',
-              color: '#64748b',
+              color: 'var(--color-text-muted)',
               border: 'none',
               cursor: 'pointer',
               padding: '0',
@@ -117,7 +129,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
           </button>
         )}
         {!compareBundle && bundles.length >= 2 && (
-          <span style={{ fontSize: '0.6rem', color: 'var(--color-border)' }}>
+          <span style={{ fontSize: '0.6rem', color: 'var(--color-text-faint)' }}>
             Shift-click to compare
           </span>
         )}
@@ -127,6 +139,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
           const isSelected = b.name === selectedBundle
           const isCompare = b.name === compareBundle
           const accentColor = phaseAccentColor(b.phase)
+          const labelColor = phaseTextColor(b.phase)
           // #532: CSS classes for state-driven styling
           const chipClass = [
             'bundle-chip',
@@ -164,10 +177,10 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
                 background: accentColor,
                 boxShadow: isSelected ? `0 0 6px ${accentColor}` : 'none',
               }} />
-              {/* Short name */}
+              {/* Short name — always use light colors since chip bg is always dark */}
               <span style={{
                 fontSize: '0.75rem',
-                color: isSelected || isCompare ? 'var(--color-text)' : '#64748b',
+                color: isSelected || isCompare ? '#e2e8f0' : '#94a3b8',
                 fontFamily: 'monospace',
                 fontWeight: isSelected || isCompare ? 600 : 400,
               }}>
@@ -176,7 +189,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Phase label */}
               <span style={{
                 fontSize: '0.75rem',
-                color: accentColor,
+                color: labelColor,  /* always readable on dark chip bg */
               }}>
                 {b.phase === 'Superseded' ? 'Sup' : b.phase}
               </span>

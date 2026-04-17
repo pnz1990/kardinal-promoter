@@ -42,7 +42,7 @@ function stageAccentColor(state: string): string {
     case 'Ready':       return '#22c55e'
     case 'Error':
     case 'Degraded':    return '#ef4444'
-    case 'Reconciling': return '#6366f1'
+    case 'Reconciling': return 'var(--color-accent)'
     default:            return 'var(--color-text-muted)'
   }
 }
@@ -64,10 +64,7 @@ export function PipelineLaneView({
   }
 
   return (
-    <div
-      role="group"
-      aria-label="Pipeline stages"
-      style={{
+    <div style={{
       display: 'flex',
       gap: '0.5rem',
       padding: '0.75rem 1.5rem',
@@ -103,10 +100,9 @@ export function PipelineLaneView({
 
             {/* Stage card — uses CSS class for state-driven colors */}
             <div
-              role="group"
+              role="button"
               tabIndex={0}
-              aria-label={`${node.environment} — ${node.state}`}
-              aria-current={isSelected || undefined}
+              aria-pressed={isSelected}
               data-health-state={kardinalStateToHealth(node.state)}
               onClick={() => onSelectNode?.(isSelected ? null : node)}
               onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelectNode?.(isSelected ? null : node)}
@@ -124,7 +120,7 @@ export function PipelineLaneView({
                 <span style={{
                   fontSize: '0.78rem',
                   fontWeight: 700,
-                  color: 'var(--color-text)',
+                  color: '#e2e8f0',  /* always light on dark stage card bg */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -139,7 +135,7 @@ export function PipelineLaneView({
                 <div style={{
                   fontSize: '0.65rem',
                   fontFamily: 'monospace',
-                  color: '#64748b',
+                  color: '#94a3b8',  /* always light muted on dark stage card bg */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -158,7 +154,7 @@ export function PipelineLaneView({
                   onClick={e => e.stopPropagation()}
                   style={{
                     fontSize: '0.65rem',
-                    color: '#6366f1',
+                    color: '#a5b4fc',  /* hardcoded: 8.7:1 on dark stage bg */
                     textDecoration: 'none',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -173,7 +169,7 @@ export function PipelineLaneView({
               {node.message && !showPRLink && (
                 <div style={{
                   fontSize: '0.65rem',
-                  color: 'var(--color-text-muted)',
+                  color: '#94a3b8',  /* always light muted on dark stage card bg */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -192,7 +188,7 @@ export function PipelineLaneView({
                     style={{
                       fontSize: '0.6rem',
                       background: 'var(--color-surface)',
-                      color: '#6366f1',
+                      color: 'var(--color-accent)',
                       border: '1px solid #334155',
                       borderRadius: '3px',
                       padding: '1px 5px',
@@ -208,7 +204,7 @@ export function PipelineLaneView({
                       style={{
                         fontSize: '0.6rem',
                         background: 'var(--color-surface)',
-                        color: 'var(--color-text-muted)',
+                        color: 'var(--color-text-muted)',  /* WCAG AA: works on light surface bg */
                         border: '1px solid #334155',
                         borderRadius: '3px',
                         padding: '1px 5px',

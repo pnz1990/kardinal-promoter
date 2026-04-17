@@ -56,7 +56,7 @@
 .dag-node--unknown {
   --dag-node-bg: #1e293b;
   --dag-node-border: #334155;
-  --dag-node-text: #64748b;
+  --dag-node-text: var(--color-text-muted);
 }
 
 /* ── Selected node ring ──────────────────────────────────────────────────── */
@@ -78,7 +78,7 @@
   border: 1px solid #1e293b;
   border-radius: 4px;
   font-size: 0.72rem;
-  color: #64748b;
+  color: var(--color-text-muted);
   display: flex;
   align-items: center;
   gap: 0.4rem;

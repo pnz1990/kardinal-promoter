@@ -44,7 +44,7 @@ function relativeTime(iso: string | undefined): string {
 
 /** Red/amber/green staleness color for inventory age. */
 function inventoryColor(days: number | undefined): string {
-  if (days === undefined) return '#64748b'
+  if (days === undefined) return 'var(--color-text-muted)'
   if (days > 30) return '#ef4444'
   if (days > 14) return '#f59e0b'
   return '#22c55e'
@@ -54,10 +54,10 @@ function inventoryColor(days: number | undefined): string {
 function cdLevelBadge(level: string | undefined) {
   const map: Record<string, { label: string; color: string }> = {
     'full-cd': { label: 'Full CD', color: '#22c55e' },
-    'mostly-cd': { label: 'Mostly CD', color: '#6366f1' },
+    'mostly-cd': { label: 'Mostly CD', color: 'var(--color-accent)' },
     'manual': { label: 'Manual', color: '#f59e0b' },
   }
-  const { label, color } = map[level ?? ''] ?? { label: '—', color: '#64748b' }
+  const { label, color } = map[level ?? ''] ?? { label: '—', color: 'var(--color-text-muted)' }
   return (
     <span style={{ color, fontSize: '0.75rem', fontWeight: 600 }}>{label}</span>
   )
@@ -159,7 +159,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
 
   if (loading) {
     return (
-      <div style={{ padding: '1.5rem', color: '#64748b', fontSize: '0.85rem' }}>
+      <div style={{ padding: '1.5rem', color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
         Loading pipelines…
       </div>
     )

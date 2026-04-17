@@ -57,12 +57,12 @@ export function stepIconFor(index: number, currentIndex: number, active: boolean
   icon: string
   color: string
 } {
-  if (index < currentIndex) return { icon: '✓', color: '#22c55e' }
+  if (index < currentIndex) return { icon: '✓', color: '#15803d' }
   if (index === currentIndex) {
     if (!active) return { icon: '○', color: 'var(--color-text-faint)' }
     return { icon: '▶', color: '#f59e0b' }
   }
-  return { icon: '○', color: 'var(--color-border)' }
+  return { icon: '○', color: 'var(--color-text-faint)' }
 }
 
 export function StageDetailPanel({ node, steps, onClose }: Props) {
@@ -138,7 +138,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
             background: 'none',
             border: 'none',
             cursor: 'pointer',
-            color: '#64748b',
+            color: 'var(--color-text-muted)',
             fontSize: '1rem',
             lineHeight: 1,
             padding: '2px 4px',
@@ -181,7 +181,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
               style={{
                 height: '100%',
                 width: `${bakePct(bakeElapsed, bakeTarget)}%`,
-                background: bakeElapsed >= bakeTarget ? '#22c55e' : '#6366f1',
+                background: bakeElapsed >= bakeTarget ? '#15803d' : 'var(--color-accent)',
                 borderRadius: '2px',
                 transition: 'width 0.5s ease',
               }}
@@ -202,7 +202,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
             href={step?.prURL ?? node.prURL}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: '#6366f1', textDecoration: 'none', fontSize: '0.75rem' }}
+            style={{ color: 'var(--color-accent)', textDecoration: 'none', fontSize: '0.75rem' }}
             aria-label="Open pull request"
           >
             View PR ↗
@@ -241,7 +241,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
                     {s.label}
                   </span>
                   {i === currentStepIndex && step.message && (
-                    <span style={{ fontSize: '0.68rem', color: '#64748b', marginLeft: 'auto', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginLeft: 'auto', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {step.message}
                     </span>
                   )}

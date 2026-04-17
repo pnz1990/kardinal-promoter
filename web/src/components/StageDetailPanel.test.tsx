@@ -87,7 +87,7 @@ describe('stepIconFor', () => {
   it('returns green check for completed step (index < currentIndex)', () => {
     const result = stepIconFor(0, 3, true)
     expect(result.icon).toBe('✓')
-    expect(result.color).toBe('#22c55e')
+    expect(result.color).toBe('#15803d')
   })
 
   it('returns play icon for active current step', () => {
@@ -105,7 +105,7 @@ describe('stepIconFor', () => {
   it('returns dark circle for future step', () => {
     const result = stepIconFor(5, 3, true)
     expect(result.icon).toBe('○')
-    expect(result.color).toContain('color-border')  // was #334155, now CSS var
+    expect(result.color).toContain('color-text-faint')  // muted gray for inactive step
   })
 })
 
