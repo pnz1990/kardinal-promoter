@@ -112,6 +112,35 @@ Flags:
 - `--active`: show only active bundles (Promoting/Verified/Failed — excludes Superseded)
 - `-o, --output <format>`: output format
 
+### kardinal get auditevents
+
+List AuditEvent records — the immutable promotion event log.
+
+```bash
+kardinal get auditevents [--pipeline <name>] [--bundle <name>] [--env <env>] [--limit N]
+```
+
+Output:
+```
+TIMESTAMP          PIPELINE      BUNDLE           ENV    ACTION                OUTCOME
+2026-04-17T03:15Z  nginx-demo    nginx-demo-v1    prod   PromotionStarted      Pending
+2026-04-17T03:18Z  nginx-demo    nginx-demo-v1    prod   PromotionSucceeded    Success
+```
+
+Actions:
+- `PromotionStarted` — Bundle started promoting through an environment
+- `PromotionSucceeded` — Health check passed; environment reached Verified
+- `PromotionFailed` — Step reached Failed state
+- `PromotionSuperseded` — Newer Bundle superseded this promotion
+- `GateEvaluated` — PolicyGate changed readiness state (on flip only)
+- `RollbackStarted` — onHealthFailure=rollback created a rollback Bundle
+
+Flags:
+- `--pipeline <name>`: filter by pipeline name
+- `--bundle <name>`: filter by bundle name
+- `--env <env>`: filter by environment name
+- `--limit N`: max results (default: 20, 0 = unlimited)
+
 ### kardinal create bundle
 
 Create a Bundle CRD. This is equivalent to `kubectl apply -f bundle.yaml` but with a simpler interface.
