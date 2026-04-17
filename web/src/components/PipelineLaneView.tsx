@@ -43,7 +43,7 @@ function stageAccentColor(state: string): string {
     case 'Error':
     case 'Degraded':    return '#ef4444'
     case 'Reconciling': return '#6366f1'
-    default:            return '#94a3b8'
+    default:            return 'var(--color-text-muted)'
   }
 }
 
@@ -93,7 +93,7 @@ export function PipelineLaneView({
               <div style={{
                 width: '20px',
                 height: '2px',
-                background: '#1e293b',
+                background: 'var(--color-surface)',
                 flexShrink: 0,
               }} />
             )}
@@ -120,7 +120,7 @@ export function PipelineLaneView({
                 <span style={{
                   fontSize: '0.78rem',
                   fontWeight: 700,
-                  color: '#e2e8f0',
+                  color: 'var(--color-text)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -169,7 +169,7 @@ export function PipelineLaneView({
               {node.message && !showPRLink && (
                 <div style={{
                   fontSize: '0.65rem',
-                  color: '#94a3b8',
+                  color: 'var(--color-text-muted)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -187,7 +187,7 @@ export function PipelineLaneView({
                     onClick={e => { e.stopPropagation(); onPromote?.(node.environment) }}
                     style={{
                       fontSize: '0.6rem',
-                      background: '#1e293b',
+                      background: 'var(--color-surface)',
                       color: '#6366f1',
                       border: '1px solid #334155',
                       borderRadius: '3px',
@@ -203,8 +203,8 @@ export function PipelineLaneView({
                       onClick={e => { e.stopPropagation(); onRollback?.(node.environment) }}
                       style={{
                         fontSize: '0.6rem',
-                        background: '#1e293b',
-                        color: '#94a3b8',
+                        background: 'var(--color-surface)',
+                        color: 'var(--color-text-muted)',
                         border: '1px solid #334155',
                         borderRadius: '3px',
                         padding: '1px 5px',

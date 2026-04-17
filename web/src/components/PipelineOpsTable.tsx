@@ -67,14 +67,14 @@ const CELL: React.CSSProperties = {
   padding: '0.45rem 0.75rem',
   borderBottom: '1px solid #1e293b',
   fontSize: '0.82rem',
-  color: '#e2e8f0',
+  color: 'var(--color-text)',
   whiteSpace: 'nowrap',
   verticalAlign: 'middle',
 }
 
 const HEADER_CELL: React.CSSProperties = {
   ...CELL,
-  color: '#94a3b8',
+  color: 'var(--color-text-muted)',
   fontSize: '0.72rem',
   textTransform: 'uppercase' as const,
   letterSpacing: '0.05em',
@@ -178,7 +178,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
       <div style={{
         padding: '0.6rem 1rem',
         borderBottom: '1px solid #1e293b',
-        background: '#050d1a',
+        background: 'var(--color-bg-deep)',
         display: 'flex',
         alignItems: 'center',
         gap: '0.5rem',
@@ -190,17 +190,17 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
           onChange={e => setFilter(e.target.value)}
           aria-label="Filter pipelines"
           style={{
-            background: '#1e293b',
+            background: 'var(--color-surface)',
             border: '1px solid #334155',
             borderRadius: '4px',
             padding: '0.3rem 0.6rem',
             fontSize: '0.8rem',
-            color: '#e2e8f0',
+            color: 'var(--color-text)',
             outline: 'none',
             width: '220px',
           }}
         />
-        <span style={{ fontSize: '0.75rem', color: '#475569' }}>
+        <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>
           {sorted.length} pipeline{sorted.length !== 1 ? 's' : ''}
           {filter ? ` matching "${filter}"` : ''}
         </span>
@@ -245,7 +245,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
               <tr>
                 <td
                   colSpan={COLUMNS.length}
-                  style={{ ...CELL, color: '#475569', textAlign: 'center', padding: '2rem' }}
+                  style={{ ...CELL, color: 'var(--color-text-faint)', textAlign: 'center', padding: '2rem' }}
                 >
                   {filter ? `No pipelines match "${filter}"` : 'No pipelines found.'}
                 </td>
@@ -267,7 +267,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                   aria-selected={isSelected}
                   style={{
                     cursor: 'pointer',
-                    background: isSelected ? '#1e293b' : 'transparent',
+                    background: isSelected ? 'var(--color-surface)' : 'transparent',
                     borderLeft: isSelected ? '3px solid #6366f1' : '3px solid transparent',
                   }}
                 >
@@ -279,7 +279,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                         <span style={{
                           fontSize: '0.6rem',
                           background: '#1e1b4b',
-                          color: '#a5b4fc',
+                          color: 'var(--color-accent)',
                           border: '1px solid #4338ca',
                           borderRadius: '3px',
                           padding: '0px 4px',
@@ -292,7 +292,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                     {p.activeBundleName && (
                       <div style={{
                         fontSize: '0.68rem',
-                        color: '#475569',
+                        color: 'var(--color-text-faint)',
                         fontFamily: 'monospace',
                         marginTop: '0.15rem',
                       }}>
@@ -342,7 +342,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
 
                   {/* Last merge */}
                   <td style={CELL}>
-                    <span title={p.lastMergedAt ?? 'Never merged'} style={{ color: '#94a3b8' }}>
+                    <span title={p.lastMergedAt ?? 'Never merged'} style={{ color: 'var(--color-text-muted)' }}>
                       {relativeTime(p.lastMergedAt)}
                     </span>
                   </td>

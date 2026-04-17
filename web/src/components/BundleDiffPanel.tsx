@@ -88,7 +88,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          background: '#0f172a',
+          background: 'var(--color-bg)',
           border: '1px solid #334155',
           borderRadius: '8px',
           padding: '1.5rem',
@@ -101,7 +101,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
         {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
           <div>
-            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#e2e8f0', margin: 0 }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)', margin: 0 }}>
               Bundle Comparison
             </h2>
             <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>
@@ -131,10 +131,10 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           marginBottom: '0.5rem',
         }}>
           <div />
-          <div style={{ fontSize: '0.7rem', color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--color-text-faint)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Bundle A
           </div>
-          <div style={{ fontSize: '0.7rem', color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <div style={{ fontSize: '0.7rem', color: 'var(--color-text-faint)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Bundle B
           </div>
         </div>
@@ -145,11 +145,11 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           gridTemplateColumns: '140px 1fr 1fr',
           gap: '0.5rem',
           marginBottom: '0.75rem',
-          background: '#1e293b',
+          background: 'var(--color-surface)',
           borderRadius: '4px',
           padding: '0.4rem 0.6rem',
         }}>
-          <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Name</span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Name</span>
           <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#7dd3fc' }} title={bundleA.name}>
             {truncate(bundleA.name, 28)}
           </span>
@@ -172,7 +172,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           }}>
             <span style={{
               fontSize: '0.75rem',
-              color: row.changed ? '#fbbf24' : '#64748b',
+              color: row.changed ? 'var(--color-warning)' : '#64748b',
               fontWeight: row.changed ? 600 : 400,
             }}>
               {row.changed ? '▸ ' : ''}{row.label}
@@ -192,9 +192,9 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           <button
             onClick={onClose}
             style={{
-              background: '#1e293b',
+              background: 'var(--color-surface)',
               border: '1px solid #334155',
-              color: '#e2e8f0',
+              color: 'var(--color-text)',
               borderRadius: '4px',
               padding: '0.4rem 1rem',
               cursor: 'pointer',
@@ -211,7 +211,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
 
 function DiffCell({ value, changed, isLink }: { value: string | null; changed: boolean; isLink?: boolean }) {
   if (!value) {
-    return <span style={{ fontSize: '0.75rem', color: '#334155' }}>—</span>
+    return <span style={{ fontSize: '0.75rem', color: 'var(--color-border)' }}>—</span>
   }
   if (isLink && value.startsWith('http')) {
     return (
@@ -230,7 +230,7 @@ function DiffCell({ value, changed, isLink }: { value: string | null; changed: b
     <span
       style={{
         fontSize: '0.75rem',
-        color: changed ? '#fbbf24' : '#94a3b8',
+        color: changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
         fontFamily: 'monospace',
       }}
       title={value}

@@ -129,7 +129,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
         left: pos?.left ?? 0,
         top: pos?.top ?? 0,
         zIndex: 9999,
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #334155',
         borderRadius: '6px',
         padding: '10px 14px',
@@ -142,7 +142,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
       }}
     >
       {/* Header: environment/gate name */}
-      <div style={{ fontWeight: 700, fontSize: '13px', color: '#e2e8f0', marginBottom: '6px' }}>
+      <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--color-text)', marginBottom: '6px' }}>
         {isPolicyGate ? `🔒 ${node.label}` : node.environment}
       </div>
 
@@ -158,7 +158,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
       {!isPolicyGate && (
         <>
           {node.message && (
-            <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px', lineHeight: 1.4, wordBreak: 'break-word' }}>
+            <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginBottom: '6px', lineHeight: 1.4, wordBreak: 'break-word' }}>
               {node.message}
             </div>
           )}
@@ -184,13 +184,13 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
           {node.expression && (
             <div style={{
               marginBottom: '6px',
-              background: '#1e293b',
+              background: 'var(--color-surface)',
               border: '1px solid #334155',
               borderRadius: '4px',
               padding: '6px 8px',
               fontFamily: 'monospace',
               fontSize: '11px',
-              color: '#94a3b8',
+              color: 'var(--color-text-muted)',
               wordBreak: 'break-word',
             }}>
               {node.expression}
@@ -202,7 +202,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
             </div>
           )}
           {node.message && (
-            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', lineHeight: 1.4 }}>
+            <div style={{ fontSize: '11px', color: 'var(--color-text-muted)', marginTop: '4px', lineHeight: 1.4 }}>
               {node.message}
             </div>
           )}

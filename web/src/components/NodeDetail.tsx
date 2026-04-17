@@ -104,7 +104,7 @@ function stepIconColor(index: number, currentIndex: number, stepState: string, i
     if (health === 'Reconciling') return '#f59e0b'
     return '#6366f1'
   }
-  return '#334155'
+  return 'var(--color-border)'
 }
 
 /** #339: Copy-to-clipboard button. Shows 📋 → ✓ on success for 2s. */
@@ -139,7 +139,7 @@ function CopyButton({ text }: { text: string }) {
         padding: '1px 6px',
         cursor: 'pointer',
         fontSize: '0.7rem',
-        color: copied ? '#86efac' : '#94a3b8',
+        color: copied ? '#86efac' : 'var(--color-text-muted)',
         transition: 'color 0.2s',
         lineHeight: 1.4,
       }}
@@ -246,12 +246,12 @@ function tokenizeCEL(expr: string): CELToken[] {
 }
 
 const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
-  keyword: '#fbbf24',    // yellow — true/false/in/has etc
+  keyword: 'var(--color-warning)',    // yellow — true/false/in/has etc
   function: '#67e8f9',   // cyan — function calls
   string: '#86efac',     // green — string literals
   number: '#f9a8d4',     // pink — numbers
-  operator: '#e2e8f0',   // white — operators
-  boolean: '#fbbf24',    // yellow — boolean literals
+  operator: 'var(--color-text)',   // white — operators
+  boolean: 'var(--color-warning)',    // yellow — boolean literals
   identifier: '#93c5fd', // blue — identifiers (bundle.X, schedule.X)
   plain: '#7dd3fc',      // light blue — default
 }
@@ -262,7 +262,7 @@ function CELBlock({ expression }: { expression: string }) {
   return (
     <code style={{
       display: 'block',
-      background: '#0f172a',
+      background: 'var(--color-bg)',
       borderRadius: '4px',
       padding: '0.5rem 0.75rem',
       fontSize: '0.8rem',
@@ -293,7 +293,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
         Promotion Steps
       </h4>
       <div style={{
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #1e293b',
         borderRadius: '4px',
         padding: '0.5rem 0.75rem',
@@ -319,7 +319,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
             </span>
             <span style={{
               fontSize: '0.75rem',
-              color: i === currentIndex ? '#e2e8f0' : i < currentIndex ? '#86efac' : '#64748b',
+              color: i === currentIndex ? 'var(--color-text)' : i < currentIndex ? '#86efac' : '#64748b',
               fontFamily: 'monospace',
               fontWeight: i === currentIndex ? 600 : 400,
             }}>
@@ -473,7 +473,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       width: '340px',
       minWidth: '300px',
       height: '100%',
-      background: '#1e293b',
+      background: 'var(--color-surface)',
       borderLeft: '1px solid #334155',
       padding: '1.5rem',
       overflowY: 'auto',
@@ -486,7 +486,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           style={{
             background: 'none',
             border: 'none',
-            color: '#94a3b8',
+            color: 'var(--color-text-muted)',
             cursor: 'pointer',
             fontSize: '1.25rem',
             lineHeight: 1,
@@ -501,17 +501,17 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <HealthChip state={node.state} nodeType={node.type} size="md" />
       </div>
 
-      <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
+      <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
         <strong style={{ color: '#cbd5e1' }}>Type:</strong> {node.type}
       </div>
-      <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
+      <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
         <strong style={{ color: '#cbd5e1' }}>Environment:</strong> {node.environment}
       </div>
 
       {/* #330: Elapsed duration timer for active PromotionStep nodes */}
       {isActiveNode && (
         <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginBottom: '0.5rem' }}>
-          <strong style={{ color: '#fbbf24' }}>Elapsed:</strong>{' '}
+          <strong style={{ color: 'var(--color-warning)' }}>Elapsed:</strong>{' '}
           {elapsedDisplay ?? 'running…'}
         </div>
       )}
@@ -595,7 +595,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PromotionStep: step progress log */}
       {isPromotionStep && stepLoading && (
-        <div style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '0.75rem', fontStyle: 'italic' }}>
+        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
           Loading step details...
         </div>
       )}
@@ -603,7 +603,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <StepProgress step={stepDetail} />
       )}
       {isPromotionStep && !stepLoading && !stepDetail && !bundleName && (
-        <div style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '0.75rem', fontStyle: 'italic' }}>
+        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
           Step sequence available when promotion is active.
         </div>
       )}
@@ -635,7 +635,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
             <CopyButton text={node.expression} />
           </div>
           {/* #333: CEL expression with syntax highlighting */}
-          <div style={{ border: `1px solid ${celValid === false ? '#7f1d1d' : '#334155'}`, borderRadius: '4px' }}>
+          <div style={{ border: `1px solid ${celValid === false ? '#7f1d1d' : 'var(--color-border)'}`, borderRadius: '4px' }}>
             <CELBlock expression={node.expression} />
           </div>
           {celValid === false && celError && (
@@ -648,7 +648,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PolicyGate: last evaluated timestamp */}
       {isPolicyGate && node.lastEvaluatedAt && (
-        <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
+        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
           <strong style={{ color: '#cbd5e1' }}>Last evaluated:</strong>{' '}
           <span title={node.lastEvaluatedAt}>
             {formatTimestamp(node.lastEvaluatedAt)}
@@ -658,13 +658,13 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PolicyGate: placeholder when expression is not yet populated */}
       {isPolicyGate && !node.expression && (
-        <div style={{ fontSize: '0.8rem', color: '#475569', marginBottom: '0.75rem', fontStyle: 'italic' }}>
+        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
           CEL expression will appear here when the graph API populates it.
         </div>
       )}
 
       {node.message && (
-        <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: '0.75rem' }}>
+        <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
           <strong style={{ color: '#cbd5e1' }}>Message:</strong> {node.message}
          </div>
       )}
@@ -676,25 +676,25 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <div style={{
           marginBottom: '0.75rem',
           padding: '0.6rem 0.75rem',
-          background: '#1e293b',
+          background: 'var(--color-surface)',
           borderRadius: '6px',
           border: '1px solid #334155',
         }}>
-          <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.4rem', fontWeight: 600 }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
             Promoting Image{activeBundle.images.length > 1 ? 's' : ''}
           </div>
           {activeBundle.images.map((img, i) => (
             <div key={i} style={{
               fontFamily: 'monospace',
               fontSize: '0.78rem',
-              color: '#e2e8f0',
+              color: 'var(--color-text)',
               wordBreak: 'break-all',
               marginBottom: i < activeBundle.images!.length - 1 ? '0.3rem' : 0,
             }}>
               {img.repository && <span style={{ color: '#7dd3fc' }}>{img.repository}</span>}
-              {img.tag && <><span style={{ color: '#94a3b8' }}>:</span><span style={{ color: '#4ade80' }}>{img.tag}</span></>}
+              {img.tag && <><span style={{ color: 'var(--color-text-muted)' }}>:</span><span style={{ color: 'var(--color-success)' }}>{img.tag}</span></>}
               {!img.tag && img.digest && (
-                <><span style={{ color: '#94a3b8' }}>@</span><span style={{ color: '#a78bfa' }}>{img.digest.slice(0, 16)}…</span></>
+                <><span style={{ color: 'var(--color-text-muted)' }}>@</span><span style={{ color: '#a78bfa' }}>{img.digest.slice(0, 16)}…</span></>
               )}
             </div>
           ))}
@@ -747,7 +747,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
             <CopyButton text={JSON.stringify(node.outputs, null, 2)} />
           </div>
           {Object.entries(node.outputs).map(([k, v]) => (
-            <div key={k} style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '0.2rem' }}>
+            <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem' }}>
               <span style={{ color: '#7dd3fc' }}>{k}</span>:{' '}
               {k.toLowerCase().includes('url') ? (
                 <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>
@@ -788,7 +788,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
             })()}
           </div>
           <div style={{
-            background: '#0f172a',
+            background: 'var(--color-bg)',
             border: '1px solid #1e293b',
             borderRadius: '4px',
             padding: '0.4rem 0.6rem',
@@ -802,14 +802,14 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 marginBottom: i < stepDetail.conditions!.length - 1 ? '0.3rem' : 0,
               }}>
                 <span style={{
-                  color: cond.status === 'True' ? '#86efac' : cond.status === 'False' ? '#fca5a5' : '#94a3b8',
+                  color: cond.status === 'True' ? '#86efac' : cond.status === 'False' ? '#fca5a5' : 'var(--color-text-muted)',
                   flexShrink: 0,
                   fontFamily: 'monospace',
                 }}>
                   {cond.status === 'True' ? '✓' : cond.status === 'False' ? '✗' : '?'}
                 </span>
                 <div>
-                  <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{cond.type}</span>
+                  <span style={{ color: 'var(--color-text)', fontWeight: 600 }}>{cond.type}</span>
                   {/* #529: reason field — CamelCase code for quick triage */}
                   {cond.reason && (
                     <span
@@ -825,10 +825,10 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                     </span>
                   )}
                   {cond.message && (
-                    <span style={{ color: '#94a3b8', marginLeft: '0.4rem' }}>— {cond.message}</span>
+                    <span style={{ color: 'var(--color-text-muted)', marginLeft: '0.4rem' }}>— {cond.message}</span>
                   )}
                   {cond.lastTransitionTime && (
-                    <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: '0.1rem' }}>
+                    <div style={{ color: 'var(--color-text-faint)', fontSize: '0.68rem', marginTop: '0.1rem' }}>
                       {formatTimestamp(cond.lastTransitionTime)}
                     </div>
                   )}

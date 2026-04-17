@@ -114,10 +114,10 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                   nodeType="PolicyGate"
                   size="sm"
                 />
-                <span style={{ fontSize: '0.8rem', color: '#e2e8f0', fontWeight: 500 }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--color-text)', fontWeight: 500 }}>
                   {gate.name}
                 </span>
-                <span style={{ fontSize: '0.65rem', color: '#475569', marginLeft: 'auto' }}>
+                <span style={{ fontSize: '0.65rem', color: 'var(--color-text-faint)', marginLeft: 'auto' }}>
                   {gate.namespace} · {formatAge(gate.lastEvaluatedAt)}
                 </span>
               </div>
@@ -125,7 +125,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 <code style={{
                   fontSize: '0.72rem',
                   color: '#7dd3fc',
-                  background: '#0f172a',
+                  background: 'var(--color-bg)',
                   border: '1px solid #1e293b',
                   borderRadius: '3px',
                   padding: '2px 6px',
@@ -136,7 +136,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 </code>
               )}
               {!gate.ready && gate.reason && (
-                <div style={{ fontSize: '0.7rem', color: '#f87171' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--color-error)' }}>
                   {gate.reason}
                 </div>
               )}

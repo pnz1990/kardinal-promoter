@@ -59,7 +59,7 @@ export default function CopyButton({ text, title }: Props) {
         padding: '1px 6px',
         cursor: 'pointer',
         fontSize: '0.7rem',
-        color: copied ? '#86efac' : '#94a3b8',
+        color: copied ? '#86efac' : 'var(--color-text-muted)',
         transition: 'color 0.2s',
         lineHeight: 1.4,
       }}

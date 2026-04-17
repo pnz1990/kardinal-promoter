@@ -108,10 +108,10 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
 function DAGLegend() {
   const legendItems: Array<{ label: string; bg: string; border: string; text: string; desc: string }> = [
     { label: 'Verified', bg: '#14532d', border: '#16a34a', text: '#86efac', desc: 'Passed' },
-    { label: 'Promoting', bg: '#1e1b4b', border: '#6366f1', text: '#a5b4fc', desc: 'Running' },
+    { label: 'Promoting', bg: '#1e1b4b', border: '#6366f1', text: 'var(--color-accent)', desc: 'Running' },
     { label: 'Waiting', bg: '#1c2c50', border: '#3b82f6', text: '#93c5fd', desc: 'Awaiting merge' },
     { label: 'Failed', bg: '#450a0a', border: '#dc2626', text: '#fca5a5', desc: 'Error' },
-    { label: 'Pending', bg: '#1e293b', border: '#475569', text: '#94a3b8', desc: 'Not started' },
+    { label: 'Pending', bg: 'var(--color-surface)', border: 'var(--color-text-faint)', text: 'var(--color-text-muted)', desc: 'Not started' },
   ]
 
   return (
@@ -124,9 +124,9 @@ function DAGLegend() {
       padding: '0.5rem 0.25rem',
       borderTop: '1px solid #1e293b',
       fontSize: '0.65rem',
-      color: '#475569',
+      color: 'var(--color-text-faint)',
     }}>
-      <span style={{ fontWeight: 600, color: '#334155', marginRight: '0.25rem' }}>Legend:</span>
+      <span style={{ fontWeight: 600, color: 'var(--color-border)', marginRight: '0.25rem' }}>Legend:</span>
       {/* Node type icons */}
       <span title="PromotionStep — environment node (rounded rect)">
         <span style={{ fontSize: '0.6rem', border: '1px solid #475569', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: '#64748b' }}>▭</span>
@@ -136,7 +136,7 @@ function DAGLegend() {
         <span style={{ marginRight: '3px' }}>🔒</span>
         Policy gate
       </span>
-      <span style={{ color: '#1e293b' }}>│</span>
+      <span style={{ color: 'var(--color-surface)' }}>│</span>
       {/* State color chips */}
       {legendItems.map(item => (
         <span
@@ -155,8 +155,8 @@ function DAGLegend() {
           {item.label}
         </span>
       ))}
-      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" style={{ marginLeft: 'auto', color: '#334155' }}>
-        <span style={{ color: '#fbbf24', marginRight: '3px' }}>◆</span>highlighted = blocked gate
+      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" style={{ marginLeft: 'auto', color: 'var(--color-border)' }}>
+        <span style={{ color: 'var(--color-warning)', marginRight: '3px' }}>◆</span>highlighted = blocked gate
       </span>
     </div>
   )
@@ -183,7 +183,7 @@ function DAGNode({
   const isActive = node.type === 'PromotionStep' && ACTIVE_STATES.has(node.state)
   const elapsed = useElapsedTick(node.startedAt, isActive)
 
-  const strokeColor = isHighlighted ? '#fbbf24' : border
+  const strokeColor = isHighlighted ? 'var(--color-warning)' : border
   const strokeWidth = isSelected ? 2.5 : isHighlighted ? 2.5 : 1.5
 
   const prNumber = node.prURL ? extractPRNumber(node.prURL) : null
@@ -224,7 +224,7 @@ function DAGNode({
         // #346: visible focus ring for keyboard navigation
         const rect = (e.currentTarget as SVGGElement).querySelector('rect')
         if (rect) {
-          rect.setAttribute('stroke', '#a5b4fc')
+          rect.setAttribute('stroke', 'var(--color-accent)')
           rect.setAttribute('stroke-width', '2.5')
         }
       }}
@@ -251,7 +251,7 @@ function DAGNode({
         x={NODE_WIDTH / 2}
         y={21}
         textAnchor="middle"
-        fill="#e2e8f0"
+        fill="var(--color-text)"
         fontSize="11"
         fontWeight="600"
         style={{ pointerEvents: 'none' }}
@@ -371,7 +371,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     return <div style={{ padding: '2rem', color: '#ef4444' }}>Error: {error}</div>
   }
   if (nodes.length === 0) {
-    return <div style={{ padding: '2rem', color: '#94a3b8' }}>No active promotion found.</div>
+    return <div style={{ padding: '2rem', color: 'var(--color-text-muted)' }}>No active promotion found.</div>
   }
   const maxX = Math.max(...layout.map(n => n.x + NODE_WIDTH / 2)) + MARGIN
   const maxY = Math.max(...layout.map(n => n.y + NODE_HEIGHT / 2)) + MARGIN
@@ -383,7 +383,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
       {/* #532: Static topology banner — uses .dag-static-banner CSS class */}
       {isStaticTopology && (
         <div className="dag-static-banner" data-testid="dag-static-banner">
-          <span style={{ color: '#334155' }}>◦</span>
+          <span style={{ color: 'var(--color-border)' }}>◦</span>
           Pipeline topology — no active bundle. Create one to start promoting.
         </div>
       )}
@@ -395,7 +395,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
         >
           <defs>
             <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-              <polygon points="0 0, 8 3, 0 6" fill="#475569" />
+              <polygon points="0 0, 8 3, 0 6" fill="var(--color-text-faint)" />
             </marker>
           </defs>
 
@@ -416,7 +416,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
                   key={`${i}-${j}`}
                   d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
                   fill="none"
-                  stroke="#475569"
+                  stroke="var(--color-text-faint)"
                   strokeWidth={1.5}
                   markerEnd="url(#arrowhead)"
                 />

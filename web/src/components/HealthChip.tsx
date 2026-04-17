@@ -114,20 +114,20 @@ export function healthStateClass(state: HealthState): string {
 export function healthChipColors(state: HealthState): { bg: string; text: string; border: string } {
   switch (state) {
     case 'Ready':
-      return { bg: '#14532d', text: '#4ade80', border: '#22c55e' }
+      return { bg: '#14532d', text: 'var(--color-success)', border: '#22c55e' }
     case 'Reconciling':
-      return { bg: '#78350f', text: '#fbbf24', border: '#f59e0b' }
+      return { bg: '#78350f', text: 'var(--color-warning)', border: '#f59e0b' }
     case 'Error':
-      return { bg: '#7f1d1d', text: '#f87171', border: '#ef4444' }
+      return { bg: '#7f1d1d', text: 'var(--color-error)', border: '#ef4444' }
     case 'Pending':
-      return { bg: '#1e293b', text: '#94a3b8', border: '#475569' }
+      return { bg: 'var(--color-surface)', text: 'var(--color-text-muted)', border: 'var(--color-text-faint)' }
     case 'Degraded':
       return { bg: '#7c2d12', text: '#fb923c', border: '#f97316' }
     case 'Paused':
-      return { bg: '#1e1b4b', text: '#a5b4fc', border: '#6366f1' }
+      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: '#6366f1' }
     case 'Unknown':
     default:
-      return { bg: '#1e293b', text: '#64748b', border: '#334155' }
+      return { bg: 'var(--color-surface)', text: '#64748b', border: 'var(--color-border)' }
   }
 }
 

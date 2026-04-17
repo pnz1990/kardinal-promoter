@@ -56,17 +56,17 @@ function ConfirmDialog({
       }}
     >
       <div style={{
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #1e293b',
         borderRadius: '8px',
         padding: '1.5rem',
         maxWidth: '400px',
         width: '90%',
       }}>
-        <h2 id="confirm-title" style={{ margin: '0 0 0.5rem', fontSize: '1rem', fontWeight: 700, color: '#e2e8f0' }}>
+        <h2 id="confirm-title" style={{ margin: '0 0 0.5rem', fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)' }}>
           {title}
         </h2>
-        <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: '0 0 1rem' }}>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem', margin: '0 0 1rem' }}>
           {description}
         </p>
         {error && (
@@ -84,7 +84,7 @@ function ConfirmDialog({
               background: 'transparent',
               border: '1px solid #334155',
               borderRadius: '6px',
-              color: '#94a3b8',
+              color: 'var(--color-text-muted)',
               cursor: 'pointer',
               fontSize: '0.875rem',
             }}
@@ -163,7 +163,7 @@ function OverrideGateDialog({ gateName, gateNamespace, onDone, onCancel }: Overr
       <form
         onSubmit={handleSubmit}
         style={{
-          background: '#0f172a',
+          background: 'var(--color-bg)',
           border: '1px solid #1e293b',
           borderRadius: '8px',
           padding: '1.5rem',
@@ -174,11 +174,11 @@ function OverrideGateDialog({ gateName, gateNamespace, onDone, onCancel }: Overr
         <h2 id="override-title" style={{ margin: '0 0 0.25rem', fontSize: '1rem', fontWeight: 700, color: '#f59e0b' }}>
           Override gate: {gateName}
         </h2>
-        <p style={{ color: '#94a3b8', fontSize: '0.8rem', margin: '0 0 1rem' }}>
+        <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', margin: '0 0 1rem' }}>
           This bypasses the policy gate. Provide a mandatory reason — it will be recorded in the PR evidence.
         </p>
 
-        <label htmlFor="override-reason" style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+        <label htmlFor="override-reason" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>
           Reason <span style={{ color: '#ef4444' }}>*</span>
         </label>
         <textarea
@@ -190,15 +190,15 @@ function OverrideGateDialog({ gateName, gateNamespace, onDone, onCancel }: Overr
           required
           style={{
             width: '100%', boxSizing: 'border-box',
-            background: '#1e293b', border: '1px solid #334155',
+            background: 'var(--color-surface)', border: '1px solid #334155',
             borderRadius: '6px', padding: '0.5rem 0.75rem',
-            color: '#e2e8f0', fontSize: '0.875rem',
+            color: 'var(--color-text)', fontSize: '0.875rem',
             resize: 'vertical', marginBottom: '0.75rem',
             fontFamily: 'inherit',
           }}
         />
 
-        <label htmlFor="override-expires" style={{ display: 'block', fontSize: '0.75rem', color: '#94a3b8', marginBottom: '0.25rem' }}>
+        <label htmlFor="override-expires" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}>
           Override duration (minutes)
         </label>
         <input
@@ -209,9 +209,9 @@ function OverrideGateDialog({ gateName, gateNamespace, onDone, onCancel }: Overr
           value={expiresInMinutes}
           onChange={e => setExpiresInMinutes(Number(e.target.value))}
           style={{
-            background: '#1e293b', border: '1px solid #334155',
+            background: 'var(--color-surface)', border: '1px solid #334155',
             borderRadius: '6px', padding: '0.4rem 0.75rem',
-            color: '#e2e8f0', fontSize: '0.875rem',
+            color: 'var(--color-text)', fontSize: '0.875rem',
             width: '100px', marginBottom: '1rem',
           }}
         />
@@ -233,7 +233,7 @@ function OverrideGateDialog({ gateName, gateNamespace, onDone, onCancel }: Overr
               background: 'transparent',
               border: '1px solid #334155',
               borderRadius: '6px',
-              color: '#94a3b8',
+              color: 'var(--color-text-muted)',
               cursor: 'pointer',
               fontSize: '0.875rem',
             }}
