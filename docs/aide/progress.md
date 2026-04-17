@@ -352,3 +352,11 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 680-audit-log-step2 | feat(api): AuditEvent step 2 — gate and rollback events | ✅ Complete | #681 merged | GateEvaluated + RollbackStarted; policygate write on ready-flip |
+
+---
+
+## queue-032 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 683-audit-cli | feat(cli): kardinal get auditevents | ✅ Complete | #684 merged | --pipeline/--bundle/--env/--limit flags |
