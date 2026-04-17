@@ -1111,6 +1111,11 @@ func (in *PromotionStepSpec) DeepCopyInto(out *PromotionStepSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.UpstreamStates != nil {
+		in, out := &in.UpstreamStates, &out.UpstreamStates
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.RequiredGates != nil {
 		in, out := &in.RequiredGates, &out.RequiredGates
 		*out = make([]string, len(*in))

@@ -33,16 +33,18 @@ type PromotionStepSpec struct {
 	// +optional
 	Inputs map[string]string `json:"inputs,omitempty"`
 
-	// UpstreamVerified carries the resolved state of the primary upstream PromotionStep.
-	// Set by the kro Graph controller via CEL expression substitution.
-	// Example: "Verified" when the upstream test environment finished successfully.
+	// UpstreamStates holds the resolved state of all upstream PromotionSteps.
+	// Each element is a string like "Verified" or "Pending" — set by the kro Graph
+	// controller via CEL expression substitution. The list contains one entry per
+	// upstream environment; the Graph's propagateWhen on the upstream node ensures
+	// data only flows here once all upstreams have reached Verified.
+	//
+	// Replaces the N-field upstreamVerified / upstreamVerified2 / ... pattern (#625).
+	// Using a single list avoids CRD field proliferation for high-fan-in environments.
+	// krocodile's collectStrings() scans []any recursively, so list elements with
+	// ${upstream.status.state} CEL expressions correctly create dependency edges.
 	// +optional
-	UpstreamVerified string `json:"upstreamVerified,omitempty"`
-
-	// UpstreamVerified2 carries the resolved state of a secondary upstream PromotionStep
-	// (for fan-in scenarios with multiple upstreams).
-	// +optional
-	UpstreamVerified2 string `json:"upstreamVerified2,omitempty"`
+	UpstreamStates []string `json:"upstreamStates,omitempty"`
 
 	// RequiredGates holds the names of PolicyGate instances that must be ready
 	// before this PromotionStep can be promoted. Set by the Graph controller via CEL.

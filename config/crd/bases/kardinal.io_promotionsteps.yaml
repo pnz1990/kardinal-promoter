@@ -93,17 +93,15 @@ spec:
                             wait-for-merge, health-check.
                 minLength: 1
                 type: string
-              upstreamVerified:
+              upstreamStates:
                 description: |-
-                  UpstreamVerified carries the resolved state of the primary upstream PromotionStep.
-                  Set by the kro Graph controller via CEL expression substitution.
-                  Example: "Verified" when the upstream test environment finished successfully.
-                type: string
-              upstreamVerified2:
-                description: |-
-                  UpstreamVerified2 carries the resolved state of a secondary upstream PromotionStep
-                  (for fan-in scenarios with multiple upstreams).
-                type: string
+                  UpstreamStates holds the resolved state of all upstream PromotionSteps.
+                  Each element is a string like "Verified" or "Pending", set by the kro Graph
+                  controller via CEL expression substitution. Replaces the N-field
+                  upstreamVerified / upstreamVerified2 / ... pattern (#625).
+                items:
+                  type: string
+                type: array
             required:
             - bundleName
             - environment
