@@ -29,6 +29,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **SCM circuit breaker** — all three providers (GitHub, GitLab, Forgejo) now use a per-provider circuit breaker. After 5 consecutive 429/5xx failures, calls are blocked for an exponential backoff period (30s base, 10min max). Respects `X-RateLimit-Reset` and `Retry-After` response headers. Prevents rate-limit exhaustion during SCM outages (#571)
+- **Bundle Watch node in Graph** — `bundle.*` fields are now live CEL scope variables in the Graph spec. PromotionStep `spec.bundleName` is a live reference rather than a baked-in literal. Prerequisite for Bundle intent filtering via `includeWhen` (#622)
+
+### Changed
+
+- **PolicyGate `spec.upstreamEnvironment` removed** — this controller-internal DAG edge marker moved to a metadata annotation (`kardinal.io/upstream-ref`). PolicyGate spec now only contains user-authored configuration (expression, message, recheckInterval). No functional change — the PromotionStep reconciler never read this field (#618)
+
+
 ---
 
 ## [v0.7.0] — 2026-04-17
