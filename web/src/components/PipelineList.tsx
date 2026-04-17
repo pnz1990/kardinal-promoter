@@ -40,7 +40,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-code-text)',
         marginBottom: '0.5rem',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
@@ -55,7 +55,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-code-text)',
         marginBottom: '0.75rem',
       }}>
         kardinal init
@@ -237,13 +237,16 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
-            style={{ listStyle: 'none' }}
+            style={{ listStyle: 'none', position: 'relative' }}
           >
-          {/* #762: Outer <li> is non-interactive. A <button> handles selection to avoid
-              nested-interactive axe violation (interactive inside interactive). */}
+          {/* #762: Outer <li> is non-interactive. A <button> handles selection.
+              #773: CopyButton is a sibling of the selection button (not nested inside it)
+              to avoid the nested-interactive axe violation. The copy button is
+              absolutely positioned over the pipeline name area. */}
           <button
             onClick={() => onSelect(p.name)}
             aria-pressed={selected === p.name}
+            aria-selected={selected === p.name}
             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
             style={{
               width: '100%',
@@ -265,7 +268,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               alignItems: 'center',
               marginBottom: bundle || envCount ? '0.2rem' : 0,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0, paddingRight: '1.5rem' }}>
                 <span style={{
                   fontWeight: selected === p.name ? 600 : 400,
                   fontSize: '0.85rem',
@@ -277,8 +280,6 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
@@ -367,6 +368,15 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               </div>
             )}
           </button>
+          {/* #773: CopyButton is outside the selection button — sibling not child —
+              to avoid nested-interactive axe violation. Absolutely positioned over
+              the pipeline name area. stopPropagation prevents selection on copy click. */}
+          <div
+            style={{ position: 'absolute', top: '0.55rem', left: '8.5rem', zIndex: 1 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+          </div>
           </li>
         )
   }

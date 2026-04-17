@@ -253,7 +253,7 @@ const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
   operator: 'var(--color-text)',   // white — operators
   boolean: 'var(--color-warning)',    // yellow — boolean literals
   identifier: '#93c5fd', // blue — identifiers (bundle.X, schedule.X)
-  plain: '#7dd3fc',      // light blue — default
+  plain: 'var(--color-code-text)',  // light blue — default
 }
 
 /** #333: Syntax-highlighted CEL expression block. */
@@ -691,7 +691,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               wordBreak: 'break-all',
               marginBottom: i < activeBundle.images!.length - 1 ? '0.3rem' : 0,
             }}>
-              {img.repository && <span style={{ color: '#7dd3fc' }}>{img.repository}</span>}
+              {img.repository && <span style={{ color: 'var(--color-code-text)' }}>{img.repository}</span>}
               {img.tag && <><span style={{ color: 'var(--color-text-muted)' }}>:</span><span style={{ color: 'var(--color-success)' }}>{img.tag}</span></>}
               {!img.tag && img.digest && (
                 <><span style={{ color: 'var(--color-text-muted)' }}>@</span><span style={{ color: '#a78bfa' }}>{img.digest.slice(0, 16)}…</span></>
@@ -748,7 +748,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           </div>
           {Object.entries(node.outputs).map(([k, v]) => (
             <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem' }}>
-              <span style={{ color: '#7dd3fc' }}>{k}</span>:{' '}
+              <span style={{ color: 'var(--color-code-text)' }}>{k}</span>:{' '}
               {k.toLowerCase().includes('url') ? (
                 <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }}>
                   {v.length > 40 ? v.slice(0, 37) + '…' : v}
