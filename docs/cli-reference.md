@@ -579,3 +579,28 @@ kardinal completion powershell | Out-String | Invoke-Expression
 | `-n, --namespace <ns>` | Namespace (default: current context namespace) |
 | `-o, --output <format>` | Output format: `table` (default), `json`, `yaml` |
 | `--verbose` | Enable verbose logging |
+
+### kardinal audit summary
+
+Show aggregate promotion metrics from the AuditEvent log.
+
+```bash
+kardinal audit summary [--pipeline <name>] [--since <duration>]
+```
+
+Output:
+```
+Pipeline: nginx-demo  (last 24h)
+
+Promotions:   12 started, 10 succeeded, 1 failed, 1 superseded
+Success rate: 83.3%
+Avg duration: 8m 42s
+
+Gates:        45 evaluations, 3 blocked (6.7% block rate)
+Rollbacks:    1 triggered
+```
+
+Flags:
+- `--pipeline <name>`: filter by pipeline name (default: all pipelines)
+- `--since <duration>`: time window — e.g. `24h` (default), `7d`, `30d`
+
