@@ -328,3 +328,11 @@
 |---|---|---|---|---|
 | 573-admission-webhook | feat(api): Pipeline/Bundle VAP extension | ✅ Complete | #670 merged | 2 new VAP policies |
 | 617-definition-nodes | feat(graph): Definition nodes for naming | ⛔ NEEDS HUMAN | — | False premise: Go strings not in krocodile CEL scope |
+
+---
+
+## queue-029 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 646-krocodile-upgrade-2 | chore(graph): upgrade krocodile to 05db829 | ✅ Complete | #677 merged | BREAKING: explicit-keyword schema; ref:/watch: compat fixes |
