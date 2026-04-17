@@ -1132,14 +1132,11 @@
       "note": "CI green. Branch protection requires human reviewer. Needs human to merge."
     },
     "783-focus-trap": {
-      "title": "feat(ui): focus trap in keyboard shortcuts modal",
-      "state": "todo",
-      "issue": "783",
-      "areas": [
-        "ui"
-      ],
-      "size": "xs",
-      "priority": "medium"
+      "state": "in_review",
+      "assigned_to": "sess-0fe0edd0",
+      "pr_number": 785,
+      "title": "feat(ui): focus trap in keyboard shortcuts modal (#783)",
+      "awaiting_human_review": true
     },
     "784-skeleton-loading": {
       "title": "feat(ui): skeleton loading states",
@@ -1176,6 +1173,5 @@
     ],
     "status": "in_progress",
     "note": "Security sprint near-complete. PRs #701 (krocodile trivy) and #707 (SLSA) awaiting human review. Generate new queue from roadmap after these merge."
-  },
-  "pm_cycle_count": 1
+  }
 }
