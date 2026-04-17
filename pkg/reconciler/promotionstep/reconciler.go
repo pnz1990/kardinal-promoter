@@ -34,6 +34,8 @@ import (
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
@@ -1018,6 +1020,13 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 // PromotionSteps matching the agent's shard label are enqueued. This replaces the
 // silent Go-level skip (PS-3 in docs/design/11-graph-purity-tech-debt.md) with a
 // declarative controller-level filter that is observable via label selectors.
+//
+// Additionally registers Watches on PRStatus and PolicyGate CRDs:
+//   - PRStatus: re-enqueue the owning PromotionStep when status.merged changes.
+//     Without this Watch, a step in WaitingForMerge would only react after
+//     requeueWaitForMerge, defeating the purpose of the PRStatus CRD.
+//   - PolicyGate: re-enqueue PromotionSteps in the same namespace when any gate
+//     changes status.ready, reducing latency for pre-deploy gate advancement.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr)
 	if r.Shard != "" {
@@ -1029,7 +1038,56 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	} else {
 		b = b.For(&v1alpha1.PromotionStep{})
 	}
+
+	b = b.Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper))
+	b = b.Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper))
+
 	return b.Complete(r)
+}
+
+// prStatusMapper re-enqueues the PromotionStep that owns the changed PRStatus.
+// The owning step is identified via ps.Spec.PRStatusRef == changed PRStatus name.
+// This ensures the WaitingForMerge handler runs immediately when PRStatus.status.merged
+// flips to true, rather than waiting for requeueWaitForMerge. (#644)
+func (r *Reconciler) prStatusMapper(ctx context.Context, obj client.Object) []reconcile.Request {
+	prs := obj.(*v1alpha1.PRStatus)
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList, client.InNamespace(prs.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, step := range stepList.Items {
+		if step.Spec.PRStatusRef == prs.GetName() {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      step.Name,
+					Namespace: step.Namespace,
+				},
+			})
+		}
+	}
+	return reqs
+}
+
+// policyGateMapper re-enqueues all PromotionSteps in the namespace when a
+// PolicyGate changes status.ready. This reduces latency for pre-deploy gate
+// advancement. (#644)
+func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []reconcile.Request {
+	gate := obj.(*v1alpha1.PolicyGate)
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList, client.InNamespace(gate.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(stepList.Items))
+	for _, step := range stepList.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      step.Name,
+				Namespace: step.Namespace,
+			},
+		})
+	}
+	return reqs
 }
 
 // shardMatchPredicate implements sigs.k8s.io/controller-runtime/pkg/predicate.Predicate
