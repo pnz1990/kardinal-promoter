@@ -224,15 +224,96 @@ These defaults comply with the Kubernetes `restricted` pod security standard.
 
 ## Audit Logging
 
-Every promotion action is recorded as a Kubernetes Event:
+kardinal writes an immutable `AuditEvent` CRD record at every significant promotion
+lifecycle transition. AuditEvents are append-only — the spec is set at creation and
+never mutated. Kubernetes RBAC can be used to prevent deletion, satisfying SOC 2,
+ISO 27001, and FedRAMP audit trail requirements.
+
+### Events written automatically
+
+| Action | Trigger |
+|---|---|
+| `PromotionStarted` | Bundle begins promoting through an environment |
+| `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
+| `PromotionFailed` | PromotionStep reached Failed state |
+| `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
+| `GateEvaluated` | PolicyGate changed readiness state (blocked or unblocked) |
+| `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
+
+### Fields on every event
+
+| Field | Description |
+|---|---|
+| `spec.timestamp` | RFC 3339 time when the event occurred |
+| `spec.pipelineName` | Name of the Pipeline |
+| `spec.bundleName` | Name of the Bundle being promoted |
+| `spec.environment` | Environment name (e.g. `prod`) |
+| `spec.action` | One of the action values in the table above |
+| `spec.actor` | Author from Bundle provenance, or controller service account |
+| `spec.outcome` | `Success`, `Failure`, or `Pending` |
+| `spec.message` | Human-readable description |
+| `spec.bundleImage` | Container image tag, when applicable |
+
+### Querying audit events
 
 ```bash
-kubectl get events -n kardinal-system --field-selector reason=PromotionStarted
-kubectl get events -n kardinal-system --field-selector reason=PolicyGateBlocked
-kubectl get events -n kardinal-system --field-selector reason=BundleVerified
+# List all audit events (most recent first)
+kardinal get auditevents
+
+# Filter by pipeline
+kardinal get auditevents --pipeline my-app
+
+# Filter by environment
+kardinal get auditevents --pipeline my-app --env prod
+
+# Raw kubectl (shows all fields)
+kubectl get auditevents -n kardinal-system -o wide
+
+# Watch a specific pipeline's events in real-time
+kubectl get auditevents -n kardinal-system \
+  -l kardinal.io/pipeline=my-app \
+  --watch
 ```
 
-For long-term audit retention, forward Events to your SIEM using a log aggregator (Fluentd, Vector, etc.).
+### SIEM integration
+
+Export AuditEvents as structured JSON for forwarding to your SIEM:
+
+```bash
+# JSON dump of all events (pipe to your log forwarder)
+kubectl get auditevents -n kardinal-system -o json \
+  | jq -c '.items[] | {
+      ts: .spec.timestamp,
+      pipeline: .spec.pipelineName,
+      bundle: .spec.bundleName,
+      env: .spec.environment,
+      action: .spec.action,
+      actor: .spec.actor,
+      outcome: .spec.outcome,
+      message: .spec.message
+    }'
+```
+
+With **Fluentd / Vector / Fluent Bit**: configure a Kubernetes input that tails the
+`auditevents` resource and forwards to your SIEM sink (Splunk, Datadog, OpenSearch,
+etc.). The structured JSON output above is the recommended log format.
+
+### RBAC: preventing deletion
+
+By default the controller's service account creates AuditEvents but cannot delete
+them. To prevent all users from deleting audit records, apply:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kardinal-audit-readonly
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["auditevents"]
+    verbs: ["get", "list", "watch"]
+    # Intentionally no "delete" or "update"
+```
 
 ---
 
