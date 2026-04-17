@@ -819,10 +819,10 @@
       "size": "xs"
     },
     "618-remove-upstream-env": {
-      "state": "todo",
+      "state": "done",
       "issue": "618",
-      "title": "refactor(policygate): remove spec.upstreamEnvironment \u2014 Graph wiring not gate logic",
-      "size": "s"
+      "title": "refactor: remove spec.upstreamEnvironment",
+      "note": "WONTFIX: analysis shows upstreamEnvironment IS necessary for correct sequencing. Posted [NEEDS HUMAN] on issue."
     },
     "571-scm-circuit-breaker": {
       "state": "todo",
