@@ -78,7 +78,7 @@ func TestExplain_ShowsStepsAndGates(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(ps, gate).Build()
 
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", "nginx-demo", "")
+	err := explainOnce(&buf, c, "default", "nginx-demo", "", false)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -124,7 +124,7 @@ func TestExplain_FilterByEnv(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(testStep, prodStep).Build()
 
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", "nginx-demo", "prod")
+	err := explainOnce(&buf, c, "default", "nginx-demo", "prod", false)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -140,7 +140,7 @@ func TestExplain_EmptyOutput(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).Build()
 
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", "nginx-demo", "")
+	err := explainOnce(&buf, c, "default", "nginx-demo", "", false)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -167,7 +167,7 @@ func TestExplain_UnevaluatedGateExpression(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
 
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", "nginx-demo", "")
+	err := explainOnce(&buf, c, "default", "nginx-demo", "", false)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -201,8 +201,6 @@ func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 				"kardinal.io/pipeline":    "my-app",
 				"kardinal.io/environment": "prod",
 				// Per-bundle Graph instance — must be filtered out by explain (#297).
-				// The kardinal.io/bundle label is the sole guard (krocodile e082fe9+
-				// no longer stamps internal.kro.run/graph-name on managed resources).
 				"kardinal.io/bundle": "old-bundle",
 			},
 		},
@@ -228,30 +226,23 @@ func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 			Labels: map[string]string{
 				"kardinal.io/pipeline":    "my-app",
 				"kardinal.io/environment": "prod",
-				// Note: no kardinal.io/bundle label — template gates are shown by explain;
-				// per-bundle Graph instances (with bundle label) are filtered out (#297).
 			},
 		},
 		Spec:   v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 		Status: v1alpha1.PolicyGateStatus{Ready: false, LastEvaluatedAt: &now},
 	}
-	// oldGate is also template-style for consistency.
-	// The test verifies that explain shows gates scoped to the active environment,
-	// not that it filters by bundle. Gate-by-bundle filtering is an API concern (#297).
 
 	s := buildExplainScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(oldStep, oldGate, newStep, newGate).Build()
 
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", "my-app", "")
+	err := explainOnce(&buf, c, "default", "my-app", "", false)
 	require.NoError(t, err)
 
 	out := buf.String()
-	// New bundle's step and gate should appear.
 	assert.Contains(t, out, "new-step", "active bundle step must be shown")
 	assert.Contains(t, out, "new-gate", "active bundle gate must be shown")
 	assert.Contains(t, out, "Promoting", "active bundle step state must be shown")
-	// Old bundle's step and gate should NOT appear.
 	assert.NotContains(t, out, "old-step", "superseded bundle step must not appear")
 	assert.NotContains(t, out, "old-gate", "superseded bundle gate must not appear")
 }
@@ -278,7 +269,7 @@ func TestExplain_UnknownEnvSuggestsAvailable(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipe).Build()
 
 	var buf bytes.Buffer
-	err := explainOnce(&buf, c, "default", "nginx-demo", "bogus")
+	err := explainOnce(&buf, c, "default", "nginx-demo", "bogus", false)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -287,4 +278,37 @@ func TestExplain_UnknownEnvSuggestsAvailable(t *testing.T) {
 	assert.Contains(t, out, "test", "available env 'test' must be listed")
 	assert.Contains(t, out, "uat", "available env 'uat' must be listed")
 	assert.Contains(t, out, "prod", "available env 'prod' must be listed")
+}
+
+// TestExplain_ColorOutput verifies that forceColor=true wraps Pass/Block/Pending
+// states in ANSI codes, and forceColor=false produces plain text (issue #719).
+func TestExplain_ColorOutput(t *testing.T) {
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "gate-pass",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo", "kardinal.io/environment": "prod"},
+		},
+		Spec:   v1alpha1.PolicyGateSpec{Expression: "true"},
+		Status: v1alpha1.PolicyGateStatus{Ready: true},
+	}
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
+
+	t.Run("force color enabled", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := explainOnce(&buf, c, "default", "nginx-demo", "", true)
+		require.NoError(t, err)
+		out := buf.String()
+		// Pass state (gate ready=true) should be wrapped in green + reset
+		assert.Contains(t, out, "\033[32mPass\033[0m", "Pass state must be wrapped in green ANSI code")
+	})
+
+	t.Run("color disabled plain text", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := explainOnce(&buf, c, "default", "nginx-demo", "", false)
+		require.NoError(t, err)
+		out := buf.String()
+		assert.NotContains(t, out, "\033[", "plain text output must not contain ANSI escape codes")
+	})
 }

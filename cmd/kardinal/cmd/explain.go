@@ -34,6 +34,7 @@ func newExplainCmd() *cobra.Command {
 	var (
 		envFlag   string
 		watchFlag bool
+		colorFlag bool
 	)
 
 	cmd := &cobra.Command{
@@ -43,20 +44,22 @@ func newExplainCmd() *cobra.Command {
 It shows the current state, reason, and any PR URLs for each environment.
 
 Use --env to filter to a specific environment.
-Use --watch to stream live updates.`,
+Use --watch to stream live updates.
+Use --color to force ANSI color output (auto-detected when writing to a TTY).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runExplain(cmd, args, envFlag, watchFlag)
+			return runExplain(cmd, args, envFlag, watchFlag, colorFlag)
 		},
 	}
 
 	cmd.Flags().StringVar(&envFlag, "env", "", "Filter to a specific environment")
 	cmd.Flags().BoolVar(&watchFlag, "watch", false, "Stream updates (polling)")
+	cmd.Flags().BoolVar(&colorFlag, "color", false, "Force ANSI color output (auto-detected when TTY)")
 
 	return cmd
 }
 
-func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool) error {
+func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool, forceColor bool) error {
 	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("explain: %w", err)
@@ -65,14 +68,14 @@ func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool)
 	pipeline := args[0]
 
 	if !watch {
-		return explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter)
+		return explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter, forceColor)
 	}
 
 	// Watch mode: poll every 3 seconds and refresh the output.
 	for {
 		// Clear screen using ANSI escape.
 		_, _ = fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
-		if err := explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter); err != nil {
+		if err := explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter, forceColor); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
@@ -80,7 +83,7 @@ func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool)
 	}
 }
 
-func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string) error {
+func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
 	ctx := context.Background()
 
 	var steps v1alpha1.PromotionStepList
@@ -211,7 +214,15 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return rows[i].name < rows[j].name
 	})
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
+	cr := newColorizer(w, forceColor)
+
+	// When color is enabled, render the table to a buffer first (plain text,
+	// no ANSI codes), then post-process each line to colorize the STATE value.
+	// This avoids the tabwriter byte-width alignment bug caused by inserting
+	// ANSI escape sequences into a middle column while tabwriter is computing
+	// column widths from byte counts.
+	var tableBuf strings.Builder
+	tw := tabwriter.NewWriter(&tableBuf, 0, 0, 3, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
@@ -221,6 +232,26 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush explain table: %w", err)
+	}
+
+	// Post-process: if color is enabled, wrap state keywords in ANSI codes.
+	// Each line has already been aligned by tabwriter; we only replace the
+	// exact state word (surrounded by spaces or at end of line) to avoid
+	// touching the header or embedded text.
+	output := tableBuf.String()
+	if cr.enabled {
+		for _, state := range []string{"Pass", "Block", "Pending", "Running", "Succeeded", "Verified", "Failed"} {
+			colored := cr.colorState(state)
+			// Only replace whole-word occurrences (space-bounded or end of line).
+			output = strings.ReplaceAll(output, " "+state+" ", " "+colored+" ")
+			output = strings.ReplaceAll(output, " "+state+"\n", " "+colored+"\n")
+		}
+	}
+	if _, err := fmt.Fprint(w, output); err != nil {
+		return fmt.Errorf("write explain output: %w", err)
 	}
 
 	if len(rows) == 0 {
@@ -245,10 +276,10 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		} else {
 			emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q\n", pipeline)
 		}
-		if _, err := fmt.Fprint(tw, emptyMsg); err != nil {
+		if _, err := fmt.Fprint(w, emptyMsg); err != nil {
 			return fmt.Errorf("write empty message: %w", err)
 		}
 	}
 
-	return tw.Flush()
+	return nil
 }

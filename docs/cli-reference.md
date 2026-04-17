@@ -214,6 +214,7 @@ Flags:
 - `--watch`: continuous output, re-evaluates and reprints when gate states change
 - `--bundle <version>`: explain a specific Bundle (default: latest active)
 - `--env <env>`: filter by environment
+- `--color`: force ANSI color output (auto-detected when writing to a TTY; respects `NO_COLOR`)
 
 If the environment name is not found, the command prints the available environments:
 
