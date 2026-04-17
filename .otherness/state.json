@@ -4,7 +4,11 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": null,
+  "current_queue": [
+    "662-v070-release",
+    "618-remove-upstream-env",
+    "571-scm-circuit-breaker"
+  ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -809,6 +813,24 @@
       "issue": 645,
       "title": "docs fix already applied",
       "note": "Already fixed by previous agent \u2014 issue is CLOSED"
+    },
+    "662-v070-release": {
+      "state": "todo",
+      "issue": "662",
+      "title": "chore(release): tag v0.7.0",
+      "size": "xs"
+    },
+    "618-remove-upstream-env": {
+      "state": "todo",
+      "issue": "618",
+      "title": "refactor(policygate): remove spec.upstreamEnvironment \u2014 Graph wiring not gate logic",
+      "size": "s"
+    },
+    "571-scm-circuit-breaker": {
+      "state": "todo",
+      "issue": "571",
+      "title": "feat(scm): circuit breaker \u2014 exponential backoff, rate-limit respect, per-provider error budget",
+      "size": "s"
     }
   },
   "session_heartbeats": {
