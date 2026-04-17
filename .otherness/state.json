@@ -4,10 +4,7 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": [
-    "693-trivy-scan",
-    "694-sbom-gen"
-  ],
+  "current_queue": "queue-021",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -935,6 +932,19 @@
       "issue": "694",
       "title": "SBOM generation",
       "qa_approved": true
+    },
+    "699-cosign-signing": {
+      "state": "in_review",
+      "issue": 699,
+      "pr_number": 700,
+      "title": "feat(security): cosign keyless image signing",
+      "branch": "feat/699-cosign-signing"
+    },
+    "702-sbom-generation": {
+      "state": "todo",
+      "issue": "702",
+      "title": "feat(security): Syft SBOM generation \u2014 attach to OCI artifact",
+      "size": "s"
     }
   },
   "session_heartbeats": {
@@ -945,24 +955,17 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
-    },
-    "STANDALONE-startup": {
-      "last_seen": "2026-04-17T05:38:47Z",
-      "cycle": 1,
-      "item": "batch-032-complete"
     }
   },
   "handoff": {
-    "batch": "batch-037",
-    "completed_at": "2026-04-17T06:37:12Z",
+    "batch": "batch-039",
+    "completed_at": "2026-04-17T08:39:20Z",
     "open_prs": [
-      669,
-      670,
-      674,
-      675,
-      678
+      696,
+      697,
+      700
     ],
     "status": "in_progress",
-    "note": "PR #678 (krocodile 05db829 upgrade) CI running. Multiple PRs awaiting review."
+    "note": "Security sprint: trivy (#696), SBOM (#697), cosign (#700) all CI green and QA approved. Generate next queue."
   }
 }
