@@ -310,3 +310,11 @@
 |---|---|---|---|---|
 | 662-v070-release | chore(release): v0.7.0 | ✅ Complete | #664 merged | v0.7.0 tagged; chart 0.7.0 |
 | 618-remove-upstream-env | refactor(policygate): remove spec.upstreamEnvironment | ✅ Complete | #665 merged | 17 lines deleted; graph-first cleanup |
+
+---
+
+## queue-026 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 571-scm-circuit-breaker | feat(scm): SCM circuit breaker | ✅ Complete | #666 merged | Closed→Open→HalfOpen; Retry-After support; 145 test lines |
