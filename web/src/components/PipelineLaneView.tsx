@@ -101,15 +101,13 @@ export function PipelineLaneView({
               }} />
             )}
 
-            {/* Stage card — uses CSS class for state-driven colors */}
+            {/* Stage card — uses CSS class for state-driven colors.
+                #758: Card is a non-interactive div (mouse click only).
+                A visually-hidden button provides keyboard selection. */}
             <div
-              role="group"
-              tabIndex={0}
-              aria-label={`${node.environment} — ${node.state}`}
-              aria-current={isSelected || undefined}
+
               data-health-state={kardinalStateToHealth(node.state)}
               onClick={() => onSelectNode?.(isSelected ? null : node)}
-              onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelectNode?.(isSelected ? null : node)}
               className={cardClass}
               style={{
                 display: 'flex',
@@ -117,8 +115,27 @@ export function PipelineLaneView({
                 gap: '0.3rem',
                 boxShadow: isSelected ? `0 0 0 1px ${accent}` : 'none',
                 outline: 'none',
+                position: 'relative',
               }}
             >
+              {/* Visually-hidden select button — keyboard accessibility (#758).
+                  Position absolute, covers the card, z-index 0 so visible content renders above. */}
+              <button
+                aria-label={isSelected ? `Deselect ${node.environment}` : `Select ${node.environment}`}
+                aria-pressed={isSelected}
+                onClick={e => { e.stopPropagation(); onSelectNode?.(isSelected ? null : node) }}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  opacity: 0,
+                  cursor: 'pointer',
+                  border: 'none',
+                  background: 'none',
+                  zIndex: 0,
+                }}
+              />
+              {/* Card content sits above the invisible button */}
+              <div style={{ position: 'relative', zIndex: 1 }}>
               {/* Environment name + state chip */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.3rem' }}>
                 <span style={{
@@ -221,8 +238,9 @@ export function PipelineLaneView({
                 </div>
               )}
             </div>
+            </div>
           </div>
-        )
+         )
       })}
     </div>
   )

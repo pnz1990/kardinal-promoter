@@ -81,7 +81,7 @@ describe('PipelineLaneView — stage cards', () => {
     const onSelect = vi.fn()
     const node = makeNode({ id: 'step-env', environment: 'env' })
     render(<PipelineLaneView nodes={[node]} onSelectNode={onSelect} />)
-    await user.click(screen.getByRole('group', { name: /env/i }))
+    await user.click(screen.getByRole('button', { name: /env/i }))
     expect(onSelect).toHaveBeenCalledWith(node)
   })
 
@@ -90,14 +90,14 @@ describe('PipelineLaneView — stage cards', () => {
     const onSelect = vi.fn()
     const node = makeNode({ id: 'step-env', environment: 'env' })
     render(<PipelineLaneView nodes={[node]} selectedNode={node} onSelectNode={onSelect} />)
-    await user.click(screen.getByRole('group', { name: /env/i }))
+    await user.click(screen.getByRole('button', { name: /env/i }))
     expect(onSelect).toHaveBeenCalledWith(null)
   })
 
-  it('selected card has stage-card--selected CSS class', () => {
+  it('aria-pressed=true on selected card', () => {
     const node = makeNode({ id: 'step-env', environment: 'env' })
     render(<PipelineLaneView nodes={[node]} selectedNode={node} />)
-    const card = screen.getByRole('group', { name: /env/i })
-    expect(card.classList.contains('stage-card--selected')).toBe(true)
+    const card = screen.getByRole('button', { name: /env/i })
+    expect(card).toHaveAttribute('aria-pressed', 'true')
   })
 })
