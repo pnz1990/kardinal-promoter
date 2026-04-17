@@ -8,7 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-**DX improvements, Prometheus metrics, dark/light mode**
+**UI accessibility compliance, DX polish, keyboard shortcuts**
 
 ### Added
 
@@ -20,6 +20,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`kardinal status`** — show controller health, CRD versions, and resource summary (#715)
 - **Improved explain error** — `kardinal explain <pipeline> --env <bogus>` now lists available environments (#717)
 - **Improved circular dependency error** — cycle path displayed in full (#711)
+- **`--dry-run` for `kardinal create bundle`** — print what would be created without submitting; useful for CI validation (#741)
+- **URL routing in embedded UI** — selecting a pipeline, node, or bundle diff panel updates the URL hash fragment; page reload and back/forward navigation restore selection (#742)
+- **Keyboard shortcuts in embedded UI** — `?` opens help panel, `r` refreshes, `Esc` closes panels (#750)
+- **Error boundaries on async UI components** — DAGView, PipelineList, NodeDetail, BundleTimeline show a user-friendly message + Retry on render error (#755)
+- **WCAG 2.1 AA accessibility enforcement** — axe-core Playwright check in E2E test suite (Journey 009); all structural violations resolved (#756, #759, #760)
+- **Copy-to-clipboard on pipeline names and bundle hashes** — click to copy pipeline name, bundle name, or commit SHA in the embedded UI (#764)
+- **Stale data indicator escalation** — red + pulse animation when dashboard data is >30s old; screen reader announcement via `aria-live` (#767)
+
+### Changed
+
+- **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
+- **UI WCAG color contrast** — all theme colors now meet WCAG 2.1 AA 4.5:1 minimum contrast ratio in both dark and light modes (#760)
 
 ---
 
