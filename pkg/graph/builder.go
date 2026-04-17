@@ -587,17 +587,26 @@ func buildPolicyGateNode(
 			"kardinal.io/applies-to": appliesToLabel,
 		},
 	}
+	// Add upstream DAG edge annotation to maintain krocodile dependency ordering.
+	// krocodile's collectStrings() scans all string values in the template recursively,
+	// so placing the ${upstream.status.state} reference in an annotation still creates
+	// the DAG edge from the upstream PromotionStep to this PolicyGate node (#618).
+	// Using an annotation instead of spec.upstreamEnvironment avoids user confusion:
+	// users reading PolicyGate spec no longer see controller-internal wiring.
+	if len(upstreams) > 0 {
+		templateAnnotations := map[string]interface{}{
+			"kardinal.io/upstream-ref": fmt.Sprintf("${%s.status.state}", upstreams[0]),
+		}
+		templateMeta["annotations"] = templateAnnotations
+	}
 
 	templateSpec := map[string]interface{}{
 		"expression":      gate.Spec.Expression,
 		"message":         gate.Spec.Message,
 		"recheckInterval": gate.Spec.RecheckInterval,
 	}
-
-	// Add upstream reference to create dependency edge
-	if len(upstreams) > 0 {
-		templateSpec["upstreamEnvironment"] = fmt.Sprintf("${%s.status.state}", upstreams[0])
-	}
+	// Note: upstreamEnvironment removed from spec (#618).
+	// The upstream DAG edge is maintained via the metadata annotation below.
 
 	return GraphNode{
 		ID: nodeID,
