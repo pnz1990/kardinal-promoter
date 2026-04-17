@@ -216,3 +216,86 @@ func TestWatchNodeTemplate_ReadyWhenIsValidCEL(t *testing.T) {
 		})
 	}
 }
+
+// TestWatchNodeTemplate_ResourceWatchKind verifies that health.type=resource with
+// a non-empty LabelSelector produces a WatchKind node spec instead of a Watch node spec.
+func TestWatchNodeTemplate_ResourceWatchKind(t *testing.T) {
+	spec, err := health.WatchNodeTemplate("resource", health.CheckOptions{
+		Resource: health.ResourceConfig{
+			Namespace: "prod",
+			Condition: "Available",
+			LabelSelector: map[string]string{
+				"app":                  "nginx",
+				"kardinal.io/pipeline": "nginx-demo",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "apps/v1", spec.APIVersion)
+	assert.Equal(t, "Deployment", spec.Kind)
+	assert.Equal(t, "prod", spec.Namespace)
+	assert.True(t, spec.UseWatchKind, "LabelSelector must produce UseWatchKind=true")
+	assert.Empty(t, spec.Name, "WatchKind node must have no Name (no metadata.name)")
+	assert.Equal(t, map[string]string{
+		"app":                  "nginx",
+		"kardinal.io/pipeline": "nginx-demo",
+	}, spec.LabelSelector)
+	assert.Contains(t, spec.ReadyWhen, "healthNode.all(")
+	assert.Contains(t, spec.ReadyWhen, "Available")
+	assert.Equal(t, "resource", spec.HealthType)
+}
+
+// TestWatchNodeTemplate_ResourceWatchKind_DefaultCondition verifies that an empty Condition
+// defaults to "Available" for WatchKind mode.
+func TestWatchNodeTemplate_ResourceWatchKind_DefaultCondition(t *testing.T) {
+	spec, err := health.WatchNodeTemplate("resource", health.CheckOptions{
+		Resource: health.ResourceConfig{
+			Namespace:     "prod",
+			LabelSelector: map[string]string{"app": "nginx"},
+		},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, spec.UseWatchKind)
+	assert.Contains(t, spec.ReadyWhen, "Available",
+		"default condition should be 'Available'")
+}
+
+// TestWatchNodeTemplate_ResourceNoLabelSelector verifies that health.type=resource
+// WITHOUT LabelSelector produces a plain Watch node (unchanged behaviour).
+func TestWatchNodeTemplate_ResourceNoLabelSelector(t *testing.T) {
+	spec, err := health.WatchNodeTemplate("resource", health.CheckOptions{
+		Resource: health.ResourceConfig{
+			Name:      "nginx",
+			Namespace: "prod",
+		},
+	})
+	require.NoError(t, err)
+
+	assert.False(t, spec.UseWatchKind, "no LabelSelector must produce UseWatchKind=false")
+	assert.Equal(t, "nginx", spec.Name)
+	assert.Nil(t, spec.LabelSelector)
+	assert.Contains(t, spec.ReadyWhen, "healthNode.status.conditions.exists(")
+}
+
+// TestWatchNodeTemplate_WatchKindReadyWhenUsesAllPredicate verifies that the WatchKind
+// readyWhen expression uses list.all() to check all items in the collection.
+// This is required because the krocodile CEL scope variable for a WatchKind node
+// is a list (not a single object).
+func TestWatchNodeTemplate_WatchKindReadyWhenUsesAllPredicate(t *testing.T) {
+	spec, err := health.WatchNodeTemplate("resource", health.CheckOptions{
+		Resource: health.ResourceConfig{
+			Namespace:     "prod",
+			LabelSelector: map[string]string{"env": "prod"},
+		},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, spec.UseWatchKind)
+	// Must use the CEL list predicate form: healthNode.all(d, <condition>)
+	// so that ALL Deployments in the collection must be healthy.
+	assert.Contains(t, spec.ReadyWhen, ".all(", "WatchKind readyWhen must use .all() list predicate")
+	assert.NotContains(t, spec.ReadyWhen, "healthNode.status",
+		"WatchKind readyWhen must not use single-object path — it is a list")
+}

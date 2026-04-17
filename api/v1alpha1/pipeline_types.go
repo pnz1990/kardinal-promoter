@@ -276,6 +276,18 @@ type HealthConfig struct {
 	// Cluster is the kubeconfig Secret name for remote cluster health checks.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
+
+	// LabelSelector enables WatchKind mode for health.type=resource.
+	// When set, the health node watches ALL Deployments in the environment namespace
+	// that match the given labels (krocodile WatchKind — O(1) incremental cache).
+	// When unset, a single named Deployment is watched (krocodile Watch — existing behavior).
+	//
+	// Example: {"app": "my-service", "kardinal.io/pipeline": "nginx-demo"}
+	//
+	// Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger
+	// (those resource types are always single-named).
+	// +optional
+	LabelSelector map[string]string `json:"labelSelector,omitempty"`
 }
 
 // DeliveryConfig holds in-cluster progressive delivery delegation configuration.

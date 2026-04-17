@@ -37,18 +37,32 @@ type WatchNodeSpec struct {
 	// Example: "Deployment", "Application", "Kustomization".
 	Kind string
 
-	// Name is the resource name to watch.
+	// Name is the resource name to watch. Empty for WatchKind nodes.
 	Name string
 
 	// Namespace is the resource namespace to watch.
 	Namespace string
 
+	// LabelSelector is the label selector for WatchKind nodes.
+	// When non-empty, UseWatchKind is true and Name is ignored.
+	// The translator emits a WatchKind node (no metadata.name in template)
+	// instead of a Watch node (with metadata.name).
+	LabelSelector map[string]string
+
+	// UseWatchKind indicates that a krocodile WatchKind node should be emitted
+	// instead of a Watch node. WatchKind nodes use an O(1) incremental cache
+	// (krocodile PR #118) and watch a collection of resources by label selector.
+	UseWatchKind bool
+
 	// ReadyWhen is a krocodile CEL expression evaluated against the watched resource.
 	// The node variable placeholder is "healthNode". The translator must substitute
 	// "healthNode" with the actual Graph node ID before emitting the Graph spec.
 	//
-	// Example:
+	// For Watch nodes (UseWatchKind=false):
 	//   "healthNode.status.conditions.exists(c, c.type == 'Available' && c.status == 'True')"
+	//
+	// For WatchKind nodes (UseWatchKind=true), healthNode is a list:
+	//   "healthNode.all(d, d.status.conditions.exists(c, c.type == 'Available' && c.status == 'True'))"
 	ReadyWhen string
 
 	// HealthType is the adapter type that produced this spec.
@@ -68,6 +82,9 @@ type WatchNodeSpec struct {
 func WatchNodeTemplate(healthType string, opts CheckOptions) (WatchNodeSpec, error) {
 	switch healthType {
 	case "resource":
+		if len(opts.Resource.LabelSelector) > 0 {
+			return watchNodeResourceWatchKind(opts.Resource), nil
+		}
 		return watchNodeResource(opts.Resource), nil
 	case "argocd":
 		return watchNodeArgoCD(opts.ArgoCD), nil
@@ -87,7 +104,7 @@ func WatchNodeTemplate(healthType string, opts CheckOptions) (WatchNodeSpec, err
 	}
 }
 
-// watchNodeResource builds a Watch node spec for a Kubernetes Deployment.
+// watchNodeResource builds a Watch node spec for a single named Kubernetes Deployment.
 //
 // readyWhen: the Available condition must be True.
 // HE-1 in docs/design/11-graph-purity-tech-debt.md.
@@ -103,6 +120,34 @@ func watchNodeResource(cfg ResourceConfig) WatchNodeSpec {
 		Namespace:  cfg.Namespace,
 		ReadyWhen: fmt.Sprintf(
 			"healthNode.status.conditions.exists(c, c.type == %q && c.status == 'True')",
+			condition,
+		),
+		HealthType: "resource",
+	}
+}
+
+// watchNodeResourceWatchKind builds a WatchKind node spec for a collection of Deployments
+// matched by label selector. Uses krocodile's O(1) incremental cache (PR #118).
+//
+// readyWhen: ALL matched Deployments must have the Available condition True.
+// UseWatchKind=true causes the translator to emit a WatchKind node (no metadata.name,
+// spec.labelSelector present) instead of a Watch node.
+// The krocodile CEL scope variable for this node is a list; list.all() checks all items.
+func watchNodeResourceWatchKind(cfg ResourceConfig) WatchNodeSpec {
+	condition := cfg.Condition
+	if condition == "" {
+		condition = "Available"
+	}
+	return WatchNodeSpec{
+		APIVersion:    "apps/v1",
+		Kind:          "Deployment",
+		Namespace:     cfg.Namespace,
+		LabelSelector: cfg.LabelSelector,
+		UseWatchKind:  true,
+		// healthNode is a list of Deployment objects when UseWatchKind=true.
+		// list.all() checks that every Deployment in the collection is healthy.
+		ReadyWhen: fmt.Sprintf(
+			"healthNode.all(d, d.status.conditions.exists(c, c.type == %q && c.status == 'True'))",
 			condition,
 		),
 		HealthType: "resource",
