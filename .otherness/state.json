@@ -787,15 +787,13 @@
       "state": "in_review",
       "issue": 625,
       "pr_number": 660,
-      "title": "refactor(graph): replace upstreamVerifiedN fields with upstreamStates list",
-      "branch": "feat/625-remove-upstream-verified"
+      "title": "refactor(graph): replace upstreamVerifiedN with upstreamStates"
     },
     "656-watchkind-docs": {
       "state": "in_review",
       "issue": 656,
       "pr_number": 659,
-      "title": "docs(health): document health.labelSelector WatchKind mode",
-      "branch": "feat/656-watchkind-docs"
+      "title": "docs(health): document health.labelSelector WatchKind mode"
     },
     "643-doc11-kro80-ref": {
       "state": "done",
@@ -826,8 +824,8 @@
     }
   },
   "handoff": {
-    "batch": "batch-025",
-    "completed_at": "2026-04-17T04:22:58Z",
+    "batch": "batch-026",
+    "completed_at": "2026-04-17T04:42:54Z",
     "open_prs": [
       655,
       658,
@@ -835,6 +833,6 @@
       660
     ],
     "status": "in_progress",
-    "note": "Batch 025: PR #655 (promotionstep watch), #659 (watchkind docs), #660 (upstreamStates refactor) \u2014 all CI green, awaiting human review. PR #658 (changelog) also open."
+    "note": "All 4 open PRs CI green and QA reviewed. Awaiting human approval."
   }
 }
