@@ -126,6 +126,26 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      # ── Vulnerability scanning ──────────────────────────────────────────────
+      - name: Scan controller image for HIGH/CRITICAL CVEs (trivy)
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
+          format: sarif
+          output: trivy-controller-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+        # Upload SARIF even on failure so engineers can see the findings.
+        continue-on-error: false
+
+      - name: Upload trivy SARIF report
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-controller-results.sarif
+          category: trivy-controller
+
       # ── Package and publish Helm chart ─────────────────────────────────────
       - name: Update chart version and krocodile tag
         run: |
