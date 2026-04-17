@@ -47,7 +47,7 @@
 /* Error — red */
 .health-chip--error {
   background: #7f1d1d;
-  color: #f87171;
+  color: #fca5a5;  /* red-300: 5.1:1 on #7f1d1d ✓ (was #f87171 = 3.5:1 fail) */
   border-color: #ef4444;
 }
 
