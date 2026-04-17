@@ -94,10 +94,11 @@ describe('PipelineLaneView — stage cards', () => {
     expect(onSelect).toHaveBeenCalledWith(null)
   })
 
-  it('selected card has stage-card--selected CSS class', () => {
+  it('aria-pressed=true on selected card', () => {
     const node = makeNode({ id: 'step-env', environment: 'env' })
     render(<PipelineLaneView nodes={[node]} selectedNode={node} />)
-    const card = screen.getByRole('group', { name: /env/i })
-    expect(card.classList.contains('stage-card--selected')).toBe(true)
+    const card = screen.getByRole('button', { name: /env/i })
+    expect(card).toHaveAttribute('aria-pressed', 'true')
+  })
   })
 })
