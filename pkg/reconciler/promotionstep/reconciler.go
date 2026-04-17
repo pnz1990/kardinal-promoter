@@ -304,6 +304,11 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("patch pending→promoting: %w", err)
 	}
 
+	// Audit: promotion started.
+	writeAuditEvent(ctx, r.Client, ps,
+		AuditActionPromotionStarted, AuditOutcomePending,
+		fmt.Sprintf("promotion started with %d steps", len(seq)))
+
 	return ctrl.Result{Requeue: true}, nil
 }
 
@@ -709,6 +714,10 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
 			}
+			// Audit: promotion succeeded.
+			writeAuditEvent(ctx, r.Client, ps,
+				AuditActionPromotionSucceeded, AuditOutcomeSuccess,
+				fmt.Sprintf("health check passed via %s", adapter.Name()))
 			return ctrl.Result{}, nil
 		}
 
@@ -1005,12 +1014,18 @@ func (r *Reconciler) handleBake(
 }
 
 // patchState is a helper to patch state + message atomically.
+// For terminal states (StateFailed), it also writes an AuditEvent.
 func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep, state, message string) (ctrl.Result, error) {
 	patch := client.MergeFrom(ps.DeepCopy())
 	ps.Status.State = state
 	ps.Status.Message = message
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch state %s: %w", state, err)
+	}
+	// Audit terminal state transitions.
+	if state == StateFailed {
+		writeAuditEvent(ctx, r.Client, ps,
+			AuditActionPromotionFailed, AuditOutcomeFailure, message)
 	}
 	return ctrl.Result{Requeue: true}, nil
 }

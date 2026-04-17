@@ -419,3 +419,27 @@ human reviewer confirms the diff and gate compliance before the change lands.
 The default `historyLimit: 20` retains 20 Bundles per Pipeline. In high-frequency
 pipelines (multiple deployments per day), reduce this to `5`. The Git audit trail in
 GitHub is permanent regardless — only the CRD state in etcd is bounded.
+
+## Audit Log
+
+kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion lifecycle transition:
+
+| Action | When |
+|---|---|
+| `PromotionStarted` | A Bundle moves from Pending to Promoting |
+| `PromotionSucceeded` | Health check passes and the step reaches Verified |
+| `PromotionFailed` | The step reaches Failed state |
+| `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion |
+
+```bash
+# List all audit events across namespaces
+kubectl get auditevent --all-namespaces
+
+# Filter by pipeline
+kubectl get auditevent -l kardinal.io/pipeline=nginx-demo
+
+# Filter by outcome
+kubectl get auditevent -l kardinal.io/action=PromotionFailed
+```
+
+AuditEvents are immutable — they are written once at the transition and never updated. Use `kubectl get auditevent -o yaml` to inspect the full record including timestamp, bundle image, and message.
