@@ -3,6 +3,7 @@
 // sibling of DAGView rather than a position:fixed overlay.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
+// #747: ErrorBoundary wraps async components to prevent white-screen crashes.
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
@@ -20,6 +21,7 @@ import { ActionBar } from './components/ActionBar'
 import EmptyState from './components/EmptyState'
 import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import CopyButton from './components/CopyButton'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -440,13 +442,15 @@ export function App() {
               />
             </div>
           )}
-          <PipelineList
-            pipelines={filteredPipelines}
-            selected={selectedPipeline}
-            onSelect={name => { handleSelectPipeline(name); if (viewMode === 'ops-table') setViewMode('list') }}
-            loading={pipelinesLoading}
-            error={pipelinesError}
-          />
+          <ErrorBoundary fallbackMessage="Failed to load pipelines">
+            <PipelineList
+              pipelines={filteredPipelines}
+              selected={selectedPipeline}
+              onSelect={name => { handleSelectPipeline(name); if (viewMode === 'ops-table') setViewMode('list') }}
+              loading={pipelinesLoading}
+              error={pipelinesError}
+            />
+          </ErrorBoundary>
         </div>
       </aside>
 
@@ -632,17 +636,19 @@ export function App() {
 
               {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
                   Receives bundles from parent state — no independent fetch (#321). */}
-              <BundleTimeline
-                bundles={bundles}
-                selectedBundle={activeBundle?.name}
-                onSelectBundle={handleTimelineBundleSelect}
-                compareBundle={compareBundle}
-                onCompareBundle={(name) => {
-                  setCompareBundle(name ?? undefined)
-                  if (!name) setShowDiffPanel(false)
-                }}
-                onCompare={() => setShowDiffPanel(true)}
-              />
+              <ErrorBoundary fallbackMessage="Timeline unavailable">
+                <BundleTimeline
+                  bundles={bundles}
+                  selectedBundle={activeBundle?.name}
+                  onSelectBundle={handleTimelineBundleSelect}
+                  compareBundle={compareBundle}
+                  onCompareBundle={(name) => {
+                    setCompareBundle(name ?? undefined)
+                    if (!name) setShowDiffPanel(false)
+                  }}
+                  onCompare={() => setShowDiffPanel(true)}
+                />
+              </ErrorBoundary>
             </div>
 
             {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
@@ -701,28 +707,32 @@ export function App() {
                 minHeight: '300px',
                 overflow: 'auto',
               }}>
-                <DAGView
-                  nodes={displayGraph?.nodes ?? []}
-                  edges={displayGraph?.edges ?? []}
-                  loading={graphLoading}
-                  error={graphError}
-                  highlightNodeIds={highlightIds}
-                  selectedNode={selectedNode}
-                  onSelectNode={setSelectedNode}
-                />
+                <ErrorBoundary fallbackMessage="Graph failed to load">
+                  <DAGView
+                    nodes={displayGraph?.nodes ?? []}
+                    edges={displayGraph?.edges ?? []}
+                    loading={graphLoading}
+                    error={graphError}
+                    highlightNodeIds={highlightIds}
+                    selectedNode={selectedNode}
+                    onSelectNode={setSelectedNode}
+                  />
+                </ErrorBoundary>
               </div>
 
               {/* NodeDetail split panel (#326) — sibling of DAGView, not overlay */}
               {selectedNode && (
-                <NodeDetail
-                  node={selectedNode}
-                  onClose={() => setSelectedNode(null)}
-                  bundleName={activeBundle?.name}
-                  pipelineName={selectedPipeline}
-                  namespace={activePipeline?.namespace ?? 'default'}
-                  steps={activeSteps}
-                  activeBundle={activeBundle}
-                />
+                <ErrorBoundary fallbackMessage="Details unavailable">
+                  <NodeDetail
+                    node={selectedNode}
+                    onClose={() => setSelectedNode(null)}
+                    bundleName={activeBundle?.name}
+                    pipelineName={selectedPipeline}
+                    namespace={activePipeline?.namespace ?? 'default'}
+                    steps={activeSteps}
+                    activeBundle={activeBundle}
+                  />
+                </ErrorBoundary>
               )}
             </div>
           </>
