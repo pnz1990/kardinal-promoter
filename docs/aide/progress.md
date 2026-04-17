@@ -292,3 +292,12 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 901 | WatchKind health nodes for O(1) incremental cache | ✅ Complete | #652 merged | health.labelSelector → krocodile WatchKind; 6 new tests; docs MISS fixed |
+
+---
+
+## queue-024 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 644-promotionstep-watch | fix(controller): add Watch on PRStatus and PolicyGate in PromotionStep reconciler | ✅ Complete | #655 merged | goimports fix included; 4 new mapper tests |
+| 646-krocodile-upgrade | chore(graph): upgrade krocodile pin 745998f → 81c5a03 (21 commits) | ✅ Complete | #654 merged | WatchKind namespace compat fix; P0 correctness fixes in krocodile |
