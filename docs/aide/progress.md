@@ -261,6 +261,16 @@
 | UI-3 | Policy gate detail panel — CEL highlighting | ✅ Complete | #477 merged | blocking duration, override history |
 | UI-4 | Bundle promotion timeline — env chips, PR links | ✅ Complete | #478 merged | pagination |
 
+---
+
+## queue-022 (SDM batch — 2026-04-16)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 900 | Playwright E2E tests fix | ⏳ In Review | #650 open | 3 bugs: DIST path, goto('/') root redirect, DAGView useMemo before early-returns |
+
+
+
 
 
 | Spec | Title | Status | Notes |

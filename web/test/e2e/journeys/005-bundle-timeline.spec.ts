@@ -13,7 +13,8 @@ test.describe('Journey 005 — Bundle timeline interaction', () => {
   })
 
   test('Step 1: Bundle timeline shows bundle history header', async ({ page }) => {
-    await expect(page.getByText(/Bundle History/i)).toBeVisible()
+    // Use the collapsible button which contains "Bundle history" text
+    await expect(page.getByRole('button', { name: /Bundle history/i })).toBeVisible()
   })
 
   test('Step 2: Bundle timeline shows bundle phase', async ({ page }) => {

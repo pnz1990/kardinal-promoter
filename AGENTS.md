@@ -257,12 +257,21 @@ web/
 
 ## CEL Expressions — kro Library (READ BEFORE WRITING ANY CEL)
 
-kardinal uses `github.com/kubernetes-sigs/kro/pkg/cel/library` for all CEL evaluation.
-This gives PolicyGate expressions the **same extended function set** as kro's own
-`readyWhen`/`propagateWhen` expressions. Expressions written for kro graphs work
-identically in kardinal PolicyGates.
+kardinal uses `github.com/kubernetes-sigs/kro/pkg/cel/library` for CEL evaluation in
+the PolicyGate reconciler. The kro library functions are available in **two distinct
+contexts** that you must not confuse:
 
-**Available CEL functions (beyond standard CEL):**
+### Context 1: PolicyGate CEL (pkg/reconciler/policygate/cel_evaluator.go)
+
+The PolicyGate reconciler evaluates `spec.expression` using a CEL environment built
+in `newEvaluator()`. This environment includes the kro library extensions AND a set of
+**context map variables** injected at evaluation time.
+
+To add CEL evaluation in any new code: construct a `cel.NewEnv()` with explicit library
+imports following the pattern in `pkg/reconciler/policygate/cel_evaluator.go:newEvaluator()`.
+There is **no shared `pkg/cel/NewCELEnvironment()` function** — do not look for one.
+
+**kro library functions available in PolicyGate expressions:**
 
 ```
 # JSON
@@ -280,31 +289,58 @@ lists.removeAtIndex(list, index)       → list
 # Random (deterministic from seed — use for consistent soak calculations)
 random.seededInt(min, max, seed)       → int
 
-# Standard string extensions (via cel-go/ext)
+# Standard string extensions (standard cel-go/ext, NOT kro-specific)
 string.format(args)                    → string
 string.lowerAscii()                    → string
 ```
 
-**If any part of the system evaluates CEL expressions** (backend policy gate,
-CLI `policy simulate`, UI expression preview/validation) — it MUST use
-`pkg/cel/NewCELEnvironment()` which registers all kro libraries. Never construct
-a raw `cel.NewEnv()` without going through this package.
-
-**Example PolicyGate expressions using extended functions:**
+**PolicyGate context variables** (injected as map variables, NOT CEL functions):
 
 ```
-# Standard
-!schedule.isWeekend()
-bundle.metadata.annotations['team'] == 'platform'
+bundle.type, bundle.version, bundle.provenance.{author,commitSHA,ciRunURL}
+schedule.isWeekend    → bool   (true if Saturday or Sunday UTC)
+schedule.hour         → int    (current UTC hour, 0-23)
+schedule.dayOfWeek    → string (e.g. "Monday")
+environment.name      → string
+metrics.<name>.value  → string (from MetricCheck status)
+metrics.<name>.result → string ("Pass" or "Fail")
+upstream.<env>.soakMinutes → int64
+changewindow.<name>   → bool   (true when window is active/blocking)
+```
 
-# Using json functions
-json.unmarshal(bundle.spec.metadata).releaseType == 'hotfix'
+**IMPORTANT:** `schedule.*` variables are **PolicyGate reconciler context only**. They are
+NOT available in krocodile Graph `readyWhen`/`propagateWhen` expressions. Do NOT use
+`!schedule.isWeekend` in a Graph node template — it will fail krocodile CEL compilation.
+In a Graph node, use a ScheduleClock Watch node and reference `clock.status.tick` to
+trigger re-evaluation; schedule logic stays in the PolicyGate reconciler.
 
-# Using maps/lists
+See issue #616 for the planned path to making `schedule.*` available in Graph CEL.
+(Issue #616 is closed; if this work is desired, open a new tracking issue.)
+
+### Context 2: krocodile Graph CEL (readyWhen / propagateWhen / includeWhen)
+
+krocodile Graph expressions use the kro library functions via the Graph controller's
+built-in DefaultEnvironment. The same json/maps/lists/random functions are available.
+Context variables are the node IDs in scope (the Kubernetes objects each node manages).
+
+**Example PolicyGate expressions (PolicyGate reconciler context):**
+
+```
+# Time gate (schedule.* is PolicyGate-only)
+!schedule.isWeekend && schedule.hour >= 9 && schedule.hour < 17
+
+# Bundle metadata check
+bundle.provenance.author != "dependabot[bot]"
+
+# Upstream soak gate
+upstream.uat.soakMinutes >= 30
+
+# Metric gate
+metrics["error-rate"].result == "Pass"
+
+# Using json/maps functions
+json.unmarshal(bundle.provenance.commitSHA).releaseType == 'hotfix'
 maps.merge(environment.labels, bundle.labels)['env'] != 'prod'
-
-# Multi-condition with upstream soak
-!schedule.isWeekend() && upstream.uat.soakMinutes >= 30
 ```
 
 ## E2E Testing Infrastructure

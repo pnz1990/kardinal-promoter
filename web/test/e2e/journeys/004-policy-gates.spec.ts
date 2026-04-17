@@ -29,7 +29,8 @@ test.describe('Journey 004 — Policy gates auto-expand when blocked (#524)', ()
   })
 
   test('Step 4: Blocked gate summary shows "blocked" count', async ({ page }) => {
-    await expect(page.getByText(/blocked/i)).toBeVisible()
+    // Use the summary chip inside the Policy Gates toggle button (e.g. "1 blocked")
+    await expect(page.getByRole('button', { name: /Policy Gates/i }).getByText(/blocked/i)).toBeVisible()
   })
 
   test('Step 5: Toggle button collapses the panel', async ({ page }) => {

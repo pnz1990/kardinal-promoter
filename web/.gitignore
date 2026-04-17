@@ -1,0 +1,4 @@
+
+# Playwright test artifacts
+test-results/
+test/e2e/playwright-report/

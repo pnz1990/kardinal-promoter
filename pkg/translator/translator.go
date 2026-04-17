@@ -218,7 +218,8 @@ func injectHealthWatchNodes(
 			}
 		} else {
 			// Watch: identity-only template (apiVersion + kind + metadata.name).
-			// Existing behavior — unchanged.
+			// An identity-only template is classified ReferenceWatch by krocodile's
+			// DetectReference (experimental/controller/types.go). Existing behavior — unchanged.
 			nodeTemplate = map[string]interface{}{
 				"apiVersion": spec.APIVersion,
 				"kind":       spec.Kind,
