@@ -4,7 +4,10 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-17T18:43:49Z",
-  "current_queue": "queue-023",
+  "current_queue": [
+    "698-trivy-krocodile",
+    "706-slsa-provenance"
+  ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -1024,13 +1027,20 @@
     "758-nested-interactive-fix": {
       "issue": 758,
       "title": "fix(ui): WCAG 2.1 nested-interactive \u2014 PipelineLaneView keyboard nav redesign",
-      "state": "todo",
+      "state": "in_review",
       "areas": [
         "ui"
       ],
       "priority": "medium",
       "size": "s",
-      "created_at": "2026-04-17T18:43:49Z"
+      "created_at": "2026-04-17T18:43:49Z",
+      "assigned_to": "sess-a3d6f0be",
+      "assigned_at": "2026-04-17T18:45:15Z",
+      "branch": "feat/758-nested-interactive-fix",
+      "worktree": "/Users/rrroizma/Projects/kardinal-promoter.758-nested-interactive-fix",
+      "pr_number": 759,
+      "qa_approved": true,
+      "awaiting_human_review": true
     },
     "757-color-contrast-audit": {
       "issue": 757,
@@ -1042,6 +1052,17 @@
       "priority": "medium",
       "size": "m",
       "created_at": "2026-04-17T18:43:49Z"
+    },
+    "757-color-contrast": {
+      "title": "fix(ui): WCAG color contrast full audit",
+      "issue": 757,
+      "state": "todo",
+      "areas": [
+        "ui"
+      ],
+      "priority": "medium",
+      "size": "m",
+      "created_at": "2026-04-17T18:45:07Z"
     }
   },
   "session_heartbeats": {
@@ -1055,9 +1076,13 @@
     }
   },
   "handoff": {
-    "completed_at": "2026-04-14T05:11:01Z",
-    "status": "PROJECT_COMPLETE",
-    "note": "All 7 journeys pass in CI. PROJECT COMPLETE posted on Issue #1. Awaiting human confirmation.",
-    "journeys_all_passing": true
+    "batch": "batch-042",
+    "completed_at": "2026-04-17T08:53:51Z",
+    "open_prs": [
+      701,
+      707
+    ],
+    "status": "in_progress",
+    "note": "Security sprint near-complete. PRs #701 (krocodile trivy) and #707 (SLSA) awaiting human review. Generate new queue from roadmap after these merge."
   }
 }
