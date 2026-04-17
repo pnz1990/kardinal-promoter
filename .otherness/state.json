@@ -4,10 +4,7 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": [
-    "698-trivy-krocodile",
-    "706-slsa-provenance"
-  ],
+  "current_queue": "queue-021",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -848,11 +845,10 @@
       "pr_merged": true
     },
     "668-changelog-post-v070": {
-      "state": "done",
+      "state": "blocked",
       "issue": "668",
       "title": "docs(changelog): add post-v0.7.0 entries",
-      "size": "xs",
-      "pr_merged": true
+      "size": "xs"
     },
     "619-bundle-intent-graph": {
       "state": "done",
@@ -975,6 +971,46 @@
       "issue": 706,
       "pr_number": 707,
       "title": "SLSA Level 2 provenance via GitHub attestation"
+    },
+    "722-dark-mode": {
+      "state": "done",
+      "pr_number": 734,
+      "issue": "722",
+      "title": "feat(ui): dark/light mode",
+      "assigned_to": "STANDALONE",
+      "branch": "feat/722-dark-mode",
+      "pr_merged": true,
+      "done_at": "2026-04-17T16:31:06Z"
+    },
+    "721-watch-flag": {
+      "title": "feat(cli): add --watch flag to kardinal get pipelines",
+      "issue": 721,
+      "state": "done",
+      "pr_merged": true,
+      "done_at": "2026-04-17T16:32:12Z",
+      "note": "already merged in previous session"
+    },
+    "719-color-explain": {
+      "title": "feat(cli): color-coded kardinal explain output \u2014 gate status with ANSI colors",
+      "issue": 719,
+      "state": "todo",
+      "areas": [
+        "cli"
+      ],
+      "priority": "medium",
+      "size": "s",
+      "created_at": "2026-04-17T16:32:54Z"
+    },
+    "735-css-tokens": {
+      "title": "refactor(ui): migrate remaining component hardcoded colors to CSS theme tokens",
+      "issue": 735,
+      "state": "todo",
+      "areas": [
+        "ui"
+      ],
+      "priority": "low",
+      "size": "m",
+      "created_at": "2026-04-17T16:32:54Z"
     }
   },
   "session_heartbeats": {
@@ -988,13 +1024,9 @@
     }
   },
   "handoff": {
-    "batch": "batch-042",
-    "completed_at": "2026-04-17T08:53:51Z",
-    "open_prs": [
-      701,
-      707
-    ],
-    "status": "in_progress",
-    "note": "Security sprint near-complete. PRs #701 (krocodile trivy) and #707 (SLSA) awaiting human review. Generate new queue from roadmap after these merge."
+    "completed_at": "2026-04-14T05:11:01Z",
+    "status": "PROJECT_COMPLETE",
+    "note": "All 7 journeys pass in CI. PROJECT COMPLETE posted on Issue #1. Awaiting human confirmation.",
+    "journeys_all_passing": true
   }
 }
