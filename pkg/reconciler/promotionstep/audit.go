@@ -31,6 +31,8 @@ const (
 	AuditActionPromotionSucceeded  = "PromotionSucceeded"
 	AuditActionPromotionFailed     = "PromotionFailed"
 	AuditActionPromotionSuperseded = "PromotionSuperseded"
+	AuditActionGateEvaluated       = "GateEvaluated"
+	AuditActionRollbackStarted     = "RollbackStarted"
 )
 
 // AuditOutcome describes the result of the action.
@@ -118,6 +120,10 @@ func slugifyAction(action string) string {
 		return "failed"
 	case AuditActionPromotionSuperseded:
 		return "superseded"
+	case AuditActionGateEvaluated:
+		return "gate-evaluated"
+	case AuditActionRollbackStarted:
+		return "rollback-started"
 	default:
 		return "event"
 	}

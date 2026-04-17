@@ -853,6 +853,10 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch rolling-back: %w", patchErr)
 		}
+		// Audit: rollback started.
+		writeAuditEvent(ctx, r.Client, ps,
+			AuditActionRollbackStarted, AuditOutcomePending,
+			fmt.Sprintf("health alarm via %s: rollback Bundle %s created", adapterName, rollbackBundle.Name))
 		return ctrl.Result{}, nil
 
 	default: // "none" or unset
