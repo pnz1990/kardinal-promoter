@@ -281,25 +281,22 @@ function DAGNode({
           ⏱ {elapsed}
         </text>
       )}
-      {/* PR badge — shown when a PR exists; clicking opens the PR in a new tab (#361) */}
+      {/* PR badge — shown when a PR exists; clicking opens the PR in a new tab (#361)
+          #748: Use text+onClick instead of <a> to avoid nested-interactive (a[href] inside g[role=button]) */}
       {showPRBadge && node.prURL && (
-        <a
-          href={node.prURL}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={e => e.stopPropagation()}
+        <text
+          x={NODE_WIDTH / 2}
+          y={isActive && elapsed ? 68 : 56}
+          textAnchor="middle"
+          fill="#818cf8"
+          fontSize="9"
+          style={{ cursor: 'pointer', textDecoration: 'underline' }}
+          onClick={e => { e.stopPropagation(); window.open(node.prURL, '_blank', 'noopener,noreferrer') }}
+          role="link"
+          aria-label={`Open PR ${prNumber}`}
         >
-          <text
-            x={NODE_WIDTH / 2}
-            y={isActive && elapsed ? 68 : 56}
-            textAnchor="middle"
-            fill="#818cf8"
-            fontSize="9"
-            style={{ cursor: 'pointer', textDecoration: 'underline' }}
-          >
-            🔗 {prNumber}
-          </text>
-        </a>
+          🔗 {prNumber}
+        </text>
       )}
     </g>
   )

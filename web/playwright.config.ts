@@ -25,6 +25,7 @@
 //   006 — pause-resume:    ActionBar pause/resume state changes
 //   007 — empty-state:     No pipelines → onboarding card visible
 //   008 — loading-state:   Spinner clears after first successful fetch (#522 guard)
+//   009 — accessibility:   WCAG 2.1 AA axe-core scan (#748)
 
 import { defineConfig, devices } from '@playwright/test'
 
