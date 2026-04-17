@@ -8,7 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-**DX improvements, Prometheus metrics, dark/light mode**
+**DX improvements, Prometheus metrics, dark/light mode, URL routing**
 
 ### Added
 
@@ -20,6 +20,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`kardinal status`** — show controller health, CRD versions, and resource summary (#715)
 - **Improved explain error** — `kardinal explain <pipeline> --env <bogus>` now lists available environments (#717)
 - **Improved circular dependency error** — cycle path displayed in full (#711)
+- **`--dry-run` for `kardinal create bundle`** — print what would be created without submitting; useful for CI validation (#741)
+- **URL routing in embedded UI** — selecting a pipeline, node, or bundle diff panel updates the URL hash fragment; page reload and back/forward navigation restore selection (#742)
+
+### Changed
+
+- **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
 
 ---
 
