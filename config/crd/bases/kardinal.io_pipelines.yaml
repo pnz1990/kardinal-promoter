@@ -131,42 +131,45 @@ spec:
                       items:
                         type: string
                       type: array
-                     health:
-                       description: Health holds the health check configuration for
-                         this environment.
-                       properties:
-                         cluster:
-                           description: Cluster is the kubeconfig Secret name for remote
-                             cluster health checks.
-                           type: string
-                         labelSelector:
-                           additionalProperties:
-                             type: string
-                           description: |-
-                             LabelSelector enables WatchKind mode for health.type=resource.
-                             When set, the health node watches ALL Deployments in the environment
-                             namespace that match the given labels (krocodile WatchKind — O(1)
-                             incremental cache). When unset, a single named Deployment is watched
-                             (krocodile Watch — existing behavior).
-                             Only applies to health.type=resource.
-                           type: object
-                         timeout:
-                           description: |-
-                             Timeout is the maximum time to wait for health checks to pass.
-                             Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
-                           type: string
-                         type:
-                           description: |-
-                             Type selects the health check backend.
-                             Supported values: resource, argocd, flux, argoRollouts, flagger.
-                           enum:
-                           - resource
-                           - argocd
-                           - flux
-                           - argoRollouts
-                           - flagger
-                           type: string
-                       type: object
+                    health:
+                      description: Health holds the health check configuration for
+                        this environment.
+                      properties:
+                        cluster:
+                          description: Cluster is the kubeconfig Secret name for remote
+                            cluster health checks.
+                          type: string
+                        labelSelector:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            LabelSelector enables WatchKind mode for health.type=resource.
+                            When set, the health node watches ALL Deployments in the environment namespace
+                            that match the given labels (krocodile WatchKind — O(1) incremental cache).
+                            When unset, a single named Deployment is watched (krocodile Watch — existing behavior).
+
+                            Example: {"app": "my-service", "kardinal.io/pipeline": "nginx-demo"}
+
+                            Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger
+                            (those resource types are always single-named).
+                          type: object
+                        timeout:
+                          description: |-
+                            Timeout is the maximum time to wait for health checks to pass.
+                            Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+                          type: string
+                        type:
+                          description: |-
+                            Type selects the health check backend.
+                            Supported values: resource, argocd, flux, argoRollouts, flagger.
+                          enum:
+                          - resource
+                          - argocd
+                          - flux
+                          - argoRollouts
+                          - flagger
+                          type: string
+                      type: object
                     layout:
                       default: directory
                       description: |-

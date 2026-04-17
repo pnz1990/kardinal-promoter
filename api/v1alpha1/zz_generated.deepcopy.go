@@ -371,7 +371,7 @@ func (in *DeliveryConfig) DeepCopy() *DeliveryConfig {
 func (in *EnvironmentSpec) DeepCopyInto(out *EnvironmentSpec) {
 	*out = *in
 	in.Update.DeepCopyInto(&out.Update)
-	out.Health = in.Health
+	in.Health.DeepCopyInto(&out.Health)
 	out.Delivery = in.Delivery
 	if in.DependsOn != nil {
 		in, out := &in.DependsOn, &out.DependsOn
