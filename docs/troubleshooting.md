@@ -2,6 +2,32 @@
 
 Common problems and how to diagnose them.
 
+## Admission validation errors
+
+kardinal-promoter ships with `ValidatingAdmissionPolicy` rules (Kubernetes 1.28+) that catch configuration errors at `kubectl apply` time. If you see an admission error, check the table below.
+
+| Error message | Fix |
+|---|---|
+| `spec.environments must contain at least one environment` | Add at least one environment to your Pipeline spec |
+| `each environment must have a non-empty gitRepo` | Add `gitRepo: https://github.com/org/repo` to each environment |
+| `each environment's updateStrategy must be one of: kustomize, helm, custom` | Fix the `updateStrategy` field — only `kustomize`, `helm`, `custom` are valid |
+| `spec.pipeline must not be empty` | Add `pipeline: <name>` to your Bundle spec |
+| `spec.images must contain at least one image when spec.type is 'image'` | Add at least one entry to `spec.images` |
+| `spec.expression must not be empty` | Add a CEL expression to your PolicyGate spec |
+| `spec.recheckInterval must be a valid Go duration` | Use Go format: `5m`, `30s`, `1h` (not `5 minutes`) |
+
+**Disabling admission validation:**
+
+Admission validation is enabled by default and requires Kubernetes 1.28+. To disable (e.g., for kind clusters with older Kubernetes, or when using `--validate=false`):
+
+```yaml
+# values.yaml
+validatingAdmissionPolicy:
+  enabled: false
+```
+
+---
+
 ## Start here: `kardinal doctor`
 
 Before diving into specific issues, run the pre-flight check to rule out common
