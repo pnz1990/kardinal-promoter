@@ -825,10 +825,12 @@
       "size": "s"
     },
     "571-scm-circuit-breaker": {
-      "state": "todo",
+      "state": "in_review",
+      "pr_number": 666,
       "issue": "571",
-      "title": "feat(scm): circuit breaker \u2014 exponential backoff, rate-limit respect, per-provider error budget",
-      "size": "s"
+      "title": "feat(scm): circuit breaker",
+      "qa_approved": true,
+      "awaiting_human_review": true
     },
     "618-policygate-upstream-env": {
       "state": "in_review",
