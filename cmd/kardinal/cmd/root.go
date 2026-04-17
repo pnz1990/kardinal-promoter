@@ -87,6 +87,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 }
 
 // buildClient constructs a controller-runtime client from the persistent flags.
+// Returns actionable error messages with hints for common failures (#688).
 func buildClient() (sigs_client.Client, string, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if globalKubeconfig != "" {
@@ -105,13 +106,16 @@ func buildClient() (sigs_client.Client, string, error) {
 		// Fall back to in-cluster config.
 		cfg, err = rest.InClusterConfig()
 		if err != nil {
-			return nil, "", fmt.Errorf("build kubeconfig: %w", err)
+			return nil, "", fmt.Errorf(
+				"cannot connect to cluster — run 'kardinal doctor' to diagnose\n"+
+					"  (underlying error: %w)", err)
 		}
 	}
 
 	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
-		return nil, "", fmt.Errorf("create k8s client: %w", err)
+		return nil, "", fmt.Errorf(
+			"failed to create Kubernetes client — check cluster connectivity: %w", err)
 	}
 
 	// Resolve namespace.

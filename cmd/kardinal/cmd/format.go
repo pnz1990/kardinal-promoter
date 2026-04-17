@@ -76,6 +76,13 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 // showNamespace parameter. When showNamespace is true, a NAMESPACE column is prepended
 // to each row (used by --all-namespaces flag).
 func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, showNamespace bool) error {
+	if len(pipelines) == 0 {
+		_, _ = fmt.Fprintln(w, "No pipelines found.")
+		_, _ = fmt.Fprintln(w, "  To get started, apply a Pipeline CRD:")
+		_, _ = fmt.Fprintln(w, "    kubectl apply -f examples/quickstart/pipeline.yaml")
+		_, _ = fmt.Fprintln(w, "  Or check CRD installation with: kardinal doctor")
+		return nil
+	}
 	// When multiple PromotionSteps exist for the same pipeline+env (from different
 	// bundles), prefer the one with the highest state priority, then most recently
 	// created.
