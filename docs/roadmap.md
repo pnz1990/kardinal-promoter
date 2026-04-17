@@ -7,9 +7,9 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.8.0+)
+## Currently Available (v0.8.1+)
 
-> v0.8.0 released 2026-04-17. Includes AuditEvent log, SCM circuit breaker, Bundle Watch node, DX improvements.
+> v0.8.1 released 2026-04-17. Includes supply chain hardening (trivy, cosign, SBOM, SLSA) and DX improvements. For the full feature list see the [changelog](changelog.md).
 
 All of the following are implemented and shipped:
 
