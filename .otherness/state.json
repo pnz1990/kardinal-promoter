@@ -1049,8 +1049,8 @@
       "note": "Bundle diff panel URL persistence fix added in follow-up commit. All 6 AC satisfied. Waiting for human merge approval."
     },
     "746-keyboard-shortcuts": {
-      "state": "assigned",
-      "title": "feat(ui): global keyboard shortcuts \u2014 ?, /, r, Esc (#587)",
+      "state": "in_review",
+      "title": "feat(ui): global keyboard shortcuts \u2014 ?, r, Esc",
       "issue_number": 746,
       "areas": [
         "area/ui"
@@ -1059,7 +1059,10 @@
       "assigned_to": "sess-281ccde3",
       "assigned_at": "2026-04-17T17:45:32Z",
       "branch": "feat/746-keyboard-shortcuts",
-      "worktree": "../kardinal-promoter.746-keyboard-shortcuts"
+      "worktree": "../kardinal-promoter.746-keyboard-shortcuts",
+      "pr_number": 750,
+      "qa_approved": true,
+      "awaiting_human_review": true
     },
     "747-error-boundary": {
       "state": "todo",
