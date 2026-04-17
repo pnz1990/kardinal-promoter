@@ -7,11 +7,8 @@ toolchain go1.25.9
 require (
 	github.com/go-git/go-git/v5 v5.17.1
 	github.com/google/cel-go v0.28.0
-<<<<<<< HEAD
-	github.com/prometheus/client_golang v1.23.2
-=======
 	github.com/mattn/go-isatty v0.0.20
->>>>>>> 450efd7 (feat(cli): color-coded kardinal explain output — ANSI colors for gate status (#719))
+	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
