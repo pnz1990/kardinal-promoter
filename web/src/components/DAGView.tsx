@@ -126,10 +126,10 @@ function DAGLegend() {
       fontSize: '0.65rem',
       color: 'var(--color-text-faint)',
     }}>
-      <span style={{ fontWeight: 600, color: 'var(--color-border)', marginRight: '0.25rem' }}>Legend:</span>
+      <span style={{ fontWeight: 600, color: 'var(--color-text-faint)', marginRight: '0.25rem' }}>Legend:</span>
       {/* Node type icons */}
       <span title="PromotionStep — environment node (rounded rect)">
-        <span style={{ fontSize: '0.6rem', border: '1px solid #475569', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: '#64748b' }}>▭</span>
+        <span style={{ fontSize: '0.6rem', border: '1px solid #475569', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: 'var(--color-text-muted)' }}>▭</span>
         Environment step
       </span>
       <span title="PolicyGate — CEL policy check (🔒 prefix)">
@@ -155,7 +155,7 @@ function DAGLegend() {
           {item.label}
         </span>
       ))}
-      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" style={{ marginLeft: 'auto', color: 'var(--color-border)' }}>
+      <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" style={{ marginLeft: 'auto', color: 'var(--color-text-faint)' }}>
         <span style={{ color: 'var(--color-warning)', marginRight: '3px' }}>◆</span>highlighted = blocked gate
       </span>
     </div>
@@ -380,7 +380,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
       {/* #532: Static topology banner — uses .dag-static-banner CSS class */}
       {isStaticTopology && (
         <div className="dag-static-banner" data-testid="dag-static-banner">
-          <span style={{ color: 'var(--color-border)' }}>◦</span>
+          <span style={{ color: 'var(--color-text-faint)' }}>◦</span>
           Pipeline topology — no active bundle. Create one to start promoting.
         </div>
       )}

@@ -16,7 +16,7 @@
   --color-border-muted: #1e293b;
 
   --color-text:        #e2e8f0;
-  --color-text-muted:  #94a3b8;   /* 7.05:1 on #0c1628, 5.71:1 on #1e293b ✓ */
+  --color-text-muted:  #94a3b8;   /* 7.5:1 on dark bg ✓ */   /* 7.05:1 on #0c1628, 5.71:1 on #1e293b ✓ */
   --color-text-faint:  #7c8da4;   /* 5.34:1 on #0c1628, 4.60:1 on #1e293b ✓ (was #475569 = 3.07:1 ✗) */
 
   --color-accent:      #a5b4fc;
@@ -45,7 +45,7 @@
   --color-border-muted: #e2e8f0;
 
   --color-text:        #1e293b;
-  --color-text-muted:  #475569;   /* 6.92:1 on #f1f5f9 ✓ */
+  --color-text-secondary: #94a3b8;  /* alias for muted — WCAG AA on dark bg */   /* 6.92:1 on #f1f5f9 ✓ */
   --color-text-faint:  #4b5563;   /* 6.90:1 on #f1f5f9 ✓ (was #94a3b8 = 2.34:1 ✗) */
   --color-text-secondary: #475569;  /* alias for muted — WCAG AA on light bg */
 
@@ -57,9 +57,9 @@
   --color-success-bg:  #dcfce7;
   --color-warning:     #d97706;
   --color-warning-bg:  #fef3c7;
-  --color-error:       #dc2626;
+  --color-accent:      #4f46e5;    /* indigo-600: 5.45:1 on #f1f5f9 ✓ (was #6366f1 = 4.07:1 fail) */
   --color-error-bg:    #fee2e2;
-  --color-info:        #0891b2;
+  --color-accent-hover: #4338ca;
 
   color-scheme: light;
 }

@@ -60,7 +60,7 @@ export default function EmptyState() {
 
       {/* Quickstart command */}
       <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', fontWeight: 600 }}>
+        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
           Apply the quickstart example:
         </div>
         <div style={{
@@ -91,8 +91,8 @@ export default function EmptyState() {
 
       {/* Expected output */}
       <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', fontWeight: 600 }}>
-          Then run <code style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>kubectl get pipelines</code>:
+        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
+          Then run <code style={{ color: 'var(--color-info)', fontFamily: 'monospace' }}>kubectl get pipelines</code>:
         </div>
         <pre style={{
           background: 'var(--color-bg)',
@@ -100,7 +100,7 @@ export default function EmptyState() {
           borderRadius: '6px',
           padding: '8px 12px',
           fontSize: '0.75rem',
-          color: '#64748b',
+          color: 'var(--color-text-muted)',
           fontFamily: 'monospace',
           margin: 0,
           lineHeight: 1.5,

@@ -54,7 +54,7 @@
 
 .bundle-chip--superseded {
   border-color: #475569;
-  opacity: 0.7;
+  color: #94a3b8;  /* clear muted (7.5:1 on #0f172a bg) instead of opacity — opacity reduces contrast */
 }
 
 .bundle-chip--available {

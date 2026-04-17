@@ -141,7 +141,7 @@ export function PipelineLaneView({
                 <span style={{
                   fontSize: '0.78rem',
                   fontWeight: 700,
-                  color: 'var(--color-text)',
+                  color: '#e2e8f0',  /* always light on dark stage card bg */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -156,7 +156,7 @@ export function PipelineLaneView({
                 <div style={{
                   fontSize: '0.65rem',
                   fontFamily: 'monospace',
-                  color: '#64748b',
+                  color: '#94a3b8',  /* always light muted on dark stage card bg */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -190,7 +190,7 @@ export function PipelineLaneView({
               {node.message && !showPRLink && (
                 <div style={{
                   fontSize: '0.65rem',
-                  color: 'var(--color-text-muted)',
+                  color: '#94a3b8',  /* always light muted on dark stage card bg */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -225,7 +225,7 @@ export function PipelineLaneView({
                       style={{
                         fontSize: '0.6rem',
                         background: 'var(--color-surface)',
-                        color: 'var(--color-text-muted)',
+                        color: 'var(--color-text-muted)',  /* WCAG AA: works on light surface bg */
                         border: '1px solid #334155',
                         borderRadius: '3px',
                         padding: '1px 5px',

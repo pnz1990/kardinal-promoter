@@ -104,7 +104,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
             <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)', margin: 0 }}>
               Bundle Comparison
             </h2>
-            <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: '0.25rem 0 0' }}>
               {changedCount} field{changedCount !== 1 ? 's' : ''} differ between these bundles
             </p>
           </div>
@@ -114,7 +114,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
             style={{
               background: 'none',
               border: 'none',
-              color: '#64748b',
+              color: 'var(--color-text-muted)',
               cursor: 'pointer',
               fontSize: '1.2rem',
               padding: '0 4px',
@@ -150,10 +150,10 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           padding: '0.4rem 0.6rem',
         }}>
           <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Name</span>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#7dd3fc' }} title={bundleA.name}>
+          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-info)' }} title={bundleA.name}>
             {truncate(bundleA.name, 28)}
           </span>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: '#7dd3fc' }} title={bundleB.name}>
+          <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', color: 'var(--color-info)' }} title={bundleB.name}>
             {truncate(bundleB.name, 28)}
           </span>
         </div>
@@ -172,7 +172,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           }}>
             <span style={{
               fontSize: '0.75rem',
-              color: row.changed ? 'var(--color-warning)' : '#64748b',
+              color: row.changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
               fontWeight: row.changed ? 600 : 400,
             }}>
               {row.changed ? '▸ ' : ''}{row.label}
@@ -211,7 +211,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
 
 function DiffCell({ value, changed, isLink }: { value: string | null; changed: boolean; isLink?: boolean }) {
   if (!value) {
-    return <span style={{ fontSize: '0.75rem', color: 'var(--color-border)' }}>—</span>
+    return <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>—</span>
   }
   if (isLink && value.startsWith('http')) {
     return (

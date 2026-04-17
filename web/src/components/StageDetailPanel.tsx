@@ -62,7 +62,7 @@ export function stepIconFor(index: number, currentIndex: number, active: boolean
     if (!active) return { icon: '○', color: 'var(--color-text-faint)' }
     return { icon: '▶', color: '#f59e0b' }
   }
-  return { icon: '○', color: 'var(--color-border)' }
+  return { icon: '○', color: 'var(--color-text-faint)' }
 }
 
 export function StageDetailPanel({ node, steps, onClose }: Props) {
@@ -138,7 +138,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
             background: 'none',
             border: 'none',
             cursor: 'pointer',
-            color: '#64748b',
+            color: 'var(--color-text-muted)',
             fontSize: '1rem',
             lineHeight: 1,
             padding: '2px 4px',
@@ -241,7 +241,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
                     {s.label}
                   </span>
                   {i === currentStepIndex && step.message && (
-                    <span style={{ fontSize: '0.68rem', color: '#64748b', marginLeft: 'auto', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--color-text-muted)', marginLeft: 'auto', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {step.message}
                     </span>
                   )}

@@ -176,7 +176,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
           aria-label="Close gate detail"
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
-            color: '#64748b', fontSize: '1rem', lineHeight: 1, padding: '2px 4px',
+            color: 'var(--color-text-muted)', fontSize: '1rem', lineHeight: 1, padding: '2px 4px',
           }}
         >×</button>
       </div>
@@ -184,7 +184,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
       {/* Status row */}
       <div style={{ padding: '0.4rem 0.75rem', borderBottom: '1px solid #1e293b' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: '#64748b', fontSize: '0.72rem' }}>
+          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.72rem' }}>
             {gate?.reason ?? node.message ?? (isBlocking ? 'Blocking' : 'Passing')}
           </span>
           {lastEvalAt && (
@@ -271,8 +271,8 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
               marginBottom: '0.3rem',
               opacity: 0.7,
             }}>
-              <div style={{ color: '#64748b', fontSize: '0.75rem' }}>{o.reason}</div>
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.15rem', fontSize: '0.68rem', color: 'var(--color-border)' }}>
+              <div style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>{o.reason}</div>
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.15rem', fontSize: '0.68rem', color: 'var(--color-text-faint)' }}>
                 {o.createdBy && <span>by {o.createdBy}</span>}
                 {o.expiresAt && <span title={o.expiresAt}>expired</span>}
               </div>

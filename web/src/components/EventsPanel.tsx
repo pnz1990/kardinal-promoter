@@ -45,7 +45,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
   return (
     <div data-testid="events-panel" style={{ marginBottom: '0.75rem' }}>
       <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
-        Events {items.length > 0 && <span style={{ color: '#64748b', fontWeight: 400 }}>({items.length})</span>}
+        Events {items.length > 0 && <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>({items.length})</span>}
       </h4>
       {items.length === 0 ? (
         <div
@@ -61,7 +61,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
           }}
         >
           No events recorded yet.{' '}
-          <code style={{ fontStyle: 'normal', color: '#64748b', fontFamily: 'monospace' }}>{kubectlCmd}</code>
+          <code style={{ fontStyle: 'normal', color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>{kubectlCmd}</code>
         </div>
       ) : (
         <div style={{
@@ -101,7 +101,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
                   {ev.reason}
                 </span>
                 {ev.count > 1 && (
-                  <span style={{ fontSize: '11px', color: '#64748b' }}>×{ev.count}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>×{ev.count}</span>
                 )}
                 <span style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontFamily: 'monospace', marginLeft: 'auto' }}>
                   {relativeTime(ev.lastTimestamp)}

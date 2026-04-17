@@ -148,7 +148,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
 
       {/* State */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-        <span style={{ fontSize: '11px', color: '#64748b' }}>State:</span>
+        <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>State:</span>
         <span style={{ fontSize: '12px', fontWeight: 600, color: stateColor }}>
           {node.state || '—'}
         </span>
@@ -197,7 +197,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
             </div>
           )}
           {node.lastEvaluatedAt && (
-            <div style={{ fontSize: '11px', color: '#64748b' }}>
+            <div style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>
               Evaluated {relativeTime(node.lastEvaluatedAt)}
             </div>
           )}

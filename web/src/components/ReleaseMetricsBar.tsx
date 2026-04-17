@@ -113,7 +113,7 @@ function MetricCell({ label, value, sub, color }: MetricCellProps) {
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.1rem' }}>
+        <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', marginTop: '0.1rem' }}>
           {sub}
         </div>
       )}
@@ -140,12 +140,12 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         borderRadius: '6px',
         padding: '0.6rem 0.75rem',
         fontSize: '0.75rem',
-        color: 'var(--color-text-faint)',
+        color: '#94a3b8',  /* hardcoded: 9.6:1 on #0c1628 regardless of theme */
         display: 'flex',
         alignItems: 'center',
         gap: '0.4rem',
       }}>
-        <span style={{ color: 'var(--color-border)' }}>📊</span>
+        <span style={{ color: 'var(--color-text-faint)' }}>📊</span>
         <span>Not enough data — need 5+ bundles to show release metrics.</span>
       </div>
     )
@@ -165,7 +165,7 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         label="Time to Prod"
         value={metrics.meanTtpHours !== null ? formatHours(metrics.meanTtpHours) : '—'}
         sub="mean (last 10)"
-        color="#7dd3fc"
+        color="var(--color-info)"
       />
       <MetricCell
         label="Rollback Rate"

@@ -181,7 +181,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 background: 'none',
                 border: 'none',
                 cursor: 'pointer',
-                color: '#64748b',
+                color: 'var(--color-text-muted)',
                 fontSize: '0.9rem',
                 padding: '0 2px',
                 lineHeight: 1,

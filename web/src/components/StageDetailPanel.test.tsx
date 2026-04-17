@@ -105,7 +105,7 @@ describe('stepIconFor', () => {
   it('returns dark circle for future step', () => {
     const result = stepIconFor(5, 3, true)
     expect(result.icon).toBe('○')
-    expect(result.color).toContain('color-border')  // was #334155, now CSS var
+    expect(result.color).toContain('color-text-faint')  // was #334155, now CSS var
   })
 })
 
