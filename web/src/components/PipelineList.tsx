@@ -190,9 +190,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
           )}
         </div>
       )}
-      <ul role={isMultiNamespace ? 'group' : 'listbox'} aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul role="list" aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {filteredPipelines.length === 0 && debouncedQuery && (
-          <li role="option" aria-selected={false} style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+          <li role="presentation" style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
             No pipelines match "{debouncedQuery}"
           </li>
         )}
@@ -237,16 +237,25 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
+            style={{ listStyle: 'none' }}
+          >
+          {/* #762: Outer <li> is non-interactive. A <button> handles selection to avoid
+              nested-interactive axe violation (interactive inside interactive). */}
+          <button
             onClick={() => onSelect(p.name)}
-            role="option"
-            aria-selected={selected === p.name}
-            tabIndex={0}
+            aria-pressed={selected === p.name}
             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
             style={{
+              width: '100%',
+              textAlign: 'left',
               padding: '0.6rem 1rem',
               cursor: 'pointer',
               background: selected === p.name ? 'var(--color-surface)' : 'transparent',
               borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
+              borderTop: 'none',
+              borderRight: 'none',
+              borderBottom: 'none',
+              display: 'block',
             }}
           >
             {/* Pipeline name + phase badge */}
@@ -357,6 +366,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 )}
               </div>
             )}
+          </button>
           </li>
         )
   }

@@ -142,7 +142,7 @@ function SummaryBadge({
       </span>
       <span style={{
         fontSize: '0.7rem',
-        color: active ? color : '#94a3b8',  /* #94a3b8 has 9.8:1 contrast on #0c1628 (dark bg) */
+        color: active ? color : 'var(--color-text-muted)',  /* CSS var adapts to both dark and light theme — #94a3b8 was dark-only (#762 contrast fix) */
         fontWeight: active ? 600 : 400,
         whiteSpace: 'nowrap',
       }}>
