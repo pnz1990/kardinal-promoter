@@ -61,9 +61,9 @@ describe('kardinalStateToHealth', () => {
 describe('healthChipColors', () => {
   it('Ready → green palette', () => {
     const { bg, text, border } = healthChipColors('Ready')
-    expect(bg).toContain('14532d')    // dark green (not yet tokenized)
+    expect(bg).toContain('14532d')    // dark green bg (not yet tokenized)
     expect(text).toContain('color-success')  // was #4ade80, now CSS var
-    expect(border).toContain('22c55e')
+    expect(border).toContain('color-success')  // was #22c55e, now CSS var (#757)
   })
 
   it('Error → red palette', () => {
@@ -85,7 +85,7 @@ describe('healthChipColors', () => {
 
   it('Unknown → gray palette', () => {
     const { text } = healthChipColors('Unknown')
-    expect(text).toContain('64748b')
+    expect(text).toContain('color-text-faint')  // was #64748b, now CSS var (#757)
   })
 
   it('all 7 states return distinct text colors', () => {

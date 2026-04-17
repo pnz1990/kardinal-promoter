@@ -52,7 +52,7 @@ export default function EmptyState() {
           target="_blank"
           rel="noopener noreferrer"
           data-testid="docs-link"
-          style={{ color: '#6366f1', textDecoration: 'underline' }}
+          style={{ color: 'var(--color-accent)', textDecoration: 'underline' }}
         >
           Read the docs ↗
         </a>

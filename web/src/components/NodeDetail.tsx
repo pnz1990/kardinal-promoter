@@ -96,13 +96,13 @@ function stepIcon(index: number, currentIndex: number, stepState: string, isActi
 }
 
 function stepIconColor(index: number, currentIndex: number, stepState: string, isActive: boolean): string {
-  if (index < currentIndex) return '#22c55e'
+  if (index < currentIndex) return 'var(--color-success)'
   if (index === currentIndex) {
-    if (!isActive) return '#6366f1'  // indigo for pending-current
+    if (!isActive) return 'var(--color-accent)'  // indigo for pending-current
     const health = kardinalStateToHealth(stepState)
     if (health === 'Error') return '#ef4444'
     if (health === 'Reconciling') return '#f59e0b'
-    return '#6366f1'
+    return 'var(--color-accent)'
   }
   return 'var(--color-border)'
 }
@@ -730,7 +730,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               href={node.prURL}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: '#6366f1', fontSize: '0.85rem' }}
+              style={{ color: 'var(--color-accent)', fontSize: '0.85rem' }}
             >
               View Pull Request ↗
             </a>
@@ -750,7 +750,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
             <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem' }}>
               <span style={{ color: '#7dd3fc' }}>{k}</span>:{' '}
               {k.toLowerCase().includes('url') ? (
-                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: '#6366f1' }}>
+                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }}>
                   {v.length > 40 ? v.slice(0, 37) + '…' : v}
                 </a>
               ) : (

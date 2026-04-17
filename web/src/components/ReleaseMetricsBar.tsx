@@ -91,7 +91,7 @@ function formatHours(hours: number): string {
 
 /** Return a color for the rollback rate percentage. */
 function rollbackColor(pct: number): string {
-  if (pct === 0) return '#22c55e'   // green
+  if (pct === 0) return 'var(--color-success)'   // green
   if (pct < 20) return '#f59e0b'   // amber
   return '#ef4444'                   // red
 }

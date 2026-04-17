@@ -47,14 +47,14 @@ function inventoryColor(days: number | undefined): string {
   if (days === undefined) return '#64748b'
   if (days > 30) return '#ef4444'
   if (days > 14) return '#f59e0b'
-  return '#22c55e'
+  return 'var(--color-success)'
 }
 
 /** CD level label with color. */
 function cdLevelBadge(level: string | undefined) {
   const map: Record<string, { label: string; color: string }> = {
-    'full-cd': { label: 'Full CD', color: '#22c55e' },
-    'mostly-cd': { label: 'Mostly CD', color: '#6366f1' },
+    'full-cd': { label: 'Full CD', color: 'var(--color-success)' },
+    'mostly-cd': { label: 'Mostly CD', color: 'var(--color-accent)' },
     'manual': { label: 'Manual', color: '#f59e0b' },
   }
   const { label, color } = map[level ?? ''] ?? { label: '—', color: '#64748b' }
@@ -308,7 +308,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                   </td>
 
                   {/* Blockers */}
-                  <td style={{ ...CELL, color: hasBlockers ? '#ef4444' : '#22c55e' }}>
+                  <td style={{ ...CELL, color: hasBlockers ? '#ef4444' : 'var(--color-success)' }}>
                     {hasBlockers ? (
                       <span title={`${p.blockerCount} gate${p.blockerCount === 1 ? '' : 's'} blocking`}>
                         ⛔ {p.blockerCount}
@@ -319,7 +319,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                   </td>
 
                   {/* Failed steps */}
-                  <td style={{ ...CELL, color: hasFailed ? '#ef4444' : '#22c55e' }}>
+                  <td style={{ ...CELL, color: hasFailed ? '#ef4444' : 'var(--color-success)' }}>
                     {hasFailed ? (
                       <span title={`${p.failedStepCount} failed step${p.failedStepCount === 1 ? '' : 's'}`}>
                         ✗ {p.failedStepCount}

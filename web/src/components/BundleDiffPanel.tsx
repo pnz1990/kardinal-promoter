@@ -183,7 +183,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
         ))}
 
         {changedCount === 0 && (
-          <p style={{ textAlign: 'center', color: '#22c55e', fontSize: '0.85rem', marginTop: '0.5rem' }}>
+          <p style={{ textAlign: 'center', color: 'var(--color-success)', fontSize: '0.85rem', marginTop: '0.5rem' }}>
             ✓ No differences found between these bundles.
           </p>
         )}
@@ -219,7 +219,7 @@ function DiffCell({ value, changed, isLink }: { value: string | null; changed: b
         href={value}
         target="_blank"
         rel="noopener noreferrer"
-        style={{ fontSize: '0.75rem', color: '#6366f1', fontFamily: 'monospace' }}
+        style={{ fontSize: '0.75rem', color: 'var(--color-accent)', fontFamily: 'monospace' }}
         title={value}
       >
         {truncate(value, 30)}

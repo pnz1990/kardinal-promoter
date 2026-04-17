@@ -257,7 +257,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                         border: 'none',
                         padding: 0,
                         cursor: 'pointer',
-                        color: '#6366f1',
+                        color: 'var(--color-accent)',
                         fontSize: '11px',
                         textDecoration: 'underline',
                       }}
