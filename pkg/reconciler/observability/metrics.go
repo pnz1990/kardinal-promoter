@@ -1,0 +1,90 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package observability registers Prometheus metrics for kardinal-promoter.
+//
+// All four metrics required by Stage 19 acceptance criteria:
+//   - kardinal_bundles_total{phase}
+//   - kardinal_steps_total{type,result}
+//   - kardinal_gate_evaluations_total{result}
+//   - kardinal_pr_duration_seconds histogram
+//
+// Metrics are registered once at init time into the controller-runtime
+// default registry (which is the prometheus.DefaultRegisterer). They are
+// safe to call from any reconciler.
+//
+// Graph-first compliance: metric emission is a write side effect at
+// reconcile time — it does NOT drive any branching logic. Counters are
+// incremented after CRD status has been written, never before.
+package observability
+
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+)
+
+var (
+	// BundlesTotal counts Bundle phase transitions. The "phase" label carries
+	// the terminal phase: "Verified", "Failed", "Superseded".
+	// Only terminal or significant transitions are counted to avoid double-
+	// counting on re-reconcile of the same phase.
+	BundlesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_bundles_total",
+			Help: "Total number of Bundle promotions by terminal phase (Verified, Failed, Superseded).",
+		},
+		[]string{"phase"},
+	)
+
+	// StepsTotal counts PromotionStep terminal state transitions.
+	// "type" is always "PromotionStep". "result" is "succeeded" or "failed".
+	StepsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_steps_total",
+			Help: "Total number of PromotionStep terminal states (succeeded, failed).",
+		},
+		[]string{"type", "result"},
+	)
+
+	// GateEvaluationsTotal counts PolicyGate evaluations.
+	// "result" is "allowed" (gate passed) or "blocked" (gate failed).
+	GateEvaluationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kardinal_gate_evaluations_total",
+			Help: "Total PolicyGate evaluations by result (allowed, blocked).",
+		},
+		[]string{"result"},
+	)
+
+	// PRDurationSeconds records the elapsed time between a PromotionStep
+	// entering WaitingForMerge and transitioning to Verified (PR merged).
+	// This histogram models the human review latency in the promotion loop.
+	PRDurationSeconds = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "kardinal_pr_duration_seconds",
+			Help:    "Duration from PR open (WaitingForMerge) to PR merge (Verified), in seconds.",
+			Buckets: prometheus.ExponentialBuckets(30, 2, 10), // 30s → ~8.5h in 10 buckets
+		},
+	)
+)
+
+func init() {
+	ctrlmetrics.Registry.MustRegister(
+		BundlesTotal,
+		StepsTotal,
+		GateEvaluationsTotal,
+		PRDurationSeconds,
+	)
+}
