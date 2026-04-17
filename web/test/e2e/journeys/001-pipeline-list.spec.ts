@@ -23,8 +23,8 @@ test.describe('Journey 001 — Pipeline list', () => {
 
   test('Step 3: Selected pipeline is highlighted in sidebar', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
-    // The selected item has aria-selected=true
-    const selectedItem = page.locator('[aria-selected="true"]')
+    // The selected button has aria-pressed=true (button pattern, not listbox)
+    const selectedItem = page.locator('[aria-pressed="true"]')
     await expect(selectedItem).toBeVisible()
   })
 

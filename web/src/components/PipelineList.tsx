@@ -237,10 +237,12 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
-            style={{ listStyle: 'none' }}
+            style={{ listStyle: 'none', position: 'relative' }}
           >
           {/* #762: Outer <li> is non-interactive. A <button> handles selection to avoid
-              nested-interactive axe violation (interactive inside interactive). */}
+              nested-interactive axe violation (interactive inside interactive).
+              CopyButton is a sibling of this button (not a child) to satisfy the axe
+              nested-interactive rule — interactive elements must not be nested. */}
           <button
             onClick={() => onSelect(p.name)}
             aria-pressed={selected === p.name}
@@ -248,7 +250,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
             style={{
               width: '100%',
               textAlign: 'left',
-              padding: '0.6rem 1rem',
+              padding: '0.6rem 2.2rem 0.6rem 1rem',
               cursor: 'pointer',
               background: selected === p.name ? 'var(--color-surface)' : 'transparent',
               borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
@@ -277,8 +279,6 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
@@ -367,6 +367,11 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               </div>
             )}
           </button>
+          {/* #773: CopyButton is a sibling (not child) of the selection button to
+              avoid axe nested-interactive violation. Position absolute within <li>. */}
+          <div style={{ position: 'absolute', top: '0.45rem', right: '0.4rem', zIndex: 1 }}>
+            <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+          </div>
           </li>
         )
   }
