@@ -284,3 +284,11 @@
 | 007 | Distributed Architecture | 📋 Planned | Design doc: docs/design/07-distributed-architecture.md |
 | 008 | Promotion Steps Engine | ✅ Complete | PR #57. SCMProvider, GitClient, Engine, 7 built-in steps, DefaultSequence. |
 | 009 | Config-Only Promotions | ✅ Complete | PR #75. Helm strategy, config-only Bundle type, kustomize-set-image step. |
+
+---
+
+## queue-023 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 901 | WatchKind health nodes for O(1) incremental cache | ✅ Complete | #652 merged | health.labelSelector → krocodile WatchKind; 6 new tests; docs MISS fixed |
