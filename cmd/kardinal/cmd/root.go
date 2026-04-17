@@ -15,6 +15,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -87,6 +88,27 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 }
 
 // buildClient constructs a controller-runtime client from the persistent flags.
+// enrichClientError adds actionable hints to common connection errors.
+// It helps users understand what went wrong without requiring deep Kubernetes knowledge.
+func enrichClientError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no such file") || strings.Contains(msg, "kubeconfig"):
+		return fmt.Errorf("%w\n\nHint: no kubeconfig found — run 'kardinal doctor' to diagnose, or set --kubeconfig / KUBECONFIG", err)
+	case strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "connection refused") || strings.Contains(msg, "i/o timeout"):
+		return fmt.Errorf("%w\n\nHint: cannot reach the cluster — check 'kubectl cluster-info' and run 'kardinal doctor'", err)
+	case strings.Contains(msg, "Forbidden") || strings.Contains(msg, "forbidden"):
+		return fmt.Errorf("%w\n\nHint: RBAC permission denied — check ServiceAccount permissions or run 'kardinal doctor'", err)
+	case strings.Contains(msg, "no kind is registered") || strings.Contains(msg, "no matches for kind"):
+		return fmt.Errorf("%w\n\nHint: kardinal CRDs not installed — run 'helm install kardinal ...' or 'make install'", err)
+	}
+	return err
+}
+
+
 func buildClient() (sigs_client.Client, string, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if globalKubeconfig != "" {
@@ -105,13 +127,13 @@ func buildClient() (sigs_client.Client, string, error) {
 		// Fall back to in-cluster config.
 		cfg, err = rest.InClusterConfig()
 		if err != nil {
-			return nil, "", fmt.Errorf("build kubeconfig: %w", err)
+			return nil, "", enrichClientError(fmt.Errorf("build kubeconfig: %w", err))
 		}
 	}
 
 	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
-		return nil, "", fmt.Errorf("create k8s client: %w", err)
+		return nil, "", enrichClientError(fmt.Errorf("create k8s client: %w", err))
 	}
 
 	// Resolve namespace.
