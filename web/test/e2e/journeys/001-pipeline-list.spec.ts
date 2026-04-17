@@ -23,8 +23,9 @@ test.describe('Journey 001 — Pipeline list', () => {
 
   test('Step 3: Selected pipeline is highlighted in sidebar', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
-    // The selected item has aria-selected=true
-    const selectedItem = page.locator('[aria-selected="true"]')
+    // The selected pipeline item uses aria-pressed=true (button pattern, #762).
+    // aria-pressed on a <button> indicates the button is in a "pressed/selected" state.
+    const selectedItem = page.locator('li [aria-pressed="true"]').first()
     await expect(selectedItem).toBeVisible()
   })
 

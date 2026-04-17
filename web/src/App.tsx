@@ -523,15 +523,15 @@ export function App() {
                     color: 'var(--color-text-muted)',
                   }}>
                     <span>
-                      Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                      Bundle: <span style={{ color: 'var(--color-code)', fontFamily: 'monospace' }}>{activeBundle.name}</span>
                       {/* #763: copy bundle name */}
                       <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>
-                    <span style={{ color: 'var(--color-border)' }}>·</span>
+                    <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                     <HealthChip state={activeBundle.phase} size="sm" />
                     {activeBundle.provenance?.commitSHA && (
                       <>
-                        <span style={{ color: 'var(--color-border)' }}>·</span>
+                        <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                         <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}
                               title="Commit SHA">
                           {activeBundle.provenance.commitSHA.slice(0, 8)}
@@ -542,13 +542,13 @@ export function App() {
                     )}
                     {activeBundle.provenance?.author && (
                       <>
-                        <span style={{ color: 'var(--color-border)' }}>·</span>
+                        <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                         <span title="Author">{activeBundle.provenance.author}</span>
                       </>
                     )}
                     {activeBundle.provenance?.ciRunURL && (
                       <>
-                        <span style={{ color: 'var(--color-border)' }}>·</span>
+                        <span style={{ color: 'var(--color-text-faint)' }}>·</span>
                         <a
                           href={activeBundle.provenance.ciRunURL}
                           target="_blank"

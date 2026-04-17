@@ -140,12 +140,15 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         borderRadius: '6px',
         padding: '0.6rem 0.75rem',
         fontSize: '0.75rem',
-        color: 'var(--color-text-faint)',
+        // Hardcoded light color — this div always has a dark background (#0c1628).
+        // var(--color-text-faint) flips to dark in light mode and would fail contrast.
+        // #94a3b8 (slate-400) = 7.06:1 on #0c1628 — WCAG AA ✓
+        color: '#94a3b8',
         display: 'flex',
         alignItems: 'center',
         gap: '0.4rem',
       }}>
-        <span style={{ color: 'var(--color-border)' }}>📊</span>
+        <span>📊</span>
         <span>Not enough data — need 5+ bundles to show release metrics.</span>
       </div>
     )
@@ -165,7 +168,7 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         label="Time to Prod"
         value={metrics.meanTtpHours !== null ? formatHours(metrics.meanTtpHours) : '—'}
         sub="mean (last 10)"
-        color="#7dd3fc"
+        color="var(--color-code)"
       />
       <MetricCell
         label="Rollback Rate"

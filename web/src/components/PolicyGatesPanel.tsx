@@ -124,7 +124,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
               {gate.expression && (
                 <code style={{
                   fontSize: '0.72rem',
-                  color: '#7dd3fc',
+                  color: 'var(--color-code)',
                   background: 'var(--color-bg)',
                   border: '1px solid #1e293b',
                   borderRadius: '3px',

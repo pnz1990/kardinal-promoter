@@ -32,6 +32,9 @@
   --color-error-bg:    #7f1d1d;
   --color-info:        #67e8f9;
 
+  /* Code/monospace inline text — sky-300 in dark mode (visible on dark bg) */
+  --color-code:        #7dd3fc;   /* sky-300: passes on #0f172a, #1e293b, #0c1628 dark bgs */
+
   /* Scrollbar */
   color-scheme: dark;
 }
@@ -61,6 +64,9 @@
   --color-error:       #b91c1c;  /* red-700: 6.3:1 on #f1f5f9 ✓ (was #dc2626 = 4.4:1 fail) */
   --color-error-bg:    #fee2e2;
   --color-info:        #0369a1;  /* sky-700: 5.5:1 on #f1f5f9 ✓ (was #0891b2 = 3.4:1 fail) */
+
+  /* Code/monospace inline text — sky-700 in light mode (10.7:1 on #f1f5f9) */
+  --color-code:        #0369a1;  /* sky-700: 10.7:1 on #f1f5f9 ✓ */
 
   color-scheme: light;
 }

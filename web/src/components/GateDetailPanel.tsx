@@ -272,7 +272,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
               opacity: 0.7,
             }}>
               <div style={{ color: '#64748b', fontSize: '0.75rem' }}>{o.reason}</div>
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.15rem', fontSize: '0.68rem', color: 'var(--color-border)' }}>
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.15rem', fontSize: '0.68rem', color: 'var(--color-text-faint)' }}>
                 {o.createdBy && <span>by {o.createdBy}</span>}
                 {o.expiresAt && <span title={o.expiresAt}>expired</span>}
               </div>
