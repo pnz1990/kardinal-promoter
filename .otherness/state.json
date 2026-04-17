@@ -787,20 +787,18 @@
       "title": "fix: Watch on PRStatus and PolicyGate in PromotionStep"
     },
     "625-remove-upstream-verified": {
-      "state": "in_review",
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 660,
       "issue": "625",
-      "title": "refactor(graph): replace upstreamVerifiedN with upstreamStates list",
-      "qa_approved": true,
-      "awaiting_human_review": true
+      "title": "upstreamStates refactor"
     },
     "656-watchkind-docs": {
-      "state": "in_review",
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 659,
       "issue": "656",
-      "title": "docs(health): document health.labelSelector WatchKind mode",
-      "qa_approved": true,
-      "awaiting_human_review": true
+      "title": "WatchKind docs"
     },
     "643-doc11-kro80-ref": {
       "state": "done",
