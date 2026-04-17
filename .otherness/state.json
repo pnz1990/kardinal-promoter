@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-17T18:07:07Z",
+  "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": "queue-021",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -971,120 +971,6 @@
       "issue": 706,
       "pr_number": 707,
       "title": "SLSA Level 2 provenance via GitHub attestation"
-    },
-    "722-dark-mode": {
-      "state": "done",
-      "pr_number": 734,
-      "issue": "722",
-      "title": "feat(ui): dark/light mode",
-      "assigned_to": "STANDALONE",
-      "branch": "feat/722-dark-mode",
-      "pr_merged": true,
-      "done_at": "2026-04-17T16:31:06Z"
-    },
-    "721-watch-flag": {
-      "title": "feat(cli): add --watch flag to kardinal get pipelines",
-      "issue": 721,
-      "state": "done",
-      "pr_merged": true,
-      "done_at": "2026-04-17T16:32:12Z",
-      "note": "already merged in previous session"
-    },
-    "719-color-explain": {
-      "title": "feat(cli): color-coded kardinal explain output \u2014 gate status with ANSI colors",
-      "issue": 719,
-      "state": "done",
-      "areas": [
-        "cli"
-      ],
-      "priority": "medium",
-      "size": "s",
-      "created_at": "2026-04-17T16:32:54Z",
-      "pr_merged": true,
-      "done_at": "2026-04-17T16:44:10Z",
-      "pr_number": 730
-    },
-    "735-css-tokens": {
-      "title": "refactor(ui): migrate remaining component hardcoded colors to CSS theme tokens",
-      "issue": 735,
-      "state": "done",
-      "areas": [
-        "ui"
-      ],
-      "priority": "low",
-      "size": "m",
-      "created_at": "2026-04-17T16:32:54Z",
-      "pr_number": 738,
-      "pr_merged": true,
-      "done_at": "2026-04-17T16:55:54Z"
-    },
-    "739-dry-run": {
-      "title": "feat(cli): add --dry-run flag to kardinal create bundle",
-      "issue": 739,
-      "state": "done",
-      "areas": [
-        "cli"
-      ],
-      "priority": "medium",
-      "size": "s",
-      "created_at": "2026-04-17T16:58:35Z",
-      "pr_merged": true,
-      "done_at": "2026-04-17T17:22:58Z",
-      "pr_number": 741
-    },
-    "740-url-routing": {
-      "title": "feat(ui): URL routing \u2014 pipeline/bundle/node selection in URL",
-      "issue": 740,
-      "state": "in_review",
-      "areas": [
-        "ui"
-      ],
-      "priority": "high",
-      "size": "m",
-      "created_at": "2026-04-17T16:58:35Z",
-      "pr_number": 742,
-      "branch": "feat/740-url-routing",
-      "qa_approved": true,
-      "awaiting_human_review": true,
-      "note": "Bundle diff panel URL persistence fix added in follow-up commit. All 6 AC satisfied. Waiting for human merge approval."
-    },
-    "746-keyboard-shortcuts": {
-      "state": "in_review",
-      "title": "feat(ui): global keyboard shortcuts \u2014 ?, r, Esc",
-      "issue_number": 746,
-      "areas": [
-        "area/ui"
-      ],
-      "created_at": "2026-04-17T17:44:39Z",
-      "assigned_to": "sess-281ccde3",
-      "assigned_at": "2026-04-17T17:45:32Z",
-      "branch": "feat/746-keyboard-shortcuts",
-      "worktree": "../kardinal-promoter.746-keyboard-shortcuts",
-      "pr_number": 750,
-      "qa_approved": true,
-      "awaiting_human_review": true
-    },
-    "747-error-boundary": {
-      "state": "in_review",
-      "title": "feat(ui): error boundaries on async components (#587)",
-      "issue_number": 747,
-      "areas": [
-        "area/ui"
-      ],
-      "created_at": "2026-04-17T17:44:39Z",
-      "pr_number": 753,
-      "branch": "feat/747-error-boundary",
-      "qa_approved": true,
-      "awaiting_human_review": true
-    },
-    "748-wcag-axe": {
-      "state": "in_review",
-      "pr_number": 756,
-      "title": "feat(ui): WCAG 2.1 AA automated check via axe-core in Playwright CI",
-      "issue": "748",
-      "branch": "feat/748-wcag-axe",
-      "qa_approved": true,
-      "awaiting_human_review": true
     }
   },
   "session_heartbeats": {
