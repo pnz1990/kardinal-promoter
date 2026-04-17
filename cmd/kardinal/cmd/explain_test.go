@@ -255,3 +255,36 @@ func TestExplain_ShowsOnlyActiveBundleRows(t *testing.T) {
 	assert.NotContains(t, out, "old-step", "superseded bundle step must not appear")
 	assert.NotContains(t, out, "old-gate", "superseded bundle gate must not appear")
 }
+
+// TestExplain_UnknownEnvSuggestsAvailable verifies that when --env is set to an
+// unknown environment name, the error message lists the pipeline's valid environments
+// (issue #716).
+func TestExplain_UnknownEnvSuggestsAvailable(t *testing.T) {
+	pipe := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nginx-demo",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "uat"},
+				{Name: "prod"},
+			},
+		},
+	}
+
+	s := buildExplainScheme(t)
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipe).Build()
+
+	var buf bytes.Buffer
+	err := explainOnce(&buf, c, "default", "nginx-demo", "bogus")
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "bogus", "requested env name must appear in message")
+	assert.Contains(t, out, "nginx-demo", "pipeline name must appear in message")
+	assert.Contains(t, out, "test", "available env 'test' must be listed")
+	assert.Contains(t, out, "uat", "available env 'uat' must be listed")
+	assert.Contains(t, out, "prod", "available env 'prod' must be listed")
+}
