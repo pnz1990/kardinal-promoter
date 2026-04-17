@@ -633,3 +633,30 @@ Checks:
 Flags:
 - `-f, --file <path>`: Path to Pipeline or PolicyGate YAML file (required)
 
+
+### kardinal status
+
+Show controller health and a summary of managed resources.
+
+```bash
+kardinal status
+```
+
+Output:
+```
+Controller:  v0.8.1
+Pipelines:   3
+Bundles:     5 (1 active)
+```
+
+If there are failed pipelines:
+```
+Controller:  v0.8.1
+Pipelines:   3 (1 failed: [nginx-demo])
+Bundles:     5 (1 active)
+
+Warning: 1 pipeline(s) in failed state — run 'kardinal get pipelines' for details
+```
+
+For detailed diagnostics, use `kardinal doctor`.
+
