@@ -126,6 +126,19 @@ jobs:
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      # ── Cosign keyless image signing ──────────────────────────────────────────
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.3
+
+      - name: Sign controller image with cosign (keyless — GitHub Actions OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
+
       # ── Vulnerability scanning ──────────────────────────────────────────────
       - name: Scan controller image for HIGH/CRITICAL CVEs (trivy)
         uses: aquasecurity/trivy-action@0.31.0
