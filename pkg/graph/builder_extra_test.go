@@ -76,7 +76,7 @@ func TestBuilder_MultipleUpstreams(t *testing.T) {
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
 	// 3 envs × (1 PRStatus + 1 PromotionStep) = 6
-	assert.Equal(t, 7, result.NodeCount)
+	assert.Equal(t, 8, result.NodeCount)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	globalNode := nodeMap["global"]
@@ -112,7 +112,7 @@ func TestBuilder_GateInMultipleEnvs(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// 2 PromotionStep + 2 PRStatus Watch + 2 PolicyGate (one per env) = 6 nodes
-	assert.Equal(t, 7, result.NodeCount)
+	assert.Equal(t, 8, result.NodeCount)
 }
 
 // TestBuilder_SkipAllEnvironments returns error when all envs are skipped.

@@ -394,6 +394,25 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 
+	// Definition node: promotion — computed values shared by all PromotionStep nodes (#617).
+	// krocodile classifies a template with no apiVersion/no kind as ReferenceDefinition.
+	// The node produces a map[string]any in CEL scope; downstream nodes reference
+	// ${promotion.pipeline} etc. instead of repeating the same Go-interpolated strings.
+	//
+	// Currently exposes pipelineName as a constant scalar — demonstrating the pattern.
+	// Future: compute slugs, label sets, naming conventions as CEL expressions here.
+	promotionDefNode := GraphNode{
+		ID: "promotion",
+		Template: map[string]interface{}{
+			// No apiVersion, no kind — Definition node (krocodile: ReferenceDefinition)
+			"pipeline": pipelineName,
+			"bundleSlug": fmt.Sprintf("${bundle.metadata.name}"),
+		},
+		// ReadyWhen/PropagateWhen intentionally omitted — Definition nodes have no Kubernetes
+		// resource; signals on them would be interpreted as Unresolved by deriveReference.
+	}
+	nodes = append(nodes, promotionDefNode)
+
 	for _, envName := range filteredEnvs {
 		envSpec := envSpecMap[envName]
 

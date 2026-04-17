@@ -72,8 +72,8 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// 3 envs × (1 PRStatus + 1 PromotionStep) = 6
-	assert.Equal(t, 7, result.NodeCount)
-	assert.Len(t, result.Graph.Spec.Nodes, 7)
+	assert.Equal(t, 8, result.NodeCount)
+	assert.Len(t, result.Graph.Spec.Nodes, 8)
 
 	// Verify sequential dependency: uat depends on test, prod depends on uat
 	nodeMap := make(map[string]graph.GraphNode)
@@ -114,8 +114,8 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 		PolicyGates: gates,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 9, result.NodeCount, "3 PromotionStep + 3 PRStatus + 2 PolicyGate + 1 Bundle Watch = 9 nodes")
-	assert.Len(t, result.Graph.Spec.Nodes, 9)
+	assert.Equal(t, 10, result.NodeCount, "3 PromotionStep + 3 PRStatus + 2 PolicyGate + 1 Bundle Watch = 9 nodes")
+	assert.Len(t, result.Graph.Spec.Nodes, 10)
 
 	// Verify PolicyGate nodes have propagateWhen set
 	for _, n := range result.Graph.Spec.Nodes {
@@ -145,7 +145,7 @@ func TestBuilder_FanOut(t *testing.T) {
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
 	// 4 envs × (1 PRStatus + 1 PromotionStep) = 8
-	assert.Equal(t, 9, result.NodeCount)
+	assert.Equal(t, 10, result.NodeCount)
 
 	// Both prod nodes must reference staging (using CEL-safe underscore IDs)
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
@@ -168,7 +168,7 @@ func TestBuilder_TargetEnvironment(t *testing.T) {
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
 	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
-	assert.Equal(t, 5, result.NodeCount, "test and staging envs: 2 PRStatus + 2 PromotionStep + 1 Bundle Watch")
+	assert.Equal(t, 6, result.NodeCount, "test and staging envs: 2 PRStatus + 2 PromotionStep + 1 Bundle Watch")
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	assert.Contains(t, nodeMap, "test")
@@ -311,7 +311,7 @@ func TestBuilder_CustomSteps(t *testing.T) {
 	require.NoError(t, err)
 	// Just check that the builder doesn't fail; custom steps are populated in PromotionStep spec
 	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
-	assert.Equal(t, 5, result.NodeCount)
+	assert.Equal(t, 6, result.NodeCount)
 }
 
 // Test 9: Config Bundle uses config-merge step type.
@@ -329,7 +329,7 @@ func TestBuilder_ConfigBundle(t *testing.T) {
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
 	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
-	assert.Equal(t, 5, result.NodeCount)
+	assert.Equal(t, 6, result.NodeCount)
 
 	// Config Bundle nodes should have stepType indicating config-merge
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
