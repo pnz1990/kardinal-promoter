@@ -5,8 +5,7 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": [
-    "676-krocodile-explicit-keyword",
-    "673-audit-log-step1"
+    "676-krocodile-explicit-keyword"
   ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -841,42 +840,60 @@
     },
     "622-bundle-watch-node": {
       "state": "done",
-      "pr_merged": true,
       "pr_number": 667,
       "issue": "622",
-      "title": "Bundle Watch node"
+      "title": "Bundle Watch node",
+      "qa_approved": true,
+      "pr_merged": true
     },
     "668-changelog-post-v070": {
-      "state": "in_review",
-      "pr_number": 669,
+      "state": "blocked",
       "issue": "668",
-      "title": "post-v0.7.0 changelog"
+      "title": "docs(changelog): add post-v0.7.0 entries",
+      "size": "xs"
     },
     "619-bundle-intent-graph": {
       "state": "done",
-      "pr_merged": true,
-      "pr_number": 671,
       "issue": "619",
-      "title": "includeWhen for Bundle intent filtering"
+      "title": "feat(graph): move Bundle intent filtering to Graph includeWhen expressions",
+      "size": "s",
+      "pr_merged": true,
+      "pr_number": 671
     },
     "573-admission-webhook": {
       "state": "done",
-      "pr_merged": true,
-      "pr_number": 670,
       "issue": "573",
-      "title": "Admission webhook"
+      "title": "feat(api): admission webhook for Pipeline and PolicyGate validation",
+      "size": "m",
+      "pr_merged": true,
+      "pr_number": 670
     },
     "676-krocodile-explicit-keyword": {
-      "state": "todo",
-      "issue": "676",
+      "state": "in_review",
+      "issue": 676,
+      "pr_number": 678,
       "title": "chore(graph): upgrade krocodile 81c5a03 \u2192 05db829 \u2014 explicit-keyword schema",
-      "size": "m"
+      "branch": "feat/676-krocodile-explicit-keyword"
     },
     "673-audit-log-step1": {
       "state": "todo",
       "issue": "673",
       "title": "feat(api): AuditEvent CRD + write path \u2014 structured audit log step 1",
       "size": "s"
+    },
+    "673-audit-log": {
+      "state": "done",
+      "issue": "673",
+      "title": "feat(api): structured audit log step 1 \u2014 AuditEvent CRD and write path",
+      "size": "s",
+      "note": "Implemented as AuditEvent CRD in PR #675"
+    },
+    "576-audit-step1": {
+      "state": "in_review",
+      "issue": 673,
+      "pr_number": 675,
+      "title": "feat(api): AuditEvent CRD \u2014 immutable promotion event trail step 1",
+      "branch": "feat/576-audit-step1"
     }
   },
   "session_heartbeats": {
@@ -895,9 +912,16 @@
     }
   },
   "handoff": {
-    "completed_at": "2026-04-14T05:11:01Z",
-    "status": "PROJECT_COMPLETE",
-    "note": "All 7 journeys pass in CI. PROJECT COMPLETE posted on Issue #1. Awaiting human confirmation.",
-    "journeys_all_passing": true
+    "batch": "batch-037",
+    "completed_at": "2026-04-17T06:37:12Z",
+    "open_prs": [
+      669,
+      670,
+      674,
+      675,
+      678
+    ],
+    "status": "in_progress",
+    "note": "PR #678 (krocodile 05db829 upgrade) CI running. Multiple PRs awaiting review."
   }
 }
