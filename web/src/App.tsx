@@ -617,7 +617,7 @@ export function App() {
                           gap: '0.5rem',
                           marginBottom: '0.35rem',
                           fontSize: '0.8rem',
-                          color: '#cbd5e1',
+                          color: 'var(--color-text-muted)',
                         }}>
                           <HealthChip state={b.phase} size="sm" />
                           <span style={{ fontFamily: 'monospace', color: 'var(--color-text)' }}>{b.name}</span>

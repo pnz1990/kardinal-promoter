@@ -246,7 +246,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
           <button
             onClick={() => onSelect(p.name)}
             aria-pressed={selected === p.name}
-            aria-selected={selected === p.name}
+            aria-current={selected === p.name ? 'true' : undefined}
             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
             style={{
               width: '100%',
