@@ -149,6 +149,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
+	// Write AuditEvent for gate evaluation result (#680 step 2).
+	outcome := "Success"
+	if !pass {
+		outcome = "Failure"
+	}
+	writeGateAuditEvent(ctx, r.Client, &gate, outcome, reason)
+
 	return ctrl.Result{RequeueAfter: recheckInterval}, nil
 }
 

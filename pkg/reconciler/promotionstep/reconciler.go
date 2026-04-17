@@ -850,6 +850,10 @@ func (r *Reconciler) applyHealthFailurePolicy(
 			Str("env", ps.Spec.Environment).
 			Str("rollbackBundle", rollbackBundle.Name).
 			Msg("health failure: rollback Bundle created, state=RollingBack")
+		// Write AuditEvent: rollback started (#680 step 2).
+		writeAuditEvent(ctx, r.Client, ps, AuditActionRollbackStarted, AuditOutcomePending,
+			fmt.Sprintf("health-failure via %s (onHealthFailure=rollback): rollback Bundle %s",
+				adapterName, rollbackBundle.Name))
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch rolling-back: %w", patchErr)
 		}

@@ -31,6 +31,9 @@ const (
 	AuditActionPromotionSucceeded  = "PromotionSucceeded"
 	AuditActionPromotionFailed     = "PromotionFailed"
 	AuditActionPromotionSuperseded = "PromotionSuperseded"
+	// AuditActionRollbackStarted is written when an auto-rollback or manual rollback
+	// Bundle is created. Outcome is always Pending (rollback in-flight).
+	AuditActionRollbackStarted = "RollbackStarted"
 )
 
 // AuditOutcome describes the result of the action.
@@ -118,6 +121,8 @@ func slugifyAction(action string) string {
 		return "failed"
 	case AuditActionPromotionSuperseded:
 		return "superseded"
+	case AuditActionRollbackStarted:
+		return "rollback-started"
 	default:
 		return "event"
 	}
