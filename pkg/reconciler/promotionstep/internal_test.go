@@ -14,6 +14,7 @@
 package promotionstep
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -21,7 +22,11 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // TestExtractRepo verifies that GitHub PR URLs are parsed into "owner/repo" format.
@@ -204,4 +209,106 @@ func TestUpdateStepStatuses_Idempotent(t *testing.T) {
 	updateStepStatuses(ps, seq, 1, false, "")
 	assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[0].State, "idempotent: step 0 stays Completed")
 	assert.Equal(t, firstCompletedAt, ps.Status.Steps[0].CompletedAt, "idempotent: completedAt unchanged")
+}
+
+// newTestScheme creates a runtime.Scheme with all required types registered.
+func newTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, corev1.AddToScheme(scheme))
+	return scheme
+}
+
+// TestPRStatusMapper verifies that prStatusMapper re-enqueues the PromotionStep
+// that owns the changed PRStatus. This validates the Watch registration logic
+// added in #644 to eliminate polling in the WaitingForMerge state.
+func TestPRStatusMapper(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-1", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{PRStatusRef: "prstatus-1"},
+	}
+	otherStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-2", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{PRStatusRef: "prstatus-other"},
+	}
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-1", Namespace: "default"},
+	}
+
+	fakeClient := fakeclient.NewClientBuilder().WithScheme(scheme).
+		WithObjects(step, otherStep, prs).
+		Build()
+
+	r := &Reconciler{Client: fakeClient}
+	reqs := r.prStatusMapper(ctx, prs)
+
+	require.Len(t, reqs, 1, "must enqueue exactly the owning PromotionStep")
+	assert.Equal(t, "step-1", reqs[0].Name)
+	assert.Equal(t, "default", reqs[0].Namespace)
+}
+
+// TestPRStatusMapper_UnmatchedPRStatus verifies that a PRStatus with no owning
+// PromotionStep produces no re-enqueue requests.
+func TestPRStatusMapper_UnmatchedPRStatus(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	step := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-1", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{PRStatusRef: "prstatus-different"},
+	}
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-1", Namespace: "default"},
+	}
+
+	fakeClient := fakeclient.NewClientBuilder().WithScheme(scheme).
+		WithObjects(step, prs).
+		Build()
+
+	r := &Reconciler{Client: fakeClient}
+	reqs := r.prStatusMapper(ctx, prs)
+	assert.Empty(t, reqs, "no PromotionStep owns this PRStatus")
+}
+
+// TestPolicyGateMapper verifies that policyGateMapper re-enqueues all
+// PromotionSteps in the same namespace as the changed PolicyGate.
+func TestPolicyGateMapper(t *testing.T) {
+	scheme := newTestScheme(t)
+	ctx := context.Background()
+
+	step1 := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-1", Namespace: "default"},
+	}
+	step2 := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-2", Namespace: "default"},
+	}
+	otherNSStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "step-3", Namespace: "other-ns"},
+	}
+	gate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "gate-1", Namespace: "default"},
+	}
+
+	fakeClient := fakeclient.NewClientBuilder().WithScheme(scheme).
+		WithObjects(step1, step2, otherNSStep, gate).
+		Build()
+
+	r := &Reconciler{Client: fakeClient}
+	reqs := r.policyGateMapper(ctx, gate)
+
+	// Must enqueue only steps in the same namespace
+	require.Len(t, reqs, 2, "must enqueue all PromotionSteps in the same namespace")
+	names := map[string]bool{}
+	for _, req := range reqs {
+		assert.Equal(t, "default", req.Namespace)
+		names[req.Name] = true
+	}
+	assert.True(t, names["step-1"])
+	assert.True(t, names["step-2"])
+	assert.False(t, names["step-3"], "steps in other namespaces must not be enqueued")
 }
