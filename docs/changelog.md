@@ -31,6 +31,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [v0.8.1] — 2026-04-17
+
+**Security release: supply chain hardening — trivy, cosign, SBOM, SLSA, krocodile scan**
+
+---
+
 ## [v0.8.0] — 2026-04-17
 
 **Audit log, SCM circuit breaker, Bundle Watch node, Graph-first cleanup, DX improvements**
