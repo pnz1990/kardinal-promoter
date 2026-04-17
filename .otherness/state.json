@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-17T18:43:49Z",
+  "last_updated": "2026-04-17T19:22:22Z",
   "current_queue": [
     "698-trivy-krocodile",
     "706-slsa-provenance"
@@ -1039,17 +1039,6 @@
       "qa_approved": true,
       "awaiting_human_review": true
     },
-    "757-color-contrast-audit": {
-      "issue": 757,
-      "title": "fix(ui): WCAG 2.1 AA color contrast \u2014 full color system audit",
-      "state": "todo",
-      "areas": [
-        "ui"
-      ],
-      "priority": "medium",
-      "size": "m",
-      "created_at": "2026-04-17T18:43:49Z"
-    },
     "757-color-contrast": {
       "title": "fix(ui): WCAG color contrast full audit",
       "issue": 757,
@@ -1063,6 +1052,34 @@
       "pr_number": 760,
       "branch": "feat/757-color-contrast",
       "qa_approved": true
+    },
+    "761-enable-color-contrast-rule": {
+      "title": "feat(ui): enable color-contrast in Journey 009 (#761)",
+      "issue": 761,
+      "state": "todo",
+      "areas": [
+        "ui"
+      ],
+      "priority": "medium",
+      "size": "xs",
+      "depends_on": [
+        "757-color-contrast"
+      ],
+      "created_at": "2026-04-17T19:20:29Z"
+    },
+    "762-enable-nested-interactive-rule": {
+      "title": "feat(ui): enable nested-interactive in Journey 009 (#762)",
+      "issue": 762,
+      "state": "todo",
+      "areas": [
+        "ui"
+      ],
+      "priority": "low",
+      "size": "xs",
+      "depends_on": [
+        "758-nested-interactive-fix"
+      ],
+      "created_at": "2026-04-17T19:20:29Z"
     }
   },
   "session_heartbeats": {
