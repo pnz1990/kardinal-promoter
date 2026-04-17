@@ -5,7 +5,8 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": [
-    "688-better-errors"
+    "693-trivy-scan",
+    "694-sbom-gen"
   ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -920,6 +921,18 @@
       "issue": "688",
       "title": "improve error messages",
       "note": "Merged as PR #689 by parallel session; my PR #690 was duplicate and closed"
+    },
+    "693-trivy-scan": {
+      "state": "todo",
+      "issue": "693",
+      "title": "feat(security): trivy container scan on release",
+      "size": "xs"
+    },
+    "694-sbom-gen": {
+      "state": "todo",
+      "issue": "694",
+      "title": "feat(security): SBOM generation with syft",
+      "size": "xs"
     }
   },
   "session_heartbeats": {
