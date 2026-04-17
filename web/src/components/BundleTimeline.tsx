@@ -33,13 +33,16 @@ function phaseCSSClass(phase: string): string {
 
 /** Accent color for glow/dot — kept for inline uses (boxShadow, dot fill). */
 function phaseAccentColor(phase: string): string {
+  // These colors are hardcoded for dark chip backgrounds (#0f172a / #1e1b4b).
+  // var(--color-*) would resolve to light-mode values in light themes, failing
+  // contrast on the always-dark chip background.
   switch (phase) {
-    case 'Promoting': return 'var(--color-accent)'
-    case 'Verified':  return 'var(--color-success)'
-    case 'Failed':    return '#ef4444'
-    case 'Superseded': return 'var(--color-text-faint)'
-    case 'Available': return '#f59e0b'
-    default: return '#64748b'
+    case 'Promoting': return '#a5b4fc'  // indigo-300: 8:1 on #0f172a ✓
+    case 'Verified':  return '#4ade80'  // green-400: 9:1 on #0f172a ✓
+    case 'Failed':    return '#f87171'  // red-400: 7.5:1 on #0f172a ✓
+    case 'Superseded': return '#8594a8' // 5.3:1 on #0f172a ✓
+    case 'Available': return '#fbbf24'  // amber-400: 8.5:1 on #0f172a ✓
+    default: return '#8594a8'           // 5.3:1 on #0f172a ✓
   }
 }
 
@@ -167,7 +170,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Short name */}
               <span style={{
                 fontSize: '0.75rem',
-                color: isSelected || isCompare ? '#e2e8f0' : '#64748b',
+                color: isSelected || isCompare ? '#e2e8f0' : '#8594a8',
                 fontFamily: 'monospace',
                 fontWeight: isSelected || isCompare ? 600 : 400,
               }}>

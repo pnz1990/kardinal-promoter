@@ -114,17 +114,17 @@ export function healthStateClass(state: HealthState): string {
 export function healthChipColors(state: HealthState): { bg: string; text: string; border: string } {
   switch (state) {
     case 'Ready':
-      return { bg: '#14532d', text: 'var(--color-success)', border: 'var(--color-success)' }
+      return { bg: '#14532d', text: '#4ade80', border: '#4ade80' }  /* hardcoded: dark bg needs light text */
     case 'Reconciling':
-      return { bg: '#78350f', text: 'var(--color-warning)', border: '#f59e0b' }
+      return { bg: '#78350f', text: '#fbbf24', border: '#f59e0b' }  /* hardcoded: dark bg needs light text */
     case 'Error':
-      return { bg: '#7f1d1d', text: 'var(--color-error)', border: '#ef4444' }
+      return { bg: '#7f1d1d', text: '#f87171', border: '#ef4444' }  /* hardcoded: dark bg needs light text */
     case 'Pending':
       return { bg: 'var(--color-surface)', text: 'var(--color-text-muted)', border: 'var(--color-text-faint)' }
     case 'Degraded':
       return { bg: '#7c2d12', text: '#fb923c', border: '#f97316' }
     case 'Paused':
-      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: 'var(--color-accent)' }
+      return { bg: '#1e1b4b', text: '#a5b4fc', border: '#a5b4fc' }  /* hardcoded: dark bg needs light text */
     case 'Unknown':
     default:
       return { bg: 'var(--color-surface)', text: 'var(--color-text-faint)', border: 'var(--color-border)' }

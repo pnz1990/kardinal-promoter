@@ -140,12 +140,12 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         borderRadius: '6px',
         padding: '0.6rem 0.75rem',
         fontSize: '0.75rem',
-        color: 'var(--color-text-faint)',
+        color: '#94a3b8',   /* hardcoded: always-dark background (#0c1628) needs always-light text */
         display: 'flex',
         alignItems: 'center',
         gap: '0.4rem',
       }}>
-        <span style={{ color: 'var(--color-border)' }}>📊</span>
+        <span style={{ color: '#475569' }}>📊</span>
         <span>Not enough data — need 5+ bundles to show release metrics.</span>
       </div>
     )

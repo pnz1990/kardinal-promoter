@@ -61,26 +61,26 @@ describe('kardinalStateToHealth', () => {
 describe('healthChipColors', () => {
   it('Ready → green palette', () => {
     const { bg, text, border } = healthChipColors('Ready')
-    expect(bg).toContain('14532d')    // dark green bg (not yet tokenized)
-    expect(text).toContain('color-success')  // was #4ade80, now CSS var
-    expect(border).toContain('color-success')  // was #22c55e, now CSS var (#757)
+    expect(bg).toContain('14532d')    // dark green bg
+    expect(text).toBe('#4ade80')  // hardcoded: dark bg always needs light text (#773)
+    expect(border).toBe('#4ade80')  // hardcoded: was CSS var, now hardcoded (#773)
   })
 
   it('Error → red palette', () => {
     const { bg, text } = healthChipColors('Error')
     expect(bg).toContain('7f1d1d')
-    expect(text).toContain('color-error')  // was #f87171, now CSS var
+    expect(text).toBe('#f87171')  // hardcoded: dark bg needs light text (#773)
   })
 
   it('Reconciling → amber palette', () => {
     const { text } = healthChipColors('Reconciling')
-    expect(text).toContain('color-warning')  // was #fbbf24, now CSS var
+    expect(text).toBe('#fbbf24')  // hardcoded: dark bg needs light text (#773)
   })
 
   it('Paused → indigo palette (distinct from other states)', () => {
     const { bg, text } = healthChipColors('Paused')
-    expect(bg).toContain('1e1b4b')  // dark indigo (not yet tokenized)
-    expect(text).toContain('color-accent') // was #a5b4fc, now CSS var
+    expect(bg).toContain('1e1b4b')  // dark indigo
+    expect(text).toBe('#a5b4fc')  // hardcoded: dark bg needs light text (#773)
   })
 
   it('Unknown → gray palette', () => {

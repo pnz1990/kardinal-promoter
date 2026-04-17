@@ -108,7 +108,7 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
 function DAGLegend() {
   const legendItems: Array<{ label: string; bg: string; border: string; text: string; desc: string }> = [
     { label: 'Verified', bg: '#14532d', border: '#16a34a', text: '#86efac', desc: 'Passed' },
-    { label: 'Promoting', bg: '#1e1b4b', border: 'var(--color-accent)', text: 'var(--color-accent)', desc: 'Running' },
+    { label: 'Promoting', bg: '#1e1b4b', border: '#a5b4fc', text: '#a5b4fc', desc: 'Running' },
     { label: 'Waiting', bg: '#1c2c50', border: '#3b82f6', text: '#93c5fd', desc: 'Awaiting merge' },
     { label: 'Failed', bg: '#450a0a', border: '#dc2626', text: '#fca5a5', desc: 'Error' },
     { label: 'Pending', bg: 'var(--color-surface)', border: 'var(--color-text-faint)', text: 'var(--color-text-muted)', desc: 'Not started' },
