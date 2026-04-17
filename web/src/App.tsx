@@ -2,6 +2,7 @@
 // #326: selectedNode is lifted here so NodeDetail renders as a split panel
 // sibling of DAGView rather than a position:fixed overlay.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
+// #746: Global keyboard shortcuts — ?, r, Esc.
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
@@ -23,6 +24,9 @@ import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme } from './ThemeContext'
 import { useUrlState } from './useUrlState'
+import { useKeyboardShortcuts } from './useKeyboardShortcuts'
+import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
+
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 
 const POLL_INTERVAL_MS = 5000
@@ -108,6 +112,9 @@ export function App() {
   const [fleetFilter, setFleetFilter] = useState<FleetFilter>('all')
   const filteredPipelines = filterPipelines(pipelines, fleetFilter)
 
+  // #746: Keyboard shortcuts help panel visibility.
+  const [showShortcutsPanel, setShowShortcutsPanel] = useState(false)
+
   // Shared fetch function — called by both interval poll and manual refresh.
   const doFetchAll = useCallback(async () => {
     try {
@@ -167,6 +174,17 @@ export function App() {
       await doFetchGraph(selectedPipelineRef.current)
     }
   }, [doFetchAll, doFetchGraph])
+
+  // #746: Global keyboard shortcuts — ?, r, Esc.
+  useKeyboardShortcuts({
+    onHelp: useCallback(() => setShowShortcutsPanel(p => !p), []),
+    onRefresh: useCallback(() => { void manualRefresh() }, [manualRefresh]),
+    onEscape: useCallback(() => {
+      if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
+      if (selectedNode) { setSelectedNode(null); return }
+      if (showDiffPanel) { setShowDiffPanel(false); return }
+    }, [showShortcutsPanel, selectedNode, showDiffPanel]),
+  })
 
   const handleSelectPipeline = useCallback((name: string) => {
     setSelectedPipeline(name)
@@ -289,6 +307,10 @@ export function App() {
 
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
+      {/* #746: Keyboard shortcuts help panel — rendered at root level so it overlays all content. */}
+      {showShortcutsPanel && (
+        <KeyboardShortcutsPanel onClose={() => setShowShortcutsPanel(false)} />
+      )}
       {/* Sidebar */}
       <aside style={{
         width: '240px',
