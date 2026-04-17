@@ -382,6 +382,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	// The Bundle Watch is read-only; all signals belong on PromotionStep nodes.
 	bundleWatchNode := GraphNode{
 		ID: "bundle",
+		// krocodile >= 05db829: "ref:" keyword (NodeTypeRef) for single named Watch (#676).
+		Keyword: NodeKeywordRef,
 		Template: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
 			"kind":       "Bundle",
@@ -390,7 +392,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				"namespace": bundle.Namespace,
 			},
 		},
-		// ReadyWhen/PropagateWhen intentionally omitted — Watch node, not Owned node.
+		// ReadyWhen/PropagateWhen intentionally omitted — Ref node, not Owned node.
 	}
 	nodes = append(nodes, bundleWatchNode)
 

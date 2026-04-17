@@ -234,21 +234,33 @@ func injectHealthWatchNodes(
 			}
 		}
 
-		// Build the watch node.
+		// Build the health observation node.
+		// krocodile >= 05db829: explicit keyword required (#676).
+		//   Single named Watch → Keyword: NodeKeywordRef ("ref:")
+		//   Collection Watch (WatchKind) → Keyword: NodeKeywordWatch ("watch:")
+		watchKeyword := graph.NodeKeywordRef
+		if spec.UseWatchKind {
+			watchKeyword = graph.NodeKeywordWatch
+		}
 		watchNode := graph.GraphNode{
-			ID:        nodeID,
-			Template:  nodeTemplate,
-			ReadyWhen: []string{readyWhen},
+			ID:       nodeID,
+			Keyword:  watchKeyword,
+			Template: nodeTemplate,
+			// ReadyWhen: only set for WatchKind nodes. Ref nodes must NOT have ReadyWhen
+			// (krocodile 81c5a03+: Watch+ReadyWhen would upgrade to Unresolved/Contribute).
+			// Under 05db829 the explicit "watch:" keyword prevents this, but we keep
+			// the same behavior for consistency: health condition on PromotionStep only.
+			ReadyWhen: func() []string {
+				if spec.UseWatchKind {
+					return []string{readyWhen}
+				}
+				return nil
+			}(),
 		}
 		g.Spec.Nodes = append(g.Spec.Nodes, watchNode)
 
-		// Update the companion PromotionStep node's readyWhen to also include the
-		// health Watch node condition. This makes the Graph's UI signal reflect the
-		// real K8s resource health, not only the reconciler's state field.
-		//
-		// Note: propagateWhen is intentionally left unchanged — the PromotionStep
-		// reconciler still gates downstream via state==Verified. The Watch node
-		// readyWhen is a UI signal only (Graph UI shows amber vs green).
+		// Propagate the health readyWhen to the companion PromotionStep node.
+		// The PromotionStep readyWhen provides the UI health signal.
 		if idx, ok := stepNodeByEnv[env.Name]; ok {
 			g.Spec.Nodes[idx].ReadyWhen = append(
 				g.Spec.Nodes[idx].ReadyWhen,

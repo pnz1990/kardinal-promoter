@@ -4,6 +4,8 @@
 package graph
 
 import (
+	"encoding/json"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -59,6 +61,27 @@ func (in *GraphSpec) DeepCopy() *GraphSpec {
 	return out
 }
 
+// NodeKeyword identifies the krocodile Graph node classification keyword.
+// In krocodile >= 05db829 (explicit-keyword schema), exactly one keyword
+// declares the node type — replacing the old shape-based detection.
+// See: experimental/controller/types.go in the krocodile repo.
+type NodeKeyword string
+
+const (
+	// NodeKeywordTemplate — Own nodes (Graph creates & manages the resource via SSA). Default.
+	NodeKeywordTemplate NodeKeyword = "template"
+	// NodeKeywordRef — named Watch nodes (single resource observed read-only, by name).
+	// Replaces identity-only "template:" patterns in krocodile < 05db829.
+	NodeKeywordRef NodeKeyword = "ref"
+	// NodeKeywordWatch — collection Watch nodes (resources observed by label selector).
+	// Replaces WatchKind "template:" patterns in krocodile < 05db829.
+	NodeKeywordWatch NodeKeyword = "watch"
+	// NodeKeywordDef — Definition nodes (computed values in scope, no K8s resource).
+	NodeKeywordDef NodeKeyword = "def"
+	// NodeKeywordPatch — Contribute nodes (Graph writes fields on another actor's resource).
+	NodeKeywordPatch NodeKeyword = "patch"
+)
+
 // GraphNode represents one resource node in the kro Graph.
 //
 // ReadyWhen vs PropagateWhen:
@@ -83,9 +106,15 @@ type GraphNode struct {
 	// ID is the unique node identifier within the Graph.
 	ID string `json:"id"`
 
-	// Template is the raw resource template for this node.
-	// Stored as a map to allow arbitrary Kubernetes resource shapes.
-	Template map[string]interface{} `json:"template,omitempty"`
+	// Keyword identifies the krocodile node classification keyword.
+	// In krocodile >= 05db829 (explicit-keyword schema), exactly one of
+	// template/ref/watch/def/patch declares the node type.
+	// Default (empty string) serializes as "template:" for backward compat.
+	Keyword NodeKeyword `json:"-"` // serialized via MarshalJSON
+
+	// Template holds the node body map. Serialized under the key named by Keyword.
+	// For Ref/Watch nodes this is the identity map; for template/def/patch it is the full body.
+	Template map[string]interface{} `json:"-"` // serialized via MarshalJSON via Keyword
 
 	// ReadyWhen holds CEL expressions that are a health signal only.
 	// They feed the Graph's aggregated Ready condition and the UI.
@@ -141,6 +170,79 @@ func (in *GraphNode) DeepCopy() *GraphNode {
 	out := new(GraphNode)
 	in.DeepCopyInto(out)
 	return out
+}
+
+// MarshalJSON emits the correct keyword field for this node.
+// In krocodile >= 05db829, node type is declared via keyword, not inferred from shape.
+// The keyword determines which JSON key holds the template body.
+func (n GraphNode) MarshalJSON() ([]byte, error) {
+	kw := string(n.Keyword)
+	if kw == "" {
+		kw = string(NodeKeywordTemplate)
+	}
+	m := map[string]interface{}{
+		"id": n.ID,
+		kw:   n.Template,
+	}
+	if len(n.ReadyWhen) > 0 {
+		m["readyWhen"] = n.ReadyWhen
+	}
+	if len(n.PropagateWhen) > 0 {
+		m["propagateWhen"] = n.PropagateWhen
+	}
+	if len(n.IncludeWhen) > 0 {
+		m["includeWhen"] = n.IncludeWhen
+	}
+	if n.ForEach != "" {
+		m["forEach"] = n.ForEach
+	}
+	return json.Marshal(m)
+}
+
+// UnmarshalJSON detects which keyword is present and populates Keyword + Template.
+// Supports all five keywords for round-trip correctness.
+func (n *GraphNode) UnmarshalJSON(data []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	if raw, ok := m["id"]; ok {
+		if err := json.Unmarshal(raw, &n.ID); err != nil {
+			return err
+		}
+	}
+	for _, kw := range []NodeKeyword{
+		NodeKeywordTemplate, NodeKeywordRef, NodeKeywordWatch, NodeKeywordDef, NodeKeywordPatch,
+	} {
+		if raw, ok := m[string(kw)]; ok {
+			if err := json.Unmarshal(raw, &n.Template); err != nil {
+				return err
+			}
+			n.Keyword = kw
+			break
+		}
+	}
+	if raw, ok := m["readyWhen"]; ok {
+		if err := json.Unmarshal(raw, &n.ReadyWhen); err != nil {
+			return err
+		}
+	}
+	if raw, ok := m["propagateWhen"]; ok {
+		if err := json.Unmarshal(raw, &n.PropagateWhen); err != nil {
+			return err
+		}
+	}
+	if raw, ok := m["includeWhen"]; ok {
+		if err := json.Unmarshal(raw, &n.IncludeWhen); err != nil {
+			return err
+		}
+	}
+	if raw, ok := m["forEach"]; ok {
+		if err := json.Unmarshal(raw, &n.ForEach); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GraphStatus is a minimal representation of the kro Graph status.

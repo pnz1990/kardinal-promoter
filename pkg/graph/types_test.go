@@ -119,3 +119,73 @@ func TestGraphSpecDeepCopyIntoEmptyNodes(t *testing.T) {
 	original.DeepCopyInto(&out)
 	assert.Nil(t, out.Nodes)
 }
+
+// TestGraphNodeKeyword_MarshalJSON_Template verifies that a node with no Keyword
+// (or NodeKeywordTemplate) serializes with "template:" key.
+func TestGraphNodeKeyword_MarshalJSON_Template(t *testing.T) {
+	node := GraphNode{
+		ID: "prod",
+		Template: map[string]interface{}{
+			"apiVersion": "kardinal.io/v1alpha1",
+			"kind":       "PromotionStep",
+		},
+	}
+	data, err := json.Marshal(node)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"template"`, "default keyword must be template")
+	assert.NotContains(t, string(data), `"ref"`)
+	assert.NotContains(t, string(data), `"watch"`)
+}
+
+// TestGraphNodeKeyword_MarshalJSON_Ref verifies that a node with NodeKeywordRef
+// serializes with "ref:" key (krocodile >= 05db829 explicit-keyword schema, #676).
+func TestGraphNodeKeyword_MarshalJSON_Ref(t *testing.T) {
+	node := GraphNode{
+		ID:      "healthProd",
+		Keyword: NodeKeywordRef,
+		Template: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]interface{}{
+				"name":      "nginx",
+				"namespace": "prod",
+			},
+		},
+	}
+	data, err := json.Marshal(node)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"ref"`, "NodeKeywordRef must serialize as \"ref\"")
+	assert.NotContains(t, string(data), `"template"`)
+
+	// Unmarshal round-trip
+	var got GraphNode
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, NodeKeywordRef, got.Keyword)
+	assert.Equal(t, node.Template, got.Template)
+}
+
+// TestGraphNodeKeyword_MarshalJSON_Watch verifies that a node with NodeKeywordWatch
+// serializes with "watch:" key (krocodile >= 05db829 WatchKind support, #676).
+func TestGraphNodeKeyword_MarshalJSON_Watch(t *testing.T) {
+	node := GraphNode{
+		ID:      "healthProdWK",
+		Keyword: NodeKeywordWatch,
+		Template: map[string]interface{}{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"selector":   map[string]string{"app": "nginx"},
+		},
+		ReadyWhen: []string{`${healthProdWK.all(d, d.status.conditions.exists(c, c.type == "Available"))}`},
+	}
+	data, err := json.Marshal(node)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"watch"`, "NodeKeywordWatch must serialize as \"watch\"")
+	assert.Contains(t, string(data), "readyWhen")
+	assert.NotContains(t, string(data), `"template"`)
+
+	// Unmarshal round-trip
+	var got GraphNode
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, NodeKeywordWatch, got.Keyword)
+	assert.Equal(t, node.ReadyWhen, got.ReadyWhen)
+}
