@@ -29,17 +29,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+---
 
-- **AuditEvent CRD** — immutable promotion event log. Records `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `GateEvaluated` (on ready-flip), `RollbackStarted`. Fire-and-forget, never blocks promotion. (#679, #681)
-- **`kardinal get auditevents`** — list audit events with `--pipeline`, `--bundle`, `--env`, `--limit` filters. (#684)
-- **`kardinal audit summary`** — aggregate promotion metrics: success rate, avg duration, gate block rate, rollback count. `--since` flag for time window. (#686)
-- **krocodile `05db829`** — explicit-keyword schema (`ref:`, `watch:`, `def:`, `patch:`). Breaking change; kardinal compat fixes included. (#677)
+## [v0.8.0] — 2026-04-17
 
-### Fixed
-
-- **CLI error messages** — connection failures now show actionable hint: _"run 'kardinal doctor' to diagnose"_. Empty pipeline list shows onboarding hints. (#689)
-- **Pipeline/Bundle ValidatingAdmissionPolicy** — extended to cover Pipeline and Bundle CRDs. (#670)
+**Audit log, SCM circuit breaker, Bundle Watch node, Graph-first cleanup, DX improvements**
 
 ---
 
