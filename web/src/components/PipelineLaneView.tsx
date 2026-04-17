@@ -180,7 +180,10 @@ export function PipelineLaneView({
                   onClick={e => e.stopPropagation()}
                   style={{
                     fontSize: '0.65rem',
-                    color: 'var(--color-accent)',
+                    // Stage card backgrounds are always dark — var(--color-accent) flips to
+                    // #4f46e5 (indigo-600) in light mode which fails on dark card bg.
+                    // Use hardcoded #a5b4fc (indigo-300, 9.5:1 on #1e1b4b) ✓
+                    color: '#a5b4fc',
                     textDecoration: 'none',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
