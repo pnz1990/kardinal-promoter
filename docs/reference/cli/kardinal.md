@@ -21,7 +21,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 
 * [kardinal approve](kardinal_approve.md)	 - Approve a Bundle for promotion, bypassing upstream gate requirements
 * [kardinal audit](kardinal_audit.md)	 - Audit log commands — view and summarize promotion events
-* [kardinal completion](kardinal-completion.md)	 - Generate shell completion script
+* [kardinal completion](kardinal_completion.md)	 - Generate shell completion script
 * [kardinal create](kardinal_create.md)	 - Create kardinal resources
 * [kardinal dashboard](kardinal_dashboard.md)	 - Open the kardinal UI dashboard in a browser (Kargo parity)
 * [kardinal diff](kardinal_diff.md)	 - Show artifact differences between two Bundles

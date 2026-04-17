@@ -28,7 +28,7 @@ Installation:
 
 
 ```
-kardinal completion [bash|zsh|fish|powershell] [flags]
+kardinal completion [bash|zsh|fish|powershell]
 ```
 
 ### Options
