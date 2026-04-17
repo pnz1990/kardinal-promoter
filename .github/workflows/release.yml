@@ -133,7 +133,15 @@ jobs:
           image: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
           format: cyclonedx-json
           output-file: dist/kardinal-promoter-${{ env.VERSION }}-sbom.json
-          upload-artifact: false
+          upload-artifact: true
+          artifact-name: sbom-${{ env.VERSION }}.json
+
+      - name: Upload SBOM to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ env.VERSION }}
+        run: |
+          gh release upload "${VERSION}"             "dist/kardinal-promoter-${VERSION}-sbom.json#SBOM (CycloneDX JSON)"             --clobber
 
       # ── Package and publish Helm chart ─────────────────────────────────────
       - name: Update chart version and krocodile tag
