@@ -292,3 +292,14 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 901 | WatchKind health nodes for O(1) incremental cache | ✅ Complete | #652 merged | health.labelSelector → krocodile WatchKind; 6 new tests; docs MISS fixed |
+
+---
+
+## queue-024 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 646 | krocodile upgrade: 745998f → 81c5a03 | ⏳ In Review | #654 open | 21 commits; compat fix: Watch+ReadyWhen→Unresolved; WatchKind namespace scoping |
+| 644 | PromotionStep reconciler missing Watch on PRStatus/PolicyGate | ⏳ In Review | #655 open | prStatusMapper + policyGateMapper; reduces WaitingForMerge latency |
+| 643 | doc 11 kro#80 reference | ✅ Already Fixed | n/a | Issue closed by previous agent |
+| 645 | doc 11 #616 reference | ✅ Already Fixed | n/a | Issue closed by previous agent |

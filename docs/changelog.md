@@ -31,7 +31,9 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires krocodile `745998f`+ (#652)
+- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires krocodile `81c5a03`+ (#652)
+- **krocodile upgraded to `81c5a03`** — `deriveReference()` type safety: Watch+signals nodes now resolve as Unresolved (requires Watch nodes to have no ReadyWhen); WatchKind namespace scoping via `metadata.namespace`; declaration-order-stable topological sort; `ResolvedReference` type split; labelSafeGraphName truncation. kardinal compat fixes: removed ReadyWhen from health Watch nodes; added WatchKind metadata.namespace (#654)
+- **PromotionStep Watch on PRStatus and PolicyGate** — re-enqueue immediately on PRStatus.status.merged flip (eliminates `requeueWaitForMerge` latency) and on PolicyGate.status.ready change (#655)
 - **Kargo migration guide** — concept mapping, side-by-side Pipeline vs Kargo YAML, 7-step migration walkthrough in `docs/guides/` (#640)
 - **Operations runbook expanded** — PolicyGate debugging, SCM failure modes, RBAC issues, krocodile restarts, performance tuning added (#639)
 - **Bundle image diff in NodeDetail** — UI compares the current bundle's image against the previous bundle for that environment; closes a Kargo parity gap (#638)
