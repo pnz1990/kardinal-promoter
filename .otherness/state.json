@@ -993,13 +993,16 @@
     "719-color-explain": {
       "title": "feat(cli): color-coded kardinal explain output \u2014 gate status with ANSI colors",
       "issue": 719,
-      "state": "todo",
+      "state": "done",
       "areas": [
         "cli"
       ],
       "priority": "medium",
       "size": "s",
-      "created_at": "2026-04-17T16:32:54Z"
+      "created_at": "2026-04-17T16:32:54Z",
+      "pr_merged": true,
+      "done_at": "2026-04-17T16:44:10Z",
+      "pr_number": 730
     },
     "735-css-tokens": {
       "title": "refactor(ui): migrate remaining component hardcoded colors to CSS theme tokens",
