@@ -109,8 +109,10 @@ describe('PipelineOpsTable', () => {
         onSelect={onSelect}
       />
     )
-    const row = screen.getByRole('button')
-    fireEvent.click(row)
+    // <tr> with aria-selected has implicit role="row" after removing role="button"
+    const rows = screen.getAllByRole('row')
+    const dataRow = rows.find(r => r.getAttribute('aria-selected') !== null)!
+    fireEvent.click(dataRow)
     expect(onSelect).toHaveBeenCalledWith('click-me')
   })
 
@@ -122,8 +124,9 @@ describe('PipelineOpsTable', () => {
         onSelect={onSelect}
       />
     )
-    const row = screen.getByRole('button')
-    fireEvent.keyDown(row, { key: 'Enter' })
+    const rows = screen.getAllByRole('row')
+    const dataRow = rows.find(r => r.getAttribute('aria-selected') !== null)!
+    fireEvent.keyDown(dataRow, { key: 'Enter' })
     expect(onSelect).toHaveBeenCalledWith('keyboard-select')
   })
 

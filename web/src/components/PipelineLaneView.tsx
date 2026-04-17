@@ -106,7 +106,7 @@ export function PipelineLaneView({
               role="group"
               tabIndex={0}
               aria-label={`${node.environment} — ${node.state}`}
-              aria-selected={isSelected}
+              aria-current={isSelected || undefined}
               data-health-state={kardinalStateToHealth(node.state)}
               onClick={() => onSelectNode?.(isSelected ? null : node)}
               onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelectNode?.(isSelected ? null : node)}

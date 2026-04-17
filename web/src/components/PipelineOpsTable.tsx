@@ -261,7 +261,6 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                 <tr
                   key={`${p.namespace}/${p.name}`}
                   onClick={() => onSelect(p.name)}
-                  role="button"
                   tabIndex={0}
                   onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
                   aria-selected={isSelected}
