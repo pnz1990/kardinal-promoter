@@ -6,8 +6,8 @@ description: |
   A Kubernetes-native promotion controller with DAG pipelines and policy gates.
   Bundles the krocodile Graph controller — a single helm install installs everything.
 type: application
-version: 0.6.0
-appVersion: "v0.6.0"
+version: 0.7.0
+appVersion: "v0.7.0"
 keywords:
   - kubernetes
   - promotion
