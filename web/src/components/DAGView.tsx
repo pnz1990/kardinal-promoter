@@ -282,7 +282,9 @@ function DAGNode({
         </text>
       )}
       {/* PR badge — shown when a PR exists; clicking opens the PR in a new tab (#361)
-          #748: Use text+onClick instead of <a> to avoid nested-interactive (a[href] inside g[role=button]) */}
+          #748: Use text+onClick instead of <a> to avoid nested-interactive (a[href] inside g[role=button]).
+          #762: role="link" removed — it made axe fire nested-interactive (interactive inside interactive).
+          The <g> carries aria-label describing the node; PR number is visible in text. */}
       {showPRBadge && node.prURL && (
         <text
           x={NODE_WIDTH / 2}
@@ -292,8 +294,7 @@ function DAGNode({
           fontSize="9"
           style={{ cursor: 'pointer', textDecoration: 'underline' }}
           onClick={e => { e.stopPropagation(); window.open(node.prURL, '_blank', 'noopener,noreferrer') }}
-          role="link"
-          aria-label={`Open PR ${prNumber}`}
+          aria-hidden="true"
         >
           🔗 {prNumber}
         </text>

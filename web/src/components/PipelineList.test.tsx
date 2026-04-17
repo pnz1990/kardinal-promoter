@@ -86,17 +86,17 @@ describe('PipelineList — pipeline items', () => {
     const onSelect = vi.fn()
     const pipelines = [makePipeline({ name: 'kb-pipeline' })]
     render(<PipelineList pipelines={pipelines} onSelect={onSelect} />)
-    const item = screen.getByRole('option', { name: /kb-pipeline/i })
+    const item = screen.getByRole('button', { name: /kb-pipeline/i })
     item.focus()
     await user.keyboard('{Enter}')
     expect(onSelect).toHaveBeenCalled()
   })
 
-  it('highlights selected pipeline with aria-selected=true', () => {
+  it('highlights selected pipeline with aria-pressed=true', () => {
     const pipelines = [makePipeline({ name: 'selected-app' })]
     render(<PipelineList pipelines={pipelines} selected="selected-app" onSelect={vi.fn()} />)
-    const item = screen.getByRole('option', { name: /selected-app/i })
-    expect(item).toHaveAttribute('aria-selected', 'true')
+    const item = screen.getByRole('button', { name: /selected-app/i })
+    expect(item).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('shows PAUSED badge when pipeline is paused', () => {

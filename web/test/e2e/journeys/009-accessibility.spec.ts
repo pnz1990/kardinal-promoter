@@ -6,12 +6,10 @@
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
-const KNOWN_CONTRAST_DISABLE = ['color-contrast']
-// DAG SVG nodes use role="button" on <g> elements containing SVG children with
-// pointerEvents:none — those children are not focusable. Axe fires nested-interactive
-// due to SVG semantics. Tracked as a follow-up SVG refactor.
-const KNOWN_SVG_DISABLE = ['nested-interactive']
-const DISABLED_RULES = [...KNOWN_CONTRAST_DISABLE, ...KNOWN_SVG_DISABLE]
+// #761: color-contrast rule enabled after full color system audit (#757, #760).
+// #762: nested-interactive rule enabled after PipelineLaneView redesign (#758) and
+//       DAG SVG role="link" removal from PR badge text element (#762).
+const DISABLED_RULES: string[] = []
 
 test.describe('Journey 009 — WCAG 2.1 AA accessibility', () => {
   test('default dashboard state passes structural WCAG 2.1 AA checks', async ({ page }) => {
