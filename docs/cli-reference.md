@@ -604,3 +604,32 @@ Flags:
 - `--pipeline <name>`: filter by pipeline name (default: all pipelines)
 - `--since <duration>`: time window — e.g. `24h` (default), `7d`, `30d`
 
+
+### kardinal validate
+
+Validate a Pipeline or PolicyGate YAML file before applying to the cluster. Works offline — no cluster connection needed.
+
+```bash
+kardinal validate --file pipeline.yaml
+kardinal validate --file policy-gate.yaml
+```
+
+Output:
+```
+✓ pipeline.yaml is valid
+```
+or:
+```
+✗ pipeline.yaml is invalid:
+  - build: circular dependency in pipeline environments: prod → uat → prod (cycle!)
+    Fix: remove one of the dependsOn references to break the cycle
+```
+
+Checks:
+- Schema: required fields present, valid enum values
+- Dependencies: no circular deps, all referenced environments exist
+- CEL: PolicyGate expressions are syntactically valid
+
+Flags:
+- `-f, --file <path>`: Path to Pipeline or PolicyGate YAML file (required)
+
