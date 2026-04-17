@@ -1017,6 +1017,31 @@
       "pr_number": 738,
       "pr_merged": true,
       "done_at": "2026-04-17T16:55:54Z"
+    },
+    "739-dry-run": {
+      "title": "feat(cli): add --dry-run flag to kardinal create bundle",
+      "issue": 739,
+      "state": "done",
+      "areas": [
+        "cli"
+      ],
+      "priority": "medium",
+      "size": "s",
+      "created_at": "2026-04-17T16:58:35Z",
+      "pr_merged": true,
+      "done_at": "2026-04-17T17:22:58Z",
+      "pr_number": 741
+    },
+    "740-url-routing": {
+      "title": "feat(ui): URL routing \u2014 pipeline/bundle/node selection in URL",
+      "issue": 740,
+      "state": "todo",
+      "areas": [
+        "ui"
+      ],
+      "priority": "high",
+      "size": "m",
+      "created_at": "2026-04-17T16:58:35Z"
     }
   },
   "session_heartbeats": {
