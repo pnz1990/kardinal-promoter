@@ -837,29 +837,31 @@
       "branch": "feat/618-policygate-upstream-env"
     },
     "622-bundle-watch-node": {
-      "state": "in_review",
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 667,
       "issue": "622",
-      "title": "Bundle Watch node",
-      "qa_approved": true
+      "title": "Bundle Watch node"
     },
     "668-changelog-post-v070": {
-      "state": "todo",
+      "state": "in_review",
+      "pr_number": 669,
       "issue": "668",
-      "title": "docs(changelog): add post-v0.7.0 entries",
-      "size": "xs"
+      "title": "post-v0.7.0 changelog"
     },
     "619-bundle-intent-graph": {
-      "state": "todo",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 671,
       "issue": "619",
-      "title": "feat(graph): move Bundle intent filtering to Graph includeWhen expressions",
-      "size": "s"
+      "title": "includeWhen for Bundle intent filtering"
     },
     "573-admission-webhook": {
-      "state": "todo",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 670,
       "issue": "573",
-      "title": "feat(api): admission webhook for Pipeline and PolicyGate validation",
-      "size": "m"
+      "title": "Admission webhook"
     }
   },
   "session_heartbeats": {
