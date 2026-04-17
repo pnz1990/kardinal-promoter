@@ -759,20 +759,28 @@
       "dependency_mode": "merged"
     },
     "646-krocodile-upgrade": {
-      "state": "todo",
+      "state": "in_review",
+      "pr_number": 654,
+      "assigned_to": "STANDALONE-646-krocodile-upgrade",
+      "branch": "feat/646-krocodile-upgrade",
+      "title": "chore(graph): upgrade krocodile pin to 81c5a03",
       "issue": "646",
-      "title": "chore(graph): upgrade krocodile pin to 81c5a03 (21 commits behind)",
-      "size": "s"
+      "size": "s",
+      "qa_approved": true,
+      "awaiting_human_review": true
     },
     "643-doc11-stale-refs": {
-      "state": "todo",
+      "state": "done",
       "issue": "643",
       "title": "docs(design): fix three stale references in doc-11",
       "size": "xs",
       "also_closes": [
         "645",
         "647"
-      ]
+      ],
+      "pr_number": 648,
+      "pr_merged": true,
+      "note": "Already fixed by arch-audit PR #648"
     },
     "644-promotionstep-watch": {
       "state": "todo",
@@ -806,6 +814,11 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
+    },
+    "STANDALONE-646-krocodile-upgrade": {
+      "last_seen": "2026-04-17T03:59:11Z",
+      "cycle": 1,
+      "item": "646-krocodile-upgrade"
     }
   },
   "handoff": {
