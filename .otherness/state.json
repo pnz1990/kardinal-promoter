@@ -833,13 +833,11 @@
       "title": "SCM circuit breaker"
     },
     "618-policygate-upstream-env": {
-      "state": "done",
+      "state": "in_review",
       "issue": 618,
       "pr_number": 663,
       "title": "refactor(policygate): move upstreamEnvironment from spec to annotation",
-      "branch": "feat/618-policygate-upstream-env",
-      "pr_merged": true,
-      "done_at": "2026-04-17T14:35:06Z"
+      "branch": "feat/618-policygate-upstream-env"
     },
     "622-bundle-watch-node": {
       "state": "done",
@@ -850,10 +848,11 @@
       "pr_merged": true
     },
     "668-changelog-post-v070": {
-      "state": "blocked",
+      "state": "done",
       "issue": "668",
       "title": "docs(changelog): add post-v0.7.0 entries",
-      "size": "xs"
+      "size": "xs",
+      "pr_merged": true
     },
     "619-bundle-intent-graph": {
       "state": "done",
@@ -893,17 +892,11 @@
       "note": "Implemented as AuditEvent CRD in PR #675"
     },
     "576-audit-step1": {
-      "state": "done",
+      "state": "in_review",
       "issue": 673,
       "pr_number": 675,
       "title": "feat(api): AuditEvent CRD \u2014 immutable promotion event trail step 1",
-      "branch": null,
-      "assigned_to": null,
-      "assigned_at": null,
-      "worktree": null,
-      "pr_merged": true,
-      "note": "AuditEvent CRD implemented in PRs #675 #681 #684",
-      "done_at": "2026-04-17T15:25:18Z"
+      "branch": "feat/576-audit-step1"
     },
     "680-audit-step2": {
       "state": "done",
@@ -938,13 +931,11 @@
       "title": "trivy vulnerability scan"
     },
     "694-sbom-gen": {
-      "state": "done",
+      "state": "in_review",
       "pr_number": 697,
       "issue": "694",
       "title": "SBOM generation",
-      "qa_approved": true,
-      "pr_merged": true,
-      "done_at": "2026-04-17T14:35:06Z"
+      "qa_approved": true
     },
     "699-cosign-signing": {
       "state": "done",
@@ -963,97 +954,27 @@
       "pr_number": 703
     },
     "698-krocodile-trivy": {
-      "state": "done",
+      "state": "in_review",
       "pr_number": 701,
       "issue": "698",
       "title": "krocodile trivy scan",
-      "qa_approved": true,
-      "pr_merged": true,
-      "done_at": "2026-04-17T14:35:06Z"
+      "qa_approved": true
     },
     "698-trivy-krocodile": {
-      "state": "done",
+      "state": "in_review",
       "issue": 698,
       "pr_number": 701,
-      "title": "trivy scan for krocodile image",
-      "pr_merged": true,
-      "done_at": "2026-04-17T14:35:06Z"
+      "title": "trivy scan for krocodile image"
     },
     "702-sbom-cosign-attach": {
       "state": "done",
       "note": "Superseded by PR #703 which was already merged"
     },
     "706-slsa-provenance": {
-      "state": "done",
+      "state": "in_review",
       "issue": 706,
       "pr_number": 707,
-      "title": "SLSA Level 2 provenance via GitHub attestation",
-      "pr_merged": true,
-      "done_at": "2026-04-17T14:35:06Z"
-    },
-    "720-prometheus-metrics": {
-      "state": "done",
-      "assigned_to": "STANDALONE",
-      "assigned_at": "2026-04-17T14:37:33Z",
-      "branch": "feat/720-prometheus-metrics",
-      "worktree": "../kardinal-promoter.720-prometheus-metrics",
-      "issue": "720",
-      "title": "Prometheus metrics emission",
-      "pr_merged": true,
-      "done_at": "2026-04-17T15:03:43Z"
-    },
-    "718-shell-completion": {
-      "title": "feat(cli): shell completion \u2014 kardinal completion bash/zsh/fish/powershell",
-      "issue": 718,
-      "state": "done",
-      "areas": [
-        "cli"
-      ],
-      "priority": "medium",
-      "size": "s",
-      "created_at": "2026-04-17T14:38:54Z",
-      "pr_merged": true,
-      "pr_number": 731,
-      "done_at": "2026-04-17T15:28:56Z"
-    },
-    "721-watch-flag": {
-      "title": "feat(cli): add --watch flag to kardinal get pipelines",
-      "issue": 721,
-      "state": "done",
-      "areas": [
-        "cli"
-      ],
-      "priority": "medium",
-      "size": "s",
-      "created_at": "2026-04-17T14:38:54Z",
-      "pr_merged": true,
-      "note": "--watch flag already in get_pipelines.go #629",
-      "done_at": "2026-04-17T15:25:18Z"
-    },
-    "722-dark-mode": {
-      "title": "feat(ui): dark/light mode \u2014 system-aware theme with manual toggle",
-      "issue": 722,
-      "state": "todo",
-      "areas": [
-        "ui"
-      ],
-      "priority": "high",
-      "size": "m",
-      "created_at": "2026-04-17T14:38:54Z"
-    },
-    "723-audit-docs": {
-      "title": "docs(security): update security.md audit log section to document AuditEvent CRD",
-      "issue": 723,
-      "state": "done",
-      "areas": [
-        "docs"
-      ],
-      "priority": "medium",
-      "size": "xs",
-      "created_at": "2026-04-17T14:38:54Z",
-      "pr_merged": true,
-      "pr_number": 724,
-      "done_at": "2026-04-17T15:25:48Z"
+      "title": "SLSA Level 2 provenance via GitHub attestation"
     }
   },
   "session_heartbeats": {
@@ -1075,6 +996,5 @@
     ],
     "status": "in_progress",
     "note": "Security sprint near-complete. PRs #701 (krocodile trivy) and #707 (SLSA) awaiting human review. Generate new queue from roadmap after these merge."
-  },
-  "pm_cycle_count": 1
+  }
 }
