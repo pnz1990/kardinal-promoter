@@ -139,6 +139,24 @@ jobs:
           cosign sign --yes \
             ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
 
+      # ── SBOM generation ─────────────────────────────────────────────────────
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0.18.0
+        with:
+          image: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
+          artifact-name: sbom-controller.spdx.json
+          output-file: ./sbom-controller.spdx.json
+          format: spdx-json
+
+      - name: Attach SBOM as cosign attestation
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign attest --yes \
+            --predicate sbom-controller.spdx.json \
+            --type spdxjson \
+            ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
+
       # ── Vulnerability scanning ──────────────────────────────────────────────
       - name: Scan controller image for HIGH/CRITICAL CVEs (trivy)
         uses: aquasecurity/trivy-action@0.31.0
