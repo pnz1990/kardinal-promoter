@@ -93,7 +93,7 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 
 	events := aeList.Items
 	if len(events) == 0 {
-		fmt.Fprintln(out, "No audit events found.")
+		_, _ = fmt.Fprintln(out, "No audit events found.")
 		return nil
 	}
 
@@ -109,14 +109,14 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 
 	// Print table.
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
+	_, _ = fmt.Fprintln(tw, "TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
 	for _, ae := range events {
 		ts := ae.Spec.Timestamp.UTC().Format("2006-01-02T15:04Z")
 		msg := ae.Spec.Message
 		if len(msg) > 50 {
 			msg = msg[:47] + "..."
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			ts,
 			ae.Spec.PipelineName,
 			ae.Spec.BundleName,
