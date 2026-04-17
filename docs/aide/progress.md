@@ -336,3 +336,11 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 646-krocodile-upgrade-2 | chore(graph): upgrade krocodile to 05db829 | ✅ Complete | #677 merged | BREAKING: explicit-keyword schema; ref:/watch: compat fixes |
+
+---
+
+## queue-030 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 673-audit-log | feat(api): AuditEvent CRD — immutable promotion event log | ✅ Complete | #679 merged | 4 tests; fire-and-forget; idempotent |
