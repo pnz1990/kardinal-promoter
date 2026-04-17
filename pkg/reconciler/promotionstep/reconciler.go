@@ -406,6 +406,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			}
 			return ctrl.Result{}, fmt.Errorf("patch failed state: %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -469,6 +470,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed: %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 }
@@ -528,6 +530,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed on closed PR: %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -591,6 +594,7 @@ func (r *Reconciler) handleWaitingForMergeViaDirectSCM(ctx context.Context, log 
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed: %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -665,6 +669,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 				return ctrl.Result{}, fmt.Errorf("patch failed (health timeout): %w", patchErr)
 			}
+			observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 			return ctrl.Result{}, nil
 		}
 
@@ -780,6 +785,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health): %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 
@@ -808,6 +814,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health): %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 }
@@ -877,6 +884,7 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed (health policy): %w", patchErr)
 		}
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
 	}
 }
@@ -1007,6 +1015,8 @@ func (r *Reconciler) handleBake(
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch bake verified: %w", patchErr)
 		}
+		// Emit Prometheus step counter for bake-path Verified.
+		observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
 		return ctrl.Result{}, nil
 	}
 
