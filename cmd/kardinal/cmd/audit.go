@@ -121,7 +121,7 @@ func runAuditSummary(cmd *cobra.Command, pipeline, sinceDuration string) error {
 		case "PromotionSucceeded":
 			succeeded++
 			if st, ok := startTimes[key]; ok {
-				totalDuration += ae.Spec.Timestamp.Time.Sub(st)
+				totalDuration += ae.Spec.Timestamp.Sub(st)
 				durationCount++
 				delete(startTimes, key)
 			}
@@ -184,16 +184,17 @@ func parseSinceDuration(s string) (time.Duration, error) {
 	if len(s) == 0 {
 		return 0, fmt.Errorf("empty duration")
 	}
-	// Support "d" (days) as shorthand.
-	if s[len(s)-1] == 'd' {
+	switch {
+	case s[len(s)-1] == 'd':
 		days := s[:len(s)-1]
 		var n int
 		if _, err := fmt.Sscanf(days, "%d", &n); err != nil {
 			return 0, fmt.Errorf("invalid days: %s", days)
 		}
 		return time.Duration(n) * 24 * time.Hour, nil
+	default:
+		return time.ParseDuration(s)
 	}
-	return time.ParseDuration(s)
 }
 
 // formatAuditDuration formats a duration as "Xm Ys" for display.
