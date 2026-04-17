@@ -35,12 +35,6 @@ type PolicyGateSpec struct {
 	// +optional
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 
-	// UpstreamEnvironment is set by the kro Graph controller via CEL expression
-	// substitution. It carries the resolved state of the upstream PromotionStep
-	// that must be Verified before this gate is evaluated.
-	// +optional
-	UpstreamEnvironment string `json:"upstreamEnvironment,omitempty"`
-
 	// When controls when this gate is evaluated in the promotion lifecycle (K-02).
 	// "pre-deploy" (default: post-deploy): evaluated before git operations start.
 	//   If not ready, the PromotionStep stays in Pending and no git-clone begins.
