@@ -115,7 +115,10 @@ func TestBuilder_GateInMultipleEnvs(t *testing.T) {
 	assert.Equal(t, 7, result.NodeCount)
 }
 
-// TestBuilder_SkipAllEnvironments returns error when all envs are skipped.
+// TestBuilder_SkipAllEnvironments: with includeWhen (#619), skipping all envs
+// does NOT return a Build error — the Graph is emitted with all nodes having
+// includeWhen: ${!bundle.spec.intent.skipEnvironments.exists(s, s == "test")}.
+// krocodile excludes them at runtime.
 func TestBuilder_SkipAllEnvironments(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("app", "test")
@@ -123,8 +126,13 @@ func TestBuilder_SkipAllEnvironments(t *testing.T) {
 	bundle.Spec.Intent = &kardinalv1alpha1.BundleIntent{
 		SkipEnvironments: []string{"test"},
 	}
-	_, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
-	require.Error(t, err)
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err, "Build succeeds: includeWhen handles filtering at runtime (#619)")
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	assert.Contains(t, nodeMap, "test", "test node present with includeWhen skip expression")
+	testNode := nodeMap["test"]
+	require.NotEmpty(t, testNode.IncludeWhen, "test must have includeWhen skip expression")
+	assert.Contains(t, testNode.IncludeWhen[0], "skipEnvironments.exists")
 }
 
 // TestBuilder_GraphLabels verifies the generated Graph has correct labels.

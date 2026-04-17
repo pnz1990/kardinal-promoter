@@ -60,13 +60,10 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 		return nil, err
 	}
 
-	// Step 2: filter environments by Bundle intent
-	filteredEnvs, err := filterByIntent(orderedEnvs, deps, input.Bundle)
-	if err != nil {
+	// Step 2: validate Bundle intent — targetEnvironment must exist if set.
+	// includeWhen expressions in the Graph handle actual filtering at runtime (#619).
+	if err := validateBundleIntent(orderedEnvs, input.Bundle); err != nil {
 		return nil, err
-	}
-	if len(filteredEnvs) == 0 {
-		return nil, fmt.Errorf("build: all environments skipped")
 	}
 
 	// Step 3: validate skip permissions — REMOVED from Build().
@@ -75,11 +72,11 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 	// Bundle reconciler (Graph-first: validation result flows through CRD status).
 	// See docs/design/11-graph-purity-tech-debt.md GB-2.
 
-	// Step 4: collect and match PolicyGates by environment
-	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates)
+	// Step 4: collect and match PolicyGates for all environments.
+	gatesByEnv := matchGatesByEnv(orderedEnvs, input.PolicyGates)
 
-	// Step 5 & 6: build nodes and wire edges
-	nodes, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv)
+	// Step 5 & 6: build all environment nodes with includeWhen for Bundle intent (#619)
+	nodes, err := buildNodes(input.Pipeline, input.Bundle, orderedEnvs, deps, gatesByEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -200,98 +197,105 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error)
 	return sorted, nil
 }
 
-// --- Step 2: filter environments by Bundle intent ---
+// --- Step 2: validate Bundle intent and build includeWhen expressions (#619) ---
 
-func filterByIntent(orderedEnvs []string, deps map[string][]string,
-	bundle *kardinalv1alpha1.Bundle) ([]string, error) {
+// validateBundleIntent checks that Bundle.spec.intent references valid environments.
+// filterByIntent is removed — includeWhen in Graph spec handles filtering at runtime.
+func validateBundleIntent(orderedEnvs []string, bundle *kardinalv1alpha1.Bundle) error {
 	if bundle.Spec.Intent == nil {
-		return orderedEnvs, nil
+		return nil
 	}
-
-	result := make([]string, len(orderedEnvs))
-	copy(result, orderedEnvs)
-
-	// Apply targetEnvironment: keep only envs up to and including target
 	if target := bundle.Spec.Intent.TargetEnvironment; target != "" {
-		found := false
 		for _, e := range orderedEnvs {
 			if e == target {
-				found = true
-				break
+				return nil
 			}
 		}
-		if !found {
-			return nil, fmt.Errorf("build: unknown target environment %q", target)
-		}
-		// Keep all envs that are on any path leading to target
-		result = envPathTo(orderedEnvs, deps, target)
+		return fmt.Errorf("build: unknown target environment %q", target)
 	}
-
-	// Apply skipEnvironments
-	for _, skip := range bundle.Spec.Intent.SkipEnvironments {
-		result = removeEnv(result, skip)
-	}
-
-	if len(result) == 0 {
-		return nil, fmt.Errorf("build: all environments skipped")
-	}
-	return result, nil
+	return nil
 }
 
-// envPathTo returns all envs on the path from the first env to target (inclusive).
-// Uses a simple reachability walk on the deps graph.
-func envPathTo(orderedEnvs []string, deps map[string][]string, target string) []string {
-	// Find all ancestors of target (including target itself)
-	ancestors := make(map[string]bool)
-	var walk func(e string)
-	walk = func(e string) {
-		if ancestors[e] {
-			return
-		}
-		ancestors[e] = true
-		for _, dep := range deps[e] {
-			walk(dep)
-		}
-	}
-	walk(target)
-
-	// Return envs in original order, keeping only ancestors
-	var result []string
-	for _, e := range orderedEnvs {
-		if ancestors[e] {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-// removeEnv removes an environment by name from the slice.
-func removeEnv(envs []string, name string) []string {
-	result := make([]string, 0, len(envs))
-	for _, e := range envs {
-		if e != name {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-// --- Step 3: validate skip permissions ---
-
-// ValidateSkipPermissions checks whether the Bundle's intent to skip environments
-// is permitted by the org-level PolicyGates. Returns an error if any skip is denied.
+// buildIncludeWhen returns includeWhen CEL expressions for environment envName.
+// It encodes Bundle intent in the Graph spec so krocodile can conditionally exclude
+// nodes at runtime when bundle.spec.intent changes (e.g. targetEnvironment or skipEnvironments).
 //
-// This function was previously called inside Build() which made the check invisible
-// to the Graph. It is now exported so callers (Translator) can call it before Build(),
-// allowing the Bundle reconciler to write the result to Bundle.status (Graph-first).
-// See docs/design/11-graph-purity-tech-debt.md GB-2 (elimination in progress).
+// The expression is nil (no filtering) when bundle.spec.intent is nil or has no restrictions.
+// Otherwise it encodes:
+//  - targetEnvironment: include env if target is empty OR target is reachable FROM env
+//  - skipEnvironments: include env if env is NOT in the skip list
+//
+// desc maps each envName to the set of environments reachable from it (self + descendants).
+func buildIncludeWhen(envName string, desc map[string]map[string]bool,
+	bundle *kardinalv1alpha1.Bundle) []string {
+	if bundle.Spec.Intent == nil {
+		return nil
+	}
+	hasTarget := bundle.Spec.Intent.TargetEnvironment != ""
+	hasSkip := len(bundle.Spec.Intent.SkipEnvironments) > 0
+	if !hasTarget && !hasSkip {
+		return nil
+	}
+
+	var parts []string
+	if hasTarget {
+		// Include envName if: no target, OR target is in the reachable set from envName.
+		// reachable[envName] = {envName} + descendants of envName.
+		reach := desc[envName]
+		reachClauses := make([]string, 0, len(reach)+1)
+		reachClauses = append(reachClauses, `bundle.spec.intent.targetEnvironment == ""`)
+		for r := range reach {
+			reachClauses = append(reachClauses, fmt.Sprintf("bundle.spec.intent.targetEnvironment == %q", r))
+		}
+		parts = append(parts, "("+strings.Join(reachClauses, " || ")+")")
+	}
+	if hasSkip {
+		parts = append(parts, fmt.Sprintf("!bundle.spec.intent.skipEnvironments.exists(s, s == %q)", envName))
+	}
+
+	expr := strings.Join(parts, " && ")
+	return []string{"${" + expr + "}"}
+}
+
+// descendantsOf computes the descendant set for each environment.
+// descendants[e] = {e} ∪ {all envs reachable by following forward deps edges from e}.
+// deps maps child → parents; we invert to get parent → children.
+func descendantsOf(orderedEnvs []string, deps map[string][]string) map[string]map[string]bool {
+	forward := make(map[string][]string)
+	for child, parents := range deps {
+		for _, p := range parents {
+			forward[p] = append(forward[p], child)
+		}
+	}
+	result := make(map[string]map[string]bool, len(orderedEnvs))
+	for _, e := range orderedEnvs {
+		reachable := make(map[string]bool)
+		var visit func(n string)
+		visit = func(n string) {
+			if reachable[n] {
+				return
+			}
+			reachable[n] = true
+			for _, child := range forward[n] {
+				visit(child)
+			}
+		}
+		visit(e)
+		result[e] = reachable
+	}
+	return result
+}
+
+
+// ValidateSkipPermissions checks that all skip-environments in bundle.spec.intent
+// have a SkipPermission gate. Called by the Translator before calling Build().
+// Result is written to Bundle.status (Graph-first: see docs/design/11-graph-purity-tech-debt.md GB-2).
 func ValidateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
 	bundle *kardinalv1alpha1.Bundle, allGates []kardinalv1alpha1.PolicyGate) error {
 	if bundle.Spec.Intent == nil {
 		return nil
 	}
 	for _, skip := range bundle.Spec.Intent.SkipEnvironments {
-		// Check if any org gate applies to this environment
 		hasOrgGate := false
 		for _, g := range allGates {
 			if g.Labels["kardinal.io/scope"] == "org" && appliesToEnv(g, skip) {
@@ -300,10 +304,8 @@ func ValidateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
 			}
 		}
 		if !hasOrgGate {
-			// No org gate → skip is allowed without permission check
 			continue
 		}
-		// Org gate exists — look for a SkipPermission gate
 		permitted := false
 		for _, g := range allGates {
 			if g.Labels["kardinal.io/type"] == "skip-permission" &&
@@ -335,7 +337,6 @@ func appliesToEnv(gate kardinalv1alpha1.PolicyGate, envName string) bool {
 	return false
 }
 
-// --- Step 4: match PolicyGates by environment ---
 
 // matchGatesByEnv returns a map of environmentName → []PolicyGate for gates
 // that apply to each environment and have type "gate" (not skip-permission).
@@ -367,7 +368,7 @@ func matchGatesByEnv(filteredEnvs []string,
 // buildNodes generates all PromotionStep and PolicyGate Graph nodes in
 // dependency order, with correct readyWhen, propagateWhen, and edge fields.
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
-	filteredEnvs []string, deps map[string][]string,
+	allEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate) ([]GraphNode, error) {
 	// Build env spec map for quick lookup
 	envSpecMap := make(map[string]kardinalv1alpha1.EnvironmentSpec)
@@ -379,11 +380,14 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	bundleSlugK8s := slugify(bundle.Name)        // K8s-safe (hyphens) — used in metadata.name only
 	pipelineName := pipeline.Name
 
-	// Filter deps to only include filtered envs
-	filteredSet := make(map[string]bool, len(filteredEnvs))
-	for _, e := range filteredEnvs {
-		filteredSet[e] = true
+	// allEnvs = all pipeline environments. No Go-side filtering. includeWhen handles it (#619).
+	allSet := make(map[string]bool, len(allEnvs))
+	for _, e := range allEnvs {
+		allSet[e] = true
 	}
+
+	// Pre-compute descendants for includeWhen generation
+	desc := descendantsOf(allEnvs, deps)
 
 	var nodes []GraphNode
 
@@ -408,12 +412,12 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	}
 	nodes = append(nodes, bundleWatchNode)
 
-	for _, envName := range filteredEnvs {
+	for _, envName := range allEnvs {
 		envSpec := envSpecMap[envName]
 
-		// Compute upstream deps for this env (filtered to only include surviving envs)
+		// Compute upstream deps for this env.
 		// Return as CEL-safe IDs (matching the step node IDs built with celSafeSlug).
-		rawUpstreams := filteredDeps(envName, deps, filteredSet)
+		rawUpstreams := filteredDeps(envName, deps, allSet)
 		upstreams := make([]string, len(rawUpstreams))
 		for i, up := range rawUpstreams {
 			upstreams[i] = celSafeSlug(up)
@@ -428,6 +432,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			gateNodeIDs = append(gateNodeIDs, gateNodeID)
 
 			gateNode := buildPolicyGateNode(gateNodeID, gateNodeK8s, gate, pipelineName, bundle.Name, envName, upstreams)
+			gateNode.IncludeWhen = buildIncludeWhen(envName, desc, bundle)
 			nodes = append(nodes, gateNode)
 		}
 
@@ -444,6 +449,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		stepNode := buildPromotionStepNode(
 			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs, prStatusNodeID,
 		)
+		stepNode.IncludeWhen = buildIncludeWhen(envName, desc, bundle)
 		nodes = append(nodes, stepNode)
 	}
 

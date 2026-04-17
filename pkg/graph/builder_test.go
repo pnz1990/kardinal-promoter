@@ -167,13 +167,24 @@ func TestBuilder_TargetEnvironment(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
-	assert.Equal(t, 5, result.NodeCount, "test and staging envs: 2 PRStatus + 2 PromotionStep + 1 Bundle Watch")
+	// All 3 envs × (1 PRStatus + 1 PromotionStep) = 6 + 1 Bundle Watch = 7 (#619: includeWhen)
+	assert.Equal(t, 7, result.NodeCount, "all envs emitted; includeWhen encodes intent filtering")
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	// All envs are in the Graph — krocodile uses includeWhen to conditionally exclude them
 	assert.Contains(t, nodeMap, "test")
 	assert.Contains(t, nodeMap, "staging")
-	assert.NotContains(t, nodeMap, "prod")
+	assert.Contains(t, nodeMap, "prod", "prod node emitted with includeWhen — krocodile excludes it at runtime")
+
+	// prod's includeWhen must NOT include targetEnvironment == "staging" (prod is unreachable from staging target)
+	prodNode := nodeMap["prod"]
+	require.NotEmpty(t, prodNode.IncludeWhen, "prod must have includeWhen to exclude when target=staging")
+	assert.Contains(t, prodNode.IncludeWhen[0], `targetEnvironment == ""`, "prod includeWhen: include if no target")
+	assert.NotContains(t, prodNode.IncludeWhen[0], `targetEnvironment == "staging"`, "prod excluded when target=staging")
+	// staging's includeWhen must include targetEnvironment == "staging"
+	stagingNode := nodeMap["staging"]
+	require.NotEmpty(t, stagingNode.IncludeWhen, "staging must have includeWhen")
+	assert.Contains(t, stagingNode.IncludeWhen[0], `targetEnvironment == "staging"`, "staging included when target=staging")
 }
 
 // Test 5: intent.skipEnvironments = [staging] with SkipPermission gate.
@@ -209,13 +220,18 @@ func TestBuilder_SkipEnvironments_WithPermission(t *testing.T) {
 	require.NoError(t, err)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	assert.NotContains(t, nodeMap, "staging", "staging must be removed")
+	// All envs are present — includeWhen handles skip at runtime (#619)
+	assert.Contains(t, nodeMap, "staging", "staging emitted with includeWhen skip expression")
 	assert.Contains(t, nodeMap, "test")
 	assert.Contains(t, nodeMap, "prod")
 
-	// prod must depend on test directly (not staging)
-	assert.True(t, containsCELRef(nodeMap["prod"].Template, "test"),
-		"prod must reference test when staging is skipped")
+	// staging must have includeWhen with skip expression
+	stagingNode := nodeMap["staging"]
+	require.NotEmpty(t, stagingNode.IncludeWhen, "staging must have includeWhen for skip")
+	assert.Contains(t, stagingNode.IncludeWhen[0], `skipEnvironments.exists`, "includeWhen must use skipEnvironments.exists")
+	// prod must have includeWhen for skip (staging is in the Graph, upstreamStates still wires test→staging→prod)
+	prodNode := nodeMap["prod"]
+	require.NotEmpty(t, prodNode.IncludeWhen, "prod must have includeWhen (for skip check)")
 }
 
 // Test 6: intent.skipEnvironments = [staging] without SkipPermission.
