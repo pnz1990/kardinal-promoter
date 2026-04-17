@@ -44,6 +44,7 @@
 
   --color-text:        #1e293b;
   --color-text-muted:  #475569;
+  --color-text-secondary: #475569;  /* alias for muted — WCAG AA on light bg */
   --color-text-faint:  #94a3b8;
 
   --color-accent:      #6366f1;

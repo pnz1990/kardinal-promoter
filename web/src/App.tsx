@@ -201,7 +201,7 @@ export function App() {
     ? '#f59e0b'  // amber on error
     : staleness > 15
     ? '#f59e0b'  // amber when stale > 15s
-    : '#64748b'  // default muted
+    : 'var(--color-text-secondary)'  // WCAG AA compliant; was #64748b which fails at small font sizes
 
   // Compute blocked PolicyGate node IDs from the graph.
   const blockedGateIds = useMemo<Set<string>>(() => {
@@ -340,7 +340,7 @@ export function App() {
           </button>
           </div>
         </div>
-        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--color-text-faint)', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--color-text-secondary)', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>PIPELINES</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             {/* #462: view mode toggle — list sidebar vs ops table */}
@@ -355,7 +355,7 @@ export function App() {
                 cursor: 'pointer',
                 padding: '1px 5px',
                 fontSize: '0.65rem',
-                color: viewMode === 'ops-table' ? 'var(--color-accent)' : 'var(--color-text-faint)',
+                color: viewMode === 'ops-table' ? 'var(--color-accent)' : 'var(--color-text-secondary)',
               }}
             >
               {viewMode === 'list' ? '⊞ Ops' : '☰ List'}
@@ -363,7 +363,7 @@ export function App() {
             {currentNamespace && (
               <span style={{
                 fontSize: '0.65rem',
-                color: 'var(--color-border)',
+                color: 'var(--color-text-secondary)',
                 background: 'var(--color-surface)',
                 borderRadius: '4px',
                 padding: '1px 5px',

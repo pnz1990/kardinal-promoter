@@ -64,7 +64,10 @@ export function PipelineLaneView({
   }
 
   return (
-    <div style={{
+    <div
+      role="group"
+      aria-label="Pipeline stages"
+      style={{
       display: 'flex',
       gap: '0.5rem',
       padding: '0.75rem 1.5rem',
@@ -100,8 +103,9 @@ export function PipelineLaneView({
 
             {/* Stage card — uses CSS class for state-driven colors */}
             <div
-              role="button"
+              role="group"
               tabIndex={0}
+              aria-label={`${node.environment} — ${node.state}`}
               aria-selected={isSelected}
               data-health-state={kardinalStateToHealth(node.state)}
               onClick={() => onSelectNode?.(isSelected ? null : node)}

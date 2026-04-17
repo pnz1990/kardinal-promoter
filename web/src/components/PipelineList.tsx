@@ -189,9 +189,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
           )}
         </div>
       )}
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul role={isMultiNamespace ? 'group' : 'listbox'} aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {filteredPipelines.length === 0 && debouncedQuery && (
-          <li style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
+          <li role="option" aria-selected={false} style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
             No pipelines match "{debouncedQuery}"
           </li>
         )}
@@ -215,7 +215,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {ns}
                 </div>
-                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <ul role="group" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                   {nsPipelines.map(p => renderPipelineItem(p))}
                 </ul>
               </li>
@@ -237,7 +237,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
           <li
             key={`${p.namespace}/${p.name}`}
             onClick={() => onSelect(p.name)}
-            role="button"
+            role="option"
             aria-selected={selected === p.name}
             tabIndex={0}
             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
