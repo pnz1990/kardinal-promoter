@@ -4,7 +4,12 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": "queue-021",
+  "current_queue": [
+    "646-krocodile-upgrade",
+    "643-doc11-stale-refs",
+    "644-promotionstep-watch",
+    "625-remove-upstream-verified"
+  ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -752,6 +757,45 @@
       "pr_merged": true,
       "pr_number": 489,
       "dependency_mode": "merged"
+    },
+    "646-krocodile-upgrade": {
+      "state": "todo",
+      "issue": "646",
+      "title": "chore(graph): upgrade krocodile pin to 81c5a03 (21 commits behind)",
+      "size": "s"
+    },
+    "643-doc11-stale-refs": {
+      "state": "todo",
+      "issue": "643",
+      "title": "docs(design): fix three stale references in doc-11",
+      "size": "xs",
+      "also_closes": [
+        "645",
+        "647"
+      ]
+    },
+    "644-promotionstep-watch": {
+      "state": "todo",
+      "issue": "644",
+      "title": "fix(controller): add Watch on PRStatus and PolicyGate to PromotionStep reconciler",
+      "size": "s"
+    },
+    "625-remove-upstream-verified": {
+      "state": "todo",
+      "issue": "625",
+      "title": "refactor(graph): remove spec.upstreamVerifiedN fields",
+      "size": "s"
+    },
+    "901-watchkind-refactor": {
+      "state": "in_review",
+      "pr_number": 652,
+      "assigned_to": "STANDALONE-901-watchkind-refactor",
+      "branch": "feat/901-watchkind-refactor",
+      "title": "chore(graph): refactor health Watch nodes to WatchKind",
+      "issue": "611",
+      "size": "m",
+      "qa_approved": true,
+      "awaiting_human_review": true
     }
   },
   "session_heartbeats": {
