@@ -179,12 +179,30 @@ jobs:
         # Upload SARIF even on failure so engineers can see the findings.
         continue-on-error: false
 
-      - name: Upload trivy SARIF report
+      - name: Upload trivy SARIF report (controller)
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-controller-results.sarif
           category: trivy-controller
+
+      - name: Scan krocodile image for HIGH/CRITICAL CVEs (trivy)
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          image-ref: ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.KROCODILE_COMMIT }}
+          format: sarif
+          output: trivy-krocodile-results.sarif
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+        continue-on-error: false
+
+      - name: Upload trivy SARIF report (krocodile)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-krocodile-results.sarif
+          category: trivy-krocodile
 
       # ── Package and publish Helm chart ─────────────────────────────────────
       - name: Update chart version and krocodile tag
