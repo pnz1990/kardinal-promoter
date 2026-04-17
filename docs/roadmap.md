@@ -7,9 +7,9 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.6.0+)
+## Currently Available (v0.8.0+)
 
-> v0.6.0 released 2026-04-14. Post-v0.6.0 features (per-step observability, `--watch`, `kardinal doctor`, PrometheusRule CRD) are on main and will be released as v0.7.0.
+> v0.8.0 released 2026-04-17. Includes AuditEvent log, SCM circuit breaker, Bundle Watch node, DX improvements.
 
 All of the following are implemented and shipped:
 
@@ -134,7 +134,7 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 
 ---
 
-## Near-Term (v0.7.0 — active development)
+## Near-Term (v0.9.0 — planned)
 
 ### `kardinal-agent` standalone binary
 
