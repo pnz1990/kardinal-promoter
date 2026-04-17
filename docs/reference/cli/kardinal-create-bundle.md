@@ -9,6 +9,8 @@ Create a Bundle to trigger promotion through a Pipeline.
 The pipeline name is a required positional argument.
 Specify one or more container images with --image.
 
+Use --dry-run to preview the promotion graph without creating any resources.
+
 ```
 kardinal create bundle <pipeline> [flags]
 ```
@@ -16,6 +18,7 @@ kardinal create bundle <pipeline> [flags]
 ### Options
 
 ```
+      --dry-run             Preview the promotion graph without creating any cluster resources
   -h, --help                help for bundle
       --image stringArray   Container image reference (can be specified multiple times)
       --type string         Bundle type: image, config, or mixed (default "image")
