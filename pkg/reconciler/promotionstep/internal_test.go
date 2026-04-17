@@ -22,10 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
