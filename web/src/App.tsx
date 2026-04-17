@@ -85,8 +85,15 @@ export function App() {
   }, [graph, urlState.node, selectedNode?.id])
 
   // #338: Bundle diff comparison state.
-  const [compareBundle, setCompareBundle] = useState<string | undefined>()
-  const [showDiffPanel, setShowDiffPanel] = useState(false)
+  // #740: compareBundle and showDiffPanel are derived from URL bundle= param.
+  const compareBundle = urlState.bundle
+  const showDiffPanel = !!urlState.bundle
+  const setCompareBundle = useCallback((name: string | undefined) => {
+    setUrlState({ bundle: name })
+  }, [setUrlState])
+  const setShowDiffPanel = useCallback((show: boolean) => {
+    if (!show) setUrlState({ bundle: undefined })
+  }, [setUrlState])
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
   const { elapsedSeconds, onSuccess: onPollSuccess } = useRefreshIndicator()

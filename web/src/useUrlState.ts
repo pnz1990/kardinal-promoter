@@ -21,15 +21,18 @@ import { useCallback, useEffect, useState } from 'react'
 export interface UrlState {
   pipeline: string | undefined
   node: string | undefined
+  /** Name of the bundle selected for diff comparison (opens BundleDiffPanel). */
+  bundle: string | undefined
 }
 
 /** Parse the URL hash fragment into a UrlState. */
 function parseHash(hash: string): UrlState {
-  if (!hash || hash === '#') return { pipeline: undefined, node: undefined }
+  if (!hash || hash === '#') return { pipeline: undefined, node: undefined, bundle: undefined }
   const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
   return {
     pipeline: params.get('pipeline') ?? undefined,
     node: params.get('node') ?? undefined,
+    bundle: params.get('bundle') ?? undefined,
   }
 }
 
@@ -38,6 +41,7 @@ function serializeHash(state: UrlState): string {
   const params = new URLSearchParams()
   if (state.pipeline) params.set('pipeline', state.pipeline)
   if (state.node) params.set('node', state.node)
+  if (state.bundle) params.set('bundle', state.bundle)
   const s = params.toString()
   return s ? `#${s}` : ''
 }

@@ -15,6 +15,7 @@ describe('useUrlState', () => {
     const { result } = renderHook(() => useUrlState())
     expect(result.current[0].pipeline).toBeUndefined()
     expect(result.current[0].node).toBeUndefined()
+    expect(result.current[0].bundle).toBeUndefined()
   })
 
   it('initializes from existing hash', () => {
@@ -39,6 +40,30 @@ describe('useUrlState', () => {
     expect(result.current[0].node).toBe('prod-step')
     expect(window.location.hash).toContain('pipeline=my-app')
     expect(window.location.hash).toContain('node=prod-step')
+  })
+
+  it('updates the hash when bundle is set for diff comparison', () => {
+    const { result } = renderHook(() => useUrlState())
+    act(() => result.current[1]({ pipeline: 'my-app', bundle: 'bundle-abc' }))
+    expect(result.current[0].pipeline).toBe('my-app')
+    expect(result.current[0].bundle).toBe('bundle-abc')
+    expect(window.location.hash).toContain('bundle=bundle-abc')
+  })
+
+  it('clears bundle without clearing pipeline', () => {
+    const { result } = renderHook(() => useUrlState())
+    act(() => result.current[1]({ pipeline: 'my-app', bundle: 'bundle-abc' }))
+    act(() => result.current[1]({ bundle: undefined }))
+    expect(result.current[0].pipeline).toBe('my-app')
+    expect(result.current[0].bundle).toBeUndefined()
+    expect(window.location.hash).toBe('#pipeline=my-app')
+  })
+
+  it('initializes bundle from existing hash', () => {
+    window.history.replaceState(null, '', '#pipeline=my-app&bundle=bundle-xyz')
+    const { result } = renderHook(() => useUrlState())
+    expect(result.current[0].pipeline).toBe('my-app')
+    expect(result.current[0].bundle).toBe('bundle-xyz')
   })
 
   it('clears node independently without clearing pipeline', () => {
