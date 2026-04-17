@@ -5,9 +5,9 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": [
-    "662-v070-release",
-    "618-remove-upstream-env",
-    "571-scm-circuit-breaker"
+    "668-changelog-post-v070",
+    "619-bundle-intent-graph",
+    "573-admission-webhook"
   ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -846,6 +846,24 @@
       "issue": "622",
       "title": "Bundle Watch node",
       "qa_approved": true
+    },
+    "668-changelog-post-v070": {
+      "state": "todo",
+      "issue": "668",
+      "title": "docs(changelog): add post-v0.7.0 entries",
+      "size": "xs"
+    },
+    "619-bundle-intent-graph": {
+      "state": "todo",
+      "issue": "619",
+      "title": "feat(graph): move Bundle intent filtering to Graph includeWhen expressions",
+      "size": "s"
+    },
+    "573-admission-webhook": {
+      "state": "todo",
+      "issue": "573",
+      "title": "feat(api): admission webhook for Pipeline and PolicyGate validation",
+      "size": "m"
     }
   },
   "session_heartbeats": {
