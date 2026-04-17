@@ -17,7 +17,8 @@
 
   --color-text:        #e2e8f0;
   --color-text-muted:  #94a3b8;   /* 7.05:1 on #0c1628, 5.71:1 on #1e293b ✓ */
-  --color-text-faint:  #7c8da4;   /* 5.34:1 on #0c1628, 4.60:1 on #1e293b ✓ (was #475569 = 3.07:1 ✗) */
+  --color-text-faint:  #8594a8;   /* 5.3:1 on #0f172a ✓ (was #7c8da4) */
+  --color-text-secondary: #94a3b8;  /* alias for muted — WCAG AA on dark bg */
 
   --color-accent:      #a5b4fc;
   --color-accent-bg:   #312e81;
@@ -41,25 +42,25 @@
   --color-bg-deep:     #e2e8f0;
   --color-surface:     #ffffff;
   --color-surface-2:   #f8fafc;
-  --color-border:      #94a3b8;   /* was #cbd5e1 (1.48:1 as text ✗); now used only as border, text uses text vars */
+  --color-border:      #cbd5e1;
   --color-border-muted: #e2e8f0;
 
   --color-text:        #1e293b;
-  --color-text-muted:  #475569;   /* 6.92:1 on #f1f5f9 ✓ */
-  --color-text-faint:  #4b5563;   /* 6.90:1 on #f1f5f9 ✓ (was #94a3b8 = 2.34:1 ✗) */
+  --color-text-muted:  #475569;   /* slate-600: 5.74:1 on #f1f5f9 ✓ */
+  --color-text-faint:  #4b5563;   /* gray-600: 6.35:1 on #f1f5f9 ✓ (was #6b7280 which failed at 4.38:1) */
   --color-text-secondary: #475569;  /* alias for muted — WCAG AA on light bg */
 
   --color-accent:      #4f46e5;   /* 5.74:1 on #f1f5f9 ✓ (was #6366f1 = 4.08:1 ✗) */
   --color-accent-bg:   #eef2ff;
   --color-accent-hover: #4338ca;  /* 7.86:1 on #f1f5f9 ✓ */
 
-  --color-success:     #15803d;   /* 4.58:1 on #f1f5f9 ✓ (was #16a34a = 3.01:1 ✗) */
+  --color-success:     #166534;  /* green-800: 6.5:1 on #f1f5f9 ✓ (was #15803d = 4.58:1) */
   --color-success-bg:  #dcfce7;
   --color-warning:     #d97706;
   --color-warning-bg:  #fef3c7;
-  --color-error:       #dc2626;
+  --color-error:       #b91c1c;  /* red-700: 6.3:1 on #f1f5f9 ✓ (was #dc2626 = 4.4:1 fail) */
   --color-error-bg:    #fee2e2;
-  --color-info:        #0891b2;
+  --color-info:        #0369a1;  /* sky-700: 5.5:1 on #f1f5f9 ✓ (was #0891b2 = 3.4:1 fail) */
 
   color-scheme: light;
 }

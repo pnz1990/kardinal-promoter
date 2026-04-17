@@ -23,6 +23,11 @@
 }
 
 /* ── Stage state variants ────────────────────────────────────────────────── */
+/* All variants have dark backgrounds — force light text for WCAG contrast */
+.stage-card {
+  color: #e2e8f0;  /* always light text on dark card backgrounds */
+}
+
 .stage-card--ready {
   background: #052e16;
   border-color: #16a34a;
@@ -51,7 +56,7 @@
 
 .stage-card--paused {
   background: #1e1b4b;
-  border-color: #6366f1;
+  border-color: var(--color-accent);
 }
 
 /* ── Stage loading skeleton ──────────────────────────────────────────────── */
