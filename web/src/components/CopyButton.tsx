@@ -19,6 +19,12 @@ interface Props {
   text: string
   /** Optional title override for the button. Defaults to "Copy to clipboard". */
   title?: string
+  /**
+   * Optional tabIndex override. Pass -1 when the button is nested inside another
+   * interactive element (e.g. a selection <button>) to prevent nested-interactive
+   * axe-core violation (WCAG 2.1 §4.1.3 — nested focusable elements).
+   */
+  tabIndex?: number
 }
 
 /**
@@ -26,7 +32,7 @@ interface Props {
  * Shows a checkmark for 2 seconds on success.
  * Falls back to execCommand for environments without Clipboard API.
  */
-export default function CopyButton({ text, title }: Props) {
+export default function CopyButton({ text, title, tabIndex }: Props) {
   const [copied, setCopied] = useState(false)
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(text).then(() => {
@@ -51,6 +57,7 @@ export default function CopyButton({ text, title }: Props) {
     <button
       data-testid="copy-button"
       onClick={handleCopy}
+      tabIndex={tabIndex}
       title={copied ? 'Copied!' : (title ?? 'Copy to clipboard')}
       style={{
         background: 'none',

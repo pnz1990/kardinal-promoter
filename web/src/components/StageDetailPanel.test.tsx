@@ -102,10 +102,10 @@ describe('stepIconFor', () => {
     expect(result.color).toContain('color-text-faint')  // was #475569, now CSS var
   })
 
-  it('returns dark circle for future step', () => {
+  it('returns dim circle for future step', () => {
     const result = stepIconFor(5, 3, true)
     expect(result.icon).toBe('○')
-    expect(result.color).toContain('color-border')  // was #334155, now CSS var
+    expect(result.color).toContain('color-text-faint')  // WCAG AA: changed from color-border (#334155 fails in light mode)
   })
 })
 

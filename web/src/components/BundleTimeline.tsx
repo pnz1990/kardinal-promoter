@@ -117,7 +117,9 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
           </button>
         )}
         {!compareBundle && bundles.length >= 2 && (
-          <span style={{ fontSize: '0.6rem', color: 'var(--color-border)' }}>
+          // color-text-muted (7.05:1 on dark bg, 5.74:1 on light bg) — WCAG AA ✓
+          // color-border fails in light mode (#cbd5e1 on #f1f5f9 = 1.3:1)
+          <span style={{ fontSize: '0.6rem', color: 'var(--color-text-muted)' }}>
             Shift-click to compare
           </span>
         )}
@@ -167,7 +169,11 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Short name */}
               <span style={{
                 fontSize: '0.75rem',
-                color: isSelected || isCompare ? 'var(--color-text)' : '#64748b',
+                // Bundle chip backgrounds are always dark (#1e1b4b selected, #0f172a default).
+                // Use hardcoded light text for selected/compare — var(--color-text) flips to
+                // dark in light mode and fails contrast against the dark chip bg (#1e1b4b).
+                // #e2e8f0 (slate-200) = 13.6:1 on #1e1b4b. WCAG AA ✓
+                color: isSelected || isCompare ? '#e2e8f0' : '#64748b',
                 fontFamily: 'monospace',
                 fontWeight: isSelected || isCompare ? 600 : 400,
               }}>

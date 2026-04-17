@@ -62,7 +62,7 @@ export function stepIconFor(index: number, currentIndex: number, active: boolean
     if (!active) return { icon: '○', color: 'var(--color-text-faint)' }
     return { icon: '▶', color: '#f59e0b' }
   }
-  return { icon: '○', color: 'var(--color-border)' }
+  return { icon: '○', color: 'var(--color-text-faint)' }
 }
 
 export function StageDetailPanel({ node, steps, onClose }: Props) {

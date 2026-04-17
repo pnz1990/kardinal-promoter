@@ -40,7 +40,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-code)',
         marginBottom: '0.5rem',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
@@ -55,7 +55,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-code)',
         marginBottom: '0.75rem',
       }}>
         kardinal init
@@ -277,8 +277,10 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+                {/* #763: copy pipeline name to clipboard
+                    tabIndex={-1} prevents nested-interactive axe violation — CopyButton
+                    is inside the selection <button> and must not be independently focusable. */}
+                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} tabIndex={-1} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
