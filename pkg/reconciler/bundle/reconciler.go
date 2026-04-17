@@ -40,6 +40,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 // BundleTranslator is the interface the BundleReconciler uses to translate a
@@ -362,6 +363,8 @@ func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 		Str("pipeline", b.Spec.Pipeline).
 		Str("type", b.Spec.Type).
 		Msg("bundle superseded by newer bundle (self-supersession)")
+	// Emit Prometheus counter for Superseded bundles.
+	observability.BundlesTotal.WithLabelValues("Superseded").Inc()
 	return ctrl.Result{}, nil
 }
 
@@ -411,6 +414,8 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
 			log.Error().Err(patchErr).Msg("failed to patch bundle status to Failed")
 		}
+		// Emit Prometheus counter for Failed bundles.
+		observability.BundlesTotal.WithLabelValues("Failed").Inc()
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)
 	}
 
@@ -432,6 +437,9 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		Str("phase", "Promoting").
 		Str("graph", graphName).
 		Msg("bundle advancing to Promoting")
+
+	// Emit Prometheus counter for bundles entering Promoting (successful graph creation).
+	observability.BundlesTotal.WithLabelValues("Promoting").Inc()
 
 	return ctrl.Result{}, nil
 }

@@ -39,6 +39,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
@@ -507,6 +508,11 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch health-checking: %w", patchErr)
 		}
+		// Emit PR duration histogram: time from PRStatus creation (PR opened) to now (PR merged).
+		prDuration := time.Since(prs.CreationTimestamp.Time).Seconds()
+		if prDuration > 0 {
+			observability.PRDurationSeconds.Observe(prDuration)
+		}
 		return ctrl.Result{Requeue: true}, nil
 	}
 
@@ -718,6 +724,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			writeAuditEvent(ctx, r.Client, ps,
 				AuditActionPromotionSucceeded, AuditOutcomeSuccess,
 				fmt.Sprintf("health check passed via %s", adapter.Name()))
+			// Emit Prometheus step counter for terminal success.
+			observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
 			return ctrl.Result{}, nil
 		}
 
@@ -786,6 +794,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch verified: %w", patchErr)
 		}
+		// Emit Prometheus step counter for terminal success (steps path).
+		observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
 		return ctrl.Result{}, nil
 
 	case steps.StepPending:
@@ -1030,6 +1040,8 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 	if state == StateFailed {
 		writeAuditEvent(ctx, r.Client, ps,
 			AuditActionPromotionFailed, AuditOutcomeFailure, message)
+		// Emit Prometheus step counter for terminal failure.
+		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 	}
 	return ctrl.Result{Requeue: true}, nil
 }

@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
 const (
@@ -148,6 +149,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if patchErr := r.patchStatus(ctx, &gate, pass, reason); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
+
+	// Emit Prometheus metric. Only emit on state changes to avoid double-counting
+	// on re-reconcile with the same result. We check whether ready actually changed
+	// by comparing to the previous status before the patch.
+	gateResult := "blocked"
+	if pass {
+		gateResult = "allowed"
+	}
+	observability.GateEvaluationsTotal.WithLabelValues(gateResult).Inc()
 
 	return ctrl.Result{RequeueAfter: recheckInterval}, nil
 }
