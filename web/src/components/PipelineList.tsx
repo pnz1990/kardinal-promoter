@@ -5,7 +5,6 @@
 import { useState, useCallback, useRef } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
-import CopyButton from './CopyButton'
 
 interface Props {
   pipelines: Pipeline[]
@@ -237,39 +236,26 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
-            style={{
-              listStyle: 'none',
-              position: 'relative',
-            }}
+            style={{ listStyle: 'none' }}
           >
-          {/* #762: Visually-hidden absolute button handles all selection (mouse + keyboard).
-              Content div uses pointer-events: none so clicks fall through to the button.
-              CopyButton and other interactive children override with pointer-events: auto. */}
+          {/* #762: Simple <button> contains only non-interactive content (no CopyButton).
+              HealthChip is a <span> — no nested-interactive axe violation. */}
           <button
-            aria-label={selected === p.name ? `Deselect ${p.name}` : `Select pipeline ${p.name}`}
-            aria-pressed={selected === p.name}
             onClick={() => onSelect(p.name)}
+            aria-pressed={selected === p.name}
             style={{
-              position: 'absolute',
-              inset: 0,
-              opacity: 0,
-              border: 'none',
+              width: '100%',
+              textAlign: 'left',
+              padding: '0.6rem 1rem',
+              cursor: 'pointer',
               background: selected === p.name ? 'var(--color-surface)' : 'transparent',
               borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
-              cursor: 'pointer',
-              zIndex: 0,
+              borderTop: 'none',
+              borderRight: 'none',
+              borderBottom: 'none',
+              display: 'block',
             }}
-          />
-          {/* Content — pointer-events: none so clicks fall through to the button above.
-              CopyButton has pointer-events: auto (CSS class) to remain independently clickable. */}
-          <div style={{
-            position: 'relative',
-            zIndex: 1,
-            padding: '0.6rem 1rem',
-            pointerEvents: 'none',
-            background: selected === p.name ? 'var(--color-surface)' : 'transparent',
-            borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
-          }}>
+          >
             {/* Pipeline name + phase badge */}
             <div style={{
               display: 'flex',
@@ -289,8 +275,6 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
@@ -378,7 +362,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 )}
               </div>
             )}
-          </div>
+          </button>
           </li>
         )
   }
