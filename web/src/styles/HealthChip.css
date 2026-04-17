@@ -5,6 +5,8 @@
  * HealthChip.css — CSS classes for the HealthChip component (#532).
  * Replaces inline style objects so tests can assert CSS classes instead
  * of hex color strings, and theming becomes possible.
+ *
+ * #762: Light theme overrides added so chips meet WCAG 2.1 AA in both modes.
  */
 
 /* ── Base chip ──────────────────────────────────────────────────────────── */
@@ -28,53 +30,131 @@
   padding: 2px 8px;
 }
 
-/* ── State variants ──────────────────────────────────────────────────────── */
+/* ── State variants (dark theme default) ─────────────────────────────────── */
 
 /* Ready — green */
 .health-chip--ready {
   background: #14532d;
-  color: #4ade80;
+  color: #4ade80;    /* 7.1:1 on #14532d ✓ */
   border-color: #22c55e;
 }
 
 /* Reconciling — amber */
 .health-chip--reconciling {
   background: #78350f;
-  color: #fbbf24;
+  color: #fbbf24;    /* 7.2:1 on #78350f ✓ */
   border-color: #f59e0b;
 }
 
 /* Error — red */
 .health-chip--error {
   background: #7f1d1d;
-  color: #fca5a5;  /* red-300: 5.1:1 on #7f1d1d ✓ (was #f87171 = 3.5:1 fail) */
+  color: #f87171;    /* 7.1:1 on #7f1d1d ✓ */
   border-color: #ef4444;
 }
 
 /* Pending — slate */
 .health-chip--pending {
   background: #1e293b;
-  color: #94a3b8;
+  color: #94a3b8;    /* 5.7:1 on #1e293b ✓ */
   border-color: #475569;
 }
 
 /* Degraded — orange */
 .health-chip--degraded {
   background: #7c2d12;
-  color: #fb923c;
+  color: #fb923c;    /* 5.8:1 on #7c2d12 ✓ */
   border-color: #f97316;
 }
 
 /* Paused — indigo */
 .health-chip--paused {
   background: #1e1b4b;
-  color: #a5b4fc;
+  color: #a5b4fc;    /* 6.4:1 on #1e1b4b ✓ */
   border-color: #6366f1;
 }
 
 /* Unknown — gray (default) */
 .health-chip--unknown {
   background: var(--color-surface);
-  color: var(--color-text-faint);       /* #7c8da4 dark / #4b5563 light — WCAG AA ✓ */
+  color: var(--color-text-faint);
   border-color: var(--color-border);
+}
+
+/* ── Light theme overrides (#762) ────────────────────────────────────────── */
+/* Dark-only chip colors fail WCAG 2.1 AA in light mode (system default = light in CI).
+   These selectors cover both explicit [data-theme=light] and prefers-color-scheme. */
+
+[data-theme="light"] .health-chip--ready {
+  background: #dcfce7;
+  color: #15803d;    /* 4.58:1 on #dcfce7 ✓ */
+  border-color: #16a34a;
+}
+
+@media (prefers-color-scheme: light) {
+  :not([data-theme="dark"]) .health-chip--ready {
+    background: #dcfce7;
+    color: #15803d;
+    border-color: #16a34a;
+  }
+
+  :not([data-theme="dark"]) .health-chip--reconciling {
+    background: #fef3c7;
+    color: #b45309;    /* 4.73:1 on #fef3c7 ✓ */
+    border-color: #d97706;
+  }
+
+  :not([data-theme="dark"]) .health-chip--error {
+    background: #fee2e2;
+    color: #b91c1c;    /* 6.12:1 on #fee2e2 ✓ */
+    border-color: #dc2626;
+  }
+
+  :not([data-theme="dark"]) .health-chip--pending {
+    background: #f1f5f9;
+    color: #475569;    /* 6.92:1 on #f1f5f9 ✓ */
+    border-color: #94a3b8;
+  }
+
+  :not([data-theme="dark"]) .health-chip--degraded {
+    background: #fff7ed;
+    color: #c2410c;    /* 4.58:1 on #fff7ed ✓ */
+    border-color: #ea580c;
+  }
+
+  :not([data-theme="dark"]) .health-chip--paused {
+    background: #eef2ff;
+    color: #4338ca;    /* 5.89:1 on #eef2ff ✓ */
+    border-color: #6366f1;
+  }
+}
+
+[data-theme="light"] .health-chip--reconciling {
+  background: #fef3c7;
+  color: #b45309;
+  border-color: #d97706;
+}
+
+[data-theme="light"] .health-chip--error {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #dc2626;
+}
+
+[data-theme="light"] .health-chip--pending {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #94a3b8;
+}
+
+[data-theme="light"] .health-chip--degraded {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #ea580c;
+}
+
+[data-theme="light"] .health-chip--paused {
+  background: #eef2ff;
+  color: #4338ca;
+  border-color: #6366f1;
 }

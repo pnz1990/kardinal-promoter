@@ -40,7 +40,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-code)',
         marginBottom: '0.5rem',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-all',
@@ -55,7 +55,7 @@ function EmptyState() {
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
         fontSize: '0.72rem',
-        color: '#7dd3fc',
+        color: 'var(--color-code)',
         marginBottom: '0.75rem',
       }}>
         kardinal init
@@ -237,27 +237,39 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
-            style={{ listStyle: 'none' }}
-          >
-          {/* #762: Outer <li> is non-interactive. A <button> handles selection to avoid
-              nested-interactive axe violation (interactive inside interactive). */}
-          <button
-            onClick={() => onSelect(p.name)}
-            aria-pressed={selected === p.name}
-            onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
             style={{
-              width: '100%',
-              textAlign: 'left',
-              padding: '0.6rem 1rem',
-              cursor: 'pointer',
-              background: selected === p.name ? 'var(--color-surface)' : 'transparent',
-              borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
-              borderTop: 'none',
-              borderRight: 'none',
-              borderBottom: 'none',
-              display: 'block',
+              listStyle: 'none',
+              position: 'relative',
             }}
           >
+          {/* #762: Visually-hidden absolute button handles all selection (mouse + keyboard).
+              Content div uses pointer-events: none so clicks fall through to the button.
+              CopyButton and other interactive children override with pointer-events: auto. */}
+          <button
+            aria-label={selected === p.name ? `Deselect ${p.name}` : `Select pipeline ${p.name}`}
+            aria-pressed={selected === p.name}
+            onClick={() => onSelect(p.name)}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              opacity: 0,
+              border: 'none',
+              background: selected === p.name ? 'var(--color-surface)' : 'transparent',
+              borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
+              cursor: 'pointer',
+              zIndex: 0,
+            }}
+          />
+          {/* Content — pointer-events: none so clicks fall through to the button above.
+              CopyButton has pointer-events: auto (CSS class) to remain independently clickable. */}
+          <div style={{
+            position: 'relative',
+            zIndex: 1,
+            padding: '0.6rem 1rem',
+            pointerEvents: 'none',
+            background: selected === p.name ? 'var(--color-surface)' : 'transparent',
+            borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
+          }}>
             {/* Pipeline name + phase badge */}
             <div style={{
               display: 'flex',
@@ -366,7 +378,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 )}
               </div>
             )}
-          </button>
+          </div>
           </li>
         )
   }

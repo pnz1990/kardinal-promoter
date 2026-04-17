@@ -77,7 +77,8 @@ describe('PipelineList — pipeline items', () => {
     const onSelect = vi.fn()
     const pipelines = [makePipeline({ name: 'my-pipeline' })]
     render(<PipelineList pipelines={pipelines} onSelect={onSelect} />)
-    await user.click(screen.getByText('my-pipeline'))
+    // #762: click the invisible selection button (pointer-events pattern)
+    await user.click(screen.getByRole('button', { name: /Select pipeline my-pipeline/i }))
     expect(onSelect).toHaveBeenCalledWith('my-pipeline')
   })
 

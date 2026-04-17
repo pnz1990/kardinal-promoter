@@ -165,7 +165,7 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         label="Time to Prod"
         value={metrics.meanTtpHours !== null ? formatHours(metrics.meanTtpHours) : '—'}
         sub="mean (last 10)"
-        color="#7dd3fc"
+        color="var(--color-code)"
       />
       <MetricCell
         label="Rollback Rate"

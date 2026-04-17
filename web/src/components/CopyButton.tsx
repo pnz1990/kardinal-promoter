@@ -62,6 +62,7 @@ export default function CopyButton({ text, title }: Props) {
         color: copied ? '#86efac' : 'var(--color-text-muted)',
         transition: 'color 0.2s',
         lineHeight: 1.4,
+        pointerEvents: 'auto',  /* #762: override parent pointer-events:none when inside PipelineList */
       }}
     >
       {copied ? '✓' : '📋'}
