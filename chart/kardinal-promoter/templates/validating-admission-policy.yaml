@@ -47,3 +47,108 @@ spec:
   policyName: kardinal-policygate-validation
   validationActions: [Deny]
 {{- end }}
+---
+{{/*
+ValidatingAdmissionPolicy for Pipeline validation.
+Validates:
+  1. spec.environments is non-empty
+  2. Each environment has a non-empty name and gitRepo
+  3. Each environment's updateStrategy is one of: kustomize, helm, custom
+  4. Each environment's approvalMode is one of: pr-review, auto
+*/}}
+{{- if .Values.validatingAdmissionPolicy.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kardinal-pipeline-validation
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["kardinal.io"]
+      apiVersions: ["v1alpha1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["pipelines"]
+  validations:
+  - expression: "has(object.spec.environments) && object.spec.environments.size() > 0"
+    message: "spec.environments must contain at least one environment"
+    reason: Invalid
+  - expression: >
+      object.spec.environments.all(e, has(e.name) && e.name != '')
+    message: "each environment must have a non-empty name"
+    reason: Invalid
+  - expression: >
+      object.spec.environments.all(e, has(e.gitRepo) && e.gitRepo != '')
+    message: "each environment must have a non-empty gitRepo"
+    reason: Invalid
+  - expression: >
+      object.spec.environments.all(e,
+        !has(e.updateStrategy) || e.updateStrategy == '' ||
+        e.updateStrategy in ['kustomize', 'helm', 'custom'])
+    message: "each environment's updateStrategy must be one of: kustomize, helm, custom"
+    reason: Invalid
+  - expression: >
+      object.spec.environments.all(e,
+        !has(e.approval) || e.approval == '' ||
+        e.approval in ['pr-review', 'auto'])
+    message: "each environment's approval must be one of: pr-review, auto"
+    reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kardinal-pipeline-validation
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: kardinal-pipeline-validation
+  validationActions: [Deny]
+---
+{{/*
+ValidatingAdmissionPolicy for Bundle validation.
+Validates:
+  1. spec.pipeline is non-empty
+  2. If spec.type is 'image', spec.images must contain at least one entry
+  3. spec.type, if set, must be one of: image, config, mixed
+*/}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kardinal-bundle-validation
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["kardinal.io"]
+      apiVersions: ["v1alpha1"]
+      operations:  ["CREATE", "UPDATE"]
+      resources:   ["bundles"]
+  validations:
+  - expression: "has(object.spec.pipeline) && object.spec.pipeline != ''"
+    message: "spec.pipeline must not be empty — provide the Pipeline name to promote"
+    reason: Invalid
+  - expression: >
+      !has(object.spec.type) || object.spec.type == '' ||
+      object.spec.type in ['image', 'config', 'mixed']
+    message: "spec.type must be one of: image, config, mixed"
+    reason: Invalid
+  - expression: >
+      !has(object.spec.type) || object.spec.type != 'image' ||
+      (has(object.spec.images) && object.spec.images.size() > 0)
+    message: "spec.images must contain at least one image when spec.type is 'image'"
+    reason: Invalid
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kardinal-bundle-validation
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+spec:
+  policyName: kardinal-bundle-validation
+  validationActions: [Deny]
+{{- end }}
