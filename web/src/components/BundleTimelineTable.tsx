@@ -69,15 +69,15 @@ export function shortBundleVersion(name: string): string {
 
 const phaseChipColor: Record<string, { bg: string; text: string; border: string }> = {
   Verified:      { bg: '#14532d', text: '#86efac', border: '#16a34a' },
-  Promoting:     { bg: '#1e1b4b', text: '#a5b4fc', border: '#4338ca' },
-  WaitingForMerge: { bg: '#1e1b4b', text: '#a5b4fc', border: '#4338ca' },
+  Promoting:     { bg: '#1e1b4b', text: 'var(--color-accent)', border: '#4338ca' },
+  WaitingForMerge: { bg: '#1e1b4b', text: 'var(--color-accent)', border: '#4338ca' },
   HealthChecking:{ bg: '#1c1917', text: '#d6b4fc', border: '#7c3aed' },
   Failed:        { bg: '#7f1d1d', text: '#fca5a5', border: '#dc2626' },
-  Pending:       { bg: '#0f172a', text: '#475569', border: '#334155' },
+  Pending:       { bg: 'var(--color-bg)', text: 'var(--color-text-faint)', border: 'var(--color-border)' },
 }
 
 function EnvChip({ name, phase, prURL }: { name: string; phase?: string; prURL?: string }) {
-  const colors = phaseChipColor[phase ?? ''] ?? { bg: '#0f172a', text: '#475569', border: '#334155' }
+  const colors = phaseChipColor[phase ?? ''] ?? { bg: 'var(--color-bg)', text: 'var(--color-text-faint)', border: 'var(--color-border)' }
   const chip = (
     <span
       title={`${name}: ${phase ?? 'Pending'}${prURL ? '\n' + prURL : ''}`}
@@ -119,7 +119,7 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
 
   if (sorted.length === 0) {
     return (
-      <div style={{ padding: '1rem', color: '#475569', fontSize: '0.8rem', textAlign: 'center' }}>
+      <div style={{ padding: '1rem', color: 'var(--color-text-faint)', fontSize: '0.8rem', textAlign: 'center' }}>
         No bundles promoted yet.
       </div>
     )
@@ -134,16 +134,16 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
       }}>
         <thead>
           <tr style={{ borderBottom: '1px solid #1e293b' }}>
-            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'left', color: '#475569', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'left', color: 'var(--color-text-faint)', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               Version
             </th>
-            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'left', color: '#475569', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'left', color: 'var(--color-text-faint)', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               Environments
             </th>
-            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'left', color: '#475569', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'left', color: 'var(--color-text-faint)', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               Author
             </th>
-            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'right', color: '#475569', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <th style={{ padding: '0.4rem 0.75rem', textAlign: 'right', color: 'var(--color-text-faint)', fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               Age
             </th>
           </tr>
@@ -166,7 +166,7 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
                     <span style={{
                       fontFamily: 'monospace',
                       fontSize: '0.75rem',
-                      color: dimmed ? '#475569' : '#e2e8f0',
+                      color: dimmed ? 'var(--color-text-faint)' : 'var(--color-text)',
                     }}>
                       {version}
                     </span>
@@ -178,19 +178,19 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
                       ? b.environments.map(env => (
                           <EnvChip key={env.name} name={env.name} phase={env.phase} prURL={env.prURL} />
                         ))
-                      : <span style={{ color: '#334155', fontSize: '0.7rem' }}>—</span>
+                      : <span style={{ color: 'var(--color-border)', fontSize: '0.7rem' }}>—</span>
                     }
                   </div>
                 </td>
                 <td style={{ padding: '0.4rem 0.75rem', verticalAlign: 'middle' }}>
-                  <span style={{ color: dimmed ? '#334155' : '#64748b', fontSize: '0.72rem' }}>
+                  <span style={{ color: dimmed ? 'var(--color-border)' : '#64748b', fontSize: '0.72rem' }}>
                     {b.provenance?.author ?? '—'}
                   </span>
                 </td>
                 <td style={{ padding: '0.4rem 0.75rem', verticalAlign: 'middle', textAlign: 'right' }}>
                   <span
                     title={b.createdAt}
-                    style={{ color: '#475569', fontSize: '0.7rem', whiteSpace: 'nowrap' }}
+                    style={{ color: 'var(--color-text-faint)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}
                   >
                     {formatBundleAge(b.createdAt)}
                   </span>

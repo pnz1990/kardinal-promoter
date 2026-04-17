@@ -39,7 +39,7 @@ export function BlockedBanner({ blockedCount, highlightActive, onToggleHighlight
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: '#fbbf24', fontSize: '0.9rem' }} aria-hidden="true">⚠</span>
+        <span style={{ color: 'var(--color-warning)', fontSize: '0.9rem' }} aria-hidden="true">⚠</span>
         <span style={{ fontSize: '0.82rem', color: '#fcd34d', fontWeight: 600 }}>
           {label}
         </span>

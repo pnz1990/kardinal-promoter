@@ -59,10 +59,10 @@ export function stepIconFor(index: number, currentIndex: number, active: boolean
 } {
   if (index < currentIndex) return { icon: '✓', color: '#22c55e' }
   if (index === currentIndex) {
-    if (!active) return { icon: '○', color: '#475569' }
+    if (!active) return { icon: '○', color: 'var(--color-text-faint)' }
     return { icon: '▶', color: '#f59e0b' }
   }
-  return { icon: '○', color: '#334155' }
+  return { icon: '○', color: 'var(--color-border)' }
 }
 
 export function StageDetailPanel({ node, steps, onClose }: Props) {
@@ -111,7 +111,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
         top: '40px',
         right: '16px',
         width: '320px',
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #1e293b',
         borderRadius: '6px',
         boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
@@ -128,7 +128,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
         borderBottom: '1px solid #1e293b',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontWeight: 600, color: '#e2e8f0' }}>{node.environment}</span>
+          <span style={{ fontWeight: 600, color: 'var(--color-text)' }}>{node.environment}</span>
           <HealthChip state={node.state} size="sm" />
         </div>
         <button
@@ -155,12 +155,12 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
             alignItems: 'center',
             marginBottom: '0.3rem',
           }}>
-            <span style={{ color: '#94a3b8', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <span style={{ color: 'var(--color-text-muted)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               Bake
             </span>
             <span
               title={`Bake progress: ${bakeElapsed}m of ${bakeTarget}m elapsed`}
-              style={{ fontFamily: 'monospace', color: '#e2e8f0' }}
+              style={{ fontFamily: 'monospace', color: 'var(--color-text)' }}
             >
               {formatBakeCountdown(bakeElapsed, bakeTarget)}
             </span>
@@ -168,7 +168,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
           {/* Progress bar */}
           <div style={{
             height: '4px',
-            background: '#1e293b',
+            background: 'var(--color-surface)',
             borderRadius: '2px',
             overflow: 'hidden',
           }}>
@@ -213,7 +213,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
       {/* Step list (#501) */}
       {step && (
         <div style={{ padding: '0.5rem 0.75rem' }}>
-          <div style={{ color: '#94a3b8', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
+          <div style={{ color: 'var(--color-text-muted)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.35rem' }}>
             Steps
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
@@ -235,7 +235,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
                   </span>
                   <span style={{
                     fontSize: '0.75rem',
-                    color: i === currentStepIndex ? '#e2e8f0' : '#94a3b8',
+                    color: i === currentStepIndex ? 'var(--color-text)' : 'var(--color-text-muted)',
                     fontWeight: i === currentStepIndex ? 600 : 400,
                   }}>
                     {s.label}
@@ -254,7 +254,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
 
       {/* No step found */}
       {!step && (
-        <div style={{ padding: '0.75rem', color: '#475569', fontSize: '0.75rem' }}>
+        <div style={{ padding: '0.75rem', color: 'var(--color-text-faint)', fontSize: '0.75rem' }}>
           No active promotion step for this environment.
         </div>
       )}

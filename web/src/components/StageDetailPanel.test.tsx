@@ -99,13 +99,13 @@ describe('stepIconFor', () => {
   it('returns circle for inactive current step', () => {
     const result = stepIconFor(3, 3, false)
     expect(result.icon).toBe('○')
-    expect(result.color).toBe('#475569')
+    expect(result.color).toContain('color-text-faint')  // was #475569, now CSS var
   })
 
   it('returns dark circle for future step', () => {
     const result = stepIconFor(5, 3, true)
     expect(result.icon).toBe('○')
-    expect(result.color).toBe('#334155')
+    expect(result.color).toContain('color-border')  // was #334155, now CSS var
   })
 })
 

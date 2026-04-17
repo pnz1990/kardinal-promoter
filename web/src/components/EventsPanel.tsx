@@ -52,8 +52,8 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
           data-testid="events-panel-empty"
           style={{
             fontSize: '0.75rem',
-            color: '#475569',
-            background: '#0f172a',
+            color: 'var(--color-text-faint)',
+            background: 'var(--color-bg)',
             border: '1px solid #1e293b',
             borderRadius: '4px',
             padding: '0.5rem 0.75rem',
@@ -65,7 +65,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
         </div>
       ) : (
         <div style={{
-          background: '#0f172a',
+          background: 'var(--color-bg)',
           border: '1px solid #1e293b',
           borderRadius: '4px',
           overflow: 'hidden',
@@ -92,24 +92,24 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
                     border: '1px solid',
                     background: ev.type === 'Warning' ? '#451a03' : '#0c2a1a',
                     borderColor: ev.type === 'Warning' ? '#92400e' : '#166534',
-                    color: ev.type === 'Warning' ? '#fbbf24' : '#4ade80',
+                    color: ev.type === 'Warning' ? 'var(--color-warning)' : 'var(--color-success)',
                   }}
                 >
                   {ev.type}
                 </span>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#e2e8f0' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-text)' }}>
                   {ev.reason}
                 </span>
                 {ev.count > 1 && (
                   <span style={{ fontSize: '11px', color: '#64748b' }}>×{ev.count}</span>
                 )}
-                <span style={{ fontSize: '11px', color: '#475569', fontFamily: 'monospace', marginLeft: 'auto' }}>
+                <span style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontFamily: 'monospace', marginLeft: 'auto' }}>
                   {relativeTime(ev.lastTimestamp)}
                 </span>
               </div>
               {/* Message row */}
               {ev.message && (
-                <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '3px', lineHeight: 1.4 }}>
+                <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '3px', lineHeight: 1.4 }}>
                   {ev.message}
                 </div>
               )}

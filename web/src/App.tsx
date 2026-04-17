@@ -411,7 +411,7 @@ export function App() {
         <>{/* Main area — column layout for header + content row */}
         <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
         {!selectedPipeline ? (
-          <div style={{ color: '#475569', padding: '3rem 2rem', textAlign: 'center' }}>
+          <div style={{ color: 'var(--color-text-faint)', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
               <>
                 <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>←</div>
@@ -439,7 +439,7 @@ export function App() {
                     <span style={{
                       fontSize: '0.7rem',
                       background: '#1e1b4b',
-                      color: '#a5b4fc',
+                      color: 'var(--color-accent)',
                       border: '1px solid #4338ca',
                       borderRadius: '4px',
                       padding: '2px 8px',
@@ -458,16 +458,16 @@ export function App() {
                     gap: '0.5rem',
                     alignItems: 'center',
                     fontSize: '0.82rem',
-                    color: '#94a3b8',
+                    color: 'var(--color-text-muted)',
                   }}>
                     <span>
                       Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
                     </span>
-                    <span style={{ color: '#334155' }}>·</span>
+                    <span style={{ color: 'var(--color-border)' }}>·</span>
                     <HealthChip state={activeBundle.phase} size="sm" />
                     {activeBundle.provenance?.commitSHA && (
                       <>
-                        <span style={{ color: '#334155' }}>·</span>
+                        <span style={{ color: 'var(--color-border)' }}>·</span>
                         <span style={{ fontFamily: 'monospace', color: '#64748b' }}
                               title="Commit SHA">
                           {activeBundle.provenance.commitSHA.slice(0, 8)}
@@ -476,13 +476,13 @@ export function App() {
                     )}
                     {activeBundle.provenance?.author && (
                       <>
-                        <span style={{ color: '#334155' }}>·</span>
+                        <span style={{ color: 'var(--color-border)' }}>·</span>
                         <span title="Author">{activeBundle.provenance.author}</span>
                       </>
                     )}
                     {activeBundle.provenance?.ciRunURL && (
                       <>
-                        <span style={{ color: '#334155' }}>·</span>
+                        <span style={{ color: 'var(--color-border)' }}>·</span>
                         <a
                           href={activeBundle.provenance.ciRunURL}
                           target="_blank"

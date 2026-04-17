@@ -59,11 +59,11 @@ export function tokenizeCEL(expr: string): Array<{ text: string; type: 'keyword'
 
 const TOKEN_COLORS: Record<string, string> = {
   keyword: '#f59e0b',   // amber — true/false/null/in
-  string: '#4ade80',    // green — string literals
+  string: 'var(--color-success)',    // green — string literals
   number: '#60a5fa',    // blue — numbers
-  operator: '#e2e8f0',  // white — operators
+  operator: 'var(--color-text)',  // white — operators
   function: '#22d3ee',  // cyan — function calls
-  plain: '#94a3b8',     // gray — identifiers
+  plain: 'var(--color-text-muted)',     // gray — identifiers
 }
 
 /** #502: Format relative time from ISO string. */
@@ -146,7 +146,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
         top: '40px',
         right: '16px',
         width: '360px',
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #1e293b',
         borderRadius: '6px',
         boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
@@ -166,7 +166,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: '#6366f1' }}>🔒</span>
-          <span style={{ fontWeight: 600, color: '#e2e8f0', fontFamily: 'monospace', fontSize: '0.82rem' }}>
+          <span style={{ fontWeight: 600, color: 'var(--color-text)', fontFamily: 'monospace', fontSize: '0.82rem' }}>
             {node.label}
           </span>
           <HealthChip state={node.state} nodeType="PolicyGate" size="sm" />
@@ -190,7 +190,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
           {lastEvalAt && (
             <span
               title={`Last evaluated: ${lastEvalAt}`}
-              style={{ color: '#475569', fontSize: '0.68rem' }}
+              style={{ color: 'var(--color-text-faint)', fontSize: '0.68rem' }}
             >
               evaluated {relativeTime(lastEvalAt)}
             </span>
@@ -206,7 +206,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
       {/* CEL expression (syntax highlighted) */}
       {expression && (
         <div style={{ padding: '0.5rem 0.75rem', borderBottom: '1px solid #1e293b' }}>
-          <div style={{ color: '#94a3b8', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.3rem' }}>
+          <div style={{ color: 'var(--color-text-muted)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.3rem' }}>
             Expression
           </div>
           <pre
@@ -259,12 +259,12 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
       {/* Expired overrides (audit records) */}
       {expiredOverrides.length > 0 && (
         <div style={{ padding: '0.5rem 0.75rem' }}>
-          <div style={{ color: '#475569', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.3rem' }}>
+          <div style={{ color: 'var(--color-text-faint)', fontSize: '0.68rem', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.3rem' }}>
             Override History
           </div>
           {expiredOverrides.map((o, i) => (
             <div key={i} style={{
-              background: '#0f172a',
+              background: 'var(--color-bg)',
               border: '1px solid #1e293b',
               borderRadius: '4px',
               padding: '0.3rem 0.4rem',
@@ -272,7 +272,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
               opacity: 0.7,
             }}>
               <div style={{ color: '#64748b', fontSize: '0.75rem' }}>{o.reason}</div>
-              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.15rem', fontSize: '0.68rem', color: '#334155' }}>
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.15rem', fontSize: '0.68rem', color: 'var(--color-border)' }}>
                 {o.createdBy && <span>by {o.createdBy}</span>}
                 {o.expiresAt && <span title={o.expiresAt}>expired</span>}
               </div>

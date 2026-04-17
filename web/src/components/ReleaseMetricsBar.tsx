@@ -106,10 +106,10 @@ interface MetricCellProps {
 function MetricCell({ label, value, sub, color }: MetricCellProps) {
   return (
     <div style={{ flex: 1, padding: '0.5rem 0.75rem', borderRight: '1px solid #1e293b' }}>
-      <div style={{ fontSize: '0.65rem', color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
+      <div style={{ fontSize: '0.65rem', color: 'var(--color-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
         {label}
       </div>
-      <div style={{ fontSize: '1rem', fontWeight: 700, color: color ?? '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+      <div style={{ fontSize: '1rem', fontWeight: 700, color: color ?? 'var(--color-text)', fontVariantNumeric: 'tabular-nums' }}>
         {value}
       </div>
       {sub && (
@@ -140,12 +140,12 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         borderRadius: '6px',
         padding: '0.6rem 0.75rem',
         fontSize: '0.75rem',
-        color: '#475569',
+        color: 'var(--color-text-faint)',
         display: 'flex',
         alignItems: 'center',
         gap: '0.4rem',
       }}>
-        <span style={{ color: '#334155' }}>📊</span>
+        <span style={{ color: 'var(--color-border)' }}>📊</span>
         <span>Not enough data — need 5+ bundles to show release metrics.</span>
       </div>
     )
@@ -177,7 +177,7 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         label="Deploys"
         value={String(metrics.deployCount)}
         sub="last 10 bundles"
-        color="#a5b4fc"
+        color="var(--color-accent)"
       />
     </div>
   )

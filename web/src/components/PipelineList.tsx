@@ -29,12 +29,12 @@ function shortBundleName(name: string | undefined): string | null {
 /** Onboarding empty state shown when no pipelines have been created yet. */
 function EmptyState() {
   return (
-    <div style={{ padding: '1rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+    <div style={{ padding: '1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
       <p style={{ marginBottom: '0.75rem', fontStyle: 'italic' }}>No pipelines found.</p>
       <p style={{ marginBottom: '0.5rem', color: '#64748b' }}>Get started:</p>
       <code style={{
         display: 'block',
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #1e293b',
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
@@ -49,7 +49,7 @@ function EmptyState() {
       <p style={{ marginBottom: '0.4rem', color: '#64748b' }}>Or use the wizard:</p>
       <code style={{
         display: 'block',
-        background: '#0f172a',
+        background: 'var(--color-bg)',
         border: '1px solid #1e293b',
         borderRadius: '4px',
         padding: '0.4rem 0.5rem',
@@ -159,12 +159,12 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
              style={{
                width: '100%',
                boxSizing: 'border-box',
-              background: '#1e293b',
+              background: 'var(--color-surface)',
               border: '1px solid #334155',
               borderRadius: '4px',
               padding: '0.3rem 1.75rem 0.3rem 0.5rem',
               fontSize: '0.78rem',
-              color: '#e2e8f0',
+              color: 'var(--color-text)',
               outline: 'none',
             }}
           />
@@ -206,7 +206,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 <div style={{
                   padding: '0.3rem 1rem 0.15rem',
                   fontSize: '0.65rem',
-                  color: '#475569',
+                  color: 'var(--color-text-faint)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.05em',
                   borderTop: '1px solid #1e293b',
@@ -244,7 +244,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
             style={{
               padding: '0.6rem 1rem',
               cursor: 'pointer',
-              background: selected === p.name ? '#1e293b' : 'transparent',
+              background: selected === p.name ? 'var(--color-surface)' : 'transparent',
               borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
             }}
           >
@@ -258,7 +258,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               <span style={{
                 fontWeight: selected === p.name ? 600 : 400,
                 fontSize: '0.85rem',
-                color: '#e2e8f0',
+                color: 'var(--color-text)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -274,7 +274,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                     style={{
                       fontSize: '0.6rem',
                       background: '#1e1b4b',
-                      color: '#a5b4fc',
+                      color: 'var(--color-accent)',
                       border: '1px solid #4338ca',
                       borderRadius: '3px',
                       padding: '0px 4px',
@@ -304,7 +304,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 {p.environmentStates && Object.keys(p.environmentStates).length > 0 ? (
                   <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
                     <span>{envCount} env{envCount !== 1 ? 's' : ''}</span>
-                    <span style={{ color: '#1e293b' }}>·</span>
+                    <span style={{ color: 'var(--color-surface)' }}>·</span>
                     {/* State badges: count per phase */}
                     {(() => {
                       const counts: Record<string, number> = {}
@@ -313,7 +313,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                       }
                       const phaseColor: Record<string, string> = {
                         Verified: '#22c55e', Promoting: '#6366f1', WaitingForMerge: '#6366f1',
-                        HealthChecking: '#a78bfa', Failed: '#ef4444', Pending: '#475569',
+                        HealthChecking: '#a78bfa', Failed: '#ef4444', Pending: 'var(--color-text-faint)',
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} style={{
@@ -335,7 +335,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                       <>
                         {envCount > 0 && <span>·</span>}
                         <span
-                          style={{ fontFamily: 'monospace', color: '#94a3b8' }}
+                          style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}
                           title={p.activeBundleName}
                         >
                           {bundle}
@@ -346,7 +346,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 )}
                 {/* Bundle name shown below the health bar when env states are shown */}
                 {p.environmentStates && bundle && (
-                  <span style={{ fontFamily: 'monospace', color: '#94a3b8' }} title={p.activeBundleName}>
+                  <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }} title={p.activeBundleName}>
                     {bundle}
                   </span>
                 )}

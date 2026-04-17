@@ -39,12 +39,12 @@ export default function EmptyState() {
       }}
     >
       {/* Title */}
-      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0', marginBottom: '0.5rem' }}>
+      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-text)', marginBottom: '0.5rem' }}>
         No pipelines found
       </div>
 
       {/* One-sentence explanation */}
-      <p style={{ fontSize: '0.9rem', color: '#94a3b8', marginBottom: '1.5rem', lineHeight: 1.5 }}>
+      <p style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)', marginBottom: '1.5rem', lineHeight: 1.5 }}>
         A <strong style={{ color: '#cbd5e1' }}>Pipeline</strong> defines your promotion environments
         (test → uat → prod) and the policy gates between them.{' '}
         <a
@@ -67,7 +67,7 @@ export default function EmptyState() {
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
-          background: '#0f172a',
+          background: 'var(--color-bg)',
           border: '1px solid #1e293b',
           borderRadius: '6px',
           padding: '8px 12px',
@@ -77,7 +77,7 @@ export default function EmptyState() {
             style={{
               flex: 1,
               fontSize: '0.75rem',
-              color: '#94a3b8',
+              color: 'var(--color-text-muted)',
               fontFamily: 'monospace',
               wordBreak: 'break-all',
               lineHeight: 1.5,
@@ -95,7 +95,7 @@ export default function EmptyState() {
           Then run <code style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>kubectl get pipelines</code>:
         </div>
         <pre style={{
-          background: '#0f172a',
+          background: 'var(--color-bg)',
           border: '1px solid #1e293b',
           borderRadius: '6px',
           padding: '8px 12px',
@@ -113,7 +113,7 @@ export default function EmptyState() {
       {/* Polling status */}
       <div
         data-testid="watching-indicator"
-        style={{ fontSize: '0.75rem', color: '#475569', display: 'flex', alignItems: 'center', gap: '6px' }}
+        style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)', display: 'flex', alignItems: 'center', gap: '6px' }}
       >
         <span style={{ animation: 'spin 2s linear infinite', display: 'inline-block' }}>◌</span>
         Watching for new pipelines…

@@ -125,7 +125,7 @@ function SummaryBadge({
         gap: '0.4rem',
         padding: '0.35rem 0.65rem',
         background: active ? bgColor : 'transparent',
-        border: `1px solid ${active ? borderColor : '#1e293b'}`,
+        border: `1px solid ${active ? borderColor : 'var(--color-surface)'}`,
         borderRadius: '6px',
         cursor: 'pointer',
         transition: 'all 0.1s',
@@ -197,21 +197,21 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
           alignItems: 'center',
           gap: '0.35rem',
           padding: '0.3rem 0.55rem',
-          background: activeFilter === 'all' ? '#1e293b' : 'transparent',
-          border: `1px solid ${activeFilter === 'all' ? '#475569' : '#1e293b'}`,
+          background: activeFilter === 'all' ? 'var(--color-surface)' : 'transparent',
+          border: `1px solid ${activeFilter === 'all' ? 'var(--color-text-faint)' : 'var(--color-surface)'}`,
           borderRadius: '6px',
           cursor: 'pointer',
         }}
       >
-        <span style={{ fontSize: '0.65rem', color: '#94a3b8', fontWeight: 600 }}>
+        <span style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
           Pipelines
         </span>
-        <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--color-text)', fontVariantNumeric: 'tabular-nums' }}>
           {s.total}
         </span>
       </button>
 
-      <span style={{ color: '#1e293b', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
+      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
 
       <SummaryBadge
         label="Healthy"
@@ -246,7 +246,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         />
       )}
 
-      <span style={{ color: '#1e293b', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
+      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
 
       <SummaryBadge
         label="Promoting"
@@ -261,7 +261,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
       <SummaryBadge
         label="Full CD"
         count={s.fullCD}
-        color="#a5b4fc"
+        color="var(--color-accent)"
         bgColor="#12103a"
         borderColor="#3730a3"
         active={activeFilter === 'full-cd'}
