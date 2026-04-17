@@ -84,6 +84,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.AddCommand(newAuditCmd())
 	root.AddCommand(newValidateCmd())
 	root.AddCommand(newStatusCmd())
+	root.AddCommand(newCompletionCmd())
 
 	return root
 }
