@@ -16,6 +16,10 @@ maqa:
   agents_path: ~/.otherness/agents
   max_parallel: 3
 
+  # Operator has authorized agents to act on their behalf.
+  # Enables --admin merge bypass when branch protection requires a human review.
+  autonomous_mode: true
+
   # Executive project status update to GitHub Projects board every N cycles.
   # Only the unbounded standalone posts these. 0 = disabled.
   status_update_cycles: 5
