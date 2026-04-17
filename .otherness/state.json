@@ -833,11 +833,13 @@
       "title": "SCM circuit breaker"
     },
     "618-policygate-upstream-env": {
-      "state": "in_review",
+      "state": "done",
       "issue": 618,
       "pr_number": 663,
       "title": "refactor(policygate): move upstreamEnvironment from spec to annotation",
-      "branch": "feat/618-policygate-upstream-env"
+      "branch": "feat/618-policygate-upstream-env",
+      "pr_merged": true,
+      "done_at": "2026-04-17T14:35:06Z"
     },
     "622-bundle-watch-node": {
       "state": "done",
@@ -891,11 +893,14 @@
       "note": "Implemented as AuditEvent CRD in PR #675"
     },
     "576-audit-step1": {
-      "state": "in_review",
+      "state": "todo",
       "issue": 673,
       "pr_number": 675,
       "title": "feat(api): AuditEvent CRD \u2014 immutable promotion event trail step 1",
-      "branch": "feat/576-audit-step1"
+      "branch": null,
+      "assigned_to": null,
+      "assigned_at": null,
+      "worktree": null
     },
     "680-audit-step2": {
       "state": "done",
@@ -930,11 +935,13 @@
       "title": "trivy vulnerability scan"
     },
     "694-sbom-gen": {
-      "state": "in_review",
+      "state": "done",
       "pr_number": 697,
       "issue": "694",
       "title": "SBOM generation",
-      "qa_approved": true
+      "qa_approved": true,
+      "pr_merged": true,
+      "done_at": "2026-04-17T14:35:06Z"
     },
     "699-cosign-signing": {
       "state": "done",
@@ -953,27 +960,33 @@
       "pr_number": 703
     },
     "698-krocodile-trivy": {
-      "state": "in_review",
+      "state": "done",
       "pr_number": 701,
       "issue": "698",
       "title": "krocodile trivy scan",
-      "qa_approved": true
+      "qa_approved": true,
+      "pr_merged": true,
+      "done_at": "2026-04-17T14:35:06Z"
     },
     "698-trivy-krocodile": {
-      "state": "in_review",
+      "state": "done",
       "issue": 698,
       "pr_number": 701,
-      "title": "trivy scan for krocodile image"
+      "title": "trivy scan for krocodile image",
+      "pr_merged": true,
+      "done_at": "2026-04-17T14:35:06Z"
     },
     "702-sbom-cosign-attach": {
       "state": "done",
       "note": "Superseded by PR #703 which was already merged"
     },
     "706-slsa-provenance": {
-      "state": "in_review",
+      "state": "done",
       "issue": 706,
       "pr_number": 707,
-      "title": "SLSA Level 2 provenance via GitHub attestation"
+      "title": "SLSA Level 2 provenance via GitHub attestation",
+      "pr_merged": true,
+      "done_at": "2026-04-17T14:35:06Z"
     }
   },
   "session_heartbeats": {
