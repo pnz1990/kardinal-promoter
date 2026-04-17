@@ -23,5 +23,6 @@ func newGetCmd() *cobra.Command {
 	get.AddCommand(newGetPipelinesCmd())
 	get.AddCommand(newGetBundlesCmd())
 	get.AddCommand(newGetStepsCmd())
+	get.AddCommand(newGetAuditEventsCmd())
 	return get
 }
