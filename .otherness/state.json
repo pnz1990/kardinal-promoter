@@ -1097,6 +1097,29 @@
       "worktree": "/Users/rrroizma/Projects/kardinal-promoter.763-copy-clipboard",
       "pr_number": 764,
       "qa_approved": true
+    },
+    "766-stale-indicator": {
+      "title": "feat(ui): escalate stale data indicator at 30s",
+      "issue": 766,
+      "state": "in_review",
+      "areas": [
+        "ui"
+      ],
+      "priority": "low",
+      "size": "xs",
+      "assigned_to": "sess-a3d6f0be",
+      "assigned_at": "2026-04-17T19:35:31Z",
+      "branch": "feat/766-stale-indicator",
+      "worktree": "/Users/rrroizma/Projects/kardinal-promoter.766-stale-indicator",
+      "pr_number": 767,
+      "qa_approved": true
+    },
+    "krocodile-upgrade-cdc4bb9": {
+      "title": "chore(graph): upgrade krocodile 05db829 \u2192 cdc4bb9",
+      "state": "in_review",
+      "pr_number": 769,
+      "branch": "feat/krocodile-upgrade-cdc4bb9",
+      "qa_approved": true
     }
   },
   "session_heartbeats": {
