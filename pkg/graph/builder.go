@@ -387,6 +387,27 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 
 	var nodes []GraphNode
 
+	// Bundle Watch node: brings bundle.spec.* into Graph CEL scope (#622).
+	// This is a single named Watch reference (not WatchKind) — the translator
+	// knows the exact Bundle name at graph generation time.
+	//
+	// krocodile >= 81c5a03: Watch node must NOT have ReadyWhen/PropagateWhen/IncludeWhen.
+	// deriveReference upgrades Watch+signals -> ReferenceUnresolved -> SSA on Bundle CRD.
+	// The Bundle Watch is read-only; all signals belong on PromotionStep nodes.
+	bundleWatchNode := GraphNode{
+		ID: "bundle",
+		Template: map[string]interface{}{
+			"apiVersion": "kardinal.io/v1alpha1",
+			"kind":       "Bundle",
+			"metadata": map[string]interface{}{
+				"name":      bundle.Name,
+				"namespace": bundle.Namespace,
+			},
+		},
+		// ReadyWhen/PropagateWhen intentionally omitted — Watch node, not Owned node.
+	}
+	nodes = append(nodes, bundleWatchNode)
+
 	for _, envName := range filteredEnvs {
 		envSpec := envSpecMap[envName]
 
@@ -489,9 +510,11 @@ func buildPromotionStepNode(
 
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
-		"bundleName":   bundle.Name,
-		"environment":  envName,
-		"stepType":     stepType,
+		// bundleName: live CEL reference to Bundle Watch node metadata.name (#622).
+		// Enables the Graph to react to Bundle changes without regenerating the spec.
+		"bundleName":  "${bundle.metadata.name}",
+		"environment": envName,
+		"stepType":    stepType,
 		// prStatusRef points to the companion PRStatus Watch node.
 		// The PromotionStep reconciler reads spec.prStatusRef.name to find the
 		// PRStatus CRD instead of polling GitHub directly (eliminates PS-4, SCM-2).

@@ -301,3 +301,12 @@
 |---|---|---|---|---|
 | 625-remove-upstream-verified | refactor(graph): upstreamStates list replaces upstreamVerifiedN | ✅ Complete | #660 merged | CRD regen + builder.go update |
 | 656-watchkind-docs | docs(health): document health.labelSelector WatchKind mode | ✅ Complete | #659 merged | |
+
+---
+
+## queue-025 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 662-v070-release | chore(release): v0.7.0 | ✅ Complete | #664 merged | v0.7.0 tagged; chart 0.7.0 |
+| 618-remove-upstream-env | refactor(policygate): remove spec.upstreamEnvironment | ✅ Complete | #665 merged | 17 lines deleted; graph-first cleanup |
