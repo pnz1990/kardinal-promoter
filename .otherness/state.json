@@ -923,16 +923,18 @@
       "note": "Merged as PR #689 by parallel session; my PR #690 was duplicate and closed"
     },
     "693-trivy-scan": {
-      "state": "todo",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 696,
       "issue": "693",
-      "title": "feat(security): trivy container scan on release",
-      "size": "xs"
+      "title": "trivy vulnerability scan"
     },
     "694-sbom-gen": {
-      "state": "todo",
+      "state": "in_review",
+      "pr_number": 697,
       "issue": "694",
-      "title": "feat(security): SBOM generation with syft",
-      "size": "xs"
+      "title": "SBOM generation",
+      "qa_approved": true
     }
   },
   "session_heartbeats": {
