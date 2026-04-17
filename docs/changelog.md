@@ -31,9 +31,16 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires krocodile `745998f`+ (#652)
+- **Kargo migration guide** — concept mapping, side-by-side Pipeline vs Kargo YAML, 7-step migration walkthrough in `docs/guides/` (#640)
+- **Operations runbook expanded** — PolicyGate debugging, SCM failure modes, RBAC issues, krocodile restarts, performance tuning added (#639)
+- **Bundle image diff in NodeDetail** — UI compares the current bundle's image against the previous bundle for that environment; closes a Kargo parity gap (#638)
 - **Per-step progress observability** — `PromotionStep.status.steps[]` exposes each step with individual state, start time, and duration (#630)
 - **`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh (#629)
 - **PrometheusRule CRD** — 6 pre-built alerting rules in Helm chart: promotion stuck, high rollback rate, policy gate blocked, SCM errors (#621)
+- **UI: conditions summary and reason** — NodeDetail shows Kubernetes Conditions table with reason column; improved empty-state onboarding (#529, #530)
+- **UI: Kubernetes events stream** — timestamped event history per PromotionStep in NodeDetail (#560)
+- **UI: cross-environment error aggregation** — groups PromotionStep failures by type across environments; shows affected count (#564)
 - **krocodile upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
 
 ### Fixed
