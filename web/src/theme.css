@@ -61,3 +61,9 @@
 
   color-scheme: light;
 }
+
+/* ── Staleness pulse animation (#766) ──────────────────────────────────────── */
+@keyframes stalePulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}

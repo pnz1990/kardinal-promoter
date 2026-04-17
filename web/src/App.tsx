@@ -245,13 +245,17 @@ export function App() {
   // Derive current namespace from the first loaded pipeline.
   const currentNamespace = pipelines[0]?.namespace
 
-  // Determine staleness indicator color.
+  // Determine staleness indicator color — escalates at 15s (amber) and 30s (red).
   const staleness = elapsedSeconds ?? 0
   const indicatorColor = pipelinesError
-    ? '#f59e0b'  // amber on error
+    ? '#f59e0b'   // amber on error
+    : staleness > 30
+    ? '#ef4444'   // red when critically stale > 30s (#766)
     : staleness > 15
     ? '#f59e0b'  // amber when stale > 15s
     : 'var(--color-text-secondary)'  // WCAG AA compliant; was #64748b which fails at small font sizes
+    ? '#f59e0b'   // amber when stale > 15s
+    : 'var(--color-text-faint)'  // default muted
 
   // Compute blocked PolicyGate node IDs from the graph.
   const blockedGateIds = useMemo<Set<string>>(() => {
@@ -362,15 +366,17 @@ export function App() {
             }}
           >
             <span
-              title={pipelinesError ? `Error: ${pipelinesError}` : 'Last updated'}
+              title={pipelinesError ? `Error: ${pipelinesError}` : staleness > 30 ? 'Data is stale — click to refresh' : 'Last updated'}
               style={{
                 fontSize: '0.65rem',
                 color: indicatorColor,
                 fontVariantNumeric: 'tabular-nums',
+                animation: staleness > 30 ? 'stalePulse 1.5s ease-in-out infinite' : undefined,
               }}
+              aria-live="polite"
               aria-label={`Data ${formatElapsed(elapsedSeconds)}`}
             >
-              {pipelinesError ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
+              {pipelinesError ? '⚠' : staleness > 30 ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
             </span>
             <span style={{ fontSize: '0.6rem', color: 'var(--color-text-faint)' }} title="Click to refresh">↺</span>
           </button>
