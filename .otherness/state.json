@@ -989,13 +989,15 @@
       "done_at": "2026-04-17T14:35:06Z"
     },
     "720-prometheus-metrics": {
-      "state": "assigned",
+      "state": "done",
       "assigned_to": "STANDALONE",
       "assigned_at": "2026-04-17T14:37:33Z",
       "branch": "feat/720-prometheus-metrics",
       "worktree": "../kardinal-promoter.720-prometheus-metrics",
       "issue": "720",
-      "title": "Prometheus metrics emission"
+      "title": "Prometheus metrics emission",
+      "pr_merged": true,
+      "done_at": "2026-04-17T15:03:43Z"
     },
     "718-shell-completion": {
       "title": "feat(cli): shell completion \u2014 kardinal completion bash/zsh/fish/powershell",
@@ -1061,5 +1063,6 @@
     ],
     "status": "in_progress",
     "note": "Security sprint near-complete. PRs #701 (krocodile trivy) and #707 (SLSA) awaiting human review. Generate new queue from roadmap after these merge."
-  }
+  },
+  "pm_cycle_count": 1
 }
