@@ -26,7 +26,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Contiguous healthy soak** | Yes — `bake.minutes` resets timer on health alarm | No — elapsed time only | No — elapsed time only |
 | **Change freeze management** | Yes — `ChangeWindow` CRD blocks all pipelines cluster-wide | No | Manual CommitStatus |
 | **Wave topology** | Yes — `wave:` field generates multi-region DAG edges automatically | No | No |
-| **CLI** | Full `kardinal` CLI incl. `override`, `metrics`, `logs` | `kargo` CLI | No CLI |
+| **CLI** | Full `kardinal` CLI incl. `override`, `metrics`, `logs`, `validate`, `status`, shell completion | `kargo` CLI | No CLI |
 | **UI dashboard** | Full control plane UI: fleet dashboard, ops view, bake countdown, gate detail panel, bundle timeline, metrics bar, in-UI approve/rollback/override | Polished Kargo UI | No UI |
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
@@ -38,7 +38,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Artifact discovery** | Bundle created by CI/CLI; Subscription CRD with OCI + Git watchers | Warehouse (automatic OCI/git scanning) | Git commit-based |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight) | No |
 | **Architecture** | Graph-first (krocodile DAG) | Stage/controller | Controller |
-| **Maturity** | v0.6.0, active development | v1.9.x, production-grade | v0.26.x, experimental |
+| **Maturity** | v0.8.1, active development | v1.9.x, production-grade | v0.26.x, experimental |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 
 ---
