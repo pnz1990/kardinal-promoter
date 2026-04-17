@@ -1004,6 +1004,47 @@ func (r *Reconciler) handleBake(
 	return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
 }
 
+// writeAuditEvent creates an immutable AuditEvent CRD for the given transition.
+// Errors are logged but non-fatal — audit event creation must not block promotion.
+func (r *Reconciler) writeAuditEvent(ctx context.Context, ps *v1alpha1.PromotionStep, action, outcome, message string) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	event := &v1alpha1.AuditEvent{
+		ObjectMeta: metav1.ObjectMeta{
+			// Name: deterministic — pipeline+bundle+env+action+timestamp suffix
+			// Using GenerateName allows multiple events for the same transition
+			GenerateName: fmt.Sprintf("%s-%s-%s-%s-",
+				ps.Spec.PipelineName, ps.Spec.BundleName, ps.Spec.Environment,
+				strings.ToLower(action)),
+			Namespace: ps.Namespace,
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    ps.Spec.PipelineName,
+				"kardinal.io/bundle":      ps.Spec.BundleName,
+				"kardinal.io/environment": ps.Spec.Environment,
+				"kardinal.io/action":      strings.ToLower(action),
+			},
+		},
+		Spec: v1alpha1.AuditEventSpec{
+			Timestamp:        now,
+			PipelineName:     ps.Spec.PipelineName,
+			BundleName:       ps.Spec.BundleName,
+			Environment:      ps.Spec.Environment,
+			Action:           action,
+			Actor:            "controller",
+			Outcome:          outcome,
+			Message:          message,
+			PromotionStepRef: ps.Name,
+		},
+	}
+	if err := r.Create(ctx, event); err != nil {
+		zerolog.Ctx(ctx).Warn().
+			Err(err).
+			Str("action", action).
+			Str("bundle", ps.Spec.BundleName).
+			Str("env", ps.Spec.Environment).
+			Msg("audit: failed to create AuditEvent (non-fatal)")
+	}
+}
+
 // patchState is a helper to patch state + message atomically.
 func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep, state, message string) (ctrl.Result, error) {
 	patch := client.MergeFrom(ps.DeepCopy())
@@ -1012,6 +1053,17 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch state %s: %w", state, err)
 	}
+
+	// Write audit event for significant state transitions (#576 step 1).
+	switch state {
+	case StatePromoting:
+		r.writeAuditEvent(ctx, ps, "PromotionStarted", "Success", message)
+	case StateVerified:
+		r.writeAuditEvent(ctx, ps, "PromotionVerified", "Success", message)
+	case StateFailed:
+		r.writeAuditEvent(ctx, ps, "PromotionFailed", "Failure", message)
+	}
+
 	return ctrl.Result{Requeue: true}, nil
 }
 

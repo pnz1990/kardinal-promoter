@@ -1,0 +1,118 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: auditevents.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: AuditEvent
+    listKind: AuditEventList
+    plural: auditevents
+    shortNames:
+    - ae
+    singular: auditevent
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bundleName
+      name: Bundle
+      type: string
+    - jsonPath: .spec.environment
+      name: Environment
+      type: string
+    - jsonPath: .spec.action
+      name: Action
+      type: string
+    - jsonPath: .spec.outcome
+      name: Outcome
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: AuditEvent is an immutable record of a significant promotion
+          lifecycle event. Events are written by the PromotionStep reconciler at key
+          state transitions (pending to promoting, verified, failed). They are never
+          updated after creation.
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: AuditEventSpec holds the immutable event data. Fields must
+              not be updated after creation -- AuditEvent is append-only.
+            properties:
+              action:
+                description: Action describes the lifecycle event that was observed.
+                enum:
+                - PromotionStarted
+                - PromotionVerified
+                - PromotionFailed
+                - RollbackStarted
+                - RollbackVerified
+                - GateBlocked
+                - GateApproved
+                - Override
+                type: string
+              actor:
+                description: Actor is the identity that triggered this event. For
+                  automated actions -- "controller". For human overrides -- the username.
+                type: string
+              bundleName:
+                description: BundleName is the name of the Bundle CRD being promoted.
+                type: string
+              environment:
+                description: Environment is the target environment name.
+                type: string
+              message:
+                description: Message is a human-readable description of the event,
+                  including reasons for failure or blocking.
+                type: string
+              outcome:
+                description: Outcome summarises the result -- Success, Failure, or
+                  Blocked.
+                enum:
+                - Success
+                - Failure
+                - Blocked
+                type: string
+              pipelineName:
+                description: PipelineName is the name of the Pipeline CRD that this
+                  promotion belongs to.
+                type: string
+              prNumber:
+                description: PRNumber is the pull request number, if the event involved
+                  a PR.
+                type: integer
+              prUrl:
+                description: PRUrl is the URL of the pull request, if applicable.
+                type: string
+              promotionStepRef:
+                description: PromotionStepRef is the name of the PromotionStep CRD
+                  that generated this event.
+                type: string
+              timestamp:
+                description: Timestamp is the wall-clock time of the event in RFC3339
+                  format.
+                type: string
+            required:
+            - action
+            - bundleName
+            - environment
+            - pipelineName
+            - timestamp
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}
