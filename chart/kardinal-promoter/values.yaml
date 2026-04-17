@@ -129,7 +129,7 @@ krocodile:
   # This is the commit the release pipeline built the image from.
   # Used as the default image tag when image.tag is not set.
   # Update via the krocodile upgrade protocol in AGENTS.md.
-  pinnedCommit: "05db829"
+  pinnedCommit: "cdc4bb9"
 
   # -- API group for Graph CRDs.
   apiGroup: "experimental.kro.run"

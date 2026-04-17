@@ -16,16 +16,19 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    05db829 (2026-04-17 — 5 commits since 81c5a03; highlights:
-#                           - BREAKING: explicit-keyword schema for Graph nodes (#150)
-#                             template: → Own, patch: → Contribute, ref: → Ref (single),
-#                             watch: → Watch (collection), def: → Definition
-#                             kardinal compat: Watch nodes → ref:, WatchKind → watch:
-#                           - stdlib: rename Kind items, Singleton holder (#155)
+# Last verified:    cdc4bb9 (2026-04-17 — 6 commits since 05db829; highlights:
+#                           - schema-aware CEL: typed resource schemas + runtime
+#                             value wrapping; no dyn() wrappers needed (#161)
+#                           - forEach fix: silent data loss + unchecked type
+#                             assertions resolved (#160)
+#                           - NodeTypeOwn → NodeTypeTemplate (cosmetic rename,
+#                             YAML keywords unchanged) (#158)
+#                           - startup hydration: skip dynamic-GVR nodes (#157)
+# Previously verified: 05db829 (explicit-keyword schema)
 #                           - stdlib: cluster-scoped Kind, printer columns (#152)
 #                           - RGD stdlib: instance GVK labels + force-apply (#149))
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-05db829}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-cdc4bb9}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 
