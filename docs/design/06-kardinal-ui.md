@@ -1,6 +1,6 @@
 # 06: kardinal-ui
 
-> Status: Comprehensive
+> Status: Active
 > Depends on: CRD types
 > Blocks: nothing (can be built in parallel with the controller)
 
@@ -252,3 +252,84 @@ Backend API tests (Go):
 8. `/api/v1/ui/pipelines/:name/graph` returns nodes with status.
 9. `/api/v1/ui/bundles/:name` returns evidence.
 10. SPA fallback: unmatched routes serve index.html.
+
+---
+
+## Present (✅)
+
+The following capabilities are implemented and shipped as of v0.8.x:
+
+- ✅ Embedded React UI served by controller binary (`go:embed`) — PR #19
+- ✅ DAG view: PromotionStep and PolicyGate nodes with per-node state colors — PR #19
+- ✅ PipelineList: all pipelines with current Bundle per environment — PR #19
+- ✅ NodeDetail side panel: step details, PR links, Bundle provenance — PR #19
+- ✅ BundleTimeline: artifact history with diff links — PR #19
+- ✅ PolicyGateCard: CEL expression + evaluation result — PR #19
+- ✅ Backend API proxy at `/api/v1/ui/` — PR #19
+- ✅ CSS design tokens (no framework) — PR #19
+- ✅ Dark/light mode: system-aware with manual toggle — PR #734
+- ✅ CSS token migration: 206 hardcoded hex values replaced — PR #738
+- ✅ URL routing: pipeline + node selection persisted in hash fragment — PR #742
+- ✅ Global keyboard shortcuts: `?` (help modal), `r` (refresh), `Esc` (dismiss) — PR #750
+- ✅ WCAG 2.1 AA automated check: axe-core in Playwright CI — PR #756
+- ✅ WCAG 2.1 AA color contrast: full color system audit, all violations fixed — PR #760/#765
+- ✅ Nested-interactive WCAG fix: PipelineLaneView keyboard nav — PR #759
+- ✅ Error boundaries on DAGView, PipelineList, NodeDetail, BundleTimeline — PR #755
+- ✅ Copy-to-clipboard on pipeline names and bundle hashes — PR #764
+- ✅ Stale data indicator: amber→red+pulse escalation after 30s — PR #767
+
+---
+
+## Future (🔲)
+
+The following capabilities are declared in `docs/aide/vision.md` §F8 but not yet implemented:
+
+- 🔲 Fleet-wide health dashboard (blocked pipelines, CI red, interventions scannable in one table) — epic #531
+- 🔲 Per-pipeline operations view (sortable health columns: inventory age, last merge, blockage time) — epic #531
+- 🔲 Per-stage detail (bake countdown, integration test pass rates, override history) — epic #531
+- 🔲 In-UI actions: approve, pause, resume, rollback, override gate (with mandatory reason) — epic #531
+- 🔲 Bundle promotion timeline with rollback records and override audit trail — epic #531
+- 🔲 Policy gate detail: current CEL variable values, evaluation history, time until unblocked — epic #531
+- 🔲 Responsive layout at 1280px width — epic #587
+- 🔲 Skeleton loading states (replace blank panels) — epic #587
+- 🔲 Virtualization for pipeline list with 50+ entries — epic #587
+- 🔲 `/` keyboard shortcut for search (no search field exists yet) — epic #587
+- 🔲 Focus trap in keyboard shortcuts modal (full WCAG compliance) — epic #587
+
+---
+
+## Enterprise polish design (added 2026-04-17)
+
+This section documents design decisions made during the epic #587 UI overhaul.
+It was not written before the work (a DDDD violation — see issue history). It is
+written now to serve as the design layer for remaining 🔲 Future items.
+
+### Theme system
+
+Two themes: `light` (default) and `dark`. Theme is stored in `localStorage` and
+detected from `prefers-color-scheme` on first load. All color values are CSS custom
+properties (`--color-*`). No hardcoded hex values anywhere in the component tree.
+Theme toggle in the top-right nav.
+
+### WCAG 2.1 AA requirements
+
+All interactive elements must pass axe-core checks in CI. Specific rules enforced:
+- `color-contrast`: minimum 4.5:1 ratio for normal text, 3:1 for large text
+- `nested-interactive`: no button inside button or anchor inside button
+- `aria-live` regions on status displays that update asynchronously
+
+The axe-core Playwright check runs in CI as a separate test file (`web/tests/a11y.spec.ts`).
+New UI PRs that introduce axe violations will fail CI.
+
+### URL routing
+
+Selection state (active pipeline, active node) is persisted in the URL hash fragment
+using a custom `useUrlState` hook. Format: `#pipeline=<name>&node=<id>`. This allows
+sharing links to specific pipeline states and restoring selection on page reload.
+
+### Keyboard navigation
+
+All shortcuts are suppressed when `document.activeElement` is an input, textarea,
+select, or contenteditable element. Shortcuts are registered in a single
+`useKeyboardShortcuts` hook on `App.tsx`. The `?` key opens a `KeyboardShortcutsPanel`
+modal listing all available shortcuts.
