@@ -329,17 +329,41 @@ kubectl create secret generic github-token \
 
 The controller will automatically retry the failed step on the next reconcile (within 30 seconds).
 
-### Symptom: "403 rate limit exceeded" in controller logs
+### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 
-GitHub's API rate limit (5000 req/hr for authenticated requests) has been hit. This typically happens when many pipelines are active simultaneously.
+GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rate limit has been hit. The **SCM circuit breaker** (shipped in v0.7.0) handles this automatically.
+
+**How the circuit breaker works:**
+1. After 5 consecutive failures (429 or 5xx), the circuit opens and all SCM calls are blocked for a cooldown period
+2. The cooldown respects `X-RateLimit-Reset` and `Retry-After` response headers when present
+3. After the cooldown, one probe request is allowed (half-open state)
+4. On probe success, the circuit closes and normal operation resumes
+
+**Checking circuit state in logs:**
 
 ```bash
-# Check current rate limit
+# Look for circuit open/close events
+kubectl logs -n kardinal-system deploy/kardinal-controller | grep "scm circuit"
+
+# Example log when circuit is open:
+# ERR scm: github scm: SCM circuit open until 2026-04-17T05:30:00Z
+```
+
+**Manual recovery if circuit stays open too long:**
+
+```bash
+# Restart the controller to reset in-memory circuit state
+kubectl rollout restart deployment/kardinal-controller -n kardinal-system
+```
+
+**Check current GitHub rate limit:**
+
+```bash
 TOKEN=$(kubectl get secret github-token -o jsonpath='{.data.token}' | base64 -d)
 curl -s -H "Authorization: token $TOKEN" https://api.github.com/rate_limit | jq .rate
 ```
 
-The SCM circuit breaker (PR #571, near-term) will handle this automatically once shipped. Until then: reduce the number of concurrent active Bundles, or use a GitHub App token (higher rate limits).
+**Long-term fix:** Use a GitHub App token (higher rate limits than PAT).
 
 ### Symptom: Push succeeds but PR is not opened
 

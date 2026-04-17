@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // GitHubProvider implements SCMProvider against the GitHub REST API.
@@ -38,6 +39,10 @@ type GitHubProvider struct {
 	// WebhookSecret is the HMAC secret for validating incoming webhook payloads.
 	WebhookSecret string
 
+	// circuit guards all outbound GitHub API calls. Opened on 5 consecutive
+	// failures (429 or 5xx); respects X-RateLimit-Reset / Retry-After headers.
+	circuit *CircuitBreaker
+
 	client *http.Client
 }
 
@@ -51,6 +56,7 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
+		circuit:       NewCircuitBreaker(),
 		client:        &http.Client{},
 	}
 }
@@ -321,6 +327,11 @@ func containsStr(s, substr string) bool {
 
 // do executes an authenticated GitHub API request.
 func (g *GitHubProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
+	// Check circuit breaker before making the call.
+	if err := g.circuit.Allow(); err != nil {
+		return fmt.Errorf("github scm: %w", err)
+	}
+
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -343,15 +354,25 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 
 	resp, err := g.client.Do(req)
 	if err != nil {
+		// Network error — record as failure with no retry-after hint.
+		g.circuit.RecordFailure(time.Time{})
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
+		if IsRateLimitError(resp.StatusCode) {
+			retryAfter := RetryAfterFromResponse(resp)
+			g.circuit.RecordFailure(retryAfter)
+		} else {
+			// Non-transient error (4xx) — record success to keep circuit closed.
+			g.circuit.RecordSuccess()
+		}
 		return fmt.Errorf("GitHub API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 
+	g.circuit.RecordSuccess()
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
