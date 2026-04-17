@@ -16,6 +16,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"text/tabwriter"
 
@@ -59,10 +60,14 @@ AuditEvents are written by the controller at key points:
 }
 
 func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit int) error {
-	client, ns, err := buildClient()
+	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("get auditevents: %w", err)
 	}
+	return getAuditEventsFn(cmd.OutOrStdout(), c, ns, pipeline, bundle, env, limit)
+}
+
+func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bundle, env string, limit int) error {
 
 	var aeList v1alpha1.AuditEventList
 	listOpts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
@@ -88,7 +93,7 @@ func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit i
 
 	events := aeList.Items
 	if len(events) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No audit events found.")
+		fmt.Fprintln(out, "No audit events found.")
 		return nil
 	}
 
@@ -103,15 +108,15 @@ func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit i
 	}
 
 	// Print table.
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
 	for _, ae := range events {
 		ts := ae.Spec.Timestamp.UTC().Format("2006-01-02T15:04Z")
 		msg := ae.Spec.Message
 		if len(msg) > 50 {
 			msg = msg[:47] + "..."
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			ts,
 			ae.Spec.PipelineName,
 			ae.Spec.BundleName,
@@ -121,5 +126,5 @@ func runGetAuditEvents(cmd *cobra.Command, pipeline, bundle, env string, limit i
 			msg,
 		)
 	}
-	return w.Flush()
+	return tw.Flush()
 }
