@@ -914,10 +914,12 @@
       "title": "kardinal get auditevents CLI command"
     },
     "688-better-errors": {
-      "state": "todo",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 689,
       "issue": "688",
-      "title": "feat(cli): improve error messages \u2014 actionable hints for common failures",
-      "size": "s"
+      "title": "improve error messages",
+      "note": "Merged as PR #689 by parallel session; my PR #690 was duplicate and closed"
     }
   },
   "session_heartbeats": {
