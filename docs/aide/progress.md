@@ -319,3 +319,12 @@
 |---|---|---|---|---|
 | 622-bundle-watch-node | feat(graph): Bundle Watch node | ✅ Complete | #667 merged | bundle.* live in Graph CEL scope |
 | 619-bundle-intent-filter | feat(graph): skipEnvironments via includeWhen | ✅ Complete | #671 merged | test fixes for new semantic included |
+
+---
+
+## queue-028 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 573-admission-webhook | feat(api): Pipeline/Bundle VAP extension | ✅ Complete | #670 merged | 2 new VAP policies |
+| 617-definition-nodes | feat(graph): Definition nodes for naming | ⛔ NEEDS HUMAN | — | False premise: Go strings not in krocodile CEL scope |
