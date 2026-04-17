@@ -782,16 +782,18 @@
       "size": "s"
     },
     "625-remove-upstream-verified": {
-      "state": "todo",
-      "issue": "625",
-      "title": "refactor(graph): remove spec.upstreamVerifiedN fields",
-      "size": "s"
+      "state": "in_review",
+      "issue": 625,
+      "pr_number": 660,
+      "title": "refactor(graph): replace upstreamVerifiedN fields with upstreamStates list",
+      "branch": "feat/625-remove-upstream-verified"
     },
     "656-watchkind-docs": {
-      "state": "todo",
-      "issue": "656",
-      "title": "docs(pipeline): document health.labelSelector field (WatchKind mode)",
-      "size": "xs"
+      "state": "in_review",
+      "issue": 656,
+      "pr_number": 659,
+      "title": "docs(health): document health.labelSelector WatchKind mode",
+      "branch": "feat/656-watchkind-docs"
     },
     "643-doc11-kro80-ref": {
       "state": "done",
@@ -822,18 +824,15 @@
     }
   },
   "handoff": {
-    "batch": "batch-024",
-    "completed_at": "2026-04-17T04:09:46Z",
+    "batch": "batch-025",
+    "completed_at": "2026-04-17T04:22:58Z",
     "open_prs": [
-      654,
       655,
-      657,
-      658
-    ],
-    "merged_prs": [
-      654
+      658,
+      659,
+      660
     ],
     "status": "in_progress",
-    "note": "PR #654 (krocodile upgrade) MERGED. PR #655 (promotionstep watch) CI lint fixed \u2014 awaiting review. PR #657/658 (changelog/progress) open."
+    "note": "Batch 025: PR #655 (promotionstep watch), #659 (watchkind docs), #660 (upstreamStates refactor) \u2014 all CI green, awaiting human review. PR #658 (changelog) also open."
   }
 }
