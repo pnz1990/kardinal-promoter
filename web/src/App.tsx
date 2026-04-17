@@ -20,6 +20,7 @@ import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
+import { useTheme } from './ThemeContext'
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
 
 const POLL_INTERVAL_MS = 5000
@@ -34,6 +35,7 @@ function formatElapsed(seconds: number | null): string {
 }
 
 export function App() {
+  const { theme, toggleTheme } = useTheme()
   const [pipelines, setPipelines] = useState<Pipeline[]>([])
   const [pipelinesLoading, setPipelinesLoading] = useState(true)
   const [pipelinesError, setPipelinesError] = useState<string | undefined>()
@@ -255,20 +257,20 @@ export function App() {
   const displayGraph = graph ?? staticGraph
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--color-bg)', color: 'var(--color-text)' }}>
       {/* Sidebar */}
       <aside style={{
         width: '240px',
         minWidth: '200px',
-        background: '#0f172a',
-        borderRight: '1px solid #1e293b',
+        background: 'var(--color-bg)',
+        borderRight: '1px solid var(--color-border-muted)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
       }}>
         <div style={{
           padding: '1rem',
-          borderBottom: '1px solid #1e293b',
+          borderBottom: '1px solid var(--color-border-muted)',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
@@ -283,13 +285,14 @@ export function App() {
             <span style={{
               fontWeight: 700,
               fontSize: '0.9rem',
-              color: '#e2e8f0',
+              color: 'var(--color-text)',
               letterSpacing: '0.05em',
             }}>
               KARDINAL
             </span>
           </div>
           {/* Staleness indicator with manual refresh button (#362) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <button
             onClick={manualRefresh}
             title="Refresh now"
@@ -315,10 +318,29 @@ export function App() {
             >
               {pipelinesError ? '⚠' : '●'} {formatElapsed(elapsedSeconds)}
             </span>
-            <span style={{ fontSize: '0.6rem', color: '#475569' }} title="Click to refresh">↺</span>
+            <span style={{ fontSize: '0.6rem', color: 'var(--color-text-faint)' }} title="Click to refresh">↺</span>
           </button>
+          {/* Theme toggle button (#722) */}
+          <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            style={{
+              background: 'none',
+              border: '1px solid var(--color-border)',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '0.7rem',
+              padding: '1px 4px',
+              color: 'var(--color-text-muted)',
+              lineHeight: 1,
+            }}
+          >
+            {theme === 'dark' ? '☀' : '☾'}
+          </button>
+          </div>
         </div>
-        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: '#475569', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--color-text-faint)', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>PIPELINES</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             {/* #462: view mode toggle — list sidebar vs ops table */}
@@ -327,13 +349,13 @@ export function App() {
               title={viewMode === 'list' ? 'Switch to Operations Table' : 'Switch to List View'}
               aria-label={viewMode === 'list' ? 'Switch to Operations Table' : 'Switch to List View'}
               style={{
-                background: viewMode === 'ops-table' ? '#1e293b' : 'none',
-                border: '1px solid ' + (viewMode === 'ops-table' ? '#6366f1' : '#334155'),
+                background: viewMode === 'ops-table' ? 'var(--color-surface)' : 'none',
+                border: '1px solid ' + (viewMode === 'ops-table' ? 'var(--color-accent)' : 'var(--color-border)'),
                 borderRadius: '4px',
                 cursor: 'pointer',
                 padding: '1px 5px',
                 fontSize: '0.65rem',
-                color: viewMode === 'ops-table' ? '#a5b4fc' : '#475569',
+                color: viewMode === 'ops-table' ? 'var(--color-accent)' : 'var(--color-text-faint)',
               }}
             >
               {viewMode === 'list' ? '⊞ Ops' : '☰ List'}
@@ -341,8 +363,8 @@ export function App() {
             {currentNamespace && (
               <span style={{
                 fontSize: '0.65rem',
-                color: '#334155',
-                background: '#1e293b',
+                color: 'var(--color-border)',
+                background: 'var(--color-surface)',
                 borderRadius: '4px',
                 padding: '1px 5px',
                 fontWeight: 400,
@@ -376,7 +398,7 @@ export function App() {
 
       {/* Ops table mode — full-width table replaces the main content area */}
       {viewMode === 'ops-table' ? (
-        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#050d1a' }}>
+        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg-deep)' }}>
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
@@ -387,7 +409,7 @@ export function App() {
         </main>
       ) : (
         <>{/* Main area — column layout for header + content row */}
-        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#0f172a' }}>
+        <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--color-bg)' }}>
         {!selectedPipeline ? (
           <div style={{ color: '#475569', padding: '3rem 2rem', textAlign: 'center' }}>
             {pipelines.length > 0 ? (
@@ -519,7 +541,7 @@ export function App() {
                       listStyle: 'none',
                       padding: '0.5rem 0',
                       margin: 0,
-                      borderLeft: '2px solid #1e293b',
+                      borderLeft: '2px solid var(--color-border-muted)',
                       paddingLeft: '0.75rem',
                     }}>
                       {bundles.map(b => (
@@ -532,7 +554,7 @@ export function App() {
                           color: '#cbd5e1',
                         }}>
                           <HealthChip state={b.phase} size="sm" />
-                          <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{b.name}</span>
+                          <span style={{ fontFamily: 'monospace', color: 'var(--color-text)' }}>{b.name}</span>
                           {b.provenance?.commitSHA && (
                             <span style={{ color: '#64748b', fontFamily: 'monospace' }}>
                               {b.provenance.commitSHA.slice(0, 8)}
@@ -615,7 +637,7 @@ export function App() {
               {/* DAG area */}
               <div style={{
                 flex: 1,
-                background: '#1e293b',
+                background: 'var(--color-surface)',
                 borderRadius: selectedNode ? '8px 0 0 8px' : '8px',
                 padding: '1rem',
                 minHeight: '300px',
