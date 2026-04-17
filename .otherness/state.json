@@ -5,7 +5,7 @@
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": [
-    "680-audit-step2"
+    "688-better-errors"
   ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
@@ -912,6 +912,12 @@
       "pr_number": 684,
       "issue": "683",
       "title": "kardinal get auditevents CLI command"
+    },
+    "688-better-errors": {
+      "state": "todo",
+      "issue": "688",
+      "title": "feat(cli): improve error messages \u2014 actionable hints for common failures",
+      "size": "s"
     }
   },
   "session_heartbeats": {
