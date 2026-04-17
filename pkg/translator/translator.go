@@ -207,14 +207,18 @@ func injectHealthWatchNodes(
 			// We use the flat top-level form as it is simpler and matches the
 			// krocodile source exactly.
 			//
-			// The namespace is passed separately via graph.GetNamespace() in krocodile
-			// (the Graph object's namespace drives the list namespace). We do NOT
-			// include namespace in the template to avoid conflicting with krocodile's
-			// namespace handling.
+			// Namespace: krocodile ≥ 81c5a03 changed WatchKind namespace from
+			// graph.GetNamespace() to tmpl["metadata"]["namespace"] (absent = cluster-wide).
+			// We must include the namespace to scope the watch to the environment namespace.
+			// Note: metadata.name is intentionally omitted — krocodile uses its absence to
+			// classify this as ReferenceWatchKind rather than ReferenceWatch.
 			nodeTemplate = map[string]interface{}{
 				"apiVersion": spec.APIVersion,
 				"kind":       spec.Kind,
 				"selector":   spec.LabelSelector,
+				"metadata": map[string]interface{}{
+					"namespace": spec.Namespace,
+				},
 			}
 		} else {
 			// Watch: identity-only template (apiVersion + kind + metadata.name).
@@ -230,6 +234,7 @@ func injectHealthWatchNodes(
 			}
 		}
 
+		// Build the watch node.
 		watchNode := graph.GraphNode{
 			ID:        nodeID,
 			Template:  nodeTemplate,

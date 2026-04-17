@@ -481,9 +481,16 @@ func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
 	assert.Equal(t, "Deployment", tmpl["kind"])
 
-	// WatchKind: must NOT have metadata block (krocodile WatchKind detection requires no metadata.name).
-	_, hasMetadata := tmpl["metadata"]
-	assert.False(t, hasMetadata, "WatchKind node template must NOT have metadata block")
+	// WatchKind: metadata IS present (with namespace for scoping) but must NOT have metadata.name.
+	// krocodile ≥ 81c5a03 changed WatchKind namespace from graph.GetNamespace() to
+	// tmpl["metadata"]["namespace"] (absent = cluster-wide list). We include namespace to scope
+	// the watch to the environment namespace. The absence of metadata.name is what krocodile uses
+	// to classify as ReferenceWatchKind (types.go:DetectReference checks !hasName).
+	md, hasMd := tmpl["metadata"].(map[string]interface{})
+	require.True(t, hasMd, "WatchKind node template must have metadata block (for namespace scoping)")
+	_, hasName := md["name"]
+	assert.False(t, hasName, "WatchKind node template must NOT have metadata.name")
+	assert.Equal(t, "prod", md["namespace"], "WatchKind must have metadata.namespace = env name")
 
 	// WatchKind: must have top-level "selector" field (krocodile node.go:reconcileWatchKind
 	// extracts selector from tmpl["selector"] or tmpl["metadata"]["selector"]).
@@ -491,10 +498,6 @@ func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	require.True(t, ok, "WatchKind node template must have top-level 'selector' of type map[string]string")
 	assert.Equal(t, "nginx", labelSelector["app"])
 	assert.Equal(t, "nginx", labelSelector["kardinal.io/pipeline"])
-
-	// WatchKind: must NOT have metadata block (krocodile WatchKind detection requires no metadata.name).
-	_, hasMetadata = tmpl["metadata"]
-	assert.False(t, hasMetadata, "WatchKind node template must NOT have metadata block")
 
 	// ReadyWhen must use list.all() form.
 	require.NotEmpty(t, watchNode.ReadyWhen)
@@ -540,9 +543,13 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 	watchKindNode := findHealthNode(gWatchKind, "uat")
 	require.NotNil(t, watchKindNode)
 	tmplWatchKind := watchKindNode.Template
-	// WatchKind: must NOT have metadata block (krocodile WatchKind has no metadata.name)
-	_, hasMetadata := tmplWatchKind["metadata"]
-	assert.False(t, hasMetadata, "WatchKind node must not have a metadata block")
+	// WatchKind: metadata IS present (with namespace) but must NOT have metadata.name.
+	// krocodile ≥ 81c5a03: WatchKind namespace from tmpl["metadata"]["namespace"], not graph.GetNamespace().
+	wkMd, hasMd := tmplWatchKind["metadata"].(map[string]interface{})
+	require.True(t, hasMd, "WatchKind node must have metadata block for namespace scoping")
+	_, hasName := wkMd["name"]
+	assert.False(t, hasName, "WatchKind node must not have metadata.name")
+	assert.Equal(t, "uat", wkMd["namespace"], "WatchKind must scope to env namespace")
 	// WatchKind: must have top-level selector
 	_, hasSelector := tmplWatchKind["selector"]
 	assert.True(t, hasSelector, "WatchKind node must have top-level selector")
