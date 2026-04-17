@@ -143,13 +143,14 @@ func runAuditSummary(cmd *cobra.Command, pipeline, sinceDuration string) error {
 
 	// Format output.
 	pipelineLabel := "all pipelines"
-	if pipeline != "" {
+	switch {
+	case pipeline != "":
 		pipelineLabel = pipeline
-	} else if len(pipelines) == 1 {
+	case len(pipelines) == 1:
 		for p := range pipelines {
 			pipelineLabel = p
 		}
-	} else if len(pipelines) > 1 {
+	case len(pipelines) > 1:
 		pipelineLabel = fmt.Sprintf("%d pipelines", len(pipelines))
 	}
 
