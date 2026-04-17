@@ -141,7 +141,7 @@ export function PipelineLaneView({
                 <span style={{
                   fontSize: '0.78rem',
                   fontWeight: 700,
-                  color: 'var(--color-text)',
+                  color: '#e2e8f0',  /* hardcoded: stage-card always has dark bg (#052e16, #1e1b4b, etc.) */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -152,15 +152,15 @@ export function PipelineLaneView({
               </div>
 
               {/* Active bundle name (truncated) */}
-              {activeBundleName && (
-                <div style={{
-                  fontSize: '0.65rem',
-                  fontFamily: 'monospace',
-                  color: '#64748b',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
+               {activeBundleName && (
+                 <div style={{
+                   fontSize: '0.65rem',
+                   fontFamily: 'monospace',
+                   color: '#8594a8',  /* hardcoded: 5.3:1 on dark stage-card backgrounds */
+                   overflow: 'hidden',
+                   textOverflow: 'ellipsis',
+                   whiteSpace: 'nowrap',
+                 }}
                 title={activeBundleName}>
                   {activeBundleName.length > 18 ? activeBundleName.slice(-16) : activeBundleName}
                 </div>
@@ -175,7 +175,7 @@ export function PipelineLaneView({
                   onClick={e => e.stopPropagation()}
                   style={{
                     fontSize: '0.65rem',
-                    color: 'var(--color-accent)',
+                    color: '#a5b4fc',  /* hardcoded: indigo-300 on dark stage card bg */
                     textDecoration: 'none',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -190,7 +190,7 @@ export function PipelineLaneView({
               {node.message && !showPRLink && (
                 <div style={{
                   fontSize: '0.65rem',
-                  color: 'var(--color-text-muted)',
+                  color: '#8594a8',  /* hardcoded: 5.3:1 on dark stage-card backgrounds */
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
