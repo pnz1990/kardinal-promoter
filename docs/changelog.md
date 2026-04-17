@@ -8,10 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-**DX improvements, Prometheus metrics**
+**DX improvements, Prometheus metrics, dark/light mode**
 
 ### Added
 
+- **Shell completion** — `kardinal completion bash|zsh|fish|powershell` (#731)
+- **Color output for `kardinal explain`** — `--color` flag, auto-detected TTY; Pass=green, Block=red, Pending=yellow (#730)
+- **Dark/light mode** — system-aware theme with manual toggle in the embedded UI (#734)
 - **Prometheus metrics** — `kardinal_bundles_total{phase}`, `kardinal_steps_total{type,result}`, `kardinal_gate_evaluations_total{result}`, `kardinal_pr_duration_seconds` histogram emitted from reconcilers (#726)
 - **`kardinal validate`** — validate Pipeline and PolicyGate YAML files offline; checks CEL syntax and schema (#713)
 - **`kardinal status`** — show controller health, CRD versions, and resource summary (#715)
