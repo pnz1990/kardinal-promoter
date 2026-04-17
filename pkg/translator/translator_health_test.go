@@ -106,7 +106,7 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 
 	// Template must be identity-only (Watch-reference auto-detection):
 	// Only apiVersion, kind, metadata.name/namespace
-	tmpl := watchNode.Template
+	tmpl := watchNode.Ref
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
 	assert.Equal(t, "Deployment", tmpl["kind"])
 	md := tmpl["metadata"].(map[string]interface{})
@@ -146,7 +146,7 @@ func TestInjectHealthWatchNodes_ArgoCD(t *testing.T) {
 	watchNode := findHealthNode(g, "prod")
 	require.NotNil(t, watchNode)
 
-	tmpl := watchNode.Template
+	tmpl := watchNode.Ref
 	assert.Equal(t, "argoproj.io/v1alpha1", tmpl["apiVersion"])
 	assert.Equal(t, "Application", tmpl["kind"])
 	md := tmpl["metadata"].(map[string]interface{})
@@ -172,7 +172,7 @@ func TestInjectHealthWatchNodes_Flux(t *testing.T) {
 	watchNode := findHealthNode(g, "staging")
 	require.NotNil(t, watchNode)
 
-	tmpl := watchNode.Template
+	tmpl := watchNode.Ref
 	assert.Equal(t, "kustomize.toolkit.fluxcd.io/v1", tmpl["apiVersion"])
 	assert.Equal(t, "Kustomization", tmpl["kind"])
 	md := tmpl["metadata"].(map[string]interface{})
@@ -198,7 +198,7 @@ func TestInjectHealthWatchNodes_ArgoRollouts(t *testing.T) {
 	require.NotNil(t, watchNode)
 	assert.Equal(t, "healthProdEu", watchNode.ID, "hyphens in env name become camelCase word boundaries")
 
-	tmpl := watchNode.Template
+	tmpl := watchNode.Ref
 	assert.Equal(t, "argoproj.io/v1alpha1", tmpl["apiVersion"])
 	assert.Equal(t, "Rollout", tmpl["kind"])
 	md := tmpl["metadata"].(map[string]interface{})
@@ -220,7 +220,7 @@ func TestInjectHealthWatchNodes_Flagger(t *testing.T) {
 	watchNode := findHealthNode(g, "prod")
 	require.NotNil(t, watchNode)
 
-	tmpl := watchNode.Template
+	tmpl := watchNode.Ref
 	assert.Equal(t, "flagger.app/v1beta1", tmpl["apiVersion"])
 	assert.Equal(t, "Canary", tmpl["kind"])
 	assert.Contains(t, watchNode.ReadyWhen[0], "Succeeded")
@@ -384,7 +384,7 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 			watchNode := findHealthNode(g, "prod")
 			require.NotNil(t, watchNode, "health Watch node must exist for type %s", tc.healthType)
 
-			tmpl := watchNode.Template
+			tmpl := watchNode.Ref
 
 			// Only allowed top-level keys: apiVersion, kind, metadata
 			for k := range tmpl {
@@ -477,7 +477,8 @@ func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	watchNode := findHealthNode(g, "prod")
 	require.NotNil(t, watchNode, "health node for prod must be present")
 
-	tmpl := watchNode.Template
+	// krocodile ≥ 05db829: WatchKind nodes use watch: keyword, not ref: or template:
+	tmpl := watchNode.Watch
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
 	assert.Equal(t, "Deployment", tmpl["kind"])
 
@@ -520,7 +521,8 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 
 	watchNode := findHealthNode(gWatch, "uat")
 	require.NotNil(t, watchNode)
-	tmplWatch := watchNode.Template
+	// krocodile ≥ 05db829: single-named Watch nodes use ref: keyword
+	tmplWatch := watchNode.Ref
 	// Watch: must have metadata.name
 	md := tmplWatch["metadata"].(map[string]interface{})
 	assert.Equal(t, "myapp", md["name"])
@@ -542,9 +544,9 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 
 	watchKindNode := findHealthNode(gWatchKind, "uat")
 	require.NotNil(t, watchKindNode)
-	tmplWatchKind := watchKindNode.Template
+	// krocodile ≥ 05db829: WatchKind nodes use watch: keyword
+	tmplWatchKind := watchKindNode.Watch
 	// WatchKind: metadata IS present (with namespace) but must NOT have metadata.name.
-	// krocodile ≥ 81c5a03: WatchKind namespace from tmpl["metadata"]["namespace"], not graph.GetNamespace().
 	wkMd, hasMd := tmplWatchKind["metadata"].(map[string]interface{})
 	require.True(t, hasMd, "WatchKind node must have metadata block for namespace scoping")
 	_, hasName := wkMd["name"]

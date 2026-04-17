@@ -377,12 +377,12 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	// This is a single named Watch reference (not WatchKind) — the translator
 	// knows the exact Bundle name at graph generation time.
 	//
-	// krocodile >= 81c5a03: Watch node must NOT have ReadyWhen/PropagateWhen/IncludeWhen.
-	// deriveReference upgrades Watch+signals -> ReferenceUnresolved -> SSA on Bundle CRD.
-	// The Bundle Watch is read-only; all signals belong on PromotionStep nodes.
+	// krocodile ≥ 05db829 (explicit-keyword schema): identity-only Watch nodes
+	// must use the ref: keyword, not template:. template: always means Own.
+	// The Bundle Watch is read-only — use ref: to dereference it into scope.
 	bundleWatchNode := GraphNode{
 		ID: "bundle",
-		Template: map[string]interface{}{
+		Ref: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
 			"kind":       "Bundle",
 			"metadata": map[string]interface{}{
@@ -390,7 +390,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				"namespace": bundle.Namespace,
 			},
 		},
-		// ReadyWhen/PropagateWhen intentionally omitted — Watch node, not Owned node.
+		// ReadyWhen/PropagateWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
 
