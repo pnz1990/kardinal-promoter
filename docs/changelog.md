@@ -42,9 +42,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **UI: Kubernetes events stream** — timestamped event history per PromotionStep in NodeDetail (#560)
 - **UI: cross-environment error aggregation** — groups PromotionStep failures by type across environments; shows affected count (#564)
 - **krocodile upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
+- **krocodile upgraded to `81c5a03`** — P0 correctness fixes: WatchKind cache loss on GET error, empty WatchKind vacuous-true; stable topological sort (#654)
 
 ### Fixed
 
+- **PromotionStep Watch on PRStatus and PolicyGate** — reconciler now re-enqueues immediately when PRStatus.status.merged flips or PolicyGate.status.ready changes, eliminating polling lag in WaitingForMerge state (#655)
 - **Bundle reconciler watches Pipeline changes** — Graph is regenerated when Pipeline spec changes (new environments, updated policyNamespaces, changed git config). Previously Pipeline changes were invisible to in-flight Bundles (#634)
 - **Subscription deduplication under HA** — uses label selector (`kardinal.io/source-digest`) instead of status field comparison; safe under concurrent reconciles and multiple controller replicas (#636)
 - **CEL documentation accuracy** — corrected false claims about `pkg/cel/NewCELEnvironment()` (does not exist) and `schedule.*` (map variable, not CEL library function) in design docs and code comments (#631)
