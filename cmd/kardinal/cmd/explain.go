@@ -214,17 +214,44 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return rows[i].name < rows[j].name
 	})
 
-	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	cr := newColorizer(w, forceColor)
-	if _, err := fmt.Fprintln(tw, cr.bold("ENVIRONMENT")+"\t"+cr.bold("TYPE")+"\t"+cr.bold("NAME")+"\t"+cr.bold("STATE")+"\t"+cr.bold("EXPRESSION")+"\t"+cr.bold("REASON")); err != nil {
+
+	// When color is enabled, render the table to a buffer first (plain text,
+	// no ANSI codes), then post-process each line to colorize the STATE value.
+	// This avoids the tabwriter byte-width alignment bug caused by inserting
+	// ANSI escape sequences into a middle column while tabwriter is computing
+	// column widths from byte counts.
+	var tableBuf strings.Builder
+	tw := tabwriter.NewWriter(&tableBuf, 0, 0, 3, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.kind, row.name, cr.colorState(row.state), row.expression, row.reason,
+			row.environment, row.kind, row.name, row.state, row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush explain table: %w", err)
+	}
+
+	// Post-process: if color is enabled, wrap state keywords in ANSI codes.
+	// Each line has already been aligned by tabwriter; we only replace the
+	// exact state word (surrounded by spaces or at end of line) to avoid
+	// touching the header or embedded text.
+	output := tableBuf.String()
+	if cr.enabled {
+		for _, state := range []string{"Pass", "Block", "Pending", "Running", "Succeeded", "Verified", "Failed"} {
+			colored := cr.colorState(state)
+			// Only replace whole-word occurrences (space-bounded or end of line).
+			output = strings.ReplaceAll(output, " "+state+" ", " "+colored+" ")
+			output = strings.ReplaceAll(output, " "+state+"\n", " "+colored+"\n")
+		}
+	}
+	if _, err := fmt.Fprint(w, output); err != nil {
+		return fmt.Errorf("write explain output: %w", err)
 	}
 
 	if len(rows) == 0 {
@@ -249,10 +276,10 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		} else {
 			emptyMsg = fmt.Sprintf("No steps or gates found for pipeline %q\n", pipeline)
 		}
-		if _, err := fmt.Fprint(tw, emptyMsg); err != nil {
+		if _, err := fmt.Fprint(w, emptyMsg); err != nil {
 			return fmt.Errorf("write empty message: %w", err)
 		}
 	}
 
-	return tw.Flush()
+	return nil
 }
