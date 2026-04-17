@@ -157,8 +157,7 @@ func (cb *CircuitBreaker) RecordFailure(retryAfter time.Time) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
-	switch cb.currentState() {
-	case CircuitHalfOpen:
+	if cb.currentState() == CircuitHalfOpen {
 		// Probe failed — reopen the circuit with doubled timeout
 		backoff := cb.backoffDuration(cb.consecutiveFails)
 		cb.openUntil = latestTime(retryAfter, time.Now().Add(backoff))
