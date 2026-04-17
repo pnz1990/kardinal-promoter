@@ -85,11 +85,8 @@ All of the following are implemented and shipped:
 
 **K-10: Subscription CRD (passive Bundle creation)**
 - `Subscription` CRD definition complete; reconciler creates Bundles on new artifacts
-
-    !!! warning "Source watchers are stubs"
-        OCI and Git source watchers always return `Changed: false`. Bundle auto-creation
-        from Subscriptions does not work yet. See [#491](https://github.com/pnz1990/kardinal-promoter/issues/491)
-        and [#493](https://github.com/pnz1990/kardinal-promoter/issues/493).
+- `OCIWatcher` polls OCI registries for new image tags matching a regex filter (#491)
+- `GitWatcher` polls Git branches for new commits via Git Smart HTTP protocol (#493)
 
 **K-11: Cross-stage history CEL functions**
 - `upstream.staging.soakMinutes` — elapsed minutes since upstream Verified
