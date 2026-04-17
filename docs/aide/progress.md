@@ -344,3 +344,11 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 673-audit-log | feat(api): AuditEvent CRD — immutable promotion event log | ✅ Complete | #679 merged | 4 tests; fire-and-forget; idempotent |
+
+---
+
+## queue-031 (STANDALONE batch — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 680-audit-log-step2 | feat(api): AuditEvent step 2 — gate and rollback events | ✅ Complete | #681 merged | GateEvaluated + RollbackStarted; policygate write on ready-flip |
