@@ -8,7 +8,8 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write   # required for OIDC-based cosign keyless signing (future)
+  id-token: write       # required for OIDC-based cosign keyless signing
+  attestations: write   # required for actions/attest-build-provenance (SLSA)
 
 jobs:
   release:
@@ -113,6 +114,7 @@ jobs:
 
       # ── Build kardinal-promoter controller image ───────────────────────────
       - name: Build and push kardinal-promoter controller image (multi-arch)
+        id: build-controller
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -125,6 +127,13 @@ jobs:
             org.opencontainers.image.title=kardinal-promoter-controller
             org.opencontainers.image.version=${{ env.VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
+
+      # ── SLSA Level 2 provenance ──────────────────────────────────────────────
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/pnz1990/kardinal-promoter/controller
+          subject-digest: ${{ steps.build-controller.outputs.digest }}
 
       # ── Cosign keyless image signing ──────────────────────────────────────────
       - name: Install cosign
