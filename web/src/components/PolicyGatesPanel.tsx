@@ -77,7 +77,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
         style={{
           background: 'none',
           border: 'none',
-          color: '#6366f1',
+          color: 'var(--color-accent)',
           cursor: 'pointer',
           fontSize: '0.8rem',
           padding: '0.25rem 0',

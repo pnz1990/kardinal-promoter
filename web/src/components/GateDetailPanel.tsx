@@ -165,7 +165,7 @@ export function GateDetailPanel({ node, gates, onClose }: Props) {
         borderBottom: '1px solid #1e293b',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: '#6366f1' }}>🔒</span>
+          <span style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'var(--color-accent)' }}>🔒</span>
           <span style={{ fontWeight: 600, color: 'var(--color-text)', fontFamily: 'monospace', fontSize: '0.82rem' }}>
             {node.label}
           </span>

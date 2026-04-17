@@ -39,10 +39,10 @@ function stageStateClass(state: string): string {
 function stageAccentColor(state: string): string {
   const health = kardinalStateToHealth(state)
   switch (health) {
-    case 'Ready':       return '#22c55e'
+    case 'Ready':       return 'var(--color-success)'
     case 'Error':
     case 'Degraded':    return '#ef4444'
-    case 'Reconciling': return '#6366f1'
+    case 'Reconciling': return 'var(--color-accent)'
     default:            return 'var(--color-text-muted)'
   }
 }
@@ -158,7 +158,7 @@ export function PipelineLaneView({
                   onClick={e => e.stopPropagation()}
                   style={{
                     fontSize: '0.65rem',
-                    color: '#6366f1',
+                    color: 'var(--color-accent)',
                     textDecoration: 'none',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -192,7 +192,7 @@ export function PipelineLaneView({
                     style={{
                       fontSize: '0.6rem',
                       background: 'var(--color-surface)',
-                      color: '#6366f1',
+                      color: 'var(--color-accent)',
                       border: '1px solid #334155',
                       borderRadius: '3px',
                       padding: '1px 5px',

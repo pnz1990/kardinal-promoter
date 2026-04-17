@@ -32,7 +32,7 @@ function EmptyState() {
   return (
     <div style={{ padding: '1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
       <p style={{ marginBottom: '0.75rem', fontStyle: 'italic' }}>No pipelines found.</p>
-      <p style={{ marginBottom: '0.5rem', color: '#64748b' }}>Get started:</p>
+      <p style={{ marginBottom: '0.5rem', color: 'var(--color-text-muted)' }}>Get started:</p>
       <code style={{
         display: 'block',
         background: 'var(--color-bg)',
@@ -47,7 +47,7 @@ function EmptyState() {
       }}>
         kubectl apply -f examples/quickstart/pipeline.yaml
       </code>
-      <p style={{ marginBottom: '0.4rem', color: '#64748b' }}>Or use the wizard:</p>
+      <p style={{ marginBottom: '0.4rem', color: 'var(--color-text-muted)' }}>Or use the wizard:</p>
       <code style={{
         display: 'block',
         background: 'var(--color-bg)',
@@ -64,7 +64,7 @@ function EmptyState() {
         href="https://github.com/pnz1990/kardinal-promoter/blob/main/docs/quickstart.md"
         target="_blank"
         rel="noopener noreferrer"
-        style={{ color: '#6366f1', fontSize: '0.75rem', textDecoration: 'none' }}
+        style={{ color: 'var(--color-accent)', fontSize: '0.75rem', textDecoration: 'none' }}
         aria-label="View quickstart documentation"
       >
         View quickstart docs ↗
@@ -192,7 +192,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
       )}
       <ul role={isMultiNamespace ? 'group' : 'listbox'} aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {filteredPipelines.length === 0 && debouncedQuery && (
-          <li role="option" aria-selected={false} style={{ padding: '0.75rem 1rem', color: '#64748b', fontSize: '0.8rem' }}>
+          <li role="option" aria-selected={false} style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
             No pipelines match "{debouncedQuery}"
           </li>
         )}
@@ -304,7 +304,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
 
              {/* Sub-line: env count + health bar + active bundle (#342) */}
             {(bundle || envCount > 0) && (
-              <div style={{ fontSize: '0.7rem', color: '#64748b', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
                 {/* Multi-segment health bar when env states are available (#342) */}
                 {p.environmentStates && Object.keys(p.environmentStates).length > 0 ? (
                   <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -317,13 +317,13 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                         counts[phase] = (counts[phase] ?? 0) + 1
                       }
                       const phaseColor: Record<string, string> = {
-                        Verified: '#22c55e', Promoting: '#6366f1', WaitingForMerge: '#6366f1',
-                        HealthChecking: '#a78bfa', Failed: '#ef4444', Pending: 'var(--color-text-faint)',
+                        Verified: 'var(--color-success)', Promoting: 'var(--color-accent)', WaitingForMerge: 'var(--color-accent)',
+                        HealthChecking: '#a78bfa', Failed: 'var(--color-error)', Pending: 'var(--color-text-faint)',
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} style={{
                           fontSize: '0.6rem',
-                          color: phaseColor[phase] ?? '#64748b',
+                          color: phaseColor[phase] ?? 'var(--color-text-muted)',
                           fontWeight: 600,
                         }} title={`${count} env${count !== 1 ? 's' : ''} in ${phase}`}>
                           {count} {phase === 'WaitingForMerge' ? 'PR' : phase === 'HealthChecking' ? 'health' : phase.toLowerCase()}

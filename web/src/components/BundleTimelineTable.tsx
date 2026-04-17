@@ -209,7 +209,7 @@ export function BundleTimelineTable({ bundles, pageSize = DEFAULT_PAGE_SIZE }: P
             style={{
               background: 'none',
               border: 'none',
-              color: '#6366f1',
+              color: 'var(--color-accent)',
               cursor: 'pointer',
               fontSize: '0.75rem',
               padding: '0',

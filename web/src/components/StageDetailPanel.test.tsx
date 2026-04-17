@@ -87,7 +87,7 @@ describe('stepIconFor', () => {
   it('returns green check for completed step (index < currentIndex)', () => {
     const result = stepIconFor(0, 3, true)
     expect(result.icon).toBe('✓')
-    expect(result.color).toBe('#22c55e')
+    expect(result.color).toBe('var(--color-success)')  // was #22c55e, now CSS var (#757)
   })
 
   it('returns play icon for active current step', () => {

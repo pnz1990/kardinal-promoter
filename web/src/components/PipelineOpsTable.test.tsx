@@ -86,7 +86,7 @@ describe('PipelineOpsTable', () => {
     const blockerCell = container.querySelector('td:nth-child(3)')
     const style = blockerCell?.getAttribute('style') ?? ''
     expect(
-      style.includes('#22c55e') || style.includes('rgb(34, 197, 94)')
+      style.includes('#22c55e') || style.includes('rgb(34, 197, 94)') || style.includes('var(--color-success)')
     ).toBe(true)
   })
 

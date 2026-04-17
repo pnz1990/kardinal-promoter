@@ -57,7 +57,7 @@ export function stepIconFor(index: number, currentIndex: number, active: boolean
   icon: string
   color: string
 } {
-  if (index < currentIndex) return { icon: '✓', color: '#22c55e' }
+  if (index < currentIndex) return { icon: '✓', color: 'var(--color-success)' }
   if (index === currentIndex) {
     if (!active) return { icon: '○', color: 'var(--color-text-faint)' }
     return { icon: '▶', color: '#f59e0b' }
@@ -181,7 +181,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
               style={{
                 height: '100%',
                 width: `${bakePct(bakeElapsed, bakeTarget)}%`,
-                background: bakeElapsed >= bakeTarget ? '#22c55e' : '#6366f1',
+                background: bakeElapsed >= bakeTarget ? 'var(--color-success)' : 'var(--color-accent)',
                 borderRadius: '2px',
                 transition: 'width 0.5s ease',
               }}
@@ -202,7 +202,7 @@ export function StageDetailPanel({ node, steps, onClose }: Props) {
             href={step?.prURL ?? node.prURL}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ color: '#6366f1', textDecoration: 'none', fontSize: '0.75rem' }}
+            style={{ color: 'var(--color-accent)', textDecoration: 'none', fontSize: '0.75rem' }}
             aria-label="Open pull request"
           >
             View PR ↗

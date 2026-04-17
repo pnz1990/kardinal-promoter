@@ -180,8 +180,8 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         alignItems: 'center',
         gap: '0.5rem',
         padding: '0.5rem 0.75rem',
-        background: '#0c1628',
-        border: '1px solid #1e293b',
+        background: 'var(--color-bg-deep)',
+        border: '1px solid var(--color-border-muted)',
         borderRadius: '6px',
         flexWrap: 'wrap',
         marginBottom: '0.75rem',
@@ -216,7 +216,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
       <SummaryBadge
         label="Healthy"
         count={s.healthy}
-        color="#22c55e"
+        color="var(--color-success)"
         bgColor="#052e16"
         borderColor="#166534"
         active={activeFilter === 'healthy'}

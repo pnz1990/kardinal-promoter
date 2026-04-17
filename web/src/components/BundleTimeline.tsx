@@ -34,8 +34,8 @@ function phaseCSSClass(phase: string): string {
 /** Accent color for glow/dot — kept for inline uses (boxShadow, dot fill). */
 function phaseAccentColor(phase: string): string {
   switch (phase) {
-    case 'Promoting': return '#6366f1'
-    case 'Verified':  return '#22c55e'
+    case 'Promoting': return 'var(--color-accent)'
+    case 'Verified':  return 'var(--color-success)'
     case 'Failed':    return '#ef4444'
     case 'Superseded': return 'var(--color-text-faint)'
     case 'Available': return '#f59e0b'

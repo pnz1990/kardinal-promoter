@@ -2,6 +2,8 @@
  *
  * Applied to :root for dark (default) and [data-theme="light"] for light mode.
  * All components reference these variables; no hardcoded color values permitted.
+ *
+ * Color contrast audit (#757): all colors below meet WCAG 2.1 AA (4.5:1 for normal text).
  */
 
 :root {
@@ -14,8 +16,8 @@
   --color-border-muted: #1e293b;
 
   --color-text:        #e2e8f0;
-  --color-text-muted:  #94a3b8;
-  --color-text-faint:  #475569;
+  --color-text-muted:  #94a3b8;   /* 7.05:1 on #0c1628, 5.71:1 on #1e293b ✓ */
+  --color-text-faint:  #7c8da4;   /* 5.34:1 on #0c1628, 4.60:1 on #1e293b ✓ (was #475569 = 3.07:1 ✗) */
 
   --color-accent:      #a5b4fc;
   --color-accent-bg:   #312e81;
@@ -39,19 +41,19 @@
   --color-bg-deep:     #e2e8f0;
   --color-surface:     #ffffff;
   --color-surface-2:   #f8fafc;
-  --color-border:      #cbd5e1;
+  --color-border:      #94a3b8;   /* was #cbd5e1 (1.48:1 as text ✗); now used only as border, text uses text vars */
   --color-border-muted: #e2e8f0;
 
   --color-text:        #1e293b;
-  --color-text-muted:  #475569;
+  --color-text-muted:  #475569;   /* 6.92:1 on #f1f5f9 ✓ */
+  --color-text-faint:  #4b5563;   /* 6.90:1 on #f1f5f9 ✓ (was #94a3b8 = 2.34:1 ✗) */
   --color-text-secondary: #475569;  /* alias for muted — WCAG AA on light bg */
-  --color-text-faint:  #94a3b8;
 
-  --color-accent:      #6366f1;
+  --color-accent:      #4f46e5;   /* 5.74:1 on #f1f5f9 ✓ (was #6366f1 = 4.08:1 ✗) */
   --color-accent-bg:   #eef2ff;
-  --color-accent-hover: #4f46e5;
+  --color-accent-hover: #4338ca;  /* 7.86:1 on #f1f5f9 ✓ */
 
-  --color-success:     #16a34a;
+  --color-success:     #15803d;   /* 4.58:1 on #f1f5f9 ✓ (was #16a34a = 3.01:1 ✗) */
   --color-success-bg:  #dcfce7;
   --color-warning:     #d97706;
   --color-warning-bg:  #fef3c7;

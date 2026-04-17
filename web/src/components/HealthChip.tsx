@@ -114,7 +114,7 @@ export function healthStateClass(state: HealthState): string {
 export function healthChipColors(state: HealthState): { bg: string; text: string; border: string } {
   switch (state) {
     case 'Ready':
-      return { bg: '#14532d', text: 'var(--color-success)', border: '#22c55e' }
+      return { bg: '#14532d', text: 'var(--color-success)', border: 'var(--color-success)' }
     case 'Reconciling':
       return { bg: '#78350f', text: 'var(--color-warning)', border: '#f59e0b' }
     case 'Error':
@@ -124,10 +124,10 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
     case 'Degraded':
       return { bg: '#7c2d12', text: '#fb923c', border: '#f97316' }
     case 'Paused':
-      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: '#6366f1' }
+      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: 'var(--color-accent)' }
     case 'Unknown':
     default:
-      return { bg: 'var(--color-surface)', text: '#64748b', border: 'var(--color-border)' }
+      return { bg: 'var(--color-surface)', text: 'var(--color-text-faint)', border: 'var(--color-border)' }
   }
 }
 
