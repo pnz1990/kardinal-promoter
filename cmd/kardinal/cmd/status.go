@@ -20,7 +20,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -46,7 +45,7 @@ For detailed diagnostics, use 'kardinal doctor'.`,
 func runStatus(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 
-	client, ns, err := buildClient()
+	client, _, err := buildClient()
 	if err != nil {
 		return err // buildClient already provides actionable message
 	}
@@ -64,12 +63,8 @@ func runStatus(cmd *cobra.Command) error {
 		}
 	}
 
-	// 2. Pipeline count
+	// 2. Pipeline count (all namespaces)
 	var pipelines v1alpha1.PipelineList
-	if err := client.List(ctx, &pipelines, sigs_client.InNamespace(ns)); err == nil {
-		// also check all namespaces
-	}
-	// Try all namespaces
 	if err := client.List(ctx, &pipelines); err != nil {
 		_, _ = fmt.Fprintln(out, "Controller: "+ctrlVersion)
 		return fmt.Errorf("list pipelines: %w", err)
@@ -77,12 +72,13 @@ func runStatus(cmd *cobra.Command) error {
 
 	// 3. Bundle counts
 	var bundles v1alpha1.BundleList
+
 	_ = client.List(ctx, &bundles)
 
 	var activeBundles, failedPipelines int
 	failedPipelineNames := []string{}
 	for _, b := range bundles.Items {
-		phase := string(b.Status.Phase)
+		phase := b.Status.Phase
 		if phase == "Promoting" || phase == "Pending" {
 			activeBundles++
 		}
