@@ -34,15 +34,10 @@ type PromotionStepSpec struct {
 	Inputs map[string]string `json:"inputs,omitempty"`
 
 	// UpstreamStates holds the resolved state of all upstream PromotionSteps.
-	// Each element is a string like "Verified" or "Pending" — set by the kro Graph
-	// controller via CEL expression substitution. The list contains one entry per
-	// upstream environment; the Graph's propagateWhen on the upstream node ensures
-	// data only flows here once all upstreams have reached Verified.
-	//
-	// Replaces the N-field upstreamVerified / upstreamVerified2 / ... pattern (#625).
-	// Using a single list avoids CRD field proliferation for high-fan-in environments.
-	// krocodile's collectStrings() scans []any recursively, so list elements with
-	// ${upstream.status.state} CEL expressions correctly create dependency edges.
+	// Each entry is a string like "Verified", set by the kro Graph controller via CEL
+	// expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2
+	// pattern (issue 625) -- a single list scales to any number of upstream environments.
+	// krocodile collectStrings() scans []any recursively so list items create DAG edges.
 	// +optional
 	UpstreamStates []string `json:"upstreamStates,omitempty"`
 
