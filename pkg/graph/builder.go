@@ -594,11 +594,6 @@ func buildPolicyGateNode(
 		"recheckInterval": gate.Spec.RecheckInterval,
 	}
 
-	// Add upstream reference to create dependency edge
-	if len(upstreams) > 0 {
-		templateSpec["upstreamEnvironment"] = fmt.Sprintf("${%s.status.state}", upstreams[0])
-	}
-
 	return GraphNode{
 		ID: nodeID,
 		Template: map[string]interface{}{
