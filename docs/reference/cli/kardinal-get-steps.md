@@ -30,5 +30,5 @@ kardinal get steps <pipeline> [flags]
 
 ### SEE ALSO
 
-* [kardinal get](kardinal_get.md)	 - Display one or more kardinal resources
+* [kardinal get](kardinal-get.md)	 - Display one or more kardinal resources
 

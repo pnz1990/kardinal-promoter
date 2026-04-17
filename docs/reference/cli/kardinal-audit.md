@@ -1,11 +1,11 @@
-## kardinal policy
+## kardinal audit
 
-Manage and evaluate promotion policy gates
+Audit log commands — view and summarize promotion events
 
 ### Options
 
 ```
-  -h, --help   help for policy
+  -h, --help   help for audit
 ```
 
 ### Options inherited from parent commands
@@ -20,7 +20,4 @@ Manage and evaluate promotion policy gates
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal policy list](kardinal-policy-list.md)	 - List PolicyGates
-* [kardinal policy simulate](kardinal-policy-simulate.md)	 - Simulate PolicyGate evaluation for a hypothetical promotion context
-* [kardinal policy test](kardinal-policy-test.md)	 - Validate PolicyGate YAML syntax and dry-run CEL expressions
-
+* [kardinal audit summary](kardinal-audit-summary.md)	 - Aggregate promotion metrics from AuditEvent records

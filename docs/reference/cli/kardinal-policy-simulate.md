@@ -39,5 +39,5 @@ kardinal policy simulate [flags]
 
 ### SEE ALSO
 
-* [kardinal policy](kardinal_policy.md)	 - Manage and evaluate promotion policy gates
+* [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
 

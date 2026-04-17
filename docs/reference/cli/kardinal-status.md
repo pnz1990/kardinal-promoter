@@ -1,11 +1,26 @@
-## kardinal policy
+## kardinal status
 
-Manage and evaluate promotion policy gates
+Show controller health and cluster resource summary
+
+### Synopsis
+
+Show the health of the kardinal controller and a summary of managed resources.
+
+Displays:
+  - Controller pod status and version
+  - Count of Pipelines and active Bundles
+  - Any pipelines currently in a failed/stuck state
+
+For detailed diagnostics, use 'kardinal doctor'.
+
+```
+kardinal status [flags]
+```
 
 ### Options
 
 ```
-  -h, --help   help for policy
+  -h, --help   help for status
 ```
 
 ### Options inherited from parent commands
@@ -20,7 +35,3 @@ Manage and evaluate promotion policy gates
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal policy list](kardinal-policy-list.md)	 - List PolicyGates
-* [kardinal policy simulate](kardinal-policy-simulate.md)	 - Simulate PolicyGate evaluation for a hypothetical promotion context
-* [kardinal policy test](kardinal-policy-test.md)	 - Validate PolicyGate YAML syntax and dry-run CEL expressions
-
