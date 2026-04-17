@@ -759,15 +759,11 @@
       "dependency_mode": "merged"
     },
     "646-krocodile-upgrade": {
-      "state": "in_review",
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 654,
-      "assigned_to": "STANDALONE-646-krocodile-upgrade",
-      "branch": "feat/646-krocodile-upgrade",
-      "title": "chore(graph): upgrade krocodile pin to 81c5a03",
       "issue": "646",
-      "size": "s",
-      "qa_approved": true,
-      "awaiting_human_review": true
+      "title": "krocodile upgrade to 81c5a03"
     },
     "643-doc11-stale-refs": {
       "state": "done",
@@ -795,15 +791,11 @@
       "size": "s"
     },
     "901-watchkind-refactor": {
-      "state": "in_review",
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 652,
-      "assigned_to": "STANDALONE-901-watchkind-refactor",
-      "branch": "feat/901-watchkind-refactor",
-      "title": "chore(graph): refactor health Watch nodes to WatchKind",
       "issue": "611",
-      "size": "m",
-      "qa_approved": true,
-      "awaiting_human_review": true
+      "title": "WatchKind health nodes"
     }
   },
   "session_heartbeats": {
