@@ -537,14 +537,29 @@ func findSubstr(s, sub string) bool {
 	return false
 }
 
-func findUpstreamRef(t *testing.T, n graph.GraphNode) string {
+// findUpstreamRefs returns all upstream state CEL references from the upstreamStates
+// list field. Returns empty slice if no upstreams are set.
+// Updated in #625: upstreamVerified/upstreamVerified2 → upstreamStates []string.
+func findUpstreamRefs(t *testing.T, n graph.GraphNode) []interface{} {
 	t.Helper()
 	spec, ok := n.Template["spec"].(map[string]interface{})
 	if !ok {
+		return nil
+	}
+	refs, _ := spec["upstreamStates"].([]interface{})
+	return refs
+}
+
+// findUpstreamRef returns the first upstream state CEL reference, or "" if none.
+// Kept for backward compat with existing test assertions.
+func findUpstreamRef(t *testing.T, n graph.GraphNode) string {
+	t.Helper()
+	refs := findUpstreamRefs(t, n)
+	if len(refs) == 0 {
 		return ""
 	}
-	uv, _ := spec["upstreamVerified"].(string)
-	return uv
+	s, _ := refs[0].(string)
+	return s
 }
 
 // TestBuilder_PolicyGateScopeLabelsPropagate verifies that the scope and applies-to

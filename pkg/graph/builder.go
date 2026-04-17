@@ -498,17 +498,17 @@ func buildPromotionStepNode(
 		"prStatusRef": fmt.Sprintf("${%s.metadata.name}", prStatusNodeID),
 	}
 
-	// Add upstream reference fields (creates CEL dependency edges)
+	// Add upstream state references as a list — creates CEL dependency edges.
+	// krocodile's collectStrings() scans []any recursively, so list elements with
+	// ${upstream.status.state} CEL expressions correctly establish dependency edges
+	// from all upstream PromotionStep nodes. Using a single list avoids the N-field
+	// upstreamVerified / upstreamVerified2 / ... scaling anti-pattern (#625).
 	if len(upstreams) > 0 {
-		// For simplicity, reference the first (primary) upstream
-		// Fan-in: all upstreams must be Verified, so reference each
+		upstreamRefs := make([]interface{}, len(upstreams))
 		for i, up := range upstreams {
-			key := "upstreamVerified"
-			if i > 0 {
-				key = fmt.Sprintf("upstreamVerified%d", i+1)
-			}
-			templateSpec[key] = fmt.Sprintf("${%s.status.state}", up)
+			upstreamRefs[i] = fmt.Sprintf("${%s.status.state}", up)
 		}
+		templateSpec["upstreamStates"] = upstreamRefs
 	}
 
 	// Add required gates reference (creates fan-in edges from gate nodes)
