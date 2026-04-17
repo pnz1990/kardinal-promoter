@@ -5,6 +5,7 @@
 import { useState, useCallback, useRef } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
+import CopyButton from './CopyButton'
 
 interface Props {
   pipelines: Pipeline[]
@@ -255,17 +256,21 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               alignItems: 'center',
               marginBottom: bundle || envCount ? '0.2rem' : 0,
             }}>
-              <span style={{
-                fontWeight: selected === p.name ? 600 : 400,
-                fontSize: '0.85rem',
-                color: 'var(--color-text)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: '130px',
-              }}>
-                {p.name}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0 }}>
+                <span style={{
+                  fontWeight: selected === p.name ? 600 : 400,
+                  fontSize: '0.85rem',
+                  color: 'var(--color-text)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  maxWidth: '105px',
+                }}>
+                  {p.name}
+                </span>
+                {/* #763: copy pipeline name to clipboard */}
+                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
                 {p.paused && (

@@ -18,6 +18,7 @@ import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
 import EmptyState from './components/EmptyState'
 import PromotionErrorsPanel from './components/PromotionErrorsPanel'
+import CopyButton from './components/CopyButton'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
 import { useRefreshIndicator } from './useRefreshIndicator'
@@ -493,16 +494,20 @@ export function App() {
                   }}>
                     <span>
                       Bundle: <span style={{ color: '#7dd3fc', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                      {/* #763: copy bundle name */}
+                      <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>
                     <span style={{ color: 'var(--color-border)' }}>·</span>
                     <HealthChip state={activeBundle.phase} size="sm" />
                     {activeBundle.provenance?.commitSHA && (
                       <>
                         <span style={{ color: 'var(--color-border)' }}>·</span>
-                        <span style={{ fontFamily: 'monospace', color: '#64748b' }}
+                        <span style={{ fontFamily: 'monospace', color: 'var(--color-text-muted)' }}
                               title="Commit SHA">
                           {activeBundle.provenance.commitSHA.slice(0, 8)}
                         </span>
+                        {/* #763: copy full commit SHA */}
+                        <CopyButton text={activeBundle.provenance.commitSHA} title="Copy commit SHA" />
                       </>
                     )}
                     {activeBundle.provenance?.author && (
