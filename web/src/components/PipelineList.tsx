@@ -237,10 +237,12 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         return (
           <li
             key={`${p.namespace}/${p.name}`}
-            style={{ listStyle: 'none' }}
+            style={{ listStyle: 'none', position: 'relative' }}
           >
           {/* #762: Outer <li> is non-interactive. A <button> handles selection to avoid
-              nested-interactive axe violation (interactive inside interactive). */}
+              nested-interactive axe violation (interactive inside interactive).
+              CopyButton is a sibling of the selection button (outside it) to avoid
+              button-inside-button nested-interactive. */}
           <button
             onClick={() => onSelect(p.name)}
             aria-pressed={selected === p.name}
@@ -277,8 +279,8 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard — tabIndex={-1} avoids nested-interactive (#762) */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} tabIndex={-1} />
+                {/* Spacer — CopyButton is rendered outside this button below */}
+                <span style={{ width: '28px', display: 'inline-block' }} aria-hidden />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
@@ -367,6 +369,11 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               </div>
             )}
           </button>
+          {/* #763: CopyButton is OUTSIDE the selection button (sibling) to avoid
+              nested-interactive. Positioned absolutely to overlay the name area. */}
+          <div style={{ position: 'absolute', top: '0.5rem', left: 'calc(1rem + 105px + 0.25rem)', pointerEvents: 'auto' }}>
+            <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+          </div>
           </li>
         )
   }
