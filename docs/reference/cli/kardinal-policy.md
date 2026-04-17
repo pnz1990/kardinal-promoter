@@ -20,7 +20,7 @@ Manage and evaluate promotion policy gates
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal policy list](kardinal-policy-list.md)	 - List PolicyGates
-* [kardinal policy simulate](kardinal-policy-simulate.md)	 - Simulate PolicyGate evaluation for a hypothetical promotion context
-* [kardinal policy test](kardinal-policy-test.md)	 - Validate PolicyGate YAML syntax and dry-run CEL expressions
+* [kardinal policy list](kardinal_policy_list.md)	 - List PolicyGates
+* [kardinal policy simulate](kardinal_policy_simulate.md)	 - Simulate PolicyGate evaluation for a hypothetical promotion context
+* [kardinal policy test](kardinal_policy_test.md)	 - Validate PolicyGate YAML syntax and dry-run CEL expressions
 

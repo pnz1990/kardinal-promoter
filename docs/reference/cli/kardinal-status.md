@@ -35,3 +35,4 @@ kardinal status [flags]
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
+

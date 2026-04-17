@@ -20,4 +20,5 @@ Audit log commands — view and summarize promotion events
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal audit summary](kardinal-audit-summary.md)	 - Aggregate promotion metrics from AuditEvent records
+* [kardinal audit summary](kardinal_audit_summary.md)	 - Aggregate promotion metrics from AuditEvent records
+

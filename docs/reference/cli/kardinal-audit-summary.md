@@ -31,4 +31,5 @@ kardinal audit summary [flags]
 
 ### SEE ALSO
 
-* [kardinal audit](kardinal-audit.md)	 - Audit log commands — view and summarize promotion events
+* [kardinal audit](kardinal_audit.md)	 - Audit log commands — view and summarize promotion events
+

@@ -20,5 +20,5 @@ Create kardinal resources
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal create bundle](kardinal-create-bundle.md)	 - Create a Bundle to trigger promotion through a Pipeline
+* [kardinal create bundle](kardinal_create_bundle.md)	 - Create a Bundle to trigger promotion through a Pipeline
 

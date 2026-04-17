@@ -32,5 +32,5 @@ kardinal create bundle <pipeline> [flags]
 
 ### SEE ALSO
 
-* [kardinal create](kardinal-create.md)	 - Create kardinal resources
+* [kardinal create](kardinal_create.md)	 - Create kardinal resources
 
