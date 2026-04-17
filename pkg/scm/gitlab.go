@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // GitLabProvider implements SCMProvider against the GitLab REST API v4.
@@ -39,6 +40,9 @@ type GitLabProvider struct {
 	// GitLab sends the token in the X-Gitlab-Token header (plaintext comparison).
 	WebhookSecret string
 
+	// circuit guards all outbound GitLab API calls.
+	circuit *CircuitBreaker
+
 	client *http.Client
 }
 
@@ -52,6 +56,7 @@ func NewGitLabProvider(token, apiURL, webhookSecret string) *GitLabProvider {
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
+		circuit:       NewCircuitBreaker(),
 		client:        &http.Client{},
 	}
 }
@@ -237,6 +242,10 @@ func (g *GitLabProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 
 // do executes an authenticated GitLab API request.
 func (g *GitLabProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
+	if err := g.circuit.Allow(); err != nil {
+		return fmt.Errorf("gitlab scm: %w", err)
+	}
+
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -257,15 +266,23 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 
 	resp, err := g.client.Do(req)
 	if err != nil {
+		g.circuit.RecordFailure(time.Time{})
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
+		if IsRateLimitError(resp.StatusCode) {
+			retryAfter := RetryAfterFromResponse(resp)
+			g.circuit.RecordFailure(retryAfter)
+		} else {
+			g.circuit.RecordSuccess()
+		}
 		return fmt.Errorf("GitLab API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 
+	g.circuit.RecordSuccess()
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)

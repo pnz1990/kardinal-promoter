@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ForgejoProvider implements SCMProvider against the Forgejo/Gitea REST API v1.
@@ -44,6 +45,9 @@ type ForgejoProvider struct {
 	// the X-Gitea-Signature header (same scheme as GitHub's X-Hub-Signature-256).
 	WebhookSecret string
 
+	// circuit guards all outbound Forgejo API calls.
+	circuit *CircuitBreaker
+
 	client *http.Client
 }
 
@@ -57,6 +61,7 @@ func NewForgejoProvider(token, apiURL, webhookSecret string) *ForgejoProvider {
 		Token:         token,
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
+		circuit:       NewCircuitBreaker(),
 		client:        &http.Client{},
 	}
 }
@@ -330,6 +335,10 @@ func (f *ForgejoProvider) ensureLabels(ctx context.Context, owner, repo string, 
 
 // do executes an authenticated Forgejo/Gitea API request.
 func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, result interface{}) error {
+	if err := f.circuit.Allow(); err != nil {
+		return fmt.Errorf("forgejo scm: %w", err)
+	}
+
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -351,15 +360,23 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 
 	resp, err := f.client.Do(req)
 	if err != nil {
+		f.circuit.RecordFailure(time.Time{})
 		return fmt.Errorf("execute request %s %s: %w", method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
+		if IsRateLimitError(resp.StatusCode) {
+			retryAfter := RetryAfterFromResponse(resp)
+			f.circuit.RecordFailure(retryAfter)
+		} else {
+			f.circuit.RecordSuccess()
+		}
 		return fmt.Errorf("forgejo API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 
+	f.circuit.RecordSuccess()
 	if result != nil {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
