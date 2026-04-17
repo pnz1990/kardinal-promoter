@@ -254,8 +254,6 @@ export function App() {
     : staleness > 15
     ? '#f59e0b'  // amber when stale > 15s
     : 'var(--color-text-secondary)'  // WCAG AA compliant; was #64748b which fails at small font sizes
-    ? '#f59e0b'   // amber when stale > 15s
-    : 'var(--color-text-faint)'  // default muted
 
   // Compute blocked PolicyGate node IDs from the graph.
   const blockedGateIds = useMemo<Set<string>>(() => {
