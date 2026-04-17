@@ -934,17 +934,24 @@
       "qa_approved": true
     },
     "699-cosign-signing": {
-      "state": "in_review",
-      "issue": 699,
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 700,
-      "title": "feat(security): cosign keyless image signing",
-      "branch": "feat/699-cosign-signing"
+      "issue": "699",
+      "title": "cosign keyless signing"
     },
     "702-sbom-generation": {
       "state": "todo",
       "issue": "702",
       "title": "feat(security): Syft SBOM generation \u2014 attach to OCI artifact",
       "size": "s"
+    },
+    "698-krocodile-trivy": {
+      "state": "in_review",
+      "pr_number": 701,
+      "issue": "698",
+      "title": "krocodile trivy scan",
+      "qa_approved": true
     }
   },
   "session_heartbeats": {
