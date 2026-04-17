@@ -117,7 +117,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
           </button>
         )}
         {!compareBundle && bundles.length >= 2 && (
-          <span style={{ fontSize: '0.6rem', color: 'var(--color-border)' }}>
+          <span style={{ fontSize: '0.6rem', color: '#64748b' }}>
             Shift-click to compare
           </span>
         )}
@@ -167,7 +167,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Short name */}
               <span style={{
                 fontSize: '0.75rem',
-                color: isSelected || isCompare ? 'var(--color-text)' : '#64748b',
+                color: isSelected || isCompare ? '#e2e8f0' : '#64748b',
                 fontFamily: 'monospace',
                 fontWeight: isSelected || isCompare ? 600 : 400,
               }}>

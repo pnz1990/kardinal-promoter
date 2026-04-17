@@ -146,7 +146,7 @@ export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
         gap: '0.4rem',
       }}>
         <span style={{ color: 'var(--color-border)' }}>📊</span>
-        <span>Not enough data — need 5+ bundles to show release metrics.</span>
+        <span style={{ color: '#8594a8' }}>Not enough data — need 5+ bundles to show release metrics.</span>
       </div>
     )
   }

@@ -23,8 +23,10 @@ test.describe('Journey 001 — Pipeline list', () => {
 
   test('Step 3: Selected pipeline is highlighted in sidebar', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
-    // The selected button has aria-pressed=true (button pattern, not listbox)
-    const selectedItem = page.locator('[aria-pressed="true"]')
+    // The selected button has aria-pressed=true; scope to the pipeline list to
+    // avoid matching other aria-pressed=true buttons (e.g. PolicyGates toggle)
+    const pipelineList = page.getByRole('list', { name: 'Pipelines' })
+    const selectedItem = pipelineList.locator('[aria-pressed="true"]')
     await expect(selectedItem).toBeVisible()
   })
 
