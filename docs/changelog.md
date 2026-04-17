@@ -36,7 +36,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **PolicyGate `spec.upstreamEnvironment` removed** — this controller-internal DAG edge marker moved to a metadata annotation (`kardinal.io/upstream-ref`). PolicyGate spec now only contains user-authored configuration (expression, message, recheckInterval). No functional change — the PromotionStep reconciler never read this field (#618)
+- **PolicyGate `spec.upstreamEnvironment` removed** — this controller-internal DAG edge field was never read by the PolicyGate reconciler. It was used only as a CEL dependency edge marker by the Graph builder, which has since been replaced by the PromotionStep→gate dependency via `spec.requiredGates`. PolicyGate spec now contains only user-authored configuration (#618)
 
 
 ---
