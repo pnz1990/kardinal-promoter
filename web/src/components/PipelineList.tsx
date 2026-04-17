@@ -277,8 +277,8 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+                {/* #763: copy pipeline name to clipboard — tabIndex={-1} avoids nested-interactive (#762) */}
+                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} tabIndex={-1} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}

@@ -19,6 +19,11 @@ interface Props {
   text: string
   /** Optional title override for the button. Defaults to "Copy to clipboard". */
   title?: string
+  /**
+   * Optional tabIndex. Set to -1 when embedded inside another focusable element
+   * (e.g. a button) to avoid nested-interactive WCAG violation.
+   */
+  tabIndex?: number
 }
 
 /**
@@ -26,7 +31,7 @@ interface Props {
  * Shows a checkmark for 2 seconds on success.
  * Falls back to execCommand for environments without Clipboard API.
  */
-export default function CopyButton({ text, title }: Props) {
+export default function CopyButton({ text, title, tabIndex }: Props) {
   const [copied, setCopied] = useState(false)
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(text).then(() => {
@@ -51,6 +56,7 @@ export default function CopyButton({ text, title }: Props) {
     <button
       data-testid="copy-button"
       onClick={handleCopy}
+      tabIndex={tabIndex}
       title={copied ? 'Copied!' : (title ?? 'Copy to clipboard')}
       style={{
         background: 'none',
