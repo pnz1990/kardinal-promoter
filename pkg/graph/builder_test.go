@@ -209,13 +209,21 @@ func TestBuilder_SkipEnvironments_WithPermission(t *testing.T) {
 	require.NoError(t, err)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	assert.NotContains(t, nodeMap, "staging", "staging must be removed")
+	// (#619) staging IS in the node map -- skipEnvironments no longer filters in Go.
+	// The node has includeWhen: false so krocodile excludes it from execution.
+	assert.Contains(t, nodeMap, "staging",
+		"staging must be in Graph spec -- includeWhen handles exclusion at runtime")
+	// The staging PromotionStep must have includeWhen referencing this env
+	require.NotEmpty(t, nodeMap["staging"].IncludeWhen)
+	assert.Contains(t, nodeMap["staging"].IncludeWhen[0], `"staging"`,
+		"includeWhen must reference the env name 'staging'")
 	assert.Contains(t, nodeMap, "test")
 	assert.Contains(t, nodeMap, "prod")
 
-	// prod must depend on test directly (not staging)
-	assert.True(t, containsCELRef(nodeMap["prod"].Template, "test"),
-		"prod must reference test when staging is skipped")
+	// prod still references its upstreams via upstreamStates
+	assert.True(t, containsCELRef(nodeMap["prod"].Template, "staging") ||
+		containsCELRef(nodeMap["prod"].Template, "test"),
+		"prod must reference at least one upstream")
 }
 
 // Test 6: intent.skipEnvironments = [staging] without SkipPermission.
