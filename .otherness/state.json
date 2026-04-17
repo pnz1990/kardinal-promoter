@@ -1120,6 +1120,16 @@
       "pr_number": 769,
       "branch": "feat/krocodile-upgrade-cdc4bb9",
       "qa_approved": true
+    },
+    "ci-fix-wcag-aria": {
+      "state": "in_review",
+      "assigned_to": "sess-0fe0edd0",
+      "assigned_at": "2026-04-17T22:02:50Z",
+      "pr_number": 780,
+      "title": "fix(ui): resolve CI failures from Journey 009 WCAG enablement",
+      "branch": "feat/ci-fix-wcag-aria",
+      "awaiting_human_review": true,
+      "note": "CI green. Branch protection requires human reviewer. Needs human to merge."
     }
   },
   "session_heartbeats": {
@@ -1130,6 +1140,11 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
+    },
+    "sess-0fe0edd0": {
+      "last_seen": "2026-04-17T22:02:50Z",
+      "item": "ci-fix-wcag-aria",
+      "cycle": 2
     }
   },
   "handoff": {
