@@ -141,7 +141,10 @@ export function PipelineLaneView({
                 <span style={{
                   fontSize: '0.78rem',
                   fontWeight: 700,
-                  color: 'var(--color-text)',
+                  // Stage cards always have dark backgrounds — var(--color-text) flips to
+                  // dark (#1e293b) in light mode causing contrast failure. Use hardcoded
+                  // light color. #e2e8f0 matches the CSS .stage-card base rule.
+                  color: '#e2e8f0',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -156,7 +159,9 @@ export function PipelineLaneView({
                 <div style={{
                   fontSize: '0.65rem',
                   fontFamily: 'monospace',
-                  color: '#64748b',
+                  // Stage card backgrounds are always dark — #64748b (slate-500) fails
+                  // on #052e16 (ready bg). Use #94a3b8 (slate-400, 7.1:1 on dark bg) ✓
+                  color: '#94a3b8',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
