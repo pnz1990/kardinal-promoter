@@ -405,8 +405,8 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		ID: "promotion",
 		Template: map[string]interface{}{
 			// No apiVersion, no kind — Definition node (krocodile: ReferenceDefinition)
-			"pipeline": pipelineName,
-			"bundleSlug": fmt.Sprintf("${bundle.metadata.name}"),
+			"pipeline":   pipelineName,
+			"bundleSlug": "${bundle.metadata.name}",
 		},
 		// ReadyWhen/PropagateWhen intentionally omitted — Definition nodes have no Kubernetes
 		// resource; signals on them would be interpreted as Unresolved by deriveReference.
