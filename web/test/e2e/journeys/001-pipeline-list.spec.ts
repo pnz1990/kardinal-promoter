@@ -23,9 +23,8 @@ test.describe('Journey 001 — Pipeline list', () => {
 
   test('Step 3: Selected pipeline is highlighted in sidebar', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
-    // The selected pipeline button has aria-pressed=true. Scope to the pipeline list
-    // (ul[aria-label]) to avoid matching FleetHealthBar filter buttons.
-    const selectedItem = page.locator('[aria-label="Pipeline list"] [aria-pressed="true"]')
+    // The selected pipeline item has aria-selected=true (role=option in listbox)
+    const selectedItem = page.locator('aside [aria-selected="true"]')
     await expect(selectedItem).toBeVisible()
   })
 
