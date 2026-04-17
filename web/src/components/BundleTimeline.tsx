@@ -32,14 +32,17 @@ function phaseCSSClass(phase: string): string {
 }
 
 /** Accent color for glow/dot — kept for inline uses (boxShadow, dot fill). */
+// Bundle chip backgrounds are always hardcoded dark (#0f172a, #1e1b4b).
+// Phase accent colors must always be readable on dark — use hardcoded dark-mode values
+// rather than CSS variables that would flip to dark in light mode.
 function phaseAccentColor(phase: string): string {
   switch (phase) {
-    case 'Promoting': return 'var(--color-accent)'
-    case 'Verified':  return 'var(--color-success)'
-    case 'Failed':    return '#ef4444'
-    case 'Superseded': return 'var(--color-text-faint)'
-    case 'Available': return '#f59e0b'
-    default: return '#64748b'
+    case 'Promoting': return '#a5b4fc'   // indigo-300: 9.5:1 on #0f172a ✓ (was var(--color-accent) = #4f46e5 in light)
+    case 'Verified':  return '#4ade80'   // green-400: 8.8:1 on #0f172a ✓ (was var(--color-success))
+    case 'Failed':    return '#ef4444'   // red-500 — unchanged (works on dark bg)
+    case 'Superseded': return '#94a3b8'  // slate-400: 7.1:1 on #0f172a ✓ (was var(--color-text-faint) = #4b5563 in light)
+    case 'Available': return '#f59e0b'   // amber-500 — unchanged (works on dark bg)
+    default: return '#94a3b8'            // slate-400: 7.1:1 on #0f172a ✓ (was #64748b = 4.1:1 fail)
   }
 }
 
@@ -172,8 +175,9 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
                 // Bundle chip backgrounds are always dark (#1e1b4b selected, #0f172a default).
                 // Use hardcoded light text for selected/compare — var(--color-text) flips to
                 // dark in light mode and fails contrast against the dark chip bg (#1e1b4b).
-                // #e2e8f0 (slate-200) = 13.6:1 on #1e1b4b. WCAG AA ✓
-                color: isSelected || isCompare ? '#e2e8f0' : '#64748b',
+                // #e2e8f0 (slate-200) = 13.6:1 on #1e1b4b ✓
+                // #94a3b8 (slate-400) = 7.1:1 on #0f172a ✓ (was #64748b = 4.1:1 fail)
+                color: isSelected || isCompare ? '#e2e8f0' : '#94a3b8',
                 fontFamily: 'monospace',
                 fontWeight: isSelected || isCompare ? 600 : 400,
               }}>

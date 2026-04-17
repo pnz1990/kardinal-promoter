@@ -235,18 +235,19 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
         const envCount = p.environmentCount
 
         return (
+          // #762: Outer <li> is a flex container. Selection <button> + CopyButton are siblings
+          // (not nested) to satisfy the axe nested-interactive rule — <button> inside <button>
+          // always fails regardless of tabIndex. CopyButton renders as a narrow flex column.
           <li
             key={`${p.namespace}/${p.name}`}
-            style={{ listStyle: 'none' }}
+            style={{ listStyle: 'none', display: 'flex', alignItems: 'stretch' }}
           >
-          {/* #762: Outer <li> is non-interactive. A <button> handles selection to avoid
-              nested-interactive axe violation (interactive inside interactive). */}
           <button
             onClick={() => onSelect(p.name)}
             aria-pressed={selected === p.name}
             onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
             style={{
-              width: '100%',
+              flex: 1,
               textAlign: 'left',
               padding: '0.6rem 1rem',
               cursor: 'pointer',
@@ -255,7 +256,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               borderTop: 'none',
               borderRight: 'none',
               borderBottom: 'none',
-              display: 'block',
+              minWidth: 0,
             }}
           >
             {/* Pipeline name + phase badge */}
@@ -265,7 +266,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               alignItems: 'center',
               marginBottom: bundle || envCount ? '0.2rem' : 0,
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
                 <span style={{
                   fontWeight: selected === p.name ? 600 : 400,
                   fontSize: '0.85rem',
@@ -277,10 +278,6 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                 }}>
                   {p.name}
                 </span>
-                {/* #763: copy pipeline name to clipboard
-                    tabIndex={-1} prevents nested-interactive axe violation — CopyButton
-                    is inside the selection <button> and must not be independently focusable. */}
-                <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} tabIndex={-1} />
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                 {/* Paused badge — visible accent when pipeline is paused (#328) */}
@@ -369,6 +366,17 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
               </div>
             )}
           </button>
+          {/* #763: CopyButton as a sibling of the selection button — not nested inside it.
+              Flex sibling renders as a narrow strip on the right of the row. */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            paddingTop: '0.55rem',
+            paddingRight: '0.4rem',
+            background: selected === p.name ? 'var(--color-surface)' : 'transparent',
+          }}>
+            <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
+          </div>
           </li>
         )
   }
