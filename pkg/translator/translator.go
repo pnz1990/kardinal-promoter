@@ -234,6 +234,7 @@ func injectHealthWatchNodes(
 			}
 		}
 
+		// Build the watch node.
 		watchNode := graph.GraphNode{
 			ID:        nodeID,
 			Template:  nodeTemplate,

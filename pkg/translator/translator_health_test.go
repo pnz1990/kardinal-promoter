@@ -125,10 +125,11 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 			"metadata must only have name/namespace for Watch-reference detection")
 	}
 
-	// krocodile >= 81c5a03: Watch nodes must NOT have ReadyWhen.
-	// deriveReference() upgrades Watch+ReadyWhen -> ReferenceUnresolved -> SSA on user workloads.
-	assert.Empty(t, watchNode.ReadyWhen, "Watch node must have no ReadyWhen (krocodile >= 81c5a03 compat)")
-	assert.Empty(t, watchNode.PropagateWhen, "Watch node must have no PropagateWhen")
+	// ReadyWhen must reference the actual node ID (not the placeholder "healthNode")
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], "healthProd", "readyWhen must reference node ID")
+	assert.NotContains(t, watchNode.ReadyWhen[0], "healthNode", "placeholder must be substituted")
+	assert.Contains(t, watchNode.ReadyWhen[0], "Available", "readyWhen checks Available condition")
 }
 
 // TestInjectHealthWatchNodes_ArgoCD verifies health.type=argocd Watch node.
@@ -152,8 +153,9 @@ func TestInjectHealthWatchNodes_ArgoCD(t *testing.T) {
 	assert.Equal(t, "myapp-prod", md["name"], "application name = pipeline + env")
 	assert.Equal(t, "argocd", md["namespace"])
 
-	// krocodile >= 81c5a03: Watch nodes must NOT have ReadyWhen.
-	assert.Empty(t, watchNode.ReadyWhen, "Watch node must have no ReadyWhen (krocodile >= 81c5a03 compat)")
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], "Healthy")
+	assert.Contains(t, watchNode.ReadyWhen[0], "Synced")
 }
 
 // TestInjectHealthWatchNodes_Flux verifies health.type=flux Watch node.
@@ -177,8 +179,8 @@ func TestInjectHealthWatchNodes_Flux(t *testing.T) {
 	assert.Equal(t, "myapp-staging", md["name"])
 	assert.Equal(t, "flux-system", md["namespace"])
 
-	// krocodile >= 81c5a03: Watch nodes must NOT have ReadyWhen.
-	assert.Empty(t, watchNode.ReadyWhen, "Watch node must have no ReadyWhen (krocodile >= 81c5a03 compat)")
+	require.NotEmpty(t, watchNode.ReadyWhen)
+	assert.Contains(t, watchNode.ReadyWhen[0], "Ready")
 }
 
 // TestInjectHealthWatchNodes_ArgoRollouts verifies health.type=argoRollouts Watch node.
@@ -221,8 +223,7 @@ func TestInjectHealthWatchNodes_Flagger(t *testing.T) {
 	tmpl := watchNode.Template
 	assert.Equal(t, "flagger.app/v1beta1", tmpl["apiVersion"])
 	assert.Equal(t, "Canary", tmpl["kind"])
-	// krocodile >= 81c5a03: Watch nodes must NOT have ReadyWhen.
-	assert.Empty(t, watchNode.ReadyWhen, "Watch node must have no ReadyWhen (krocodile >= 81c5a03 compat)")
+	assert.Contains(t, watchNode.ReadyWhen[0], "Succeeded")
 }
 
 // TestInjectHealthWatchNodes_MultipleEnvs verifies multiple environments each get
@@ -523,8 +524,7 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 	// Watch: must have metadata.name
 	md := tmplWatch["metadata"].(map[string]interface{})
 	assert.Equal(t, "myapp", md["name"])
-	// krocodile ≥ 81c5a03: Watch node must NOT have ReadyWhen.
-	assert.Empty(t, watchNode.ReadyWhen, "Watch node must have no ReadyWhen (krocodile ≥ 81c5a03 compat)")
+	assert.Contains(t, watchNode.ReadyWhen[0], "healthUat.status.conditions.exists(")
 
 	// WatchKind case: with LabelSelector
 	watchKindPipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
@@ -553,8 +553,6 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 	// WatchKind: must have top-level selector
 	_, hasSelector := tmplWatchKind["selector"]
 	assert.True(t, hasSelector, "WatchKind node must have top-level selector")
-	// WatchKind CAN have ReadyWhen (krocodile only upgrades ReferenceWatch, not WatchKind).
-	require.NotEmpty(t, watchKindNode.ReadyWhen, "WatchKind node must have ReadyWhen with .all() predicate")
 	assert.Contains(t, watchKindNode.ReadyWhen[0], ".all(",
-		"WatchKind readyWhen must use .all() list predicate")
+		"WatchKind readyWhen must use .all() predicate")
 }
