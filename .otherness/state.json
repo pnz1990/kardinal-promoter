@@ -776,12 +776,11 @@
       "note": "Already fixed by arch-audit PR #648"
     },
     "644-promotionstep-watch": {
-      "state": "in_review",
+      "state": "done",
+      "pr_merged": true,
       "pr_number": 655,
       "issue": "644",
-      "title": "fix(controller): add Watch on PRStatus and PolicyGate to PromotionStep reconciler",
-      "qa_approved": true,
-      "awaiting_human_review": true
+      "title": "fix: Watch on PRStatus and PolicyGate in PromotionStep"
     },
     "625-remove-upstream-verified": {
       "state": "in_review",
