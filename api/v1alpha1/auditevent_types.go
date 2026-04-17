@@ -41,8 +41,8 @@ type AuditEventSpec struct {
 	// Action is a short verb describing what happened.
 	// Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed",
 	//               "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded",
-	//               "HealthCheckFailed", "GateBlocked".
-	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked
+	//               "HealthCheckFailed", "GateBlocked", "GateEvaluated".
+	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated
 	Action string `json:"action"`
 
 	// Actor is the identity that triggered the action.

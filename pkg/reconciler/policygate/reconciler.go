@@ -523,6 +523,7 @@ func (r *Reconciler) buildPRContext(ctx context.Context, ns, bundleName string) 
 // patchStatus patches the PolicyGate's status fields.
 func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
 	ready bool, reason string) error {
+	prevReady := gate.Status.Ready
 	patch := client.MergeFrom(gate.DeepCopy())
 	now := metav1.NewTime(r.now())
 	gate.Status.Ready = ready
@@ -530,6 +531,14 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	gate.Status.LastEvaluatedAt = &now
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("status patch: %w", err)
+	}
+	// Audit: write on state change only (ready flip), not every evaluation.
+	if ready != prevReady {
+		outcome := "Success"
+		if !ready {
+			outcome = "Failure"
+		}
+		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason)
 	}
 	return nil
 }
