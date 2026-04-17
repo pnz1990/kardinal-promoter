@@ -29,6 +29,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`kardinal completion`** — shell completion for bash, zsh, fish, and PowerShell (#718)
+- **`kardinal status`** — show controller health and cluster resource summary (#714)
+- **`kardinal validate`** — offline Pipeline and PolicyGate YAML validation (#712)
+- **Improved circular dependency error** — shows the full cycle path in the error message (#710)
+- **Improved `kardinal explain` error** — suggests valid environment names when `--env` is unknown (#716)
+
 ---
 
 ## [v0.8.1] — 2026-04-17
@@ -243,7 +251,7 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ---
 
-[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.8.1...HEAD
 [v0.5.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.4.0...v0.5.0
 [v0.4.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.3.0...v0.4.0
 [v0.3.0]: https://github.com/pnz1990/kardinal-promoter/compare/v0.2.1...v0.3.0
