@@ -15,7 +15,7 @@
 
   --color-text:        #e2e8f0;
   --color-text-muted:  #94a3b8;   /* 7.5:1 on dark bg ✓ */
-  --color-text-faint:  #64748b;   /* medium muted for dark mode; was #475569 */
+  --color-text-faint:  #8594a8;   /* was #64748b (3.75:1 fail) → custom (5.3:1 on #0f172a ✓) */
   --color-text-secondary: #94a3b8;  /* alias for muted — WCAG AA on dark bg */
 
   --color-accent:      #a5b4fc;
@@ -52,7 +52,7 @@
   --color-accent-bg:   #eef2ff;
   --color-accent-hover: #4338ca;
 
-  --color-success:     #16a34a;
+  --color-success:     #166534;  /* green-800: 6.5:1 on #f1f5f9 ✓ (was #16a34a = 3:1 fail) */
   --color-success-bg:  #dcfce7;
   --color-warning:     #d97706;
   --color-warning-bg:  #fef3c7;

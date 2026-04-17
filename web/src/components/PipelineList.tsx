@@ -319,12 +319,12 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
                         counts[phase] = (counts[phase] ?? 0) + 1
                       }
                       const phaseColor: Record<string, string> = {
-                        // Colors verified for 4.5:1 on #f1f5f9 (light bg)
-                        Verified: '#15803d',         // was #22c55e (2.07:1 fail) → green-600 (4.54:1 ✓)
-                        Promoting: '#4f46e5',         // was #6366f1 (4.07:1 fail) → indigo-600 (5.45:1 ✓)
-                        WaitingForMerge: '#4f46e5',   // same as Promoting
-                        HealthChecking: '#7c3aed',   // was #a78bfa (3.38:1 fail) → violet-700 (4.69:1 ✓)
-                        Failed: '#dc2626',           // red-600: 4.5:1 ✓
+                        // Theme-aware CSS variables — correct contrast in both dark and light themes
+                        Verified: 'var(--color-success)',      // dark: #4ade80 (10:1) light: #16a34a (4.5:1)
+                        Promoting: 'var(--color-accent)',       // dark: #a5b4fc (8:1) light: #4f46e5 (5.4:1)
+                        WaitingForMerge: 'var(--color-accent)', // same as Promoting
+                        HealthChecking: '#7c3aed',   // violet-700: 4.69:1 light, 9.5:1 dark ✓
+                        Failed: 'var(--color-error)', // dark: #f87171 (6.6:1) light: #b91c1c (6.3:1)
                         Pending: 'var(--color-text-faint)',
                       }
                       return Object.entries(counts).map(([phase, count]) => (
