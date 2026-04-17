@@ -4,7 +4,10 @@
   "mode": "standalone",
   "initialized": "2026-04-09",
   "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": "queue-021",
+  "current_queue": [
+    "676-krocodile-explicit-keyword",
+    "673-audit-log-step1"
+  ],
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -862,6 +865,18 @@
       "pr_number": 670,
       "issue": "573",
       "title": "Admission webhook"
+    },
+    "676-krocodile-explicit-keyword": {
+      "state": "todo",
+      "issue": "676",
+      "title": "chore(graph): upgrade krocodile 81c5a03 \u2192 05db829 \u2014 explicit-keyword schema",
+      "size": "m"
+    },
+    "673-audit-log-step1": {
+      "state": "todo",
+      "issue": "673",
+      "title": "feat(api): AuditEvent CRD + write path \u2014 structured audit log step 1",
+      "size": "s"
     }
   },
   "session_heartbeats": {
