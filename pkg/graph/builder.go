@@ -227,11 +227,8 @@ func filterByIntent(orderedEnvs []string, deps map[string][]string,
 		result = envPathTo(orderedEnvs, deps, target)
 	}
 
-	// Apply skipEnvironments
-	for _, skip := range bundle.Spec.Intent.SkipEnvironments {
-		result = removeEnv(result, skip)
-	}
-
+	// skipEnvironments: NOT filtered in Go here (#619 — Graph-first).
+	// PromotionStep nodes have includeWhen expressions for this (#619).
 	if len(result) == 0 {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
@@ -259,17 +256,6 @@ func envPathTo(orderedEnvs []string, deps map[string][]string, target string) []
 	var result []string
 	for _, e := range orderedEnvs {
 		if ancestors[e] {
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-// removeEnv removes an environment by name from the slice.
-func removeEnv(envs []string, name string) []string {
-	result := make([]string, 0, len(envs))
-	for _, e := range envs {
-		if e != name {
 			result = append(result, e)
 		}
 	}
@@ -553,9 +539,16 @@ func buildPromotionStepNode(
 	stateRef := fmt.Sprintf("${%s.status.state}", nodeID)
 	_ = stateRef // used in readyWhen/propagateWhen expressions
 
+	// includeWhen for skipEnvironments (#619 -- Graph-first).
+	// bundle.spec.intent.skipEnvironments is live via the Bundle Watch node (#622).
+	includeWhen := []string{
+		fmt.Sprintf(`${!has(bundle.spec.intent) || !has(bundle.spec.intent.skipEnvironments) || !bundle.spec.intent.skipEnvironments.exists(s, s == %q)}`, envName),
+	}
+
 	return GraphNode{
-		ID:       nodeID,
-		Template: template,
+		ID:          nodeID,
+		Template:    template,
+		IncludeWhen: includeWhen,
 		ReadyWhen: []string{
 			fmt.Sprintf(`${%s.status.state == "Verified"}`, nodeID),
 		},

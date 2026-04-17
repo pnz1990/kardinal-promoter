@@ -123,8 +123,15 @@ func TestBuilder_SkipAllEnvironments(t *testing.T) {
 	bundle.Spec.Intent = &kardinalv1alpha1.BundleIntent{
 		SkipEnvironments: []string{"test"},
 	}
-	_, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
-	require.Error(t, err)
+	// skipEnvironments is now expressed as includeWhen (#619), not Go-level filtering.
+	// Build succeeds — the node is present but krocodile will exclude it via includeWhen.
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.NoError(t, err)
+	// test node present with includeWhen excluding it
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	testNode, ok := nodeMap["test"]
+	require.True(t, ok, "test node must be present (excluded via includeWhen, not removed)")
+	require.NotEmpty(t, testNode.IncludeWhen, "test node must have includeWhen for skipEnvironments")
 }
 
 // TestBuilder_GraphLabels verifies the generated Graph has correct labels.
