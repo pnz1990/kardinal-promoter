@@ -170,12 +170,6 @@ spec:
                   SkipPermission controls whether bundles with intent.skipEnvironments can
                   bypass this gate. When false, skip requests are denied.
                 type: boolean
-              upstreamEnvironment:
-                description: |-
-                  UpstreamEnvironment is set by the kro Graph controller via CEL expression
-                  substitution. It carries the resolved state of the upstream PromotionStep
-                  that must be Verified before this gate is evaluated.
-                type: string
               when:
                 default: post-deploy
                 description: |-
