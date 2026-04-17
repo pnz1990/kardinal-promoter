@@ -3,7 +3,7 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-17T19:22:22Z",
+  "last_updated": "2026-04-14T05:11:01Z",
   "current_queue": [
     "698-trivy-krocodile",
     "706-slsa-provenance"
@@ -1080,6 +1080,23 @@
         "758-nested-interactive-fix"
       ],
       "created_at": "2026-04-17T19:20:29Z"
+    },
+    "763-copy-clipboard": {
+      "title": "feat(ui): copy-to-clipboard on resource names",
+      "issue": 763,
+      "state": "in_review",
+      "areas": [
+        "ui"
+      ],
+      "priority": "medium",
+      "size": "s",
+      "created_at": "2026-04-17T19:25:07Z",
+      "assigned_to": "sess-a3d6f0be",
+      "assigned_at": "2026-04-17T19:25:19Z",
+      "branch": "feat/763-copy-clipboard",
+      "worktree": "/Users/rrroizma/Projects/kardinal-promoter.763-copy-clipboard",
+      "pr_number": 764,
+      "qa_approved": true
     }
   },
   "session_heartbeats": {
