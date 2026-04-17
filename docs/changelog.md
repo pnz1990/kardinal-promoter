@@ -29,6 +29,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [v0.7.0] — 2026-04-17
+
+**WatchKind O(1) health checks, krocodile 81c5a03 upgrade, reactive PromotionStep reconciler, graph-first cleanup**
+
 ### Added
 
 - **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires krocodile `745998f`+ (#652)

@@ -292,3 +292,12 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 901 | WatchKind health nodes for O(1) incremental cache | ✅ Complete | #652 merged | health.labelSelector → krocodile WatchKind; 6 new tests; docs MISS fixed |
+
+---
+
+## queue-024 continued (batch 024b — 2026-04-17)
+
+| Item | Title | Status | PR | Notes |
+|---|---|---|---|---|
+| 625-remove-upstream-verified | refactor(graph): upstreamStates list replaces upstreamVerifiedN | ✅ Complete | #660 merged | CRD regen + builder.go update |
+| 656-watchkind-docs | docs(health): document health.labelSelector WatchKind mode | ✅ Complete | #659 merged | |
