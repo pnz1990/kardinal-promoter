@@ -1078,13 +1078,13 @@
       "awaiting_human_review": true
     },
     "748-wcag-axe": {
-      "state": "todo",
-      "title": "feat(ui): WCAG 2.1 AA automated check \u2014 axe-core in CI (#587)",
-      "issue_number": 748,
-      "areas": [
-        "area/ui"
-      ],
-      "created_at": "2026-04-17T17:44:39Z"
+      "state": "in_review",
+      "pr_number": 756,
+      "title": "feat(ui): WCAG 2.1 AA automated check via axe-core in Playwright CI",
+      "issue": "748",
+      "branch": "feat/748-wcag-axe",
+      "qa_approved": true,
+      "awaiting_human_review": true
     }
   },
   "session_heartbeats": {
