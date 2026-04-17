@@ -34,6 +34,7 @@ func newExplainCmd() *cobra.Command {
 	var (
 		envFlag   string
 		watchFlag bool
+		colorFlag bool
 	)
 
 	cmd := &cobra.Command{
@@ -43,20 +44,22 @@ func newExplainCmd() *cobra.Command {
 It shows the current state, reason, and any PR URLs for each environment.
 
 Use --env to filter to a specific environment.
-Use --watch to stream live updates.`,
+Use --watch to stream live updates.
+Use --color to force ANSI color output (auto-detected when writing to a TTY).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runExplain(cmd, args, envFlag, watchFlag)
+			return runExplain(cmd, args, envFlag, watchFlag, colorFlag)
 		},
 	}
 
 	cmd.Flags().StringVar(&envFlag, "env", "", "Filter to a specific environment")
 	cmd.Flags().BoolVar(&watchFlag, "watch", false, "Stream updates (polling)")
+	cmd.Flags().BoolVar(&colorFlag, "color", false, "Force ANSI color output (auto-detected when TTY)")
 
 	return cmd
 }
 
-func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool) error {
+func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool, forceColor bool) error {
 	c, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("explain: %w", err)
@@ -65,14 +68,14 @@ func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool)
 	pipeline := args[0]
 
 	if !watch {
-		return explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter)
+		return explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter, forceColor)
 	}
 
 	// Watch mode: poll every 3 seconds and refresh the output.
 	for {
 		// Clear screen using ANSI escape.
 		_, _ = fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
-		if err := explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter); err != nil {
+		if err := explainOnce(cmd.OutOrStdout(), c, ns, pipeline, envFilter, forceColor); err != nil {
 			return err
 		}
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
@@ -80,7 +83,7 @@ func runExplain(cmd *cobra.Command, args []string, envFilter string, watch bool)
 	}
 }
 
-func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string) error {
+func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter string, forceColor bool) error {
 	ctx := context.Background()
 
 	var steps v1alpha1.PromotionStepList
@@ -212,12 +215,13 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	})
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
+	cr := newColorizer(w, forceColor)
+	if _, err := fmt.Fprintln(tw, cr.bold("ENVIRONMENT")+"\t"+cr.bold("TYPE")+"\t"+cr.bold("NAME")+"\t"+cr.bold("STATE")+"\t"+cr.bold("EXPRESSION")+"\t"+cr.bold("REASON")); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.kind, row.name, row.state, row.expression, row.reason,
+			row.environment, row.kind, row.name, cr.colorState(row.state), row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
