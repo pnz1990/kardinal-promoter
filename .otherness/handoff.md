@@ -1,4 +1,4 @@
-## Session Handoff — 2026-04-17T18:00:59Z
+## Session Handoff — 2026-04-17T17:42:48Z
 
 ### Recent merges (last 10)
 - PR #741 feat(cli): add --dry-run flag to kardinal create bundle (#739) (2026-04-17)
@@ -13,30 +13,21 @@
 - PR #729 chore(sm): batch metrics update 2026-04-17 (2026-04-17)
 
 ### Queue
-**In progress/review:**
-- 618-policygate-upstream-env: state=in_review pr=663
-- 576-audit-step1: state=in_review pr=675
-- 694-sbom-gen: state=in_review pr=697
-- 698-krocodile-trivy: state=in_review pr=701
-- 698-trivy-krocodile: state=in_review pr=701
-- 706-slsa-provenance: state=in_review pr=707
-- 740-url-routing: state=in_review pr=742
-- 746-keyboard-shortcuts: state=in_review pr=750
-- 747-error-boundary: state=in_review pr=None
-**Todo:**
-- 748-wcag-axe: feat(ui): WCAG 2.1 AA automated check — axe-core in CI (#587)
-
-### Open PRs needing human review
-- PR #742 (feat/740-url-routing) — URL routing, all CI green
-- PR #750 (feat/746-keyboard-shortcuts) — Keyboard shortcuts, all CI green
-- PR #745 and #749 — Changelog updates
-- PR #751 — SM metrics update
+**In progress:**
+- 618-policygate-upstream-env: refactor(policygate): move upstreamEnvironment from spec to annotation
+- 576-audit-step1: feat(api): AuditEvent CRD — immutable promotion event trail step 1
+- 694-sbom-gen: SBOM generation
+- 698-krocodile-trivy: krocodile trivy scan
+- 698-trivy-krocodile: trivy scan for krocodile image
+- 706-slsa-provenance: SLSA Level 2 provenance via GitHub attestation
+- 740-url-routing: feat(ui): URL routing — pipeline/bundle/node selection in URL
+**Queue empty**
 
 ### CI status (main)
 success
 
 ### Next item
-748-wcag-axe
+none
 
 ### Notes
-Session: sess-281ccde3 | otherness@v0.1.0-4-gccd967f
+Session: sess-4159513c | otherness@v0.1.0-4-gccd967f
