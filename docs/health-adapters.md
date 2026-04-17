@@ -41,6 +41,30 @@ health:
 
 **Limitations:** Only checks that the Deployment itself is healthy. Does not verify that the image was actually updated (the old Deployment may still report Available if the new image fails to pull). For reliable verification, use the `argocd` or `flux` adapter.
 
+### WatchKind mode (label selector)
+
+By default, the `resource` adapter watches a single named Deployment (`Pipeline.metadata.name`). When `health.labelSelector` is set, the adapter switches to **WatchKind mode**: it watches all Deployments in the environment namespace that match the label selector.
+
+```yaml
+health:
+  type: resource
+  labelSelector:
+    app: my-app
+    kardinal.io/pipeline: nginx-demo
+  timeout: 10m
+```
+
+**When to use WatchKind mode:**
+- When your Deployment name does not match the Pipeline name
+- When you deploy multiple Deployments per environment and need all of them healthy before advancing
+- When you want to match Deployments by label rather than by exact name
+
+**How it works:** Uses krocodile's O(1) incremental cache (WatchKind reference type). The Graph node's `readyWhen` expression uses `list.all()` to require all matched Deployments to have `Available=True`. A change to any matched Deployment triggers immediate re-evaluation.
+
+**Requirement:** krocodile `81c5a03`+ (already bundled in kardinal-promoter Helm chart).
+
+> **Note:** `labelSelector` is only supported for `health.type: resource`. For `argocd`, `flux`, `argoRollouts`, and `flagger`, the adapter always watches a single named resource and `labelSelector` is ignored.
+
 ## Adapter: argocd
 
 Watches an Argo CD Application's health, sync, and operation status.
