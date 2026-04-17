@@ -81,7 +81,7 @@ describe('PipelineLaneView — stage cards', () => {
     const onSelect = vi.fn()
     const node = makeNode({ id: 'step-env', environment: 'env' })
     render(<PipelineLaneView nodes={[node]} onSelectNode={onSelect} />)
-    await user.click(screen.getByRole('group', { name: /env/i }))
+    await user.click(screen.getByRole('button', { name: /env/i }))
     expect(onSelect).toHaveBeenCalledWith(node)
   })
 
@@ -90,7 +90,7 @@ describe('PipelineLaneView — stage cards', () => {
     const onSelect = vi.fn()
     const node = makeNode({ id: 'step-env', environment: 'env' })
     render(<PipelineLaneView nodes={[node]} selectedNode={node} onSelectNode={onSelect} />)
-    await user.click(screen.getByRole('group', { name: /env/i }))
+    await user.click(screen.getByRole('button', { name: /env/i }))
     expect(onSelect).toHaveBeenCalledWith(null)
   })
 
