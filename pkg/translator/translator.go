@@ -192,53 +192,43 @@ func injectHealthWatchNodes(
 		// Substitute the "healthNode" placeholder in ReadyWhen with the actual node ID.
 		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
 
-		// Build the Graph node template.
-		// krocodile auto-detects the reference type from the template structure
-		// (experimental/controller/types.go: DetectReference):
-		//   - Watch:     apiVersion + kind + metadata.name  (single named resource)
-		//   - WatchKind: apiVersion + kind, no metadata.name (collection by selector)
-		var nodeTemplate map[string]interface{}
+		// Build the Graph node.
+		// krocodile ≥ 05db829 (explicit-keyword schema):
+		//   - ref:   → dereference a single named object (by-name, read-only)
+		//   - watch: → observe a collection by selector (read-only)
+		// The old "template:" key with identity-only body is no longer valid for
+		// read-only nodes — it means Own (Graph creates the resource) in the new schema.
+		var watchNode graph.GraphNode
 		if spec.UseWatchKind {
-			// WatchKind: no metadata.name — krocodile watches all resources matching
-			// the label selector.
-			//
-			// krocodile (node.go:reconcileWatchKind) extracts the selector from
-			// tmpl["selector"] (flat top-level key) or tmpl["metadata"]["selector"].
-			// We use the flat top-level form as it is simpler and matches the
-			// krocodile source exactly.
-			//
-			// Namespace: krocodile ≥ 81c5a03 changed WatchKind namespace from
-			// graph.GetNamespace() to tmpl["metadata"]["namespace"] (absent = cluster-wide).
-			// We must include the namespace to scope the watch to the environment namespace.
-			// Note: metadata.name is intentionally omitted — krocodile uses its absence to
-			// classify this as ReferenceWatchKind rather than ReferenceWatch.
-			nodeTemplate = map[string]interface{}{
-				"apiVersion": spec.APIVersion,
-				"kind":       spec.Kind,
-				"selector":   spec.LabelSelector,
-				"metadata": map[string]interface{}{
-					"namespace": spec.Namespace,
+			// WatchKind → watch: keyword. selector at top level, namespace in metadata.
+			// krocodile ≥ 81c5a03: namespace from watch["metadata"]["namespace"]
+			// (absent = cluster-wide). Include namespace for env scoping.
+			watchNode = graph.GraphNode{
+				ID: nodeID,
+				Watch: map[string]interface{}{
+					"apiVersion": spec.APIVersion,
+					"kind":       spec.Kind,
+					"selector":   spec.LabelSelector,
+					"metadata": map[string]interface{}{
+						"namespace": spec.Namespace,
+					},
 				},
+				ReadyWhen: []string{readyWhen},
 			}
 		} else {
-			// Watch: identity-only template (apiVersion + kind + metadata.name).
-			// An identity-only template is classified ReferenceWatch by krocodile's
-			// DetectReference (experimental/controller/types.go). Existing behavior — unchanged.
-			nodeTemplate = map[string]interface{}{
-				"apiVersion": spec.APIVersion,
-				"kind":       spec.Kind,
-				"metadata": map[string]interface{}{
-					"name":      spec.Name,
-					"namespace": spec.Namespace,
+			// Single-named Watch → ref: keyword (by-name dereference).
+			watchNode = graph.GraphNode{
+				ID: nodeID,
+				Ref: map[string]interface{}{
+					"apiVersion": spec.APIVersion,
+					"kind":       spec.Kind,
+					"metadata": map[string]interface{}{
+						"name":      spec.Name,
+						"namespace": spec.Namespace,
+					},
 				},
+				ReadyWhen: []string{readyWhen},
 			}
-		}
-
-		// Build the watch node.
-		watchNode := graph.GraphNode{
-			ID:        nodeID,
-			Template:  nodeTemplate,
-			ReadyWhen: []string{readyWhen},
 		}
 		g.Spec.Nodes = append(g.Spec.Nodes, watchNode)
 

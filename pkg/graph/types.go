@@ -85,7 +85,21 @@ type GraphNode struct {
 
 	// Template is the raw resource template for this node.
 	// Stored as a map to allow arbitrary Kubernetes resource shapes.
+	// Template is the node body for an Own node (Graph creates the resource).
+	// Serialized as "template:" key — krocodile ≥ 05db829 (explicit-keyword schema).
+	// Previous name for this concept: "template" was also used for Watch/WatchKind,
+	// but those now use Ref/Watch fields.
 	Template map[string]interface{} `json:"template,omitempty"`
+
+	// Ref is the identity for a Ref node (dereference a single named object into scope).
+	// Serialized as "ref:" key — krocodile ≥ 05db829 (explicit-keyword schema).
+	// Replaces the old "template: {apiVersion, kind, metadata.name}" identity-only form.
+	Ref map[string]interface{} `json:"ref,omitempty"`
+
+	// Watch is the selector for a Watch node (observe a collection by selector).
+	// Serialized as "watch:" key — krocodile ≥ 05db829 (explicit-keyword schema).
+	// Replaces the old "template: {apiVersion, kind, selector}" WatchKind form.
+	Watch map[string]interface{} `json:"watch,omitempty"`
 
 	// ReadyWhen holds CEL expressions that are a health signal only.
 	// They feed the Graph's aggregated Ready condition and the UI.
@@ -114,6 +128,18 @@ func (in *GraphNode) DeepCopyInto(out *GraphNode) {
 		out.Template = make(map[string]interface{}, len(in.Template))
 		for k, v := range in.Template {
 			out.Template[k] = v
+		}
+	}
+	if in.Ref != nil {
+		out.Ref = make(map[string]interface{}, len(in.Ref))
+		for k, v := range in.Ref {
+			out.Ref[k] = v
+		}
+	}
+	if in.Watch != nil {
+		out.Watch = make(map[string]interface{}, len(in.Watch))
+		for k, v := range in.Watch {
+			out.Watch[k] = v
 		}
 	}
 	if in.ReadyWhen != nil {
