@@ -893,14 +893,17 @@
       "note": "Implemented as AuditEvent CRD in PR #675"
     },
     "576-audit-step1": {
-      "state": "todo",
+      "state": "done",
       "issue": 673,
       "pr_number": 675,
       "title": "feat(api): AuditEvent CRD \u2014 immutable promotion event trail step 1",
       "branch": null,
       "assigned_to": null,
       "assigned_at": null,
-      "worktree": null
+      "worktree": null,
+      "pr_merged": true,
+      "note": "AuditEvent CRD implemented in PRs #675 #681 #684",
+      "done_at": "2026-04-17T15:25:18Z"
     },
     "680-audit-step2": {
       "state": "done",
@@ -1002,24 +1005,30 @@
     "718-shell-completion": {
       "title": "feat(cli): shell completion \u2014 kardinal completion bash/zsh/fish/powershell",
       "issue": 718,
-      "state": "todo",
+      "state": "done",
       "areas": [
         "cli"
       ],
       "priority": "medium",
       "size": "s",
-      "created_at": "2026-04-17T14:38:54Z"
+      "created_at": "2026-04-17T14:38:54Z",
+      "pr_merged": true,
+      "pr_number": 731,
+      "done_at": "2026-04-17T15:28:56Z"
     },
     "721-watch-flag": {
       "title": "feat(cli): add --watch flag to kardinal get pipelines",
       "issue": 721,
-      "state": "todo",
+      "state": "done",
       "areas": [
         "cli"
       ],
       "priority": "medium",
       "size": "s",
-      "created_at": "2026-04-17T14:38:54Z"
+      "created_at": "2026-04-17T14:38:54Z",
+      "pr_merged": true,
+      "note": "--watch flag already in get_pipelines.go #629",
+      "done_at": "2026-04-17T15:25:18Z"
     },
     "722-dark-mode": {
       "title": "feat(ui): dark/light mode \u2014 system-aware theme with manual toggle",
@@ -1035,13 +1044,16 @@
     "723-audit-docs": {
       "title": "docs(security): update security.md audit log section to document AuditEvent CRD",
       "issue": 723,
-      "state": "todo",
+      "state": "done",
       "areas": [
         "docs"
       ],
       "priority": "medium",
       "size": "xs",
-      "created_at": "2026-04-17T14:38:54Z"
+      "created_at": "2026-04-17T14:38:54Z",
+      "pr_merged": true,
+      "pr_number": 724,
+      "done_at": "2026-04-17T15:25:48Z"
     }
   },
   "session_heartbeats": {
