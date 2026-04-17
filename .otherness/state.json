@@ -785,15 +785,19 @@
     },
     "625-remove-upstream-verified": {
       "state": "in_review",
-      "issue": 625,
       "pr_number": 660,
-      "title": "refactor(graph): replace upstreamVerifiedN with upstreamStates"
+      "issue": "625",
+      "title": "refactor(graph): replace upstreamVerifiedN with upstreamStates list",
+      "qa_approved": true,
+      "awaiting_human_review": true
     },
     "656-watchkind-docs": {
       "state": "in_review",
-      "issue": 656,
       "pr_number": 659,
-      "title": "docs(health): document health.labelSelector WatchKind mode"
+      "issue": "656",
+      "title": "docs(health): document health.labelSelector WatchKind mode",
+      "qa_approved": true,
+      "awaiting_human_review": true
     },
     "643-doc11-kro80-ref": {
       "state": "done",
