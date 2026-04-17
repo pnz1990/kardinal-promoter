@@ -57,7 +57,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
       <div style={{ marginBottom: '0.75rem' }}>
         <button
           style={{
-            background: 'none', border: 'none', color: '#64748b',
+            background: 'none', border: 'none', color: '#94a3b8',
             cursor: 'default', fontSize: '0.8rem', padding: '0.25rem 0',
           }}
           disabled
@@ -124,8 +124,8 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
               {gate.expression && (
                 <code style={{
                   fontSize: '0.72rem',
-                  color: 'var(--color-info)',
-                  background: 'var(--color-bg)',
+                  color: '#67e8f9',   /* --color-info dark: 9.5:1 on #0f172a */
+                  background: '#0f172a',  /* --color-bg dark: explicit for axe CSS var resolution */
                   border: '1px solid #1e293b',
                   borderRadius: '3px',
                   padding: '2px 6px',

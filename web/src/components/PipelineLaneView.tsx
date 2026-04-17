@@ -156,7 +156,7 @@ export function PipelineLaneView({
                 <div style={{
                   fontSize: '0.65rem',
                   fontFamily: 'monospace',
-                  color: '#64748b',
+                  color: '#94a3b8',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',

@@ -211,7 +211,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         </span>
       </button>
 
-      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
+      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }} aria-hidden="true">|</span>
 
       <SummaryBadge
         label="Healthy"
@@ -246,7 +246,7 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         />
       )}
 
-      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }}>|</span>
+      <span style={{ color: 'var(--color-surface)', fontSize: '1.2rem', userSelect: 'none' }} aria-hidden="true">|</span>
 
       <SummaryBadge
         label="Promoting"

@@ -523,7 +523,7 @@ export function App() {
                     color: 'var(--color-text-muted)',
                   }}>
                     <span>
-                      Bundle: <span style={{ color: 'var(--color-info)', fontFamily: 'monospace' }}>{activeBundle.name}</span>
+                      Bundle: <span style={{ color: '#67e8f9', fontFamily: 'monospace' }}>{activeBundle.name}</span>
                       {/* #763: copy bundle name */}
                       <CopyButton text={activeBundle.name} title={`Copy bundle name "${activeBundle.name}"`} />
                     </span>

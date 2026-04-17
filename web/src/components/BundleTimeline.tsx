@@ -34,12 +34,12 @@ function phaseCSSClass(phase: string): string {
 /** Accent color for glow/dot — kept for inline uses (boxShadow, dot fill). */
 function phaseAccentColor(phase: string): string {
   switch (phase) {
-    case 'Promoting': return 'var(--color-accent)'
-    case 'Verified':  return 'var(--color-success)'
-    case 'Failed':    return '#ef4444'
-    case 'Superseded': return 'var(--color-text-faint)'
-    case 'Available': return '#f59e0b'
-    default: return '#64748b'
+    case 'Promoting': return '#a5b4fc'   /* --color-accent dark: 9.1:1 on #0f172a */
+    case 'Verified':  return '#4ade80'   /* --color-success dark: 6.6:1 on #0f172a */
+    case 'Failed':    return '#f87171'   /* --color-error dark: 5.4:1 on #0f172a */
+    case 'Superseded': return '#8594a8'  /* --color-text-faint dark: 5.3:1 on #0f172a */
+    case 'Available': return '#fbbf24'   /* --color-warning dark: 7.8:1 on #0f172a */
+    default: return '#94a3b8'            /* slate-400: 7.05:1 on #0f172a */
   }
 }
 
@@ -106,7 +106,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
             style={{
               fontSize: '0.65rem',
               background: 'none',
-              color: '#64748b',
+              color: '#94a3b8',
               border: 'none',
               cursor: 'pointer',
               padding: '0',
@@ -117,7 +117,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
           </button>
         )}
         {!compareBundle && bundles.length >= 2 && (
-          <span style={{ fontSize: '0.6rem', color: '#64748b' }}>
+          <span style={{ fontSize: '0.6rem', color: '#94a3b8' }}>
             Shift-click to compare
           </span>
         )}
@@ -167,7 +167,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {/* Short name */}
               <span style={{
                 fontSize: '0.75rem',
-                color: isSelected || isCompare ? '#e2e8f0' : '#64748b',
+                color: isSelected || isCompare ? '#e2e8f0' : '#94a3b8',
                 fontFamily: 'monospace',
                 fontWeight: isSelected || isCompare ? 600 : 400,
               }}>
@@ -184,7 +184,7 @@ export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compar
               {isCompare && (
                 <span style={{
                   fontSize: '0.55rem',
-                  color: 'var(--color-accent)',
+                  color: '#a5b4fc',  /* --color-accent dark: 9.1:1 on #0f172a */
                   fontWeight: 700,
                 }}>⇅B</span>
               )}

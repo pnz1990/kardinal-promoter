@@ -126,10 +126,10 @@ function DAGLegend() {
       fontSize: '0.65rem',
       color: 'var(--color-text-faint)',
     }}>
-      <span style={{ fontWeight: 600, color: 'var(--color-border)', marginRight: '0.25rem' }}>Legend:</span>
+      <span style={{ fontWeight: 600, color: '#94a3b8', marginRight: '0.25rem' }}>Legend:</span>
       {/* Node type icons */}
       <span title="PromotionStep — environment node (rounded rect)">
-        <span style={{ fontSize: '0.6rem', border: '1px solid #475569', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: '#64748b' }}>▭</span>
+        <span style={{ fontSize: '0.6rem', border: '1px solid #475569', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: '#94a3b8' }}>▭</span>
         Environment step
       </span>
       <span title="PolicyGate — CEL policy check (🔒 prefix)">
