@@ -278,6 +278,7 @@ The following capabilities are implemented and shipped as of v0.8.x:
 - ✅ Copy-to-clipboard on pipeline names and bundle hashes — PR #764
 - ✅ Stale data indicator: amber→red+pulse escalation after 30s — PR #767
 - ✅ Focus trap in keyboard shortcuts modal (Tab/Shift+Tab cycle, return focus on close) — PR #783
+- ✅ Skeleton loading states: NodeDetail step details, BundleTimeline chips, PolicyGatesPanel — PR (issue #784)
 
 ---
 
@@ -292,7 +293,6 @@ The following capabilities are declared in `docs/aide/vision.md` §F8 but not ye
 - 🔲 Bundle promotion timeline with rollback records and override audit trail — epic #531
 - 🔲 Policy gate detail: current CEL variable values, evaluation history, time until unblocked — epic #531
 - 🔲 Responsive layout at 1280px width — epic #587
-- 🔲 Skeleton loading states (replace blank panels) — epic #587
 - 🔲 Virtualization for pipeline list with 50+ entries — epic #587
 - 🔲 `/` keyboard shortcut for search (no search field exists yet) — epic #587
 ---

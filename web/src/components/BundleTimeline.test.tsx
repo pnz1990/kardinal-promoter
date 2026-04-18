@@ -33,6 +33,19 @@ describe('BundleTimeline — empty state', () => {
     const { container } = render(<BundleTimeline bundles={[]} />)
     expect(container.firstChild).toBeNull()
   })
+
+  it('renders skeleton when loading=true (#784)', () => {
+    const { container } = render(<BundleTimeline bundles={[]} loading />)
+    expect(container.firstChild).not.toBeNull()
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument()
+    expect(container.querySelector('[data-testid="bundle-timeline-skeleton"]')).not.toBeNull()
+  })
+
+  it('renders bundles when loading=false even if passed explicitly', () => {
+    const bundles = [makeBundle({ phase: 'Verified' })]
+    render(<BundleTimeline bundles={bundles} loading={false} />)
+    expect(screen.getByText('Verified')).toBeInTheDocument()
+  })
 })
 
 describe('BundleTimeline — bundle rendering', () => {
@@ -107,5 +120,28 @@ describe('BundleTimeline — selection', () => {
       />
     )
     expect(screen.getByText(/× clear/i)).toBeInTheDocument()
+  })
+})
+
+describe('BundleTimeline — skeleton loading state (#784)', () => {
+  it('shows data-testid=bundle-timeline-skeleton when loading=true', () => {
+    const { getByTestId, queryByText } = render(
+      <BundleTimeline
+        bundles={[]}
+        loading={true}
+      />
+    )
+    expect(getByTestId('bundle-timeline-skeleton')).toBeDefined()
+  })
+
+  it('renders bundles normally when loading=false', () => {
+    const bundles = [makeBundle({ name: 'b1', createdAt: '2026-04-15T10:00:00Z' })]
+    const { queryByTestId } = render(
+      <BundleTimeline
+        bundles={bundles}
+        loading={false}
+      />
+    )
+    expect(queryByTestId('bundle-timeline-skeleton')).toBeNull()
   })
 })

@@ -32,9 +32,13 @@ describe('PolicyGatesPanel — empty state', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('renders loading state when loading=true', () => {
-    render(<PolicyGatesPanel gates={[]} loading />)
-    expect(screen.getByText(/loading/i)).toBeInTheDocument()
+  it('renders skeleton loading state (not text) when loading=true', () => {
+    const { container } = render(<PolicyGatesPanel gates={[]} loading />)
+    // Must NOT show the old text-based loading indicator
+    expect(screen.queryByText(/loading/i)).not.toBeInTheDocument()
+    // Must show the skeleton container with aria-busy
+    const skeleton = container.querySelector('[aria-busy="true"]')
+    expect(skeleton).toBeInTheDocument()
   })
 })
 
