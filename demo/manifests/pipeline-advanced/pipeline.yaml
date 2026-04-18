@@ -1,0 +1,78 @@
+# demo/manifests/pipeline-advanced/pipeline.yaml
+#
+# Pipeline 2: kardinal-test-app-advanced (multi-cluster, all gates)
+#
+# Topology:
+#   test-fast (auto, kind-kardinal-dev)   — fast lane, no soak
+#    └→ uat   (auto, kind-kardinal-dev)   — normal lane
+#        ├→ prod-canary  (pr-review, kind-kardinal-prod)  — 10% traffic
+#        └→ prod-full    (pr-review, kind-kardinal-prod)  — 100% traffic, depends on prod-canary
+#
+# Features exercised (beyond pipeline-simple):
+#   ✓ Change window gate (business-hours-only)
+#   ✓ Multi-cluster shard
+#   ✓ Parallel prod environments (canary + full)
+#   ✓ Upstream soak gate (30m in uat before prod-canary)
+#   ✓ Manual override capability
+#   ✓ Pause / resume
+#
+# Copyright 2026 The kardinal-promoter Authors.
+# Licensed under the Apache License, Version 2.0
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: kardinal-test-app-advanced
+  namespace: default
+  labels:
+    demo: "true"
+    demo.kardinal.io/complexity: advanced
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    - name: test-fast
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        timeout: 5m
+
+    - name: uat
+      dependsOn: [test-fast]
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        timeout: 10m
+
+    - name: prod-canary
+      dependsOn: [uat]
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 20m
+
+    - name: prod-full
+      dependsOn: [prod-canary]
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 20m
+
+  historyLimit: 10

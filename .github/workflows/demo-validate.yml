@@ -1,0 +1,149 @@
+name: Demo Validate
+
+# This workflow IS the source of truth that kardinal-promoter works end-to-end.
+# It runs the full demo setup + validate scripts on a real kind cluster.
+#
+# Triggers:
+#   - Nightly at 02:00 UTC (catches controller regressions)
+#   - On any PR that touches demo/, examples/, or the controller
+#   - Manual dispatch (for on-demand validation)
+#
+# If this workflow is red, kardinal does not work. No exceptions.
+
+on:
+  schedule:
+    - cron: '0 2 * * *'     # 02:00 UTC nightly
+  pull_request:
+    paths:
+      - 'demo/**'
+      - 'examples/**'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'api/**'
+      - 'chart/**'
+      - '.github/workflows/demo-validate.yml'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Specific scenario to run (1-10), or empty for all'
+        required: false
+        default: ''
+      fast:
+        description: 'Fast mode (skip soak waits)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CONTROL_CLUSTER: kardinal-control
+  DEV_CLUSTER: kardinal-dev
+  PROD_CLUSTER: kardinal-prod
+  CHART_IMAGE_TAG: v0.8.0   # last known-good published image
+
+jobs:
+  demo-validate:
+    name: Demo end-to-end validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          # kind
+          curl -Lo /usr/local/bin/kind \
+            https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x /usr/local/bin/kind
+
+          # helm
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          # argocd CLI
+          curl -sSL https://github.com/argoproj/argo-cd/releases/download/v2.10.3/argocd-linux-amd64 \
+            -o /usr/local/bin/argocd
+          chmod +x /usr/local/bin/argocd
+
+          # kardinal CLI — build from source (always tests latest)
+          go build -o /usr/local/bin/kardinal ./cmd/kardinal/
+
+      - name: Build and load controller image locally
+        run: |
+          # Build from source so CI always tests the code in this PR
+          docker build \
+            --build-arg VERSION=ci-$(git rev-parse --short HEAD) \
+            -t ghcr.io/pnz1990/kardinal-promoter/controller:ci-local \
+            .
+          echo "CHART_IMAGE_TAG=ci-local" >> $GITHUB_ENV
+
+      - name: Set up demo environment
+        env:
+          GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
+        run: |
+          # Load the locally-built image into the control cluster after it's created.
+          # setup.sh creates clusters first, then we load the image.
+          SKIP_BUILD=true CHART_IMAGE_TAG=ci-local \
+            bash demo/scripts/setup.sh
+
+          # Load locally-built controller image into the control cluster
+          kind load docker-image \
+            ghcr.io/pnz1990/kardinal-promoter/controller:ci-local \
+            --name "$CONTROL_CLUSTER"
+
+          # Patch the deployment to use the local image
+          kubectl config use-context "kind-${CONTROL_CLUSTER}"
+          kubectl set image deployment/kardinal-kardinal-promoter \
+            controller=ghcr.io/pnz1990/kardinal-promoter/controller:ci-local \
+            -n kardinal-system
+          kubectl rollout status deployment/kardinal-kardinal-promoter \
+            -n kardinal-system --timeout=120s
+
+      - name: Run validation
+        env:
+          GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
+          FAST: ${{ github.event.inputs.fast || 'false' }}
+        run: |
+          SCENARIO_ARG=""
+          if [[ -n "${{ github.event.inputs.scenario }}" ]]; then
+            SCENARIO_ARG="--scenario ${{ github.event.inputs.scenario }}"
+          fi
+          bash demo/scripts/validate.sh $SCENARIO_ARG
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== kardinal-system pods ==="
+          kubectl config use-context "kind-${CONTROL_CLUSTER}"
+          kubectl get pods -n kardinal-system -o wide
+          echo ""
+          echo "=== Controller logs ==="
+          kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter \
+            --tail=100 2>/dev/null || \
+            kubectl logs -n kardinal-system deployment/kardinal-kardinal-promoter \
+            --tail=100 2>/dev/null || echo "no logs"
+          echo ""
+          echo "=== Pipelines ==="
+          kubectl get pipelines -A 2>/dev/null || echo "no pipelines"
+          echo ""
+          echo "=== PolicyGates ==="
+          kubectl get policygates -A 2>/dev/null || echo "no policy gates"
+
+      - name: Post result to issue #1
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$([[ "${{ job.status }}" == "success" ]] && echo "✅ PASS" || echo "❌ FAIL")
+          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          BODY="[DEMO VALIDATE | ${DATE}] Nightly demo validation: **${STATUS}** — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment 1 \
+            --repo pnz1990/kardinal-promoter \
+            --body "$BODY"
+
+      - name: Teardown
+        if: always()
+        run: |
+          bash demo/scripts/teardown.sh 2>/dev/null || true

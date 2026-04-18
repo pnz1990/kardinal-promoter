@@ -1,0 +1,67 @@
+# demo/manifests/pipeline-simple/pipeline.yaml
+#
+# Pipeline 1: kardinal-test-app (simple, single-cluster)
+#
+# Topology:
+#   test (auto, kind-kardinal-dev)
+#    └→ uat (auto, kind-kardinal-dev)
+#        └→ prod (PR review, kind-kardinal-prod or EKS)
+#               ↑ guarded by: no-weekend-deploys, require-uat-soak, no-bot-deploys
+#
+# Features exercised:
+#   ✓ Auto-promote (test, uat)
+#   ✓ PR-review gate (prod)
+#   ✓ Org-level PolicyGates (injected from platform-policies namespace)
+#   ✓ ArgoCD health adapter
+#   ✓ historyLimit
+#
+# Copyright 2026 The kardinal-promoter Authors.
+# Licensed under the Apache License, Version 2.0
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: kardinal-test-app
+  namespace: default
+  labels:
+    demo: "true"
+    demo.kardinal.io/complexity: simple
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        timeout: 5m
+
+    - name: uat
+      dependsOn: [test]
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        timeout: 5m
+
+    - name: prod
+      dependsOn: [uat]
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        timeout: 15m
+
+  historyLimit: 20
