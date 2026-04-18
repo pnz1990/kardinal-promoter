@@ -167,6 +167,11 @@ jobs:
             ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
 
       # ── Vulnerability scanning ──────────────────────────────────────────────
+      # Scan and report CVEs in the SARIF format for GitHub Security tab.
+      # exit-code: 0 — report findings but do NOT block the release.
+      # Rationale: the image is already pushed to ghcr.io at this point.
+      # Blocking here leaves a published image without a GitHub Release entry.
+      # CVE remediation is tracked separately via Dependabot and the SARIF report.
       - name: Scan controller image for HIGH/CRITICAL CVEs (trivy)
         uses: aquasecurity/trivy-action@0.35.0
         with:
@@ -174,10 +179,9 @@ jobs:
           format: sarif
           output: trivy-controller-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: 1
+          exit-code: 0
           ignore-unfixed: true
-        # Upload SARIF even on failure so engineers can see the findings.
-        continue-on-error: false
+        continue-on-error: true
 
       - name: Upload trivy SARIF report (controller)
         uses: github/codeql-action/upload-sarif@v3
@@ -185,6 +189,7 @@ jobs:
         with:
           sarif_file: trivy-controller-results.sarif
           category: trivy-controller
+        continue-on-error: true
 
       - name: Scan krocodile image for HIGH/CRITICAL CVEs (trivy)
         uses: aquasecurity/trivy-action@0.35.0
@@ -193,9 +198,9 @@ jobs:
           format: sarif
           output: trivy-krocodile-results.sarif
           severity: HIGH,CRITICAL
-          exit-code: 1
+          exit-code: 0
           ignore-unfixed: true
-        continue-on-error: false
+        continue-on-error: true
 
       - name: Upload trivy SARIF report (krocodile)
         uses: github/codeql-action/upload-sarif@v3
@@ -203,6 +208,7 @@ jobs:
         with:
           sarif_file: trivy-krocodile-results.sarif
           category: trivy-krocodile
+        continue-on-error: true
 
       # ── Package and publish Helm chart ─────────────────────────────────────
       - name: Update chart version and krocodile tag
