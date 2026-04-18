@@ -52,59 +52,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - name: Install tools
         run: |
-          # kind
-          curl -Lo /usr/local/bin/kind \
-            https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
-          chmod +x /usr/local/bin/kind
+          BIN="${HOME}/.local/bin"
+          mkdir -p "$BIN"
+          echo "$BIN" >> $GITHUB_PATH
 
-          # helm
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # kind
+          curl -Lo "${BIN}/kind" \
+            https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x "${BIN}/kind"
+
+          # helm (installs to /usr/local/bin via the official script, which uses sudo)
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
           # argocd CLI
           curl -sSL https://github.com/argoproj/argo-cd/releases/download/v2.10.3/argocd-linux-amd64 \
-            -o /usr/local/bin/argocd
-          chmod +x /usr/local/bin/argocd
+            -o "${BIN}/argocd"
+          chmod +x "${BIN}/argocd"
 
-          # kardinal CLI — build from source (always tests latest)
-          go build -o /usr/local/bin/kardinal ./cmd/kardinal/
-
-      - name: Build and load controller image locally
-        run: |
-          # Build from source so CI always tests the code in this PR
-          docker build \
-            --build-arg VERSION=ci-$(git rev-parse --short HEAD) \
-            -t ghcr.io/pnz1990/kardinal-promoter/controller:ci-local \
-            .
-          echo "CHART_IMAGE_TAG=ci-local" >> $GITHUB_ENV
+          # kardinal CLI — build from source (always tests latest code in this PR)
+          go build -mod=mod -o "${BIN}/kardinal" ./cmd/kardinal/
+          echo "kardinal version: $("${BIN}/kardinal" version 2>&1 | head -1)"
 
       - name: Set up demo environment
         env:
           GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
         run: |
-          # Load the locally-built image into the control cluster after it's created.
-          # setup.sh creates clusters first, then we load the image.
-          SKIP_BUILD=true CHART_IMAGE_TAG=ci-local \
-            bash demo/scripts/setup.sh
-
-          # Load locally-built controller image into the control cluster
-          kind load docker-image \
-            ghcr.io/pnz1990/kardinal-promoter/controller:ci-local \
-            --name "$CONTROL_CLUSTER"
-
-          # Patch the deployment to use the local image
-          kubectl config use-context "kind-${CONTROL_CLUSTER}"
-          kubectl set image deployment/kardinal-kardinal-promoter \
-            controller=ghcr.io/pnz1990/kardinal-promoter/controller:ci-local \
-            -n kardinal-system
-          kubectl rollout status deployment/kardinal-kardinal-promoter \
-            -n kardinal-system --timeout=120s
+          # Use the published image tag (set in env.CHART_IMAGE_TAG = v0.8.0)
+          # The setup.sh script will create clusters and install everything.
+          bash demo/scripts/setup.sh
 
       - name: Run validation
         env:
           GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
-          FAST: ${{ github.event.inputs.fast || 'false' }}
+          FAST: ${{ github.event.inputs.fast || 'true' }}
         run: |
           SCENARIO_ARG=""
           if [[ -n "${{ github.event.inputs.scenario }}" ]]; then
