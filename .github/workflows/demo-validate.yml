@@ -1,0 +1,136 @@
+name: Demo Validate
+
+# This workflow IS the source of truth that kardinal-promoter works end-to-end.
+# It runs the full demo setup + validate scripts on a real kind cluster.
+#
+# Triggers:
+#   - Nightly at 02:00 UTC (catches controller regressions)
+#   - On any PR that touches demo/, examples/, or the controller
+#   - Manual dispatch (for on-demand validation)
+#
+# If this workflow is red, kardinal does not work. No exceptions.
+
+on:
+  schedule:
+    - cron: '0 2 * * *'     # 02:00 UTC nightly
+  pull_request:
+    paths:
+      - 'demo/**'
+      - 'examples/**'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'api/**'
+      - 'chart/**'
+      - '.github/workflows/demo-validate.yml'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Specific scenario to run (1-10), or empty for all'
+        required: false
+        default: ''
+      fast:
+        description: 'Fast mode (skip soak waits)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CONTROL_CLUSTER: kardinal-control
+  DEV_CLUSTER: kardinal-dev
+  PROD_CLUSTER: kardinal-prod
+  CHART_IMAGE_TAG: v0.8.0   # last known-good published image
+
+jobs:
+  demo-validate:
+    name: Demo end-to-end validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install tools
+        run: |
+          BIN="${HOME}/.local/bin"
+          mkdir -p "$BIN"
+          echo "$BIN" >> $GITHUB_PATH
+
+          # kind
+          curl -Lo "${BIN}/kind" \
+            https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x "${BIN}/kind"
+
+          # helm (installs to /usr/local/bin via the official script, which uses sudo)
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+          # argocd CLI
+          curl -sSL https://github.com/argoproj/argo-cd/releases/download/v2.10.3/argocd-linux-amd64 \
+            -o "${BIN}/argocd"
+          chmod +x "${BIN}/argocd"
+
+          # kardinal CLI — build from source (always tests latest code in this PR)
+          go build -mod=mod -o "${BIN}/kardinal" ./cmd/kardinal/
+          echo "kardinal version: $("${BIN}/kardinal" version 2>&1 | head -1)"
+
+      - name: Set up demo environment
+        env:
+          GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
+        run: |
+          # Use the published image tag (set in env.CHART_IMAGE_TAG = v0.8.0)
+          # The setup.sh script will create clusters and install everything.
+          bash demo/scripts/setup.sh
+
+      - name: Run validation
+        env:
+          GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
+          FAST: ${{ github.event.inputs.fast || 'true' }}
+        run: |
+          SCENARIO_ARG=""
+          if [[ -n "${{ github.event.inputs.scenario }}" ]]; then
+            SCENARIO_ARG="--scenario ${{ github.event.inputs.scenario }}"
+          fi
+          bash demo/scripts/validate.sh $SCENARIO_ARG
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== kardinal-system pods ==="
+          kubectl config use-context "kind-${CONTROL_CLUSTER}"
+          kubectl get pods -n kardinal-system -o wide
+          echo ""
+          echo "=== Controller logs ==="
+          kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter \
+            --tail=100 2>/dev/null || \
+            kubectl logs -n kardinal-system deployment/kardinal-kardinal-promoter \
+            --tail=100 2>/dev/null || echo "no logs"
+          echo ""
+          echo "=== Pipelines ==="
+          kubectl get pipelines -A 2>/dev/null || echo "no pipelines"
+          echo ""
+          echo "=== PolicyGates ==="
+          kubectl get policygates -A 2>/dev/null || echo "no policy gates"
+
+      - name: Post result to issue #1
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          STATUS=$([[ "${{ job.status }}" == "success" ]] && echo "✅ PASS" || echo "❌ FAIL")
+          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          BODY="[DEMO VALIDATE | ${DATE}] Nightly demo validation: **${STATUS}** — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment 1 \
+            --repo pnz1990/kardinal-promoter \
+            --body "$BODY"
+
+      - name: Teardown
+        if: always()
+        run: |
+          bash demo/scripts/teardown.sh 2>/dev/null || true

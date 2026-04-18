@@ -1,0 +1,79 @@
+# demo/manifests/policy-gates/org-gates.yaml
+#
+# Org-level PolicyGates — applied to platform-policies namespace.
+# These are automatically injected into every Pipeline targeting prod.
+#
+# Copyright 2026 The kardinal-promoter Authors.
+# Licensed under the Apache License, Version 2.0
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-policies
+---
+# Gate 1: No weekend deploys
+# Demonstrates: schedule.* variables, recheckInterval
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-weekend-deploys
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+    kardinal.io/type: schedule-gate
+spec:
+  expression: "!schedule.isWeekend"
+  message: "Production deployments are blocked on weekends (Sat–Sun UTC)"
+  recheckInterval: 5m
+---
+# Gate 2: UAT soak requirement
+# Demonstrates: upstream.* variables, time-based gate
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: require-uat-soak
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+    kardinal.io/type: soak-gate
+spec:
+  expression: "upstream.uat.soakMinutes >= 30"
+  message: "Bundle must be verified in uat for at least 30 minutes before promoting to prod"
+  recheckInterval: 1m
+---
+# Gate 3: Change window (business hours only)
+# Demonstrates: schedule.hour, schedule.dayOfWeek, complex CEL
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: business-hours-only
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+    kardinal.io/type: change-window
+spec:
+  expression: >
+    !schedule.isWeekend &&
+    schedule.hour >= 9 &&
+    schedule.hour < 17
+  message: "Production deployments are only allowed Mon–Fri 09:00–17:00 UTC"
+  recheckInterval: 5m
+---
+# Gate 4: Author check (no bot deploys to prod)
+# Demonstrates: bundle.provenance.* variables
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-bot-deploys
+  namespace: platform-policies
+  labels:
+    kardinal.io/scope: org
+    kardinal.io/applies-to: prod
+    kardinal.io/type: provenance-gate
+spec:
+  expression: '!bundle.provenance.author.endsWith("[bot]")'
+  message: "Production deployments from bot accounts are blocked. Requires human author."
+  recheckInterval: 10m
