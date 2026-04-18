@@ -221,6 +221,21 @@ info "[3/7] Installing kardinal-promoter on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
 
+# CRDs must be applied before Helm — the chart includes a ScheduleClock resource
+# that requires the CRDs to exist before the chart renders (#593)
+if [[ -d "${REPO_ROOT}/config/crd/bases" ]]; then
+  info "  Applying CRDs from local repo..."
+  kubectl apply -f "${REPO_ROOT}/config/crd/bases/" 2>/dev/null || true
+else
+  # Running from a release tarball — pull CRDs from the published chart
+  info "  Fetching CRDs from published chart..."
+  helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+    --version "${CHART_IMAGE_TAG#v}" 2>/dev/null | kubectl apply -f - || \
+  helm pull oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+    --version "${CHART_IMAGE_TAG#v}" --untar --untardir /tmp/kardinal-chart 2>/dev/null && \
+  kubectl apply -f /tmp/kardinal-chart/kardinal-promoter/crds/ 2>/dev/null || true
+fi
+
 # GitHub token secret
 kubectl create secret generic github-token \
   --namespace kardinal-system \
