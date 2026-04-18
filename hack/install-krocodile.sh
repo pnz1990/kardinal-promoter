@@ -16,19 +16,24 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    cdc4bb9 (2026-04-17 — 6 commits since 05db829; highlights:
-#                           - schema-aware CEL: typed resource schemas + runtime
-#                             value wrapping; no dyn() wrappers needed (#161)
-#                           - forEach fix: silent data loss + unchecked type
-#                             assertions resolved (#160)
-#                           - NodeTypeOwn → NodeTypeTemplate (cosmetic rename,
-#                             YAML keywords unchanged) (#158)
-#                           - startup hydration: skip dynamic-GVR nodes (#157)
+# Last verified:    3376810 (2026-04-18 — 10 commits since cdc4bb9; highlights:
+#                           - CORRECTNESS FIX (#789): propagation trigger on
+#                             self-state refresh (3bcbe92) — fixes UAT never
+#                             starting when test PS reaches Verified
+#                           - NodeState sync guard: _nodeStateCount sentinel
+#                             panics on startup if metrics labels drift (8a6e2e9)
+#                           - ForEach map→typed binding: ForEach map[string]string
+#                             replaced with *ForEachBinding struct (8a6e2e9)
+#                           - Watch merge encapsulation + unified hash paths
+#                             (3376810)
+#                           - validation compat: expression validation, kind
+#                             pattern, empty resources (be88c4f)
+#                           - .updated() CEL function for forEach rollout
+#                             gating (94695c8)
+# Previously verified: cdc4bb9 (2026-04-17 — schema-aware CEL, forEach fix)
 # Previously verified: 05db829 (explicit-keyword schema)
-#                           - stdlib: cluster-scoped Kind, printer columns (#152)
-#                           - RGD stdlib: instance GVK labels + force-apply (#149))
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-cdc4bb9}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-3376810}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 

@@ -224,3 +224,18 @@ The Graph API is experimental. To detect breaking changes:
 - How PromotionStep CRs are reconciled (see 03-promotionstep-reconciler)
 - How PolicyGate CRs are reconciled (see 04-policygate-reconciler)
 - The Graph controller's internal implementation (maintained by the kro team)
+
+## Present
+
+✅ krocodile pinned to `cdc4bb9` (2026-04-17): schema-aware CEL, forEach data-loss fix,
+   NodeTypeOwn→NodeTypeTemplate cosmetic rename (PR merged before #789 tracking)
+
+✅ krocodile upgraded to `3376810` (2026-04-18, PR #789): propagation trigger on self-state
+   refresh — fixes J1 blocker where UAT PromotionStep never started because krocodile
+   Path 2 dispatch did not mark dependents as `propagationTriggered`.
+   Root cause: krocodile commit `3bcbe92` (correctness: propagation trigger on self-state
+   refresh + cycle error format).
+
+## Future
+
+- 🔲 krocodile upgrade cadence — check for new commits every batch per AGENTS.md protocol
