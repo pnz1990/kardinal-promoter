@@ -1,28 +1,23 @@
-## Session Handoff — 2026-04-18T20:34:28Z
+## Session Handoff — 2026-04-18T20:47:42Z
 
-### PRs awaiting human approval (ALL CI GREEN)
-1. **PR #790** (CRITICAL): fix(graph) krocodile cdc4bb9→3376810 + terminal state guard + empty hash guard
-   Fixes J1 blocker: UAT never starts after test PS reaches Verified
-   https://github.com/pnz1990/kardinal-promoter/pull/790
+### Open PRs awaiting human merge (all CI-green, all QA-approved)
+- **PR #790** (PRIORITY): fix(graph): krocodile upgrade — UAT never starting J1 blocker
+  https://github.com/pnz1990/kardinal-promoter/pull/790
+- **PR #791**: feat(ui): skeleton loading states
+  https://github.com/pnz1990/kardinal-promoter/pull/791
+- **PR #793**: docs(changelog): skeleton loading entry
+  https://github.com/pnz1990/kardinal-promoter/pull/793  
+- **PR #794**: docs(changelog): unreleased krocodile fix + skeleton
+  https://github.com/pnz1990/kardinal-promoter/pull/794
 
-2. **PR #791** (medium): feat(ui) skeleton loading states — NodeDetail, BundleTimeline, PolicyGatesPanel
-   https://github.com/pnz1990/kardinal-promoter/pull/791
-
-3. **PR #793** (xs): docs(changelog) add skeleton loading states entry
-   https://github.com/pnz1990/kardinal-promoter/pull/793
-
-### Next after merges
-- After merging #790: trigger PDCA validation (J1 blocker is fixed)
-  ```
-  gh workflow run pdca.yml --repo pnz1990/kardinal-promoter -f scenario=1
-  ```
-- Open queue items from design docs: 🔲 Future items (responsive layout, per-pipeline ops view, etc.)
+### After merging #790
+Run PDCA scenario 1 to get live J1 validation evidence:
+gh workflow run pdca.yml --repo pnz1990/kardinal-promoter -f scenario=1
 
 ### CI status (main)
 success
 
-### Queue state
-All items in_review. Empty queue — next agent batch needs new queue generation.
-
 ### Notes
-Session: sess-b0f605f3 | otherness@v0.1.0-89-gffe81ab
+Session: sess-51bc2351 | otherness@v0.1.0-89-gffe81ab
+All queue items were completed. All PRs are ready to merge.
+Branch protection requires 1 human approving review before merge.
