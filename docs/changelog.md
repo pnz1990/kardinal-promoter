@@ -27,6 +27,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **WCAG 2.1 AA accessibility enforcement** — axe-core Playwright check in E2E test suite (Journey 009); all structural violations resolved (#756, #759, #760)
 - **Copy-to-clipboard on pipeline names and bundle hashes** — click to copy pipeline name, bundle name, or commit SHA in the embedded UI (#764)
 - **Stale data indicator escalation** — red + pulse animation when dashboard data is >30s old; screen reader announcement via `aria-live` (#767)
+- **Skeleton loading states** — NodeDetail step details, BundleTimeline chips, and PolicyGatesPanel now show animated shimmer placeholders instead of blank panels while data loads (#784)
 
 ### Changed
 
