@@ -647,6 +647,7 @@ export function App() {
               <ErrorBoundary fallbackMessage="Timeline unavailable">
                 <BundleTimeline
                   bundles={bundles}
+                  loading={bundlesLoading}
                   selectedBundle={activeBundle?.name}
                   onSelectBundle={handleTimelineBundleSelect}
                   compareBundle={compareBundle}
