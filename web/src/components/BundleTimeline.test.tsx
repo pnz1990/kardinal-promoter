@@ -125,7 +125,7 @@ describe('BundleTimeline — selection', () => {
 
 describe('BundleTimeline — skeleton loading state (#784)', () => {
   it('shows data-testid=bundle-timeline-skeleton when loading=true', () => {
-    const { getByTestId, queryByText } = render(
+    const { getByTestId } = render(
       <BundleTimeline
         bundles={[]}
         loading={true}
