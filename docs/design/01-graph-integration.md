@@ -236,6 +236,12 @@ The Graph API is experimental. To detect breaking changes:
    Root cause: krocodile commit `3bcbe92` (correctness: propagation trigger on self-state
    refresh + cycle error format).
 
+✅ ensurePipelineSpecCurrent empty-hash guard (2026-04-18, PR #789): Bundles promoted before
+   PipelineSpecHash was introduced (pre-#634) had an empty stored hash. The guard now treats
+   an empty stored hash as "uninitialised" — saves it and returns without deleting the Graph.
+   Previously the empty hash was misinterpreted as "spec has changed", causing a spurious
+   Graph deletion that reset all PromotionSteps to empty status.
+
 ## Future
 
 - 🔲 krocodile upgrade cadence — check for new commits every batch per AGENTS.md protocol
