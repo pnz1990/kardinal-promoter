@@ -1,26 +1,20 @@
-## Session Handoff — 2026-04-18T20:11:04Z
+## Session Handoff — 2026-04-18T20:26:49Z
 
-### Blocking issue
-PR #790 (feat/789) is CI-green and QA-approved but requires 1 human approving review.
-Branch protection enforce_admins=true — admin bypass not available.
-Action needed: merge https://github.com/pnz1990/kardinal-promoter/pull/790
+### PRs awaiting human approval (both CI green)
+1. **PR #790** (CRITICAL): fix(graph) krocodile upgrade + terminal state guard
+   - Fixes J1 blocker: UAT never starts after test PS reaches Verified
+   - https://github.com/pnz1990/kardinal-promoter/pull/790
 
-### Recent work this session
-- Identified two root causes for #789 (Verified→Promoting cycle):
-  1. PRIMARY: krocodile propagation trigger bug (fixed in 3bcbe92 / commit 3376810)
-  2. SECONDARY: empty PipelineSpecHash treated as "spec changed" — spurious Graph deletion
-- Fixed O4: ensurePipelineSpecCurrent empty-hash guard in pkg/reconciler/bundle/reconciler.go
-- Added 3 regression tests: TestBundleReconciler_EmptyPipelineSpecHash_NoGraphDeletion,
-  TestAbortedByAlarmIsTerminal, TestRollingBackIsTerminal
-- Updated design docs: 01-graph-integration.md (✅ present section), 03-promotionstep-reconciler.md
+2. **PR #791** (medium): feat(ui) skeleton loading states
+   - NodeDetail, BundleTimeline, PolicyGatesPanel shimmer skeletons
+   - https://github.com/pnz1990/kardinal-promoter/pull/791
 
-### Queue status
-- Item 789: in_review (PR #790, needs human merge)
-- Item 784 (skeleton loading states): todo
-- CI on main: green
+### Queue
+- krocodile-upgrade: resolved in PR #790 (cdc4bb9→3376810)
+- All other items from batch are done
 
-### Next item
-784
+### CI status (main)
+success
 
 ### Notes
-Session: sess-53d9ea14 | otherness@v0.1.0-89-gffe81ab
+Session: sess-b0f605f3 | otherness@v0.1.0-89-gffe81ab
