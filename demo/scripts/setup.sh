@@ -126,8 +126,9 @@ check_tool helm
 check_tool argocd 2>/dev/null || warn "argocd CLI not found — some validation steps will be skipped"
 
 if [[ -z "$GITHUB_TOKEN" ]]; then
-  error "GITHUB_TOKEN is required. Export it or pass it inline:
-  GITHUB_TOKEN=ghp_xxx ./demo/scripts/setup.sh"
+  warn "GITHUB_TOKEN is not set. The controller will install but promotions"
+  warn "will fail at the GitOps push step (bundle creation in validate.sh)."
+  warn "For full end-to-end validation, set GITHUB_TOKEN before running."
 fi
 
 if ! docker info &>/dev/null; then
