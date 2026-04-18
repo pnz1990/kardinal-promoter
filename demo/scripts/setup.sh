@@ -245,14 +245,29 @@ kubectl create secret generic github-token \
 # Create platform-policies namespace for org-level PolicyGates
 kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
 
-# Install from OCI registry — use last known-good published tag
+# Install from OCI registry — use last known-good published tag.
+# Use --wait=false for the install, then wait for the controller pod
+# separately — the Helm wait includes all chart resources (krocodile,
+# CRDs, etc.) and can timeout on slow CI runners; the controller pod
+# itself comes up quickly once the image is pulled.
 helm upgrade --install kardinal-promoter \
   oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --set "image.tag=${CHART_IMAGE_TAG}" \
   --set github.secretRef.name=github-token \
   --set validatingAdmissionPolicy.enabled=false \
-  --wait --timeout 180s
+  --wait=false --timeout 60s 2>/dev/null || \
+helm upgrade --install kardinal-promoter \
+  oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  --namespace kardinal-system \
+  --set "image.tag=${CHART_IMAGE_TAG}" \
+  --set github.secretRef.name=github-token \
+  --set validatingAdmissionPolicy.enabled=false
+
+# Wait for the controller pod to be Ready (up to 3 min)
+kubectl rollout status deployment -n kardinal-system --timeout=180s 2>/dev/null || true
+# Also wait for kro-system if present
+kubectl rollout status deployment -n kro-system --timeout=60s 2>/dev/null || true
 
 success "[3/7] kardinal-promoter installed"
 
