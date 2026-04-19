@@ -6,3 +6,4 @@
 | 2026-04-17 | 10 | 0 | 336 | WCAG 2.1 AA: stale indicator, nested-interactive fix, axe rule enablement | ✅ |
 | 2026-04-17 | 1 | 0 | 344 | CI fix: Journey 009 WCAG — nested-interactive + color-contrast + focus trap | ✅ |
 | 2026-04-18 | 1 | 0 | 344 | krocodile upgrade cdc4bb9→3376810 — fix UAT never starting (J1 blocker #789) | ✅ |
+| 2026-04-19 | 50 | 0 | 357 | / keyboard shortcut search, CI Demo Validate fix, krocodile upgrade, responsive layout | ✅ |
