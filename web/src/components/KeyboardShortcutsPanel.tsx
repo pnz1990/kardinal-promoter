@@ -17,6 +17,7 @@ interface ShortcutRow {
 }
 
 const SHORTCUTS: ShortcutRow[] = [
+  { key: '/', description: 'Focus pipeline search' },
   { key: '?', description: 'Show / hide this help panel' },
   { key: 'r', description: 'Refresh data now' },
   { key: 'Esc', description: 'Close the open side panel' },

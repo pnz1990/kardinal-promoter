@@ -1,7 +1,7 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-// useKeyboardShortcuts.test.ts — unit tests for the global keyboard shortcut hook (#746).
+// useKeyboardShortcuts.test.ts — unit tests for the global keyboard shortcut hook (#746, #800).
 import { renderHook } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
@@ -18,11 +18,13 @@ describe('useKeyboardShortcuts', () => {
   let onHelp: AnyMock
   let onRefresh: AnyMock
   let onEscape: AnyMock
+  let onSearch: AnyMock
 
   beforeEach(() => {
     onHelp = vi.fn()
     onRefresh = vi.fn()
     onEscape = vi.fn()
+    onSearch = vi.fn()
   })
 
   function makeHandlers() {
@@ -30,6 +32,7 @@ describe('useKeyboardShortcuts', () => {
       onHelp: onHelp as unknown as () => void,
       onRefresh: onRefresh as unknown as () => void,
       onEscape: onEscape as unknown as () => void,
+      onSearch: onSearch as unknown as () => void,
     }
   }
 
@@ -55,6 +58,39 @@ describe('useKeyboardShortcuts', () => {
     renderHook(() => useKeyboardShortcuts(makeHandlers()))
     pressKey('Escape')
     expect(onEscape).toHaveBeenCalledOnce()
+  })
+
+  // #800: / shortcut tests
+  it('calls onSearch when / is pressed', () => {
+    renderHook(() => useKeyboardShortcuts(makeHandlers()))
+    pressKey('/')
+    expect(onSearch).toHaveBeenCalledOnce()
+  })
+
+  it('does not call any handler for / when onSearch is not provided', () => {
+    const handlersNoSearch = {
+      onHelp: onHelp as unknown as () => void,
+      onRefresh: onRefresh as unknown as () => void,
+      onEscape: onEscape as unknown as () => void,
+      // onSearch omitted
+    }
+    renderHook(() => useKeyboardShortcuts(handlersNoSearch))
+    // Should not throw
+    pressKey('/')
+    expect(onHelp).not.toHaveBeenCalled()
+    expect(onRefresh).not.toHaveBeenCalled()
+    expect(onEscape).not.toHaveBeenCalled()
+  })
+
+  it('suppresses / when an input element has focus (O2)', () => {
+    renderHook(() => useKeyboardShortcuts(makeHandlers()))
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    const event = new KeyboardEvent('keydown', { key: '/', bubbles: true })
+    input.dispatchEvent(event)
+    expect(onSearch).not.toHaveBeenCalled()
+    document.body.removeChild(input)
   })
 
   it('suppresses ? when an input element has focus', () => {

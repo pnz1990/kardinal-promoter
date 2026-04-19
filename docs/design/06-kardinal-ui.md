@@ -279,6 +279,7 @@ The following capabilities are implemented and shipped as of v0.8.x:
 - ✅ Stale data indicator: amber→red+pulse escalation after 30s — PR #767
 - ✅ Focus trap in keyboard shortcuts modal (Tab/Shift+Tab cycle, return focus on close) — PR #783
 - ✅ Skeleton loading states: NodeDetail step details, BundleTimeline chips, PolicyGatesPanel — PR (issue #784)
+- ✅ `/` keyboard shortcut to focus pipeline search input; Esc clears + blurs; filter always visible — PR #800, 2026-04-19
 
 ---
 
@@ -294,7 +295,6 @@ The following capabilities are declared in `docs/aide/vision.md` §F8 but not ye
 - 🔲 Policy gate detail: current CEL variable values, evaluation history, time until unblocked — epic #531
 - 🔲 Responsive layout at 1280px width — epic #587
 - 🔲 Virtualization for pipeline list with 50+ entries — epic #587
-- 🔲 `/` keyboard shortcut for search (no search field exists yet) — epic #587
 ---
 
 ## Enterprise polish design (added 2026-04-17)

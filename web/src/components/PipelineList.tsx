@@ -2,7 +2,8 @@
 // bundle name, environment count, and namespace indicator.
 // Includes an onboarding empty state (Kargo parity).
 // #345: debounced search/filter input at the top.
-import { useState, useCallback, useRef } from 'react'
+// #800: searchInputRef prop exposes the filter input for the / keyboard shortcut.
+import { useState, useCallback, useRef, type RefObject } from 'react'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
 import CopyButton from './CopyButton'
@@ -15,6 +16,11 @@ interface Props {
   error?: string
   /** Current namespace derived from loaded pipelines. Shown in header when set. */
   namespace?: string
+  /**
+   * #800: Ref forwarded to the filter <input> so App can call
+   * searchInputRef.current?.focus() when the / shortcut fires.
+   */
+  searchInputRef?: RefObject<HTMLInputElement>
 }
 
 /** Truncate a bundle name to a readable short form for the sidebar. */
@@ -73,7 +79,7 @@ function EmptyState() {
   )
 }
 
-export function PipelineList({ pipelines, selected, onSelect, loading, error }: Props) {
+export function PipelineList({ pipelines, selected, onSelect, loading, error, searchInputRef }: Props) {
   // #345: search/filter state with debounce
   const [searchQuery, setSearchQuery] = useState('')
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -148,48 +154,56 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error }: 
 
   return (
     <div>
-      {/* #345: search/filter input */}
-      {pipelines.length > 3 && (
-         <div style={{ padding: '0.5rem 1rem 0.25rem', position: 'relative' }}>
-           <input
-             type="text"
-             placeholder={isMultiNamespace ? "Filter by name or namespace…" : "Filter pipelines…"}
-             value={searchQuery}
-             onChange={e => handleSearchChange(e.target.value)}
-             aria-label="Filter pipelines by name or namespace"
-             style={{
-               width: '100%',
-               boxSizing: 'border-box',
-              background: 'var(--color-surface)',
-              border: '1px solid #334155',
-              borderRadius: '4px',
-              padding: '0.3rem 1.75rem 0.3rem 0.5rem',
-              fontSize: '0.78rem',
-              color: 'var(--color-text)',
-              outline: 'none',
+      {/* #345 #800: search/filter input — always rendered so / shortcut always works.
+          Esc clears the filter and blurs the input (O3 of spec issue-800). */}
+      <div style={{ padding: '0.5rem 1rem 0.25rem', position: 'relative' }}>
+        <input
+          ref={searchInputRef}
+          type="text"
+          placeholder={isMultiNamespace ? "Filter by name or namespace…" : "Filter pipelines…"}
+          value={searchQuery}
+          onChange={e => handleSearchChange(e.target.value)}
+          onKeyDown={e => {
+            // #800: Esc in filter clears and blurs — distinct from global Esc (close panel).
+            if (e.key === 'Escape') {
+              e.stopPropagation() // prevent global Esc from also firing
+              handleSearchChange('')
+              ;(e.target as HTMLInputElement).blur()
+            }
+          }}
+          aria-label="Filter pipelines by name or namespace"
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            background: 'var(--color-surface)',
+            border: '1px solid #334155',
+            borderRadius: '4px',
+            padding: '0.3rem 1.75rem 0.3rem 0.5rem',
+            fontSize: '0.78rem',
+            color: 'var(--color-text)',
+            outline: 'none',
+          }}
+        />
+        {searchQuery && (
+          <button
+            onClick={() => handleSearchChange('')}
+            aria-label="Clear filter"
+            style={{
+              position: 'absolute',
+              right: '1.3rem',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#64748b',
+              fontSize: '0.9rem',
+              padding: '0 2px',
+              lineHeight: 1,
             }}
-          />
-          {searchQuery && (
-            <button
-              onClick={() => handleSearchChange('')}
-              aria-label="Clear filter"
-              style={{
-                position: 'absolute',
-                right: '1.3rem',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: '#64748b',
-                fontSize: '0.9rem',
-                padding: '0 2px',
-                lineHeight: 1,
-              }}
-            >×</button>
-          )}
-        </div>
-      )}
+          >×</button>
+        )}
+      </div>
       <ul role="list" aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {filteredPipelines.length === 0 && debouncedQuery && (
           <li role="presentation" style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
