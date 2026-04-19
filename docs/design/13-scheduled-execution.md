@@ -67,13 +67,12 @@ The PAT has `repo` and `workflow` scopes.
 
 | Setting | Value |
 |---------|-------|
-| Cron | `0 * * * *` — every hour |
+| Cron | `0 */6 * * *` — every 6 hours (steady-state standby) |
 | Manual trigger | `workflow_dispatch` — available for on-demand runs |
-| `otherness-config.yaml` `schedule.cron` | `0 * * * *` |
 
-Hourly is appropriate for an active development project. If the project enters a
-low-churn phase (e.g. all Future items complete, waiting on vision), consider
-reducing to `0 */6 * * *` to avoid unnecessary token spend.
+Every 6 hours is appropriate for steady-state standby (all journeys passing, queue empty,
+waiting on vision). If active development resumes (new Future items in design docs), switch
+back to hourly (`0 * * * *`) by updating the cron above.
 
 ---
 
@@ -116,11 +115,11 @@ If secrets expire or need rotation:
 - ✅ `AWS_DEFAULT_REGION` secret set — `us-east-1` (2026-04-19)
 - ✅ `GH_TOKEN` secret set — PAT with `repo` + `workflow` scopes (2026-04-19)
 - ✅ `otherness-config.yaml` `schedule.cron` field — `0 * * * *` (existing)
+- ✅ Cadence reduced to `0 */6 * * *` (every 6h) — all 7 journeys passing, steady-state standby (PR #834, 2026-04-19)
 
 ## Future (🔲)
 
 - 🔲 Token expiry preflight: add a step before `Run otherness` that verifies `GH_TOKEN` has required scopes; post a `[NEEDS HUMAN]` issue on the report issue (#1) if the token is expired or missing scopes, so the failure is visible rather than silent
-- 🔲 Reduce cadence to `0 */6 * * *` when the project enters steady-state standby (empty queue, autonomous vision synthesizing) — update both the workflow cron and `otherness-config.yaml`
 
 ---
 
