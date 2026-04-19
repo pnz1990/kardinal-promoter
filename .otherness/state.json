@@ -972,26 +972,35 @@
       "note": "Superseded by PR #703 which was already merged"
     },
     "706-slsa-provenance": {
-      "state": "in_review",
+      "state": "done",
       "issue": 706,
       "pr_number": 707,
-      "title": "SLSA Level 2 provenance via GitHub attestation"
+      "title": "SLSA Level 2 provenance via GitHub attestation",
+      "pr_merged": true,
+      "done_at": "2026-04-18T00:00:00Z",
+      "note": "stale in_review \u2014 branch deleted, PR merged"
     },
     "changelog-dry-run-css": {
       "title": "docs(changelog): add --dry-run, CSS tokens, URL routing + roadmap K-10 fix",
-      "state": "in_review",
+      "state": "done",
       "pr_number": 745,
       "branch": "feat/changelog-dry-run-css",
       "assigned_at": "2026-04-17T17:48:00Z",
-      "assigned_to": "sess-a3d6f0be"
+      "assigned_to": "sess-a3d6f0be",
+      "pr_merged": true,
+      "done_at": "2026-04-18T00:00:00Z",
+      "note": "stale in_review \u2014 branch deleted, PR merged"
     },
     "740-url-routing": {
       "title": "feat(ui): URL routing \u2014 pipeline/bundle/node selection in URL",
       "issue": 740,
-      "state": "in_review",
+      "state": "done",
       "pr_number": 742,
       "branch": "feat/740-url-routing",
-      "assigned_to": "sess-a3d6f0be"
+      "assigned_to": "sess-a3d6f0be",
+      "pr_merged": true,
+      "done_at": "2026-04-18T00:00:00Z",
+      "note": "stale in_review \u2014 branch deleted, PR merged"
     },
     "743-bundle-url-routing": {
       "title": "feat(ui): persist bundle diff panel selection in URL hash",
@@ -1002,24 +1011,30 @@
     "747-error-boundary": {
       "title": "feat(ui): error boundaries on async components (#587)",
       "issue": 747,
-      "state": "in_review",
+      "state": "done",
       "pr_number": 755,
       "branch": "feat/747-error-boundary",
       "qa_approved": true,
       "awaiting_human_review": true,
       "assigned_at": "2026-04-17T18:20:00Z",
-      "assigned_to": "sess-a3d6f0be"
+      "assigned_to": "sess-a3d6f0be",
+      "pr_merged": true,
+      "done_at": "2026-04-18T00:00:00Z",
+      "note": "stale in_review \u2014 branch deleted, PR merged"
     },
     "748-wcag-axe": {
       "title": "feat(ui): WCAG 2.1 AA automated check \u2014 axe-core in CI (#587)",
       "issue": 748,
-      "state": "in_review",
+      "state": "done",
       "pr_number": 756,
       "branch": "feat/748-wcag-axe",
       "qa_approved": true,
       "awaiting_human_review": true,
       "assigned_at": "2026-04-17T19:00:00Z",
-      "assigned_to": "sess-a3d6f0be"
+      "assigned_to": "sess-a3d6f0be",
+      "pr_merged": true,
+      "done_at": "2026-04-18T00:00:00Z",
+      "note": "stale in_review \u2014 branch deleted, PR merged"
     },
     "758-nested-interactive-fix": {
       "issue": 758,
@@ -1080,6 +1095,13 @@
       "pr_merged": true,
       "pr_number": 825,
       "done_at": "2026-04-19T06:11:02Z"
+    },
+    "issue-819": {
+      "title": "test(ui): aria-pressed test for PipelineList virtual mode",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 826,
+      "done_at": "2026-04-19T06:19:36Z"
     }
   },
   "session_heartbeats": {
@@ -1107,6 +1129,6 @@
     "next_item": "none",
     "notes": "All 3 batches in this session complete. Loop continues per human directive."
   },
-  "sm_cycle_count": 3,
-  "pm_cycle_count": 2
+  "sm_cycle_count": 4,
+  "pm_cycle_count": 3
 }

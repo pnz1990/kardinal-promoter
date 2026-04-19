@@ -1,25 +1,22 @@
-## Session Handoff — 2026-04-19T06:11:30Z
+## Session Handoff — 2026-04-19T06:25:24Z
 
-### Recent merges (last 10)
-- PR #825 feat(demo): scenarios 11-13 Flux/Argo Rollouts/Flagger (2026-04-18)
-- PR #823 chore(sm): batch metrics (2026-04-18)
-- PR #822 docs(changelog): adapter coverage (2026-04-18)
-- PR #821 feat(demo): full adapter coverage (2026-04-18)
-- PR #817 feat(ui): virtual scrolling (2026-04-18)
+### Session summary
+7 PRs merged:
+- #817 virtual scrolling
+- #821 full adapter coverage (Flux/Flagger/Argo Rollouts/GitHub)
+- #822 changelog
+- #823 metrics
+- #825 validate.sh scenarios 11-13
+- #826 aria-pressed test
+- #827 metrics
+
+Epic #587 (enterprise UI overhaul) closed — all items shipped.
+
+### Open issues remaining
+- #819 (closed via #826)
+- #815 (closed via #817)
+- #612, #623: low priority research items
+- krocodile upgrade: 0 commits behind HEAD
 
 ### Queue
-All design doc items exhausted. Loop continues per human directive (never stop).
-Human intent: full demo coverage + live validation of all adapters.
-Achieved: examples (PR #821) + live scenarios (PR #825) + docs (demo-validation.md)
-
-### Next items (generated from gaps)
-None in state. Next COORD cycle should generate from:
-- docs/design/ Future items (currently 0)
-- Any open issues tagged as todo
-- krocodile upgrade check (mandatory if ≥5 behind)
-
-### CI status (main)
-success
-
-### Notes
-Session: sess-1f914935 | otherness@v0.1.0-140-ga2666eb
+Empty. Loop continues. Next items come from design doc expansion or new issues.
