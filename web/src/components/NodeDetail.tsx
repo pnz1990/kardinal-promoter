@@ -595,8 +595,32 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {/* PromotionStep: step progress log */}
       {isPromotionStep && stepLoading && (
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', marginBottom: '0.75rem', fontStyle: 'italic' }}>
-          Loading step details...
+        <div style={{ marginBottom: '0.75rem' }} data-testid="step-skeleton">
+          {/* #784: skeleton loading state — shimmer placeholders while step details load */}
+          <style>{`
+            @keyframes shimmer-nd {
+              0% { background-position: 200% 0; }
+              100% { background-position: -200% 0; }
+            }
+          `}</style>
+          <span className="sr-only" role="status" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }}>
+            Loading step details
+          </span>
+          {[75, 55, 65, 45].map((w, i) => (
+            <div
+              key={i}
+              aria-hidden="true"
+              style={{
+                height: '20px',
+                borderRadius: '4px',
+                background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer-nd 1.5s infinite',
+                marginBottom: '0.5rem',
+                width: `${w}%`,
+              }}
+            />
+          ))}
         </div>
       )}
       {isPromotionStep && !stepLoading && stepDetail && (

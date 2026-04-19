@@ -412,6 +412,78 @@ func TestVerifiedIsTerminal(t *testing.T) {
 	assert.Equal(t, time.Duration(0), result.RequeueAfter)
 }
 
+// TestAbortedByAlarmIsTerminal verifies that AbortedByAlarm is a no-op (idempotent).
+// Guards against regression: AbortedByAlarm must not fall into the default switch branch
+// which would reset the state to Pending (causing the Verified→Promoting cycle #789).
+func TestAbortedByAlarmIsTerminal(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-aborted", "nginx-demo", "bundle-1", "test")
+	step.Status.State = "AbortedByAlarm"
+	pipeline := makePipeline("nginx-demo")
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-aborted", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.Requeue, "AbortedByAlarm must not requeue") //nolint:staticcheck
+	assert.Equal(t, time.Duration(0), result.RequeueAfter)
+
+	// State must remain AbortedByAlarm — not reset to Pending or Promoting.
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "step-aborted", Namespace: "default"}, &got))
+	assert.Equal(t, "AbortedByAlarm", got.Status.State,
+		"AbortedByAlarm must remain AbortedByAlarm after reconcile")
+}
+
+// TestRollingBackIsTerminal verifies that RollingBack is a no-op (idempotent).
+// Guards against regression: RollingBack must not fall into the default switch branch
+// which would reset the state to Pending (causing the Verified→Promoting cycle #789).
+func TestRollingBackIsTerminal(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-rolling", "nginx-demo", "bundle-1", "test")
+	step.Status.State = "RollingBack"
+	pipeline := makePipeline("nginx-demo")
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{},
+	).WithObjects(step, pipeline, bundle).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-rolling", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.False(t, result.Requeue, "RollingBack must not requeue") //nolint:staticcheck
+	assert.Equal(t, time.Duration(0), result.RequeueAfter)
+
+	// State must remain RollingBack — not reset to Pending or Promoting.
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "step-rolling", Namespace: "default"}, &got))
+	assert.Equal(t, "RollingBack", got.Status.State,
+		"RollingBack must remain RollingBack after reconcile")
+}
+
 // TestEvidenceNotCopiedByPromotionStepReconciler verifies that the PromotionStep reconciler
 // does NOT write evidence to Bundle.status.environments (PS-9 elimination).
 // Evidence sync is now handled by the Bundle reconciler watching PromotionStep changes.

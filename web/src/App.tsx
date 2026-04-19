@@ -56,6 +56,7 @@ export function App() {
     (name: string | undefined) => setUrlState({ pipeline: name }),
   ] as const
   const [bundles, setBundles] = useState<Bundle[]>([])
+  const [bundlesLoading, setBundlesLoading] = useState(false)
   const [bundleHistoryOpen, setBundleHistoryOpen] = useState(false)
   // Bundle selected via timeline — overrides the automatic activeBundle selection.
   const [timelineSelectedBundle, setTimelineSelectedBundle] = useState<string | undefined>()
@@ -194,6 +195,8 @@ export function App() {
     setGraph(undefined)
     setGraphError(undefined)
     setGraphLoading(true)
+    setBundlesLoading(true)
+    setBundles([])
     setBundleHistoryOpen(false)
     setShowBlockedOnly(false)
     setTimelineSelectedBundle(undefined) // reset timeline selection on pipeline change
@@ -203,6 +206,7 @@ export function App() {
     api.listBundles(name)
       .then(bs => {
         setBundles(bs)
+        setBundlesLoading(false)
         const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
         if (promoting) {
           return Promise.all([
@@ -214,7 +218,7 @@ export function App() {
           })
         }
       })
-      .catch(e => setGraphError(String(e)))
+      .catch(e => { setGraphError(String(e)); setBundlesLoading(false) })
       .finally(() => setGraphLoading(false))
   }, [])
 
@@ -643,6 +647,7 @@ export function App() {
               <ErrorBoundary fallbackMessage="Timeline unavailable">
                 <BundleTimeline
                   bundles={bundles}
+                  loading={bundlesLoading}
                   selectedBundle={activeBundle?.name}
                   onSelectBundle={handleTimelineBundleSelect}
                   compareBundle={compareBundle}

@@ -14,6 +14,8 @@ import '../styles/BundleTimeline.css'
 interface Props {
   /** Bundles for this pipeline — managed by the parent (App). */
   bundles: Bundle[]
+  /** #784: Show skeleton loading state instead of bundles while fetching. */
+  loading?: boolean
   /** Callback when a bundle is selected — fetches its DAG. */
   onSelectBundle?: (bundleName: string) => void
   /** Currently selected bundle (highlighted). */
@@ -56,7 +58,46 @@ function shortName(bundleName: string): string {
   return bundleName.slice(-6)
 }
 
-export function BundleTimeline({ bundles, onSelectBundle, selectedBundle, compareBundle, onCompareBundle, onCompare }: Props) {
+export function BundleTimeline({ bundles, loading, onSelectBundle, selectedBundle, compareBundle, onCompareBundle, onCompare }: Props) {
+  // #784: skeleton loading state — shimmer chips while bundles are being fetched
+  if (loading) {
+    return (
+      <div style={{
+        padding: '0.5rem 1rem',
+        background: 'var(--color-bg)',
+        borderBottom: '1px solid #1e293b',
+        overflowX: 'auto',
+      }} data-testid="bundle-timeline-skeleton">
+        <style>{`
+          @keyframes shimmer-bt {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+          }
+        `}</style>
+        <span className="sr-only" role="status" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }}>
+          Loading bundles
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {[72, 58, 64, 50, 68].map((w, i) => (
+            <div
+              key={i}
+              aria-hidden="true"
+              style={{
+                height: '28px',
+                borderRadius: '14px',
+                background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer-bt 1.5s infinite',
+                width: `${w}px`,
+                flexShrink: 0,
+              }}
+            />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   // Sort newest-first by createdAt timestamp (ISO 8601), falling back to name (#337).
   // Name fallback ensures stability when createdAt is not yet populated.
   const sorted = [...bundles]

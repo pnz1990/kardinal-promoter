@@ -253,8 +253,26 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	}
 
 	currentHash := pipelineSpecHashFor(&pipeline)
-	if currentHash == "" || currentHash == b.Status.PipelineSpecHash {
-		return nil // no change or hash computation failed
+	if currentHash == "" {
+		return nil // hash computation failed — skip to avoid spurious deletion
+	}
+
+	if b.Status.PipelineSpecHash == "" {
+		// PipelineSpecHash not yet initialised (Bundle promoted before #634 was merged).
+		// Treat this as "first observation": save the current hash and return nil.
+		// Do NOT delete the Graph — an empty stored hash means "unknown", not "changed".
+		patch := client.MergeFrom(b.DeepCopy())
+		b.Status.PipelineSpecHash = currentHash
+		if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
+			log.Warn().Err(patchErr).Msg("failed to initialise PipelineSpecHash (non-fatal)")
+		} else {
+			log.Info().Str("hash", currentHash).Msg("PipelineSpecHash initialised — no Graph deletion")
+		}
+		return nil
+	}
+
+	if currentHash == b.Status.PipelineSpecHash {
+		return nil // no change
 	}
 
 	// Pipeline spec changed. Delete the existing Graph so ensureGraphExists recreates it.

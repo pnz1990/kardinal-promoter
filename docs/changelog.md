@@ -27,11 +27,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **WCAG 2.1 AA accessibility enforcement** — axe-core Playwright check in E2E test suite (Journey 009); all structural violations resolved (#756, #759, #760)
 - **Copy-to-clipboard on pipeline names and bundle hashes** — click to copy pipeline name, bundle name, or commit SHA in the embedded UI (#764)
 - **Stale data indicator escalation** — red + pulse animation when dashboard data is >30s old; screen reader announcement via `aria-live` (#767)
+- **Skeleton loading states** — NodeDetail step details, BundleTimeline chips, and PolicyGatesPanel now show animated shimmer placeholders instead of blank panels while data loads (#784)
 
 ### Changed
 
 - **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
 - **UI WCAG color contrast** — all theme colors now meet WCAG 2.1 AA 4.5:1 minimum contrast ratio in both dark and light modes (#760)
+- **krocodile upgraded to `3376810`** — correctness fix: propagation trigger on self-state refresh. Without this, UAT PromotionStep was never created after test reached Verified. Also includes NodeState sync guard and ForEach typed binding (#789)
+
+### Fixed
+
+- **UAT never starting after test Verified** — krocodile Path 2 (self-state refresh) now correctly marks dependents as `propagationTriggered`; UAT PromotionStep is created once test PS writes `status.state=Verified` (#789)
+- **AbortedByAlarm / RollingBack cycling** — PromotionStep reconciler now handles `AbortedByAlarm` and `RollingBack` as explicit terminal/managed cases, preventing fall-through to `default` which incorrectly reset state to Pending (#789)
 
 ---
 
