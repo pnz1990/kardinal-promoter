@@ -3,10 +3,15 @@
 // Includes an onboarding empty state (Kargo parity).
 // #345: debounced search/filter input at the top.
 // #800: searchInputRef prop exposes the filter input for the / keyboard shortcut.
+// #815: virtual scrolling for flat lists with >50 entries (@tanstack/react-virtual).
 import { useState, useCallback, useRef, type RefObject } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Pipeline } from '../types'
 import { HealthChip } from './HealthChip'
 import CopyButton from './CopyButton'
+
+/** Number of pipelines above which virtual scrolling is enabled (flat list only). */
+const VIRTUAL_THRESHOLD = 50
 
 interface Props {
   pipelines: Pipeline[]
@@ -85,6 +90,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState('')
 
+  // #815: container ref for virtual scrolling
+  const listContainerRef = useRef<HTMLDivElement>(null)
+
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value)
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
@@ -92,6 +100,29 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
       setDebouncedQuery(value.trim().toLowerCase())
     }, 150)
   }, [])
+
+  // #815: Compute filtered count BEFORE early returns so useVirtualizer
+  // is always called with the same hook order (Rules of Hooks).
+  // When loading/error/empty, these will be empty/0 which is harmless.
+  const filteredForVirtualCount = debouncedQuery
+    ? pipelines.filter(p =>
+        p.name.toLowerCase().includes(debouncedQuery) ||
+        p.namespace.toLowerCase().includes(debouncedQuery) ||
+        `${p.namespace}/${p.name}`.toLowerCase().includes(debouncedQuery)
+      ).length
+    : pipelines.length
+
+  const uniqueNamespacesEarly = new Set(pipelines.map(p => p.namespace))
+  const isMultiNamespaceEarly = uniqueNamespacesEarly.size > 1
+  const useVirtual = !isMultiNamespaceEarly && filteredForVirtualCount > VIRTUAL_THRESHOLD
+
+  // #815: Hook must be called unconditionally — before any early returns.
+  const virtualizer = useVirtualizer({
+    count: filteredForVirtualCount,
+    getScrollElement: () => listContainerRef.current,
+    estimateSize: () => 52,
+    overscan: 5,
+  })
 
   if (loading) {
     // #335: skeleton loading state — shimmer placeholders instead of "Loading pipelines..."
@@ -141,8 +172,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
     : pipelines
 
   // #358: detect multi-namespace setup — show namespace prefix when needed
-  const uniqueNamespaces = new Set(pipelines.map(p => p.namespace))
-  const isMultiNamespace = uniqueNamespaces.size > 1
+  // (useVirtual and virtualizer already computed above, before early returns)
+  const uniqueNamespaces = uniqueNamespacesEarly
+  const isMultiNamespace = isMultiNamespaceEarly
 
   // Group by namespace for multi-namespace display
   const pipelinesByNamespace: Record<string, typeof filteredPipelines> = {}
@@ -204,58 +236,102 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
           >×</button>
         )}
       </div>
-      <ul role="list" aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      {/* #815: List container — scrollable, used as virtual scroll container when active */}
+      <div
+        ref={listContainerRef}
+        style={useVirtual ? { overflowY: 'auto', maxHeight: '100%' } : undefined}
+      >
         {filteredPipelines.length === 0 && debouncedQuery && (
-          <li role="presentation" style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-            No pipelines match "{debouncedQuery}"
-          </li>
+          <div style={{ padding: '0.75rem 1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+            No pipelines match &ldquo;{debouncedQuery}&rdquo;
+          </div>
         )}
-        {/* #358: multi-namespace grouped display */}
+        {/* #358: multi-namespace grouped display — not virtualized (variable header heights) */}
         {isMultiNamespace ? (
-          namespaceOrder.map(ns => {
-            const nsPipelines = pipelinesByNamespace[ns]
-            if (!nsPipelines || nsPipelines.length === 0) return null
-            return (
-              <li key={ns}>
-                {/* Namespace header */}
-                <div style={{
-                  padding: '0.3rem 1rem 0.15rem',
-                  fontSize: '0.65rem',
-                  color: 'var(--color-text-faint)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                  borderTop: '1px solid #1e293b',
-                  fontFamily: 'monospace',
-                  background: '#070f1b',
-                }}>
-                  {ns}
-                </div>
-      <ul role="group" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                  {nsPipelines.map(p => renderPipelineItem(p))}
-                </ul>
-              </li>
-            )
-          })
+          <ul role="list" aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {namespaceOrder.map(ns => {
+              const nsPipelines = pipelinesByNamespace[ns]
+              if (!nsPipelines || nsPipelines.length === 0) return null
+              return (
+                <li key={ns}>
+                  {/* Namespace header */}
+                  <div style={{
+                    padding: '0.3rem 1rem 0.15rem',
+                    fontSize: '0.65rem',
+                    color: 'var(--color-text-faint)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    borderTop: '1px solid #1e293b',
+                    fontFamily: 'monospace',
+                    background: '#070f1b',
+                  }}>
+                    {ns}
+                  </div>
+                  <ul role="group" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {nsPipelines.map(p => renderPipelineItem(p))}
+                  </ul>
+                </li>
+              )
+            })}
+          </ul>
+        ) : useVirtual ? (
+          /* #815: virtual scrolling for flat lists > VIRTUAL_THRESHOLD */
+          <ul
+            role="list"
+            aria-label="Pipelines"
+            style={{
+              listStyle: 'none',
+              padding: 0,
+              margin: 0,
+              height: `${virtualizer.getTotalSize()}px`,
+              position: 'relative',
+            }}
+          >
+            {virtualizer.getVirtualItems().map(virtualItem => {
+              const p = filteredPipelines[virtualItem.index]
+              if (!p) return null
+              return (
+                <li
+                  key={virtualItem.key}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualItem.start}px)`,
+                    listStyle: 'none',
+                    display: 'flex',
+                    alignItems: 'stretch',
+                  }}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                >
+                  {renderPipelineItemContent(p)}
+                </li>
+              )
+            })}
+          </ul>
         ) : (
-          filteredPipelines.map(p => renderPipelineItem(p))
+          /* Normal flat rendering for ≤ VIRTUAL_THRESHOLD pipelines */
+          <ul role="list" aria-label="Pipelines" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {filteredPipelines.map(p => renderPipelineItem(p))}
+          </ul>
         )}
-      </ul>
+      </div>
     </div>
   )
 
   // #358: renderPipelineItem as inner function for reuse in grouped and flat display
-  function renderPipelineItem(p: Pipeline) {
+  // #815: renderPipelineItemContent returns just the inner row content (no <li> wrapper)
+  //       so the virtual scrolling path can provide its own <li> with positioning.
+  function renderPipelineItemContent(p: Pipeline) {
         const bundle = shortBundleName(p.activeBundleName)
         const envCount = p.environmentCount
 
         return (
-          // #762: Outer <li> is a flex container. Selection <button> + CopyButton are siblings
-          // (not nested) to satisfy the axe nested-interactive rule — <button> inside <button>
-          // always fails regardless of tabIndex. CopyButton renders as a narrow flex column.
-          <li
-            key={`${p.namespace}/${p.name}`}
-            style={{ listStyle: 'none', display: 'flex', alignItems: 'stretch' }}
-          >
+          // #762: Outer flex container. Selection <button> + CopyButton are siblings
+          // (not nested) to satisfy the axe nested-interactive rule.
+          <>
           <button
             onClick={() => onSelect(p.name)}
             aria-pressed={selected === p.name}
@@ -391,7 +467,19 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
           }}>
             <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
           </div>
-          </li>
+          </>
         )
+  }
+
+  /** renderPipelineItem wraps content in an <li> for normal (non-virtual) rendering. */
+  function renderPipelineItem(p: Pipeline) {
+    return (
+      <li
+        key={`${p.namespace}/${p.name}`}
+        style={{ listStyle: 'none', display: 'flex', alignItems: 'stretch' }}
+      >
+        {renderPipelineItemContent(p)}
+      </li>
+    )
   }
 }
