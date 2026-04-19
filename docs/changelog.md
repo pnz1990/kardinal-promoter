@@ -33,6 +33,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
 - **UI WCAG color contrast** — all theme colors now meet WCAG 2.1 AA 4.5:1 minimum contrast ratio in both dark and light modes (#760)
+- **krocodile upgraded to `3376810`** — correctness fix: propagation trigger on self-state refresh. Without this, UAT PromotionStep was never created after test reached Verified. Also includes NodeState sync guard and ForEach typed binding (#789)
+
+### Fixed
+
+- **UAT never starting after test Verified** — krocodile Path 2 (self-state refresh) now correctly marks dependents as `propagationTriggered`; UAT PromotionStep is created once test PS writes `status.state=Verified` (#789)
+- **AbortedByAlarm / RollingBack cycling** — PromotionStep reconciler now handles `AbortedByAlarm` and `RollingBack` as explicit terminal/managed cases, preventing fall-through to `default` which incorrectly reset state to Pending (#789)
 
 ---
 
