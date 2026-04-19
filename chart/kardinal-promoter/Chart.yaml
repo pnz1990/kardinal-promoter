@@ -25,4 +25,4 @@ maintainers:
 annotations:
   # The krocodile commit bundled in this chart version.
   # Built and pushed to ghcr.io/pnz1990/kardinal-promoter/krocodile:<commit>
-  krocodile.commit: "3376810"
+  krocodile.commit: "d6cbc54"

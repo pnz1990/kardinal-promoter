@@ -16,24 +16,24 @@ set -euo pipefail
 # ── Pinned version ─────────────────────────────────────────────────────────────
 # Update this when intentionally upgrading krocodile.
 # Minimum required: 1b0ce353 (fixes double-dispatch race in DAG coordinator)
-# Last verified:    3376810 (2026-04-18 — 10 commits since cdc4bb9; highlights:
-#                           - CORRECTNESS FIX (#789): propagation trigger on
-#                             self-state refresh (3bcbe92) — fixes UAT never
-#                             starting when test PS reaches Verified
-#                           - NodeState sync guard: _nodeStateCount sentinel
-#                             panics on startup if metrics labels drift (8a6e2e9)
-#                           - ForEach map→typed binding: ForEach map[string]string
-#                             replaced with *ForEachBinding struct (8a6e2e9)
-#                           - Watch merge encapsulation + unified hash paths
-#                             (3376810)
-#                           - validation compat: expression validation, kind
-#                             pattern, empty resources (be88c4f)
-#                           - .updated() CEL function for forEach rollout
-#                             gating (94695c8)
+# Last verified:    d6cbc54 (2026-04-19 — 5 commits since 3376810; highlights:
+#                           - fix: cache canonical Kind in WatchManager to fix
+#                             wrong-case resource keys in prune/delete (d6cbc54)
+#                           - forEach context-aware hashing, remove volatile
+#                             metadata copy (ff33a4a)
+#                           - forEach O(changed) incremental diff: cache per-item
+#                             hashes, O(K) instead of O(N) rehash (22681e7)
+#                           - deflake crash recovery and histogram metrics tests
+#                             (2badac0)
+#                           - delete redundant unit tests covered by e2e (e480f78)
+#                           Analysis: additive performance improvements only.
+#                           No breaking changes to types, labels, or readyWhen.
+#                           No kardinal source changes required.
+# Previously verified: 3376810 (2026-04-18 — UAT fix + Watch merge encapsulation)
 # Previously verified: cdc4bb9 (2026-04-17 — schema-aware CEL, forEach fix)
 # Previously verified: 05db829 (explicit-keyword schema)
 KROCODILE_REPO="https://github.com/ellistarn/kro.git"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-3376810}"
+KROCODILE_COMMIT="${KROCODILE_COMMIT:-d6cbc54}"
 KROCODILE_IMAGE="krocodile-graph-controller:${KROCODILE_COMMIT}"
 KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 
