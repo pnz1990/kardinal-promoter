@@ -1,22 +1,21 @@
-## Session Handoff — 2026-04-19T06:25:24Z
+## Session Handoff — 2026-04-19T23:58:17Z
 
-### Session summary
-7 PRs merged:
-- #817 virtual scrolling
-- #821 full adapter coverage (Flux/Flagger/Argo Rollouts/GitHub)
-- #822 changelog
-- #823 metrics
-- #825 validate.sh scenarios 11-13
-- #826 aria-pressed test
-- #827 metrics
+### This batch
+1 PR merged: cadence reduction (6h standby schedule). All 7 journeys ✅.
 
-Epic #587 (enterprise UI overhaul) closed — all items shipped.
-
-### Open issues remaining
-- #819 (closed via #826)
-- #815 (closed via #817)
-- #612, #623: low priority research items
-- krocodile upgrade: 0 commits behind HEAD
+### Recent merges
+- PR #834: chore(ci): reduce scheduled cadence to 6h — steady-state standby
+- PR #835: chore(sm): batch 10 metrics
 
 ### Queue
-Empty. Loop continues. Next items come from design doc expansion or new issues.
+**Queue empty (item 832 pending)**
+
+### CI status (main)
+green
+
+### Next item
+832-token-preflight — GH_TOKEN scope preflight step in otherness-scheduled.yml
+
+### Notes
+Session: sess-8bedca7e | otherness@e49a123
+All 7 journeys passing. Project in steady-state standby. Token preflight (#832) is the next actionable item.
