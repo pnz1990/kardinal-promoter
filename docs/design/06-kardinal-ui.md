@@ -293,7 +293,7 @@ The following capabilities are declared in `docs/aide/vision.md` §F8 but not ye
 - 🔲 In-UI actions: approve, pause, resume, rollback, override gate (with mandatory reason) — epic #531
 - 🔲 Bundle promotion timeline with rollback records and override audit trail — epic #531
 - 🔲 Policy gate detail: current CEL variable values, evaluation history, time until unblocked — epic #531
-- 🔲 Responsive layout at 1280px width — epic #587
+- ✅ Responsive layout at 1280px width — Playwright test verifies no horizontal overflow at 1280×800 (PR #799, 2026-04-19)
 - 🔲 Virtualization for pipeline list with 50+ entries — epic #587
 ---
 
