@@ -1,0 +1,61 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: kardinal-test-app
+  namespace: default
+spec:
+  # Git repo managed by Flux — kardinal writes kustomize patches;
+  # Flux reconciles them into the cluster.
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    # test: auto-promote, Flux health check
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: flux
+        flux:
+          name: kardinal-test-app-test   # Flux Kustomization name
+          namespace: flux-system         # default Flux namespace
+
+    # uat: auto-promote, Flux health check with 10-minute bake
+    - name: uat
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      bake:
+        minutes: 10
+        policy: fail-on-alarm
+      health:
+        type: flux
+        flux:
+          name: kardinal-test-app-uat
+          namespace: flux-system
+
+    # prod: PR review required, Flux health check with 60-minute bake
+    - name: prod
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      bake:
+        minutes: 60
+        policy: fail-on-alarm
+      health:
+        type: flux
+        flux:
+          name: kardinal-test-app-prod
+          namespace: flux-system
+        timeout: 20m
+
+  historyLimit: 20

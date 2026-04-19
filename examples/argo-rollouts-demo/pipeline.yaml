@@ -1,0 +1,57 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: kardinal-test-app
+  namespace: default
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    # test: resource health check — simple Deployment check
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: resource
+        resource:
+          name: kardinal-test-app
+          namespace: kardinal-test-app-test
+
+    # staging: ArgoCD health check — ArgoCD manages the staging environment
+    - name: staging
+      path: environments/staging
+      update:
+        strategy: kustomize
+      approval: auto
+      bake:
+        minutes: 10
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-staging
+          namespace: argocd
+
+    # prod: Argo Rollouts progressive delivery — canary analysis before full rollout
+    # The Pipeline updates the Rollout's image; Argo Rollouts manages traffic splitting.
+    # kardinal waits for Rollout.status.phase == "Healthy" (full promotion complete).
+    - name: prod
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argoRollouts
+        argoRollouts:
+          name: kardinal-test-app    # Rollout CR name
+          namespace: prod             # namespace where the Rollout lives
+        timeout: 30m
+
+  historyLimit: 20

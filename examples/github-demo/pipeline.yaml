@@ -1,0 +1,105 @@
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: kardinal-test-app
+  namespace: default
+spec:
+  # GitHub SCM provider — uses the full GitHub feature set:
+  # - PR review gate (prod requires human approval)
+  # - Structured PR evidence body (image digest, CI run URL, gate results, soak time)
+  # - Emergency override comment (kardinal override command writes to PR)
+  # - Rollback PR (kardinal/rollback label, evidence body with previous SHA)
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+
+  environments:
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-test
+
+    - name: uat
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      bake:
+        minutes: 30
+        policy: fail-on-alarm
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-uat
+
+    # prod: full GitHub feature exercise
+    # - PR opened with structured evidence body
+    # - Requires at least 1 approving review (pr-review)
+    # - PolicyGate no-weekend: blocks Saturday/Sunday
+    # - 60-minute contiguous healthy bake after merge
+    # - Emergency override available via: kardinal override kardinal-test-app --env prod --reason "hotfix"
+    # - Rollback opens a new PR with kardinal/rollback label
+    - name: prod
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      bake:
+        minutes: 60
+        policy: fail-on-alarm
+      onHealthFailure: rollback
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-prod
+        timeout: 15m
+
+  historyLimit: 20
+---
+# PolicyGate: no deployments on weekends (schedule.isWeekend check)
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-weekend-deploys
+  namespace: default
+spec:
+  pipelineRef:
+    name: kardinal-test-app
+  environment: prod
+  expression: "!schedule.isWeekend"
+  description: "Block deployments on Saturday and Sunday UTC"
+---
+# PolicyGate: require upstream UAT soak of 30 minutes
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: uat-soak-gate
+  namespace: default
+spec:
+  pipelineRef:
+    name: kardinal-test-app
+  environment: prod
+  expression: "upstream.uat.soakMinutes >= 30"
+  description: "UAT must have been healthy for at least 30 contiguous minutes"
+---
+# PolicyGate: block deployments by dependabot (bundle metadata check)
+apiVersion: kardinal.io/v1alpha1
+kind: PolicyGate
+metadata:
+  name: no-bot-deploys
+  namespace: default
+spec:
+  pipelineRef:
+    name: kardinal-test-app
+  environment: prod
+  expression: 'bundle.provenance.author != "dependabot[bot]"'
+  description: "Do not auto-deploy dependabot bundles to production"

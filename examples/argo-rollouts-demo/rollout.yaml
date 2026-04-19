@@ -1,0 +1,76 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: kardinal-test-app
+  namespace: prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: kardinal-test-app
+  template:
+    metadata:
+      labels:
+        app: kardinal-test-app
+    spec:
+      containers:
+        - name: kardinal-test-app
+          image: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234  # updated by kardinal
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+  strategy:
+    canary:
+      # Step 1: route 10% of traffic to canary
+      steps:
+        - setWeight: 10
+        - pause:
+            duration: 5m   # observe for 5 minutes
+        - setWeight: 30
+        - pause:
+            duration: 5m
+        - setWeight: 60
+        - pause:
+            duration: 5m
+        # Full promotion happens automatically after the last step
+
+      # Optional: Argo Rollouts analysis template for metric-gated promotion
+      # analysis:
+      #   templates:
+      #     - templateName: success-rate
+      #   startingStep: 2
+      #   args:
+      #     - name: service-name
+      #       value: kardinal-test-app-canary
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kardinal-test-app
+  namespace: prod
+spec:
+  selector:
+    app: kardinal-test-app
+  ports:
+    - port: 80
+      targetPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kardinal-test-app-canary
+  namespace: prod
+spec:
+  selector:
+    app: kardinal-test-app
+  ports:
+    - port: 80
+      targetPort: 8080

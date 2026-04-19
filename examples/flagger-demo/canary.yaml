@@ -1,0 +1,57 @@
+apiVersion: flagger.app/v1beta1
+kind: Canary
+metadata:
+  name: kardinal-test-app
+  namespace: prod
+spec:
+  # Reference to the Deployment that Flagger manages
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: kardinal-test-app
+
+  # Flagger will create a HorizontalPodAutoscaler (optional)
+  # autoscalerRef:
+  #   apiVersion: autoscaling/v2
+  #   kind: HorizontalPodAutoscaler
+  #   name: kardinal-test-app
+
+  progressDeadlineSeconds: 1800  # 30 minutes — matches Pipeline health.timeout
+
+  service:
+    port: 8080
+    targetPort: 8080
+    # gateways: [istio-ingress/ingressgateway]   # uncomment for Istio
+    # hosts: [kardinal-test-app.prod.example.com]
+
+  analysis:
+    # Maximum time to wait before declaring failure (minutes per step)
+    interval: 1m
+    # Number of iterations before promotion
+    threshold: 10
+    # Max number of failed metric checks before rollback
+    maxWeight: 50
+    stepWeight: 5
+
+    metrics:
+      - name: request-success-rate
+        # Requires Prometheus with istio/linkerd/nginx metrics
+        # Remove this block if you don't have a service mesh
+        interval: 1m
+        thresholdRange:
+          min: 99
+
+      - name: request-duration
+        interval: 1m
+        thresholdRange:
+          max: 500
+
+    # Optional: run integration tests during canary
+    # webhooks:
+    #   - name: acceptance-test
+    #     type: pre-rollout
+    #     url: http://flagger-loadtester.test/
+    #     timeout: 30s
+    #     metadata:
+    #       type: bash
+    #       cmd: "curl -sd 'test' http://kardinal-test-app-canary.prod/health"
