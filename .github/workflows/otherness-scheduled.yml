@@ -72,7 +72,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          echo "$GH_TOKEN" | gh auth login --with-token
+          # GH_TOKEN env var is sufficient for `gh` CLI auth.
+          # `gh auth login --with-token` fails when GH_TOKEN is already set in env.
+          # We only need `gh auth setup-git` to configure the git credential helper.
           gh auth setup-git
           gh auth status
 
