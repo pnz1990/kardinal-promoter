@@ -20,7 +20,7 @@ interface Props {
    * #800: Ref forwarded to the filter <input> so App can call
    * searchInputRef.current?.focus() when the / shortcut fires.
    */
-  searchInputRef?: RefObject<HTMLInputElement>
+  searchInputRef?: RefObject<HTMLInputElement | null>
 }
 
 /** Truncate a bundle name to a readable short form for the sidebar. */
