@@ -8,3 +8,4 @@
 | 2026-04-18 | 1 | 0 | 344 | krocodile upgrade cdc4bb9→3376810 — fix UAT never starting (J1 blocker #789) | ✅ |
 | 2026-04-19 | 50 | 0 | 357 | / keyboard shortcut search, CI Demo Validate fix, krocodile upgrade, responsive layout | ✅ |
 | 2026-04-18 | 1 | 0 | 361 | Virtual scrolling for pipeline list >50 entries (@tanstack/react-virtual, PR #817) | ✅ |
+| 2026-04-18 | 2 | 0 | 368 | Full adapter coverage: Flux, Flagger, Argo Rollouts, GitHub demo examples + tests (#821) | ✅ |
