@@ -218,12 +218,17 @@ Phase 2+: Add optional OIDC authentication. The UI redirects unauthenticated use
 
 ## Interaction Model
 
-The UI is read-only. There are no buttons to promote, rollback, pause, or create Bundles. All mutations go through:
-- CLI (`kardinal promote`, `kardinal rollback`, `kardinal pause`)
-- kubectl (`kubectl apply -f bundle.yaml`)
-- Webhook (`POST /api/v1/bundles`)
+The UI provides both read and write operations:
 
-The UI is a monitoring and debugging tool. It answers: "What is the current state of my promotions?" and "Why is my promotion blocked?"
+**Read operations** — DAG view, pipeline list, bundle timeline, policy gate expressions, health status.
+
+**Write operations** (via ActionBar, added in PR #482):
+- Pause/resume a pipeline
+- Rollback a pipeline to a previous bundle
+- Override a policy gate (with mandatory reason, creates an AuditEvent)
+
+All mutations go through the backend API proxy which calls the Kubernetes API server.
+Direct CRD mutation via CLI (`kardinal pause`, `kardinal rollback`) and kubectl also remain available.
 
 ## CSS and Design Tokens
 
@@ -278,8 +283,15 @@ The following capabilities are implemented and shipped as of v0.8.x:
 - ✅ Copy-to-clipboard on pipeline names and bundle hashes — PR #764
 - ✅ Stale data indicator: amber→red+pulse escalation after 30s — PR #767
 - ✅ Focus trap in keyboard shortcuts modal (Tab/Shift+Tab cycle, return focus on close) — PR #783
-- ✅ Skeleton loading states: NodeDetail step details, BundleTimeline chips, PolicyGatesPanel — PR (issue #784)
-- ✅ `/` keyboard shortcut to focus pipeline search input; Esc clears + blurs; filter always visible — PR #800, 2026-04-19
+- ✅ Skeleton loading states: NodeDetail step details, BundleTimeline chips, PolicyGatesPanel — PR #791
+- ✅ `/` keyboard shortcut to focus pipeline search input; Esc clears + blurs; filter always visible — PR #805, 2026-04-19
+- ✅ Fleet-wide health dashboard: FleetHealthBar — blocked pipelines, CI red, interventions scannable in one table — PR #480 (2026-04-14)
+- ✅ Per-pipeline operations view: PipelineOpsTable — sortable health columns: inventory age, last merge, blockage time — PR #475 (2026-04-14)
+- ✅ Per-stage detail: StageDetailPanel — step list, bake countdown, override history — PR #476 (2026-04-14)
+- ✅ In-UI actions: ActionBar — pause, resume, rollback, override gate (with mandatory reason) — PR #482 (2026-04-14)
+- ✅ Bundle promotion timeline with rollback records and override audit trail: BundleTimeline + AuditEvents — PR #478, PR #681 (2026-04-14)
+- ✅ Policy gate detail panel: GateDetailPanel — CEL highlighting, current variable values, blocking duration, override history — PR #477 (2026-04-14)
+- ✅ Release efficiency metrics bar: ReleaseMetricsBar — inline P50/P90 metrics on pipeline detail — PR #481 (2026-04-14)
 
 ---
 
@@ -287,13 +299,7 @@ The following capabilities are implemented and shipped as of v0.8.x:
 
 The following capabilities are declared in `docs/aide/vision.md` §F8 but not yet implemented:
 
-- 🔲 Fleet-wide health dashboard (blocked pipelines, CI red, interventions scannable in one table) — epic #531
-- 🔲 Per-pipeline operations view (sortable health columns: inventory age, last merge, blockage time) — epic #531
-- 🔲 Per-stage detail (bake countdown, integration test pass rates, override history) — epic #531
-- 🔲 In-UI actions: approve, pause, resume, rollback, override gate (with mandatory reason) — epic #531
-- 🔲 Bundle promotion timeline with rollback records and override audit trail — epic #531
-- 🔲 Policy gate detail: current CEL variable values, evaluation history, time until unblocked — epic #531
-- 🔲 Responsive layout at 1280px width — epic #587
+- 🔲 Responsive layout at 1280px width — epic #587 (tracked in #799)
 - 🔲 Virtualization for pipeline list with 50+ entries — epic #587
 ---
 
