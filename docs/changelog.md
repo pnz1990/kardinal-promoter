@@ -30,6 +30,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Skeleton loading states** — NodeDetail step details, BundleTimeline chips, and PolicyGatesPanel now show animated shimmer placeholders instead of blank panels while data loads (#784)
 - **`/` keyboard shortcut to focus pipeline search** — pressing `/` anywhere (except when an input is focused) moves keyboard focus to the pipeline filter input; `Esc` inside the filter clears and blurs; `/` listed in the `?` shortcut help modal (#800)
 - **Responsive layout at 1280px** — Journey 010 Playwright test formalizes the no-overflow guarantee at 1280×800 viewport (#806)
+- **Virtual scrolling for pipeline list** — `@tanstack/react-virtual` used for flat lists exceeding 50 entries; multi-namespace grouped display falls back to normal rendering (#817)
 
 ### Changed
 
