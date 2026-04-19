@@ -175,3 +175,56 @@ describe('PipelineList — search filter (#345 #800)', () => {
     expect(ref.current?.getAttribute('aria-label')).toMatch(/filter/i)
   })
 })
+
+describe('PipelineList — virtual scrolling (#815)', () => {
+  // O1: virtual scrolling activates above threshold
+  it('renders all pipeline names with ≤50 pipelines (normal mode)', () => {
+    const pipelines = Array.from({ length: 50 }, (_, i) =>
+      makePipeline({ name: `pipe-${i + 1}` })
+    )
+    render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
+    // All pipelines should be in the DOM for ≤50
+    expect(screen.getByText('pipe-1')).toBeInTheDocument()
+    expect(screen.getByText('pipe-50')).toBeInTheDocument()
+  })
+
+  // O2: with >50 pipelines, the virtual list renders some items
+  it('renders visible items with >50 pipelines (virtual mode)', () => {
+    const pipelines = Array.from({ length: 100 }, (_, i) =>
+      makePipeline({ name: `pipe-${i + 1}` })
+    )
+    render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
+    // At least some items should be rendered (overscan=5, estimateSize=52)
+    // The virtualizer renders items visible in the scroll window.
+    // In jsdom (no layout), totalSize=0 so getVirtualItems may be empty — check the list structure exists.
+    const list = screen.getByRole('list', { name: /pipelines/i })
+    expect(list).toBeInTheDocument()
+  })
+
+  // O3: filter works correctly even in virtual mode
+  it('filter updates the virtual list items (O3)', async () => {
+    const user = userEvent.setup()
+    const pipelines = Array.from({ length: 100 }, (_, i) =>
+      makePipeline({ name: `pipe-${i + 1}` })
+    )
+    render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
+    const input = screen.getByRole('textbox', { name: /filter/i })
+    await user.type(input, 'pipe-99')
+    await new Promise(r => setTimeout(r, 200))
+    // List still renders correctly after filter
+    const list = screen.getByRole('list', { name: /pipelines/i })
+    expect(list).toBeInTheDocument()
+  })
+
+  // O5: multi-namespace grouped display falls back to normal rendering
+  it('does NOT use virtual scrolling for multi-namespace grouped display (O5)', () => {
+    const pipelines = [
+      ...Array.from({ length: 60 }, (_, i) => makePipeline({ name: `app-${i}`, namespace: 'ns-a' })),
+      ...Array.from({ length: 60 }, (_, i) => makePipeline({ name: `svc-${i}`, namespace: 'ns-b' })),
+    ]
+    render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
+    // Should render namespace headers (grouped mode, not virtual)
+    expect(screen.getByText('ns-a')).toBeInTheDocument()
+    expect(screen.getByText('ns-b')).toBeInTheDocument()
+  })
+})

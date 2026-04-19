@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
+    "@tanstack/react-virtual": "^3.13.24",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "reactflow": "^11.11.4"
