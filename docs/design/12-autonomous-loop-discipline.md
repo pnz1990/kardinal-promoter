@@ -95,15 +95,29 @@ in-review items using the autonomous merge protocol. If all are genuinely unmerg
 
 ## Present (✅)
 
-*(Not yet implemented — this is the design doc for a new behavior.)*
+- ✅ **qa.md §3e — 3-step autonomous merge protocol** (`_merge_pr()` function):
+  normal → `--admin` → clear branch protection (PUT) → restore. Never posts
+  `[NEEDS HUMAN: pr-approval-required]` before attempting all three steps.
+  `_RESTORE_TRAP` with `trap ... EXIT` ensures branch protection is always restored.
+  Implemented in `~/.otherness/agents/phases/qa.md §3e`.
+
+- ✅ **qa.md §3e — enforce_admins toggle error handling**: The `_RESTORE_TRAP`
+  environment variable captures the restore curl command; `trap "$_RESTORE_TRAP" EXIT`
+  fires on both normal exit and error. Explicit `eval "$_RESTORE_TRAP"` + `trap - EXIT`
+  on normal exit. Implemented alongside the 3-step protocol in qa.md §3e.
+
+- ✅ **coord.md §1c — queue gate (in_review ≥ 3)**: When total `in_review` items ≥ 3,
+  queue generation is skipped and the queue-gen lock is released immediately. Prevents
+  saturating the review queue when items accumulate. Implemented in coord.md §1c.
+
+- ✅ **standalone.md HARD RULES — `[NEEDS HUMAN]` as last resort**: The HARD RULES
+  section states: "Before posting `[NEEDS HUMAN]` for any merge failure: attempt all 3
+  steps in qa.md §3e. Only post `[NEEDS HUMAN]` when step 3 fails with a specific error
+  (403 = no admin rights). Log the exact error." Implemented in standalone.md §HARD RULES.
 
 ## Future (🔲)
 
-- 🔲 qa.md §3e (in otherness agents): codify the 3-step autonomous merge protocol above
-- 🔲 qa.md §3e: wrap enforce_admins toggle in error handling that always restores the setting
-- 🔲 coord.md §1c (in otherness agents): add gate — skip queue generation when in_review >= 3
-- 🔲 standalone.md HARD RULES: rewrite `[NEEDS HUMAN]` rule — attempt autonomous resolution first;
-  post [NEEDS HUMAN] only after all autonomous paths have been tried and failed with specific errors
+_(no items)_
 
 ---
 
