@@ -1,0 +1,56 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: kardinal-test-app-rollouts
+  namespace: kardinal-test-app-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kardinal-test-app-rollouts
+  template:
+    metadata:
+      labels:
+        app: kardinal-test-app-rollouts
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+  strategy:
+    canary:
+      steps:
+        - setWeight: 50
+        - pause:
+            duration: 5s   # very short for demo/CI
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kardinal-test-app-rollouts
+  namespace: kardinal-test-app-test
+spec:
+  selector:
+    app: kardinal-test-app-rollouts
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kardinal-test-app-rollouts-canary
+  namespace: kardinal-test-app-test
+spec:
+  selector:
+    app: kardinal-test-app-rollouts
+  ports:
+    - port: 80
+      targetPort: 8080

@@ -406,6 +406,87 @@ kubectl rollout status deployment/argocd-application-controller -n argocd --time
 
 success "[7/7] ArgoCD applications configured"
 
+# ── Step 8: Install Flux (optional — needed for scenarios 11-13) ─────────────
+
+INSTALL_FLUX="${INSTALL_FLUX:-true}"
+INSTALL_ARGO_ROLLOUTS="${INSTALL_ARGO_ROLLOUTS:-true}"
+INSTALL_FLAGGER="${INSTALL_FLAGGER:-true}"
+
+if [[ "$INSTALL_FLUX" == "true" ]]; then
+  info "[8/13] Installing Flux..."
+  kubectl config use-context "kind-${DEV_CLUSTER}"
+  # Install Flux controllers (no bootstrap — we apply Kustomizations manually)
+  kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f -
+  kubectl apply -f "https://github.com/fluxcd/flux2/releases/latest/download/install.yaml" 2>/dev/null || \
+    kubectl apply -f "https://github.com/fluxcd/flux2/releases/download/v2.3.0/install.yaml"
+  kubectl -n flux-system rollout status deploy/source-controller --timeout=120s 2>/dev/null || true
+  kubectl -n flux-system rollout status deploy/kustomize-controller --timeout=120s 2>/dev/null || true
+
+  # Create GitHub token secret in flux-system if GITHUB_TOKEN is set
+  if [[ -n "$GITHUB_TOKEN" ]]; then
+    kubectl create secret generic github-token \
+      --namespace flux-system \
+      --from-literal=token="$GITHUB_TOKEN" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  fi
+
+  # Apply Flux Kustomizations
+  kubectl apply -f "${DEMO_DIR}/manifests/flux/"
+  success "[8/13] Flux installed and Kustomizations applied"
+else
+  info "[8/13] Flux install skipped (INSTALL_FLUX=false)"
+fi
+
+# ── Step 9: Install Argo Rollouts ─────────────────────────────────────────────
+
+if [[ "$INSTALL_ARGO_ROLLOUTS" == "true" ]]; then
+  info "[9/13] Installing Argo Rollouts..."
+  kubectl config use-context "kind-${DEV_CLUSTER}"
+  kubectl create namespace argo-rollouts --dry-run=client -o yaml | kubectl apply -f -
+  kubectl apply -n argo-rollouts \
+    -f "https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml" 2>/dev/null || \
+    kubectl apply -n argo-rollouts \
+    -f "https://github.com/argoproj/argo-rollouts/releases/download/v1.7.1/install.yaml"
+  kubectl -n argo-rollouts rollout status deploy/argo-rollouts --timeout=120s 2>/dev/null || true
+
+  # Apply Rollout fixture
+  kubectl create namespace kardinal-test-app-test --dry-run=client -o yaml | kubectl apply -f -
+  kubectl apply -f "${DEMO_DIR}/manifests/rollouts/"
+  # Apply the rollouts Pipeline on the control cluster
+  kubectl config use-context "kind-${CONTROL_CLUSTER}"
+  kubectl apply -f "${DEMO_DIR}/manifests/rollouts/pipeline.yaml"
+  success "[9/13] Argo Rollouts installed and Rollout applied"
+else
+  info "[9/13] Argo Rollouts install skipped (INSTALL_ARGO_ROLLOUTS=false)"
+fi
+
+# ── Step 10: Install Flagger ──────────────────────────────────────────────────
+
+if [[ "$INSTALL_FLAGGER" == "true" ]]; then
+  info "[10/13] Installing Flagger..."
+  kubectl config use-context "kind-${DEV_CLUSTER}"
+  # Install Flagger (no service mesh — uses Kubernetes provider)
+  helm repo add flagger https://flagger.app 2>/dev/null || true
+  helm repo update 2>/dev/null || true
+  kubectl create namespace flagger-system --dry-run=client -o yaml | kubectl apply -f -
+  helm upgrade -i flagger flagger/flagger \
+    --namespace flagger-system \
+    --set prometheus.install=false \
+    --set meshProvider=kubernetes \
+    --wait --timeout=120s 2>/dev/null || \
+  kubectl apply -f "https://raw.githubusercontent.com/fluxcd/flagger/main/artifacts/flagger/crd.yaml" 2>/dev/null || true
+
+  # Apply Flagger Canary and Deployment
+  kubectl create namespace kardinal-test-app-test --dry-run=client -o yaml | kubectl apply -f -
+  kubectl apply -f "${DEMO_DIR}/manifests/flagger/"
+  # Apply the flagger Pipeline on the control cluster
+  kubectl config use-context "kind-${CONTROL_CLUSTER}"
+  kubectl apply -f "${DEMO_DIR}/manifests/flagger/pipeline.yaml"
+  success "[10/13] Flagger installed and Canary applied"
+else
+  info "[10/13] Flagger install skipped (INSTALL_FLAGGER=false)"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 echo ""

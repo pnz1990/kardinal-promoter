@@ -373,3 +373,65 @@ kardinal get pipelines
 | Flagger progressive delivery | `flagger` | `canaries.flagger.app` |
 
 **health.type is required** — there is no silent auto-detection. Omitting `health.type` returns an error. See `pkg/health/adapter.go:AutoDetector.Select()`.
+
+---
+
+## Live Cluster Validation (demo/scripts/validate.sh)
+
+Scenarios 11–13 validate the new adapters against a live cluster. They are included in `demo/scripts/validate.sh` and run as part of the nightly `demo-validate` GitHub Actions workflow.
+
+### Running locally
+
+```bash
+# Full demo environment (kind + ArgoCD + Flux + Argo Rollouts + Flagger)
+bash demo/scripts/setup.sh
+
+# Run all scenarios including 11-13
+bash demo/scripts/validate.sh
+```
+
+### Scenario results format
+
+Each adapter scenario checks:
+1. The adapter's Pipeline is registered (`kardinal get pipelines`)
+2. The adapter-specific CRD exists in the cluster
+3. The live resource is in a known phase (Healthy/Progressing/Succeeded)
+4. The Pipeline spec has the correct `health.type`
+
+Example output:
+
+```
+── Scenario 11: Flux health adapter — Kustomization Ready check
+  ✓ kardinal-test-app-flux pipeline registered
+  ✓ Flux Kustomizations found: 2
+  ✓ Kustomization 'kardinal-test-app-flux-test' Ready=True — adapter would report Healthy
+  ✓ Pipeline spec confirms health.type=flux
+
+── Scenario 12: Argo Rollouts health adapter — Rollout phase check
+  ✓ kardinal-test-app-rollouts pipeline registered
+  ✓ Rollout phase=Healthy — argoRollouts adapter reports Healthy
+  ✓ Pipeline spec confirms health.type=argoRollouts
+
+── Scenario 13: Flagger health adapter — Canary phase check
+  ✓ kardinal-test-app-flagger pipeline registered
+  ✓ Canary phase=Succeeded — flagger adapter reports Healthy
+  ✓ Pipeline spec confirms health.type=flagger
+```
+
+### Skipped vs failed
+
+Scenarios gracefully skip when an adapter is not installed (`INSTALL_FLUX=false` etc.), rather than failing. This allows running the demo on minimal clusters without all tools installed. A skip is not a failure — it means the adapter was not exercised, not that it is broken.
+
+### CI integration
+
+The `demo-validate.yml` GitHub Actions workflow runs all scenarios nightly (including 11-13) on a full kind cluster with all adapters installed. Failed scenarios post `❌ FAIL` to the daily report issue. Passing scenarios post `✅ PASS`.
+
+```bash
+# Trigger manually on GitHub
+gh workflow run demo-validate.yml --repo pnz1990/kardinal-promoter
+
+# Or trigger specific scenario
+gh workflow run demo-validate.yml --repo pnz1990/kardinal-promoter \
+  -f scenario=11
+```
+**health.type is required** — there is no silent auto-detection. Omitting `health.type` returns an error. See `pkg/health/adapter.go:AutoDetector.Select()`.
