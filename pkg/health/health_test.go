@@ -363,6 +363,34 @@ func TestArgoRolloutsAdapter_Degraded(t *testing.T) {
 	assert.Contains(t, result.Reason, "Degraded")
 }
 
+// TestArgoRolloutsAdapter_Progressing verifies that a Rollout in Progressing phase
+// (canary steps running) returns Unhealthy so the adapter keeps waiting.
+// This covers spec O5 (#820): Rollout phase=Progressing → Wait.
+func TestArgoRolloutsAdapter_Progressing(t *testing.T) {
+	rollout := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Rollout",
+			"metadata":   map[string]interface{}{"name": "my-app", "namespace": "prod"},
+			"status": map[string]interface{}{
+				"phase":   "Progressing",
+				"message": "canary step 2/5 — waiting for pause duration",
+			},
+		},
+	}
+	rollout.SetGroupVersionKind(schema.GroupVersionKind{Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout"})
+	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), rollout)
+
+	adapter := health.NewArgoRolloutsAdapter(dynClient)
+	result, err := adapter.Check(context.Background(), health.CheckOptions{
+		ArgoRollouts: health.ArgoRolloutsConfig{Name: "my-app", Namespace: "prod"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, result.Healthy, "Progressing rollout must not be Healthy — canary is still running")
+	assert.Contains(t, result.Reason, "Progressing")
+}
+
 // TestArgoRolloutsAdapter_NotFound verifies that a missing Rollout returns Unhealthy.
 func TestArgoRolloutsAdapter_NotFound(t *testing.T) {
 	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())

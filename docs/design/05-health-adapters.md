@@ -363,3 +363,33 @@ The PromotionStep reconciler handles the "not healthy yet" case by requeueing af
 14. Remote client: valid kubeconfig Secret creates client.
 15. Remote client: invalid kubeconfig returns error.
 16. Remote client: cached client reused on second call.
+17. Argo Rollouts adapter: Rollout phase=Healthy returns Healthy.
+18. Argo Rollouts adapter: Rollout phase=Progressing returns unhealthy (wait).
+19. Argo Rollouts adapter: Rollout phase=Degraded returns unhealthy.
+20. Argo Rollouts adapter: Rollout not found returns unhealthy.
+21. Flagger adapter: Canary phase=Succeeded returns Healthy.
+22. Flagger adapter: Canary phase=Failed returns unhealthy.
+23. Flagger adapter: Canary phase=Progressing returns unhealthy (wait).
+24. Flagger adapter: Canary not found returns unhealthy.
+25. AutoDetector: explicit "argoRollouts" type returns ArgoRolloutsAdapter.
+26. AutoDetector: explicit "flagger" type returns FlaggerAdapter.
+
+## Present
+
+- ✅ Resource (Deployment) adapter: full implementation + tests 1–3 (PR #014, 2026-04-11)
+- ✅ Argo CD adapter: full implementation + tests 4–7 (PR #014, 2026-04-11)
+- ✅ Flux adapter: full implementation + tests 8–10 (PR #014, 2026-04-11)
+- ✅ Argo Rollouts adapter: implementation in adapter.go (PR #014, 2026-04-11)
+- ✅ Flagger adapter: implementation in adapter.go (PR #014, 2026-04-11)
+- ✅ AutoDetector: all 5 adapters selectable by explicit type (PR #014, 2026-04-11)
+- ✅ Unit tests 17–26: ArgoRollouts + Flagger + AutoDetector coverage (PR #820, 2026-04-18)
+- ✅ examples/flux-demo/: Pipeline with Flux health adapter + README (PR #820, 2026-04-18)
+- ✅ examples/flagger-demo/: Pipeline with Flagger Canary adapter + README (PR #820, 2026-04-18)
+- ✅ examples/argo-rollouts-demo/: Standalone Argo Rollouts example + README (PR #820, 2026-04-18)
+- ✅ examples/github-demo/: GitHub SCM full-feature example + README (PR #820, 2026-04-18)
+- ✅ scripts/demo-validate.sh: runs all adapter test paths (PR #820, 2026-04-18)
+- ✅ docs/demo-validation.md: documented results per adapter (PR #820, 2026-04-18)
+
+## Future
+
+*All planned items for this design doc are now complete.*

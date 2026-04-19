@@ -1,0 +1,69 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kardinal-test-app-test
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./environments/test
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: kardinal-demo
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: kardinal-test-app
+      namespace: kardinal-test-app-test
+  timeout: 5m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kardinal-test-app-uat
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./environments/uat
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: kardinal-demo
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: kardinal-test-app
+      namespace: kardinal-test-app-uat
+  timeout: 5m
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: kardinal-test-app-prod
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./environments/prod
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: kardinal-demo
+  healthChecks:
+    - apiVersion: apps/v1
+      kind: Deployment
+      name: kardinal-test-app
+      namespace: kardinal-test-app-prod
+  timeout: 10m
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: kardinal-demo
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/pnz1990/kardinal-demo
+  ref:
+    branch: main
+  secretRef:
+    name: github-token
