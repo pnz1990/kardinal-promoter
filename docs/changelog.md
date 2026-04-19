@@ -28,6 +28,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Copy-to-clipboard on pipeline names and bundle hashes** — click to copy pipeline name, bundle name, or commit SHA in the embedded UI (#764)
 - **Stale data indicator escalation** — red + pulse animation when dashboard data is >30s old; screen reader announcement via `aria-live` (#767)
 - **Skeleton loading states** — NodeDetail step details, BundleTimeline chips, and PolicyGatesPanel now show animated shimmer placeholders instead of blank panels while data loads (#784)
+- **`/` keyboard shortcut to focus pipeline search** — pressing `/` anywhere (except when an input is focused) moves keyboard focus to the pipeline filter input; `Esc` inside the filter clears and blurs; `/` listed in the `?` shortcut help modal (#800)
 
 ### Changed
 
