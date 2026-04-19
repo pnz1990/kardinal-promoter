@@ -101,6 +101,29 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
     }, 150)
   }, [])
 
+  // #815: Compute filtered count BEFORE early returns so useVirtualizer
+  // is always called with the same hook order (Rules of Hooks).
+  // When loading/error/empty, these will be empty/0 which is harmless.
+  const filteredForVirtualCount = debouncedQuery
+    ? pipelines.filter(p =>
+        p.name.toLowerCase().includes(debouncedQuery) ||
+        p.namespace.toLowerCase().includes(debouncedQuery) ||
+        `${p.namespace}/${p.name}`.toLowerCase().includes(debouncedQuery)
+      ).length
+    : pipelines.length
+
+  const uniqueNamespacesEarly = new Set(pipelines.map(p => p.namespace))
+  const isMultiNamespaceEarly = uniqueNamespacesEarly.size > 1
+  const useVirtual = !isMultiNamespaceEarly && filteredForVirtualCount > VIRTUAL_THRESHOLD
+
+  // #815: Hook must be called unconditionally — before any early returns.
+  const virtualizer = useVirtualizer({
+    count: filteredForVirtualCount,
+    getScrollElement: () => listContainerRef.current,
+    estimateSize: () => 52,
+    overscan: 5,
+  })
+
   if (loading) {
     // #335: skeleton loading state — shimmer placeholders instead of "Loading pipelines..."
     return (
@@ -149,8 +172,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
     : pipelines
 
   // #358: detect multi-namespace setup — show namespace prefix when needed
-  const uniqueNamespaces = new Set(pipelines.map(p => p.namespace))
-  const isMultiNamespace = uniqueNamespaces.size > 1
+  // (useVirtual and virtualizer already computed above, before early returns)
+  const uniqueNamespaces = uniqueNamespacesEarly
+  const isMultiNamespace = isMultiNamespaceEarly
 
   // Group by namespace for multi-namespace display
   const pipelinesByNamespace: Record<string, typeof filteredPipelines> = {}
@@ -159,16 +183,6 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
     pipelinesByNamespace[p.namespace].push(p)
   }
   const namespaceOrder = Array.from(uniqueNamespaces).sort()
-
-  // #815: virtual scrolling for flat lists above threshold.
-  // Hook must be called unconditionally; we only render the virtual output when active.
-  const useVirtual = !isMultiNamespace && filteredPipelines.length > VIRTUAL_THRESHOLD
-  const virtualizer = useVirtualizer({
-    count: filteredPipelines.length,
-    getScrollElement: () => listContainerRef.current,
-    estimateSize: () => 52, // estimated pipeline item height in px
-    overscan: 5,
-  })
 
   return (
     <div>
