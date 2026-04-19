@@ -229,6 +229,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
 		r.cleanWorkDir(log, &ps)
 		return ctrl.Result{}, nil
+	case StateAbortedByAlarm:
+		// Terminal human-intervention state — clean up workdir and stop reconciling.
+		// Requires manual resume or rollback from a human operator.
+		r.cleanWorkDir(log, &ps)
+		return ctrl.Result{}, nil
+	case StateRollingBack:
+		// Managed state set by applyHealthFailurePolicy (K-03). The rollback Bundle
+		// drives resolution externally; this reconciler takes no further action until
+		// the rollback Bundle completes and the step is superseded or manually reset.
+		r.cleanWorkDir(log, &ps)
+		return ctrl.Result{}, nil
 	default:
 		log.Warn().Str("state", ps.Status.State).Msg("unknown state, resetting to Pending")
 		return r.patchState(ctx, &ps, StatePendingExplicit, "")

@@ -1162,9 +1162,10 @@ func TestBundleReconciler_MetricsComputedOnVerified(t *testing.T) {
 
 // mockGraphChecker is a test double for bundle.GraphChecker.
 type mockGraphChecker struct {
-	exists    bool
-	err       error
-	callCount int
+	exists       bool
+	err          error
+	callCount    int
+	deleteCalled bool
 }
 
 func (m *mockGraphChecker) GraphExists(_ context.Context, _, _ string) (bool, error) {
@@ -1173,7 +1174,8 @@ func (m *mockGraphChecker) GraphExists(_ context.Context, _, _ string) (bool, er
 }
 
 func (m *mockGraphChecker) DeleteGraph(_ context.Context, _, _ string) error {
-	return nil // no-op for tests that only need GraphExists
+	m.deleteCalled = true
+	return nil
 }
 
 // TestBundleReconciler_GraphRefStoredOnPromotion verifies that Bundle.status.graphRef
@@ -1511,4 +1513,59 @@ func TestBundleReconciler_PipelineSpecHashStoredOnPromotion(t *testing.T) {
 	assert.Equal(t, "Promoting", updated.Status.Phase)
 	assert.NotEmpty(t, updated.Status.PipelineSpecHash,
 		"PipelineSpecHash must be stored when bundle transitions to Promoting")
+}
+
+// TestBundleReconciler_EmptyPipelineSpecHash_NoGraphDeletion verifies that
+// ensurePipelineSpecCurrent does NOT delete the Graph when PipelineSpecHash is
+// empty (uninitialised). An empty stored hash must be treated as "not yet
+// observed", not "spec has changed". Regression guard for #789.
+func TestBundleReconciler_EmptyPipelineSpecHash_NoGraphDeletion(t *testing.T) {
+	scheme := newScheme()
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+	// Bundle is Promoting with an empty PipelineSpecHash — simulates a bundle
+	// that was promoted before PipelineSpecHash was introduced (pre-#634).
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase:            "Promoting",
+			GraphRef:         "my-app-my-app-v1",
+			PipelineSpecHash: "", // empty — key test condition
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	gc := &mockGraphChecker{exists: true}
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
+	r := &bundle.Reconciler{
+		Client:       c,
+		Translator:   translator,
+		GraphChecker: gc,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Graph must NOT be deleted when PipelineSpecHash is empty.
+	assert.False(t, gc.deleteCalled,
+		"Graph must NOT be deleted when PipelineSpecHash is empty — empty means uninitialized, not changed (#789)")
+
+	// The stored hash MUST be updated so subsequent reconciles don't trigger deletion.
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &updated))
+	assert.NotEmpty(t, updated.Status.PipelineSpecHash,
+		"PipelineSpecHash must be saved after first reconcile to prevent future spurious deletions")
 }

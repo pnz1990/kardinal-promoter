@@ -38,7 +38,7 @@ Pending -> StepExecution -> WaitingForMerge -> HealthChecking -> Verified
               Failed                                Failed
 ```
 
-**User-visible states** (in `status.state`): `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verified`, `Failed`.
+**User-visible states** (in `status.state`): `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`.
 
 **Internal states** (not exposed): `StepExecution` maps to `Promoting` in the external state. The reconciler tracks the current step index internally in `status.currentStepIndex`.
 
@@ -147,6 +147,10 @@ func (r *PromotionStepReconciler) Reconcile(ctx context.Context, req ctrl.Reques
         return r.handleHealthChecking(ctx, step)
     case "Verified", "Failed":
         return ctrl.Result{}, nil // terminal, nothing to do
+    case "AbortedByAlarm":
+        return ctrl.Result{}, nil // terminal human-intervention state — operator must resume or rollback
+    case "RollingBack":
+        return ctrl.Result{}, nil // managed by rollback Bundle — this reconciler takes no action
     }
     return ctrl.Result{}, nil
 }
