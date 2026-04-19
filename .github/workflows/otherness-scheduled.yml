@@ -88,6 +88,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         with:
           model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
+          # use_github_token: true — skip the OpenCode App OIDC exchange.
+          # The exchange calls api.opencode.ai; without the opencode GitHub App
+          # installed, it returns an HTML error page that fails JSON parsing.
+          # With use_github_token=true the action uses GITHUB_TOKEN directly.
+          use_github_token: "true"
           prompt: |
             AGENTS_PATH=$(python3 -c "
             import re, os
