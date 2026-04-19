@@ -3,8 +3,8 @@
   "project": "kardinal-promoter",
   "mode": "standalone",
   "initialized": "2026-04-09",
-  "last_updated": "2026-04-14T05:11:01Z",
-  "current_queue": "queue-021",
+  "last_updated": "2026-04-17T18:43:49Z",
+  "current_queue": "queue-023",
   "last_sm_review": "2026-04-13T18:54:36Z",
   "last_pm_review": "2026-04-13T18:54:36Z",
   "batches_since_competitive_analysis": 0,
@@ -752,6 +752,327 @@
       "pr_merged": true,
       "pr_number": 489,
       "dependency_mode": "merged"
+    },
+    "901-watchkind-refactor": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 652,
+      "issue": "611",
+      "title": "WatchKind health nodes"
+    },
+    "646-krocodile-upgrade": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 654,
+      "issue": "646",
+      "title": "krocodile upgrade to 81c5a03"
+    },
+    "643-doc11-stale-refs": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 648,
+      "issue": "643",
+      "title": "doc-11 stale refs",
+      "note": "Already fixed by arch-audit PR #648"
+    },
+    "644-promotionstep-watch": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 655,
+      "issue": "644",
+      "title": "fix: Watch on PRStatus and PolicyGate in PromotionStep"
+    },
+    "625-remove-upstream-verified": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 660,
+      "issue": "625",
+      "title": "upstreamStates refactor"
+    },
+    "656-watchkind-docs": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 659,
+      "issue": "656",
+      "title": "WatchKind docs"
+    },
+    "643-doc11-kro80-ref": {
+      "state": "done",
+      "issue": 643,
+      "title": "docs fix already applied",
+      "note": "Already fixed by previous agent \u2014 issue is CLOSED"
+    },
+    "645-doc11-issue616-ref": {
+      "state": "done",
+      "issue": 645,
+      "title": "docs fix already applied",
+      "note": "Already fixed by previous agent \u2014 issue is CLOSED"
+    },
+    "662-v070-release": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 664,
+      "issue": "662",
+      "title": "v0.7.0 release"
+    },
+    "618-remove-upstream-env": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 665,
+      "issue": "618",
+      "title": "remove spec.upstreamEnvironment"
+    },
+    "571-scm-circuit-breaker": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 666,
+      "issue": "571",
+      "title": "SCM circuit breaker"
+    },
+    "618-policygate-upstream-env": {
+      "state": "done",
+      "issue": 618,
+      "pr_number": 663,
+      "title": "refactor(policygate): move upstreamEnvironment from spec to annotation",
+      "branch": "feat/618-policygate-upstream-env",
+      "note": "PR was CLOSED (duplicate/superseded). Cleaned up."
+    },
+    "622-bundle-watch-node": {
+      "state": "done",
+      "pr_number": 667,
+      "issue": "622",
+      "title": "Bundle Watch node",
+      "qa_approved": true,
+      "pr_merged": true
+    },
+    "668-changelog-post-v070": {
+      "state": "blocked",
+      "issue": "668",
+      "title": "docs(changelog): add post-v0.7.0 entries",
+      "size": "xs"
+    },
+    "619-bundle-intent-graph": {
+      "state": "done",
+      "issue": "619",
+      "title": "feat(graph): move Bundle intent filtering to Graph includeWhen expressions",
+      "size": "s",
+      "pr_merged": true,
+      "pr_number": 671
+    },
+    "573-admission-webhook": {
+      "state": "done",
+      "issue": "573",
+      "title": "feat(api): admission webhook for Pipeline and PolicyGate validation",
+      "size": "m",
+      "pr_merged": true,
+      "pr_number": 670
+    },
+    "676-krocodile-explicit-keyword": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 677,
+      "issue": "676",
+      "title": "krocodile 05db829 explicit-keyword schema"
+    },
+    "673-audit-log-step1": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 679,
+      "issue": "673",
+      "title": "AuditEvent CRD"
+    },
+    "673-audit-log": {
+      "state": "done",
+      "issue": "673",
+      "title": "feat(api): structured audit log step 1 \u2014 AuditEvent CRD and write path",
+      "size": "s",
+      "note": "Implemented as AuditEvent CRD in PR #675"
+    },
+    "576-audit-step1": {
+      "state": "done",
+      "issue": 673,
+      "pr_number": 675,
+      "title": "feat(api): AuditEvent CRD \u2014 immutable promotion event trail step 1",
+      "branch": "feat/576-audit-step1",
+      "note": "PR was CLOSED (duplicate/superseded). Cleaned up."
+    },
+    "680-audit-step2": {
+      "state": "done",
+      "pr_number": 681,
+      "issue": "680",
+      "title": "AuditEvent step 2 \u2014 gate and rollback events",
+      "qa_approved": true,
+      "awaiting_human_review": true,
+      "pr_merged": true,
+      "note": "Merged as PR #681 by parallel session; my PR #682 was duplicate and closed"
+    },
+    "683-audit-cli": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 684,
+      "issue": "683",
+      "title": "kardinal get auditevents CLI command"
+    },
+    "688-better-errors": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 689,
+      "issue": "688",
+      "title": "improve error messages",
+      "note": "Merged as PR #689 by parallel session; my PR #690 was duplicate and closed"
+    },
+    "693-trivy-scan": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 696,
+      "issue": "693",
+      "title": "trivy vulnerability scan"
+    },
+    "694-sbom-gen": {
+      "state": "done",
+      "pr_number": 697,
+      "issue": "694",
+      "title": "SBOM generation",
+      "qa_approved": true,
+      "note": "PR was CLOSED (duplicate/superseded). Cleaned up."
+    },
+    "699-cosign-signing": {
+      "state": "done",
+      "issue": 699,
+      "pr_number": 700,
+      "title": "feat(security): cosign keyless image signing",
+      "branch": "feat/699-cosign-signing",
+      "pr_merged": true
+    },
+    "702-sbom-generation": {
+      "state": "done",
+      "issue": "702",
+      "title": "feat(security): Syft SBOM generation \u2014 attach to OCI artifact",
+      "size": "s",
+      "pr_merged": true,
+      "pr_number": 703
+    },
+    "698-krocodile-trivy": {
+      "state": "done",
+      "pr_number": 701,
+      "issue": "698",
+      "title": "krocodile trivy scan",
+      "qa_approved": true,
+      "note": "PR was CLOSED (duplicate/superseded). Cleaned up."
+    },
+    "698-trivy-krocodile": {
+      "state": "done",
+      "issue": 698,
+      "pr_number": 701,
+      "title": "trivy scan for krocodile image",
+      "note": "PR was CLOSED (duplicate/superseded). Cleaned up."
+    },
+    "702-sbom-cosign-attach": {
+      "state": "done",
+      "note": "Superseded by PR #703 which was already merged"
+    },
+    "706-slsa-provenance": {
+      "state": "in_review",
+      "issue": 706,
+      "pr_number": 707,
+      "title": "SLSA Level 2 provenance via GitHub attestation"
+    },
+    "changelog-dry-run-css": {
+      "title": "docs(changelog): add --dry-run, CSS tokens, URL routing + roadmap K-10 fix",
+      "state": "in_review",
+      "pr_number": 745,
+      "branch": "feat/changelog-dry-run-css",
+      "assigned_at": "2026-04-17T17:48:00Z",
+      "assigned_to": "sess-a3d6f0be"
+    },
+    "740-url-routing": {
+      "title": "feat(ui): URL routing \u2014 pipeline/bundle/node selection in URL",
+      "issue": 740,
+      "state": "in_review",
+      "pr_number": 742,
+      "branch": "feat/740-url-routing",
+      "assigned_to": "sess-a3d6f0be"
+    },
+    "743-bundle-url-routing": {
+      "title": "feat(ui): persist bundle diff panel selection in URL hash",
+      "issue": 743,
+      "state": "done",
+      "note": "Already implemented in PR #742. Issue closed."
+    },
+    "747-error-boundary": {
+      "title": "feat(ui): error boundaries on async components (#587)",
+      "issue": 747,
+      "state": "in_review",
+      "pr_number": 755,
+      "branch": "feat/747-error-boundary",
+      "qa_approved": true,
+      "awaiting_human_review": true,
+      "assigned_at": "2026-04-17T18:20:00Z",
+      "assigned_to": "sess-a3d6f0be"
+    },
+    "748-wcag-axe": {
+      "title": "feat(ui): WCAG 2.1 AA automated check \u2014 axe-core in CI (#587)",
+      "issue": 748,
+      "state": "in_review",
+      "pr_number": 756,
+      "branch": "feat/748-wcag-axe",
+      "qa_approved": true,
+      "awaiting_human_review": true,
+      "assigned_at": "2026-04-17T19:00:00Z",
+      "assigned_to": "sess-a3d6f0be"
+    },
+    "758-nested-interactive-fix": {
+      "issue": 758,
+      "title": "fix(ui): WCAG 2.1 nested-interactive \u2014 PipelineLaneView keyboard nav redesign",
+      "state": "done",
+      "areas": [
+        "ui"
+      ],
+      "priority": "medium",
+      "size": "s",
+      "created_at": "2026-04-17T18:43:49Z",
+      "pr_merged": true,
+      "pr_number": 759,
+      "done_at": "2026-04-18T00:00:00Z"
+    },
+    "757-color-contrast-audit": {
+      "issue": 757,
+      "title": "fix(ui): WCAG 2.1 AA color contrast \u2014 full color system audit",
+      "state": "done",
+      "areas": [
+        "ui"
+      ],
+      "priority": "medium",
+      "size": "m",
+      "created_at": "2026-04-17T18:43:49Z",
+      "pr_merged": true,
+      "pr_number": 772,
+      "done_at": "2026-04-18T00:00:00Z"
+    },
+    "issue-815": {
+      "title": "feat(ui): virtualization for pipeline list with 50+ entries",
+      "state": "done",
+      "assigned_to": "sess-1f914935",
+      "assigned_at": "2026-04-19T05:14:10Z",
+      "branch": "feat/issue-815",
+      "worktree": "../kardinal-promoter.issue-815",
+      "pr_number": 817,
+      "file_spaces": [
+        "web/src/"
+      ],
+      "design_doc": "docs/design/06-kardinal-ui.md",
+      "areas": [
+        "area/ui"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-19T05:16:25Z"
+    },
+    "issue-820": {
+      "title": "feat(demo): full adapter coverage",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 821,
+      "done_at": "2026-04-19T05:47:09Z"
     }
   },
   "session_heartbeats": {
@@ -762,12 +1083,21 @@
     "QA": {
       "last_seen": "2026-04-10T20:13:22Z",
       "cycle": 39
+    },
+    "sess-1f914935": {
+      "last_seen": "2026-04-19T05:14:10Z",
+      "item": "issue-815",
+      "cycle": 1
     }
   },
   "handoff": {
-    "completed_at": "2026-04-14T05:11:01Z",
-    "status": "PROJECT_COMPLETE",
-    "note": "All 7 journeys pass in CI. PROJECT COMPLETE posted on Issue #1. Awaiting human confirmation.",
-    "journeys_all_passing": true
-  }
+    "last_batch_prs": [
+      817,
+      821
+    ],
+    "next_item": "none",
+    "notes": "PR #821 merged. All 5 health adapters have examples + tests + docs. Design docs fully consumed (0 Future items). Loop continues."
+  },
+  "sm_cycle_count": 1,
+  "pm_cycle_count": 1
 }
