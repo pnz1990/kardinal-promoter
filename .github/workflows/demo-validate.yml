@@ -36,6 +36,7 @@ on:
 permissions:
   contents: read
   packages: read
+  issues: write
 
 env:
   CONTROL_CLUSTER: kardinal-control
@@ -118,7 +119,7 @@ jobs:
           echo "=== PolicyGates ==="
           kubectl get policygates -A 2>/dev/null || echo "no policy gates"
 
-      - name: Post result to issue #1
+      - name: Post result to report issue
         if: always() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -126,7 +127,15 @@ jobs:
           STATUS=$([[ "${{ job.status }}" == "success" ]] && echo "✅ PASS" || echo "❌ FAIL")
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
           BODY="[DEMO VALIDATE | ${DATE}] Nightly demo validation: **${STATUS}** — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh issue comment 1 \
+          # Find the current open kardinal-labeled report issue (daily rotation creates new ones)
+          REPORT_ISSUE=$(gh issue list \
+            --repo pnz1990/kardinal-promoter \
+            --state open \
+            --label kardinal \
+            --json number,title \
+            --jq '[.[] | select(.title | test("Autonomous Team Reports"))] | sort_by(.number) | last | .number // 1' \
+            2>/dev/null || echo "1")
+          gh issue comment "${REPORT_ISSUE}" \
             --repo pnz1990/kardinal-promoter \
             --body "$BODY"
 
