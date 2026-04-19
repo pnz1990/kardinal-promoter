@@ -29,15 +29,18 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Stale data indicator escalation** — red + pulse animation when dashboard data is >30s old; screen reader announcement via `aria-live` (#767)
 - **Skeleton loading states** — NodeDetail step details, BundleTimeline chips, and PolicyGatesPanel now show animated shimmer placeholders instead of blank panels while data loads (#784)
 - **`/` keyboard shortcut to focus pipeline search** — pressing `/` anywhere (except when an input is focused) moves keyboard focus to the pipeline filter input; `Esc` inside the filter clears and blurs; `/` listed in the `?` shortcut help modal (#800)
+- **Responsive layout at 1280px** — Journey 010 Playwright test formalizes the no-overflow guarantee at 1280×800 viewport (#806)
 
 ### Changed
 
 - **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
 - **UI WCAG color contrast** — all theme colors now meet WCAG 2.1 AA 4.5:1 minimum contrast ratio in both dark and light modes (#760)
 - **krocodile upgraded to `3376810`** — correctness fix: propagation trigger on self-state refresh. Without this, UAT PromotionStep was never created after test reached Verified. Also includes NodeState sync guard and ForEach typed binding (#789)
+- **krocodile upgraded to `d6cbc54`** — additive forEach incremental diff optimization (O(K) vs O(N) rehash), WatchManager canonical Kind caching fix. No breaking changes (#803)
 
 ### Fixed
 
+- **Demo Validate nightly workflow** — missing `issues: write` permission caused `GraphQL: Resource not accessible by integration (addComment)` on every scheduled run; fixed and improved to post to the current daily report issue instead of hard-coded #1 (#801)
 - **UAT never starting after test Verified** — krocodile Path 2 (self-state refresh) now correctly marks dependents as `propagationTriggered`; UAT PromotionStep is created once test PS writes `status.state=Verified` (#789)
 - **AbortedByAlarm / RollingBack cycling** — PromotionStep reconciler now handles `AbortedByAlarm` and `RollingBack` as explicit terminal/managed cases, preventing fall-through to `default` which incorrectly reset state to Pending (#789)
 
