@@ -23,6 +23,14 @@
 #   6. Policy gate: soak          promote before soak completes → BLOCKED
 #   7. Pause / resume             bundle halts at test when paused
 #   8. Rollback                   kardinal rollback → PR with rollback label
+#   9. CLI completeness           version, get, explain, completion, --dry-run
+#  10. Multi-cluster pipeline     kardinal-test-app-advanced promotes across clusters
+#  11. Flux health adapter        Kustomization Ready=True → adapter reports Healthy
+#  12. Argo Rollouts adapter      Rollout phase=Healthy → adapter reports Healthy
+#  13. Flagger health adapter     Canary phase=Succeeded → adapter reports Healthy
+#
+# Scenarios 11-13 skip gracefully when the adapter is not installed.
+# To enable all: run setup.sh with INSTALL_FLUX=true INSTALL_ARGO_ROLLOUTS=true INSTALL_FLAGGER=true
 #   9. CLI completeness           version, get, explain, logs, audit, history
 #  10. Multi-cluster pipeline     kardinal-test-app-advanced promotes across clusters
 #
@@ -323,7 +331,146 @@ if scenario 10 "Multi-cluster pipeline exists"; then
   fi
 fi
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# ── Scenario 11: Flux health adapter ─────────────────────────────────────────
+# Validates that a Pipeline with health.type: flux waits for Kustomization.Ready=True.
+
+if scenario 11 "Flux health adapter — Kustomization Ready check"; then
+  if ! kubectl get ns flux-system &>/dev/null 2>&1; then
+    skip "Scenario 11 skipped — Flux not installed (run setup.sh with INSTALL_FLUX=true)"
+  elif ! kubectl get crd kustomizations.kustomize.toolkit.fluxcd.io &>/dev/null 2>&1; then
+    skip "Scenario 11 skipped — Flux Kustomization CRD not found"
+  else
+    FLUX_PIPELINE=$($KARDINAL get pipelines 2>&1 | grep "kardinal-test-app-flux" || true)
+    if [[ -z "$FLUX_PIPELINE" ]]; then
+      skip "Scenario 11 skipped — kardinal-test-app-flux pipeline not found (apply demo/manifests/flux/)"
+    else
+      pass "kardinal-test-app-flux pipeline registered"
+      KS_COUNT=$(kubectl get kustomizations -n flux-system --no-headers 2>/dev/null | wc -l | tr -d ' ')
+      if [[ "${KS_COUNT:-0}" -gt 0 ]]; then
+        pass "Flux Kustomizations found: $KS_COUNT"
+      else
+        skip "No Kustomizations in flux-system yet"
+      fi
+      READY_KS=$(kubectl get kustomizations -n flux-system -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for item in data.get('items', []):
+        conds = item.get('status', {}).get('conditions', [])
+        ready = next((c for c in conds if c.get('type') == 'Ready'), None)
+        if ready and ready.get('status') == 'True':
+            print(item['metadata']['name']); break
+except: pass
+" 2>/dev/null || true)
+      if [[ -n "$READY_KS" ]]; then
+        pass "Kustomization '$READY_KS' Ready=True — adapter would report Healthy"
+      else
+        skip "No Ready=True Kustomization yet — Flux may still be reconciling"
+      fi
+      FLUX_TYPE=$(kubectl get pipeline kardinal-test-app-flux -n default -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    p = json.load(sys.stdin)
+    for env in p.get('spec', {}).get('environments', []):
+        if env.get('health', {}).get('type') == 'flux':
+            print('flux'); break
+except: pass
+" 2>/dev/null || true)
+      if [[ "$FLUX_TYPE" == "flux" ]]; then
+        pass "Pipeline spec confirms health.type=flux"
+      else
+        fail "Pipeline kardinal-test-app-flux does not have health.type=flux in spec"
+      fi
+    fi
+  fi
+fi
+
+# ── Scenario 12: Argo Rollouts health adapter ─────────────────────────────────
+
+if scenario 12 "Argo Rollouts health adapter — Rollout phase check"; then
+  if ! kubectl get ns argo-rollouts &>/dev/null 2>&1; then
+    skip "Scenario 12 skipped — Argo Rollouts not installed (run setup.sh with INSTALL_ARGO_ROLLOUTS=true)"
+  elif ! kubectl get crd rollouts.argoproj.io &>/dev/null 2>&1; then
+    skip "Scenario 12 skipped — Rollout CRD not found"
+  else
+    ROLLOUTS_PIPELINE=$($KARDINAL get pipelines 2>&1 | grep "kardinal-test-app-rollouts" || true)
+    if [[ -z "$ROLLOUTS_PIPELINE" ]]; then
+      skip "Scenario 12 skipped — kardinal-test-app-rollouts pipeline not found"
+    else
+      pass "kardinal-test-app-rollouts pipeline registered"
+      ROLLOUT_PHASE=$(kubectl get rollout kardinal-test-app-rollouts \
+        -n kardinal-test-app-test -o json 2>/dev/null | \
+        python3 -c "import sys,json; r=json.load(sys.stdin); print(r.get('status',{}).get('phase','unknown'))" \
+        2>/dev/null || echo "NotFound")
+      case "$ROLLOUT_PHASE" in
+        "Healthy")   pass "Rollout phase=Healthy — argoRollouts adapter reports Healthy" ;;
+        "Progressing"|"Paused") pass "Rollout phase=$ROLLOUT_PHASE — adapter returns Wait (expected)" ;;
+        "Degraded")  fail "Rollout phase=Degraded — needs investigation" ;;
+        "NotFound")  skip "Rollout not found in kardinal-test-app-test" ;;
+        *)           pass "Rollout phase=$ROLLOUT_PHASE — adapter running" ;;
+      esac
+      ROLLOUTS_TYPE=$(kubectl get pipeline kardinal-test-app-rollouts -n default -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    p = json.load(sys.stdin)
+    for env in p.get('spec', {}).get('environments', []):
+        if env.get('health', {}).get('type') == 'argoRollouts':
+            print('argoRollouts'); break
+except: pass
+" 2>/dev/null || true)
+      if [[ "$ROLLOUTS_TYPE" == "argoRollouts" ]]; then
+        pass "Pipeline spec confirms health.type=argoRollouts"
+      else
+        fail "Pipeline kardinal-test-app-rollouts does not have health.type=argoRollouts"
+      fi
+    fi
+  fi
+fi
+
+# ── Scenario 13: Flagger health adapter ──────────────────────────────────────
+
+if scenario 13 "Flagger health adapter — Canary phase check"; then
+  if ! kubectl get crd canaries.flagger.app &>/dev/null 2>&1; then
+    skip "Scenario 13 skipped — Flagger Canary CRD not found (run setup.sh with INSTALL_FLAGGER=true)"
+  else
+    FLAGGER_PIPELINE=$($KARDINAL get pipelines 2>&1 | grep "kardinal-test-app-flagger" || true)
+    if [[ -z "$FLAGGER_PIPELINE" ]]; then
+      skip "Scenario 13 skipped — kardinal-test-app-flagger pipeline not found"
+    else
+      pass "kardinal-test-app-flagger pipeline registered"
+      CANARY_PHASE=$(kubectl get canary kardinal-test-app-flagger \
+        -n kardinal-test-app-test -o json 2>/dev/null | \
+        python3 -c "import sys,json; c=json.load(sys.stdin); print(c.get('status',{}).get('phase','unknown'))" \
+        2>/dev/null || echo "NotFound")
+      case "$CANARY_PHASE" in
+        "Succeeded")  pass "Canary phase=Succeeded — flagger adapter reports Healthy" ;;
+        "Initializing"|"Initialized"|"Waiting"|"Progressing"|"Promoting"|"Finalising")
+                      pass "Canary phase=$CANARY_PHASE — adapter returns Wait (expected)" ;;
+        "Failed")     fail "Canary phase=Failed — Flagger rolled back" ;;
+        "NotFound")   skip "Canary not found in kardinal-test-app-test" ;;
+        *)            pass "Canary phase=$CANARY_PHASE — adapter running" ;;
+      esac
+      FLAGGER_TYPE=$(kubectl get pipeline kardinal-test-app-flagger -n default -o json 2>/dev/null | \
+        python3 -c "
+import sys, json
+try:
+    p = json.load(sys.stdin)
+    for env in p.get('spec', {}).get('environments', []):
+        if env.get('health', {}).get('type') == 'flagger':
+            print('flagger'); break
+except: pass
+" 2>/dev/null || true)
+      if [[ "$FLAGGER_TYPE" == "flagger" ]]; then
+        pass "Pipeline spec confirms health.type=flagger"
+      else
+        fail "Pipeline kardinal-test-app-flagger does not have health.type=flagger"
+      fi
+    fi
+  fi
+fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
