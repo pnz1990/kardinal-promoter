@@ -972,15 +972,18 @@
       "pr_number": 707,
       "title": "SLSA Level 2 provenance via GitHub attestation"
     },
-    "issue-802": {
-      "state": "todo",
-      "title": "docs: 06-kardinal-ui.md Future items \u2192 Present (stale design doc fix)",
-      "issue": 802,
-      "kind": "docs",
-      "areas": [
-        "area/docs",
-        "area/ui"
-      ]
+    "issue-800": {
+      "title": "feat(ui): / keyboard shortcut to focus pipeline search input",
+      "state": "done",
+      "pr_number": 805,
+      "pr_merged": true,
+      "done_at": "2026-04-19T04:06:26Z"
+    },
+    "issue-798": {
+      "state": "done",
+      "pr_number": 803,
+      "pr_merged": true,
+      "done_at": "2026-04-19T04:06:22Z"
     }
   },
   "session_heartbeats": {
@@ -998,6 +1001,5 @@
     "status": "PROJECT_COMPLETE",
     "note": "All 7 journeys pass in CI. PROJECT COMPLETE posted on Issue #1. Awaiting human confirmation.",
     "journeys_all_passing": true
-  },
-  "pm_cycle_count": 1
+  }
 }
