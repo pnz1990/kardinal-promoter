@@ -10,3 +10,4 @@
 | 2026-04-18 | 1 | 0 | 361 | Virtual scrolling for pipeline list >50 entries (@tanstack/react-virtual, PR #817) | ✅ |
 | 2026-04-18 | 2 | 0 | 368 | Full adapter coverage: Flux, Flagger, Argo Rollouts, GitHub demo examples + tests (#821) | ✅ |
 | 2026-04-18 | 1 | 0 | 369 | aria-pressed test for virtual mode PipelineList (PR #826) | ✅ |
+| 2026-04-19 | 1 | 0 | 630 | Cadence reduction to 6h standby (PR #834); created token-preflight issue #832 | ✅ |
