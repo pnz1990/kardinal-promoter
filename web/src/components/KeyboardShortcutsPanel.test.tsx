@@ -24,6 +24,7 @@ describe('KeyboardShortcutsPanel', () => {
 
   it('renders all shortcut rows', () => {
     render(<KeyboardShortcutsPanel onClose={onClose} />)
+    expect(screen.getByText('Focus pipeline search')).toBeDefined()
     expect(screen.getByText('Show / hide this help panel')).toBeDefined()
     expect(screen.getByText('Refresh data now')).toBeDefined()
     expect(screen.getByText('Close the open side panel')).toBeDefined()

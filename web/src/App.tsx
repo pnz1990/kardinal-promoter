@@ -4,6 +4,7 @@
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
 // #746: Global keyboard shortcuts — ?, r, Esc.
 // #747: ErrorBoundary wraps async components to prevent white-screen crashes.
+// #800: / shortcut to focus pipeline search input.
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { PipelineList } from './components/PipelineList'
 import { PipelineOpsTable } from './components/PipelineOpsTable'
@@ -119,6 +120,9 @@ export function App() {
   // #746: Keyboard shortcuts help panel visibility.
   const [showShortcutsPanel, setShowShortcutsPanel] = useState(false)
 
+  // #800: Ref for the pipeline search input — used by the / keyboard shortcut.
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
   // Shared fetch function — called by both interval poll and manual refresh.
   const doFetchAll = useCallback(async () => {
     try {
@@ -188,6 +192,10 @@ export function App() {
       if (selectedNode) { setSelectedNode(null); return }
       if (showDiffPanel) { setShowDiffPanel(false); return }
     }, [showShortcutsPanel, selectedNode, showDiffPanel]),
+    // #800: / focuses the pipeline search input
+    onSearch: useCallback(() => {
+      searchInputRef.current?.focus()
+    }, []),
   })
 
   const handleSelectPipeline = useCallback((name: string) => {
@@ -457,6 +465,7 @@ export function App() {
               onSelect={name => { handleSelectPipeline(name); if (viewMode === 'ops-table') setViewMode('list') }}
               loading={pipelinesLoading}
               error={pipelinesError}
+              searchInputRef={searchInputRef}
             />
           </ErrorBoundary>
         </div>
