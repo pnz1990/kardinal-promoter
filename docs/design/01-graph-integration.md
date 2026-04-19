@@ -242,10 +242,14 @@ The Graph API is experimental. To detect breaking changes:
    Previously the empty hash was misinterpreted as "spec has changed", causing a spurious
    Graph deletion that reset all PromotionSteps to empty status.
 
-✅ krocodile upgraded to `d6cbc54` (2026-04-19, PR #798): 5 additive commits — forEach
+✅ krocodile upgraded to `d6cbc54` (2026-04-19, PR #803): 5 additive commits — forEach
    incremental O(K) diff, WatchManager canonical Kind caching fix, context-aware hashing.
    No breaking changes to kardinal integration. No source changes required.
 
+✅ krocodile upgrade cadence (ongoing): COORD §1c checks for new commits every batch per
+   AGENTS.md protocol. If ≥5 commits behind HEAD krocodile, an upgrade item is queued
+   automatically. No separate code component — the cadence lives in the agent loop.
+
 ## Future
 
-- 🔲 krocodile upgrade cadence — check for new commits every batch per AGENTS.md protocol
+_(no items)_
