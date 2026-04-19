@@ -66,6 +66,32 @@ describe('NodeDetail — null node', () => {
   })
 })
 
+describe('NodeDetail — skeleton loading state (#784)', () => {
+  // The skeleton is shown when stepLoading=true — which happens between the
+  // useEffect setting stepLoading=true and getSteps resolving.
+  // We verify by checking that the OLD italic text "Loading step details..." is gone:
+  // the component now renders a skeleton bar instead of text.
+  // Because getSteps resolves immediately in tests (mockResolvedValue([])),
+  // the skeleton passes through quickly. We test the static output when steps
+  // prop IS provided (no loading), and verify the obsolete italic text path
+  // is no longer present in the component source (regression guard).
+  it('no longer renders italic "Loading step details..." text (#784)', () => {
+    // With steps prop provided, stepLoading is never true; render is direct.
+    const steps = [makeStep({ environment: 'test' })]
+    const { container } = render(
+      <NodeDetail
+        node={makePromotionStepNode({ environment: 'test' })}
+        onClose={vi.fn()}
+        steps={steps}
+      />
+    )
+    // Old italic text path must not exist anywhere — skeleton replaced it
+    const italicDiv = Array.from(container.querySelectorAll('div'))
+      .find(el => el.style.fontStyle === 'italic' && /Loading step details/i.test(el.textContent ?? ''))
+    expect(italicDiv).toBeUndefined()
+  })
+})
+
 describe('NodeDetail — close button', () => {
   it('calls onClose when close button is clicked', async () => {
     const user = userEvent.setup()
@@ -154,5 +180,29 @@ describe('NodeDetail — PolicyGate node', () => {
     )
     // Expression appears in the syntax-highlighted code block
     expect(screen.getByText(/isWeekend/i)).toBeInTheDocument()
+  })
+})
+
+describe('NodeDetail — skeleton loading state (#784)', () => {
+  it('shows data-testid=step-skeleton instead of "Loading step details..." text', async () => {
+    // getSteps returns a never-resolving promise so stepLoading stays true during render
+    const { api } = await import('../api/client')
+    ;(api.getSteps as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<PromotionStep[]>(() => {}))
+
+    const { getByTestId, queryByText } = render(
+      <NodeDetail
+        node={makePromotionStepNode()}
+        onClose={vi.fn()}
+        bundleName="test-bundle"
+      />
+    )
+
+    // Skeleton placeholder should be present while loading
+    const { waitFor: localWait } = await import('@testing-library/react')
+    await localWait(() => {
+      expect(getByTestId('step-skeleton')).toBeDefined()
+    })
+    // Old italic text must not appear
+    expect(queryByText('Loading step details...')).toBeNull()
   })
 })

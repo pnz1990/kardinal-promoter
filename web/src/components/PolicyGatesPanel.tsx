@@ -54,16 +54,28 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
 
   if (loading) {
     return (
-      <div style={{ marginBottom: '0.75rem' }}>
-        <button
-          style={{
-            background: 'none', border: 'none', color: '#64748b',
-            cursor: 'default', fontSize: '0.8rem', padding: '0.25rem 0',
-          }}
-          disabled
-        >
-          ▸ Policy Gates (loading…)
-        </button>
+      <div style={{ marginBottom: '0.75rem' }} aria-label="policy-gates-loading" aria-busy="true">
+        <style>{`
+          @keyframes shimmer-pg {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+          }
+        `}</style>
+        {/* Skeleton header bar mimicking the accordion button */}
+        {[70, 50].map((w, i) => (
+          <div
+            key={i}
+            style={{
+              height: '16px',
+              borderRadius: '3px',
+              background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+              backgroundSize: '200% 100%',
+              animation: 'shimmer-pg 1.5s infinite',
+              marginBottom: '0.4rem',
+              width: `${w}%`,
+            }}
+          />
+        ))}
       </div>
     )
   }
