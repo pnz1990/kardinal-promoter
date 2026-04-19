@@ -1073,6 +1073,13 @@
       "pr_merged": true,
       "pr_number": 821,
       "done_at": "2026-04-19T05:47:09Z"
+    },
+    "issue-824": {
+      "title": "feat(demo): validate.sh scenarios 11-13",
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 825,
+      "done_at": "2026-04-19T06:11:02Z"
     }
   },
   "session_heartbeats": {
@@ -1092,12 +1099,14 @@
   },
   "handoff": {
     "last_batch_prs": [
-      817,
-      821
+      821,
+      822,
+      823,
+      825
     ],
     "next_item": "none",
-    "notes": "PR #821 merged. All 5 health adapters have examples + tests + docs. Design docs fully consumed (0 Future items). Loop continues."
+    "notes": "All 3 batches in this session complete. Loop continues per human directive."
   },
-  "sm_cycle_count": 2,
-  "pm_cycle_count": 1
+  "sm_cycle_count": 3,
+  "pm_cycle_count": 2
 }
