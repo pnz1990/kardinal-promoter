@@ -116,7 +116,7 @@ If secrets expire or need rotation:
 - ✅ `GH_TOKEN` secret set — PAT with `repo` + `workflow` scopes (2026-04-19)
 - ✅ `otherness-config.yaml` `schedule.cron` field — `0 * * * *` (existing)
 - ✅ Cadence reduced to `0 */6 * * *` (every 6h) — all 7 journeys passing, steady-state standby (PR #834, 2026-04-19)
-- ✅ Token expiry preflight step — `Verify GH_TOKEN scopes` step before `Run otherness`; posts `[NEEDS HUMAN]` issue on expired/missing-scope token (PR #836, 2026-04-19)
+- ✅ Token expiry and scope preflight step — `Validate GH_TOKEN` step checks token validity AND `repo`/`workflow` OAuth scopes via `X-OAuth-Scopes` header; posts `[NEEDS HUMAN]` issue on expired/missing-scope token (PR #836 added, PR #845 removed in rewrite, re-added PR #862, 2026-04-20)
 
 ## Future (🔲)
 
