@@ -129,6 +129,13 @@ func main() {
 	flag.StringVar(&uiListenAddress, "ui-listen-address", ":8082",
 		"The address the embedded kardinal-ui HTTP server binds to.")
 
+	var corsAllowedOrigins string
+	flag.StringVar(&corsAllowedOrigins, "cors-allowed-origins", os.Getenv("KARDINAL_CORS_ORIGINS"),
+		"Comma-separated list of allowed CORS origins for /api/v1/ui/* routes. "+
+			"Default (empty): same-origin only — cross-origin requests are rejected with 403. "+
+			"Set to '*' to allow all origins (development only). "+
+			"Also readable from KARDINAL_CORS_ORIGINS environment variable.")
+
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
 		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
@@ -345,6 +352,12 @@ func main() {
 			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token to require Bearer token")
 		}
 
+		// Apply CORS lockdown to /api/v1/ui/* routes.
+		// Default (empty corsAllowedOrigins): same-origin only — cross-origin requests rejected.
+		// Explicit list: only listed origins are allowed.
+		// Wildcard "*": all origins allowed (development / opt-out).
+		handler = applyCORSMiddleware(handler, corsAllowedOrigins, logger)
+
 		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
 		if err := listenAndServeWithTLS(uiListenAddress, handler, tlsCertFile, tlsKeyFile, logger); err != nil {
 			logger.Error().Err(err).Msg("UI server error")
@@ -489,6 +502,82 @@ func splitCSV(s string) []string {
 
 // ptr returns a pointer to v — used for optional ctrl.Options fields. (#574)
 func ptr[T any](v T) *T { return &v }
+
+// applyCORSMiddleware wraps handler with CORS enforcement for /api/v1/ui/* routes.
+//
+// Policy:
+//   - allowedOriginsCSV == "":  same-origin only. Cross-origin requests receive 403.
+//   - allowedOriginsCSV == "*": all origins allowed (development / opt-out).
+//   - otherwise: comma-separated list. Only listed origins receive CORS headers.
+//
+// CORS headers are only written for /api/v1/ui/* paths. Static /ui/* assets and
+// webhook routes are not affected.
+func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolog.Logger) http.Handler {
+	// Parse allow-list once at startup.
+	allowAll := allowedOriginsCSV == "*"
+	allowedSet := make(map[string]struct{})
+	if !allowAll {
+		for _, o := range strings.Split(allowedOriginsCSV, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedSet[o] = struct{}{}
+			}
+		}
+	}
+
+	if allowAll {
+		log.Warn().Msg("CORS: all origins allowed (--cors-allowed-origins=*). Use an explicit list in production.")
+	} else if len(allowedSet) > 0 {
+		origins := make([]string, 0, len(allowedSet))
+		for o := range allowedSet {
+			origins = append(origins, o)
+		}
+		log.Info().Strs("origins", origins).Msg("CORS: allow-list configured for /api/v1/ui/*")
+	} else {
+		log.Info().Msg("CORS: same-origin only for /api/v1/ui/* (no --cors-allowed-origins set)")
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only apply CORS logic to UI API routes.
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			// Same-origin request (no Origin header) — pass through unconditionally.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Cross-origin request: check allow-list.
+		allowed := allowAll
+		if !allowed {
+			_, allowed = allowedSet[origin]
+		}
+
+		if !allowed {
+			// Reject: cross-origin request from unlisted origin.
+			http.Error(w, "CORS: origin not allowed", http.StatusForbidden)
+			return
+		}
+
+		// Write CORS headers for allowed origins.
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Vary", "Origin")
+
+		// Handle preflight requests.
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
 
 // listenAndServeWithTLS starts an HTTP or HTTPS server depending on whether
 // both certFile and keyFile are non-empty.
