@@ -57,6 +57,17 @@ logLevel: info
 # -- Enable leader election for controller manager
 leaderElect: true
 
+# -- TLS configuration for the UI and webhook HTTP servers.
+# When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS.
+# Typically used with cert-manager: mount the certificate Secret as a volume,
+# then set the paths to the mounted cert and key files.
+# See docs/guides/security.md for the recommended cert-manager setup.
+controller:
+  # -- Path to the TLS certificate file (PEM). Set together with tlsKeyFile to enable TLS.
+  tlsCertFile: ""
+  # -- Path to the TLS private key file (PEM). Set together with tlsCertFile to enable TLS.
+  tlsKeyFile: ""
+
 # -- Address the metrics endpoint binds to
 metricsBindAddress: ":8080"
 

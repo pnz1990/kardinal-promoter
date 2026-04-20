@@ -129,6 +129,18 @@ func main() {
 	flag.StringVar(&uiListenAddress, "ui-listen-address", ":8082",
 		"The address the embedded kardinal-ui HTTP server binds to.")
 
+	var tlsCertFile string
+	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
+		"Path to the TLS certificate file (PEM). When set together with --tls-key-file, "+
+			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
+			"Also readable from KARDINAL_TLS_CERT_FILE environment variable.")
+
+	var tlsKeyFile string
+	flag.StringVar(&tlsKeyFile, "tls-key-file", os.Getenv("KARDINAL_TLS_KEY_FILE"),
+		"Path to the TLS private key file (PEM). When set together with --tls-cert-file, "+
+			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
+			"Also readable from KARDINAL_TLS_KEY_FILE environment variable.")
+
 	var shard string
 	flag.StringVar(&shard, "shard", os.Getenv("KARDINAL_SHARD"),
 		"Shard name for distributed mode. When set, this controller only processes PromotionSteps "+
@@ -289,7 +301,7 @@ func main() {
 			logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 		}
 		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
-		if err := http.ListenAndServe(webhookBindAddress, mux); err != nil {
+		if err := listenAndServeWithTLS(webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger); err != nil {
 			logger.Error().Err(err).Msg("webhook server error")
 		}
 	}()
@@ -334,7 +346,7 @@ func main() {
 		}
 
 		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
-		if err := http.ListenAndServe(uiListenAddress, handler); err != nil {
+		if err := listenAndServeWithTLS(uiListenAddress, handler, tlsCertFile, tlsKeyFile, logger); err != nil {
 			logger.Error().Err(err).Msg("UI server error")
 		}
 	}()
@@ -477,3 +489,26 @@ func splitCSV(s string) []string {
 
 // ptr returns a pointer to v — used for optional ctrl.Options fields. (#574)
 func ptr[T any](v T) *T { return &v }
+
+// listenAndServeWithTLS starts an HTTP or HTTPS server depending on whether
+// both certFile and keyFile are non-empty.
+//   - Both set: use http.ListenAndServeTLS (HTTPS).
+//   - Neither set: use http.ListenAndServe (plain HTTP — backwards compatible).
+//   - Exactly one set: log a warning and fall back to plain HTTP.
+func listenAndServeWithTLS(addr string, handler http.Handler, certFile, keyFile string, log zerolog.Logger) error {
+	tlsEnabled := certFile != "" && keyFile != ""
+	partialTLS := (certFile == "") != (keyFile == "") // exactly one is set
+
+	if partialTLS {
+		log.Warn().
+			Str("tls-cert-file", certFile).
+			Str("tls-key-file", keyFile).
+			Msg("TLS: both --tls-cert-file and --tls-key-file must be set; falling back to plain HTTP")
+	}
+
+	if tlsEnabled {
+		log.Info().Str("addr", addr).Msg("TLS enabled for server")
+		return http.ListenAndServeTLS(addr, certFile, keyFile, handler)
+	}
+	return http.ListenAndServe(addr, handler)
+}

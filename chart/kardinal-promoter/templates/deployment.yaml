@@ -53,6 +53,14 @@ spec:
                   name: {{ .Values.github.secretRef.name }}
                   key: {{ .Values.github.secretRef.key | default "token" }}
             {{- end }}
+            {{- if .Values.controller.tlsCertFile }}
+            - name: KARDINAL_TLS_CERT_FILE
+              value: {{ .Values.controller.tlsCertFile | quote }}
+            {{- end }}
+            {{- if .Values.controller.tlsKeyFile }}
+            - name: KARDINAL_TLS_KEY_FILE
+              value: {{ .Values.controller.tlsKeyFile | quote }}
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.service.metricsPort }}
