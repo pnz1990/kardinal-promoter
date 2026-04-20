@@ -12,3 +12,4 @@
 | 2026-04-18 | 1 | 0 | 369 | aria-pressed test for virtual mode PipelineList (PR #826) | ✅ |
 | 2026-04-19 | 1 | 0 | 630 | Cadence reduction to 6h standby (PR #834); created token-preflight issue #832 | ✅ |
 | 2026-04-19 | 1 | 0 | 630 | GH_TOKEN scope preflight step (PR #836); design doc 13 Future section cleared | ✅ |
+| 2026-04-20 | 5 | 0 | 626 | PDCA batch: daily cron, anchor score, S7-12, delete bundle CLI | ✅ |
