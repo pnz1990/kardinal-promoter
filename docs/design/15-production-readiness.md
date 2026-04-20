@@ -1,0 +1,118 @@
+<!--
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+-->
+
+# Design 15: Production Readiness — Competitive Gap Analysis
+
+> Created: 2026-04-20
+> Status: Active — gap tracking
+> Lens: "Would a platform team at a Series B company choose kardinal-promoter over Kargo
+> in a competitive evaluation today?" Every 🔲 item below is a reason the answer is No.
+
+This doc is maintained by the vibe-vision-auto scan. Engineers pick items from this
+doc's Future section and open `kind/enhancement` issues to close them.
+
+---
+
+## Purpose
+
+The standard design docs (01–14) track feature implementation. This doc tracks
+**competitive gaps, production-stability defects, and adoption blockers** that have no
+other home. The PDCA scenarios test what we have — they do not test what we are missing.
+
+Every item in this doc was identified by examining the live codebase against five lenses:
+
+1. **Kargo parity** — what Kargo does that kardinal cannot model at all
+2. **Production stability** — what would a platform team find broken after a week in prod
+3. **Observability** — can an operator understand a stalled Bundle without reading Go logs?
+4. **Security posture** — would a security review at a Series B company pass this?
+5. **Adoption** — what makes a platform engineer close the GitHub tab within 60 seconds?
+
+---
+
+## Present ✅
+
+*(No items yet — this doc was created to track gaps.)*
+
+---
+
+## Future
+
+### Lens 1: Kargo parity — capability gaps that lose competitive evaluations
+
+- 🔲 **Bundle history GC — `historyLimit` is defined in the API but never enforced** — `api/v1alpha1/pipeline_types.go` declares `Pipeline.spec.historyLimit` but no reconciler reads it to delete old Bundles. After 1000 deployments in production, etcd holds 1000+ Bundle objects, all their PromotionSteps, AuditEvents, and PRStatus CRDs. At scale this will OOM etcd or exhaust the API server list cache. The bundle reconciler must enforce `historyLimit` (default: 50) by deleting terminal Bundles (Verified/Failed/Superseded) beyond the limit, oldest first. Kargo's Warehouse enforces `maxFreightAge`. This is a production-blocker that no one has hit yet only because there are zero production deployments.
+
+- 🔲 **No outbound event notifications** — Kargo integrates with Argo CD Notifications engine for Slack/PagerDuty/Teams webhooks on promotion events (started, succeeded, failed, blocked). kardinal has zero outbound notification capability. A platform team that deploys this to production today cannot be paged when a promotion fails or a gate blocks prod for 48 hours. Minimum viable: a `NotificationHook` CRD with a `webhook.url` + optional `Authorization` header + a template for the event body. Emit on: Bundle.Verified, Bundle.Failed, PolicyGate blocked (first block, not every re-eval), PromotionStep.Failed.
+
+- 🔲 **No ArgoCD-native image update step** — Kargo's `argocd-update` promotion step directly patches the ArgoCD Application's `spec.source.helm.valuesObject` or triggers a refresh without a git commit. This is the dominant Kargo use case for teams that store application config inside the ArgoCD Application rather than a GitOps repo. kardinal only supports git-write promotion (kustomize, helm values.yaml patch, config-merge). Teams using ArgoCD with inline image references cannot use kardinal without restructuring their ArgoCD setup. Adding an `argocd-set-image` step (patches `Application.spec` directly via the Kubernetes API) would unlock this cohort.
+
+- 🔲 **No GitHub Actions native bundle creation** — Kargo has a GitHub Action (`akuity/kargo-action`) that creates Freight directly from a workflow step. kardinal requires `kardinal create bundle` or a `POST /api/v1/bundles` HTTP call, which requires the CI system to have network access to the in-cluster endpoint. Without an in-cluster ingress (which most teams don't set up initially), CI cannot create Bundles. A GitHub Action wrapper (`pnz1990/kardinal-action`) that wraps the HTTP call and handles ingress/port-forward discovery would remove this adoption blocker for GitHub Actions users.
+
+- 🔲 **No UI for Bundle creation / triggering promotions** — Kargo has a UI button to manually trigger a promotion for testing. kardinal's UI is read-only for Bundle lifecycle (aside from pause/resume/rollback actions). A "Create Bundle" dialog in the UI (with image input + provenance fields) would let platform engineers test pipelines without CLI access. This is a table-stakes demo feature for a competitive evaluation.
+
+- 🔲 **Warehouse-equivalent: no automatic discovery mode** — Kargo's Warehouse concept passively watches OCI registries and Git repos and creates Freight without CI pipeline integration. kardinal's `Subscription` CRD and `OCIWatcher`/`GitWatcher` are implemented (K-10), but there is no UI for managing Subscriptions and no `kardinal get subscriptions` CLI command. The capability exists but is invisible to users who don't read the API reference. Surface Subscription status in `kardinal get pipelines` and add a `kardinal get subscriptions` command.
+
+### Lens 2: Production stability — what breaks after a week in production
+
+- 🔲 **No reconciler panic recovery** — there are zero `recover()` calls in any reconciler. A malformed CRD (e.g. a Pipeline with a CEL expression that panics the kro library) will crash the controller binary, and the controller will restart in a loop until the CRD is fixed. This is a production-availability issue. Wrap each reconciler's `Reconcile()` method with a deferred `recover()` that logs the panic and returns a non-fatal error with exponential backoff. controller-runtime's `WithRecoverPanic` option may handle this — evaluate and enable it.
+
+- 🔲 **No PromotionStep timeout** — a PromotionStep can stall indefinitely in any phase (e.g. `WaitingForMerge` on a PR that the reviewer forgot about, or `HealthChecking` on a Deployment that never becomes Ready). There is no `spec.timeout` on either PromotionStep or Pipeline environments. After one week in production, a platform team will have at least one stalled step consuming controller reconcile slots forever. Add `environment.timeout` to Pipeline spec (default: 24h for `WaitingForMerge`, 1h for health checks). When exceeded: transition to Failed, emit a notification event.
+
+- 🔲 **ScheduleClock reconciler requeue loop risk** — `pkg/reconciler/scheduleclock/reconciler.go` returns `ctrl.Result{RequeueAfter: interval}` on every reconcile. If `interval` is misconfigured (e.g. set to 0 or negative), this creates a hot reconcile loop that saturates the controller. Add a minimum interval guard (5s floor, already noted in doc comment but not enforced in code).
+
+- 🔲 **Bundle reconciler orphan guard races with Pipeline deletion** — `pkg/reconciler/bundle/reconciler.go:134` handles the case where the parent Pipeline was deleted by self-deleting the Bundle. This is triggered by checking `isNotFound` on the Pipeline. If the Pipeline is being deleted (DeletionTimestamp set but finalizers not cleared), the check may transiently pass, causing premature Bundle deletion before the Pipeline's owned resources are cleaned up. Add a check for `pipeline.DeletionTimestamp != nil` and requeue instead of deleting.
+
+- 🔲 **Git credential rotation with zero downtime** — kardinal reads the SCM token from a Kubernetes Secret at controller startup (or at first reconcile). If the Secret is rotated (new PAT issued, old PAT expired), the controller must be restarted to pick up the new token. This causes a gap in promotions during the restart window. The SCM factory should watch the Secret and reinitialize providers on change without a controller restart. Kargo handles credential rotation natively. This is a production-operations requirement for any team that rotates credentials on a schedule.
+
+### Lens 3: Observability — can an operator understand a stall without Go logs?
+
+- 🔲 **Missing Prometheus metrics for step duration and gate blocking time** — `pkg/reconciler/observability/metrics.go` exports 4 counters (bundles_total, steps_total, gate_evaluations_total, pr_duration_seconds). There is no metric for: (a) per-step execution duration (git-clone latency, kustomize latency), (b) PolicyGate blocking duration histogram (how long has this gate been blocking?), (c) PromotionStep age histogram (how old is the oldest in-flight step?), (d) reconciler queue depth. Without (b) and (c), a Grafana dashboard cannot answer "which gates are blocking prod right now and for how long?" — the most common on-call question.
+
+- 🔲 **`kubectl get bundle` prints only phase, not current step** — `Bundle.status` has rich environment-level state but a `kubectl get bundle` with no custom printer columns shows only the object name and age. Add `+kubebuilder:printcolumn` annotations to Bundle and PromotionStep CRDs so that `kubectl get bundle` prints pipeline, phase, and the active environment's current step. Kargo's `kubectl get freight` shows stage progression clearly. This is a single-command observability win.
+
+- 🔲 **No `kardinal status` command for in-flight promotion details** — `kardinal get pipelines` shows environment states. `kardinal explain` shows gate details. Neither command answers "my prod promotion is stuck — what exactly is it waiting for right now?" A `kardinal status <pipeline> [--bundle <name>]` command should show: current state of every PromotionStep (with active step highlighted), which PolicyGates are blocking (with CEL expression + current variable values), which PRs are open and their review status. This is the first command a new user needs when something is wrong.
+
+- 🔲 **No structured `kardinal logs` for promotion step output** — `kardinal logs` is listed in the CLI help but there is no evidence it surfaces individual step output (git-clone stderr, kustomize output). If kustomize fails mid-promotion, the error is in `PromotionStep.status.message` but not surfaced as structured log lines the way `kubectl logs` works. `kardinal logs <pipeline> --env prod --follow` should stream the active PromotionStep's step messages as they are written to status.
+
+### Lens 4: Security posture — what a Series B security review would flag
+
+- 🔲 **UI API has no authentication** — `cmd/kardinal-controller/ui_api.go` exposes all pipeline, bundle, gate, and audit data with zero authentication. The listen address (`:8082`) binds to all interfaces. Any pod in the cluster can enumerate all pipelines, all bundles, all PolicyGate CEL expressions, and all promotion history with a `curl`. Add at minimum a `--ui-auth-token` flag (same mechanism as the Bundle API) or Kubernetes TokenReview-based auth. Tracked also in `docs/design/06-kardinal-ui.md`.
+
+- 🔲 **No admission webhook for Pipeline/Bundle CRD validation** — malformed Pipelines (e.g. a `dependsOn` cycle, a CEL expression with unbalanced brackets, a missing `repoURL`) are accepted by the API server and only fail at reconcile time with a cryptic error in controller logs. A `ValidatingAdmissionWebhook` on Pipeline and Bundle CRDs would reject invalid specs at `kubectl apply` time with a clear error message, before any reconciler runs. Kargo has this. This is both a UX win (immediate feedback) and a stability win (no malformed objects entering the reconcile loop).
+
+- 🔲 **No SBOM attestation for the controller image** — trivy CVE scanning is present (PR #882). cosign image signing and SLSA provenance were added in v0.8.1. But there is no Software Bill of Materials (SBOM) attached to the controller image. A security team at a regulated company (financial services, healthcare) requires SBOM for any controller running in their cluster. Add `syft` SBOM generation to the release workflow and attach the SBOM to the OCI image via `cosign attach sbom`.
+
+- 🔲 **SCM token scopes are not validated at startup** — the GitHub token is read from the Secret but its scopes are never verified. A token with only `read:repo` scope will fail silently when the controller tries to open a PR (403 response surfaces hours later in a reconcile log). Add a startup preflight check (similar to `kardinal doctor`) that calls the SCM provider's "whoami" endpoint and logs a warning if required scopes are missing. This surfaces misconfiguration in minutes rather than hours.
+
+### Lens 5: Adoption — what makes a platform engineer close the GitHub tab
+
+- 🔲 **`helm install` to first Bundle in under 10 minutes is not achievable** — the quickstart requires: create a GitOps repo with Kustomize overlays, configure ArgoCD Applications, create a GitHub PAT with correct scopes, set up the git branch structure, then install kardinal. A new user with no existing GitOps repo cannot complete the quickstart in under 30 minutes. Add a `kardinal init` command that scaffolds the GitOps repo structure (creates `env/test`, `env/uat`, `env/prod` branches, adds a kustomization.yaml with a placeholder image) and a `--demo` mode for `helm install` that deploys the `kardinal-test-app` as a demo target automatically. The "time to first promotion" metric must be under 10 minutes on a fresh kind cluster.
+
+- 🔲 **No `kardinal get subscriptions` CLI command** — `Subscription` CRD and watchers are shipped (K-10) but invisible from the CLI. `kardinal get pipelines` does not show whether a pipeline has an active Subscription. A user who installed the Subscription CRD cannot easily verify it is working without `kubectl get subscriptions`. Add `kardinal get subscriptions` with columns: name, pipeline, source type, last check time, last bundle created.
+
+- 🔲 **No community presence** — zero GitHub Discussions, zero Discord/Slack, no Stack Overflow tag. Kargo has an active community in their GitHub Discussions and a Discord server. A platform engineer who hits a problem has no place to ask for help except filing a GitHub issue. The single biggest reason someone closes the GitHub tab within 60 seconds is the perception that the project is abandoned. Add a GitHub Discussions board with seeded topics (Getting Started, Show & Tell, Feature Requests, Q&A) as the minimum. The automated agent should monitor Discussions for support questions and respond.
+
+- 🔲 **No ADOPTERS.md or case studies** — zero public deployers. Kargo lists production adopters in their README. Even a single "we use this in our CI pipeline for the test app" entry (written by the agent about its own PDCA validation) would signal active use. Create `ADOPTERS.md` with the PDCA validation as the first entry: "kardinal-promoter uses itself — the PDCA workflow runs promotions of `kardinal-test-app` through `kardinal-demo` on every 6-hour cycle."
+
+- 🔲 **No `kardinal completion` works for all shells** — shell completion is listed as shipped (`#606`) but there is no test that verifies the completion script generates valid output for bash/zsh/fish. Add a CI test that runs `kardinal completion bash` and `kardinal completion zsh` and verifies the output is non-empty and contains expected command names. Without working completion, power users get frustrated immediately.
+
+---
+
+## Triage notes
+
+**Must-fix before v1.0 (any one of these is a production-blocker):**
+1. Bundle history GC (historyLimit) — etcd OOM risk
+2. PromotionStep timeout — no stuck-forever protection
+3. UI API authentication — security review failure
+4. Reconciler panic recovery — crash loop on malformed CRDs
+
+**Must-fix for competitive parity with Kargo:**
+1. Outbound event notifications (Slack/webhook)
+2. ArgoCD-native image update step
+3. `kubectl get` printer columns on Bundle/PromotionStep CRDs
+
+**Adoption wins (high effort/impact):**
+1. `kardinal init` scaffolding command
+2. GitHub Actions wrapper action
+3. GitHub Discussions community presence
