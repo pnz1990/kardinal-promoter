@@ -4,23 +4,20 @@ metadata:
   name: kardinal-test-app-rollouts
   namespace: default
 spec:
+  environments:
+  - approval: auto
+    health:
+      timeout: 3m
+      type: argoRollouts
+    name: test
+    path: environments/test
+    update:
+      strategy: kustomize
   git:
-    url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
     provider: github
     secretRef:
       name: github-token
-  environments:
-    - name: test
-      path: environments/test
-      update:
-        strategy: kustomize
-      approval: auto
-      health:
-        type: argoRollouts
-        argoRollouts:
-          name: kardinal-test-app-rollouts
-          namespace: kardinal-test-app-test
-        timeout: 3m
+    url: https://github.com/pnz1990/kardinal-demo
   historyLimit: 5

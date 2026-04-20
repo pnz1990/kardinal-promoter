@@ -4,23 +4,20 @@ metadata:
   name: kardinal-test-app-flagger
   namespace: default
 spec:
+  environments:
+  - approval: auto
+    health:
+      timeout: 5m
+      type: flagger
+    name: test
+    path: environments/test
+    update:
+      strategy: kustomize
   git:
-    url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
     provider: github
     secretRef:
       name: github-token
-  environments:
-    - name: test
-      path: environments/test
-      update:
-        strategy: kustomize
-      approval: auto
-      health:
-        type: flagger
-        flagger:
-          name: kardinal-test-app-flagger
-          namespace: kardinal-test-app-test
-        timeout: 5m
+    url: https://github.com/pnz1990/kardinal-demo
   historyLimit: 5

@@ -4,56 +4,43 @@ metadata:
   name: kardinal-test-app
   namespace: default
 spec:
+  environments:
+  - approval: auto
+    health:
+      resource:
+        condition: Available
+        name: kardinal-test-app
+        namespace: kardinal-test-app-test
+      type: resource
+    name: test
+    path: environments/test
+    update:
+      strategy: kustomize
+  - approval: auto
+    bake:
+      minutes: 5
+    health:
+      resource:
+        name: kardinal-test-app
+        namespace: kardinal-test-app-uat
+      type: resource
+    name: uat
+    path: environments/uat
+    update:
+      strategy: kustomize
+  - approval: pr-review
+    health:
+      timeout: 30m
+      type: flagger
+    name: prod
+    path: environments/prod
+    update:
+      strategy: kustomize
   git:
-    url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
     provider: github
     secretRef:
       name: github-token
-
-  environments:
-    # test: resource health check (Deployment) — Flagger not needed in lower envs
-    - name: test
-      path: environments/test
-      update:
-        strategy: kustomize
-      approval: auto
-      health:
-        type: resource
-        resource:
-          name: kardinal-test-app
-          namespace: kardinal-test-app-test
-          condition: Available
-
-    # uat: resource health check with short bake
-    - name: uat
-      path: environments/uat
-      update:
-        strategy: kustomize
-      approval: auto
-      bake:
-        minutes: 5
-      health:
-        type: resource
-        resource:
-          name: kardinal-test-app
-          namespace: kardinal-test-app-uat
-
-    # prod: Flagger Canary progressive delivery
-    # Flagger intercepts the Deployment and creates a canary.
-    # kardinal waits for the Canary phase to reach "Succeeded" before
-    # marking the promotion as Verified.
-    - name: prod
-      path: environments/prod
-      update:
-        strategy: kustomize
-      approval: pr-review
-      health:
-        type: flagger
-        flagger:
-          name: kardinal-test-app    # Canary CR name (matches Deployment name)
-          namespace: prod            # namespace where the Canary lives
-        timeout: 30m                 # Flagger canary typically takes 10–20 minutes
-
+    url: https://github.com/pnz1990/kardinal-demo
   historyLimit: 20
