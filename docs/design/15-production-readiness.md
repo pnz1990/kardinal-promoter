@@ -39,7 +39,8 @@ Every item in this doc was identified by examining the live codebase against fiv
 - ✅ **SBOM attestation on the controller image** — `.github/workflows/release.yml` generates an SBOM with `anchore/sbom-action` (syft) and attaches it as a cosign attestation via `cosign attest`. SLSA Level 2 provenance also attached. (verified 2026-04-20; item was incorrectly listed as Future)
 - ✅ **ValidatingAdmissionPolicy for Pipeline, Bundle, PolicyGate CRDs** — `chart/kardinal-promoter/templates/validating-admission-policy.yaml` validates required fields, updateStrategy enum, approval enum, and spec.expression at admission time. Requires Kubernetes 1.28+. Enabled by default; set `validatingAdmissionPolicy.enabled=false` for older clusters. Remaining gap: cycle detection in `dependsOn` (requires a webhook, not expressible in CEL VAP) — see Future item below. (verified 2026-04-20)
 - ✅ **Bundle history GC — `historyLimit` enforced by bundle reconciler** (PR #910, 2026-04-20) — `Pipeline.spec.historyLimit` is now enforced in `pkg/reconciler/bundle/reconciler.go:enforceHistoryLimit`. On each new Bundle creation, terminal Bundles (Verified/Failed/Superseded) beyond the limit are deleted oldest-first. Default limit: 50. Kargo parity achieved.
-- ✅ **Reconciler panic recovery — handled by controller-runtime default** (PR #920, 2026-04-20) — Verified against controller-runtime v0.23.3 source: `RecoverPanic` defaults to `true` in `pkg/internal/controller/controller.go`. A panic in any reconciler's `Reconcile()` increments `ReconcilePanics` metric, calls panic handlers, and returns a wrapped error for exponential backoff — no crash loop. DO NOT set `RecoverPanic: false` in `ctrl.Options{}`. See comment in `cmd/kardinal-controller/main.go`.
+- ✅ **Reconciler panic recovery — handled by controller-runtime default** (PR #920, 2026-04-20) — Verified against controller-runtime v0.23.3 source: `RecoverPanic` defaults to `true` in the controller-runtime internal controller package. A panic in any reconciler's `Reconcile()` increments `ReconcilePanics` metric, calls panic handlers, and returns a wrapped error for exponential backoff — no crash loop. DO NOT set `RecoverPanic: false` in `ctrl.Options{}`. See comment in `cmd/kardinal-controller/main.go`.
+- ✅ **UI API Bearer token authentication** (PR #924, 2026-04-20) — `--ui-auth-token` flag (env: `KARDINAL_UI_TOKEN`) added to `cmd/kardinal-controller/main.go`. When set, all `/api/v1/ui/*` routes require `Authorization: Bearer <token>`. Static `/ui/*` assets bypass auth. Constant-time comparison via `crypto/subtle`. Warn-level log on startup when token is not set. Default is open (no token) for backwards compatibility. Tests in `cmd/kardinal-controller/ui_auth_test.go`. Remaining gaps: TLS termination and CORS lockdown (see Future items below).
 
 ---
 
@@ -73,7 +74,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ### Lens 4: Security posture — what a Series B security review would flag
 
-- 🔲 **UI API has no authentication** — `cmd/kardinal-controller/ui_api.go` exposes all pipeline, bundle, gate, and audit data with zero authentication. The listen address (`:8082`) binds to all interfaces. Any pod in the cluster can enumerate all pipelines, all bundles, all PolicyGate CEL expressions, and all promotion history with a `curl`. Add at minimum a `--ui-auth-token` flag (same mechanism as the Bundle API) or Kubernetes TokenReview-based auth. Tracked also in `docs/design/06-kardinal-ui.md`.
+- 🔲 **No Kubernetes TokenReview-based auth for UI API** — The current `--ui-auth-token` flag (see Present) is a static shared secret. A more secure alternative for cluster-native deployments is `TokenReview` authentication: the UI server calls `authenticationv1.TokenReview` to validate the calling user's kubeconfig token and can then apply RBAC-style namespace isolation. Until this is added, a single leaked `KARDINAL_UI_TOKEN` grants access to all pipeline data across all namespaces. Tracked also in `docs/design/06-kardinal-ui.md`.
 
 - 🔲 **No admission webhook for `dependsOn` cycle detection** — `ValidatingAdmissionPolicy` (now shipped, see Present) covers required fields and enum values for Pipeline, Bundle, and PolicyGate. It cannot detect graph cycles: a Pipeline where `prod` depends on `uat` and `uat` depends on `prod` is accepted at admission and only fails at translator time. A traditional `ValidatingAdmissionWebhook` (not VAP) is needed to detect cycles, since CEL cannot express graph traversal. Until the webhook is added, the translator must return a clear `InvalidSpec` status condition rather than a reconciler error log. Kargo detects cycles on `kubectl apply`.
 
@@ -117,6 +118,16 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - 🔲 **No multi-tenant project isolation** — Kargo has a Project CRD that namespaces all Stages, Promotions, and Warehouses under a single owner entity, with RBAC scoped to the project. kardinal has no equivalent: all Pipelines and Bundles share the same namespace with the same ClusterRole. A platform team running kardinal for 20 application teams cannot grant Team A write access to their Pipeline without also granting them read access to Team B's pipelines and bundles. Until namespace-scoped controller mode is added (see Lens 6), document the recommended workaround: one kardinal install per application namespace. This workaround is costly (multiple controller replicas), but it is the only safe multi-tenant configuration today.
 
+### Lens 8: New gaps identified by vision scan (2026-04-20)
+
+- 🔲 **No per-step execution timeout** — `pkg/steps/steps/git_clone.go`, `kustomize.go`, and `helm_set_image.go` have no per-execution timeout. A `git clone` against a slow SCM host or a `kustomize build` on a large repo can block a PromotionStep's `Reconcile()` call indefinitely. With controller-runtime's default `MaxConcurrentReconciles=1` per resource type, a single hung step can stall ALL other PromotionSteps of that pipeline. Add a `Pipeline.spec.environments[].stepTimeoutSeconds` field (default: 300) propagated via `StepState.Config["stepTimeoutSeconds"]`. Each step executor must wrap its operation in `context.WithTimeout`. This is especially critical for `git-clone` where network hangs are common in restricted egress environments.
+
+- 🔲 **`kardinal logs` has no `--follow` / streaming mode** — `cmd/kardinal/cmd/logs.go` renders a static snapshot of `PromotionStep.status.stepMessages` at the time of the call. There is no `--follow` flag to stream messages as steps execute. For a platform engineer watching an active `git-clone` → `open-pr` sequence, they must repeatedly run `kardinal logs <pipeline>` to see progress. Add a `--follow` flag that polls for status changes every 2s (or watches the resource) and streams new `stepMessages` entries as they are appended. This is the key observability feature a new user needs to trust that something is actually happening.
+
+- 🔲 **`kardinal status <pipeline>` is not per-pipeline** — `cmd/kardinal/cmd/status.go` shows cluster-level controller health (version, pipeline count, bundle count). It does NOT show in-flight promotion details for a specific pipeline. A new user who runs `kardinal status nginx-demo` gets a cluster summary, not "what is nginx-demo doing right now?" Rename or extend `status` to accept a pipeline argument. When a pipeline name is provided, show: current PromotionStep states (with active step highlighted), blocking PolicyGates (with CEL expression + evaluated variable values), and open PR URLs. This is the single most impactful CLI change for new user time-to-understanding.
+
+- 🔲 **No Kubernetes TokenReview-based auth for UI API** — The current `--ui-auth-token` flag (see Present) is a static shared secret. A more secure alternative for cluster-native deployments is `TokenReview` authentication: the UI server calls `authenticationv1.TokenReview` to validate the calling user's kubeconfig token and can then apply RBAC-style namespace isolation. Until this is added, a single leaked `KARDINAL_UI_TOKEN` grants access to all pipeline data across all namespaces. Tracked also in `docs/design/06-kardinal-ui.md`.
+
 ---
 
 ## Triage notes
@@ -125,10 +136,11 @@ Every item in this doc was identified by examining the live codebase against fiv
 1. ~~Bundle history GC (historyLimit)~~ ✅ Done (PR #910) — enforced in bundle reconciler
 2. ~~PromotionStep timeout~~ ✅ Done (PR #906) — WaitingForMerge timeout added
 3. ~~Reconciler panic recovery~~ ✅ Done (PR #920) — handled by controller-runtime v0.23.3 default (RecoverPanic=true)
-4. UI API authentication — security review failure
+4. ~~UI API authentication~~ ✅ Done (PR #924) — `--ui-auth-token` Bearer token auth implemented; upgrade to TokenReview is a Future item
 5. Bundle `status.conditions` never populated — breaks `kubectl wait` and GitOps tooling
 6. HTTP plain-text for UI and webhook servers — TLS gap flagged in enterprise security reviews
 7. `RequeueAfter: time.Millisecond` hot loop in bundle reconciler — API server pressure in busy clusters
+8. No per-step execution timeout — a hung `git-clone` stalls all PromotionStep reconciles for that pipeline
 
 **Must-fix for competitive parity with Kargo:**
 1. Outbound event notifications (Slack/webhook)
@@ -138,9 +150,12 @@ Every item in this doc was identified by examining the live codebase against fiv
 5. Namespace-scoped controller mode — required for multi-tenant clusters
 6. Image signature verification step (cosign verify) — supply-chain control gap vs Kargo v1.10
 7. `maxConcurrentPromotions` cap per pipeline — prevents promotion storms from CI bursts
+8. No Kubernetes Events emitted by reconcilers — `kubectl describe` is silent; operators cannot diagnose without Go logs
 
 **Adoption wins (high effort/impact):**
 1. `kardinal init` full GitOps repo scaffolding (currently generates Pipeline YAML only)
 2. GitHub Actions wrapper action
 3. GitHub Discussions community presence
 4. Reusable PromotionTemplate CRD
+5. `kardinal status <pipeline>` per-pipeline in-flight view — highest-impact new CLI command for new users
+6. `kardinal logs --follow` streaming mode — new users need real-time feedback during first promotion

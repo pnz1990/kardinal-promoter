@@ -41,9 +41,6 @@ spec:
       approval: pr-review
       health:
         type: argoRollouts
-        argoRollouts:
-          name: rollouts-demo
-          namespace: rollouts-demo
         timeout: 30m
       delivery:
         delegate: argoRollouts
@@ -58,9 +55,6 @@ spec:
       approval: pr-review
       health:
         type: argoRollouts
-        argoRollouts:
-          name: rollouts-demo
-          namespace: rollouts-demo
         timeout: 30m
       delivery:
         delegate: argoRollouts
