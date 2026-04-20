@@ -19,6 +19,7 @@ All stages 0-29 are complete. These are the next incremental improvements.
 ---
 
 ## Future
+- 🔲 implement once NodeDetail component exposes data-testid="node-detail" — ⚠️ Inferred from `web/test/e2e/journeys/011-rollback-button.spec.ts:30` (TODO)
 
 - 🔲 14.1 — Subscription OCI source watcher: implement `pkg/subscription/oci_watcher.go` — polls OCI registry for new image tags, creates Bundle automatically (issue #491)
 - 🔲 14.2 — Subscription Git source watcher: implement `pkg/subscription/git_watcher.go` — watches Git repo for config changes, creates Bundle automatically (issue #493)
