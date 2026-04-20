@@ -10,13 +10,14 @@ LOCALBIN               ?= $(shell pwd)/bin
 # Build
 BINARY_CONTROLLER = bin/kardinal-controller
 BINARY_CLI        = bin/kardinal
+BINARY_AGENT      = bin/kardinal-agent
 GO                = go
 GOPROXY          ?= https://proxy.golang.org
 
 # Docker image
 IMG ?= kardinal-promoter:dev
 
-.PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration lint vet generate manifests \
+.PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration lint vet generate manifests \
         install uninstall docker-build helm-lint \
         install-krocodile \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
@@ -26,13 +27,16 @@ IMG ?= kardinal-promoter:dev
 all: generate build test lint
 
 ## Build
-build: build-controller build-cli
+build: build-controller build-cli build-agent
 
 build-controller:
 	$(GO) build -o $(BINARY_CONTROLLER) ./cmd/kardinal-controller/
 
 build-cli:
 	$(GO) build -o $(BINARY_CLI) ./cmd/kardinal/
+
+build-agent:
+	$(GO) build -o $(BINARY_AGENT) ./cmd/kardinal-agent/
 
 ## UI
 ui: ## Build the embedded React UI (requires Node.js and npm)
