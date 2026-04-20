@@ -143,8 +143,9 @@ jobs:
           # Scenario 1: Happy path promotion
           echo "=== Scenario 1: Happy path promotion ==="
           kardinal create bundle kardinal-test-app --image "$TEST_IMAGE" || true
-          # Wait up to 3 minutes for promotion to start — real cluster takes longer than fake client
-          for i in $(seq 1 12); do
+          # Wait up to 5 minutes for promotion to start — increased from 3min (12×15s) to 5min (20×15s)
+          # Reliability fix: slow controller reconcile on resource-constrained CI runners. (PR #513)
+          for i in $(seq 1 20); do
             sleep 15
             OUTPUT=$(kardinal get pipelines 2>&1 || true)
             if echo "$OUTPUT" | grep -q "Verified\|Promoting\|WaitingForMerge"; then break; fi
