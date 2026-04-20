@@ -1,30 +1,31 @@
-## Session Handoff — 2026-04-20T07:24:13Z
+## Session Handoff — 2026-04-20T12:30:30Z
 
 ### This session
-3 PRs merged:
-- PR #869: fix(ci): add no-op job to prevent false failure on push events
-- PR #870: fix(ci): explicitly add push trigger to security workflow
-- PR #872: docs(pm): update Kargo version v1.9.x → v1.10.x in comparison.md
+Standby session — no PRs merged.
 
-1 PR closed (false positive): #868 vision scan flagged existing file as stale
-
-**Root cause of CI issue**: GitHub Actions security workflow (#263295298) has a persistent 0-job failure on push events that cannot be fixed through workflow file changes. Opened needs-human #871 documenting the issue.
-
-**Comparative note**: The workflow file IS correct (push trigger + noop job), but GitHub's workflow evaluation still shows 0 jobs. This is a GitHub Actions platform issue.
+**Findings:**
+- 7/7 journeys ✅ (all passing)
+- Design doc Future items: 0
+- Queue empty — standby mode
+- krocodile: 4 commits behind (internal DAG refactor, no breaking changes)
+- CI: main passing; security-checks cosmetic failure (needs-human #871, non-blocking)
+- Kargo v1.10.0 released (evolution release, no architectural changes affecting comparison)
+- GitOps Promoter v0.27.0 released (incremental, no DAG capability)
 
 ### Queue
 **Queue empty**. No open kardinal-labeled feature issues. All design doc Future sections clear.
 
 ### krocodile
-Status unknown (kro-review not cached). Last known: d6cbc54. <5 commits behind threshold — standby.
+Pinned: d6cbc54. 4 commits ahead (< 5 threshold). Changes: internal dagTopology caching, SchemaGen field, doc reference renames (004→005). No API surface changes. No upgrade needed this batch.
 
 ### CI status (main)
 CI/Docs/E2E: success
 Security checks: cosmetic failure (0-job push evaluation — needs-human #871, non-blocking)
+Metrics pushed: chore(sm): batch metrics update 2026-04-20
 
 ### Next item
 none — standby
 
 ### Notes
-Session: sess-bb9ef00f | otherness@309df70
-Batch: 3 items shipped. PM audit: 7/7 journeys ✅, comparison.md updated.
+Session: sess-88520c3b | otherness@9ccba9f
+Batch: 0 items shipped (standby). SM health: GREEN. PM audit: 7/7 journeys ✅, website accurate.
