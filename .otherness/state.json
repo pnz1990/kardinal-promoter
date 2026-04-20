@@ -148,6 +148,149 @@
       "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/906",
       "pr_merged": true,
       "done_at": "2026-04-20T20:04:25Z"
+    },
+    "909": {
+      "title": "feat: UI API authentication",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "910": {
+      "title": "feat: Bundle history GC",
+      "state": "done",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ],
+      "assigned_to": "sess-1fe44b8f",
+      "assigned_at": "2026-04-20T20:37:39Z",
+      "branch": "feat/910",
+      "worktree": "/home/runner/work/kardinal-promoter/kardinal-promoter.910",
+      "file_spaces": [
+        "pkg/",
+        "api/"
+      ],
+      "pr_number": "919",
+      "pr_merged": true,
+      "done_at": "2026-04-20T20:53:49Z"
+    },
+    "911": {
+      "title": "feat: TLS for UI and webhook HTTP servers",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "912": {
+      "title": "feat: CORS lockdown for UI API",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "913": {
+      "title": "feat: In-cluster kubectl port-forward UX",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "914": {
+      "title": "feat: No outbound event notifications",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "915": {
+      "title": "feat: No ArgoCD-native image update step",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "916": {
+      "title": "feat: No GitHub Actions native bundle creation",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "917": {
+      "title": "feat: No UI for Bundle creation / triggering promotions",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "918": {
+      "title": "feat: Warehouse-equivalent: no automatic discovery mode",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "904": {
+      "title": "test: add CI check that CRD YAML printer columns match Go type annotations",
+      "state": "todo",
+      "priority": "low",
+      "labels": [
+        "kardinal",
+        "kind/chore",
+        "area/test",
+        "size/xs",
+        "priority/low"
+      ]
     }
   },
   "session_heartbeats": {
@@ -155,9 +298,14 @@
       "last_seen": "2026-04-20T18:34:19Z",
       "item": "issue-891",
       "cycle": 1
+    },
+    "sess-1fe44b8f": {
+      "last_seen": "2026-04-20T20:37:39Z",
+      "item": "910",
+      "cycle": 2
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 2,
-  "pm_cycle_count": 2
+  "sm_cycle_count": 3,
+  "pm_cycle_count": 3
 }
