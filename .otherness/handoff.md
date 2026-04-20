@@ -1,23 +1,30 @@
-## Session Handoff — 2026-04-20T05:40:24Z
+## Session Handoff — 2026-04-20T07:24:13Z
 
 ### This session
-1 PR merged:
-- PR #867: docs(design): fix stale items in 13-scheduled-execution.md
+3 PRs merged:
+- PR #869: fix(ci): add no-op job to prevent false failure on push events
+- PR #870: fix(ci): explicitly add push trigger to security workflow
+- PR #872: docs(pm): update Kargo version v1.9.x → v1.10.x in comparison.md
 
-**Fixed**: Vision scan false positive — PR #866 incorrectly flagged existing .github/workflows/otherness-scheduled.yml as missing.
-**Corrected**: Cron description (hourly→6h), permission count (6→5), removed non-existent otherness-config.yaml schedule.cron item.
+1 PR closed (false positive): #868 vision scan flagged existing file as stale
+
+**Root cause of CI issue**: GitHub Actions security workflow (#263295298) has a persistent 0-job failure on push events that cannot be fixed through workflow file changes. Opened needs-human #871 documenting the issue.
+
+**Comparative note**: The workflow file IS correct (push trigger + noop job), but GitHub's workflow evaluation still shows 0 jobs. This is a GitHub Actions platform issue.
 
 ### Queue
 **Queue empty**. No open kardinal-labeled feature issues. All design doc Future sections clear.
 
 ### krocodile
-3 commits behind HEAD (threshold 5 — no action). Internal compilation caching refactor, no breaking changes.
+Status unknown (kro-review not cached). Last known: d6cbc54. <5 commits behind threshold — standby.
 
 ### CI status (main)
-success
+CI/Docs/E2E: success
+Security checks: cosmetic failure (0-job push evaluation — needs-human #871, non-blocking)
 
 ### Next item
 none — standby
 
 ### Notes
-Session: sess-f0cd6fc5 | otherness@2f379cf
+Session: sess-bb9ef00f | otherness@309df70
+Batch: 3 items shipped. PM audit: 7/7 journeys ✅, comparison.md updated.
