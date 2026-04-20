@@ -104,7 +104,7 @@ All of the following are implemented and shipped:
 
 **UI** — full control plane UI: fleet health dashboard, pipeline operations view, per-stage bake countdown, bundle promotion timeline, policy gate detail panel, release efficiency metrics bar, in-UI actions (approve/pause/resume/rollback/override)
 
-**Distributed mode** — shard routing: `shard:` field on Pipeline environments routes PromotionSteps to the correct controller instance. The `kardinal-agent` standalone binary (for running in spoke clusters without inbound connectivity) is near-term (#508).
+**Distributed mode** — shard routing: `shard:` field on Pipeline environments routes PromotionSteps to the correct controller instance. The `kardinal-agent` standalone binary for spoke clusters is available (PR #886).
 
 **Multi-tenant self-service** — ApplicationSet + Pipeline template bootstrap; team onboarding by committing a folder to Git; org PolicyGates automatically inherited; namespace isolation enforced by RBAC.
 
@@ -128,15 +128,6 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 **Shell completion** — bash, zsh, fish, and PowerShell completion via `kardinal completion <shell>`. (#606)
 
 **PrometheusRule CRD in Helm chart** — 6 pre-built alerting rules: promotion stuck, high rollback rate, policy gate blocked, SCM errors. (#621)
-
----
-
-## Near-Term (v0.9.0 — planned)
-
-### `kardinal-agent` standalone binary
-
-Lightweight `kardinal-agent` binary for spoke clusters behind firewalls. The reconciler is
-already shard-aware; the agent is a thin wrapper around it.
 
 ---
 

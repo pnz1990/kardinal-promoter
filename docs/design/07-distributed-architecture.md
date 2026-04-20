@@ -4,6 +4,15 @@
 > Depends on: 01-graph-integration, 03-promotionstep-reconciler
 > Blocks: nothing (additive to standalone mode)
 
+## Present
+
+- ✅ `kardinal-agent` standalone binary — `cmd/kardinal-agent/main.go` ships as a separate entry point for spoke-cluster distributed mode. Reads shard assignments via `--shard` flag, runs only the PromotionStep reconciler for matching steps. No Bundle, Pipeline, PolicyGate, UI, or webhook components. Defaults to ports :8085/:8086 to avoid collision with the controller. (PR #886, 2026-04-20)
+- ✅ Shard routing — `kardinal.io/shard` label on PromotionStep resources. Pipeline translator sets the label from `environment.shard`. Controller skips sharded steps; agent handles only matching-shard steps.
+
+## Future
+
+*(No outstanding future items in this area.)*
+
 ## Purpose
 
 This spec defines how kardinal-promoter scales to multi-cluster enterprise environments by splitting the controller into a control plane component and per-shard agents. The agent runs behind firewalls in workload clusters, connecting outbound to the control plane. The control plane retains all state and provides a single pane of glass.
