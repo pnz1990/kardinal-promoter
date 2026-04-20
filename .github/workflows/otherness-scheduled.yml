@@ -204,6 +204,46 @@ jobs:
 
             Read and follow $AGENTS_PATH/vibe-vision-auto.md.
 
+            Context for this vision scan:
+
+            kardinal-promoter is not good enough yet. Apply this lens to every gap you find:
+
+            - Is it complete enough to replace Kargo? A platform engineer evaluating
+              both today would still choose Kargo for most cases. Why? What does Kargo
+              do that kardinal-promoter cannot? Every capability gap is a reason to
+              not adopt. The PDCA scenarios test what we have — they do not test what
+              we are missing. What promotion scenarios exist in real AWS/EKS deployments
+              that kardinal-promoter cannot model at all?
+
+            - Is it stable enough for production? The controller panics on malformed
+              CRDs. The E2E suite is fragile (CRD registration timing, kind cluster
+              teardown). If a platform team deployed this to production today and came
+              back in a week, what would they find broken? Memory leaks? Reconciler
+              loops? State drift?
+
+            - Is it observable enough? When a Bundle stalls, can the operator tell
+              why without reading Go logs? Are the status conditions meaningful to a
+              human? Does the Prometheus metrics surface actually tell the story of
+              a promotion in flight, or is it just counters?
+
+            - Is the CLI good enough? `kardinal explain` and `kardinal get pipelines`
+              exist. But can a new user, having never seen the product, run three
+              commands and understand what is happening in their cluster without
+              reading documentation?
+
+            - Is the security posture good enough for a platform team to approve?
+              The RBAC model, the webhook auth, the credential isolation — would a
+              security review at a Series B company approve this for production use?
+              What would they flag?
+
+            - Is it adopted enough? Zero users outside the author. What is the single
+              biggest reason a platform engineer who found this on GitHub would close
+              the tab within 60 seconds? Fix that first.
+
+            For each gap you identify: if there is no 🔲 Future item in any design doc
+            covering it, add one. The bar is a platform team choosing kardinal-promoter
+            over Kargo in a competitive evaluation — not "it runs on kind."
+
       # ── Step 8: Run otherness (Step B) ──────────────────────────────────
       # SHA-pinned (security: doc 27 §M1 — critical supply chain mitigation).
       # ── Step 8: Run otherness (Step B) ────────────────────────────────────────────
