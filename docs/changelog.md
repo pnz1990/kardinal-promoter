@@ -13,6 +13,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`kardinal-agent` standalone binary** — separate binary for spoke-cluster distributed mode (`cmd/kardinal-agent/`); runs only the PromotionStep reconciler for a specific shard, without Bundle, Pipeline, PolicyGate, UI, or webhook components. Required flag: `--shard`. Defaults to ports :8085/:8086 to avoid collision with the controller. (#886)
+- **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — `kubectl get bundle` now shows Type, Pipeline, Phase, Age; `kubectl get promotionstep` (shortname: `ps`) now shows Pipeline, Env, Bundle, State, Age. No more `kubectl describe` to find which pipeline a step belongs to. (#902)
 - **Shell completion** — `kardinal completion bash|zsh|fish|powershell` (#731)
 - **Color output for `kardinal explain`** — `--color` flag, auto-detected TTY; Pass=green, Block=red, Pending=yellow (#730)
 - **Dark/light mode** — system-aware theme with manual toggle in the embedded UI (#734)

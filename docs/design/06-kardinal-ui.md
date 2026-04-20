@@ -302,6 +302,15 @@ The following capabilities are implemented and shipped as of v0.8.x:
 The following capabilities are declared in `docs/aide/vision.md` §F8 but not yet implemented:
 
 *All epic #587 items are now complete.*
+
+### UI authentication gaps (competitive/security pressure — 2026-04-20)
+
+The embedded UI (`cmd/kardinal-controller/ui_api.go`) currently serves all endpoints with **no authentication**. The UI listen address (`:8082`) is bound to all interfaces. A platform team at a Series B company would fail this in a security review on day one.
+
+- 🔲 **UI API authentication** — `ui_api.go` has no auth middleware. Add Bearer-token or Kubernetes ServiceAccount token review (TokenReview API) to the `/api/v1/ui/*` routes. Minimum: same Bearer token as the Bundle API. Better: k8s OIDC proxy or a `--ui-auth-token` flag. Without this, any pod in the cluster can read all pipeline state.
+- 🔲 **TLS for UI and webhook HTTP servers** — both `http.ListenAndServe` calls in `cmd/kardinal-controller/main.go` use plain HTTP. Add TLS termination via cert-manager-issued certificates (or a `--tls-cert-file` / `--tls-key-file` flag). This is required before any production deployment behind an ingress that doesn't strip TLS.
+- 🔲 **CORS lockdown for UI API** — `/api/v1/ui/*` has no `Access-Control-Allow-Origin` restriction. Add an explicit allow-list (default: same-origin only). This prevents CSRF from any page a cluster operator visits.
+- 🔲 **In-cluster `kubectl port-forward` UX** — until full TLS + auth lands, document that the supported access method is `kubectl port-forward svc/kardinal-controller 8082` and add a note to the UI that warns when accessed without HTTPS (`window.location.protocol != 'https:'`).
 ---
 
 ## Enterprise polish design (added 2026-04-17)

@@ -17,6 +17,15 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.pipelineName
+      name: Pipeline
+      type: string
+    - jsonPath: .spec.environment
+      name: Env
+      type: string
+    - jsonPath: .spec.bundleName
+      name: Bundle
+      type: string
     - jsonPath: .status.state
       name: State
       type: string
