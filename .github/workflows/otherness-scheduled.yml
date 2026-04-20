@@ -79,6 +79,69 @@ jobs:
           gh auth setup-git
           gh auth status
 
+      - name: Verify GH_TOKEN scopes
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Preflight: verify GH_TOKEN has the required OAuth scopes (repo + workflow).
+          # If the token is expired or missing scopes, post a [NEEDS HUMAN] issue so the
+          # failure is visible rather than producing a confusing mid-run failure.
+          #
+          # gh api /user returns a 200 with X-OAuth-Scopes header when the token is valid.
+          # We use -i (include headers) and grep for the required scopes.
+          SCOPES=$(gh api /user -i 2>/dev/null | grep -i '^x-oauth-scopes:' | head -1 || true)
+          echo "Token scopes header: $SCOPES"
+
+          MISSING=""
+          echo "$SCOPES" | grep -qi 'repo' || MISSING="${MISSING}repo "
+          echo "$SCOPES" | grep -qi 'workflow' || MISSING="${MISSING}workflow "
+
+          if [ -n "$MISSING" ]; then
+            echo "ERROR: GH_TOKEN is missing required scopes: $MISSING"
+            REPO=$(git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')
+            # Read report_issue from otherness-config.yaml
+            REPORT_ISSUE=$(python3 -c "
+          import re
+          section = None
+          for line in open('otherness-config.yaml'):
+              s = re.match(r'^(\w[\w_]*):', line)
+              if s: section = s.group(1)
+              if section == 'project':
+                  m = re.match(r'^\s+report_issue:\s*(\S+)', line)
+                  if m: print(m.group(1)); break
+          " 2>/dev/null || echo "1")
+            # Avoid duplicate issues
+            EXISTING=$(gh issue list --repo "$REPO" --state open \
+              --search "[NEEDS HUMAN] GH_TOKEN expired" --json number --jq 'length' 2>/dev/null || echo "0")
+            if [ "${EXISTING:-0}" -eq 0 ]; then
+              gh issue create --repo "$REPO" \
+                --title "[NEEDS HUMAN] GH_TOKEN expired or missing scopes — scheduled run blocked" \
+                --label "needs-human" \
+                --body "## Problem
+The otherness scheduled workflow detected that \`GH_TOKEN\` is missing required scopes or has expired.
+
+**Missing scopes**: \`$MISSING\`
+
+## Fix
+Generate a new PAT at https://github.com/settings/tokens with \`repo\` + \`workflow\` scopes, then:
+\`\`\`
+echo \"<new-token>\" | gh secret set GH_TOKEN --repo $REPO
+\`\`\`
+
+## Notes
+- Run started at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+- Preflight check: \`docs/design/13-scheduled-execution.md\` §Present" 2>/dev/null \
+                && echo "Opened [NEEDS HUMAN] issue." || echo "Issue creation failed."
+            else
+              echo "NEEDS HUMAN issue already open — not creating duplicate."
+              gh issue comment "$REPORT_ISSUE" --repo "$REPO" \
+                --body "[PREFLIGHT] GH_TOKEN missing scopes: $MISSING. Scheduled run skipped." 2>/dev/null || true
+            fi
+            exit 1
+          fi
+
+          echo "GH_TOKEN scopes OK (repo + workflow present)."
+
       - name: Run otherness
         uses: anomalyco/opencode/github@latest
         env:
