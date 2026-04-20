@@ -8,8 +8,8 @@ name: PDCA Product Validation
 
 on:
   schedule:
-    # Weekly on Sundays at 04:00 UTC — after any weekday CI fixes land
-    - cron: '0 4 * * 0'
+    # Daily at 02:00 UTC — matches demo-validate cadence for continuous coverage
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       scenario:
