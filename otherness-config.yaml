@@ -88,3 +88,9 @@ github_projects:
 
   start_date_field_id: PVTF_lAHOC22HhM4BUMuczhBWhao
   target_date_field_id: PVTF_lAHOC22HhM4BUMuczhBWhas
+
+# ── Continuous code hygiene ────────────────────────────────────────────────────
+hygiene:
+  enabled: true
+  max_issues_per_scan: 3
+  cycle_interval: 3
