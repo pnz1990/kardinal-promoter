@@ -469,7 +469,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
     : null
 
   return (
-    <div style={{
+    <div data-testid="node-detail" style={{
       width: '340px',
       minWidth: '300px',
       height: '100%',

@@ -14,21 +14,18 @@ All stages 0-29 are complete. These are the next incremental improvements.
 
 ## Present
 
-*(No items shipped yet in this doc)*
+- ✅ 14.6 — PDCA: Playwright rollback button tests un-skipped — added `data-testid="node-detail"` to `NodeDetail` root element, enabling E2E Playwright test `web/test/e2e/journeys/011-rollback-button.spec.ts` Steps 2 and 3 (PR #881, 2026-04-20)
+- ✅ 14.8 — NEEDS HUMAN resolved — security-checks workflow now succeeds on push; issue #871 closed (2026-04-20)
 
 ---
 
 ## Future
-- 🔲 implement once NodeDetail component exposes data-testid="node-detail" — ⚠️ Inferred from `web/test/e2e/journeys/011-rollback-button.spec.ts:30` (TODO)
-
 - 🔲 14.1 — Subscription OCI source watcher: implement `pkg/subscription/oci_watcher.go` — polls OCI registry for new image tags, creates Bundle automatically (issue #491)
 - 🔲 14.2 — Subscription Git source watcher: implement `pkg/subscription/git_watcher.go` — watches Git repo for config changes, creates Bundle automatically (issue #493)
 - 🔲 14.3 — Pipeline deployment metrics: persist `time-to-production`, `rollback-rate`, `operator-interventions` to `Pipeline.status.deploymentMetrics` after each Bundle completes (issue #498)
 - 🔲 14.4 — ChangeWindow CEL functions: implement `changewindow.isAllowed()` and `changewindow.isBlocked()` as named CEL functions on the Graph environment (issue #506)
 - 🔲 14.5 — kardinal-agent binary: separate `cmd/kardinal-agent/` entry point for spoke-cluster distributed mode; reads shard assignments, runs PromotionStep reconciler only (issue #508)
-- 🔲 14.6 — PDCA: fix broken Playwright scenarios S25-S27 (bundle status, pipeline graph, rollback button) — verify E2E environment setup and Playwright config
 - 🔲 14.7 — Security hardening: run `trivy image kardinal-promoter:latest` in CI and block on HIGH/CRITICAL vulnerabilities; target 0 HIGH
-- 🔲 14.8 — NEEDS HUMAN resolution: investigate and resolve issue #871 (security-checks persistent 0-job failure on push)
 
 ---
 
