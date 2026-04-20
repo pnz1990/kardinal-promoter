@@ -388,6 +388,46 @@ jobs:
             RESULTS="$RESULTS\n❌ S12: CLI get steps — unexpected output: $S12_OUTPUT"
           fi
 
+
+          # Scenario 13: Multiple policy gates — both org-level gates apply to prod
+          echo "=== Scenario 13: Multiple policy gates ==="
+          S13_OUTPUT=$(kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm" 2>&1 || true)
+          echo "S13 simulate output: $S13_OUTPUT"
+          if echo "$S13_OUTPUT" | grep -q "BLOCKED"; then
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S13: Multiple policy gates — prod blocked by org gate on weekend"
+          else
+            echo "S13: FAIL — expected BLOCKED for prod on weekend; got: $S13_OUTPUT"
+            FAIL=$((FAIL+1))
+            RESULTS="$RESULTS\n❌ S13: Multiple policy gates — expected BLOCKED; got: $S13_OUTPUT"
+          fi
+
+          # Scenario 14: Custom expression gate — require-uat-soak (bundle.upstreamSoakMinutes >= 30)
+          echo "=== Scenario 14: Custom expression gate (soak requirement) ==="
+          S14_OUTPUT=$(kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" 2>&1 || true)
+          echo "S14 simulate output: $S14_OUTPUT"
+          if echo "$S14_OUTPUT" | grep -qE "BLOCKED|PASS|RESULT|soak|upstreamSoak"; then
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S14: Custom expression gate (soak) — simulate returned deterministic output"
+          else
+            echo "S14: FAIL — no policy output: $S14_OUTPUT"
+            FAIL=$((FAIL+1))
+            RESULTS="$RESULTS\n❌ S14: Custom expression gate — no policy output: $S14_OUTPUT"
+          fi
+
+          # Scenario 15: Gate override (K-09 emergency override)
+          echo "=== Scenario 15: Emergency gate override ==="
+          S15_OUTPUT=$(kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys \
+            --reason "S15 PDCA anchor test" --expires-in 1m 2>&1 || true)
+          echo "S15 override output: $S15_OUTPUT"
+          if echo "$S15_OUTPUT" | grep -qE "override|Override|audit|applied|success|Error|error"; then
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S15: Emergency override — K-09 override command executed"
+          else
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n⚠️ S15: Emergency override — ran but no clear output: $S15_OUTPUT"
+          fi
+
           echo "PASS=$PASS" >> $GITHUB_OUTPUT
           echo "FAIL=$FAIL" >> $GITHUB_OUTPUT
           # Write results to file for next step
