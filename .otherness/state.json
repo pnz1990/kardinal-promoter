@@ -151,7 +151,7 @@
     },
     "909": {
       "title": "feat: UI API authentication",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -159,7 +159,14 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-5c1aab20",
+      "assigned_at": "2026-04-20T21:27:56Z",
+      "branch": "feat/909",
+      "worktree": "../kardinal-promoter.909",
+      "pr_number": 924,
+      "pr_merged": true,
+      "done_at": "2026-04-20T21:39:54Z"
     },
     "910": {
       "title": "feat: Bundle history GC",
@@ -306,6 +313,30 @@
       "pr_number": "921",
       "pr_merged": true,
       "done_at": "2026-04-20T21:06:16Z"
+    },
+    "925": {
+      "title": "fix(ci): Demo E2E fails \u2014 health.flux field not in CRD schema",
+      "state": "todo",
+      "priority": "high",
+      "labels": [
+        "kind/bug",
+        "area/test",
+        "priority/high",
+        "size/s",
+        "kardinal"
+      ]
+    },
+    "926": {
+      "title": "docs: document UI API authentication in security guide",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kind/docs",
+        "area/docs",
+        "priority/medium",
+        "size/xs",
+        "kardinal"
+      ]
     }
   },
   "session_heartbeats": {
@@ -322,5 +353,5 @@
   },
   "report_issue": 1,
   "sm_cycle_count": 3,
-  "pm_cycle_count": 3
+  "pm_cycle_count": 4
 }
