@@ -384,6 +384,13 @@ success "[5/7] Test app deployed to prod cluster"
 info "[6/7] Applying pipelines and PolicyGates on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 
+# Wait for Pipeline CRD to be established before applying any Pipeline resources.
+# The Helm install is async — the CRD must be fully registered before kubectl apply.
+kubectl wait --for=condition=established \
+  crd/pipelines.kardinal.io \
+  crd/policygates.kardinal.io \
+  --timeout=60s
+
 # Org-level PolicyGates (platform team owns these)
 kubectl apply -f "${DEMO_DIR}/manifests/policy-gates/"
 
@@ -430,8 +437,12 @@ if [[ "$INSTALL_FLUX" == "true" ]]; then
       --dry-run=client -o yaml | kubectl apply -f -
   fi
 
-  # Apply Flux Kustomizations
-  kubectl apply -f "${DEMO_DIR}/manifests/flux/"
+  # Apply Flux Kustomizations (on dev cluster — Kustomization resources live here)
+  kubectl apply -f "${DEMO_DIR}/manifests/flux/kustomizations.yaml"
+
+  # Apply the Flux pipeline on the control cluster (Pipeline CRD is only registered there)
+  kubectl config use-context "kind-${CONTROL_CLUSTER}"
+  kubectl apply -f "${DEMO_DIR}/manifests/flux/pipeline.yaml"
   success "[8/13] Flux installed and Kustomizations applied"
 else
   info "[8/13] Flux install skipped (INSTALL_FLUX=false)"
