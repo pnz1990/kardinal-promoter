@@ -316,7 +316,7 @@
     },
     "925": {
       "title": "fix(ci): Demo E2E fails \u2014 health.flux field not in CRD schema",
-      "state": "todo",
+      "state": "done",
       "priority": "high",
       "labels": [
         "kind/bug",
@@ -324,7 +324,10 @@
         "priority/high",
         "size/s",
         "kardinal"
-      ]
+      ],
+      "pr_number": 927,
+      "pr_merged": true,
+      "done_at": "2026-04-20T22:05:58Z"
     },
     "926": {
       "title": "docs: document UI API authentication in security guide",
