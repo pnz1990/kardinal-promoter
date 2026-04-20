@@ -6,6 +6,7 @@ project:
   name: kardinal-promoter
   repo: pnz1990/kardinal-promoter
   agent_version: v0.2.0  # pinned to stable release
+  upgrade_policy: "0.x.x"  # auto-upgrade any 0.* release
   report_issue: 1
   board_url: https://github.com/users/pnz1990/projects/1
   pr_label: kardinal
