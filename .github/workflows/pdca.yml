@@ -461,26 +461,8 @@ jobs:
           # Scenario 18: Custom health adapter configuration (webhook step)
           echo "=== Scenario 18: Custom health adapter configuration ==="
           # Verify the pipeline API accepts a custom webhook step spec (dry-run)
-          S18_OUTPUT=$(cat <<EOF | kubectl apply --dry-run=server -f - 2>&1 || true
-apiVersion: kardinal.io/v1alpha1
-kind: Pipeline
-metadata:
-  name: s18-test-dry-run
-  namespace: default
-spec:
-  stages:
-  - name: test
-    path: environments/test
-    update:
-      strategy: kustomize
-    health:
-      type: resource
-      resource:
-        kind: Deployment
-        name: s18-placeholder
-        namespace: default
-EOF
-          )
+          S18_MANIFEST="apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: s18-test-dry-run\n  namespace: default\nspec:\n  stages:\n  - name: test\n    path: environments/test\n    update:\n      strategy: kustomize\n    health:\n      type: resource\n      resource:\n        kind: Deployment\n        name: s18-placeholder\n        namespace: default"
+          S18_OUTPUT=$(printf '%s' "$S18_MANIFEST" | kubectl apply --dry-run=server -f - 2>&1 || true)
           echo "S18 dry-run output: $S18_OUTPUT"
           if echo "$S18_OUTPUT" | grep -qE "configured|created|serverside|dry run|validated|Pipeline"; then
             PASS=$((PASS+1))
