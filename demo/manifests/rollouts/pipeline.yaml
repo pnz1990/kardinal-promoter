@@ -19,8 +19,7 @@ spec:
       approval: auto
       health:
         type: argoRollouts
-        argoRollouts:
-          name: kardinal-test-app-rollouts
-          namespace: kardinal-test-app-test
+        # Rollout name is derived: <pipeline> = kardinal-test-app-rollouts, namespace = <env>
+        # = kardinal-test-app-test
         timeout: 3m
   historyLimit: 5
