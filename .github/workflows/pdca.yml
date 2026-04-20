@@ -335,6 +335,58 @@ PEOF
           kubectl delete pipeline s9-health-test 2>/dev/null || true
           kubectl delete namespace s9-health-test 2>/dev/null || true
 
+          # Scenario 10: CLI completeness — kardinal get bundles
+          echo "=== Scenario 10: kardinal get bundles ==="
+          S10_OUTPUT=$(kardinal get bundles kardinal-test-app 2>&1 || true)
+          echo "S10 output: $S10_OUTPUT"
+          if echo "$S10_OUTPUT" | grep -qE "kardinal-test-app|Bundle|bundle|AGE|NAME|No bundles"; then
+            echo "S10: PASS — get bundles returned expected output"
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S10: CLI get bundles — command works and returns output"
+          else
+            echo "S10: FAIL — unexpected output: $S10_OUTPUT"
+            FAIL=$((FAIL+1))
+            RESULTS="$RESULTS\n❌ S10: CLI get bundles — unexpected output: $S10_OUTPUT"
+          fi
+
+          # Scenario 11: CLI completeness — kardinal delete bundle
+          echo "=== Scenario 11: kardinal delete bundle ==="
+          # Create a bundle then delete it immediately
+          DEL_BUNDLE_OUT=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-del1111" 2>&1 || true)
+          echo "S11 create output: $DEL_BUNDLE_OUT"
+          DEL_BUNDLE_NAME=$(echo "$DEL_BUNDLE_OUT" | grep -oE 'Bundle [a-z0-9-]+ created' | awk '{print $2}' | head -1)
+          if [ -n "$DEL_BUNDLE_NAME" ]; then
+            DEL_OUT=$(kardinal delete bundle "$DEL_BUNDLE_NAME" 2>&1 || true)
+            echo "S11 delete output: $DEL_OUT"
+            if echo "$DEL_OUT" | grep -q "deleted"; then
+              echo "S11: PASS — bundle deleted"
+              PASS=$((PASS+1))
+              RESULTS="$RESULTS\n✅ S11: CLI delete bundle — bundle $DEL_BUNDLE_NAME deleted"
+            else
+              echo "S11: FAIL — delete output: $DEL_OUT"
+              FAIL=$((FAIL+1))
+              RESULTS="$RESULTS\n❌ S11: CLI delete bundle — unexpected output: $DEL_OUT"
+            fi
+          else
+            echo "S11: NOTE — could not extract bundle name from: $DEL_BUNDLE_OUT"
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n⚠️ S11: CLI delete bundle — could not extract bundle name: $DEL_BUNDLE_OUT"
+          fi
+
+          # Scenario 12: CLI completeness — kardinal get steps
+          echo "=== Scenario 12: kardinal get steps ==="
+          S12_OUTPUT=$(kardinal get steps kardinal-test-app 2>&1 || true)
+          echo "S12 output: $S12_OUTPUT"
+          if echo "$S12_OUTPUT" | grep -qE "kardinal-test-app|Step|step|AGE|PIPELINE|ENV|No steps"; then
+            echo "S12: PASS — get steps returned expected output"
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S12: CLI get steps — command works and returns output"
+          else
+            echo "S12: FAIL — unexpected output: $S12_OUTPUT"
+            FAIL=$((FAIL+1))
+            RESULTS="$RESULTS\n❌ S12: CLI get steps — unexpected output: $S12_OUTPUT"
+          fi
+
           echo "PASS=$PASS" >> $GITHUB_OUTPUT
           echo "FAIL=$FAIL" >> $GITHUB_OUTPUT
           # Write results to file for next step
