@@ -302,11 +302,39 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 	return nil
 }
 
+// defaultHistoryLimit is the number of completed Bundle promotions to retain
+// when Pipeline.spec.historyLimit is unset or zero.
+const defaultHistoryLimit = 50
+
 // handleNew sets the phase to Available on a newly-created Bundle.
 // Supersession of older bundles is no longer done here (BU-1 fix). Each bundle
 // is responsible for superseding itself when it detects a newer bundle exists.
+//
+// History GC is enforced here at the natural write boundary: when a new Bundle
+// is created, enforce historyLimit on terminal siblings (Verified/Failed/Superseded)
+// for the same pipeline. Oldest-first deletion. See spec #910.
 func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	// Enforce historyLimit before setting Available — clean up before adding.
+	if b.Spec.Pipeline != "" {
+		var pipeline kardinalv1alpha1.Pipeline
+		if err := r.Get(ctx, client.ObjectKey{
+			Name:      b.Spec.Pipeline,
+			Namespace: b.Namespace,
+		}, &pipeline); err != nil {
+			if !apierrors.IsNotFound(err) {
+				// Non-fatal: log and continue — GC failure should not block promotion.
+				log.Warn().Err(err).Msg("history GC: failed to get pipeline (non-fatal)")
+			}
+			// Pipeline not found: orphan guard will handle cleanup on requeue.
+		} else {
+			if gcErr := r.enforceHistoryLimit(ctx, log, &pipeline, b.Namespace); gcErr != nil {
+				// Non-fatal: log and continue — GC failure should not block promotion.
+				log.Warn().Err(gcErr).Msg("history GC: enforce failed (non-fatal)")
+			}
+		}
+	}
+
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Available"
 
@@ -328,6 +356,90 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 	// Requeue immediately to advance to Promoting.
 	// Use RequeueAfter instead of Requeue (Requeue is deprecated).
 	return ctrl.Result{RequeueAfter: time.Millisecond}, nil
+}
+
+// enforceHistoryLimit deletes the oldest terminal Bundles (Verified/Failed/Superseded)
+// for the given pipeline in the given namespace, keeping at most historyLimit bundles.
+//
+// This implements Pipeline.spec.historyLimit enforcement (spec #910). Terminal Bundles
+// are Verified, Failed, or Superseded. Non-terminal Bundles (Available, Promoting) are
+// never deleted by this function.
+//
+// Ordering: oldest-first by CreationTimestamp; name as tiebreaker for stability.
+// Default limit: defaultHistoryLimit (50) when spec.historyLimit is unset or zero.
+//
+// Graph-first: we only delete Bundles (our own CRD). No cross-CRD writes.
+// Idempotent: deleting N-limit bundles twice yields the same result as once.
+func (r *Reconciler) enforceHistoryLimit(ctx context.Context, log zerolog.Logger,
+	pipeline *kardinalv1alpha1.Pipeline, namespace string) error {
+	limit := pipeline.Spec.HistoryLimit
+	if limit <= 0 {
+		limit = defaultHistoryLimit
+	}
+
+	var allBundles kardinalv1alpha1.BundleList
+	if err := r.List(ctx, &allBundles,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.pipeline": pipeline.Name},
+	); err != nil {
+		return fmt.Errorf("enforceHistoryLimit: list bundles: %w", err)
+	}
+
+	// Collect terminal bundles only (Verified, Failed, Superseded).
+	terminal := make([]*kardinalv1alpha1.Bundle, 0, len(allBundles.Items))
+	for i := range allBundles.Items {
+		switch allBundles.Items[i].Status.Phase {
+		case "Verified", "Failed", "Superseded":
+			terminal = append(terminal, &allBundles.Items[i])
+		}
+	}
+
+	if len(terminal) <= limit {
+		return nil // within limit — nothing to delete
+	}
+
+	// Sort oldest-first: CreationTimestamp ascending, then name for stable ordering.
+	sortBundlesByAge(terminal)
+
+	// Delete oldest (len - limit) bundles.
+	excess := len(terminal) - limit
+	for i := range excess {
+		b := terminal[i]
+		log.Info().
+			Str("bundle", b.Name).
+			Str("phase", b.Status.Phase).
+			Str("pipeline", pipeline.Name).
+			Int("historyLimit", limit).
+			Msg("history GC: deleting terminal bundle beyond historyLimit")
+		if err := r.Delete(ctx, b); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("enforceHistoryLimit: delete bundle %s: %w", b.Name, err)
+		}
+	}
+
+	log.Info().
+		Str("pipeline", pipeline.Name).
+		Int("deleted", excess).
+		Int("remaining", limit).
+		Msg("history GC: complete")
+
+	return nil
+}
+
+// sortBundlesByAge sorts a slice of Bundle pointers in ascending CreationTimestamp
+// order (oldest first). When timestamps are equal, sorts by name for stability.
+func sortBundlesByAge(bundles []*kardinalv1alpha1.Bundle) {
+	// Insertion sort is sufficient for small slices (typical historyLimit is 50-100).
+	for i := 1; i < len(bundles); i++ {
+		for j := i; j > 0; j-- {
+			a, b := bundles[j-1], bundles[j]
+			aT, bT := a.CreationTimestamp.Time, b.CreationTimestamp.Time
+			if aT.After(bT) || (aT.Equal(bT) && a.Name > b.Name) {
+				bundles[j-1], bundles[j] = bundles[j], bundles[j-1]
+			} else {
+				break
+			}
+		}
+	}
 }
 
 // isSuperseededByNewer returns true if there is a newer Bundle for the same
