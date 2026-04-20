@@ -33,7 +33,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ## Present ✅
 
-*(No items yet — this doc was created to track gaps.)*
+- ✅ **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — Bundle now shows Type, Pipeline, Phase, Age. PromotionStep shows Pipeline, Env, Bundle, State, Age. Eliminates the need to `kubectl describe` to find which pipeline a step belongs to. (PR #902, 2026-04-20)
 
 ---
 
@@ -68,8 +68,6 @@ Every item in this doc was identified by examining the live codebase against fiv
 ### Lens 3: Observability — can an operator understand a stall without Go logs?
 
 - 🔲 **Missing Prometheus metrics for step duration and gate blocking time** — `pkg/reconciler/observability/metrics.go` exports 4 counters (bundles_total, steps_total, gate_evaluations_total, pr_duration_seconds). There is no metric for: (a) per-step execution duration (git-clone latency, kustomize latency), (b) PolicyGate blocking duration histogram (how long has this gate been blocking?), (c) PromotionStep age histogram (how old is the oldest in-flight step?), (d) reconciler queue depth. Without (b) and (c), a Grafana dashboard cannot answer "which gates are blocking prod right now and for how long?" — the most common on-call question.
-
-- 🔲 **`kubectl get bundle` prints only phase, not current step** — `Bundle.status` has rich environment-level state but a `kubectl get bundle` with no custom printer columns shows only the object name and age. Add `+kubebuilder:printcolumn` annotations to Bundle and PromotionStep CRDs so that `kubectl get bundle` prints pipeline, phase, and the active environment's current step. Kargo's `kubectl get freight` shows stage progression clearly. This is a single-command observability win.
 
 - 🔲 **No `kardinal status` command for in-flight promotion details** — `kardinal get pipelines` shows environment states. `kardinal explain` shows gate details. Neither command answers "my prod promotion is stuck — what exactly is it waiting for right now?" A `kardinal status <pipeline> [--bundle <name>]` command should show: current state of every PromotionStep (with active step highlighted), which PolicyGates are blocking (with CEL expression + current variable values), which PRs are open and their review status. This is the first command a new user needs when something is wrong.
 
@@ -110,7 +108,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 **Must-fix for competitive parity with Kargo:**
 1. Outbound event notifications (Slack/webhook)
 2. ArgoCD-native image update step
-3. `kubectl get` printer columns on Bundle/PromotionStep CRDs
+3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #902)
 
 **Adoption wins (high effort/impact):**
 1. `kardinal init` scaffolding command
