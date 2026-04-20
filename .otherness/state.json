@@ -1,8 +1,0 @@
-{
-  "mode": "autonomous",
-  "report_issue": 1,
-  "current_queue": [],
-  "features": {},
-  "session_heartbeats": {},
-  "bounded_sessions": {}
-}
