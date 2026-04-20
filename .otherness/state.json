@@ -80,6 +80,232 @@
       "created_at": "2026-04-20T18:33:57Z",
       "pr_merged": true,
       "done_at": "2026-04-20T18:43:43Z"
+    },
+    "888": {
+      "state": "done",
+      "title": "docs(roadmap): kardinal-agent shipped in #886 \u2014 move from Near-Term to Currently Available",
+      "priority": "high",
+      "labels": [
+        "kind/docs",
+        "area/docs",
+        "priority/high",
+        "size/xs"
+      ],
+      "assigned_to": "sess-549c0020",
+      "assigned_at": "2026-04-20T19:39:17Z",
+      "branch": "feat/888",
+      "worktree": "../kardinal-promoter.888",
+      "file_spaces": [
+        "docs/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T19:40:31Z",
+      "note": "Already resolved by PR #898. Closed issue 888."
+    },
+    "902": {
+      "state": "done",
+      "title": "feat(crd): add kubectl printer columns to Bundle and PromotionStep CRDs",
+      "priority": "medium",
+      "labels": [
+        "kind/enhancement",
+        "area/controller",
+        "priority/medium",
+        "size/s"
+      ],
+      "assigned_to": "sess-549c0020",
+      "assigned_at": "2026-04-20T19:42:58Z",
+      "branch": "feat/902",
+      "worktree": "../kardinal-promoter.902",
+      "file_spaces": [
+        "api/",
+        "config/crd/"
+      ],
+      "pr_number": "903",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/903",
+      "pr_merged": true,
+      "done_at": "2026-04-20T19:52:57Z"
+    },
+    "905": {
+      "state": "done",
+      "title": "feat(reconciler): add WaitingForMerge timeout to prevent stuck promotions",
+      "priority": "high",
+      "labels": [
+        "kind/enhancement",
+        "area/controller",
+        "priority/high",
+        "size/s"
+      ],
+      "assigned_to": "sess-549c0020",
+      "assigned_at": "2026-04-20T19:55:02Z",
+      "branch": "feat/905",
+      "worktree": "../kardinal-promoter.905",
+      "file_spaces": [
+        "api/",
+        "pkg/reconciler/",
+        "pkg/translator/"
+      ],
+      "pr_number": "906",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/906",
+      "pr_merged": true,
+      "done_at": "2026-04-20T20:04:25Z"
+    },
+    "909": {
+      "title": "feat: UI API authentication",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "910": {
+      "title": "feat: Bundle history GC",
+      "state": "done",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ],
+      "assigned_to": "sess-1fe44b8f",
+      "assigned_at": "2026-04-20T20:37:39Z",
+      "branch": "feat/910",
+      "worktree": "/home/runner/work/kardinal-promoter/kardinal-promoter.910",
+      "file_spaces": [
+        "pkg/",
+        "api/"
+      ],
+      "pr_number": "919",
+      "pr_merged": true,
+      "done_at": "2026-04-20T20:53:49Z"
+    },
+    "911": {
+      "title": "feat: TLS for UI and webhook HTTP servers",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "912": {
+      "title": "feat: CORS lockdown for UI API",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "913": {
+      "title": "feat: In-cluster kubectl port-forward UX",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/s",
+        "priority/medium"
+      ]
+    },
+    "914": {
+      "title": "feat: No outbound event notifications",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "915": {
+      "title": "feat: No ArgoCD-native image update step",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "916": {
+      "title": "feat: No GitHub Actions native bundle creation",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "917": {
+      "title": "feat: No UI for Bundle creation / triggering promotions",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/ui",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "918": {
+      "title": "feat: Warehouse-equivalent: no automatic discovery mode",
+      "state": "todo",
+      "priority": "medium",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ]
+    },
+    "904": {
+      "title": "test: add CI check that CRD YAML printer columns match Go type annotations",
+      "state": "todo",
+      "priority": "low",
+      "labels": [
+        "kardinal",
+        "kind/chore",
+        "area/test",
+        "size/xs",
+        "priority/low"
+      ]
+    },
+    "920": {
+      "title": "feat: reconciler panic recovery \u2014 enable WithRecoverPanic to prevent crash loops",
+      "state": "done",
+      "priority": "high",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "pr_number": "921",
+      "pr_merged": true,
+      "done_at": "2026-04-20T21:06:16Z"
     }
   },
   "session_heartbeats": {
@@ -87,9 +313,14 @@
       "last_seen": "2026-04-20T18:34:19Z",
       "item": "issue-891",
       "cycle": 1
+    },
+    "sess-1fe44b8f": {
+      "last_seen": "2026-04-20T20:37:39Z",
+      "item": "910",
+      "cycle": 2
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 2,
-  "pm_cycle_count": 2
+  "sm_cycle_count": 3,
+  "pm_cycle_count": 3
 }
