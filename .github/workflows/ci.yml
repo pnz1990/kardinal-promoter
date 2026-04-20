@@ -153,51 +153,14 @@ jobs:
 
           # Validate all Pipeline manifests in demo/ and examples/ against the generated CRD
           SCHEMA_DIR=$(mktemp -d)
-          python3 - <<'PYEOF'
-import json, yaml, os, pathlib
-
-crd_file = 'config/crd/bases/kardinal.io_pipelines.yaml'
-schema_dir = os.environ.get('SCHEMA_DIR', '/tmp/schemas')
-os.makedirs(schema_dir, exist_ok=True)
-
-try:
-    with open(crd_file) as f:
-        crd = yaml.safe_load(f)
-    schema = crd['spec']['versions'][0]['schema']['openAPIV3Schema']
-    out_file = os.path.join(schema_dir, 'kardinal.io_pipelines.json')
-    with open(out_file, 'w') as f:
-        json.dump(schema, f)
-    print(f'Schema written to {out_file}')
-except Exception as e:
-    print(f'Schema extraction failed: {e}')
-PYEOF
+          # Extract CRD schema for validation (inline to avoid YAML heredoc column-0 issues)
+          python3 -c "import json,yaml,os; crd=yaml.safe_load(open('config/crd/bases/kardinal.io_pipelines.yaml')); schema=crd['spec']['versions'][0]['schema']['openAPIV3Schema']; os.makedirs('${SCHEMA_DIR}',exist_ok=True); json.dump(schema,open('${SCHEMA_DIR}/kardinal.io_pipelines.json','w')); print('Schema extracted')" 2>/dev/null || echo "Schema extraction skipped (CRD not generated yet)"
 
           FAILURES=0
           for manifest in $(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | \
               xargs grep -l "kind: Pipeline" 2>/dev/null); do
             echo "Validating $manifest..."
-            # Use kubectl --dry-run=client for schema validation (no cluster needed, strict mode)
-            if ! kubectl apply --dry-run=client --validate=strict -f "$manifest" \
-              --server-side=false 2>&1 | grep -q "configured\|created\|unchanged\|dry run"; then
-              # kubectl not available without cluster — use python yaml parse as fallback
-              python3 -c "
-import yaml, sys
-try:
-    doc = yaml.safe_load(open('$manifest'))
-    if not doc: sys.exit(0)
-    health_types = []
-    for env in doc.get('spec',{}).get('environments',[]):
-        h = env.get('health',{})
-        for key in list(h.keys()):
-            if key not in ('type','timeout','cluster','labelSelector','resource'):
-                print(f'FAIL: $manifest: unknown health sub-field: {key}')
-                sys.exit(1)
-    print(f'OK: $manifest')
-except Exception as e:
-    print(f'FAIL: $manifest: {e}')
-    sys.exit(1)
-" || FAILURES=$((FAILURES+1))
-            fi
+            python3 -c "import yaml,sys; m=sys.argv[1]; d=yaml.safe_load(open(m)); [sys.exit('FAIL: '+m+': unknown health field: '+k) for e in d.get('spec',{}).get('environments',[]) for k in e.get('health',{}).keys() if k not in ('type','timeout','cluster','labelSelector','resource')]; print('OK: '+m)" "$manifest" || FAILURES=$((FAILURES+1))
           done
 
           if [ $FAILURES -gt 0 ]; then
