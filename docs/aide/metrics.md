@@ -18,3 +18,4 @@
 
 | 2026-04-20 | 1 | 0 | 663 | feat(ui): NodeDetail data-testid + E2E rollback tests un-skipped (#883); issue #871 closed | ✅ |
 | 2026-04-20 | 2 | 0 | 630 | feat(agent): kardinal-agent binary for distributed mode (#886); design doc follow-up #887 | ✅ |
+| 2026-04-20 | 2 | 0 | 633 | fix(ci): Demo E2E CRD wait + Flux pipeline context (#897); docs drift: kardinal-agent roadmap + design doc 14 (#898) | ✅ |
