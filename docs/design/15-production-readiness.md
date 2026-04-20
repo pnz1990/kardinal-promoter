@@ -45,7 +45,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ### Lens 1: Kargo parity — capability gaps that lose competitive evaluations
 
-- 🔲 **Bundle history GC — `historyLimit` is defined in the API but never enforced** — `api/v1alpha1/pipeline_types.go` declares `Pipeline.spec.historyLimit` but no reconciler reads it to delete old Bundles. After 1000 deployments in production, etcd holds 1000+ Bundle objects, all their PromotionSteps, AuditEvents, and PRStatus CRDs. At scale this will OOM etcd or exhaust the API server list cache. The bundle reconciler must enforce `historyLimit` (default: 50) by deleting terminal Bundles (Verified/Failed/Superseded) beyond the limit, oldest first. Kargo's Warehouse enforces `maxFreightAge`. This is a production-blocker that no one has hit yet only because there are zero production deployments.
+- ✅ **Bundle history GC — `historyLimit` enforced by bundle reconciler** (PR #910, 2026-04-20) — `Pipeline.spec.historyLimit` is now enforced in `pkg/reconciler/bundle/reconciler.go:enforceHistoryLimit`. On each new Bundle creation, terminal Bundles (Verified/Failed/Superseded) beyond the limit are deleted oldest-first. Default limit: 50. Kargo parity achieved.
 
 - 🔲 **No outbound event notifications** — Kargo integrates with Argo CD Notifications engine for Slack/PagerDuty/Teams webhooks on promotion events (started, succeeded, failed, blocked). kardinal has zero outbound notification capability. A platform team that deploys this to production today cannot be paged when a promotion fails or a gate blocks prod for 48 hours. Minimum viable: a `NotificationHook` CRD with a `webhook.url` + optional `Authorization` header + a template for the event body. Emit on: Bundle.Verified, Bundle.Failed, PolicyGate blocked (first block, not every re-eval), PromotionStep.Failed.
 
@@ -116,7 +116,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 ## Triage notes
 
 **Must-fix before v1.0 (any one of these is a production-blocker):**
-1. Bundle history GC (historyLimit) — etcd OOM risk
+1. ~~Bundle history GC (historyLimit)~~ ✅ Done (PR #910) — enforced in bundle reconciler
 2. ~~PromotionStep timeout~~ ✅ Done (PR #906) — WaitingForMerge timeout added
 3. UI API authentication — security review failure
 4. Reconciler panic recovery — crash loop on malformed CRDs

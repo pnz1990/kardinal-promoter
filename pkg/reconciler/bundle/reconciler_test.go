@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -1568,4 +1569,260 @@ func TestBundleReconciler_EmptyPipelineSpecHash_NoGraphDeletion(t *testing.T) {
 		types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &updated))
 	assert.NotEmpty(t, updated.Status.PipelineSpecHash,
 		"PipelineSpecHash must be saved after first reconcile to prevent future spurious deletions")
+}
+
+// TestBundleReconciler_HistoryGC_DeletesOldestTerminal verifies that when a new Bundle
+// is created and there are more terminal Bundles than historyLimit, the oldest terminal
+// Bundles are deleted first (spec #910 O1, O3).
+func TestBundleReconciler_HistoryGC_DeletesOldestTerminal(t *testing.T) {
+	const limit = 3
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			HistoryLimit: limit,
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	// Create 4 terminal bundles — one more than the limit.
+	// oldest → newest: v1, v2, v3, v4. v1 should be deleted.
+	bundles := []*kardinalv1alpha1.Bundle{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v1",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v2",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Superseded"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v3",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Failed"},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "my-app-v4",
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+		},
+	}
+
+	// The new bundle (v5) — no phase yet — triggers GC.
+	newBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-v5",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)),
+		},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+
+	s := newScheme()
+	objs := []client.Object{pipeline, newBundle}
+	for _, b := range bundles {
+		objs = append(objs, b)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithStatusSubresource(newBundle).
+		WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", func(obj client.Object) []string {
+			b, ok := obj.(*kardinalv1alpha1.Bundle)
+			if !ok || b.Spec.Pipeline == "" {
+				return nil
+			}
+			return []string{b.Spec.Pipeline}
+		}).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-v5", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// v1 (oldest) must be deleted.
+	var v1 kardinalv1alpha1.Bundle
+	err = c.Get(context.Background(), types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &v1)
+	assert.True(t, apierrors.IsNotFound(err), "oldest terminal bundle (v1) must have been deleted by GC")
+
+	// v2, v3, v4 must still exist (they are within the limit after deleting v1).
+	for _, name := range []string{"my-app-v2", "my-app-v3", "my-app-v4"} {
+		var b kardinalv1alpha1.Bundle
+		require.NoError(t, c.Get(context.Background(),
+			types.NamespacedName{Name: name, Namespace: "default"}, &b),
+			"bundle %s must still exist", name)
+	}
+}
+
+// TestBundleReconciler_HistoryGC_DefaultLimit verifies that when Pipeline.spec.historyLimit
+// is unset (zero), the default limit of 50 is applied (spec #910 O2).
+func TestBundleReconciler_HistoryGC_DefaultLimit(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			// HistoryLimit intentionally unset (zero value → use default 50)
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	// Create 51 terminal bundles — one more than the default limit of 50.
+	objs := []client.Object{pipeline}
+	statusObjs := []client.Object{}
+	for i := range 51 {
+		b := &kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              fmt.Sprintf("my-app-old-%03d", i),
+				Namespace:         "default",
+				CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC)),
+			},
+			Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+			Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+		}
+		objs = append(objs, b)
+		statusObjs = append(statusObjs, b)
+	}
+	// The new bundle that triggers GC.
+	newBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-new",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)),
+		},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+	objs = append(objs, newBundle)
+	statusObjs = append(statusObjs, newBundle)
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(objs...).
+		WithStatusSubresource(statusObjs...).
+		WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", func(obj client.Object) []string {
+			b, ok := obj.(*kardinalv1alpha1.Bundle)
+			if !ok || b.Spec.Pipeline == "" {
+				return nil
+			}
+			return []string{b.Spec.Pipeline}
+		}).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-new", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// After GC: the oldest bundle (my-app-old-000) must be deleted.
+	var oldest kardinalv1alpha1.Bundle
+	err = c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-old-000", Namespace: "default"}, &oldest)
+	assert.True(t, apierrors.IsNotFound(err),
+		"oldest terminal bundle must be deleted when historyLimit=50 (default) and 51 exist")
+
+	// Exactly 50 old bundles should remain (my-app-old-001 through my-app-old-050).
+	var remaining kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &remaining,
+		client.InNamespace("default"),
+		client.MatchingFields{"spec.pipeline": "my-app"},
+	))
+	// 50 terminal + 1 new (Available) = 51 total remaining
+	assert.LessOrEqual(t, len(remaining.Items), 51,
+		"total bundles must be at most 51 (50 terminal + 1 new Available)")
+}
+
+// TestBundleReconciler_HistoryGC_NonTerminalNotDeleted verifies that non-terminal
+// Bundles (Available, Promoting) are never deleted by history GC (spec #910 O4).
+func TestBundleReconciler_HistoryGC_NonTerminalNotDeleted(t *testing.T) {
+	const limit = 1
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			HistoryLimit: limit,
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	// One terminal bundle (Verified) and one non-terminal (Promoting).
+	// With historyLimit=1, after adding the new bundle we'd have 1 terminal — no GC needed.
+	// But a Promoting bundle must never be deleted.
+	terminalBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-old",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+	}
+	promotingBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-promoting",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)),
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// New bundle with historyLimit=1 — after GC there should be exactly 1 terminal.
+	// The terminal bundle (my-app-old) is at the limit, no excess to delete.
+	newBundle := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app-new",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)),
+		},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "my-app"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, terminalBundle, promotingBundle, newBundle).
+		WithStatusSubresource(newBundle).
+		WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", func(obj client.Object) []string {
+			b, ok := obj.(*kardinalv1alpha1.Bundle)
+			if !ok || b.Spec.Pipeline == "" {
+				return nil
+			}
+			return []string{b.Spec.Pipeline}
+		}).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-app-new", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// The Promoting bundle must never be deleted, regardless of historyLimit.
+	var promoting kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-promoting", Namespace: "default"}, &promoting),
+		"Promoting bundle must NOT be deleted by history GC")
+
+	// The terminal bundle is at the limit (1 terminal = 1 allowed) — must not be deleted either.
+	var terminal kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "my-app-old", Namespace: "default"}, &terminal),
+		"terminal bundle within limit must not be deleted")
 }
