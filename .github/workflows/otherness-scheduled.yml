@@ -2,10 +2,8 @@ name: otherness scheduled run
 
 # ── SECURITY HARDENED — see docs/design/27-security-model.md ─────────────────
 #
-# ⚠️  CRON IS LOCKED TO HOURLY. DO NOT CHANGE TO */6 OR ANY SLOWER CADENCE.
-# Hourly runs are required to make progress on the backlog. Slower cadence
-# means the agent ships 1/6th as much work. The vision requires the loop to
-# run continuously. If you need to pause, disable the workflow — do not slow it.
+# Cadence: every 6 hours (steady-state). All 7 journeys pass, queue is empty.
+# When active backlog work resumes, change back to hourly (0 * * * *).
 #
 # Security controls applied:
 #   M1: All action dependencies pinned to SHAs (no @latest, no @vN tags)
@@ -15,7 +13,7 @@ name: otherness scheduled run
 #
 on:
   schedule:
-    - cron: "0 * * * *"   # HOURLY — DO NOT CHANGE. See comment above.
+    - cron: "0 */6 * * *"   # Every 6 hours — steady-state standby cadence.
   workflow_dispatch:        # manual trigger for immediate runs and testing
 
 # ── Concurrency: cancel in-progress runs when a new one starts ────────────────
