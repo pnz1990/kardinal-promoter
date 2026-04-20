@@ -279,35 +279,35 @@ jobs:
           kubectl create deployment s9-test-app --image=nginx:alpine -n s9-health-test --dry-run=client -o yaml \
             | kubectl apply -f -
           kubectl scale deployment s9-test-app --replicas=0 -n s9-health-test || true
-          # Apply a minimal pipeline with resource health check
-          cat <<'PEOF' | kubectl apply -f -
-          apiVersion: kardinal.io/v1alpha1
-          kind: Pipeline
-          metadata:
-            name: s9-health-test
-            namespace: default
-          spec:
-            git:
-              url: https://github.com/pnz1990/kardinal-demo
-              branch: main
-              layout: directory
-              provider: github
-              secretRef:
-                name: github-token
-            environments:
-              - name: test
-                path: environments/test
-                update:
-                  strategy: kustomize
-                approval: auto
-                health:
-                  type: resource
-                  timeout: 30s
-                  resource:
-                    kind: Deployment
-                    name: s9-test-app
-                    namespace: s9-health-test
-PEOF
+          # Apply a minimal pipeline with resource health check (using printf to avoid heredoc column-0 YAML issues)
+          printf '%s\n' \
+            'apiVersion: kardinal.io/v1alpha1' \
+            'kind: Pipeline' \
+            'metadata:' \
+            '  name: s9-health-test' \
+            '  namespace: default' \
+            'spec:' \
+            '  git:' \
+            '    url: https://github.com/pnz1990/kardinal-demo' \
+            '    branch: main' \
+            '    layout: directory' \
+            '    provider: github' \
+            '    secretRef:' \
+            '      name: github-token' \
+            '  environments:' \
+            '  - name: test' \
+            '    path: environments/test' \
+            '    update:' \
+            '      strategy: kustomize' \
+            '    approval: auto' \
+            '    health:' \
+            '      type: resource' \
+            '      timeout: 30s' \
+            '      resource:' \
+            '        kind: Deployment' \
+            '        name: s9-test-app' \
+            '        namespace: s9-health-test' \
+            | kubectl apply -f -
           sleep 5
           S9_BUNDLE_OUTPUT=$(kardinal create bundle s9-health-test --image "ghcr.io/pnz1990/kardinal-test-app:sha-aaa0001" 2>&1 || true)
           echo "S9 bundle output: $S9_BUNDLE_OUTPUT"
