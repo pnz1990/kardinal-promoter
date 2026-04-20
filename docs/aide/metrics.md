@@ -17,3 +17,4 @@
 | 2026-04-20 | 1 | 0 | 663 | Fix design doc 13 stale items (PR #867); vision scan false-positive closed | ✅ |
 
 | 2026-04-20 | 1 | 0 | 663 | feat(ui): NodeDetail data-testid + E2E rollback tests un-skipped (#883); issue #871 closed | ✅ |
+| 2026-04-20 | 2 | 0 | 630 | feat(agent): kardinal-agent binary for distributed mode (#886); design doc follow-up #887 | ✅ |
