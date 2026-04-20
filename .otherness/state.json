@@ -291,6 +291,21 @@
         "size/xs",
         "priority/low"
       ]
+    },
+    "920": {
+      "title": "feat: reconciler panic recovery \u2014 enable WithRecoverPanic to prevent crash loops",
+      "state": "done",
+      "priority": "high",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "pr_number": "921",
+      "pr_merged": true,
+      "done_at": "2026-04-20T21:06:16Z"
     }
   },
   "session_heartbeats": {
