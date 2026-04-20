@@ -159,6 +159,11 @@ func main() {
 		// before the controller exits. Set to 30s — half the pod's
 		// terminationGracePeriodSeconds (60s) to leave room for cleanup. (#574)
 		GracefulShutdownTimeout: ptr(30 * time.Second),
+		// RecoverPanic is intentionally NOT set here. controller-runtime v0.23+ defaults
+		// RecoverPanic to true: a panic in any reconciler's Reconcile() method is caught
+		// by the framework, increments the ReconcilePanics metric, and returns a wrapped
+		// error for exponential backoff. DO NOT set RecoverPanic to false — that would
+		// revert to crash-loop-on-panic behaviour. (spec #920, docs/design/15-production-readiness.md)
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")

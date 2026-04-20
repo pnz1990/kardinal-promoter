@@ -59,7 +59,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ### Lens 2: Production stability — what breaks after a week in production
 
-- 🔲 **No reconciler panic recovery** — there are zero `recover()` calls in any reconciler. A malformed CRD (e.g. a Pipeline with a CEL expression that panics the kro library) will crash the controller binary, and the controller will restart in a loop until the CRD is fixed. This is a production-availability issue. Wrap each reconciler's `Reconcile()` method with a deferred `recover()` that logs the panic and returns a non-fatal error with exponential backoff. controller-runtime's `WithRecoverPanic` option may handle this — evaluate and enable it.
+- ✅ **Reconciler panic recovery — handled by controller-runtime default** (PR #920, 2026-04-20) — Verified against controller-runtime v0.23.3 source: `RecoverPanic` defaults to `true` in `pkg/internal/controller/controller.go`. A panic in any reconciler's `Reconcile()` increments `ReconcilePanics` metric, calls panic handlers, and returns a wrapped error for exponential backoff — no crash loop. DO NOT set `RecoverPanic: false` in `ctrl.Options{}`. See comment in `cmd/kardinal-controller/main.go`.
 
 - ~~🔲 **No PromotionStep timeout**~~ ✅ Done (PR #906) — `environment.waitForMergeTimeout` added to Pipeline environments.
 
@@ -119,7 +119,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 1. ~~Bundle history GC (historyLimit)~~ ✅ Done (PR #910) — enforced in bundle reconciler
 2. ~~PromotionStep timeout~~ ✅ Done (PR #906) — WaitingForMerge timeout added
 3. UI API authentication — security review failure
-4. Reconciler panic recovery — crash loop on malformed CRDs
+4. ~~Reconciler panic recovery~~ ✅ Done (PR #920) — handled by controller-runtime v0.23.3 default (RecoverPanic=true)
 5. Bundle `status.conditions` never populated — breaks `kubectl wait` and GitOps tooling
 6. HTTP plain-text for UI and webhook servers — TLS gap flagged in enterprise security reviews
 
