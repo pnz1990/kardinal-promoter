@@ -30,8 +30,9 @@ test.describe('Journey 011 — Rollback button in NodeDetail', () => {
     const testNode = page.getByRole('button', { name: /test — /i })
     await testNode.click()
     await expect(page.getByLabel('Close')).toBeVisible()
-    // Rollback button is rendered inside NodeDetail for PromotionStep nodes
-    const rollbackBtn = page.getByRole('button', { name: /rollback/i })
+    // Rollback button inside NodeDetail — scope to panel to avoid matching DAG node buttons
+    const nodeDetail = page.locator('[data-testid="node-detail"], [aria-label*="Node detail"], .node-detail').first()
+    const rollbackBtn = nodeDetail.getByRole('button', { name: /rollback/i }).first()
     await expect(rollbackBtn).toBeVisible()
   })
 
@@ -45,7 +46,9 @@ test.describe('Journey 011 — Rollback button in NodeDetail', () => {
       req.url().includes('/api/v1/ui/rollback') && req.method() === 'POST'
     )
 
-    const rollbackBtn = page.getByRole('button', { name: /rollback/i })
+    // Scope to NodeDetail panel to avoid strict mode violation from multiple rollback buttons
+    const nodeDetail = page.locator('[data-testid="node-detail"], [aria-label*="Node detail"], .node-detail').first()
+    const rollbackBtn = nodeDetail.getByRole('button', { name: /rollback/i }).first()
     await rollbackBtn.click()
 
     // Wait for the API call — mock server responds with { bundle: 'rollback-bundle', message: 'rollback started' }
