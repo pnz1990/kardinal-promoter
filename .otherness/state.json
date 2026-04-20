@@ -1,0 +1,29 @@
+{
+  "features": {
+    "issue-491": {
+      "state": "done",
+      "title": "OCI source watcher"
+    },
+    "issue-493": {
+      "state": "done",
+      "title": "Git source watcher"
+    },
+    "issue-498": {
+      "state": "done",
+      "title": "Pipeline deployment metrics"
+    },
+    "issue-506": {
+      "state": "done",
+      "title": "ChangeWindow CEL functions"
+    },
+    "issue-14-5-kardinal-agent": {
+      "state": "done",
+      "title": "feat(agent): kardinal-agent binary for spoke-cluster distributed mode",
+      "pr_number": 886,
+      "pr_merged": true,
+      "done_at": "2026-04-20T17:46:04Z"
+    }
+  },
+  "session_heartbeats": {},
+  "report_issue": 1
+}
