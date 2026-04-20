@@ -5,6 +5,7 @@
 project:
   name: kardinal-promoter
   repo: pnz1990/kardinal-promoter
+  agent_version: 4daf5ea695f0147ac255dc434ccf703055e85a1c  # pin otherness to this SHA (security: doc 27 §M2)
   report_issue: 1
   board_url: https://github.com/users/pnz1990/projects/1
   pr_label: kardinal
