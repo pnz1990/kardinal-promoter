@@ -16,4 +16,4 @@
 | 2026-04-20 | 3 | 0 | 747 | Fix pdca.yml YAML parse, 6h cadence standby, GH_TOKEN scope preflight restored | ✅ |
 | 2026-04-20 | 1 | 0 | 663 | Fix design doc 13 stale items (PR #867); vision scan false-positive closed | ✅ |
 
-| 2026-04-20 | 3 | 1 | 663 | Standby: 7/7 journeys ✅, CI security cosmetic (#871), krocodile 4c behind (no breaking changes) | ✅ |
+| 2026-04-20 | 1 | 0 | 663 | feat(ui): NodeDetail data-testid + E2E rollback tests un-skipped (#883); issue #871 closed | ✅ |
