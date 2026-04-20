@@ -394,15 +394,85 @@ The static React assets at `/ui/*` are **not** gated — they contain no sensiti
 
 ### Accessing the UI securely (before TLS is configured)
 
-Until TLS is added (tracked in [#911](https://github.com/pnz1990/kardinal-promoter/issues/911)), the recommended access method is:
+Until TLS is configured, the recommended access method is:
 
 ```bash
 kubectl port-forward svc/kardinal-kardinal-promoter 8082:8082 -n kardinal-system
 ```
 
-Then access the UI at `http://localhost:8082/ui/`. The browser will display a warning when accessed over plain HTTP (`window.location.protocol != 'https:'`).
+Then access the UI at `http://localhost:8082/ui/`. The browser may display a warning when accessed over plain HTTP (`window.location.protocol != 'https:'`).
 
-> **Production note**: Do not expose port 8082 via a LoadBalancer or Ingress without TLS and auth enabled. Use port-forward for operator access until TLS is configured.
+> **Production note**: Do not expose port 8082 via a LoadBalancer or Ingress without TLS and auth enabled. Use port-forward for operator access or configure TLS as described below.
+
+---
+
+## TLS Configuration
+
+Both the UI server (`:8082`) and the webhook/bundle-API server (`:8083`) support TLS via the `--tls-cert-file` and `--tls-key-file` flags (environment variables `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`).
+
+When both flags are set, both servers switch to `https.ListenAndServeTLS`. When neither is set, both remain on plain HTTP (backwards compatible). Providing only one of the two flags is detected at startup and logs a warning before falling back to plain HTTP.
+
+### Helm: cert-manager integration (recommended)
+
+Use cert-manager to provision a certificate and mount it as a Kubernetes Secret:
+
+```yaml
+# 1. Create a Certificate using cert-manager
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kardinal-tls
+  namespace: kardinal-system
+spec:
+  secretName: kardinal-tls
+  duration: 2160h  # 90 days
+  renewBefore: 360h
+  dnsNames:
+    - kardinal-kardinal-promoter.kardinal-system.svc.cluster.local
+  issuerRef:
+    name: letsencrypt-prod  # your ClusterIssuer
+    kind: ClusterIssuer
+```
+
+```yaml
+# 2. Mount the cert-manager Secret and configure Helm
+controller:
+  tlsCertFile: /etc/kardinal-tls/tls.crt
+  tlsKeyFile: /etc/kardinal-tls/tls.key
+
+# Add to values.yaml:
+extraVolumes:
+  - name: kardinal-tls
+    secret:
+      secretName: kardinal-tls
+extraVolumeMounts:
+  - name: kardinal-tls
+    mountPath: /etc/kardinal-tls
+    readOnly: true
+```
+
+Or set directly at deploy time:
+
+```bash
+helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+  --set controller.tlsCertFile=/etc/kardinal-tls/tls.crt \
+  --set controller.tlsKeyFile=/etc/kardinal-tls/tls.key
+```
+
+### Self-signed certificates (development only)
+
+Generate a self-signed cert for local testing:
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout tls.key -out tls.crt \
+  -days 365 -nodes -subj '/CN=localhost'
+
+kubectl create secret tls kardinal-tls \
+  --cert=tls.crt --key=tls.key \
+  -n kardinal-system
+```
+
+> **Do not use self-signed certificates in production.** Use cert-manager or a trusted CA.
 
 ---
 
