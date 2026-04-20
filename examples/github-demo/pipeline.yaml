@@ -25,8 +25,6 @@ spec:
       approval: auto
       health:
         type: argocd
-        argocd:
-          name: kardinal-test-app-test
 
     - name: uat
       path: environments/uat
@@ -38,8 +36,6 @@ spec:
         policy: fail-on-alarm
       health:
         type: argocd
-        argocd:
-          name: kardinal-test-app-uat
 
     # prod: full GitHub feature exercise
     # - PR opened with structured evidence body
@@ -59,8 +55,6 @@ spec:
       onHealthFailure: rollback
       health:
         type: argocd
-        argocd:
-          name: kardinal-test-app-prod
         timeout: 15m
 
   historyLimit: 20
