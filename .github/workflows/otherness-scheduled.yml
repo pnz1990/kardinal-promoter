@@ -24,12 +24,11 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      actions: write
       statuses: write
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
           # Use GH_TOKEN (PAT) — pushes from a PAT trigger other workflows.
@@ -63,7 +62,7 @@ jobs:
           [ $SYNCED -eq 1 ] && echo "[otherness] Command files synced." || echo "[otherness] Commands already current."
 
       - name: Configure AWS credentials (Bedrock via OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c  # v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: otherness-bedrock
@@ -143,7 +142,7 @@ echo \"<new-token>\" | gh secret set GH_TOKEN --repo $REPO
           echo "GH_TOKEN scopes OK (repo + workflow present)."
 
       - name: Run otherness
-        uses: anomalyco/opencode/github@latest
+        uses: anomalyco/opencode/github@23fb5e0516c99ac04a1aa46c193efda2e1b9bb24  # v1.14.18
         env:
           # Bedrock credentials — injected by the OIDC step above
           AWS_REGION: us-east-1
@@ -168,5 +167,12 @@ echo \"<new-token>\" | gh secret set GH_TOKEN --repo $REPO
                     m = re.match(r'^\s+agents_path:\s*[\"\'']?([^\"\'#\n]+)[\"\'']?', line)
                     if m: print(os.path.expanduser(m.group(1).strip())); break
             " 2>/dev/null || echo "$HOME/.otherness/agents")
+
+            # Security: validate agents_path is within ~/.otherness (doc 27 §M6)
+            ALLOWED_PREFIX="$HOME/.otherness"
+            if [[ "$AGENTS_PATH" != "$ALLOWED_PREFIX"* ]]; then
+              echo "Security: agents_path '$AGENTS_PATH' outside allowed prefix. Refusing."
+              exit 1
+            fi
 
             Read and follow $AGENTS_PATH/standalone.md.
