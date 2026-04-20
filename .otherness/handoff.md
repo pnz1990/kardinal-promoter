@@ -1,18 +1,17 @@
-## Session Handoff — 2026-04-20T04:31:58Z
+## Session Handoff — 2026-04-20T05:40:24Z
 
 ### This session
-4 PRs merged:
-- PR #860: fix(ci): replace heredoc with printf in pdca.yml scenario 9
-- PR #861: chore(ci): reduce scheduled cadence from 1h to 6h (steady-state)
-- PR #862: feat(ci): add OAuth scope check to GH_TOKEN preflight
-- PR #863: chore(sm): batch metrics 2026-04-20
+1 PR merged:
+- PR #867: docs(design): fix stale items in 13-scheduled-execution.md
 
-**Fixed**: pdca.yml YAML parse error (PEOF heredoc terminator at column 0).
-**Shipped**: 6h scheduled cadence for steady-state standby.
-**Restored**: GH_TOKEN OAuth scope check (removed by PR #845, re-added PR #862).
+**Fixed**: Vision scan false positive — PR #866 incorrectly flagged existing .github/workflows/otherness-scheduled.yml as missing.
+**Corrected**: Cron description (hourly→6h), permission count (6→5), removed non-existent otherness-config.yaml schedule.cron item.
 
 ### Queue
-**Queue empty**. No open kardinal-labeled issues with size/priority labels remain.
+**Queue empty**. No open kardinal-labeled feature issues. All design doc Future sections clear.
+
+### krocodile
+3 commits behind HEAD (threshold 5 — no action). Internal compilation caching refactor, no breaking changes.
 
 ### CI status (main)
 success
@@ -21,4 +20,4 @@ success
 none — standby
 
 ### Notes
-Session: sess-3a62d618 | otherness@e00d1ea
+Session: sess-f0cd6fc5 | otherness@2f379cf
