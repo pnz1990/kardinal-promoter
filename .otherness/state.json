@@ -193,7 +193,7 @@
     },
     "911": {
       "title": "feat: TLS for UI and webhook HTTP servers",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -201,7 +201,9 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     },
     "912": {
       "title": "feat: CORS lockdown for UI API",
@@ -299,7 +301,7 @@
         "priority/low"
       ],
       "pr_merged": true,
-      "done_at": "2026-04-20T22:57:15Z"
+      "done_at": "2026-04-20T23:16:22Z"
     },
     "920": {
       "title": "feat: reconciler panic recovery \u2014 enable WithRecoverPanic to prevent crash loops",
@@ -333,7 +335,7 @@
     },
     "926": {
       "title": "docs: document UI API authentication in security guide",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kind/docs",
@@ -341,7 +343,9 @@
         "priority/medium",
         "size/xs",
         "kardinal"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     }
   },
   "session_heartbeats": {
