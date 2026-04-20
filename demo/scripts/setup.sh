@@ -460,10 +460,10 @@ if [[ "$INSTALL_ARGO_ROLLOUTS" == "true" ]]; then
     -f "https://github.com/argoproj/argo-rollouts/releases/download/v1.7.1/install.yaml"
   kubectl -n argo-rollouts rollout status deploy/argo-rollouts --timeout=120s 2>/dev/null || true
 
-  # Apply Rollout fixture
+  # Apply Rollout fixture only (pipeline.yaml requires the control cluster — applied separately below)
   kubectl create namespace kardinal-test-app-test --dry-run=client -o yaml | kubectl apply -f -
-  kubectl apply -f "${DEMO_DIR}/manifests/rollouts/"
-  # Apply the rollouts Pipeline on the control cluster
+  kubectl apply -f "${DEMO_DIR}/manifests/rollouts/rollout.yaml"
+  # Apply the rollouts Pipeline on the control cluster (Pipeline CRD is only there)
   kubectl config use-context "kind-${CONTROL_CLUSTER}"
   kubectl apply -f "${DEMO_DIR}/manifests/rollouts/pipeline.yaml"
   success "[9/13] Argo Rollouts installed and Rollout applied"
@@ -487,9 +487,9 @@ if [[ "$INSTALL_FLAGGER" == "true" ]]; then
     --wait --timeout=120s 2>/dev/null || \
   kubectl apply -f "https://raw.githubusercontent.com/fluxcd/flagger/main/artifacts/flagger/crd.yaml" 2>/dev/null || true
 
-  # Apply Flagger Canary and Deployment
+  # Apply Flagger Canary and Deployment only (pipeline.yaml requires the control cluster)
   kubectl create namespace kardinal-test-app-test --dry-run=client -o yaml | kubectl apply -f -
-  kubectl apply -f "${DEMO_DIR}/manifests/flagger/"
+  kubectl apply -f "${DEMO_DIR}/manifests/flagger/canary.yaml"
   # Apply the flagger Pipeline on the control cluster
   kubectl config use-context "kind-${CONTROL_CLUSTER}"
   kubectl apply -f "${DEMO_DIR}/manifests/flagger/pipeline.yaml"
