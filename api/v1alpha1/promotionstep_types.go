@@ -141,6 +141,15 @@ type PromotionStepStatus struct {
 	// +optional
 	HealthCheckExpiry *metav1.Time `json:"healthCheckExpiry,omitempty"`
 
+	// WaitForMergeExpiry is the deadline for the PR merge, computed as
+	// (time step entered WaitingForMerge) + env.waitForMergeTimeout. Set once on
+	// the first reconcile in WaitingForMerge state when the environment configures
+	// a non-zero waitForMergeTimeout. Nil when no timeout is configured.
+	// Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when
+	// writing to CRD status.
+	// +optional
+	WaitForMergeExpiry *metav1.Time `json:"waitForMergeExpiry,omitempty"`
+
 	// WorkDir is the working directory on the controller node used for git operations
 	// (clone, commit, push) and kustomize builds. Persisted to etcd so that a restarted
 	// controller can re-use the same directory and resume in-flight git work.

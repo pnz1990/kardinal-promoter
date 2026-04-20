@@ -355,6 +355,155 @@ func TestWaitingForMerge_FailsOnPRClosed(t *testing.T) {
 	assert.Contains(t, updated.Status.Message, "closed without merging")
 }
 
+// TestWaitingForMerge_TimeoutFires verifies that a WaitForMerge timeout transitions
+// the step to Failed when the expiry has elapsed.
+func TestWaitingForMerge_TimeoutFires(t *testing.T) {
+	scheme := buildScheme(t)
+
+	// Build a pipeline with a 1-minute WaitForMergeTimeout on prod environment.
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto"},
+				{Name: "prod", Approval: "pr-review", WaitForMergeTimeout: "1m"},
+			},
+		},
+	}
+	bundle := makeBundle("bundle-1", "nginx-demo")
+	step := makeStep("step-timeout", "nginx-demo", "bundle-1", "prod")
+	step.Spec.PRStatusRef = "prstatus-step-timeout"
+	step.Status.State = "WaitingForMerge"
+	// Pre-set an expiry in the past to simulate timeout elapsed.
+	pastExpiry := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+	step.Status.WaitForMergeExpiry = &pastExpiry
+
+	// PRStatus still open (not merged).
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-timeout", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/test/repo/pull/10", PRNumber: 10, Repo: "test/repo"},
+		Status:     v1alpha1.PRStatusStatus{Merged: false, Open: true, LastCheckedAt: &now},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PRStatus{},
+	).WithObjects(step, pipeline, bundle, prStatus).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-timeout", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-timeout", Namespace: "default"}, &updated))
+	assert.Equal(t, "Failed", updated.Status.State, "step should be Failed after timeout")
+	assert.Contains(t, updated.Status.Message, "wait-for-merge timeout", "message should mention timeout")
+	assert.Nil(t, updated.Status.WaitForMergeExpiry, "expiry should be cleared on failure")
+}
+
+// TestWaitingForMerge_TimeoutNotConfigured verifies that when no WaitForMergeTimeout is set,
+// the step stays in WaitingForMerge indefinitely (no timeout).
+func TestWaitingForMerge_TimeoutNotConfigured(t *testing.T) {
+	scheme := buildScheme(t)
+	step := makeStep("step-no-timeout", "nginx-demo", "bundle-1", "prod")
+	step.Spec.PRStatusRef = "prstatus-step-no-timeout"
+	step.Status.State = "WaitingForMerge"
+	// No WaitForMergeExpiry set — no timeout configured.
+	pipeline := makePipeline("nginx-demo") // prod env has no WaitForMergeTimeout
+	bundle := makeBundle("bundle-1", "nginx-demo")
+
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-no-timeout", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/test/repo/pull/11", PRNumber: 11, Repo: "test/repo"},
+		Status:     v1alpha1.PRStatusStatus{Merged: false, Open: true, LastCheckedAt: &now},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PRStatus{},
+	).WithObjects(step, pipeline, bundle, prStatus).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-no-timeout", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Greater(t, result.RequeueAfter, time.Duration(0), "should requeue")
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-no-timeout", Namespace: "default"}, &updated))
+	assert.Equal(t, "WaitingForMerge", updated.Status.State, "step should remain WaitingForMerge without timeout")
+	assert.Nil(t, updated.Status.WaitForMergeExpiry, "no expiry should be set when timeout not configured")
+}
+
+// TestWaitingForMerge_TimeoutNotYetReached verifies that when timeout is configured
+// but expiry hasn't elapsed, the step stays in WaitingForMerge.
+func TestWaitingForMerge_TimeoutNotYetReached(t *testing.T) {
+	scheme := buildScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo", Branch: "main"},
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test", Approval: "auto"},
+				{Name: "prod", Approval: "pr-review", WaitForMergeTimeout: "24h"},
+			},
+		},
+	}
+	bundle := makeBundle("bundle-1", "nginx-demo")
+	step := makeStep("step-not-expired", "nginx-demo", "bundle-1", "prod")
+	step.Spec.PRStatusRef = "prstatus-step-not-expired"
+	step.Status.State = "WaitingForMerge"
+	// Expiry set 23 hours in the future — not yet reached.
+	futureExpiry := metav1.NewTime(time.Now().Add(23 * time.Hour))
+	step.Status.WaitForMergeExpiry = &futureExpiry
+
+	now := metav1.Now()
+	prStatus := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-step-not-expired", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/test/repo/pull/12", PRNumber: 12, Repo: "test/repo"},
+		Status:     v1alpha1.PRStatusStatus{Merged: false, Open: true, LastCheckedAt: &now},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
+		&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}, &v1alpha1.PRStatus{},
+	).WithObjects(step, pipeline, bundle, prStatus).Build()
+
+	r := &promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "step-not-expired", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Greater(t, result.RequeueAfter, time.Duration(0), "should requeue while waiting")
+
+	var updated v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-not-expired", Namespace: "default"}, &updated))
+	assert.Equal(t, "WaitingForMerge", updated.Status.State, "step should remain WaitingForMerge")
+	assert.NotNil(t, updated.Status.WaitForMergeExpiry, "expiry should remain set")
+}
+
 // TestHealthCheckingToVerified verifies HealthChecking → Verified transition.
 func TestHealthCheckingToVerified(t *testing.T) {
 	scheme := buildScheme(t)

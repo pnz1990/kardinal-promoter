@@ -493,6 +493,48 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 // The PRStatusReconciler polls GitHub and writes status.merged/open.
 // This reconciler simply reads the CRD status — no GitHub API call here.
 func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	// Apply WaitForMerge timeout if configured (#905).
+	// Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when
+	// writing the expiry to CRD status; the subsequent comparison reads the stored value.
+	pipeline, pipelineErr := r.loadPipeline(ctx, ps)
+	if pipelineErr == nil && pipeline != nil {
+		env := findEnv(pipeline, ps.Spec.Environment)
+		if env.WaitForMergeTimeout != "" {
+			if d, err := time.ParseDuration(env.WaitForMergeTimeout); err == nil && d > 0 {
+				// Set expiry once on first entry into WaitingForMerge (idempotent).
+				if ps.Status.WaitForMergeExpiry == nil {
+					expiry := metav1.NewTime(time.Now().Add(d))
+					patch := client.MergeFrom(ps.DeepCopy())
+					ps.Status.WaitForMergeExpiry = &expiry
+					if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+						return ctrl.Result{}, fmt.Errorf("patch wait-for-merge expiry: %w", patchErr)
+					}
+					log.Info().
+						Str("environment", ps.Spec.Environment).
+						Dur("timeout", d).
+						Time("expiry", expiry.Time).
+						Msg("WaitForMerge timeout set")
+				}
+				// Check if timeout has elapsed.
+				if time.Now().After(ps.Status.WaitForMergeExpiry.Time) {
+					log.Warn().
+						Time("expiry", ps.Status.WaitForMergeExpiry.Time).
+						Dur("timeout", d).
+						Msg("wait-for-merge timeout exceeded — failing step")
+					patch := client.MergeFrom(ps.DeepCopy())
+					ps.Status.State = StateFailed
+					ps.Status.Message = fmt.Sprintf("wait-for-merge timeout after %s: PR was not merged within the configured deadline", d)
+					ps.Status.WaitForMergeExpiry = nil
+					if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+						return ctrl.Result{}, fmt.Errorf("patch failed (wait-for-merge timeout): %w", patchErr)
+					}
+					observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
+					return ctrl.Result{}, nil
+				}
+			}
+		}
+	}
+
 	prStatusName := ps.Spec.PRStatusRef
 	if prStatusName == "" {
 		// PRStatusRef not set — this is a pre-PRStatus PromotionStep (schema migration).
@@ -518,6 +560,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.State = StateHealthChecking
 		ps.Status.Message = fmt.Sprintf("PR #%d merged (via PRStatus CRD)", prs.Spec.PRNumber)
+		ps.Status.WaitForMergeExpiry = nil // clear expiry on successful transition
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch health-checking: %w", patchErr)
 		}
@@ -538,6 +581,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		patch := client.MergeFrom(ps.DeepCopy())
 		ps.Status.State = StateFailed
 		ps.Status.Message = fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber)
+		ps.Status.WaitForMergeExpiry = nil // clear expiry on transition out
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch failed on closed PR: %w", patchErr)
 		}

@@ -173,6 +173,13 @@ type EnvironmentSpec struct {
 	// Steps can include custom webhook steps alongside built-in step names.
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
+
+	// WaitForMergeTimeout is the maximum duration a PromotionStep will wait
+	// in the WaitingForMerge state before transitioning to Failed. When not set
+	// or zero, the step waits indefinitely (no timeout). Accepts Go duration
+	// strings: "24h", "72h", "168h", etc.
+	// +optional
+	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
 }
 
 // AutoRollbackSpec defines the automatic rollback policy for an environment.

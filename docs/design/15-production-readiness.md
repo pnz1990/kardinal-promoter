@@ -33,7 +33,8 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ## Present ✅
 
-- ✅ **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — Bundle now shows Type, Pipeline, Phase, Age. PromotionStep shows Pipeline, Env, Bundle, State, Age. Eliminates the need to `kubectl describe` to find which pipeline a step belongs to. (PR #902, 2026-04-20)
+- ✅ **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — Bundle now shows Type, Pipeline, Phase, Age. PromotionStep shows Pipeline, Env, Bundle, State, Age. Eliminates the need to `kubectl describe` to find which pipeline a step belongs to. (PR #903, 2026-04-20)
+- ✅ **WaitingForMerge timeout** — `environment.waitForMergeTimeout` on Pipeline environments (e.g. `"24h"`) causes a PromotionStep stuck in `WaitingForMerge` to transition to `Failed` after the configured duration. No timeout by default (existing behavior preserved). Closes production-blocker: abandoned PR reviewers no longer stall pipelines indefinitely. (PR #906, 2026-04-20)
 
 ---
 
@@ -57,7 +58,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - 🔲 **No reconciler panic recovery** — there are zero `recover()` calls in any reconciler. A malformed CRD (e.g. a Pipeline with a CEL expression that panics the kro library) will crash the controller binary, and the controller will restart in a loop until the CRD is fixed. This is a production-availability issue. Wrap each reconciler's `Reconcile()` method with a deferred `recover()` that logs the panic and returns a non-fatal error with exponential backoff. controller-runtime's `WithRecoverPanic` option may handle this — evaluate and enable it.
 
-- 🔲 **No PromotionStep timeout** — a PromotionStep can stall indefinitely in any phase (e.g. `WaitingForMerge` on a PR that the reviewer forgot about, or `HealthChecking` on a Deployment that never becomes Ready). There is no `spec.timeout` on either PromotionStep or Pipeline environments. After one week in production, a platform team will have at least one stalled step consuming controller reconcile slots forever. Add `environment.timeout` to Pipeline spec (default: 24h for `WaitingForMerge`, 1h for health checks). When exceeded: transition to Failed, emit a notification event.
+- ~~🔲 **No PromotionStep timeout**~~ ✅ Done (PR #906) — `environment.waitForMergeTimeout` added to Pipeline environments.
 
 - 🔲 **ScheduleClock reconciler requeue loop risk** — `pkg/reconciler/scheduleclock/reconciler.go` returns `ctrl.Result{RequeueAfter: interval}` on every reconcile. If `interval` is misconfigured (e.g. set to 0 or negative), this creates a hot reconcile loop that saturates the controller. Add a minimum interval guard (5s floor, already noted in doc comment but not enforced in code).
 
@@ -101,14 +102,14 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 **Must-fix before v1.0 (any one of these is a production-blocker):**
 1. Bundle history GC (historyLimit) — etcd OOM risk
-2. PromotionStep timeout — no stuck-forever protection
+2. ~~PromotionStep timeout~~ ✅ Done (PR #906) — WaitingForMerge timeout added
 3. UI API authentication — security review failure
 4. Reconciler panic recovery — crash loop on malformed CRDs
 
 **Must-fix for competitive parity with Kargo:**
 1. Outbound event notifications (Slack/webhook)
 2. ArgoCD-native image update step
-3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #902)
+3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #903)
 
 **Adoption wins (high effort/impact):**
 1. `kardinal init` scaffolding command
