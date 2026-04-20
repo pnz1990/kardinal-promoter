@@ -1102,6 +1102,27 @@
       "pr_merged": true,
       "pr_number": 826,
       "done_at": "2026-04-19T06:19:36Z"
+    },
+    "832-token-preflight": {
+      "state": "done",
+      "issue": "832",
+      "title": "feat(ci): GH_TOKEN scope preflight \u2014 detect expired token before agent run",
+      "size": "s",
+      "areas": [
+        "area/test"
+      ],
+      "design_doc": "docs/design/13-scheduled-execution.md",
+      "assigned_to": "sess-8bedca7e",
+      "assigned_at": "2026-04-20T00:00:04Z",
+      "branch": "feat/832-token-preflight",
+      "worktree": "../kardinal-promoter.832-token-preflight",
+      "file_spaces": [
+        ".github/workflows/"
+      ],
+      "created_at": "2026-04-20T00:00:04Z",
+      "pr_number": 836,
+      "pr_merged": true,
+      "done_at": "2026-04-20T00:06:35Z"
     }
   },
   "session_heartbeats": {
@@ -1129,6 +1150,6 @@
     "next_item": "none",
     "notes": "All 3 batches in this session complete. Loop continues per human directive."
   },
-  "sm_cycle_count": 4,
-  "pm_cycle_count": 3
+  "sm_cycle_count": 6,
+  "pm_cycle_count": 4
 }
