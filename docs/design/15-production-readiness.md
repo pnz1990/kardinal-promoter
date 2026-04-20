@@ -38,14 +38,14 @@ Every item in this doc was identified by examining the live codebase against fiv
 - ✅ **ScheduleClock minimum interval guard** — `pkg/reconciler/scheduleclock/reconciler.go` enforces `minInterval = 5 * time.Second` in `parseInterval()`. A zero or negative `spec.interval` is clamped to 5s, not looped at 0. (verified 2026-04-20; this item was incorrectly listed as Future)
 - ✅ **SBOM attestation on the controller image** — `.github/workflows/release.yml` generates an SBOM with `anchore/sbom-action` (syft) and attaches it as a cosign attestation via `cosign attest`. SLSA Level 2 provenance also attached. (verified 2026-04-20; item was incorrectly listed as Future)
 - ✅ **ValidatingAdmissionPolicy for Pipeline, Bundle, PolicyGate CRDs** — `chart/kardinal-promoter/templates/validating-admission-policy.yaml` validates required fields, updateStrategy enum, approval enum, and spec.expression at admission time. Requires Kubernetes 1.28+. Enabled by default; set `validatingAdmissionPolicy.enabled=false` for older clusters. Remaining gap: cycle detection in `dependsOn` (requires a webhook, not expressible in CEL VAP) — see Future item below. (verified 2026-04-20)
+- ✅ **Bundle history GC — `historyLimit` enforced by bundle reconciler** (PR #910, 2026-04-20) — `Pipeline.spec.historyLimit` is now enforced in `pkg/reconciler/bundle/reconciler.go:enforceHistoryLimit`. On each new Bundle creation, terminal Bundles (Verified/Failed/Superseded) beyond the limit are deleted oldest-first. Default limit: 50. Kargo parity achieved.
+- ✅ **Reconciler panic recovery — handled by controller-runtime default** (PR #920, 2026-04-20) — Verified against controller-runtime v0.23.3 source: `RecoverPanic` defaults to `true` in `pkg/internal/controller/controller.go`. A panic in any reconciler's `Reconcile()` increments `ReconcilePanics` metric, calls panic handlers, and returns a wrapped error for exponential backoff — no crash loop. DO NOT set `RecoverPanic: false` in `ctrl.Options{}`. See comment in `cmd/kardinal-controller/main.go`.
 
 ---
 
 ## Future
 
 ### Lens 1: Kargo parity — capability gaps that lose competitive evaluations
-
-- ✅ **Bundle history GC — `historyLimit` enforced by bundle reconciler** (PR #910, 2026-04-20) — `Pipeline.spec.historyLimit` is now enforced in `pkg/reconciler/bundle/reconciler.go:enforceHistoryLimit`. On each new Bundle creation, terminal Bundles (Verified/Failed/Superseded) beyond the limit are deleted oldest-first. Default limit: 50. Kargo parity achieved.
 
 - 🔲 **No outbound event notifications** — Kargo integrates with Argo CD Notifications engine for Slack/PagerDuty/Teams webhooks on promotion events (started, succeeded, failed, blocked). kardinal has zero outbound notification capability. A platform team that deploys this to production today cannot be paged when a promotion fails or a gate blocks prod for 48 hours. Minimum viable: a `NotificationHook` CRD with a `webhook.url` + optional `Authorization` header + a template for the event body. Emit on: Bundle.Verified, Bundle.Failed, PolicyGate blocked (first block, not every re-eval), PromotionStep.Failed.
 
@@ -58,10 +58,6 @@ Every item in this doc was identified by examining the live codebase against fiv
 - 🔲 **Warehouse-equivalent: no automatic discovery mode** — Kargo's Warehouse concept passively watches OCI registries and Git repos and creates Freight without CI pipeline integration. kardinal's `Subscription` CRD and `OCIWatcher`/`GitWatcher` are implemented (K-10), but there is no UI for managing Subscriptions and no `kardinal get subscriptions` CLI command. The capability exists but is invisible to users who don't read the API reference. Surface Subscription status in `kardinal get pipelines` and add a `kardinal get subscriptions` command.
 
 ### Lens 2: Production stability — what breaks after a week in production
-
-- ✅ **Reconciler panic recovery — handled by controller-runtime default** (PR #920, 2026-04-20) — Verified against controller-runtime v0.23.3 source: `RecoverPanic` defaults to `true` in `pkg/internal/controller/controller.go`. A panic in any reconciler's `Reconcile()` increments `ReconcilePanics` metric, calls panic handlers, and returns a wrapped error for exponential backoff — no crash loop. DO NOT set `RecoverPanic: false` in `ctrl.Options{}`. See comment in `cmd/kardinal-controller/main.go`.
-
-- ~~🔲 **No PromotionStep timeout**~~ ✅ Done (PR #906) — `environment.waitForMergeTimeout` added to Pipeline environments.
 
 - 🔲 **Bundle reconciler orphan guard races with Pipeline deletion** — `pkg/reconciler/bundle/reconciler.go:134` handles the case where the parent Pipeline was deleted by self-deleting the Bundle. This is triggered by checking `isNotFound` on the Pipeline. If the Pipeline is being deleted (DeletionTimestamp set but finalizers not cleared), the check may transiently pass, causing premature Bundle deletion before the Pipeline's owned resources are cleaned up. Add a check for `pipeline.DeletionTimestamp != nil` and requeue instead of deleting.
 
@@ -80,8 +76,6 @@ Every item in this doc was identified by examining the live codebase against fiv
 - 🔲 **UI API has no authentication** — `cmd/kardinal-controller/ui_api.go` exposes all pipeline, bundle, gate, and audit data with zero authentication. The listen address (`:8082`) binds to all interfaces. Any pod in the cluster can enumerate all pipelines, all bundles, all PolicyGate CEL expressions, and all promotion history with a `curl`. Add at minimum a `--ui-auth-token` flag (same mechanism as the Bundle API) or Kubernetes TokenReview-based auth. Tracked also in `docs/design/06-kardinal-ui.md`.
 
 - 🔲 **No admission webhook for `dependsOn` cycle detection** — `ValidatingAdmissionPolicy` (now shipped, see Present) covers required fields and enum values for Pipeline, Bundle, and PolicyGate. It cannot detect graph cycles: a Pipeline where `prod` depends on `uat` and `uat` depends on `prod` is accepted at admission and only fails at translator time. A traditional `ValidatingAdmissionWebhook` (not VAP) is needed to detect cycles, since CEL cannot express graph traversal. Until the webhook is added, the translator must return a clear `InvalidSpec` status condition rather than a reconciler error log. Kargo detects cycles on `kubectl apply`.
-
-- 🔲 **No SBOM attestation for the controller image** — trivy CVE scanning is present (PR #882). cosign image signing and SLSA provenance were added in v0.8.1. But there is no Software Bill of Materials (SBOM) attached to the controller image. A security team at a regulated company (financial services, healthcare) requires SBOM for any controller running in their cluster. Add `syft` SBOM generation to the release workflow and attach the SBOM to the OCI image via `cosign attach sbom`.
 
 - 🔲 **SCM token scopes are not validated at startup** — the GitHub token is read from the Secret but its scopes are never verified. A token with only `read:repo` scope will fail silently when the controller tries to open a PR (403 response surfaces hours later in a reconcile log). Add a startup preflight check (similar to `kardinal doctor`) that calls the SCM provider's "whoami" endpoint and logs a warning if required scopes are missing. This surfaces misconfiguration in minutes rather than hours.
 
@@ -111,6 +105,18 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - 🔲 **HTTP plain-text for UI and webhook endpoints is a TLS gap** — both `http.ListenAndServe` calls in `cmd/kardinal-controller/main.go` (UI on `:8082`, webhooks on `:8083`) use plain HTTP. Any internal network observer (or a compromised pod) can read promotion events and pipeline state in transit. Add `--tls-cert-file` / `--tls-key-file` flags (or auto-provision via cert-manager annotation on the Service) for both servers. Tracked in `docs/design/06-kardinal-ui.md` but not yet in the triage/blocker list.
 
+### Lens 7: New gaps identified by competitive scan (2026-04-20)
+
+- 🔲 **`RequeueAfter: time.Millisecond` in bundle reconciler is a production hot loop** — `pkg/reconciler/bundle/reconciler.go:358` requeues the Bundle immediately (`time.Millisecond`) after setting phase to `Available`, to "advance to Promoting". With dozens of concurrent Bundles, each one fires a reconcile within 1ms of phase change, creating a burst of reconcile events that pressures the API server and etcd. Replace with `RequeueAfter: 500*time.Millisecond` as the minimum safe floor. The controller-runtime workqueue will deduplicate simultaneous events, but 1ms bypass of normal rate limiting is not safe for production clusters with >10 concurrent pipelines. This will manifest as elevated API server CPU and etcd write throughput after ~2 hours in a busy cluster.
+
+- 🔲 **No `maxConcurrentPromotions` cap per pipeline** — Kargo enforces `maxConcurrentPromotions` on a Stage, preventing runaway promotion storms (e.g. when a CI system creates 50 Bundles within seconds after a maintenance window). kardinal has no such field. The bundle reconciler will attempt to promote all available Bundles simultaneously. For large organizations with many pipelines, this can saturate git hosts with concurrent PR-open requests, exhaust GitHub API rate limits (5000 req/hr), and create merge conflicts in the GitOps repo. Add `Pipeline.spec.maxConcurrentPromotions` (default: 0 = unlimited, compatible with existing behavior) enforced in the bundle reconciler before creating the Graph.
+
+- 🔲 **No image signature verification step** — Kargo v1.10 added a `verify-image` promotion step that runs `cosign verify` against the container image before it advances to the next stage. kardinal has no equivalent: any image digest (including a compromised or unauthorized one) will be promoted without verifying the publisher's signature. For a security-conscious platform team, this is a supply-chain control gap. Add a `verify-image` step type in `pkg/steps/steps/` that runs `cosign verify --certificate-oidc-issuer <issuer> --certificate-identity-regexp <regex> <image>` and fails the PromotionStep if the signature is absent or invalid. This is also a differentiator: both Kargo and kardinal can advertise cosign integration.
+
+- 🔲 **No Kubernetes Events emitted by reconcilers** — reconcilers in `pkg/reconciler/` write audit records to a ConfigMap (`writeAuditEvent`) and update CRD status fields. They do NOT emit Kubernetes Events via `EventRecorder`. This means `kubectl describe bundle <name>` and `kubectl describe promotionstep <name>` show no event history — the most common operator debugging tool is silent. Add `EventRecorder` to each reconciler and emit `Normal`/`Warning` events on: Bundle phase transitions (Available→Promoting→Verified/Failed), PolicyGate first-block, PromotionStep state transitions (Executing→WaitingForMerge→Verified), and PromotionStep failure with the step name and error message. This surfaces all promotion activity in `kubectl get events -n kardinal-system` without requiring Go log access.
+
+- 🔲 **No multi-tenant project isolation** — Kargo has a Project CRD that namespaces all Stages, Promotions, and Warehouses under a single owner entity, with RBAC scoped to the project. kardinal has no equivalent: all Pipelines and Bundles share the same namespace with the same ClusterRole. A platform team running kardinal for 20 application teams cannot grant Team A write access to their Pipeline without also granting them read access to Team B's pipelines and bundles. Until namespace-scoped controller mode is added (see Lens 6), document the recommended workaround: one kardinal install per application namespace. This workaround is costly (multiple controller replicas), but it is the only safe multi-tenant configuration today.
+
 ---
 
 ## Triage notes
@@ -118,10 +124,11 @@ Every item in this doc was identified by examining the live codebase against fiv
 **Must-fix before v1.0 (any one of these is a production-blocker):**
 1. ~~Bundle history GC (historyLimit)~~ ✅ Done (PR #910) — enforced in bundle reconciler
 2. ~~PromotionStep timeout~~ ✅ Done (PR #906) — WaitingForMerge timeout added
-3. UI API authentication — security review failure
-4. ~~Reconciler panic recovery~~ ✅ Done (PR #920) — handled by controller-runtime v0.23.3 default (RecoverPanic=true)
+3. ~~Reconciler panic recovery~~ ✅ Done (PR #920) — handled by controller-runtime v0.23.3 default (RecoverPanic=true)
+4. UI API authentication — security review failure
 5. Bundle `status.conditions` never populated — breaks `kubectl wait` and GitOps tooling
 6. HTTP plain-text for UI and webhook servers — TLS gap flagged in enterprise security reviews
+7. `RequeueAfter: time.Millisecond` hot loop in bundle reconciler — API server pressure in busy clusters
 
 **Must-fix for competitive parity with Kargo:**
 1. Outbound event notifications (Slack/webhook)
@@ -129,6 +136,8 @@ Every item in this doc was identified by examining the live codebase against fiv
 3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #903)
 4. Bitbucket and Azure DevOps SCM providers — blocks enterprise adoption
 5. Namespace-scoped controller mode — required for multi-tenant clusters
+6. Image signature verification step (cosign verify) — supply-chain control gap vs Kargo v1.10
+7. `maxConcurrentPromotions` cap per pipeline — prevents promotion storms from CI bursts
 
 **Adoption wins (high effort/impact):**
 1. `kardinal init` full GitOps repo scaffolding (currently generates Pipeline YAML only)

@@ -109,7 +109,7 @@ If secrets expire or need rotation:
 
 ## Present (✅)
 
-- ✅ `.github/workflows/otherness-scheduled.yml` — 6-hourly cron (`0 */6 * * *`) + workflow_dispatch; Bedrock via OIDC; GH_TOKEN PAT; five job permissions (id-token, contents, pull-requests, issues, statuses) (PR #828, #834, 2026-04-19) ⚠️ Stale — referenced file not found
+- ✅ `.github/workflows/otherness-scheduled.yml` — 6-hourly cron (`0 */6 * * *`) + workflow_dispatch; Bedrock via OIDC; GH_TOKEN PAT; five job permissions (id-token, contents, pull-requests, issues, statuses) (PR #828, #834, 2026-04-19)
 - ✅ `AWS_ROLE_ARN` secret set — `arn:aws:iam::569190534191:role/github-bedrock-key` (2026-04-19)
 - ✅ `AWS_ACCOUNT_ID` secret set — `569190534191` (2026-04-19)
 - ✅ `AWS_DEFAULT_REGION` secret set — `us-east-1` (2026-04-19)
