@@ -1,164 +1,143 @@
 ---
-description: "DEV: Check for speckit/maqa/aide/extension updates, show changelog, and apply with confirmation. Run by the otherness maintainer, not customers."
+description: "Show available otherness versions, changelog preview, and guide pinning/unpinning agent_version."
 ---
 
-You are the otherness dependency upgrade agent. You check for new versions of speckit, maqa, aide, and other extensions that otherness depends on, show what changed, and apply updates.
+You are the otherness version manager. You show available releases, what changed, and help the operator pin or unpin their agent version.
 
-## Step 1 — Current installed versions
-
-```bash
-echo "=== Installed versions ==="
-echo "speckit (opencode integration):"
-python3 -c "import json; d=json.load(open('.specify/integrations/speckit.manifest.json')); print(f'  v{d[\"version\"]} installed {d[\"installed_at\"][:10]}')" 2>/dev/null || echo "  not found"
-
-echo "opencode integration:"
-python3 -c "import json; d=json.load(open('.specify/integrations/opencode.manifest.json')); print(f'  v{d[\"version\"]} installed {d[\"installed_at\"][:10]}')" 2>/dev/null || echo "  not found"
-
-echo "otherness agent files:"
-git -C ~/.otherness log --oneline -5 2>/dev/null | sed 's/^/  /' || echo "  not a git repo"
-
-echo "Extensions:"
-ls .specify/extensions/ 2>/dev/null | grep -v '^\.' | sed 's/^/  /'
-```
-
-## Step 2 — Check community catalog for updates
+## Step 1 — Current pinned version
 
 ```bash
-echo ""
-echo "=== Checking community catalog ==="
-CATALOG_URL=$(python3 -c "
+CURRENT_PIN=$(python3 -c "
 import re
-for line in open('.specify/extension-catalogs.yml'):
-    m = re.match(r'^\s+url:\s*(.+)', line)
-    if m: print(m.group(1).strip()); break
-" 2>/dev/null || echo "https://raw.githubusercontent.com/github/spec-kit/main/extensions/catalog.community.json")
+for line in open('otherness-config.yaml'):
+    m = re.match(r'^\s+agent_version:\s*[\"\'']?([^\"\'#\n]+)[\"\'']?', line)
+    if m:
+        v = m.group(1).strip()
+        if v not in ('', 'null'):
+            print(v); break
+" 2>/dev/null || echo "")
 
-curl -sL "$CATALOG_URL" 2>/dev/null | python3 - << 'EOF'
-import sys, re
-content = sys.stdin.read()
-# Extract extension names and versions from the catalog YAML
-extensions = re.findall(r'^\s+name:\s+(\S+).*?version:\s+(\S+)', content, re.MULTILINE | re.DOTALL)
-for ext in ['maqa', 'aide', 'maqa-ci', 'maqa-github-projects', 'verify', 'verify-tasks', 'review', 'ship', 'worktree', 'git']:
-    for name, version in extensions:
-        if name == ext:
-            print(f"  {name}: {version}")
-            break
-EOF
-```
-
-## Step 3 — Check otherness upstream for new commits
-
-```bash
-echo ""
-echo "=== otherness upstream (pnz1990/otherness) ==="
-git -C ~/.otherness fetch --quiet 2>/dev/null
-
-LOCAL=$(git -C ~/.otherness rev-parse HEAD 2>/dev/null)
-REMOTE=$(git -C ~/.otherness rev-parse origin/main 2>/dev/null)
-
-if [ "$LOCAL" = "$REMOTE" ]; then
-  echo "  Up to date."
+if [ -z "$CURRENT_PIN" ]; then
+  echo "Current: unpinned (running latest — git pull on every startup)"
 else
-  echo "  New commits available:"
-  git -C ~/.otherness log --oneline "$LOCAL..$REMOTE" 2>/dev/null | sed 's/^/    /'
+  echo "Current: pinned to $CURRENT_PIN"
+  RUNNING=$(git -C ~/.otherness describe --tags --always 2>/dev/null || echo "unknown")
+  echo "Running: $RUNNING"
+  if [ "$RUNNING" != "$CURRENT_PIN" ]; then
+    echo "⚠️  WARNING: running version differs from pin — may be behind or ahead"
+  fi
 fi
 ```
 
-## Step 4 — Check speckit CLI version
+## Step 2 — Available releases (changelog preview)
 
 ```bash
+OTHERNESS_REPO=$(git -C ~/.otherness remote get-url origin 2>/dev/null \
+  | sed 's|.*github.com[:/]||;s|\.git$||')
+
 echo ""
-echo "=== speckit CLI ==="
-specify --version 2>/dev/null || echo "  specify not installed (uv tool install specify-cli)"
+echo "=== Available releases (from $OTHERNESS_REPO) ==="
+gh release list --repo "$OTHERNESS_REPO" --limit 10 \
+  --json tagName,name,publishedAt \
+  --jq '.[] | "\(.tagName)  \(.name)  (\(.publishedAt[:10]))"' 2>/dev/null \
+  || echo "(no releases found — repo may be unpinned-only)"
 
-# Check PyPI for latest
-LATEST=$(curl -s https://pypi.org/pypi/specify-cli/json 2>/dev/null | \
-  python3 -c "import json,sys; d=json.load(sys.stdin); print(d['info']['version'])" 2>/dev/null || echo "unknown")
-echo "  Latest on PyPI: $LATEST"
-```
-
-## Step 5 — Present update plan and confirm
-
-Based on the above findings, produce a summary:
-
-```
-=== UPDATE PLAN ===
-
-otherness agent files: <N new commits — titles>
-speckit CLI: <current> → <latest>
-maqa extension: <current> → <latest>
-aide extension: <current> → <latest>
-<any other extensions with available updates>
-
-Apply? (yes/no)
-```
-
-Wait for confirmation before applying any changes.
-
-## Step 6 — Apply updates (on confirmation)
-
-### Update otherness agent files
-```bash
-git -C ~/.otherness pull --quiet
-echo "otherness: updated to $(git -C ~/.otherness rev-parse --short HEAD)"
-```
-
-### Upgrade speckit CLI
-```bash
-uv tool upgrade specify-cli 2>/dev/null || pip install --upgrade specify-cli 2>/dev/null
-specify --version
-```
-
-### Update extensions via speckit
-For each extension with an available update:
-```bash
-# Re-install extension (speckit handles version pinning)
-specify extension update <extension-name>
-```
-
-### Update manifest checksums
-After updating command files, update the manifest:
-```bash
-python3 - << 'EOF'
-import json, hashlib, os
-
-def sha256(path):
-    with open(path, 'rb') as f:
-        return hashlib.sha256(f.read()).hexdigest()
-
-manifest = json.load(open('.specify/integrations/opencode.manifest.json'))
-updated = {}
-for path in manifest['files']:
-    if os.path.exists(path):
-        updated[path] = sha256(path)
-    else:
-        updated[path] = manifest['files'][path]  # keep old if file missing
-
-manifest['files'] = updated
-with open('.specify/integrations/opencode.manifest.json', 'w') as f:
-    json.dump(manifest, f, indent=2)
-print("Updated opencode manifest checksums.")
-EOF
-```
-
-## Step 7 — Verify after update
-
-```bash
 echo ""
-echo "=== Post-update verification ==="
-echo "otherness: $(git -C ~/.otherness log --oneline -1 2>/dev/null)"
-specify --version 2>/dev/null || echo "specify: not installed"
-echo ""
-echo "Run /otherness.run to start the updated agent."
+echo "=== Recent commits on main (unpinned changelog) ==="
+git -C ~/.otherness fetch --quiet 2>/dev/null
+git -C ~/.otherness log --oneline -10 origin/main 2>/dev/null | sed 's/^/  /'
 ```
 
-## What each dependency provides and when to update
+## Step 3 — Show release notes for a specific version (optional)
 
-| Dependency | What it adds | How often to update |
-|---|---|---|
-| **otherness** (`~/.otherness/`) | Agent loops, GitHub PM, roles, PDCA | On every session (auto via git pull) |
-| **speckit CLI** | Internal spec workflow commands | When new queue/item/verify features ship |
-| **maqa extension** | State machine conventions, bounded sessions | When new coordination patterns available |
-| **aide extension** | Queue/roadmap generation improvements | When roadmap-to-items translation improves |
-| **verify/verify-tasks** | Phantom completion detection | When new anti-patterns are caught |
-| **review extensions** | Code review sub-agents | When new review dimensions available |
+If the operator asks about a specific version:
+
+```bash
+# Replace TAG with the version of interest
+OTHERNESS_REPO=$(git -C ~/.otherness remote get-url origin 2>/dev/null \
+  | sed 's|.*github.com[:/]||;s|\.git$||')
+gh release view TAG --repo "$OTHERNESS_REPO" 2>/dev/null
+```
+
+## Step 4 — Pin to a version
+
+To pin `otherness-config.yaml` to a specific release:
+
+```bash
+# Replace vX.Y.Z with the desired tag
+TARGET_VERSION="vX.Y.Z"
+
+python3 - <<PYEOF
+import re
+
+with open('otherness-config.yaml') as f:
+    content = f.read()
+
+# Replace existing agent_version value (or add it under maqa:)
+if re.search(r'^\s+agent_version:', content, re.MULTILINE):
+    content = re.sub(
+        r'(^\s+agent_version:\s*).*',
+        f'\\g<1>"$TARGET_VERSION"',
+        content, flags=re.MULTILINE
+    )
+else:
+    content = re.sub(
+        r'(^maqa:)',
+        f'\\1\n  agent_version: "$TARGET_VERSION"',
+        content, flags=re.MULTILINE
+    )
+
+with open('otherness-config.yaml', 'w') as f:
+    f.write(content)
+print(f"Pinned to $TARGET_VERSION in otherness-config.yaml")
+PYEOF
+```
+
+Then commit:
+```bash
+git add otherness-config.yaml
+git commit -m "chore: pin otherness to $TARGET_VERSION"
+git push origin main
+```
+
+**After pinning**: the next session startup will checkout `$TARGET_VERSION` from `~/.otherness` instead of pulling latest.
+
+## Step 5 — Unpin (return to latest)
+
+```bash
+python3 - <<PYEOF
+import re
+
+with open('otherness-config.yaml') as f:
+    content = f.read()
+
+content = re.sub(
+    r'(^\s+agent_version:\s*).*',
+    '\\g<1>""',
+    content, flags=re.MULTILINE
+)
+
+with open('otherness-config.yaml', 'w') as f:
+    f.write(content)
+print("Unpinned — will pull latest on next startup.")
+PYEOF
+
+git add otherness-config.yaml
+git commit -m "chore: unpin otherness (return to latest)"
+git push origin main
+```
+
+## Step 6 — Verify the pin is active
+
+Start a new otherness session. The startup log will show:
+```
+[STANDALONE] Pinned to vX.Y.Z
+```
+
+If it shows `[STANDALONE] Agent files up to date (latest)` then the pin is not set or the tag doesn't exist.
+
+---
+
+## Rollback after a bad release
+
+See `RECOVERY.md` §Situation 8 for the full rollback procedure (pin to the previous tag).
