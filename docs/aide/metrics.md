@@ -14,3 +14,4 @@
 | 2026-04-19 | 1 | 0 | 630 | GH_TOKEN scope preflight step (PR #836); design doc 13 Future section cleared | ✅ |
 | 2026-04-20 | 5 | 0 | 626 | PDCA batch: daily cron, anchor score, S7-12, delete bundle CLI | ✅ |
 | 2026-04-20 | 3 | 0 | 747 | Fix pdca.yml YAML parse, 6h cadence standby, GH_TOKEN scope preflight restored | ✅ |
+| 2026-04-20 | 1 | 0 | 663 | Fix design doc 13 stale items (PR #867); vision scan false-positive closed | ✅ |
