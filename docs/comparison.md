@@ -144,7 +144,7 @@ and Git repos for new artifact versions, packages them as Freight, and feeds the
 the pipeline. kardinal requires CI to create Bundles explicitly (via webhook or CLI).
 If you want passive artifact detection without modifying CI pipelines, Kargo wins.
 
-**Production maturity**: Kargo is at v1.9.x with commercial support from Akuity,
+**Production maturity**: Kargo is at v1.10.x with commercial support from Akuity,
 a larger community, and a longer track record in production.
 
 **ArgoCD integration depth**: If you are all-in on ArgoCD, Kargo's `argocd-update`
