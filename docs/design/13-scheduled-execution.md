@@ -109,12 +109,11 @@ If secrets expire or need rotation:
 
 ## Present (✅)
 
-- ✅ `.github/workflows/otherness-scheduled.yml` — hourly cron (`0 * * * *`) + workflow_dispatch; Bedrock via OIDC; GH_TOKEN PAT; all six permissions (PR #828, 2026-04-19) ⚠️ Stale — referenced file not found
+- ✅ `.github/workflows/otherness-scheduled.yml` — 6-hourly cron (`0 */6 * * *`) + workflow_dispatch; Bedrock via OIDC; GH_TOKEN PAT; five job permissions (id-token, contents, pull-requests, issues, statuses) (PR #828, #834, 2026-04-19)
 - ✅ `AWS_ROLE_ARN` secret set — `arn:aws:iam::569190534191:role/github-bedrock-key` (2026-04-19)
 - ✅ `AWS_ACCOUNT_ID` secret set — `569190534191` (2026-04-19)
 - ✅ `AWS_DEFAULT_REGION` secret set — `us-east-1` (2026-04-19)
 - ✅ `GH_TOKEN` secret set — PAT with `repo` + `workflow` scopes (2026-04-19)
-- ✅ `otherness-config.yaml` `schedule.cron` field — `0 * * * *` (existing) ⚠️ Stale — referenced file not found
 - ✅ Cadence reduced to `0 */6 * * *` (every 6h) — all 7 journeys passing, steady-state standby (PR #834, 2026-04-19)
 - ✅ Token expiry and scope preflight step — `Validate GH_TOKEN` step checks token validity AND `repo`/`workflow` OAuth scopes via `X-OAuth-Scopes` header; posts `[NEEDS HUMAN]` issue on expired/missing-scope token (PR #836 added, PR #845 removed in rewrite, re-added PR #862, 2026-04-20)
 
@@ -132,9 +131,10 @@ this account. Do not create IAM users with access keys as a shortcut.
 `GITHUB_TOKEN` pushes are inert — they do not trigger CI. The CI gate is the agent's
 only correctness signal. Breaking it silently corrupts the loop.
 
-**O3 — All six job permissions must be present.**
-Each permission corresponds to a specific agent action. Removing any one breaks that
-action without an obvious error message.
+**O3 — All five job permissions must be present.**
+Each permission corresponds to a specific agent action (id-token for OIDC, contents for push,
+pull-requests for PR creation, issues for issue comments, statuses for commit status).
+Removing any one breaks that action without an obvious error message.
 
 ---
 
