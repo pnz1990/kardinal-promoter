@@ -1,31 +1,30 @@
-## Session Handoff — 2026-04-20T12:30:30Z
+## Session Handoff — 2026-04-20T17:00:00Z
 
 ### This session
-Standby session — no PRs merged.
+2 PRs merged.
 
-**Findings:**
-- 7/7 journeys ✅ (all passing)
-- Design doc Future items: 0
-- Queue empty — standby mode
-- krocodile: 4 commits behind (internal DAG refactor, no breaking changes)
-- CI: main passing; security-checks cosmetic failure (needs-human #871, non-blocking)
-- Kargo v1.10.0 released (evolution release, no architectural changes affecting comparison)
-- GitOps Promoter v0.27.0 released (incremental, no DAG capability)
+**PRs:**
+- #883: feat(ui): NodeDetail data-testid + E2E rollback tests un-skipped (14.6 ✅)
+- #885: feat(ci): Trivy filesystem CVE scan to CI, blocks on HIGH/CRITICAL (14.7 ✅)
+- Issue #871 (security-checks cosmetic failure) — closed
 
 ### Queue
-**Queue empty**. No open kardinal-labeled feature issues. All design doc Future sections clear.
+Design doc Future items remaining (5):
+- 14.1 — Subscription OCI source watcher
+- 14.2 — Subscription Git source watcher
+- 14.3 — Pipeline deployment metrics
+- 14.4 — ChangeWindow CEL functions
+- 14.5 — kardinal-agent binary
 
 ### krocodile
-Pinned: d6cbc54. 4 commits ahead (< 5 threshold). Changes: internal dagTopology caching, SchemaGen field, doc reference renames (004→005). No API surface changes. No upgrade needed this batch.
+Pinned: d6cbc54. 4 commits ahead (< 5 threshold). No upgrade needed.
 
 ### CI status (main)
-CI/Docs/E2E: success
-Security checks: cosmetic failure (0-job push evaluation — needs-human #871, non-blocking)
-Metrics pushed: chore(sm): batch metrics update 2026-04-20
+All passing ✅
 
 ### Next item
-none — standby
+Pick any of items 14.1–14.5 from docs/design/14-v060-roadmap.md
 
 ### Notes
-Session: sess-88520c3b | otherness@9ccba9f
-Batch: 0 items shipped (standby). SM health: GREEN. PM audit: 7/7 journeys ✅, website accurate.
+Session: sess-e4795d37 | otherness@a95e9e5
+Batch: 2 PRs shipped. SM health: GREEN.
