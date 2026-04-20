@@ -1,8 +1,7 @@
 {
-  "mode": "autonomous",
-  "report_issue": 1,
-  "current_queue": [],
   "features": {},
   "session_heartbeats": {},
-  "bounded_sessions": {}
+  "sm_cycle_count": 0,
+  "pm_cycle_count": 0,
+  "report_issue": 1
 }
