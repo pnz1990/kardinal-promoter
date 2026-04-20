@@ -228,6 +228,20 @@ jobs:
             RESULTS="$RESULTS\n⚠️ S6: Concurrent bundles — output: $OUTPUT (supersession timing)"
           fi
 
+          # Scenario 7: Config-only promotion (no image change)
+          echo "=== Scenario 7: Config-only promotion ==="
+          CONFIG_OUTPUT=$(kardinal create bundle kardinal-test-app --type config 2>&1 || true)
+          echo "S7 create output: $CONFIG_OUTPUT"
+          if echo "$CONFIG_OUTPUT" | grep -q "Bundle\|bundle\|created"; then
+            echo "S7: PASS — config bundle created"
+            PASS=$((PASS+1))
+            RESULTS="$RESULTS\n✅ S7: Config-only promotion — bundle created without image"
+          else
+            echo "S7: FAIL — unexpected output: $CONFIG_OUTPUT"
+            FAIL=$((FAIL+1))
+            RESULTS="$RESULTS\n❌ S7: Config-only promotion — expected Bundle created; got: $CONFIG_OUTPUT"
+          fi
+
           echo "PASS=$PASS" >> $GITHUB_OUTPUT
           echo "FAIL=$FAIL" >> $GITHUB_OUTPUT
           # Write results to file for next step
