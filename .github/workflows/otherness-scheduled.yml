@@ -65,7 +65,7 @@ jobs:
 
       # ── Step 2: Token preflight ──────────────────────────────────────────
       # Validates GH_TOKEN before spending Bedrock tokens on a run that will fail.
-      # Posts a [NEEDS HUMAN] issue if the token is missing or expired.
+      # Posts a [NEEDS HUMAN] issue if the token is missing, expired, or lacks scopes.
       - name: Validate GH_TOKEN
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -88,7 +88,28 @@ jobs:
               --label "needs-human" 2>/dev/null || true
             exit 1
           fi
-          echo "[preflight] GH_TOKEN valid for: $(GH_TOKEN="$GH_TOKEN" gh api user --jq '.login')"
+          # Check OAuth scopes: GH_TOKEN must have repo + workflow scopes.
+          # gh api /user -i returns response headers; X-OAuth-Scopes lists granted scopes.
+          SCOPES=$(GH_TOKEN="$GH_TOKEN" gh api /user -i 2>/dev/null \
+            | grep -i '^x-oauth-scopes:' | head -1 || true)
+          echo "[preflight] OAuth scopes header: $SCOPES"
+          MISSING=""
+          echo "$SCOPES" | grep -qi '\brepo\b' || MISSING="${MISSING}repo "
+          echo "$SCOPES" | grep -qi '\bworkflow\b' || MISSING="${MISSING}workflow "
+          if [ -n "$MISSING" ]; then
+            echo "::error::GH_TOKEN is missing required OAuth scopes: $MISSING"
+            EXISTING=$(GH_TOKEN="" gh issue list --repo "$REPO" --state open \
+              --search "[NEEDS HUMAN] GH_TOKEN expired or missing scopes" \
+              --json number --jq 'length' 2>/dev/null || echo "0")
+            if [ "${EXISTING:-0}" -eq 0 ]; then
+              GH_TOKEN="" gh issue create --repo "$REPO" \
+                --title "[NEEDS HUMAN] GH_TOKEN expired or missing scopes — scheduled run blocked" \
+                --body "The otherness scheduled workflow detected that GH_TOKEN is missing required scopes ($MISSING). Generate a new PAT at https://github.com/settings/tokens with repo + workflow scopes, then run: echo NEW_TOKEN | gh secret set GH_TOKEN --repo $REPO" \
+                --label "needs-human" 2>/dev/null || true
+            fi
+            exit 1
+          fi
+          echo "[preflight] GH_TOKEN valid for: $(GH_TOKEN="$GH_TOKEN" gh api user --jq '.login') — scopes OK (repo + workflow)"
 
       # ── Step 3: Install agent files ──────────────────────────────────────
       # Clones pnz1990/otherness to ~/.otherness on the runner.
