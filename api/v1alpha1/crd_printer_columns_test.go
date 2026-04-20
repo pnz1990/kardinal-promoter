@@ -126,7 +126,9 @@ func TestCRDPrinterColumnsDrift(t *testing.T) {
 		AdditionalPrinterCols []crdColumn `yaml:"additionalPrinterColumns" json:"additionalPrinterColumns"`
 	}
 	type crdSpec struct {
-		Names    struct{ Kind string `yaml:"kind" json:"kind"` } `yaml:"names" json:"names"`
+		Names struct {
+			Kind string `yaml:"kind" json:"kind"`
+		} `yaml:"names" json:"names"`
 		Versions []crdVersion `yaml:"versions" json:"versions"`
 	}
 	type crdFile struct {
