@@ -23,16 +23,16 @@ jobs:
   pdca:
     name: PDCA validation (${{ github.event.inputs.scenario || 'all' }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       issues: write
       contents: read
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           go-version-file: go.mod
           cache: true
@@ -593,18 +593,104 @@ EOF
           # Write results to file for next step
           printf "%b" "$RESULTS" > /tmp/pdca-results.txt
 
+      # ── UI scenarios S25–S27: Playwright against mock server (no cluster required) ──
+      # Design ref: docs/design/25-anchor-kardinal-promoter.md §Future →
+      #   "Playwright integration in PDCA — first 3 UI scenarios"
+      # These run against the mock server only (web/test/e2e/mock-server/server.mjs).
+      # The cluster is already up but not used by these steps.
+      - name: Setup Node.js for Playwright UI tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      - name: Build web UI (required by mock server to serve static assets)
+        run: npm run --prefix web build
+
+      - name: Install Playwright browsers (chromium only)
+        run: npx --prefix web playwright install chromium --with-deps
+
+      - name: Run PDCA UI scenarios S25–S27 (Playwright)
+        id: ui_scenarios
+        env:
+          CI: 'true'
+          KARDINAL_E2E_PORT: '3099'
+        run: |
+          UI_PASS=0
+          UI_FAIL=0
+          UI_RESULTS=""
+
+          # S25: Journey 001 — Pipeline list + bundle status visible
+          echo "=== S25: UI — Pipeline list + bundle status ==="
+          if npx --prefix web playwright test \
+              web/test/e2e/journeys/001-pipeline-list.spec.ts \
+              --config=web/playwright.config.ts \
+              --reporter=line \
+              --timeout=30000 2>&1; then
+            echo "S25: PASS"
+            UI_PASS=$((UI_PASS+1))
+            UI_RESULTS="$UI_RESULTS\n✅ S25: UI bundle status — journey 001 all steps pass"
+          else
+            echo "S25: FAIL"
+            UI_FAIL=$((UI_FAIL+1))
+            UI_RESULTS="$UI_RESULTS\n❌ S25: UI bundle status — journey 001 failed (see logs)"
+          fi
+
+          # S26: Journey 002 — DAG node click → pipeline graph visible
+          echo "=== S26: UI — Pipeline graph (DAG node click) ==="
+          if npx --prefix web playwright test \
+              web/test/e2e/journeys/002-dag-node-click.spec.ts \
+              --config=web/playwright.config.ts \
+              --reporter=line \
+              --timeout=30000 2>&1; then
+            echo "S26: PASS"
+            UI_PASS=$((UI_PASS+1))
+            UI_RESULTS="$UI_RESULTS\n✅ S26: UI pipeline graph — journey 002 all steps pass"
+          else
+            echo "S26: FAIL"
+            UI_FAIL=$((UI_FAIL+1))
+            UI_RESULTS="$UI_RESULTS\n❌ S26: UI pipeline graph — journey 002 failed (see logs)"
+          fi
+
+          # S27: Journey 011 — Rollback button visible and clickable in NodeDetail
+          echo "=== S27: UI — Rollback button ==="
+          if npx --prefix web playwright test \
+              web/test/e2e/journeys/011-rollback-button.spec.ts \
+              --config=web/playwright.config.ts \
+              --reporter=line \
+              --timeout=30000 2>&1; then
+            echo "S27: PASS"
+            UI_PASS=$((UI_PASS+1))
+            UI_RESULTS="$UI_RESULTS\n✅ S27: UI rollback button — journey 011 all steps pass"
+          else
+            echo "S27: FAIL"
+            UI_FAIL=$((UI_FAIL+1))
+            UI_RESULTS="$UI_RESULTS\n❌ S27: UI rollback button — journey 011 failed (see logs)"
+          fi
+
+          echo "UI_PASS=$UI_PASS" >> $GITHUB_OUTPUT
+          echo "UI_FAIL=$UI_FAIL" >> $GITHUB_OUTPUT
+          printf "%b" "$UI_RESULTS" >> /tmp/pdca-results.txt
+          echo "UI scenarios complete: PASS=$UI_PASS FAIL=$UI_FAIL"
+
       - name: Post PDCA evidence to Issue #1
         if: always()
         env:
           PASS: ${{ steps.scenarios.outputs.PASS }}
           FAIL: ${{ steps.scenarios.outputs.FAIL }}
+          UI_PASS: ${{ steps.ui_scenarios.outputs.UI_PASS }}
+          UI_FAIL: ${{ steps.ui_scenarios.outputs.UI_FAIL }}
           TEST_IMAGE: ${{ steps.image.outputs.image }}
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           TRIGGER: ${{ github.event_name }}
         run: |
-          FAIL_COUNT="${FAIL:-0}"
-          PASS_COUNT="${PASS:-0}"
+          FAIL_COUNT=$((${FAIL:-0} + ${UI_FAIL:-0}))
+          PASS_COUNT=$((${PASS:-0} + ${UI_PASS:-0}))
           TOTAL=$((PASS_COUNT + FAIL_COUNT))
           STATUS="ALL PASS"
           if [ "${FAIL_COUNT}" -gt 0 ]; then STATUS="${FAIL_COUNT} FAILED"; fi
