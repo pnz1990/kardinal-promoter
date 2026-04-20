@@ -51,9 +51,8 @@ spec:
       approval: pr-review
       health:
         type: flagger
-        flagger:
-          name: kardinal-test-app    # Canary CR name (matches Deployment name)
-          namespace: prod            # namespace where the Canary lives
         timeout: 30m                 # Flagger canary typically takes 10–20 minutes
+      delivery:
+        delegate: flagger
 
   historyLimit: 20

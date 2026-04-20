@@ -160,7 +160,8 @@ jobs:
           for manifest in $(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | \
               xargs grep -l "kind: Pipeline" 2>/dev/null); do
             echo "Validating $manifest..."
-            python3 -c "import yaml,sys; m=sys.argv[1]; d=yaml.safe_load(open(m)); [sys.exit('FAIL: '+m+': unknown health field: '+k) for e in d.get('spec',{}).get('environments',[]) for k in e.get('health',{}).keys() if k not in ('type','timeout','cluster','labelSelector','resource')]; print('OK: '+m)" "$manifest" || FAILURES=$((FAILURES+1))
+            # Skip Helm templates (contain {{ }} syntax) and multi-doc YAML (contain ---)
+            python3 -c "import yaml,sys,re; m=sys.argv[1]; raw=open(m).read(); [sys.exit(0) for _ in [1] if re.search(r'{{.*}}',raw)]; docs=list(yaml.safe_load_all(raw)); [sys.exit('FAIL: '+m+': unknown health field: '+k) for d in docs if d and d.get('kind')=='Pipeline' for e in d.get('spec',{}).get('environments',[]) for k in e.get('health',{}).keys() if k not in ('type','timeout','cluster','labelSelector','resource')]; print('OK: '+m)" "$manifest" || FAILURES=$((FAILURES+1))
           done
 
           if [ $FAILURES -gt 0 ]; then
