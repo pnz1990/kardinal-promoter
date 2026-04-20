@@ -13,7 +13,7 @@ name: otherness scheduled run
 #
 on:
   schedule:
-    - cron: "0 */6 * * *"   # Every 6 hours — steady-state standby cadence.
+    - cron: "0 * * * *"     # HOURLY — active development (v0.6.0 work queued).
   workflow_dispatch:        # manual trigger for immediate runs and testing
 
 # ── Concurrency: cancel in-progress runs when a new one starts ────────────────

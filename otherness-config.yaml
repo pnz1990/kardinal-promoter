@@ -22,7 +22,7 @@ maqa:
 
   # Max items to complete per session before SM/PM gate fires.
   # See docs/design/21-session-throughput.md (otherness repo).
-  session_item_limit: 10
+  session_item_limit: 5    # 5 items ~50min, fits hourly window
 
   # Executive project status update to GitHub Projects board every N cycles.
   # Only the unbounded standalone posts these. 0 = disabled.
