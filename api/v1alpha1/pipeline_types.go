@@ -33,6 +33,10 @@ type PipelineSpec struct {
 	Paused bool `json:"paused,omitempty"`
 
 	// HistoryLimit is the number of completed Bundle promotions to retain.
+	// When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded)
+	// beyond this limit are deleted oldest-first on each new Bundle creation.
+	// +kubebuilder:default=50
+	// +kubebuilder:validation:Minimum=1
 	// +optional
 	HistoryLimit int `json:"historyLimit,omitempty"`
 
