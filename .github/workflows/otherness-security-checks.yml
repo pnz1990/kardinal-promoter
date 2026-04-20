@@ -11,6 +11,18 @@ on:
     types: [labeled]
 
 jobs:
+  # ── No-op: handle push/other events gracefully ────────────────────────────
+  # GitHub evaluates all workflow files on every push to the default branch.
+  # When no jobs match (all have if: conditions for pull_request/issues),
+  # GitHub reports the run as failed. This no-op job runs on push to prevent
+  # that false failure while keeping security checks scoped to their events.
+  noop:
+    name: no-op (push/other events)
+    if: github.event_name != 'pull_request' && github.event_name != 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Security checks only run on pull_request and issues events."
+
   # ── M8: AGENTS.md change detection ────────────────────────────────────────
   agents-md-guard:
     name: M8 — AGENTS.md security check
