@@ -289,7 +289,7 @@
     },
     "904": {
       "title": "test: add CI check that CRD YAML printer columns match Go type annotations",
-      "state": "todo",
+      "state": "done",
       "priority": "low",
       "labels": [
         "kardinal",
@@ -297,7 +297,9 @@
         "area/test",
         "size/xs",
         "priority/low"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T22:57:15Z"
     },
     "920": {
       "title": "feat: reconciler panic recovery \u2014 enable WithRecoverPanic to prevent crash loops",
