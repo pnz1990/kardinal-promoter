@@ -124,6 +124,30 @@
       "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/903",
       "pr_merged": true,
       "done_at": "2026-04-20T19:52:57Z"
+    },
+    "905": {
+      "state": "done",
+      "title": "feat(reconciler): add WaitingForMerge timeout to prevent stuck promotions",
+      "priority": "high",
+      "labels": [
+        "kind/enhancement",
+        "area/controller",
+        "priority/high",
+        "size/s"
+      ],
+      "assigned_to": "sess-549c0020",
+      "assigned_at": "2026-04-20T19:55:02Z",
+      "branch": "feat/905",
+      "worktree": "../kardinal-promoter.905",
+      "file_spaces": [
+        "api/",
+        "pkg/reconciler/",
+        "pkg/translator/"
+      ],
+      "pr_number": "906",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/906",
+      "pr_merged": true,
+      "done_at": "2026-04-20T20:04:25Z"
     }
   },
   "session_heartbeats": {
