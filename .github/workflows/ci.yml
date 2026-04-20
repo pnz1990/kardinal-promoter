@@ -209,6 +209,29 @@ jobs:
       - name: Verify go.sum
         run: go mod verify
 
+  # ── Trivy filesystem vulnerability scan (only when go.mod exists) ────────────
+  # Scans Go module dependencies for HIGH/CRITICAL CVEs and blocks CI on findings.
+  # Uses filesystem scan (no Docker image build required) — complements the
+  # release.yml image scan and govulncheck for defense-in-depth.
+  # Design ref: docs/design/14-v060-roadmap.md §14.7
+  trivy-fs:
+    name: trivy vulnerability scan
+    needs: preflight
+    if: needs.preflight.outputs.has_gomod == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Scan filesystem for HIGH/CRITICAL CVEs
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+          format: table
+
   # ── E2E journey tests (fake-client, no cluster required) ────────────────────
   e2e-stubs:
     name: e2e stubs compile

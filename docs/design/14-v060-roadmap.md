@@ -25,7 +25,7 @@ All stages 0-29 are complete. These are the next incremental improvements.
 - 🔲 14.3 — Pipeline deployment metrics: persist `time-to-production`, `rollback-rate`, `operator-interventions` to `Pipeline.status.deploymentMetrics` after each Bundle completes (issue #498)
 - 🔲 14.4 — ChangeWindow CEL functions: implement `changewindow.isAllowed()` and `changewindow.isBlocked()` as named CEL functions on the Graph environment (issue #506)
 - 🔲 14.5 — kardinal-agent binary: separate `cmd/kardinal-agent/` entry point for spoke-cluster distributed mode; reads shard assignments, runs PromotionStep reconciler only (issue #508)
-- 🔲 14.7 — Security hardening: run `trivy image kardinal-promoter:latest` in CI and block on HIGH/CRITICAL vulnerabilities; target 0 HIGH
+- ✅ 14.7 — Security hardening: `trivy-fs` job added to CI — scans Go modules for HIGH/CRITICAL CVEs with `exit-code: 1`, `ignore-unfixed: true`; blocks CI on findings (PR #882, 2026-04-20)
 
 ---
 
