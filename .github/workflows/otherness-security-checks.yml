@@ -5,20 +5,20 @@ name: otherness security checks
 #   M10: otherness label restriction — prevent external queue injection
 
 on:
+  push:
+    branches: [main, "feat/**", "fix/**"]
   pull_request:
     types: [opened, synchronize, reopened]
   issues:
     types: [labeled]
 
 jobs:
-  # ── No-op: handle push/other events gracefully ────────────────────────────
-  # GitHub evaluates all workflow files on every push to the default branch.
-  # When no jobs match (all have if: conditions for pull_request/issues),
-  # GitHub reports the run as failed. This no-op job runs on push to prevent
-  # that false failure while keeping security checks scoped to their events.
+  # ── No-op: handle push events gracefully ─────────────────────────────────
+  # Security checks only apply on pull_request (M8) and issues (M10) events.
+  # This no-op job runs on push so GitHub doesn't report a failed 0-job run.
   noop:
-    name: no-op (push/other events)
-    if: github.event_name != 'pull_request' && github.event_name != 'issues'
+    name: no-op (push — security checks are PR/issue only)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - run: echo "Security checks only run on pull_request and issues events."
