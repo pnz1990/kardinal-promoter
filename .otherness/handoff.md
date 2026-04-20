@@ -1,22 +1,28 @@
-## Session Handoff — 2026-04-20T00:07:27Z
+## Session Handoff — 2026-04-20T03:54:05Z
 
 ### This session
-2 PRs merged:
-- PR #834: chore(ci): reduce scheduled cadence to 6h — steady-state standby
-- PR #836: feat(ci): GH_TOKEN scope preflight — detect expired token before agent run
+6 PRs merged + 2 supporting PRs:
+- PR #847: feat(pdca): run daily not weekly — change cron to 0 2 * * *
+- PR #848: feat(pdca): anchor score comment — post [ANCHOR] coverage line to issue #1
+- PR #849: feat(pdca): Scenario 7 — config-only promotion
+- PR #850: feat(pdca): Scenarios 8/9 — full multi-stage assertion + health check failure
+- PR #851: feat(pdca): Scenarios 10-12 — CLI completeness (get bundles, delete bundle, get steps)
+- PR #852: chore(sm): batch metrics
+- PR #858: docs(changelog): add kardinal delete bundle to Unreleased section
 
-Design doc 13-scheduled-execution.md: Future section is now empty. All scheduled execution items shipped.
+New: `kardinal delete bundle <name>` command added to CLI.
+PDCA: 6 new scenarios (7-12), daily schedule, anchor score comment.
+All 5 open issues closed.
 
 ### Queue
-Empty. Project in steady-state standby. All 7 journeys ✅.
+Empty. No open issues with 'kardinal' label remain.
+Candidate next work: issues #623 (forEach research, xl) and #612 (forEach dynamic expansion, l).
 
 ### CI status (main)
-green (batches 10 and 11 merged cleanly)
+All CI checks green. Docs deploy triggered by PR #858.
 
 ### Next item
-Wait for vision expansion via /otherness.vibe-vision.
-Low priority open issues: #623 (forEach research, xl), #612 (forEach dynamic expansion, l).
+none — standby
 
 ### Notes
-Session: sess-8bedca7e | otherness@e49a123
-Scheduled cadence changed to 6h — next automated run in 0-6 hours.
+Session: sess-733fe79d | otherness@90c189b
