@@ -19,9 +19,8 @@ spec:
       approval: auto
       health:
         type: flux
-        flux:
-          name: kardinal-test-app-flux-test
-          namespace: flux-system
+        # Flux Kustomization name is derived: <pipeline>-<env> = kardinal-test-app-flux-test
+        # namespace defaults to flux-system
     - name: uat
       path: environments/uat
       update:
@@ -29,7 +28,5 @@ spec:
       approval: auto
       health:
         type: flux
-        flux:
-          name: kardinal-test-app-flux-uat
-          namespace: flux-system
+        # Flux Kustomization name is derived: <pipeline>-<env> = kardinal-test-app-flux-uat
   historyLimit: 5

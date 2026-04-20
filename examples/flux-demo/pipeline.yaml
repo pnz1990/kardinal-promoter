@@ -16,6 +16,8 @@ spec:
 
   environments:
     # test: auto-promote, Flux health check
+    # Flux Kustomization name is derived: <pipeline>-<env> = kardinal-test-app-test
+    # namespace defaults to flux-system
     - name: test
       path: environments/test
       update:
@@ -23,11 +25,9 @@ spec:
       approval: auto
       health:
         type: flux
-        flux:
-          name: kardinal-test-app-test   # Flux Kustomization name
-          namespace: flux-system         # default Flux namespace
 
     # uat: auto-promote, Flux health check with 10-minute bake
+    # Flux Kustomization name: kardinal-test-app-uat
     - name: uat
       path: environments/uat
       update:
@@ -38,11 +38,9 @@ spec:
         policy: fail-on-alarm
       health:
         type: flux
-        flux:
-          name: kardinal-test-app-uat
-          namespace: flux-system
 
     # prod: PR review required, Flux health check with 60-minute bake
+    # Flux Kustomization name: kardinal-test-app-prod
     - name: prod
       path: environments/prod
       update:
@@ -53,9 +51,6 @@ spec:
         policy: fail-on-alarm
       health:
         type: flux
-        flux:
-          name: kardinal-test-app-prod
-          namespace: flux-system
         timeout: 20m
 
   historyLimit: 20
