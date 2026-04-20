@@ -22,10 +22,74 @@
       "pr_number": 886,
       "pr_merged": true,
       "done_at": "2026-04-20T17:46:04Z"
+    },
+    "issue-891": {
+      "title": "fix(ci): Demo E2E fails \u2014 Pipeline CRD not registered",
+      "state": "done",
+      "issue": "891",
+      "priority": "high",
+      "labels": [
+        "kardinal",
+        "kind/bug",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "created_at": "2026-04-20T18:33:57Z",
+      "assigned_to": "sess-556be936",
+      "assigned_at": "2026-04-20T18:34:19Z",
+      "branch": "feat/issue-891",
+      "worktree": "../kardinal-promoter.issue-891",
+      "pr_number": "897",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/897",
+      "pr_merged": true,
+      "done_at": "2026-04-20T18:39:48Z"
+    },
+    "issue-888": {
+      "title": "docs(roadmap): kardinal-agent shipped \u2014 move from Near-Term to Currently Available",
+      "state": "done",
+      "issue": "888",
+      "priority": "high",
+      "labels": [
+        "kardinal",
+        "kind/docs",
+        "area/docs",
+        "size/xs",
+        "priority/high"
+      ],
+      "created_at": "2026-04-20T18:33:57Z",
+      "assigned_to": "sess-556be936",
+      "assigned_at": "2026-04-20T18:40:07Z",
+      "branch": "feat/issue-888",
+      "worktree": "/home/runner/work/kardinal-promoter/kardinal-promoter.issue-888",
+      "pr_merged": true,
+      "done_at": "2026-04-20T18:43:43Z"
+    },
+    "issue-887": {
+      "title": "docs(design): update doc 14 \u2014 mark items 14.1-14.5 as shipped",
+      "state": "done",
+      "issue": "887",
+      "priority": "low",
+      "labels": [
+        "kardinal",
+        "kind/docs",
+        "area/docs",
+        "size/xs",
+        "priority/low"
+      ],
+      "created_at": "2026-04-20T18:33:57Z",
+      "pr_merged": true,
+      "done_at": "2026-04-20T18:43:43Z"
     }
   },
-  "session_heartbeats": {},
+  "session_heartbeats": {
+    "sess-556be936": {
+      "last_seen": "2026-04-20T18:34:19Z",
+      "item": "issue-891",
+      "cycle": 1
+    }
+  },
   "report_issue": 1,
-  "sm_cycle_count": 1,
-  "pm_cycle_count": 1
+  "sm_cycle_count": 2,
+  "pm_cycle_count": 2
 }
