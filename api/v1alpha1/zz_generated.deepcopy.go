@@ -1228,6 +1228,10 @@ func (in *PromotionStepStatus) DeepCopyInto(out *PromotionStepStatus) {
 		in, out := &in.HealthCheckExpiry, &out.HealthCheckExpiry
 		*out = (*in).DeepCopy()
 	}
+	if in.WaitForMergeExpiry != nil {
+		in, out := &in.WaitForMergeExpiry, &out.WaitForMergeExpiry
+		*out = (*in).DeepCopy()
+	}
 	if in.BakeStartedAt != nil {
 		in, out := &in.BakeStartedAt, &out.BakeStartedAt
 		*out = (*in).DeepCopy()

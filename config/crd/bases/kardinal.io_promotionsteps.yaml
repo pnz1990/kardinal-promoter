@@ -218,15 +218,6 @@ spec:
                   Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
                 format: date-time
                 type: string
-              waitForMergeExpiry:
-                description: |-
-                  WaitForMergeExpiry is the deadline for the PR merge, computed as
-                  (time step entered WaitingForMerge) + env.waitForMergeTimeout. Set once on
-                  the first reconcile in WaitingForMerge state when the environment configures
-                  a non-zero waitForMergeTimeout. Nil when no timeout is configured.
-                  Graph-purity: same pattern as HealthCheckExpiry.
-                format: date-time
-                type: string
               message:
                 description: Message provides human-readable detail about the current
                   state.
@@ -310,6 +301,16 @@ spec:
                   - state
                   type: object
                 type: array
+              waitForMergeExpiry:
+                description: |-
+                  WaitForMergeExpiry is the deadline for the PR merge, computed as
+                  (time step entered WaitingForMerge) + env.waitForMergeTimeout. Set once on
+                  the first reconcile in WaitingForMerge state when the environment configures
+                  a non-zero waitForMergeTimeout. Nil when no timeout is configured.
+                  Graph-purity: same pattern as HealthCheckExpiry — time.Now() called only when
+                  writing to CRD status.
+                format: date-time
+                type: string
               workDir:
                 description: |-
                   WorkDir is the working directory on the controller node used for git operations

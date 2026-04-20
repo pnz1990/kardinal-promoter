@@ -292,25 +292,25 @@ spec:
                           - helm
                           type: string
                       type: object
-                     wave:
-                       description: |-
-                         Wave assigns this environment to a numbered deployment wave (K-06).
-                         Environments with the same wave number are promoted in parallel.
-                         Wave N environments automatically depend on ALL wave (N-1) environments —
-                         the translator generates the edges so users need not write explicit dependsOn.
-                         Wave and explicit DependsOn are composable: the final dependency set is the
-                         union of wave-derived edges and any explicit DependsOn entries.
-                         Wave values must be >= 1. Environments without a Wave use the default
-                         sequential ordering (each depends on the previous in the list).
-                       minimum: 1
-                       type: integer
-                     waitForMergeTimeout:
-                       description: |-
-                         WaitForMergeTimeout is the maximum duration a PromotionStep will wait
-                         in the WaitingForMerge state before transitioning to Failed. When not set
-                         or zero, the step waits indefinitely (no timeout). Accepts Go duration
-                         strings: "24h", "72h", "168h", etc.
-                       type: string
+                    waitForMergeTimeout:
+                      description: |-
+                        WaitForMergeTimeout is the maximum duration a PromotionStep will wait
+                        in the WaitingForMerge state before transitioning to Failed. When not set
+                        or zero, the step waits indefinitely (no timeout). Accepts Go duration
+                        strings: "24h", "72h", "168h", etc.
+                      type: string
+                    wave:
+                      description: |-
+                        Wave assigns this environment to a numbered deployment wave (K-06).
+                        Environments with the same wave number are promoted in parallel.
+                        Wave N environments automatically depend on ALL wave (N-1) environments —
+                        the translator generates the edges so users need not write explicit dependsOn.
+                        Wave and explicit DependsOn are composable: the final dependency set is the
+                        union of wave-derived edges and any explicit DependsOn entries.
+                        Wave values must be >= 1. Environments without a Wave use the default
+                        sequential ordering (each depends on the previous in the list).
+                      minimum: 1
+                      type: integer
                   required:
                   - name
                   type: object

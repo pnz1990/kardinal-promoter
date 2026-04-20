@@ -35,6 +35,9 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - ✅ **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — Bundle now shows Type, Pipeline, Phase, Age. PromotionStep shows Pipeline, Env, Bundle, State, Age. Eliminates the need to `kubectl describe` to find which pipeline a step belongs to. (PR #903, 2026-04-20)
 - ✅ **WaitingForMerge timeout** — `environment.waitForMergeTimeout` on Pipeline environments (e.g. `"24h"`) causes a PromotionStep stuck in `WaitingForMerge` to transition to `Failed` after the configured duration. No timeout by default (existing behavior preserved). Closes production-blocker: abandoned PR reviewers no longer stall pipelines indefinitely. (PR #906, 2026-04-20)
+- ✅ **ScheduleClock minimum interval guard** — `pkg/reconciler/scheduleclock/reconciler.go` enforces `minInterval = 5 * time.Second` in `parseInterval()`. A zero or negative `spec.interval` is clamped to 5s, not looped at 0. (verified 2026-04-20; this item was incorrectly listed as Future)
+- ✅ **SBOM attestation on the controller image** — `.github/workflows/release.yml` generates an SBOM with `anchore/sbom-action` (syft) and attaches it as a cosign attestation via `cosign attest`. SLSA Level 2 provenance also attached. (verified 2026-04-20; item was incorrectly listed as Future)
+- ✅ **ValidatingAdmissionPolicy for Pipeline, Bundle, PolicyGate CRDs** — `chart/kardinal-promoter/templates/validating-admission-policy.yaml` validates required fields, updateStrategy enum, approval enum, and spec.expression at admission time. Requires Kubernetes 1.28+. Enabled by default; set `validatingAdmissionPolicy.enabled=false` for older clusters. Remaining gap: cycle detection in `dependsOn` (requires a webhook, not expressible in CEL VAP) — see Future item below. (verified 2026-04-20)
 
 ---
 
@@ -60,8 +63,6 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - ~~🔲 **No PromotionStep timeout**~~ ✅ Done (PR #906) — `environment.waitForMergeTimeout` added to Pipeline environments.
 
-- 🔲 **ScheduleClock reconciler requeue loop risk** — `pkg/reconciler/scheduleclock/reconciler.go` returns `ctrl.Result{RequeueAfter: interval}` on every reconcile. If `interval` is misconfigured (e.g. set to 0 or negative), this creates a hot reconcile loop that saturates the controller. Add a minimum interval guard (5s floor, already noted in doc comment but not enforced in code).
-
 - 🔲 **Bundle reconciler orphan guard races with Pipeline deletion** — `pkg/reconciler/bundle/reconciler.go:134` handles the case where the parent Pipeline was deleted by self-deleting the Bundle. This is triggered by checking `isNotFound` on the Pipeline. If the Pipeline is being deleted (DeletionTimestamp set but finalizers not cleared), the check may transiently pass, causing premature Bundle deletion before the Pipeline's owned resources are cleaned up. Add a check for `pipeline.DeletionTimestamp != nil` and requeue instead of deleting.
 
 - 🔲 **Git credential rotation with zero downtime** — kardinal reads the SCM token from a Kubernetes Secret at controller startup (or at first reconcile). If the Secret is rotated (new PAT issued, old PAT expired), the controller must be restarted to pick up the new token. This causes a gap in promotions during the restart window. The SCM factory should watch the Secret and reinitialize providers on change without a controller restart. Kargo handles credential rotation natively. This is a production-operations requirement for any team that rotates credentials on a schedule.
@@ -78,7 +79,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - 🔲 **UI API has no authentication** — `cmd/kardinal-controller/ui_api.go` exposes all pipeline, bundle, gate, and audit data with zero authentication. The listen address (`:8082`) binds to all interfaces. Any pod in the cluster can enumerate all pipelines, all bundles, all PolicyGate CEL expressions, and all promotion history with a `curl`. Add at minimum a `--ui-auth-token` flag (same mechanism as the Bundle API) or Kubernetes TokenReview-based auth. Tracked also in `docs/design/06-kardinal-ui.md`.
 
-- 🔲 **No admission webhook for Pipeline/Bundle CRD validation** — malformed Pipelines (e.g. a `dependsOn` cycle, a CEL expression with unbalanced brackets, a missing `repoURL`) are accepted by the API server and only fail at reconcile time with a cryptic error in controller logs. A `ValidatingAdmissionWebhook` on Pipeline and Bundle CRDs would reject invalid specs at `kubectl apply` time with a clear error message, before any reconciler runs. Kargo has this. This is both a UX win (immediate feedback) and a stability win (no malformed objects entering the reconcile loop).
+- 🔲 **No admission webhook for `dependsOn` cycle detection** — `ValidatingAdmissionPolicy` (now shipped, see Present) covers required fields and enum values for Pipeline, Bundle, and PolicyGate. It cannot detect graph cycles: a Pipeline where `prod` depends on `uat` and `uat` depends on `prod` is accepted at admission and only fails at translator time. A traditional `ValidatingAdmissionWebhook` (not VAP) is needed to detect cycles, since CEL cannot express graph traversal. Until the webhook is added, the translator must return a clear `InvalidSpec` status condition rather than a reconciler error log. Kargo detects cycles on `kubectl apply`.
 
 - 🔲 **No SBOM attestation for the controller image** — trivy CVE scanning is present (PR #882). cosign image signing and SLSA provenance were added in v0.8.1. But there is no Software Bill of Materials (SBOM) attached to the controller image. A security team at a regulated company (financial services, healthcare) requires SBOM for any controller running in their cluster. Add `syft` SBOM generation to the release workflow and attach the SBOM to the OCI image via `cosign attach sbom`.
 
@@ -96,6 +97,20 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - 🔲 **No `kardinal completion` works for all shells** — shell completion is listed as shipped (`#606`) but there is no test that verifies the completion script generates valid output for bash/zsh/fish. Add a CI test that runs `kardinal completion bash` and `kardinal completion zsh` and verifies the output is non-empty and contains expected command names. Without working completion, power users get frustrated immediately.
 
+### Lens 6: New gaps identified by Kargo comparison scan (2026-04-20)
+
+- 🔲 **Bundle `status.conditions` are declared but never populated** — `api/v1alpha1/bundle_types.go` declares `Status.Conditions []metav1.Condition` but `pkg/reconciler/bundle/reconciler.go` never calls `apimeta.SetStatusCondition`. `kubectl describe bundle <name>` shows `Conditions: <none>`. Operators and automation that use standard K8s condition watches (e.g. `kubectl wait --for=condition=Ready`) cannot use them. Contrast: `PromotionStep` does populate conditions. Populate `Ready`, `Promoting`, and `Failed` conditions on Bundle status. This is also required for GitOps controllers (Flux, ArgoCD) that gate on resource readiness.
+
+- 🔲 **No namespace-scoped controller mode** — the Helm chart deploys a `ClusterRole` that grants kardinal read/write access to `kardinal.io` CRDs across all namespaces. In a multi-tenant cluster, a platform team that installs kardinal for one team inadvertently grants it visibility into all namespaces. Kargo offers both cluster-scoped and namespace-scoped install modes. Add a `controller.watchNamespace` Helm value (default `""` = cluster-wide) that, when set, limits the controller's cache and ClusterRole/Role binding to that namespace only. A security review at a company with shared clusters will block installation without this.
+
+- 🔲 **Bitbucket and Azure DevOps SCM providers are absent** — kardinal supports GitHub, GitLab, and Forgejo. Kargo supports GitHub, GitLab, Bitbucket, and Azure DevOps (the latter via `azure-devops` provider). Azure DevOps is the dominant SCM at enterprise accounts in regulated industries. `pkg/scm/factory.go` returns an error for `"bitbucket"` input. Teams on Bitbucket or Azure DevOps cannot use kardinal at all. Add `pkg/scm/bitbucket.go` and `pkg/scm/azuredevops.go` providers. PR templates, webhook validation, and PR-open/wait-for-merge operations must be implemented for both.
+
+- 🔲 **No reusable PromotionTemplate concept** — Kargo has reusable promotion step sequences via `PromotionTemplate` spec that can be referenced across Stages. In kardinal, every Pipeline.spec.environment must repeat the full promotion step list (git-clone, kustomize, git-commit, open-pr, wait-for-merge, health-check). For an organization with 50 pipelines, every step list change requires 50 Pipeline YAML edits. Add a `PromotionPolicy` CRD that encapsulates a named step sequence. Environments reference it via `spec.promotionPolicy: name`. The translator inlines the steps at graph-build time. This is an adoption blocker for large-scale platform teams.
+
+- 🔲 **`kardinal init` generates Pipeline YAML but does not scaffold the GitOps repo** — `cmd/kardinal/cmd/init.go` generates a Pipeline CRD YAML interactively. It does not create the GitOps repository branch structure (`env/test`, `env/uat`, `env/prod`), does not write `kustomization.yaml` overlays, and has no `--demo` mode. The Future item in Lens 5 (time-to-first-Bundle under 10 min) depends on `kardinal init` doing the repo scaffold. The command exists but solves only 20% of the onboarding problem. A new user still needs to understand GitOps repo structure before they can create a working Pipeline.
+
+- 🔲 **HTTP plain-text for UI and webhook endpoints is a TLS gap** — both `http.ListenAndServe` calls in `cmd/kardinal-controller/main.go` (UI on `:8082`, webhooks on `:8083`) use plain HTTP. Any internal network observer (or a compromised pod) can read promotion events and pipeline state in transit. Add `--tls-cert-file` / `--tls-key-file` flags (or auto-provision via cert-manager annotation on the Service) for both servers. Tracked in `docs/design/06-kardinal-ui.md` but not yet in the triage/blocker list.
+
 ---
 
 ## Triage notes
@@ -105,13 +120,18 @@ Every item in this doc was identified by examining the live codebase against fiv
 2. ~~PromotionStep timeout~~ ✅ Done (PR #906) — WaitingForMerge timeout added
 3. UI API authentication — security review failure
 4. Reconciler panic recovery — crash loop on malformed CRDs
+5. Bundle `status.conditions` never populated — breaks `kubectl wait` and GitOps tooling
+6. HTTP plain-text for UI and webhook servers — TLS gap flagged in enterprise security reviews
 
 **Must-fix for competitive parity with Kargo:**
 1. Outbound event notifications (Slack/webhook)
 2. ArgoCD-native image update step
 3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #903)
+4. Bitbucket and Azure DevOps SCM providers — blocks enterprise adoption
+5. Namespace-scoped controller mode — required for multi-tenant clusters
 
 **Adoption wins (high effort/impact):**
-1. `kardinal init` scaffolding command
+1. `kardinal init` full GitOps repo scaffolding (currently generates Pipeline YAML only)
 2. GitHub Actions wrapper action
 3. GitHub Discussions community presence
+4. Reusable PromotionTemplate CRD
