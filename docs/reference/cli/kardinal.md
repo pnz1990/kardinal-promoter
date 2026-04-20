@@ -24,6 +24,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 * [kardinal completion](kardinal_completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal_create.md)	 - Create kardinal resources
 * [kardinal dashboard](kardinal_dashboard.md)	 - Open the kardinal UI dashboard in a browser (Kargo parity)
+* [kardinal delete](kardinal_delete.md)	 - Delete kardinal resources
 * [kardinal diff](kardinal_diff.md)	 - Show artifact differences between two Bundles
 * [kardinal doctor](kardinal_doctor.md)	 - Run pre-flight checks to verify the cluster is correctly configured
 * [kardinal explain](kardinal_explain.md)	 - Explain the current state of a promotion pipeline
