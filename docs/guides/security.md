@@ -350,6 +350,62 @@ helm upgrade kardinal ... --set validatingAdmissionPolicy.enabled=false
 
 ---
 
+## UI API Access Control
+
+The embedded UI server runs on port `:8082` and serves two surfaces:
+
+| Path prefix | Content | Default |
+|---|---|---|
+| `/ui/*` | React app (HTML/JS/CSS) | Open — no sensitive data |
+| `/api/v1/ui/*` | Pipeline state, Bundle history, gate details | Open — unprotected by default |
+
+Without authentication, any pod in the cluster that can reach `:8082` can read all pipeline state. Enable Bearer token protection for production deployments.
+
+### Enabling Bearer token authentication
+
+Set the `--ui-auth-token` flag (or `KARDINAL_UI_TOKEN` environment variable):
+
+```bash
+# Helm values
+helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+  --set controller.uiAuthToken="$(openssl rand -hex 32)"
+```
+
+Or set it directly in the Deployment:
+
+```yaml
+env:
+  - name: KARDINAL_UI_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: kardinal-ui-token
+        key: token
+```
+
+When set, all `/api/v1/ui/*` requests must include:
+
+```
+Authorization: Bearer <token>
+```
+
+Requests without a valid Bearer token receive `HTTP 401` with a `Www-Authenticate: Bearer realm="kardinal-ui"` header.
+
+The static React assets at `/ui/*` are **not** gated — they contain no sensitive data and must load before the browser can supply a token.
+
+### Accessing the UI securely (before TLS is configured)
+
+Until TLS is added (tracked in [#911](https://github.com/pnz1990/kardinal-promoter/issues/911)), the recommended access method is:
+
+```bash
+kubectl port-forward svc/kardinal-kardinal-promoter 8082:8082 -n kardinal-system
+```
+
+Then access the UI at `http://localhost:8082/ui/`. The browser will display a warning when accessed over plain HTTP (`window.location.protocol != 'https:'`).
+
+> **Production note**: Do not expose port 8082 via a LoadBalancer or Ingress without TLS and auth enabled. Use port-forward for operator access until TLS is configured.
+
+---
+
 ## Further Reading
 
 - [Installation](../installation.md) — Helm values reference
