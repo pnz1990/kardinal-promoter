@@ -244,13 +244,21 @@ jobs:
           TRIGGER: ${{ github.event_name }}
         run: |
           FAIL_COUNT="${FAIL:-0}"
+          PASS_COUNT="${PASS:-0}"
+          TOTAL=$((PASS_COUNT + FAIL_COUNT))
           STATUS="ALL PASS"
           if [ "${FAIL_COUNT}" -gt 0 ]; then STATUS="${FAIL_COUNT} FAILED"; fi
           RESULTS=$(cat /tmp/pdca-results.txt 2>/dev/null || echo "no results")
           DATE=$(date -u '+%Y-%m-%d')
+          # Compute coverage percentage
+          if [ "$TOTAL" -gt 0 ]; then
+            PCT=$(python3 -c "print(int(${PASS_COUNT}/${TOTAL}*100))")
+          else
+            PCT=0
+          fi
           echo "PDCA AUTOMATED - Product Validation $DATE" > /tmp/comment.txt
           echo "" >> /tmp/comment.txt
-          echo "Status: $STATUS (PASS=$PASS FAIL=$FAIL_COUNT)" >> /tmp/comment.txt
+          echo "Status: $STATUS (PASS=$PASS_COUNT FAIL=$FAIL_COUNT)" >> /tmp/comment.txt
           echo "Image: $TEST_IMAGE" >> /tmp/comment.txt
           echo "CI Run: https://github.com/$GH_REPO/actions/runs/$RUN_ID" >> /tmp/comment.txt
           echo "Trigger: $TRIGGER" >> /tmp/comment.txt
@@ -261,6 +269,9 @@ jobs:
           echo "Note: S2 (pause) and S5 (rollback) require full cluster - run manually." >> /tmp/comment.txt
           echo "Issue: #413" >> /tmp/comment.txt
           gh issue comment 1 --repo "$GH_REPO" --body-file /tmp/comment.txt
+          # Post structured anchor score line to Issue #1 for otherness coverage tracking
+          gh issue comment 1 --repo "$GH_REPO" \
+            --body "[ANCHOR | kardinal-promoter | ${DATE}] coverage: ${PASS_COUNT}/${TOTAL} (${PCT}%) | PASS=${PASS_COUNT} FAIL=${FAIL_COUNT}"
 
       - name: Tear down cluster
         if: always()
