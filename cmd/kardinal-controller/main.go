@@ -525,15 +525,16 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 		}
 	}
 
-	if allowAll {
+	switch {
+	case allowAll:
 		log.Warn().Msg("CORS: all origins allowed (--cors-allowed-origins=*). Use an explicit list in production.")
-	} else if len(allowedSet) > 0 {
+	case len(allowedSet) > 0:
 		origins := make([]string, 0, len(allowedSet))
 		for o := range allowedSet {
 			origins = append(origins, o)
 		}
 		log.Info().Strs("origins", origins).Msg("CORS: allow-list configured for /api/v1/ui/*")
-	} else {
+	default:
 		log.Info().Msg("CORS: same-origin only for /api/v1/ui/* (no --cors-allowed-origins set)")
 	}
 
