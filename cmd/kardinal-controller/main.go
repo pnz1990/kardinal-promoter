@@ -20,6 +20,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -116,6 +117,13 @@ func main() {
 	var bundleToken string
 	flag.StringVar(&bundleToken, "bundle-api-token", os.Getenv("KARDINAL_BUNDLE_TOKEN"),
 		"Bearer token for authenticating POST /api/v1/bundles requests.")
+
+	var uiAuthToken string
+	flag.StringVar(&uiAuthToken, "ui-auth-token", os.Getenv("KARDINAL_UI_TOKEN"),
+		"Bearer token for authenticating /api/v1/ui/* requests. "+
+			"When set, all UI API routes require 'Authorization: Bearer <token>'. "+
+			"When empty (default), the UI API is open (no authentication). "+
+			"Also readable from KARDINAL_UI_TOKEN environment variable.")
 
 	var uiListenAddress string
 	flag.StringVar(&uiListenAddress, "ui-listen-address", ":8082",
@@ -299,8 +307,34 @@ func main() {
 		} else {
 			uiMux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(distFS))))
 		}
+
+		// Apply Bearer token authentication to all /api/v1/ui/* routes when
+		// --ui-auth-token is set. Static /ui/* assets bypass auth (no sensitive data).
+		var handler http.Handler = uiMux
+		if uiAuthToken != "" {
+			logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
+			tokenBytes := []byte(uiAuthToken)
+			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Only guard /api/v1/ui/* — static assets at /ui/* are public.
+				if strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
+					authHeader := r.Header.Get("Authorization")
+					provided := strings.TrimPrefix(authHeader, "Bearer ")
+					// Use constant-time comparison to prevent timing attacks.
+					if !strings.HasPrefix(authHeader, "Bearer ") ||
+						subtle.ConstantTimeCompare([]byte(provided), tokenBytes) != 1 {
+						w.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
+						http.Error(w, "unauthorized", http.StatusUnauthorized)
+						return
+					}
+				}
+				uiMux.ServeHTTP(w, r)
+			})
+		} else {
+			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token to require Bearer token")
+		}
+
 		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
-		if err := http.ListenAndServe(uiListenAddress, uiMux); err != nil {
+		if err := http.ListenAndServe(uiListenAddress, handler); err != nil {
 			logger.Error().Err(err).Msg("UI server error")
 		}
 	}()
