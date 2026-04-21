@@ -1137,38 +1137,38 @@ func TestUIAPI_CreateBundle_RejectsWrongMethod(t *testing.T) {
 // TestParseUIImageRef verifies the image reference parsing helper (#917).
 func TestParseUIImageRef(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantRepo  string
-		wantTag   string
+		name       string
+		input      string
+		wantRepo   string
+		wantTag    string
 		wantDigest string
 	}{
 		{
-			name:  "repo with tag",
-			input: "ghcr.io/example/app:sha-abc1234",
+			name:     "repo with tag",
+			input:    "ghcr.io/example/app:sha-abc1234",
 			wantRepo: "ghcr.io/example/app",
 			wantTag:  "sha-abc1234",
 		},
 		{
-			name:  "repo with digest",
-			input: "ghcr.io/example/app@sha256:deadbeef",
+			name:       "repo with digest",
+			input:      "ghcr.io/example/app@sha256:deadbeef",
 			wantRepo:   "ghcr.io/example/app",
 			wantDigest: "sha256:deadbeef",
 		},
 		{
-			name:  "bare repo no tag",
-			input: "ghcr.io/example/app",
+			name:     "bare repo no tag",
+			input:    "ghcr.io/example/app",
 			wantRepo: "ghcr.io/example/app",
 		},
 		{
-			name:  "repo with port and tag",
-			input: "registry.example.com:5000/myapp:v1.2.3",
+			name:     "repo with port and tag",
+			input:    "registry.example.com:5000/myapp:v1.2.3",
 			wantRepo: "registry.example.com:5000/myapp",
 			wantTag:  "v1.2.3",
 		},
 		{
-			name:  "registry:port with path — no explicit tag",
-			input: "registry.example.com:5000/org/myapp",
+			name:     "registry:port with path — no explicit tag",
+			input:    "registry.example.com:5000/org/myapp",
 			wantRepo: "registry.example.com:5000/org/myapp",
 		},
 	}
