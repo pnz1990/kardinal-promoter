@@ -151,7 +151,7 @@
     },
     "909": {
       "title": "feat: UI API authentication",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -159,7 +159,14 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-5c1aab20",
+      "assigned_at": "2026-04-20T21:27:56Z",
+      "branch": "feat/909",
+      "worktree": "../kardinal-promoter.909",
+      "pr_number": 924,
+      "pr_merged": true,
+      "done_at": "2026-04-20T21:39:54Z"
     },
     "910": {
       "title": "feat: Bundle history GC",
@@ -186,7 +193,7 @@
     },
     "911": {
       "title": "feat: TLS for UI and webhook HTTP servers",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -194,11 +201,13 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     },
     "912": {
       "title": "feat: CORS lockdown for UI API",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -206,11 +215,23 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-4f34f524",
+      "assigned_at": "2026-04-21T11:39:03Z",
+      "branch": "feat/912",
+      "worktree": "../kardinal-promoter.912",
+      "file_spaces": [
+        "web/",
+        "src/styles/",
+        "src/hooks/",
+        "src/components/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:39:47Z"
     },
     "913": {
       "title": "feat: In-cluster kubectl port-forward UX",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -218,11 +239,13 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:40:25Z"
     },
     "914": {
       "title": "feat: No outbound event notifications",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -230,11 +253,15 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_number": "942",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/942",
+      "pr_merged": true,
+      "done_at": "2026-04-21T08:19:40Z"
     },
     "915": {
       "title": "feat: No ArgoCD-native image update step",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -242,11 +269,13 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T13:13:52Z"
     },
     "916": {
       "title": "feat: No GitHub Actions native bundle creation",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -254,11 +283,21 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-4f34f524",
+      "assigned_at": "2026-04-21T11:40:46Z",
+      "branch": "feat/916",
+      "worktree": "../kardinal-promoter.916",
+      "file_spaces": [
+        "cmd/",
+        ".github/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:51:23Z"
     },
     "917": {
       "title": "feat: No UI for Bundle creation / triggering promotions",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -266,11 +305,13 @@
         "area/ui",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:28:41Z"
     },
     "918": {
       "title": "feat: Warehouse-equivalent: no automatic discovery mode",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -278,11 +319,13 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T10:24:01Z"
     },
     "904": {
       "title": "test: add CI check that CRD YAML printer columns match Go type annotations",
-      "state": "todo",
+      "state": "done",
       "priority": "low",
       "labels": [
         "kardinal",
@@ -290,7 +333,9 @@
         "area/test",
         "size/xs",
         "priority/low"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     },
     "920": {
       "title": "feat: reconciler panic recovery \u2014 enable WithRecoverPanic to prevent crash loops",
@@ -306,6 +351,35 @@
       "pr_number": "921",
       "pr_merged": true,
       "done_at": "2026-04-20T21:06:16Z"
+    },
+    "925": {
+      "title": "fix(ci): Demo E2E fails \u2014 health.flux field not in CRD schema",
+      "state": "done",
+      "priority": "high",
+      "labels": [
+        "kind/bug",
+        "area/test",
+        "priority/high",
+        "size/s",
+        "kardinal"
+      ],
+      "pr_number": 927,
+      "pr_merged": true,
+      "done_at": "2026-04-20T22:05:58Z"
+    },
+    "926": {
+      "title": "docs: document UI API authentication in security guide",
+      "state": "done",
+      "priority": "medium",
+      "labels": [
+        "kind/docs",
+        "area/docs",
+        "priority/medium",
+        "size/xs",
+        "kardinal"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     }
   },
   "session_heartbeats": {
@@ -318,9 +392,20 @@
       "last_seen": "2026-04-20T20:37:39Z",
       "item": "910",
       "cycle": 2
+    },
+    "sess-3d4ec825": {
+      "last_seen": "2026-04-21T07:24:26Z",
+      "item": "912",
+      "cycle": 1
+    },
+    "sess-4f34f524": {
+      "last_seen": "2026-04-21T11:39:03Z",
+      "item": "912",
+      "cycle": 1
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 3,
-  "pm_cycle_count": 3
+  "sm_cycle_count": 4,
+  "pm_cycle_count": 6,
+  "chore_only_guard_count": 0
 }
