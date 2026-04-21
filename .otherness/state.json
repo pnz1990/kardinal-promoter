@@ -261,7 +261,7 @@
     },
     "915": {
       "title": "feat: No ArgoCD-native image update step",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -269,7 +269,9 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T13:13:52Z"
     },
     "916": {
       "title": "feat: No GitHub Actions native bundle creation",
