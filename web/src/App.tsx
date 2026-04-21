@@ -12,6 +12,7 @@ import { DAGView } from './components/DAGView'
 import { NodeDetail } from './components/NodeDetail'
 import { HealthChip } from './components/HealthChip'
 import { BlockedBanner } from './components/BlockedBanner'
+import { InsecureConnectionBanner } from './components/InsecureConnectionBanner'
 import { BundleTimeline } from './components/BundleTimeline'
 import { BundleDiffPanel } from './components/BundleDiffPanel'
 import { PolicyGatesPanel } from './components/PolicyGatesPanel'
@@ -109,6 +110,9 @@ export function App() {
 
   // Blocked gate filter state.
   const [showBlockedOnly, setShowBlockedOnly] = useState(false)
+
+  // #913: insecure connection banner — dismissed state for the current session.
+  const [insecureBannerDismissed, setInsecureBannerDismissed] = useState(false)
 
   // #462: view mode toggle — 'list' (sidebar) | 'ops-table' (full-width operations table).
   const [viewMode, setViewMode] = useState<'list' | 'ops-table'>('list')
@@ -586,6 +590,12 @@ export function App() {
                   onRefresh={manualRefresh}
                 />
               )}
+
+              {/* #913: Insecure connection warning — shown when UI accessed over HTTP from non-localhost */}
+              <InsecureConnectionBanner
+                dismissed={insecureBannerDismissed}
+                onDismiss={() => setInsecureBannerDismissed(true)}
+              />
 
               {/* Blocked PolicyGate banner */}
               <BlockedBanner

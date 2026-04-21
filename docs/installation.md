@@ -123,6 +123,39 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
 
 ---
 
+## Accessing the UI
+
+The kardinal controller serves an embedded web UI at port `8082` (configurable via `--ui-listen-address`).
+
+### In-cluster access (recommended): kubectl port-forward
+
+The supported access method for in-cluster deployments without Ingress is `kubectl port-forward`:
+
+```bash
+kubectl port-forward svc/kardinal-controller -n kardinal-system 8082:8082
+```
+
+Then open <http://localhost:8082/ui/> in your browser.
+
+!!! tip "Why port-forward?"
+    Port-forwarding routes traffic through the Kubernetes API server over a secure
+    tunnel — no Ingress or LoadBalancer needed. It is the recommended approach for
+    platform engineers accessing the UI from their workstation.
+
+!!! warning "Avoid accessing the UI over plain HTTP from a remote address"
+    If you expose port 8082 directly (e.g. via `NodePort`) without TLS, the UI will
+    display a security warning. Use port-forward from localhost instead, or configure
+    TLS with `--tls-cert-file` / `--tls-key-file`.
+
+### With TLS (production)
+
+If you configure TLS via `--tls-cert-file` / `--tls-key-file` (or the Helm values
+`controller.tlsCertFile` / `controller.tlsKeyFile`), the UI is served over HTTPS
+and no browser warning is shown. See the [Security guide](guides/security.md) for
+a cert-manager example.
+
+---
+
 ## Upgrade
 
 ```bash
