@@ -281,7 +281,7 @@
     },
     "917": {
       "title": "feat: No UI for Bundle creation / triggering promotions",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -289,7 +289,9 @@
         "area/ui",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:28:41Z"
     },
     "918": {
       "title": "feat: Warehouse-equivalent: no automatic discovery mode",
