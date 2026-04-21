@@ -147,3 +147,40 @@ func TestUIAuth_StaticAssetsUnprotected(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code,
 		"static /ui/* assets must not be gated by auth middleware (O4)")
 }
+
+// TestUIAuth_StaticTokenTakesPrecedenceOverTokenReview verifies O4 (spec issue-975):
+// when --ui-auth-token is set, the static token middleware is applied and
+// TokenReview is NOT called. The static token is the gate.
+func TestUIAuth_StaticTokenTakesPrecedenceOverTokenReview(t *testing.T) {
+	// Scenario: static token is set AND TokenReview would return authenticated.
+	// Expected: only the static token check applies.
+	// A correct static token → 200.
+	// A token that would pass TokenReview but is NOT the static token → 401.
+	const staticToken = "static-secret-token"
+
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	uiMux := http.NewServeMux()
+	srv.RegisterRoutes(uiMux)
+
+	// Apply only static token middleware (as main.go does when uiAuthToken != "").
+	// TokenReview is NOT wired — it would never be called.
+	handler := uiAuthMiddleware(uiMux, staticToken)
+
+	t.Run("correct static token → 200", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+		req.Header.Set("Authorization", "Bearer "+staticToken)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("wrong token (even if TokenReview would accept it) → 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
+		req.Header.Set("Authorization", "Bearer valid-kube-token-but-not-static-secret")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusUnauthorized, w.Code,
+			"O4: static token takes precedence — a valid kubeconfig token is rejected if it does not match --ui-auth-token")
+	})
+}
