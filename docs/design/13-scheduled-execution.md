@@ -119,6 +119,14 @@ If secrets expire or need rotation:
 
 ## Future (🔲)
 
+- 🔲 **Workflow step syntax CI-validation** — the `otherness-scheduled.yml` "Install otherness agent files" step has failed repeatedly with bash syntax errors (7 consecutive runs failed 2026-04-21 00:40–06:43 UTC, see PR #943). The root cause: sequential edits by agents corrupt multi-branch if/else/fi blocks, and there is no automated check that catches this before merge. Add a CI job (or pre-merge check in `ci.yml`) that runs `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/otherness-scheduled.yml'))"` + `bash -n` on the extracted `run:` scripts. Every workflow step that contains bash should be syntax-verified before merge. A broken scheduled workflow means **the loop ships zero work** for hours without any human noticing — this is the highest-impact single reliability failure mode.
+
+- 🔲 **PDCA coverage must never be 0/0 — flag as BROKEN when it is** — the PDCA workflow post to Issue #1 currently shows `PASS=0 FAIL=0` ("no results") when an upstream step fails before scenarios run. This looks like "no scenarios ran" rather than "the workflow itself is broken". Add a check: if `TOTAL == 0`, post `[PDCA BROKEN — no scenarios executed; workflow failed before reaching scenario step]` and label Issue #413 with `needs-human`. Zero coverage must be visible as an error, not a neutral "no results" message. A system that silently reports 0/0 gives humans false confidence that validation is running.
+
+- 🔲 **Single-page health dashboard at Issue #1** — a human looking at Issue #1 right now cannot quickly tell if the system is healthy, what it shipped today, and whether it is moving toward the vision or spinning. The report comments are verbose and require reading 20+ comments to form a picture. Add a pinned comment (updated by every session) with a machine-readable health block: last run status (PASS/FAIL), last PR merged (title + number), queue depth, days since last meaningful feature PR, PDCA coverage percentage. Template: `[HEALTH | kardinal-promoter | <date>] loop=GREEN|RED|STALL | last_pr=#NNN "<title>" | queue=N | pdca=X/Y (Z%)`. The SM should update this block every batch using `gh issue comment --edit`.
+
+- 🔲 **Self-cadence: switch from 6h to 1h when queue is non-empty** — the cron is locked at `0 * * * *` (hourly per the security comment) but was changed to `0 */6 * * *` in PR #834 because "all 7 journeys passing, steady-state standby." The two are in conflict: the comment says hourly is required for progress, but the cron says 6h. The actual resolution: cadence should be *data-driven*: 1h when the queue has items, 6h in standby. Since GitHub Actions cron cannot be dynamic, implement this by having the session exit early (after posting a "standby" comment) if the queue is empty. This gives 6h effective cadence in standby without changing the cron, while ensuring 1h availability when work exists.
+
 ---
 
 ## Zone 1 — Obligations
