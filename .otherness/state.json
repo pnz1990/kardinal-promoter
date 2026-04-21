@@ -492,7 +492,7 @@
       "done_at": "2026-04-21T17:54:38Z"
     },
     "issue-975": {
-      "state": "in_review",
+      "state": "done",
       "title": "feat: No Kubernetes TokenReview-based auth for UI API",
       "issue": "975",
       "labels": [
@@ -504,11 +504,8 @@
       ],
       "priority": "medium",
       "created_at": "2026-04-21T13:48:40Z",
-      "assigned_to": "sess-eeb0e756",
-      "assigned_at": "2026-04-21T18:37:25Z",
-      "branch": "feat/issue-975",
-      "worktree": "../kardinal-promoter.issue-975",
-      "pr_number": "1015"
+      "pr_merged": true,
+      "done_at": "2026-04-21T18:51:09Z"
     },
     "issue-976": {
       "state": "todo",
@@ -648,7 +645,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-985": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No reusable PromotionTemplate concept",
       "issue": "985",
       "labels": [
@@ -662,7 +659,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-986": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: kardinal init generates Pipeline YAML but does not scaffold the GitOps repo",
       "issue": "986",
       "labels": [
@@ -673,7 +670,9 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-21T20:54:38Z"
     },
     "issue-987": {
       "state": "done",
