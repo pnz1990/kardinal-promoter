@@ -131,8 +131,8 @@ export AGENT_ID="COORDINATOR"  # change per session
 PROJECT_NAME:   kardinal-promoter
 CLI_BINARY:     kardinal
 PR_LABEL:       kardinal
-REPORT_ISSUE:   1
-REPORT_URL:     https://github.com/pnz1990/kardinal-promoter/issues/1
+REPORT_ISSUE:   892
+REPORT_URL:     https://github.com/pnz1990/kardinal-promoter/issues/892
 BOARD_URL:      https://github.com/users/pnz1990/projects/1
 BUILD_COMMAND:  go build ./...
 TEST_COMMAND:   go test ./... -race -count=1 -timeout 120s
