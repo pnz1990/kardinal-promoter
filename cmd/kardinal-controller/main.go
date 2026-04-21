@@ -46,6 +46,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	admissionpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/admission"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -198,6 +199,20 @@ func main() {
 		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_KEY"),
 		"Data key within the Secret that holds the SCM token (default: \"token\"). "+
 			"Also readable from KARDINAL_SCM_TOKEN_SECRET_KEY environment variable.")
+
+	// --pipeline-admission-webhook enables the ValidatingAdmissionWebhook handler for
+	// Pipeline CRDs. When true, the handler is mounted at
+	// POST /webhook/validate/pipeline on the webhook server (--webhook-bind-address).
+	// Operators must separately install a ValidatingWebhookConfiguration pointing at
+	// this path; the controller does not auto-create it.
+	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	var pipelineAdmissionWebhook bool
+	flag.BoolVar(&pipelineAdmissionWebhook, "pipeline-admission-webhook",
+		os.Getenv("KARDINAL_PIPELINE_ADMISSION_WEBHOOK") == "true",
+		"Enable the ValidatingAdmissionWebhook handler for Pipeline cycle detection "+
+			"at POST /webhook/validate/pipeline. Requires a ValidatingWebhookConfiguration "+
+			"to be installed separately. Also readable from "+
+			"KARDINAL_PIPELINE_ADMISSION_WEBHOOK=true environment variable.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
@@ -400,6 +415,13 @@ func main() {
 			bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, "default", logger)
 			mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
 			logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
+		}
+		// Pipeline admission webhook — only mounted when explicitly enabled.
+		// Requires a ValidatingWebhookConfiguration installed separately by the operator.
+		// Design ref: docs/design/15-production-readiness.md §Lens 4
+		if pipelineAdmissionWebhook {
+			mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
+			logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
 		}
 		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
 		if err := listenAndServeWithTLS(webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger); err != nil {
