@@ -246,7 +246,7 @@ type StepSpec struct {
 // UpdateConfig holds manifest update strategy configuration.
 type UpdateConfig struct {
 	// Strategy selects the manifest update strategy.
-	// +kubebuilder:validation:Enum=kustomize;helm
+	// +kubebuilder:validation:Enum=kustomize;helm;argocd
 	// +kubebuilder:default=kustomize
 	// +optional
 	Strategy string `json:"strategy,omitempty"`
@@ -255,6 +255,12 @@ type UpdateConfig struct {
 	// Used when Strategy is "helm".
 	// +optional
 	Helm *HelmUpdateConfig `json:"helm,omitempty"`
+
+	// ArgoCD holds ArgoCD-native update configuration.
+	// Used when Strategy is "argocd". Patches the ArgoCD Application's
+	// spec.source.helm.valuesObject directly without a git commit.
+	// +optional
+	ArgoCD *ArgoCDUpdateConfig `json:"argocd,omitempty"`
 }
 
 // HelmUpdateConfig holds Helm-specific update strategy configuration.
@@ -269,6 +275,29 @@ type HelmUpdateConfig struct {
 	// environment path). Defaults to "values.yaml".
 	// +optional
 	ValuesFile string `json:"valuesFile,omitempty"`
+}
+
+// ArgoCDUpdateConfig holds ArgoCD-native update strategy configuration.
+// Used when UpdateConfig.Strategy is "argocd".
+// The argocd-set-image step patches the ArgoCD Application's
+// spec.source.helm.valuesObject in-place, unlocking teams that store
+// application config inside an ArgoCD Application rather than a GitOps repo.
+type ArgoCDUpdateConfig struct {
+	// Application is the name of the ArgoCD Application resource to patch.
+	// +kubebuilder:validation:MinLength=1
+	Application string `json:"application"`
+
+	// Namespace is the Kubernetes namespace where the ArgoCD Application lives.
+	// Defaults to "argocd" if empty.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// ImageKey is the dot-separated key path within spec.source.helm.valuesObject
+	// where the image tag should be written.
+	// Example: "image.tag" writes to spec.source.helm.valuesObject.image.tag.
+	// Defaults to "image.tag" if empty.
+	// +optional
+	ImageKey string `json:"imageKey,omitempty"`
 }
 
 // HealthConfig holds health check configuration for an environment.

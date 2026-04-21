@@ -33,15 +33,22 @@ func DefaultSequence(approvalMode string) []string {
 // bundle type, update strategy, and layout. Callers should prefer this over DefaultSequence.
 //
 // bundleType: "image" | "config" | "mixed" | "" (defaults to image behaviour)
-// updateStrategy: "kustomize" | "helm" | "" (defaults to kustomize)
+// updateStrategy: "kustomize" | "helm" | "argocd" | "" (defaults to kustomize)
 // layout: "directory" | "branch" | "" (defaults to directory)
 //
 // Routing rules:
 //   - config bundle → git-clone, config-merge, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//   - image + argocd → argocd-set-image, health-check (no git operations)
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout string) []string {
+	// ArgoCD-native path: no git operations, no PR — direct Kubernetes API patch.
+	// health-check runs after the patch to verify the ArgoCD Application synced.
+	if updateStrategy == "argocd" {
+		return []string{"argocd-set-image", "health-check"}
+	}
+
 	var updateSteps []string
 	switch {
 	case bundleType == "config":
