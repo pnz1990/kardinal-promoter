@@ -23,3 +23,4 @@
 | 2026-04-21 | 50 | 0 | 12 | feat(ci): GitHub Actions native bundle creation action — image/digest inputs, retry, bundle-status-url output (#953) | ✅ |
 
 | 2026-04-21 | 51 | 20 | 0 | 0 | 12 | 1 | ~8min | 1 | feature-rich | — | — | 0 | 1 | 1 | TokenReview auth for UI API (PR #1015) |
+| 2026-04-21 | 1 | 0 | 0 | 0 | 12 | 1 | ~12min | 1 | feature-rich | — | — | 0 | 1 | 1 | feat(cli): kardinal init --scaffold-gitops --demo (PR #1022) |
