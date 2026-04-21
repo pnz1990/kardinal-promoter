@@ -4,6 +4,14 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- test(bundle): assert RequeueAfter >= 500ms in handleNew regression guard (#1027)
+- docs: add ADOPTERS.md with PDCA self-use entry (#1025)
+- feat(helm): add controller.watchNamespace for namespace-scoped install mode (#1024)
+- feat(cli): add --scaffold-gitops and --demo flags to kardinal init (#1022)
+- feat(controller): ValidatingAdmissionWebhook for Pipeline dependsOn cycle detection (#1020)
+- chore: update REPORT_ISSUE to today's daily report (#892) (#1019)
+- fix(lint): resolve golangci-lint gofmt/goimports/gocritic failures (#1018)
+
 - feat(security): add Kubernetes TokenReview-based auth for UI API (#1015)
 - 2 PRs merged: metrics + logs steps table. (#1013)
 - feat(cli): render status.steps[] per-step table in kardinal logs (#1012)
