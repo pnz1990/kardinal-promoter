@@ -79,7 +79,7 @@ describe('CreateBundleDialog', () => {
 
   it('calls api.createBundle once with correct args on valid submit', async () => {
     const onDone = vi.fn()
-    mockApi.createBundle.mockResolvedValueOnce({ bundle: 'nginx-demo-abc', message: 'bundle created' })
+    ;(mockApi.createBundle as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ bundle: 'nginx-demo-abc', message: 'bundle created' })
 
     render(
       <CreateBundleDialog
@@ -115,7 +115,7 @@ describe('CreateBundleDialog', () => {
   })
 
   it('displays API error inline and stays open on failure', async () => {
-    mockApi.createBundle.mockRejectedValueOnce(new Error('API error 500: failed to create bundle'))
+    ;(mockApi.createBundle as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('API error 500: failed to create bundle'))
 
     const onDone = vi.fn()
     render(
@@ -143,7 +143,7 @@ describe('CreateBundleDialog', () => {
 
   it('disables buttons while loading', async () => {
     let resolveCreate!: (v: { bundle: string; message: string }) => void
-    mockApi.createBundle.mockImplementationOnce(
+    ;(mockApi.createBundle as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () => new Promise<{ bundle: string; message: string }>(res => { resolveCreate = res })
     )
 
@@ -213,7 +213,7 @@ describe('CreateBundleButton', () => {
 
   it('calls onRefresh and closes dialog after successful creation', async () => {
     const onRefresh = vi.fn()
-    mockApi.createBundle.mockResolvedValueOnce({ bundle: 'nginx-demo-xyz', message: 'ok' })
+    ;(mockApi.createBundle as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ bundle: 'nginx-demo-xyz', message: 'ok' })
 
     render(
       <CreateBundleButton
@@ -227,7 +227,8 @@ describe('CreateBundleButton', () => {
     fireEvent.change(screen.getByLabelText(/container image/i), {
       target: { value: 'ghcr.io/example/app:v1.0' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create bundle', exact: true }))
+    // Click the dialog submit button (aria-label="Create bundle")
+    fireEvent.click(screen.getByRole('button', { name: 'Create bundle' }))
 
     await waitFor(() => {
       expect(onRefresh).toHaveBeenCalledOnce()
