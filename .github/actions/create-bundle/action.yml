@@ -10,8 +10,14 @@ inputs:
     description: 'Bundle type: image, config, or mixed'
     required: false
     default: 'image'
+  image:
+    description: 'Single image reference (repository:tag or repository@sha256:digest). Use this for the common single-image case. Takes precedence over images when both are set.'
+    required: false
+  digest:
+    description: 'Image digest (sha256:...) to associate with the image input. Only used when image is set.'
+    required: false
   images:
-    description: 'Newline-separated list of image references (repository:tag or repository@digest)'
+    description: 'Newline-separated list of image references (repository:tag or repository@digest). Use this for multi-image bundles.'
     required: false
   namespace:
     description: 'Kubernetes namespace of the Pipeline'
@@ -26,6 +32,8 @@ outputs:
     description: 'Name of the created Bundle CRD'
   bundle-namespace:
     description: 'Namespace of the created Bundle CRD'
+  bundle-status-url:
+    description: 'URL to the pipeline view in the kardinal UI for this bundle'
 
 runs:
   using: 'composite'
@@ -41,79 +49,186 @@ runs:
         BUNDLE_TYPE="${{ inputs.type }}"
         NAMESPACE="${{ inputs.namespace }}"
         KARDINAL_URL="${{ inputs.kardinal-url }}"
+        # Strip trailing slash from URL for consistent concatenation.
+        KARDINAL_URL="${KARDINAL_URL%/}"
+
+        IMAGE_SINGLE="${{ inputs.image }}"
+        DIGEST_SINGLE="${{ inputs.digest }}"
         IMAGES_INPUT="${{ inputs.images }}"
 
         if [ -z "$KARDINAL_TOKEN" ]; then
-          echo "::error::KARDINAL_TOKEN environment variable is not set."
+          echo "::error::KARDINAL_TOKEN environment variable is not set. Set it as a secret in your repository and pass it via env: KARDINAL_TOKEN: \${{ secrets.KARDINAL_TOKEN }}"
           exit 1
         fi
 
-        # Build images JSON array from newline-separated input.
+        echo "::group::Build image list"
+
+        # parse_image <ref> [digest] — emits a single JSON object for ImageRef.
+        # digest overrides any digest embedded in the ref.
+        parse_image() {
+          local img="$1"
+          local override_digest="${2:-}"
+          if [ -n "$override_digest" ]; then
+            # Separate the repository from any tag (ignore embedded tag when digest overrides).
+            local repo
+            repo=$(echo "$img" | cut -d: -f1)
+            echo "{\"repository\":\"$repo\",\"digest\":\"$override_digest\"}"
+          elif echo "$img" | grep -q "@"; then
+            local repo digest
+            repo=$(echo "$img" | cut -d@ -f1)
+            digest=$(echo "$img" | cut -d@ -f2)
+            echo "{\"repository\":\"$repo\",\"digest\":\"$digest\"}"
+          elif echo "$img" | grep -q ":"; then
+            local repo tag
+            repo=$(echo "$img" | rev | cut -d: -f2- | rev)
+            tag=$(echo "$img" | rev | cut -d: -f1 | rev)
+            echo "{\"repository\":\"$repo\",\"tag\":\"$tag\"}"
+          else
+            echo "{\"repository\":\"$img\"}"
+          fi
+        }
+
+        # Build images JSON array.
+        # Priority: image (single) > images (multi-line list).
         IMAGES_JSON="[]"
-        if [ -n "$IMAGES_INPUT" ]; then
-          IMAGES_JSON="["
-          FIRST=true
+
+        if [ -n "$IMAGE_SINGLE" ]; then
+          # Single image mode — image input takes precedence.
+          ENTRY=$(parse_image "$IMAGE_SINGLE" "$DIGEST_SINGLE")
+          IMAGES_JSON="[$ENTRY]"
+          echo "Single image mode: $IMAGE_SINGLE"
+        elif [ -n "$IMAGES_INPUT" ]; then
+          # Multi-image mode — parse newline-separated list.
+          ITEMS=""
           while IFS= read -r img; do
             [ -z "$img" ] && continue
-            # Parse repository:tag or repository@digest
-            if echo "$img" | grep -q "@"; then
-              REPO=$(echo "$img" | cut -d@ -f1)
-              DIGEST=$(echo "$img" | cut -d@ -f2)
-              ENTRY="{\"repository\":\"$REPO\",\"digest\":\"$DIGEST\"}"
-            elif echo "$img" | grep -q ":"; then
-              REPO=$(echo "$img" | rev | cut -d: -f2- | rev)
-              TAG=$(echo "$img" | rev | cut -d: -f1 | rev)
-              ENTRY="{\"repository\":\"$REPO\",\"tag\":\"$TAG\"}"
+            ENTRY=$(parse_image "$img" "")
+            if [ -z "$ITEMS" ]; then
+              ITEMS="$ENTRY"
             else
-              ENTRY="{\"repository\":\"$img\"}"
-            fi
-            if [ "$FIRST" = "true" ]; then
-              IMAGES_JSON="${IMAGES_JSON}${ENTRY}"
-              FIRST=false
-            else
-              IMAGES_JSON="${IMAGES_JSON},${ENTRY}"
+              ITEMS="$ITEMS,$ENTRY"
             fi
           done <<< "$IMAGES_INPUT"
-          IMAGES_JSON="${IMAGES_JSON}]"
+          IMAGES_JSON="[$ITEMS]"
+          echo "Multi-image mode: $(echo "$IMAGES_INPUT" | grep -c . || echo 0) image(s)"
+        else
+          echo "No images provided — creating config-type bundle with empty image list."
         fi
 
+        echo "Images JSON: $IMAGES_JSON"
+        echo "::endgroup::"
+
         # Build provenance from GitHub Actions environment.
-        PROVENANCE_JSON="{
-          \"commitSHA\": \"${GITHUB_SHA:-}\",
-          \"ciRunURL\": \"${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-unknown}/actions/runs/${GITHUB_RUN_ID:-0}\",
-          \"author\": \"${GITHUB_ACTOR:-}\"
-        }"
+        PROVENANCE_JSON=$(python3 -c "
+        import json, os
+        print(json.dumps({
+          'commitSHA': os.environ.get('GITHUB_SHA', ''),
+          'ciRunURL': '{}/{}/actions/runs/{}'.format(
+            os.environ.get('GITHUB_SERVER_URL', 'https://github.com'),
+            os.environ.get('GITHUB_REPOSITORY', 'unknown'),
+            os.environ.get('GITHUB_RUN_ID', '0')),
+          'author': os.environ.get('GITHUB_ACTOR', ''),
+        }))
+        ")
 
         # Build request body.
-        BODY="{
-          \"pipeline\": \"$PIPELINE\",
-          \"type\": \"$BUNDLE_TYPE\",
-          \"namespace\": \"$NAMESPACE\",
-          \"images\": $IMAGES_JSON,
-          \"provenance\": $PROVENANCE_JSON
-        }"
-
-        echo "Creating Bundle for pipeline '$PIPELINE' in namespace '$NAMESPACE'..."
-
-        RESPONSE=$(curl -sf \
-          -X POST \
-          -H "Authorization: Bearer $KARDINAL_TOKEN" \
-          -H "Content-Type: application/json" \
-          -d "$BODY" \
-          "${KARDINAL_URL}/api/v1/bundles" 2>&1) || {
-          echo "::error::Failed to create Bundle. curl exit code: $?"
-          echo "::error::Response: $RESPONSE"
-          exit 1
+        BODY=$(python3 -c "
+        import json, sys
+        body = {
+          'pipeline': '$PIPELINE',
+          'type': '$BUNDLE_TYPE',
+          'namespace': '$NAMESPACE',
+          'images': json.loads('''$IMAGES_JSON'''),
+          'provenance': json.loads('''$PROVENANCE_JSON'''),
         }
+        print(json.dumps(body))
+        ")
+
+        echo "::group::Create Bundle"
+        echo "Pipeline: $PIPELINE"
+        echo "Namespace: $NAMESPACE"
+        echo "Endpoint: ${KARDINAL_URL}/api/v1/bundles"
+
+        # Retry loop: up to 3 attempts with exponential backoff.
+        # Retries on: curl failure (network), HTTP 5xx (server error).
+        # Does NOT retry on: HTTP 4xx (client error — bad token, bad input).
+        RESPONSE=""
+        HTTP_STATUS=""
+        ATTEMPT=0
+        MAX_ATTEMPTS=3
+        SLEEP_SECS=1
+
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          ATTEMPT=$((ATTEMPT + 1))
+          echo "Attempt $ATTEMPT/$MAX_ATTEMPTS..."
+
+          # Use -w to capture HTTP status separately from response body.
+          HTTP_RESPONSE=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $KARDINAL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" \
+            --connect-timeout 10 \
+            --max-time 30 \
+            "${KARDINAL_URL}/api/v1/bundles" 2>&1) || {
+            echo "curl failed (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "Retrying in ${SLEEP_SECS}s..."
+              sleep "$SLEEP_SECS"
+              SLEEP_SECS=$((SLEEP_SECS * 2))
+              continue
+            fi
+            echo "::error::curl failed after $MAX_ATTEMPTS attempts."
+            exit 1
+          }
+
+          # Split response body and status code.
+          RESPONSE=$(echo "$HTTP_RESPONSE" | sed '/^__HTTP_STATUS__/d')
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | grep "^__HTTP_STATUS__" | sed 's/^__HTTP_STATUS__//')
+
+          echo "HTTP status: $HTTP_STATUS"
+
+          # HTTP 4xx: permanent failure, do not retry.
+          if [ -n "$HTTP_STATUS" ] && [ "$HTTP_STATUS" -ge 400 ] && [ "$HTTP_STATUS" -lt 500 ]; then
+            echo "::error::Bundle creation failed with HTTP $HTTP_STATUS (client error — not retrying)."
+            echo "::error::Response: $RESPONSE"
+            exit 1
+          fi
+
+          # HTTP 5xx or unexpected status: retry.
+          if [ -n "$HTTP_STATUS" ] && [ "$HTTP_STATUS" -ge 500 ]; then
+            echo "Server error HTTP $HTTP_STATUS (attempt $ATTEMPT/$MAX_ATTEMPTS)"
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "Retrying in ${SLEEP_SECS}s..."
+              sleep "$SLEEP_SECS"
+              SLEEP_SECS=$((SLEEP_SECS * 2))
+              continue
+            fi
+            echo "::error::Bundle creation failed with HTTP $HTTP_STATUS after $MAX_ATTEMPTS attempts."
+            echo "::error::Response: $RESPONSE"
+            exit 1
+          fi
+
+          # Success (HTTP 2xx).
+          break
+        done
 
         BUNDLE_NAME=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['name'])" 2>/dev/null || echo "")
         BUNDLE_NS=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['namespace'])" 2>/dev/null || echo "")
 
         if [ -z "$BUNDLE_NAME" ]; then
-          echo "::error::Bundle creation failed. Response: $RESPONSE"
+          echo "::error::Bundle creation failed — could not parse bundle name from response."
+          echo "::error::Response: $RESPONSE"
           exit 1
         fi
 
+        # Construct the UI status URL using hash-fragment routing.
+        STATUS_URL="${KARDINAL_URL}/ui#pipeline=${PIPELINE}"
+
         echo "Bundle created: $BUNDLE_NAME in namespace $BUNDLE_NS"
+        echo "Status URL: $STATUS_URL"
+        echo "::endgroup::"
+
         echo "bundle-name=$BUNDLE_NAME" >> "$GITHUB_OUTPUT"
         echo "bundle-namespace=$BUNDLE_NS" >> "$GITHUB_OUTPUT"
+        echo "bundle-status-url=$STATUS_URL" >> "$GITHUB_OUTPUT"

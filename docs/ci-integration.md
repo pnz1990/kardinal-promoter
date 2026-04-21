@@ -34,6 +34,11 @@ The endpoint creates a Bundle CRD in the cluster. Authentication is via Bearer t
 
 ### GitHub Action
 
+The action is at `.github/actions/create-bundle/` and uses composite steps (no Docker
+container required). Authenticate via the `KARDINAL_TOKEN` environment variable.
+
+**Single-image promotion** (most common):
+
 ```yaml
 name: Build and Promote
 on:
@@ -54,15 +59,58 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
 
       - name: Create Bundle
+        id: bundle
         uses: ./.github/actions/create-bundle
+        env:
+          KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
         with:
           pipeline: my-app
           image: ghcr.io/${{ github.repository }}:${{ github.sha }}
           digest: ${{ steps.build.outputs.digest }}
           kardinal-url: https://kardinal.example.com
+
+      - name: Log bundle URL
+        run: echo "Promotion started: ${{ steps.bundle.outputs.bundle-status-url }}"
 ```
 
-The GitHub Action wraps the webhook call with proper error handling and retry logic.
+**Multi-image promotion** (for services with multiple containers):
+
+```yaml
+      - name: Create Bundle
+        uses: ./.github/actions/create-bundle
+        env:
+          KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
+        with:
+          pipeline: my-app
+          images: |
+            ghcr.io/myorg/app:${{ github.sha }}
+            ghcr.io/myorg/sidecar:${{ github.sha }}
+          kardinal-url: https://kardinal.example.com
+```
+
+**Action inputs:**
+
+| Input | Required | Default | Description |
+|---|---|---|---|
+| `pipeline` | Yes | — | Pipeline name |
+| `image` | No | — | Single image (`repo:tag` or `repo@sha256:digest`) |
+| `digest` | No | — | Override digest for the `image` input |
+| `images` | No | — | Newline-separated list of images (multi-image case) |
+| `namespace` | No | `default` | Kubernetes namespace |
+| `kardinal-url` | Yes | — | Controller base URL |
+| `type` | No | `image` | Bundle type (`image`, `config`, `mixed`) |
+
+**Action outputs:**
+
+| Output | Description |
+|---|---|
+| `bundle-name` | Name of the created Bundle CRD |
+| `bundle-namespace` | Namespace of the created Bundle CRD |
+| `bundle-status-url` | Link to the pipeline view in the kardinal UI |
+
+The action retries on transient failures (network errors, HTTP 5xx) up to 3 times
+with exponential backoff. Permanent errors (HTTP 4xx — bad token, bad input) do not
+retry. `KARDINAL_TOKEN` must be set as a secret in your repository settings.
 
 ### GitLab CI
 
