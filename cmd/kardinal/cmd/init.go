@@ -61,11 +61,11 @@ func approvalModeFunc(idx, total int) string {
 
 func newInitCmd() *cobra.Command {
 	var (
-		stdoutFlag       bool
-		outputFlag       string
-		scaffoldGitOps   bool
-		gitopsDirFlag    string
-		demoFlag         bool
+		stdoutFlag     bool
+		outputFlag     string
+		scaffoldGitOps bool
+		gitopsDirFlag  string
+		demoFlag       bool
 	)
 
 	cmd := &cobra.Command{
@@ -182,9 +182,9 @@ func buildKustomization(imageRef string) string {
 		// Digest ref: everything after "@" is the tag (including "sha256:...")
 		name = imageRef[:atIdx]
 		tag = imageRef[atIdx+1:]
-	} else if colonIdx := strings.Index(imageRef, ":"); colonIdx >= 0 {
-		name = imageRef[:colonIdx]
-		tag = imageRef[colonIdx+1:]
+	} else if n, t, ok := strings.Cut(imageRef, ":"); ok {
+		name = n
+		tag = t
 	}
 
 	var sb strings.Builder
