@@ -1039,3 +1039,146 @@ func TestUIAPI_ListBundles_ImagesIncluded(t *testing.T) {
 	assert.Equal(t, "ghcr.io/pnz1990/kardinal-test-app", resp[0].Images[0].Repository)
 	assert.Equal(t, "sha-9349a3f", resp[0].Images[0].Tag)
 }
+
+// ─── TestUIAPI_CreateBundle ───────────────────────────────────────────────────
+
+// TestUIAPI_CreateBundle_Success verifies that POST /api/v1/ui/bundles with
+// a valid image creates a Bundle CRD and returns 201 (#917).
+func TestUIAPI_CreateBundle_Success(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"pipeline":"nginx-demo","image":"ghcr.io/example/app:sha-abc1234","commitSHA":"abc1234","author":"alice"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/bundles", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, "create bundle must return 201")
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp["bundle"], "response must include bundle name")
+
+	// Verify the Bundle CRD was created with the correct spec.
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	require.Len(t, bundles.Items, 1, "one bundle must be created")
+	b := bundles.Items[0]
+	assert.Equal(t, "nginx-demo", b.Spec.Pipeline)
+	assert.Equal(t, "image", b.Spec.Type)
+	require.Len(t, b.Spec.Images, 1)
+	assert.Equal(t, "ghcr.io/example/app", b.Spec.Images[0].Repository)
+	assert.Equal(t, "sha-abc1234", b.Spec.Images[0].Tag)
+	require.NotNil(t, b.Spec.Provenance)
+	assert.Equal(t, "abc1234", b.Spec.Provenance.CommitSHA)
+	assert.Equal(t, "alice", b.Spec.Provenance.Author)
+}
+
+// TestUIAPI_CreateBundle_RejectsMissingImage verifies that a request with no image
+// returns 400 and does NOT create a Bundle (#917).
+func TestUIAPI_CreateBundle_RejectsMissingImage(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"pipeline":"nginx-demo","image":""}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/bundles", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "missing image must return 400")
+
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	assert.Empty(t, bundles.Items, "no bundle must be created on validation error")
+}
+
+// TestUIAPI_CreateBundle_RejectsMissingPipeline verifies that a request with no
+// pipeline returns 400 (#917).
+func TestUIAPI_CreateBundle_RejectsMissingPipeline(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	body := `{"image":"ghcr.io/example/app:sha-abc1234"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ui/bundles", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "missing pipeline must return 400")
+}
+
+// TestUIAPI_CreateBundle_RejectsWrongMethod verifies that GET /api/v1/ui/bundles
+// returns 405 Method Not Allowed (#917).
+func TestUIAPI_CreateBundle_RejectsWrongMethod(t *testing.T) {
+	s := uiScheme()
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/bundles", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+// ─── TestParseUIImageRef ──────────────────────────────────────────────────────
+
+// TestParseUIImageRef verifies the image reference parsing helper (#917).
+func TestParseUIImageRef(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantRepo  string
+		wantTag   string
+		wantDigest string
+	}{
+		{
+			name:  "repo with tag",
+			input: "ghcr.io/example/app:sha-abc1234",
+			wantRepo: "ghcr.io/example/app",
+			wantTag:  "sha-abc1234",
+		},
+		{
+			name:  "repo with digest",
+			input: "ghcr.io/example/app@sha256:deadbeef",
+			wantRepo:   "ghcr.io/example/app",
+			wantDigest: "sha256:deadbeef",
+		},
+		{
+			name:  "bare repo no tag",
+			input: "ghcr.io/example/app",
+			wantRepo: "ghcr.io/example/app",
+		},
+		{
+			name:  "repo with port and tag",
+			input: "registry.example.com:5000/myapp:v1.2.3",
+			wantRepo: "registry.example.com:5000/myapp",
+			wantTag:  "v1.2.3",
+		},
+		{
+			name:  "registry:port with path — no explicit tag",
+			input: "registry.example.com:5000/org/myapp",
+			wantRepo: "registry.example.com:5000/org/myapp",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := parseUIImageRef(tc.input)
+			assert.Equal(t, tc.wantRepo, ref.Repository, "Repository")
+			assert.Equal(t, tc.wantTag, ref.Tag, "Tag")
+			assert.Equal(t, tc.wantDigest, ref.Digest, "Digest")
+		})
+	}
+}

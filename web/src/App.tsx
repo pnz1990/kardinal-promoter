@@ -20,6 +20,7 @@ import { PipelineLaneView } from './components/PipelineLaneView'
 import { FleetHealthBar, filterPipelines, type FleetFilter } from './components/FleetHealthBar'
 import { ReleaseMetricsBar } from './components/ReleaseMetricsBar'
 import { ActionBar } from './components/ActionBar'
+import { CreateBundleButton } from './components/CreateBundleDialog'
 import EmptyState from './components/EmptyState'
 import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import CopyButton from './components/CopyButton'
@@ -587,6 +588,15 @@ export function App() {
                   pipelineName={activePipeline.name}
                   namespace={activePipeline.namespace ?? 'default'}
                   paused={activePipeline.paused ?? false}
+                  onRefresh={manualRefresh}
+                />
+              )}
+
+              {/* #917: CreateBundleButton — lets platform engineers trigger a Bundle from the UI. */}
+              {activePipeline && (
+                <CreateBundleButton
+                  pipelineName={activePipeline.name}
+                  namespace={activePipeline.namespace ?? 'default'}
                   onRefresh={manualRefresh}
                 />
               )}
