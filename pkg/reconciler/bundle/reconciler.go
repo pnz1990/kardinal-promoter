@@ -353,9 +353,11 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		Str("pipeline", b.Spec.Pipeline).
 		Msg("bundle phase set to Available")
 
-	// Requeue immediately to advance to Promoting.
-	// Use RequeueAfter instead of Requeue (Requeue is deprecated).
-	return ctrl.Result{RequeueAfter: time.Millisecond}, nil
+	// Requeue after a short delay to advance to Promoting.
+	// 500ms is the minimum safe floor: avoids the 1ms hot loop that bypasses
+	// controller-runtime rate limiting and pressures the API server and etcd
+	// under concurrent Bundle load. (design doc 15-production-readiness.md)
+	return ctrl.Result{RequeueAfter: 500 * time.Millisecond}, nil
 }
 
 // enforceHistoryLimit deletes the oldest terminal Bundles (Verified/Failed/Superseded)

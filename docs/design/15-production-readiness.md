@@ -107,7 +107,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ### Lens 7: New gaps identified by competitive scan (2026-04-20)
 
-- 🔲 **`RequeueAfter: time.Millisecond` in bundle reconciler is a production hot loop** — `pkg/reconciler/bundle/reconciler.go:358` requeues the Bundle immediately (`time.Millisecond`) after setting phase to `Available`, to "advance to Promoting". With dozens of concurrent Bundles, each one fires a reconcile within 1ms of phase change, creating a burst of reconcile events that pressures the API server and etcd. Replace with `RequeueAfter: 500*time.Millisecond` as the minimum safe floor. The controller-runtime workqueue will deduplicate simultaneous events, but 1ms bypass of normal rate limiting is not safe for production clusters with >10 concurrent pipelines. This will manifest as elevated API server CPU and etcd write throughput after ~2 hours in a busy cluster.
+- ✅ **`RequeueAfter: time.Millisecond` in bundle reconciler is a production hot loop** — replaced with `RequeueAfter: 500*time.Millisecond` in `pkg/reconciler/bundle/reconciler.go`. The 1ms value bypassed controller-runtime rate limiting and would cause API server CPU and etcd write pressure under concurrent Bundle load (>10 pipelines). 500ms is the minimum safe floor; the controller-runtime workqueue deduplicates simultaneous events within this window. (PR #987 series, 2026-04-21)
 
 - 🔲 **No `maxConcurrentPromotions` cap per pipeline** — Kargo enforces `maxConcurrentPromotions` on a Stage, preventing runaway promotion storms (e.g. when a CI system creates 50 Bundles within seconds after a maintenance window). kardinal has no such field. The bundle reconciler will attempt to promote all available Bundles simultaneously. For large organizations with many pipelines, this can saturate git hosts with concurrent PR-open requests, exhaust GitHub API rate limits (5000 req/hr), and create merge conflicts in the GitOps repo. Add `Pipeline.spec.maxConcurrentPromotions` (default: 0 = unlimited, compatible with existing behavior) enforced in the bundle reconciler before creating the Graph.
 
@@ -150,7 +150,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 4. ~~UI API authentication~~ ✅ Done (PR #924) — `--ui-auth-token` Bearer token auth implemented; upgrade to TokenReview is a Future item
 5. ~~HTTP plain-text for UI and webhook servers~~ ✅ Done (PR #937) — TLS support added via `--tls-cert-file`/`--tls-key-file`; cert-manager compatible
 6. Bundle `status.conditions` never populated — breaks `kubectl wait` and GitOps tooling
-7. `RequeueAfter: time.Millisecond` hot loop in bundle reconciler — API server pressure in busy clusters
+7. ~~`RequeueAfter: time.Millisecond` hot loop in bundle reconciler~~ ✅ Done — replaced with 500ms minimum safe floor
 8. No per-step execution timeout — a hung `git-clone` stalls all PromotionStep reconciles for that pipeline
 
 **Must-fix for competitive parity with Kargo:**
