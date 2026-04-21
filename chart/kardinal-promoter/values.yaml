@@ -67,6 +67,12 @@ controller:
   tlsCertFile: ""
   # -- Path to the TLS private key file (PEM). Set together with tlsCertFile to enable TLS.
   tlsKeyFile: ""
+  # -- Namespace to watch (default: "" = cluster-wide).
+  # When set, the controller only reconciles resources in this namespace and
+  # a Role/RoleBinding is created instead of a ClusterRole/ClusterRoleBinding.
+  # Enables namespace-scoped install mode for multi-tenant clusters.
+  # See: docs/design/15-production-readiness.md §Lens 6
+  watchNamespace: ""
 
 # -- Address the metrics endpoint binds to
 metricsBindAddress: ":8080"

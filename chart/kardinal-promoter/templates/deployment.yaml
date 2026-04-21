@@ -71,6 +71,10 @@ spec:
             - name: KARDINAL_TLS_KEY_FILE
               value: {{ .Values.controller.tlsKeyFile | quote }}
             {{- end }}
+            {{- if .Values.controller.watchNamespace }}
+            - name: KARDINAL_WATCH_NAMESPACE
+              value: {{ .Values.controller.watchNamespace | quote }}
+            {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.service.metricsPort }}

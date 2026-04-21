@@ -2,18 +2,17 @@
 Copyright 2026 The kardinal-promoter Authors.
 Licensed under the Apache License, Version 2.0
 */}}
-{{- if not .Values.controller.watchNamespace -}}
-# ClusterRole for kardinal-promoter controller.
-# Grants the minimum permissions required to reconcile Pipelines, Bundles,
-# PolicyGates, PromotionSteps, and all supporting kardinal.io CRD types.
-# Audit note: "resources: *" replaced with explicit resource list per
-# enterprise least-privilege requirements (issue #516).
-# Rendered only when controller.watchNamespace is empty (cluster-wide mode).
-# When controller.watchNamespace is set, a Role is rendered instead.
+{{- if .Values.controller.watchNamespace -}}
+# Role for namespace-scoped install mode.
+# Rendered only when controller.watchNamespace is non-empty.
+# Grants the same permissions as the ClusterRole but scoped to the watch namespace.
+# When this Role is rendered, the ClusterRole/ClusterRoleBinding are NOT rendered.
+# Design ref: docs/design/15-production-readiness.md §Lens 6
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ include "kardinal-promoter.fullname" . }}-manager-role
+  namespace: {{ .Values.controller.watchNamespace }}
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
@@ -25,7 +24,7 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["configmaps", "namespaces"]
+    resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
   # Coordination for leader election
   - apiGroups: ["coordination.k8s.io"]
@@ -67,7 +66,6 @@ rules:
       - scheduleclocks/status
     verbs: ["get", "update", "patch"]
   # kro Graph CRDs (generated promotion DAGs) — experimental.kro.run API group
-  # as of krocodile commit 48224264 (2026-04-10). Update when krocodile API group changes.
   - apiGroups: ["experimental.kro.run"]
     resources: ["graphs", "graphs/status", "graphrevisions", "graphrevisions/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

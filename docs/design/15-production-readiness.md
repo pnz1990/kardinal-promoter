@@ -97,7 +97,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - ✅ **Bundle `status.conditions` are declared but never populated** — `pkg/reconciler/bundle/reconciler.go` now calls `setBundleCondition()` at every phase transition: `Ready=False/Available` (new bundle received), `Ready=False/Promoting` (graph created, promotion in progress), `Ready=False/Failed + Failed=True/TranslationError` (translator error), `Ready=False/Superseded` (superseded by newer bundle), and `Ready=True/Verified` (all environments verified via handleSyncEvidence). Operators can now use `kubectl wait --for=condition=Ready bundle/<name>` and GitOps controllers (Flux, ArgoCD) can gate on standard K8s conditions. (PR #982 series, 2026-04-21)
 
-- 🔲 **No namespace-scoped controller mode** — the Helm chart deploys a `ClusterRole` that grants kardinal read/write access to `kardinal.io` CRDs across all namespaces. In a multi-tenant cluster, a platform team that installs kardinal for one team inadvertently grants it visibility into all namespaces. Kargo offers both cluster-scoped and namespace-scoped install modes. Add a `controller.watchNamespace` Helm value (default `""` = cluster-wide) that, when set, limits the controller's cache and ClusterRole/Role binding to that namespace only. A security review at a company with shared clusters will block installation without this.
+- ✅ **No namespace-scoped controller mode** — `controller.watchNamespace` Helm value added (default `""` = cluster-wide). When set to a namespace name: (a) the controller binary uses `cache.Options{DefaultNamespaces: {ns: {}}}` to limit its informer cache; (b) the Helm chart renders a `Role`/`RoleBinding` scoped to the watch namespace instead of `ClusterRole`/`ClusterRoleBinding`. A security review at a company with shared clusters can now install kardinal with namespace-scoped RBAC. (PR #tbd, 2026-04-21)
 
 - 🔲 **Bitbucket and Azure DevOps SCM providers are absent** — kardinal supports GitHub, GitLab, and Forgejo. Kargo supports GitHub, GitLab, Bitbucket, and Azure DevOps (the latter via `azure-devops` provider). Azure DevOps is the dominant SCM at enterprise accounts in regulated industries. `pkg/scm/factory.go` returns an error for `"bitbucket"` input. Teams on Bitbucket or Azure DevOps cannot use kardinal at all. Add `pkg/scm/bitbucket.go` and `pkg/scm/azuredevops.go` providers. PR templates, webhook validation, and PR-open/wait-for-merge operations must be implemented for both.
 
@@ -158,7 +158,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 2. ArgoCD-native image update step
 3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #903)
 4. Bitbucket and Azure DevOps SCM providers — blocks enterprise adoption
-5. Namespace-scoped controller mode — required for multi-tenant clusters
+5. ~~Namespace-scoped controller mode~~ ✅ Done — `controller.watchNamespace` Helm value + Role/RoleBinding (PR #tbd, 2026-04-21)
 6. Image signature verification step (cosign verify) — supply-chain control gap vs Kargo v1.10
 7. `maxConcurrentPromotions` cap per pipeline — prevents promotion storms from CI bursts
 8. No Kubernetes Events emitted by reconcilers — `kubectl describe` is silent; operators cannot diagnose without Go logs
