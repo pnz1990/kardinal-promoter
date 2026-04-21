@@ -207,7 +207,7 @@
     },
     "912": {
       "title": "feat: CORS lockdown for UI API",
-      "state": "todo",
+      "state": "assigned",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -215,6 +215,16 @@
         "area/ui",
         "size/s",
         "priority/medium"
+      ],
+      "assigned_to": "sess-3d4ec825",
+      "assigned_at": "2026-04-21T07:24:26Z",
+      "branch": "feat/912",
+      "worktree": "../kardinal-promoter.912",
+      "file_spaces": [
+        "web/",
+        "src/styles/",
+        "src/hooks/",
+        "src/components/"
       ]
     },
     "913": {
@@ -358,6 +368,11 @@
       "last_seen": "2026-04-20T20:37:39Z",
       "item": "910",
       "cycle": 2
+    },
+    "sess-3d4ec825": {
+      "last_seen": "2026-04-21T07:24:26Z",
+      "item": "912",
+      "cycle": 1
     }
   },
   "report_issue": 1,
