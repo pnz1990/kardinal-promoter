@@ -94,8 +94,8 @@ func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
 			BundleName:  "bundle-abc",
 		},
 		Status: v1alpha1.PromotionStepStatus{
-			State:  "WaitingForMerge",
-			PRURL:  "https://github.com/org/repo/pull/42",
+			State:   "WaitingForMerge",
+			PRURL:   "https://github.com/org/repo/pull/42",
 			Message: "waiting for PR merge",
 			Steps: []v1alpha1.StepStatus{
 				{Name: "git-clone", State: "Completed"},
