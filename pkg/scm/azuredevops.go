@@ -359,7 +359,7 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 		} else {
 			a.circuit.RecordSuccess()
 		}
-		return fmt.Errorf("Azure DevOps API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
+		return fmt.Errorf("azuredevops API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 
 	a.circuit.RecordSuccess()

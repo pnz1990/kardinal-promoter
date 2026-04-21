@@ -87,7 +87,7 @@ func (b *BitbucketProvider) OpenPR(ctx context.Context, repo, title, body, head,
 	}
 
 	payload := map[string]interface{}{
-		"title": title,
+		"title":       title,
 		"description": body,
 		"source": map[string]interface{}{
 			"branch": map[string]string{"name": head},
@@ -99,7 +99,7 @@ func (b *BitbucketProvider) OpenPR(ctx context.Context, repo, title, body, head,
 	}
 
 	var result struct {
-		ID    int    `json:"id"`
+		ID    int `json:"id"`
 		Links struct {
 			HTML struct {
 				Href string `json:"href"`
@@ -255,8 +255,8 @@ func (b *BitbucketProvider) ParseWebhookEvent(payload []byte, signature string) 
 		// Bitbucket sends the event key in X-Event-Key header; the JSON body uses
 		// {"pullrequest": {...}} structure.
 		PullRequest struct {
-			ID    int    `json:"id"`
-			State string `json:"state"`
+			ID     int    `json:"id"`
+			State  string `json:"state"`
 			Source struct {
 				Repository struct {
 					FullName string `json:"full_name"`
@@ -334,7 +334,7 @@ func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, r
 		} else {
 			b.circuit.RecordSuccess()
 		}
-		return fmt.Errorf("Bitbucket API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
+		return fmt.Errorf("bitbucket API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 
 	b.circuit.RecordSuccess()
