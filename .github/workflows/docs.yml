@@ -9,6 +9,7 @@ on:
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
       - "hack/gen-cli-docs/**"
+      - "README.md"
       - ".github/workflows/docs.yml"
   pull_request:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - "mkdocs.yml"
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
+      - "README.md"
 
 permissions:
   contents: write
@@ -157,6 +159,7 @@ jobs:
           retention-days: 1
 
   # ── Step 4: Verify CLI docs are in sync (CI enforcement) ──────────────────
+  # Design ref: docs/design/41-published-docs-freshness.md §O3
   verify-cli-docs-sync:
     name: Verify CLI docs in sync
     runs-on: ubuntu-latest
@@ -169,16 +172,29 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Check CLI docs are up to date
+      - name: Check CLI detail pages and quick-reference are up to date
         run: |
           go run ./hack/gen-cli-docs/main.go --output /tmp/cli-docs/
+          FAIL=0
+          # Check per-command detail pages
           if ! diff -rq /tmp/cli-docs/ docs/reference/cli/ 2>/dev/null; then
-            echo "❌ CLI docs are stale. Run: go run ./hack/gen-cli-docs/main.go"
-            echo "Changed files:"
+            echo "::error::CLI detail docs are stale. Run: go run ./hack/gen-cli-docs/main.go"
             diff -r /tmp/cli-docs/ docs/reference/cli/ || true
-            exit 1
+            FAIL=1
           fi
-          echo "✅ CLI docs are in sync"
+          # Check consolidated quick-reference (docs/cli-reference.md)
+          # The generator also writes this file; compare against what's in the repo.
+          if [ -f /tmp/cli-reference-gen.md ]; then
+            if ! diff -q /tmp/cli-reference-gen.md docs/cli-reference.md 2>/dev/null; then
+              echo "::error::docs/cli-reference.md is stale. Run: go run ./hack/gen-cli-docs/main.go"
+              diff /tmp/cli-reference-gen.md docs/cli-reference.md || true
+              FAIL=1
+            fi
+          fi
+          if [ $FAIL -eq 0 ]; then
+            echo "::notice::CLI docs are in sync"
+          fi
+          exit $FAIL
         env:
           GOFLAGS: -mod=mod
 

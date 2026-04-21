@@ -18,7 +18,7 @@ GOPROXY          ?= https://proxy.golang.org
 IMG ?= kardinal-promoter:dev
 
 .PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration lint vet generate manifests \
-        install uninstall docker-build helm-lint \
+        install uninstall docker-build helm-lint validate-manifests \
         install-krocodile \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
@@ -109,6 +109,44 @@ docker-build:
 ## Helm
 helm-lint:
 	helm lint chart/kardinal-promoter
+
+## Validate Pipeline manifests in demo/ and examples/ against the CRD schema
+## Mirrors the 'Validate demo and example manifests against CRD schema' CI step in ci.yml.
+## Use this locally to catch schema drift before pushing.
+## Requires: config/crd/bases/ to be generated (run 'make manifests' first if not present).
+validate-manifests: ## Validate all Pipeline manifests in demo/ and examples/ against CRD schema (no cluster needed)
+	@echo "Validating Pipeline manifests against CRD schema..."
+	@if command -v kubeconform >/dev/null 2>&1; then \
+	  echo "Using kubeconform for full JSON Schema validation..."; \
+	  SCHEMA_DIR=$$(mktemp -d); \
+	  python3 -c "import json,yaml,os; crd=yaml.safe_load(open('config/crd/bases/kardinal.io_pipelines.yaml')); schema=crd['spec']['versions'][0]['schema']['openAPIV3Schema']; os.makedirs('$$SCHEMA_DIR',exist_ok=True); json.dump(schema,open('$$SCHEMA_DIR/kardinal.io_pipelines.json','w')); print('Schema extracted to $$SCHEMA_DIR')" 2>/dev/null || (echo "Schema extraction failed — run 'make manifests' first"; exit 1); \
+	  FAILURES=0; \
+	  for manifest in $$(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | xargs grep -l "kind: Pipeline" 2>/dev/null); do \
+	    echo "  Validating $$manifest..."; \
+	    kubeconform -schema-location "$$SCHEMA_DIR/{{.ResourceKind}}.json" -strict "$$manifest" 2>/dev/null || FAILURES=$$((FAILURES+1)); \
+	  done; \
+	  rm -rf "$$SCHEMA_DIR"; \
+	  if [ $$FAILURES -gt 0 ]; then \
+	    echo ""; \
+	    echo "❌ $$FAILURES manifest(s) failed kubeconform validation."; \
+	    echo "Run 'make manifests generate' and update manifests to match current CRD schema."; \
+	    exit 1; \
+	  fi; \
+	else \
+	  echo "kubeconform not found — using Python field-name check (install kubeconform for full JSON Schema validation)"; \
+	  FAILURES=0; \
+	  for manifest in $$(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | xargs grep -l "kind: Pipeline" 2>/dev/null); do \
+	    echo "  Validating $$manifest..."; \
+	    python3 -c "import yaml,sys,re; m=sys.argv[1]; raw=open(m).read(); [sys.exit(0) for _ in [1] if re.search(r'{{.*}}',raw)]; docs=list(yaml.safe_load_all(raw)); [sys.exit('FAIL: '+m+': unknown health field: '+k) for d in docs if d and d.get('kind')=='Pipeline' for e in d.get('spec',{}).get('environments',[]) for k in e.get('health',{}).keys() if k not in ('type','timeout','cluster','labelSelector','resource')]; print('  OK: '+m)" "$$manifest" || FAILURES=$$((FAILURES+1)); \
+	  done; \
+	  if [ $$FAILURES -gt 0 ]; then \
+	    echo ""; \
+	    echo "❌ $$FAILURES manifest(s) failed validation."; \
+	    echo "Run 'make manifests generate' and update manifests to match current CRD schema."; \
+	    exit 1; \
+	  fi; \
+	fi
+	@echo "✅ All Pipeline manifests valid against current CRD schema."
 
 ## Kind cluster for E2E
 kind-up: ## Create local kind cluster and install kardinal-promoter (with bundled krocodile)
