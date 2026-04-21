@@ -154,6 +154,32 @@ func main() {
 		"Shard name for distributed mode. When set, this controller only processes PromotionSteps "+
 			"with a matching kardinal.io/shard label. Leave empty for standalone (single-controller) mode.")
 
+	// SCM credential rotation — watch a Kubernetes Secret and reload the SCM
+	// provider on change without restarting the controller. When
+	// --scm-token-secret-name is set, the --github-token flag is used only as
+	// the initial value (bootstrapping) and the Secret becomes the authoritative
+	// source thereafter.
+	var scmTokenSecretName string
+	flag.StringVar(&scmTokenSecretName, "scm-token-secret-name",
+		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_NAME"),
+		"Name of a Kubernetes Secret whose data key contains the SCM token. "+
+			"When set, the controller watches this Secret and reloads the SCM provider "+
+			"on token change — no restart required (zero-downtime credential rotation). "+
+			"Also readable from KARDINAL_SCM_TOKEN_SECRET_NAME environment variable.")
+
+	var scmTokenSecretNamespace string
+	flag.StringVar(&scmTokenSecretNamespace, "scm-token-secret-namespace",
+		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_NAMESPACE"),
+		"Namespace of the Secret named by --scm-token-secret-name. "+
+			"Defaults to the POD_NAMESPACE environment variable, then 'kardinal-system'. "+
+			"Also readable from KARDINAL_SCM_TOKEN_SECRET_NAMESPACE environment variable.")
+
+	var scmTokenSecretKey string
+	flag.StringVar(&scmTokenSecretKey, "scm-token-secret-key",
+		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_KEY"),
+		"Data key within the Secret that holds the SCM token (default: \"token\"). "+
+			"Also readable from KARDINAL_SCM_TOKEN_SECRET_KEY environment variable.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -198,9 +224,49 @@ func main() {
 	}
 
 	// SCM provider — dispatches to GitHub or GitLab based on --scm-provider flag.
-	scmProvider, err := scm.NewProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("unable to create SCM provider")
+	// When --scm-token-secret-name is set, a DynamicProvider is used so that
+	// credential rotation (Secret update) reloads the provider without a restart.
+	var scmProvider scm.SCMProvider
+	if scmTokenSecretName != "" {
+		// Resolve the namespace: flag > env > controller namespace.
+		if scmTokenSecretNamespace == "" {
+			scmTokenSecretNamespace = os.Getenv("POD_NAMESPACE")
+		}
+		if scmTokenSecretNamespace == "" {
+			scmTokenSecretNamespace = "kardinal-system"
+		}
+		if scmTokenSecretKey == "" {
+			scmTokenSecretKey = "token"
+		}
+
+		dynProvider, dynErr := scm.NewDynamicProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
+		if dynErr != nil {
+			logger.Fatal().Err(dynErr).Msg("unable to create dynamic SCM provider")
+		}
+		scmProvider = dynProvider
+
+		// Register the SecretWatcher as a manager.Runnable — starts after caches are synced.
+		watcher := scm.NewSecretWatcher(
+			mgr.GetClient(),
+			dynProvider,
+			scmTokenSecretName,
+			scmTokenSecretNamespace,
+			scmTokenSecretKey,
+			logger,
+		)
+		if addErr := mgr.Add(watcher); addErr != nil {
+			logger.Fatal().Err(addErr).Msg("unable to register SCM credential watcher")
+		}
+		logger.Info().
+			Str("secret", scmTokenSecretNamespace+"/"+scmTokenSecretName).
+			Str("key", scmTokenSecretKey).
+			Msg("SCM credential watcher enabled — token will be reloaded on Secret change")
+	} else {
+		var provErr error
+		scmProvider, provErr = scm.NewProvider(scmProviderType, githubToken, scmAPIURL, webhookSecret)
+		if provErr != nil {
+			logger.Fatal().Err(provErr).Msg("unable to create SCM provider")
+		}
 	}
 	gitClient := scm.NewGoGitClient()
 
