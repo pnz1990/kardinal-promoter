@@ -22,9 +22,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	authv1 "k8s.io/api/authentication/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authv1 "k8s.io/api/authentication/v1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
