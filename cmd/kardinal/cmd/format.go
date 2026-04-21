@@ -72,10 +72,37 @@ func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1a
 	return FormatPipelineTableWithOptions(w, pipelines, steps, false)
 }
 
+// FormatPipelineTableFull is like FormatPipelineTableWithOptions but also accepts
+// a Subscription list. When subscriptions are non-nil, a SUB column is appended
+// showing the count of actively-watching Subscriptions per pipeline.
+// Pass nil subs to omit the SUB column entirely.
+func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
+	var subCount map[string]int
+	if subs != nil {
+		// Build a map: pipelineName → count of active Subscriptions (Phase=="Watching").
+		subCount = make(map[string]int)
+		for _, s := range subs {
+			if s.Spec.Pipeline == "" {
+				continue
+			}
+			if s.Status.Phase == "Watching" {
+				subCount[s.Spec.Pipeline]++
+			}
+		}
+	}
+	return formatPipelineTableInternal(w, pipelines, steps, subCount, showNamespace)
+}
+
 // FormatPipelineTableWithOptions is like FormatPipelineTable but supports an additional
 // showNamespace parameter. When showNamespace is true, a NAMESPACE column is prepended
 // to each row (used by --all-namespaces flag).
 func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, showNamespace bool) error {
+	return formatPipelineTableInternal(w, pipelines, steps, nil, showNamespace)
+}
+
+// formatPipelineTableInternal is the shared implementation for all pipeline table variants.
+// subCount maps pipeline name → active subscription count; nil means no SUB column.
+func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, subCount map[string]int, showNamespace bool) error {
 	if len(pipelines) == 0 {
 		_, _ = fmt.Fprintln(w, "No pipelines found.")
 		_, _ = fmt.Fprintln(w, "  To get started, apply a Pipeline CRD:")
@@ -138,7 +165,7 @@ func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, 
 
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 
-	// Build header: [NAMESPACE] PIPELINE BUNDLE <ENV1> <ENV2> ... AGE
+	// Build header: [NAMESPACE] PIPELINE BUNDLE <ENV1> <ENV2> ... [SUB] AGE
 	header := ""
 	if showNamespace {
 		header = "NAMESPACE\t"
@@ -146,6 +173,9 @@ func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, 
 	header += "PIPELINE\tBUNDLE"
 	for _, env := range envOrder {
 		header += "\t" + strings.ToUpper(env)
+	}
+	if subCount != nil {
+		header += "\tSUB"
 	}
 	header += "\tAGE"
 	if _, err := fmt.Fprintln(tw, header); err != nil {
@@ -198,6 +228,9 @@ func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, 
 				}
 			}
 			row += "\t" + state
+		}
+		if subCount != nil {
+			row += "\t" + fmt.Sprintf("%d", subCount[p.Name])
 		}
 		row += "\t" + HumanAge(p.CreationTimestamp.Time)
 

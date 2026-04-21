@@ -96,6 +96,14 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		promotionSteps.Items = nil
 	}
 
+	// Fetch Subscriptions for the SUB column. On error: pass nil to omit the column
+	// rather than showing misleading zeros.
+	var subsItems []v1alpha1.Subscription
+	var subsList v1alpha1.SubscriptionList
+	if err := c.List(ctx, &subsList, opts...); err == nil {
+		subsItems = subsList.Items
+	}
+
 	// If a specific name was given, filter.
 	items := pipelines.Items
 	if len(args) == 1 {
@@ -115,6 +123,6 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		return FormatPipelineTableWithOptions(w, items, promotionSteps.Items, allNamespaces)
+		return FormatPipelineTableFull(w, items, promotionSteps.Items, subsItems, allNamespaces)
 	}
 }

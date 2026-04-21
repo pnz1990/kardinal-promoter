@@ -24,4 +24,5 @@ Display one or more kardinal resources
 * [kardinal get bundles](kardinal_get_bundles.md)	 - List Bundles, optionally filtered by pipeline name
 * [kardinal get pipelines](kardinal_get_pipelines.md)	 - List Pipelines
 * [kardinal get steps](kardinal_get_steps.md)	 - List PromotionSteps for a pipeline
+* [kardinal get subscriptions](kardinal_get_subscriptions.md)	 - List Subscriptions (passive artifact watchers)
 

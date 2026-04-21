@@ -24,5 +24,6 @@ func newGetCmd() *cobra.Command {
 	get.AddCommand(newGetBundlesCmd())
 	get.AddCommand(newGetStepsCmd())
 	get.AddCommand(newGetAuditEventsCmd())
+	get.AddCommand(newGetSubscriptionsCmd())
 	return get
 }
