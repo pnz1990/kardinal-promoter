@@ -319,13 +319,32 @@ spec:
                           - argocd
                           type: string
                       type: object
-                    waitForMergeTimeout:
-                      description: |-
-                        WaitForMergeTimeout is the maximum duration a PromotionStep will wait
-                        in the WaitingForMerge state before transitioning to Failed. When not set
-                        or zero, the step waits indefinitely (no timeout). Accepts Go duration
-                        strings: "24h", "72h", "168h", etc.
-                      type: string
+                     waitForMergeTimeout:
+                       description: |-
+                         WaitForMergeTimeout is the maximum duration a PromotionStep will wait
+                         in the WaitingForMerge state before transitioning to Failed. When not set
+                         or zero, the step waits indefinitely (no timeout). Accepts Go duration
+                         strings: "24h", "72h", "168h", etc.
+                       type: string
+                     promotionTemplate:
+                       description: |-
+                         PromotionTemplate references a PromotionTemplate CR whose step sequence
+                         should be used for this environment. The translator inlines the template's
+                         steps at graph-build time; no runtime dependency remains after Graph creation.
+                         When Steps is also set, Steps takes precedence.
+                       properties:
+                         name:
+                           description: Name is the PromotionTemplate resource name.
+                           minLength: 1
+                           type: string
+                         namespace:
+                           description: |-
+                             Namespace is the namespace of the PromotionTemplate.
+                             If empty, the Pipeline's own namespace is used.
+                           type: string
+                       required:
+                       - name
+                       type: object
                     wave:
                       description: |-
                         Wave assigns this environment to a numbered deployment wave (K-06).

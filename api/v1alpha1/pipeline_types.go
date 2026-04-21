@@ -175,8 +175,17 @@ type EnvironmentSpec struct {
 	// Steps overrides the default step sequence for this environment.
 	// If empty, the default sequence is used (see DefaultSequenceForBundle).
 	// Steps can include custom webhook steps alongside built-in step names.
+	// When both Steps and PromotionTemplate are set, Steps takes precedence
+	// (local override wins).
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
+
+	// PromotionTemplate references a PromotionTemplate CR whose step sequence
+	// should be used for this environment. The translator inlines the template's
+	// steps at graph-build time; no runtime dependency remains after Graph creation.
+	// When Steps is also set, Steps takes precedence.
+	// +optional
+	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
 
 	// WaitForMergeTimeout is the maximum duration a PromotionStep will wait
 	// in the WaitingForMerge state before transitioning to Failed. When not set
@@ -184,6 +193,18 @@ type EnvironmentSpec struct {
 	// strings: "24h", "72h", "168h", etc.
 	// +optional
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
+}
+
+// PromotionTemplateRef is a reference to a PromotionTemplate CR.
+type PromotionTemplateRef struct {
+	// Name is the PromotionTemplate resource name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace is the namespace of the PromotionTemplate.
+	// If empty, the Pipeline's own namespace is used.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // AutoRollbackSpec defines the automatic rollback policy for an environment.
