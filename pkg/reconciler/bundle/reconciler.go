@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -548,7 +549,21 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		patch := client.MergeFrom(b.DeepCopy())
 		b.Status.Phase = "Failed"
 		setBundleCondition(b, "Ready", metav1.ConditionFalse, "Failed", "promotion failed: translation error")
-		setBundleCondition(b, "Failed", metav1.ConditionTrue, "TranslationError", err.Error())
+
+		// Distinguish cycle errors from generic translation errors.
+		// When the Pipeline spec has a circular dependsOn, set InvalidSpec/CircularDependency
+		// so operators can immediately identify the root cause without reading Go logs.
+		// We call graph.DetectCycle on the pipeline to confirm it's a cycle (not some other
+		// translation error like a missing environment name). DetectCycle returns a cycle error
+		// only when there is an actual cycle — it returns nil for valid pipelines.
+		// Design ref: docs/design/15-production-readiness.md §Lens 4 O5
+		cycleErr := graph.DetectCycle(&pipeline)
+		if cycleErr != nil && strings.Contains(cycleErr.Error(), "circular dependency") {
+			setBundleCondition(b, "InvalidSpec", metav1.ConditionTrue, "CircularDependency",
+				fmt.Sprintf("pipeline has circular dependsOn: %v — apply a corrected Pipeline to unblock", cycleErr))
+		} else {
+			setBundleCondition(b, "Failed", metav1.ConditionTrue, "TranslationError", err.Error())
+		}
 		if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
 			log.Error().Err(patchErr).Msg("failed to patch bundle status to Failed")
 		}
