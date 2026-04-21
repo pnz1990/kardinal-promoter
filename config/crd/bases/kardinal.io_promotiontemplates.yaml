@@ -23,11 +23,16 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          PromotionTemplate is a reusable named step sequence that Pipeline environments
-          can reference via spec.environments[].promotionTemplate.
-          The translator inlines the template's steps at graph-build time, so there is
-          no runtime dependency on the PromotionTemplate after Graph creation.
+        description: "PromotionTemplate is a reusable named step sequence that Pipeline
+          environments\ncan reference via spec.environments[].promotionTemplate.\nThe
+          translator inlines the template's steps at graph-build time, so there is\nno
+          runtime dependency on the PromotionTemplate after Graph creation.\n\nExample
+          usage:\n\n\tapiVersion: kardinal.io/v1alpha1\n\tkind: PromotionTemplate\n\tmetadata:\n\t
+          \ name: standard-with-webhook\n\tspec:\n\t  description: \"Standard promotion
+          with post-deploy webhook notification\"\n\t  steps:\n\t    - uses: git-clone\n\t
+          \   - uses: kustomize-set-image\n\t    - uses: git-commit\n\t    - uses:
+          open-pr\n\t    - uses: wait-for-merge\n\t    - uses: notify-slack\n\t      webhook:\n\t
+          \       url: https://hooks.slack.com/...\n\t    - uses: health-check"
         properties:
           apiVersion:
             description: |-
@@ -75,17 +80,27 @@ spec:
                         Webhook configures the HTTP endpoint for custom (non-built-in) steps.
                         Required when Uses does not match any registered built-in step.
                       properties:
-                        headers:
-                          additionalProperties:
-                            type: string
-                          description: Headers are additional HTTP headers to include
-                            in the webhook request.
-                          type: object
-                        timeout:
+                        secretRef:
                           description: |-
-                            Timeout is the maximum duration for the webhook HTTP call.
-                            Defaults to 30s. Accepts Go duration strings: "10s", "1m", etc.
-                          type: string
+                            SecretRef references a Kubernetes Secret whose "Authorization" key is
+                            sent as the Authorization header.
+                          properties:
+                            name:
+                              description: Name is the Secret name.
+                              minLength: 1
+                              type: string
+                            namespace:
+                              description: Namespace is the Secret namespace. If empty,
+                                the Pipeline's namespace is used.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        timeoutSeconds:
+                          default: 300
+                          description: TimeoutSeconds is the per-call timeout. Defaults
+                            to 300.
+                          type: integer
                         url:
                           description: URL is the HTTP(S) endpoint to POST to.
                           minLength: 1
@@ -99,8 +114,7 @@ spec:
                 type: array
             type: object
           status:
-            description: PromotionTemplateStatus defines the observed state of a
-              PromotionTemplate.
+            description: PromotionTemplateStatus defines the observed state of a PromotionTemplate.
             properties:
               conditions:
                 description: Conditions reports status conditions for this template.
@@ -123,7 +137,7 @@ spec:
                     observedGeneration:
                       description: |-
                         observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.observedGeneration is 9, the condition is out of date
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
                         with respect to the current state of the instance.
                       format: int64
                       minimum: 0
