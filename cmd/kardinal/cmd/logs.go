@@ -6,6 +6,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"text/tabwriter"
 
@@ -52,7 +53,12 @@ Example:
 	return cmd
 }
 
-func logsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
+// LogsFnForTest is an exported wrapper for testing logsFn.
+func LogsFnForTest(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
+	return logsFn(w, c, ns, pipeline, envFilter, bundleFilter)
+}
+
+func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
 	ctx := context.Background()
 
 	var steps v1alpha1.PromotionStepList
@@ -152,6 +158,26 @@ func logsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns,
 				cond.Type,
 				cond.Message)
 		}
+
+		// Per-step execution history (status.steps[])
+		if len(s.Status.Steps) > 0 {
+			_, _ = fmt.Fprintf(tw, "  steps:\n")
+			_, _ = fmt.Fprintf(tw, "    STEP\tSTATE\tDURATION\tMESSAGE\n")
+			_, _ = fmt.Fprintf(tw, "    ----\t-----\t--------\t-------\n")
+			for _, step := range s.Status.Steps {
+				dur := "-"
+				if step.DurationMs > 0 {
+					dur = fmt.Sprintf("%.1fs", float64(step.DurationMs)/1000.0)
+				}
+				msg := step.Message
+				if len(msg) > 80 {
+					msg = msg[:80] + "..."
+				}
+				_, _ = fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\n",
+					step.Name, string(step.State), dur, msg)
+			}
+		}
+
 		_, _ = fmt.Fprintln(tw)
 	}
 
