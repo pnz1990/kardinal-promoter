@@ -659,7 +659,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-986": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: kardinal init generates Pipeline YAML but does not scaffold the GitOps repo",
       "issue": "986",
       "labels": [
@@ -670,7 +670,9 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-21T20:54:38Z"
     },
     "issue-987": {
       "state": "done",
