@@ -53,6 +53,16 @@ spec:
                   name: {{ .Values.github.secretRef.name }}
                   key: {{ .Values.github.secretRef.key | default "token" }}
             {{- end }}
+            {{- if .Values.github.secretRef.name }}
+            {{- /* Zero-downtime credential rotation: when secretRef is set, also configure
+                   the SecretWatcher so the controller reloads on token change. */}}
+            - name: KARDINAL_SCM_TOKEN_SECRET_NAME
+              value: {{ .Values.github.secretRef.name | quote }}
+            - name: KARDINAL_SCM_TOKEN_SECRET_NAMESPACE
+              value: {{ .Values.github.secretRef.namespace | default .Release.Namespace | quote }}
+            - name: KARDINAL_SCM_TOKEN_SECRET_KEY
+              value: {{ .Values.github.secretRef.key | default "token" | quote }}
+            {{- end }}
             {{- if .Values.controller.tlsCertFile }}
             - name: KARDINAL_TLS_CERT_FILE
               value: {{ .Values.controller.tlsCertFile | quote }}
