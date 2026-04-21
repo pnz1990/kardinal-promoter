@@ -43,7 +43,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 
 ---
 
-## Where kardinal Leads
+## Why kardinal-promoter
 
 ### Graph-native policy evaluation
 
@@ -137,37 +137,35 @@ per pipeline. Neither Kargo nor GitOps Promoter tracks deployment efficiency met
 
 ---
 
-## Where Kargo Leads
+## Known limitations
 
-**Artifact discovery**: Kargo's Warehouse concept automatically monitors OCI registries
-and Git repos for new artifact versions. kardinal now has equivalent capability via the
-**Subscription CRD** — an OCI watcher polls a registry for new tags and creates Bundles
-automatically; a Git watcher monitors a repository for config changes. This gap is closed
-as of v0.6.0. Kargo's Warehouse UI has a polished exploration interface that kardinal's
-Subscription does not match yet.
+kardinal-promoter is the right tool for most of what is described above. There are cases
+where a different approach may be a better fit — not because the competition is better,
+but because the use case doesn't match what kardinal is designed for.
 
-**Production maturity**: Kargo is at v1.10.x with commercial support from Akuity,
-a larger community, and a longer track record in production.
+**You are all-in on ArgoCD and want native ArgoCD update steps.**
+kardinal's update mechanism is GitOps-native (git commits). The ArgoCD adapter covers
+health verification but the update path goes through git. If you need ArgoCD's
+`argocd-update` promotion step with no git layer, a different tool fits better.
 
-**ArgoCD integration depth**: If you are all-in on ArgoCD, Kargo's `argocd-update`
-promotion step and ArgoCD-native health checks are deeply integrated. kardinal's ArgoCD
-adapter covers health verification but the update mechanism is GitOps-native (git commits).
+**You want zero state outside Git.**
+kardinal maintains state in Kubernetes CRDs (Pipeline, Bundle, PromotionStep, AuditEvent).
+If your constraint is that every promotion artefact must be a git commit with no
+Kubernetes-side state, kardinal is not the right model.
 
----
+**You need a larger community and commercial support today.**
+kardinal-promoter is at v0.8.1 with active development. Kargo has a longer production
+track record and commercial backing from Akuity. If your organisation requires vendor
+support or a larger existing community before adopting, that is a legitimate constraint.
 
-## Where GitOps Promoter Leads
-
-**Git-native purity**: GitOps Promoter has no state outside Git. Every promotion is
-a branch, a commit, a PR. No additional CRDs tracking state. If your team wants
-"the only source of truth is git," GitOps Promoter's model is the cleanest.
-
-**CommitStatus extensibility**: Any external system can participate in promotion gating
-by writing a `CommitStatus` CRD. The open interface is simpler to extend than
-kardinal's PolicyGate CEL (which requires running code in-cluster).
+**Your only gate requirement is "a human clicks approve."**
+kardinal's DAG, CEL gates, and structured evidence add meaningful complexity. If your
+promotion workflow is simply "CI passes, human approves PR," that complexity is overhead
+you don't need.
 
 ---
 
-## When to Choose kardinal-promoter
+## When to choose kardinal-promoter
 
 - You need **parallel environment promotions** — fan-out to prod-us and prod-eu simultaneously, gate on both completing
 - You want **expressive, cross-stage policy gates** — soak time, upstream metrics, schedule, bundle metadata, PR approval state — without writing webhook servers
