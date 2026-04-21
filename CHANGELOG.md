@@ -4,6 +4,13 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(cli): verify kardinal completion for all shells via __complete protocol (#1001)
+- fix(ci): gofmt formatting in status_test.go (#999)
+- feat(cli): extend 'kardinal status' with per-pipeline in-flight promotion view (#997)
+- feat(scm): validate SCM token scopes at controller startup (#996)
+- feat(scm): zero-downtime SCM credential rotation via Secret watcher (#994)
+- feat(bundle): populate status.conditions on all phase transitions (#991)
+
 - fix(bundle): replace 1ms RequeueAfter hot loop with 500ms safe floor (#988)
 - feat(steps): add argocd-set-image step for ArgoCD-native promotion (#966)
 - feat(ci): GitHub Actions native bundle creation via composite action (#953)
