@@ -3,21 +3,30 @@
 
 //go:build ignore
 
-// hack/gen-cli-docs/main.go generates one Markdown page per kardinal CLI
-// subcommand using Cobra's built-in doc generator. Output is placed in
-// docs/reference/cli/ and is consumed by mkdocs during the docs build.
+// hack/gen-cli-docs/main.go generates CLI reference documentation from the
+// kardinal Cobra command tree. It produces:
+//
+//   - docs/reference/cli/kardinal-*.md  — one page per command (detail)
+//   - docs/cli-reference.md             — consolidated quick-reference table
+//
+// The consolidated page replaces the hand-authored docs/cli-reference.md.
+// Both outputs are consumed by mkdocs during the docs build.
 //
 // Run:
 //
 //	go run ./hack/gen-cli-docs/main.go
 //	go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/
+//
+// Design ref: docs/design/41-published-docs-freshness.md §41.1
 package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	kardinalcmd "github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
@@ -40,12 +49,11 @@ func main() {
 	setDisableAutoGenTag(root)
 
 	// Generate one .md file per command and subcommand.
-	// cobra/doc names them like: kardinal.md, kardinal_get.md, kardinal_get_pipelines.md
 	if err := doc.GenMarkdownTree(root, *outDir); err != nil {
 		log.Fatalf("generate docs: %v", err)
 	}
 
-	// Rename underscores to hyphens for cleaner URLs (kardinal_get → kardinal-get)
+	// Rename underscores to hyphens for cleaner URLs (kardinal_get -> kardinal-get)
 	entries, err := os.ReadDir(*outDir)
 	if err != nil {
 		log.Fatalf("read output dir: %v", err)
@@ -57,14 +65,84 @@ func main() {
 		newName := strings.ReplaceAll(e.Name(), "_", "-")
 		if newName != e.Name() {
 			old := filepath.Join(*outDir, e.Name())
-			new := filepath.Join(*outDir, newName)
-			if err := os.Rename(old, new); err != nil {
+			newPath := filepath.Join(*outDir, newName)
+			if err := os.Rename(old, newPath); err != nil {
 				log.Printf("rename %s: %v", e.Name(), err)
 			}
 		}
 	}
 
+	// Generate the consolidated quick-reference page (docs/cli-reference.md).
+	// This replaces the hand-authored version that was drifting out of sync.
+	// The output path is two levels up from the detail pages directory:
+	//   docs/reference/cli/ -> docs/reference/ -> docs/ -> docs/cli-reference.md
+	quickRefPath := filepath.Join(filepath.Dir(filepath.Clean(*outDir+"/../")), "cli-reference.md")
+	if err := genQuickReference(root, quickRefPath); err != nil {
+		log.Printf("warning: could not generate cli-reference.md: %v", err)
+	} else {
+		log.Printf("CLI quick-reference generated: %s", quickRefPath)
+	}
+
 	log.Printf("CLI docs generated in %s", *outDir)
+}
+
+// genQuickReference writes docs/cli-reference.md as an auto-generated command table.
+// Each row links to the per-command detail page in docs/reference/cli/.
+func genQuickReference(root *cobra.Command, outPath string) error {
+	type cmdEntry struct {
+		name string
+		desc string
+		link string
+	}
+
+	var cmdEntries []cmdEntry
+	var walk func(cmd *cobra.Command, prefix string)
+	walk = func(cmd *cobra.Command, prefix string) {
+		if cmd.Hidden || cmd.Name() == "help" {
+			return
+		}
+		fullName := strings.TrimSpace(prefix + " " + cmd.Name())
+		if fullName != "kardinal" && cmd.Short != "" {
+			linkName := strings.ReplaceAll(fullName, " ", "-") + ".md"
+			cmdEntries = append(cmdEntries, cmdEntry{
+				name: fullName,
+				desc: cmd.Short,
+				link: "reference/cli/" + linkName,
+			})
+		}
+		for _, sub := range cmd.Commands() {
+			walk(sub, fullName)
+		}
+	}
+	walk(root, "")
+
+	sort.Slice(cmdEntries, func(i, j int) bool {
+		return cmdEntries[i].name < cmdEntries[j].name
+	})
+
+	f, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fmt.Fprintf(f, "# CLI Reference\n\n")
+	fmt.Fprintf(f, "<!-- AUTO-GENERATED — do not edit by hand.\n")
+	fmt.Fprintf(f, "     Run: go run ./hack/gen-cli-docs/main.go to regenerate.\n")
+	fmt.Fprintf(f, "     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
+	fmt.Fprintf(f, "!!! note \"Auto-generated\"\n")
+	fmt.Fprintf(f, "    Generated from the kardinal CLI source. Every command is documented.\n")
+	fmt.Fprintf(f, "    See [detailed reference pages](reference/cli/) for flags and examples.\n\n")
+	fmt.Fprintf(f, "| Command | Description |\n")
+	fmt.Fprintf(f, "|---|---|\n")
+
+	for _, e := range cmdEntries {
+		fmt.Fprintf(f, "| [`%s`](%s) | %s |\n", e.name, e.link, e.desc)
+	}
+
+	fmt.Fprintf(f, "\nFor full flag documentation, examples, and output formats, see the\n")
+	fmt.Fprintf(f, "[individual command pages](reference/cli/).\n")
+	return nil
 }
 
 // setDisableAutoGenTag recursively sets DisableAutoGenTag on every command.

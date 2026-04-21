@@ -140,9 +140,11 @@ per pipeline. Neither Kargo nor GitOps Promoter tracks deployment efficiency met
 ## Where Kargo Leads
 
 **Artifact discovery**: Kargo's Warehouse concept automatically monitors OCI registries
-and Git repos for new artifact versions, packages them as Freight, and feeds them into
-the pipeline. kardinal requires CI to create Bundles explicitly (via webhook or CLI).
-If you want passive artifact detection without modifying CI pipelines, Kargo wins.
+and Git repos for new artifact versions. kardinal now has equivalent capability via the
+**Subscription CRD** — an OCI watcher polls a registry for new tags and creates Bundles
+automatically; a Git watcher monitors a repository for config changes. This gap is closed
+as of v0.6.0. Kargo's Warehouse UI has a polished exploration interface that kardinal's
+Subscription does not match yet.
 
 **Production maturity**: Kargo is at v1.10.x with commercial support from Akuity,
 a larger community, and a longer track record in production.

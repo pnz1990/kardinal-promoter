@@ -38,7 +38,7 @@ All state lives in Kubernetes CRDs. There is no external database.
 
 ## Status
 
-**v0.5.0** — Production-ready. Stages 0–18 complete. K-01 through K-11 shipped.
+**v0.8.1** — Production-ready. Active development. See the [changelog](docs/changelog.md) for what shipped.
 See the [full documentation](https://pnz1990.github.io/kardinal-promoter/) and [changelog](docs/changelog.md).
 
 ## Documentation
