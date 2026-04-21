@@ -1,20 +1,31 @@
 ## kardinal status
 
-Show controller health and cluster resource summary
+Show controller health or per-pipeline in-flight promotion details
 
 ### Synopsis
 
-Show the health of the kardinal controller and a summary of managed resources.
+Show the health of the kardinal controller and cluster resource summary.
 
-Displays:
-  - Controller pod status and version
-  - Count of Pipelines and active Bundles
-  - Any pipelines currently in a failed/stuck state
+When called without arguments: displays controller version, pipeline count, and
+active bundle count.
 
-For detailed diagnostics, use 'kardinal doctor'.
+When called with a pipeline name: shows in-flight promotion details for that
+pipeline — active bundle, PromotionStep states (with active steps highlighted),
+blocking PolicyGates (with CEL expression and current reason), and open PR URLs.
+This is the first command to run when a promotion is stuck.
+
+Examples:
+  # Cluster-level summary
+  kardinal status
+
+  # Per-pipeline in-flight view
+  kardinal status nginx-demo
+
+For detailed gate diagnostics, use 'kardinal explain <pipeline>'.
+For step-level log output, use 'kardinal logs <pipeline>'.
 
 ```
-kardinal status [flags]
+kardinal status [pipeline] [flags]
 ```
 
 ### Options
