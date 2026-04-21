@@ -614,9 +614,9 @@ func TestNewProvider_GitLab(t *testing.T) {
 }
 
 func TestNewProvider_Unknown(t *testing.T) {
-	_, err := scm.NewProvider("bitbucket", "token", "", "")
+	_, err := scm.NewProvider("badprovider", "token", "", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bitbucket")
+	assert.Contains(t, err.Error(), "badprovider")
 }
 
 func TestNewProvider_EmptyType_DefaultsToGitHub(t *testing.T) {
@@ -972,6 +972,290 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 		})
 	}
 }
+
+// ─── Bitbucket SCM Provider Tests ─────────────────────────────────────────────
+
+func TestBitbucketProvider_OpenPR(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/2.0/repositories/workspace/myrepo/pullrequests", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Contains(t, r.Header.Get("Authorization"), "Bearer test-token")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id": 10,
+			"links": map[string]interface{}{
+				"html": map[string]string{
+					"href": "https://bitbucket.org/workspace/myrepo/pull-requests/10",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	p := scm.NewBitbucketProvider("test-token", server.URL, "")
+	url, num, err := p.OpenPR(context.Background(), "workspace/myrepo", "Test PR", "body", "feature", "main")
+	require.NoError(t, err)
+	assert.Equal(t, 10, num)
+	assert.Equal(t, "https://bitbucket.org/workspace/myrepo/pull-requests/10", url)
+}
+
+func TestBitbucketProvider_ClosePR(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "pullrequests/42/decline")
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	p := scm.NewBitbucketProvider("test-token", server.URL, "")
+	require.NoError(t, p.ClosePR(context.Background(), "workspace/myrepo", 42))
+}
+
+func TestBitbucketProvider_CommentOnPR(t *testing.T) {
+	var capturedContent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "pullrequests/42/comments")
+		assert.Equal(t, http.MethodPost, r.Method)
+		var payload map[string]interface{}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		content := payload["content"].(map[string]interface{})
+		capturedContent = content["raw"].(string)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	p := scm.NewBitbucketProvider("test-token", server.URL, "")
+	require.NoError(t, p.CommentOnPR(context.Background(), "workspace/myrepo", 42, "hello bitbucket"))
+	assert.Equal(t, "hello bitbucket", capturedContent)
+}
+
+func TestBitbucketProvider_GetPRStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		state      string
+		wantMerged bool
+		wantOpen   bool
+	}{
+		{name: "open", state: "OPEN", wantMerged: false, wantOpen: true},
+		{name: "merged", state: "MERGED", wantMerged: true, wantOpen: false},
+		{name: "declined", state: "DECLINED", wantMerged: false, wantOpen: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"state": tc.state})
+			}))
+			defer server.Close()
+
+			p := scm.NewBitbucketProvider("test-token", server.URL, "")
+			merged, open, err := p.GetPRStatus(context.Background(), "workspace/myrepo", 42)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantMerged, merged)
+			assert.Equal(t, tc.wantOpen, open)
+		})
+	}
+}
+
+func TestBitbucketProvider_ParseWebhookEvent_ValidSignature(t *testing.T) {
+	secret := "bitbucket-secret"
+	payload := []byte(`{"pullrequest":{"id":42,"state":"MERGED","source":{"repository":{"full_name":"workspace/myrepo"}},"links":{"html":{"href":"https://bitbucket.org/workspace/myrepo/pull-requests/42"}}}}`)
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	p := scm.NewBitbucketProvider("token", "", secret)
+	evt, err := p.ParseWebhookEvent(payload, sig)
+	require.NoError(t, err)
+	assert.Equal(t, 42, evt.PRNumber)
+	assert.True(t, evt.Merged)
+}
+
+func TestBitbucketProvider_ParseWebhookEvent_InvalidSignature(t *testing.T) {
+	p := scm.NewBitbucketProvider("token", "", "correct-secret")
+	_, err := p.ParseWebhookEvent([]byte(`{}`), "sha256=wrongsig")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HMAC")
+}
+
+func TestBitbucketProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
+	p := scm.NewBitbucketProvider("token", "", "")
+	payload := []byte(`{"pullrequest":{"id":5,"state":"OPEN","source":{"repository":{"full_name":"workspace/myrepo"}},"links":{"html":{"href":""}}}}`)
+	evt, err := p.ParseWebhookEvent(payload, "")
+	require.NoError(t, err)
+	assert.Equal(t, 5, evt.PRNumber)
+}
+
+func TestBitbucketProvider_APIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"message":"Unauthorized"}}`))
+	}))
+	defer server.Close()
+
+	p := scm.NewBitbucketProvider("bad-token", server.URL, "")
+	_, _, err := p.OpenPR(context.Background(), "workspace/myrepo", "Test", "body", "head", "main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestBitbucketProvider_InvalidRepoFormat(t *testing.T) {
+	p := scm.NewBitbucketProvider("token", "http://example.com", "")
+	_, _, err := p.OpenPR(context.Background(), "invalid-repo-no-slash", "title", "body", "head", "main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace/repo_slug format")
+}
+
+func TestNewProvider_Bitbucket(t *testing.T) {
+	p, err := scm.NewProvider("bitbucket", "token", "https://api.bitbucket.org", "")
+	require.NoError(t, err)
+	require.NotNil(t, p)
+}
+
+// ─── Azure DevOps SCM Provider Tests ──────────────────────────────────────────
+
+func TestAzureDevOpsProvider_OpenPR(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "myorg/myproject/_apis/git/repositories/myrepo/pullrequests")
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Contains(t, r.Header.Get("Authorization"), "Basic ")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"pullRequestId": 99,
+			"repository": map[string]interface{}{
+				"webUrl": "https://dev.azure.com/myorg/myproject/_git/myrepo",
+			},
+		})
+	}))
+	defer server.Close()
+
+	p := scm.NewAzureDevOpsProvider("test-pat", server.URL, "")
+	url, num, err := p.OpenPR(context.Background(), "myorg/myproject/myrepo", "Test PR", "body", "feature", "main")
+	require.NoError(t, err)
+	assert.Equal(t, 99, num)
+	assert.Contains(t, url, "pullrequest/99")
+}
+
+func TestAzureDevOpsProvider_ClosePR(t *testing.T) {
+	var capturedPayload map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "pullrequests/99")
+		assert.Equal(t, http.MethodPatch, r.Method)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&capturedPayload))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	p := scm.NewAzureDevOpsProvider("test-pat", server.URL, "")
+	require.NoError(t, p.ClosePR(context.Background(), "myorg/myproject/myrepo", 99))
+	assert.Equal(t, "abandoned", capturedPayload["status"])
+}
+
+func TestAzureDevOpsProvider_CommentOnPR(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "pullrequests/99/threads")
+		assert.Equal(t, http.MethodPost, r.Method)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	p := scm.NewAzureDevOpsProvider("test-pat", server.URL, "")
+	require.NoError(t, p.CommentOnPR(context.Background(), "myorg/myproject/myrepo", 99, "hello ado"))
+}
+
+func TestAzureDevOpsProvider_GetPRStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantMerged bool
+		wantOpen   bool
+	}{
+		{name: "active", status: "active", wantMerged: false, wantOpen: true},
+		{name: "completed", status: "completed", wantMerged: true, wantOpen: false},
+		{name: "abandoned", status: "abandoned", wantMerged: false, wantOpen: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": tc.status})
+			}))
+			defer server.Close()
+
+			p := scm.NewAzureDevOpsProvider("test-pat", server.URL, "")
+			merged, open, err := p.GetPRStatus(context.Background(), "myorg/myproject/myrepo", 99)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantMerged, merged)
+			assert.Equal(t, tc.wantOpen, open)
+		})
+	}
+}
+
+func TestAzureDevOpsProvider_ParseWebhookEvent_ValidToken(t *testing.T) {
+	secret := "ado-webhook-secret"
+	payload := []byte(`{"eventType":"git.pullrequest.merged","resource":{"pullRequestId":99,"status":"completed","mergeStatus":"succeeded","repository":{"name":"myrepo","project":{"name":"myproject"},"remoteUrl":"https://myorg@dev.azure.com/myorg/myproject/_git/myrepo"}}}`)
+
+	p := scm.NewAzureDevOpsProvider("token", "", secret)
+	evt, err := p.ParseWebhookEvent(payload, secret)
+	require.NoError(t, err)
+	assert.Equal(t, 99, evt.PRNumber)
+	assert.True(t, evt.Merged)
+	assert.Equal(t, "myproject/myrepo", evt.RepoFullName)
+	assert.Equal(t, "git.pullrequest.merged", evt.EventType)
+}
+
+func TestAzureDevOpsProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {
+	p := scm.NewAzureDevOpsProvider("token", "", "correct-secret")
+	_, err := p.ParseWebhookEvent([]byte(`{}`), "wrong-secret")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token mismatch")
+}
+
+func TestAzureDevOpsProvider_ParseWebhookEvent_NoSecret(t *testing.T) {
+	p := scm.NewAzureDevOpsProvider("token", "", "")
+	payload := []byte(`{"eventType":"git.pullrequest.created","resource":{"pullRequestId":5,"status":"active","repository":{"name":"myrepo","project":{"name":"myproject"},"remoteUrl":""}}}`)
+	evt, err := p.ParseWebhookEvent(payload, "")
+	require.NoError(t, err)
+	assert.Equal(t, 5, evt.PRNumber)
+	assert.False(t, evt.Merged)
+}
+
+func TestAzureDevOpsProvider_APIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"$id":"1","innerException":null,"message":"Access denied."}`))
+	}))
+	defer server.Close()
+
+	p := scm.NewAzureDevOpsProvider("bad-pat", server.URL, "")
+	_, _, err := p.OpenPR(context.Background(), "myorg/myproject/myrepo", "Test", "body", "head", "main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestAzureDevOpsProvider_InvalidRepoFormat(t *testing.T) {
+	p := scm.NewAzureDevOpsProvider("token", "http://example.com", "")
+	_, _, err := p.OpenPR(context.Background(), "only-one-slash/noproj", "title", "body", "head", "main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "org/project/repo format")
+}
+
+func TestNewProvider_AzureDevOps(t *testing.T) {
+	p, err := scm.NewProvider("azuredevops", "token", "https://dev.azure.com", "")
+	require.NoError(t, err)
+	require.NotNil(t, p)
+}
+
+// ─── TestFormatElapsed ─────────────────────────────────────────────────────────
 
 // TestFormatElapsed verifies the pre-computed elapsed time formatting used to
 // eliminate time.Since() calls inside the PR template (SCM-4 logic leak fix).
