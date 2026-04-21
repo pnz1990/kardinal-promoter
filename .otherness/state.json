@@ -241,7 +241,7 @@
     },
     "914": {
       "title": "feat: No outbound event notifications",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -249,7 +249,11 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_number": "942",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/942",
+      "pr_merged": true,
+      "done_at": "2026-04-21T08:19:40Z"
     },
     "915": {
       "title": "feat: No ArgoCD-native image update step",
