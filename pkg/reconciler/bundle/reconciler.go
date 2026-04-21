@@ -337,6 +337,9 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Available"
+	// Set Ready=False/Available so operators can observe the phase via kubectl wait
+	// and so GitOps controllers (Flux/ArgoCD) can gate on standard K8s conditions.
+	setBundleCondition(b, "Ready", metav1.ConditionFalse, "Available", "bundle received; awaiting promotion")
 
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -488,6 +491,7 @@ func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Phase = "Superseded"
+	setBundleCondition(b, "Ready", metav1.ConditionFalse, "Superseded", "superseded by a newer bundle for the same pipeline and type")
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch bundle status Superseded: %w", err)
 	}
@@ -543,6 +547,8 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		// Patch bundle to Failed
 		patch := client.MergeFrom(b.DeepCopy())
 		b.Status.Phase = "Failed"
+		setBundleCondition(b, "Ready", metav1.ConditionFalse, "Failed", "promotion failed: translation error")
+		setBundleCondition(b, "Failed", metav1.ConditionTrue, "TranslationError", err.Error())
 		if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
 			log.Error().Err(patchErr).Msg("failed to patch bundle status to Failed")
 		}
@@ -556,6 +562,7 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	b.Status.Phase = "Promoting"
 	b.Status.GraphRef = graphName                              // store for recreation detection (#490)
 	b.Status.PipelineSpecHash = pipelineSpecHashFor(&pipeline) // store for change detection (#626)
+	setBundleCondition(b, "Ready", metav1.ConditionFalse, "Promoting", "promotion in progress")
 
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -686,6 +693,13 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 
 	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Environments = envs
+	// Update Ready condition based on overall bundle state.
+	// When all environments are Verified: Ready=True (enables kubectl wait --for=condition=Ready).
+	// When some environments are still in-flight: Ready=False/Promoting.
+	if b.Status.Metrics != nil {
+		// Metrics only computed when all environments are Verified.
+		setBundleCondition(b, "Ready", metav1.ConditionTrue, "Verified", "all environments verified")
+	}
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch bundle evidence: %w", err)
 	}
@@ -872,4 +886,31 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Graph is regenerated to reflect the new Pipeline configuration (#626).
 		Watches(&kardinalv1alpha1.Pipeline{}, handler.EnqueueRequestsFromMapFunc(pipelineMapper)).
 		Complete(r)
+}
+
+// setBundleCondition sets or updates a metav1.Condition on a Bundle.
+// Follows the same idempotent pattern as appendCondition in the promotionstep reconciler:
+// if a condition with the same Type already exists, it is updated in-place rather than
+// appended, so there are never duplicate condition types in the slice.
+//
+// Graph-first: this is a pure mutation of the in-memory Bundle object prior to a status
+// patch call in the calling function. It does not make API server calls itself.
+func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status metav1.ConditionStatus, reason, message string) {
+	now := metav1.Now()
+	for i, c := range b.Status.Conditions {
+		if c.Type == condType {
+			b.Status.Conditions[i].Status = status
+			b.Status.Conditions[i].Reason = reason
+			b.Status.Conditions[i].Message = message
+			b.Status.Conditions[i].LastTransitionTime = now
+			return
+		}
+	}
+	b.Status.Conditions = append(b.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: now,
+	})
 }

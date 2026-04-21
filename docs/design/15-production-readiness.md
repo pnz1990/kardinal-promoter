@@ -95,7 +95,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ### Lens 6: New gaps identified by Kargo comparison scan (2026-04-20)
 
-- 🔲 **Bundle `status.conditions` are declared but never populated** — `api/v1alpha1/bundle_types.go` declares `Status.Conditions []metav1.Condition` but `pkg/reconciler/bundle/reconciler.go` never calls `apimeta.SetStatusCondition`. `kubectl describe bundle <name>` shows `Conditions: <none>`. Operators and automation that use standard K8s condition watches (e.g. `kubectl wait --for=condition=Ready`) cannot use them. Contrast: `PromotionStep` does populate conditions. Populate `Ready`, `Promoting`, and `Failed` conditions on Bundle status. This is also required for GitOps controllers (Flux, ArgoCD) that gate on resource readiness.
+- ✅ **Bundle `status.conditions` are declared but never populated** — `pkg/reconciler/bundle/reconciler.go` now calls `setBundleCondition()` at every phase transition: `Ready=False/Available` (new bundle received), `Ready=False/Promoting` (graph created, promotion in progress), `Ready=False/Failed + Failed=True/TranslationError` (translator error), `Ready=False/Superseded` (superseded by newer bundle), and `Ready=True/Verified` (all environments verified via handleSyncEvidence). Operators can now use `kubectl wait --for=condition=Ready bundle/<name>` and GitOps controllers (Flux, ArgoCD) can gate on standard K8s conditions. (PR #982 series, 2026-04-21)
 
 - 🔲 **No namespace-scoped controller mode** — the Helm chart deploys a `ClusterRole` that grants kardinal read/write access to `kardinal.io` CRDs across all namespaces. In a multi-tenant cluster, a platform team that installs kardinal for one team inadvertently grants it visibility into all namespaces. Kargo offers both cluster-scoped and namespace-scoped install modes. Add a `controller.watchNamespace` Helm value (default `""` = cluster-wide) that, when set, limits the controller's cache and ClusterRole/Role binding to that namespace only. A security review at a company with shared clusters will block installation without this.
 
@@ -149,7 +149,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 3. ~~Reconciler panic recovery~~ ✅ Done (PR #920) — handled by controller-runtime v0.23.3 default (RecoverPanic=true)
 4. ~~UI API authentication~~ ✅ Done (PR #924) — `--ui-auth-token` Bearer token auth implemented; upgrade to TokenReview is a Future item
 5. ~~HTTP plain-text for UI and webhook servers~~ ✅ Done (PR #937) — TLS support added via `--tls-cert-file`/`--tls-key-file`; cert-manager compatible
-6. Bundle `status.conditions` never populated — breaks `kubectl wait` and GitOps tooling
+6. ~~Bundle `status.conditions` never populated~~ ✅ Done — Ready/Failed/Promoting conditions now populated on every phase transition
 7. ~~`RequeueAfter: time.Millisecond` hot loop in bundle reconciler~~ ✅ Done — replaced with 500ms minimum safe floor
 8. No per-step execution timeout — a hung `git-clone` stalls all PromotionStep reconciles for that pipeline
 
