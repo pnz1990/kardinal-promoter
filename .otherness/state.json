@@ -151,7 +151,7 @@
     },
     "909": {
       "title": "feat: UI API authentication",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -159,7 +159,14 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-5c1aab20",
+      "assigned_at": "2026-04-20T21:27:56Z",
+      "branch": "feat/909",
+      "worktree": "../kardinal-promoter.909",
+      "pr_number": 924,
+      "pr_merged": true,
+      "done_at": "2026-04-20T21:39:54Z"
     },
     "910": {
       "title": "feat: Bundle history GC",
@@ -186,7 +193,7 @@
     },
     "911": {
       "title": "feat: TLS for UI and webhook HTTP servers",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -194,11 +201,13 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     },
     "912": {
       "title": "feat: CORS lockdown for UI API",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -206,11 +215,23 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-4f34f524",
+      "assigned_at": "2026-04-21T11:39:03Z",
+      "branch": "feat/912",
+      "worktree": "../kardinal-promoter.912",
+      "file_spaces": [
+        "web/",
+        "src/styles/",
+        "src/hooks/",
+        "src/components/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:39:47Z"
     },
     "913": {
       "title": "feat: In-cluster kubectl port-forward UX",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -218,11 +239,13 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:40:25Z"
     },
     "914": {
       "title": "feat: No outbound event notifications",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -230,11 +253,15 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_number": "942",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/942",
+      "pr_merged": true,
+      "done_at": "2026-04-21T08:19:40Z"
     },
     "915": {
       "title": "feat: No ArgoCD-native image update step",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -242,11 +269,13 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T13:13:52Z"
     },
     "916": {
       "title": "feat: No GitHub Actions native bundle creation",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -254,11 +283,21 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-4f34f524",
+      "assigned_at": "2026-04-21T11:40:46Z",
+      "branch": "feat/916",
+      "worktree": "../kardinal-promoter.916",
+      "file_spaces": [
+        "cmd/",
+        ".github/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:51:23Z"
     },
     "917": {
       "title": "feat: No UI for Bundle creation / triggering promotions",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -266,11 +305,13 @@
         "area/ui",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:28:41Z"
     },
     "918": {
       "title": "feat: Warehouse-equivalent: no automatic discovery mode",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -278,11 +319,13 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T10:24:01Z"
     },
     "904": {
       "title": "test: add CI check that CRD YAML printer columns match Go type annotations",
-      "state": "todo",
+      "state": "done",
       "priority": "low",
       "labels": [
         "kardinal",
@@ -290,7 +333,9 @@
         "area/test",
         "size/xs",
         "priority/low"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
     },
     "920": {
       "title": "feat: reconciler panic recovery \u2014 enable WithRecoverPanic to prevent crash loops",
@@ -306,6 +351,338 @@
       "pr_number": "921",
       "pr_merged": true,
       "done_at": "2026-04-20T21:06:16Z"
+    },
+    "925": {
+      "title": "fix(ci): Demo E2E fails \u2014 health.flux field not in CRD schema",
+      "state": "done",
+      "priority": "high",
+      "labels": [
+        "kind/bug",
+        "area/test",
+        "priority/high",
+        "size/s",
+        "kardinal"
+      ],
+      "pr_number": 927,
+      "pr_merged": true,
+      "done_at": "2026-04-20T22:05:58Z"
+    },
+    "926": {
+      "title": "docs: document UI API authentication in security guide",
+      "state": "done",
+      "priority": "medium",
+      "labels": [
+        "kind/docs",
+        "area/docs",
+        "priority/medium",
+        "size/xs",
+        "kardinal"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-20T23:16:22Z"
+    },
+    "issue-969": {
+      "state": "done",
+      "title": "feat: Git credential rotation with zero downtime",
+      "issue": "969",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "994",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/994",
+      "pr_merged": true,
+      "done_at": "2026-04-21T15:10:40Z"
+    },
+    "issue-970": {
+      "state": "done",
+      "title": "feat: PDCA coverage must never be 0/0",
+      "issue": "970",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/test",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": 1000,
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1000",
+      "pr_merged": true,
+      "done_at": "2026-04-21T16:44:43Z"
+    },
+    "issue-971": {
+      "state": "done",
+      "title": "feat: 39.3",
+      "issue": "971",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/test",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z",
+      "assigned_to": "sess-8975a68f",
+      "assigned_at": "2026-04-21T16:46:30Z",
+      "branch": "feat/issue-971",
+      "worktree": "../kardinal-promoter.issue-971",
+      "file_spaces": [
+        "Makefile",
+        ".github/workflows/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T17:10:13Z"
+    },
+    "issue-972": {
+      "state": "todo",
+      "title": "feat: Missing Prometheus metrics for step duration and gate blocking time",
+      "issue": "972",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/health",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-973": {
+      "state": "done",
+      "title": "feat: No kardinal status command for in-flight promotion details",
+      "issue": "973",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "997",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/997",
+      "pr_merged": true,
+      "done_at": "2026-04-21T15:33:20Z"
+    },
+    "issue-974": {
+      "state": "todo",
+      "title": "feat: kardinal logs surfaces static snapshot only",
+      "issue": "974",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-975": {
+      "state": "todo",
+      "title": "feat: No Kubernetes TokenReview-based auth for UI API",
+      "issue": "975",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-976": {
+      "state": "todo",
+      "title": "feat: No admission webhook for dependsOn cycle detection",
+      "issue": "976",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-977": {
+      "state": "done",
+      "title": "feat: SCM token scopes are not validated at startup",
+      "issue": "977",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/scm",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "996",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/996",
+      "pr_merged": true,
+      "done_at": "2026-04-21T15:20:56Z"
+    },
+    "issue-978": {
+      "state": "todo",
+      "title": "feat: helm install to first Bundle in under 10 minutes",
+      "issue": "978",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/docs",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-979": {
+      "state": "todo",
+      "title": "feat: No community presence",
+      "issue": "979",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/docs",
+        "size/s",
+        "priority/low"
+      ],
+      "priority": "low",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-980": {
+      "state": "todo",
+      "title": "feat: No ADOPTERS.md or case studies",
+      "issue": "980",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/docs",
+        "size/s",
+        "priority/low"
+      ],
+      "priority": "low",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-981": {
+      "state": "done",
+      "title": "feat: No kardinal completion works for all shells",
+      "issue": "981",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "pr_number": 1001,
+      "done_at": "2026-04-21T16:19:35Z"
+    },
+    "issue-982": {
+      "state": "done",
+      "title": "feat: Bundle status.conditions are declared but never populated",
+      "issue": "982",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "priority": "high",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "991",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/991",
+      "pr_merged": true,
+      "done_at": "2026-04-21T14:23:00Z"
+    },
+    "issue-983": {
+      "state": "todo",
+      "title": "feat: No namespace-scoped controller mode",
+      "issue": "983",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-984": {
+      "state": "todo",
+      "title": "feat: Bitbucket and Azure DevOps SCM providers are absent",
+      "issue": "984",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/scm",
+        "size/m",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-985": {
+      "state": "todo",
+      "title": "feat: No reusable PromotionTemplate concept",
+      "issue": "985",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-986": {
+      "state": "todo",
+      "title": "feat: kardinal init generates Pipeline YAML but does not scaffold the GitOps repo",
+      "issue": "986",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-987": {
+      "state": "done",
+      "title": "feat: RequeueAfter: time.Millisecond in bundle reconciler is a production hot loop",
+      "issue": "987",
+      "labels": [
+        "kardinal",
+        "kind/bug",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "priority": "high",
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "988",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/988",
+      "pr_merged": true,
+      "done_at": "2026-04-21T14:00:11Z"
     }
   },
   "session_heartbeats": {
@@ -318,9 +695,25 @@
       "last_seen": "2026-04-20T20:37:39Z",
       "item": "910",
       "cycle": 2
+    },
+    "sess-3d4ec825": {
+      "last_seen": "2026-04-21T07:24:26Z",
+      "item": "912",
+      "cycle": 1
+    },
+    "sess-4f34f524": {
+      "last_seen": "2026-04-21T11:39:03Z",
+      "item": "912",
+      "cycle": 1
+    },
+    "sess-8975a68f": {
+      "last_seen": "2026-04-21T16:46:30Z",
+      "item": "issue-971",
+      "cycle": 1
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 3,
-  "pm_cycle_count": 3
+  "sm_cycle_count": 4,
+  "pm_cycle_count": 7,
+  "chore_only_guard_count": 0
 }
