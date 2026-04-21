@@ -48,6 +48,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
@@ -136,6 +137,24 @@ func main() {
 			"Default (empty): same-origin only — cross-origin requests are rejected with 403. "+
 			"Set to '*' to allow all origins (development only). "+
 			"Also readable from KARDINAL_CORS_ORIGINS environment variable.")
+
+	// --ui-tokenreview-auth enables Kubernetes TokenReview-based authentication for
+	// the UI API. When set to true (and --ui-auth-token is NOT set), the UI API server
+	// validates each bearer token by calling authenticationv1.TokenReview against the
+	// Kubernetes API server. This allows cluster users to access the UI with their
+	// existing kubeconfig credentials — no shared static secret to leak.
+	//
+	// Priority (O4): --ui-auth-token takes precedence. If both are set, only the static
+	// token check is applied and TokenReview is not called.
+	//
+	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	var uiTokenReviewAuth bool
+	flag.BoolVar(&uiTokenReviewAuth, "ui-tokenreview-auth",
+		os.Getenv("KARDINAL_UI_TOKENREVIEW_AUTH") == "true",
+		"Enable Kubernetes TokenReview-based authentication for /api/v1/ui/* routes. "+
+			"When true and --ui-auth-token is not set, each request's bearer token is "+
+			"validated via authenticationv1.TokenReview. Fail-closed: API errors return 503. "+
+			"Also readable from KARDINAL_UI_TOKENREVIEW_AUTH environment variable (set to 'true').")
 
 	var tlsCertFile string
 	flag.StringVar(&tlsCertFile, "tls-cert-file", os.Getenv("KARDINAL_TLS_CERT_FILE"),
@@ -406,6 +425,7 @@ func main() {
 		// --ui-auth-token is set. Static /ui/* assets bypass auth (no sensitive data).
 		var handler http.Handler = uiMux
 		if uiAuthToken != "" {
+			// O4 (spec issue-975): Static token takes precedence over TokenReview.
 			logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
 			tokenBytes := []byte(uiAuthToken)
 			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -423,8 +443,22 @@ func main() {
 				}
 				uiMux.ServeHTTP(w, r)
 			})
+		} else if uiTokenReviewAuth {
+			// O1–O3, O6–O8 (spec issue-975): Kubernetes TokenReview auth mode.
+			// Only activated when --ui-auth-token is not set (O4).
+			logger.Info().Msg("UI API TokenReview authentication enabled")
+			reviewer, reviewerErr := uiauth.NewKubeTokenReviewer(mgr.GetConfig())
+			if reviewerErr != nil {
+				// Non-fatal: fall through to open mode with a warning. The controller
+				// must still start — TokenReview unavailability should not block the
+				// controller itself from serving other APIs.
+				logger.Warn().Err(reviewerErr).
+					Msg("UI API TokenReview: failed to create reviewer — UI API will be open (no auth)")
+			} else {
+				handler = uiauth.Middleware(uiMux, reviewer)
+			}
 		} else {
-			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token to require Bearer token")
+			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
 		}
 
 		// Apply CORS lockdown to /api/v1/ui/* routes.
