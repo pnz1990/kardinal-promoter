@@ -68,9 +68,9 @@ type notificationPayload struct {
 
 // pendingEvent describes an event that should be delivered.
 type pendingEvent struct {
-	eventType   v1alpha1.NotificationHookEventType
-	eventKey    string // deterministic: "<EventType>/<resource-name>"
-	payload     notificationPayload
+	eventType v1alpha1.NotificationHookEventType
+	eventKey  string // deterministic: "<EventType>/<resource-name>"
+	payload   notificationPayload
 }
 
 // Reconciler handles NotificationHook objects and delivers webhooks on promotion events.
