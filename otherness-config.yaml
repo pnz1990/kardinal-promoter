@@ -10,6 +10,8 @@ project:
   report_issue: 1
   board_url: https://github.com/users/pnz1990/projects/1
   pr_label: kardinal
+  board_project_id: 'PVT_kwHOC22HhM4BUMuc'  # Kardinal Promoter project board
+  active_milestone: 'v0.6.0 — Pipeline Expressiveness'  # current active milestone
   job_family: FEE
 
 # ── MAQA runtime ──────────────────────────────────────────────────────────────
