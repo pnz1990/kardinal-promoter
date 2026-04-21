@@ -508,7 +508,7 @@
       "done_at": "2026-04-21T18:51:09Z"
     },
     "issue-976": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No admission webhook for dependsOn cycle detection",
       "issue": "976",
       "labels": [
@@ -519,7 +519,13 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "branch": null,
+      "worktree": null,
+      "assigned_to": "sess-326f58f8",
+      "assigned_at": "2026-04-21T23:25:07Z",
+      "pr_merged": true,
+      "done_at": "2026-04-21T20:20:17Z"
     },
     "issue-977": {
       "state": "done",
@@ -568,7 +574,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-980": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No ADOPTERS.md or case studies",
       "issue": "980",
       "labels": [
@@ -579,7 +585,11 @@
         "priority/low"
       ],
       "priority": "low",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-21T00:00:00Z",
+      "branch": null,
+      "worktree": null
     },
     "issue-981": {
       "state": "done",
@@ -617,7 +627,7 @@
       "done_at": "2026-04-21T14:23:00Z"
     },
     "issue-983": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No namespace-scoped controller mode",
       "issue": "983",
       "labels": [
@@ -628,7 +638,11 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-21T00:00:00Z",
+      "branch": null,
+      "worktree": null
     },
     "issue-984": {
       "state": "todo",
