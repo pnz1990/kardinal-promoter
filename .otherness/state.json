@@ -418,7 +418,7 @@
       "done_at": "2026-04-21T16:44:43Z"
     },
     "issue-971": {
-      "state": "todo",
+      "state": "assigned",
       "title": "feat: 39.3",
       "issue": "971",
       "labels": [
@@ -429,7 +429,15 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "assigned_to": "sess-8975a68f",
+      "assigned_at": "2026-04-21T16:46:30Z",
+      "branch": "feat/issue-971",
+      "worktree": "../kardinal-promoter.issue-971",
+      "file_spaces": [
+        "Makefile",
+        ".github/workflows/"
+      ]
     },
     "issue-972": {
       "state": "todo",
@@ -694,6 +702,11 @@
     "sess-4f34f524": {
       "last_seen": "2026-04-21T11:39:03Z",
       "item": "912",
+      "cycle": 1
+    },
+    "sess-8975a68f": {
+      "last_seen": "2026-04-21T16:46:30Z",
+      "item": "issue-971",
       "cycle": 1
     }
   },
