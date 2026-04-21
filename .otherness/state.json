@@ -634,7 +634,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-987": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: RequeueAfter: time.Millisecond in bundle reconciler is a production hot loop",
       "issue": "987",
       "labels": [
@@ -645,7 +645,11 @@
         "priority/high"
       ],
       "priority": "high",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "988",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/988",
+      "pr_merged": true,
+      "done_at": "2026-04-21T14:00:11Z"
     }
   },
   "session_heartbeats": {
