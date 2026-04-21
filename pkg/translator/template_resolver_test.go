@@ -193,7 +193,7 @@ func TestInlinePromotionTemplates_DefaultNamespace(t *testing.T) {
 			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
 			Environments: []kardinalv1alpha1.EnvironmentSpec{
 				{
-					Name:              "prod",
+					Name: "prod",
 					// Namespace left empty — should default to pipeline namespace
 					PromotionTemplate: &kardinalv1alpha1.PromotionTemplateRef{Name: "tpl"},
 				},
