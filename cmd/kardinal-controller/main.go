@@ -441,6 +441,48 @@ func main() {
 
 	logger.Info().Msg("starting kardinal-controller")
 
+	// SCM token scope preflight check — validate that the configured token has
+	// the scopes required for kardinal-promoter to open and manage pull requests.
+	// This is a non-fatal startup check: warnings are logged but do not prevent
+	// the controller from starting. A misconfigured token will surface as a 403
+	// during the first open-pr step — surfacing it here means teams discover the
+	// problem in minutes rather than hours.
+	//
+	// The check is skipped when:
+	//   - the token is managed by a DynamicProvider (the initial token from --github-token
+	//     may be empty; the actual token is loaded from the Secret by the watcher)
+	//   - the provider type is not github/gitlab/forgejo (unsupported)
+	//   - the call returns a transient network error (logged at debug level; non-fatal)
+	if scmTokenSecretName == "" && githubToken != "" {
+		scopeCtx, scopeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer scopeCancel()
+
+		var scopeWarnings []scm.TokenScopeWarning
+		var scopeErr error
+
+		switch scmProviderType {
+		case "", "github":
+			scopeWarnings, scopeErr = scm.ValidateGitHubTokenScopes(scopeCtx, githubToken, scmAPIURL)
+		case "gitlab":
+			scopeWarnings, scopeErr = scm.ValidateGitLabTokenScopes(scopeCtx, githubToken, scmAPIURL)
+		case "forgejo", "gitea":
+			scopeWarnings, scopeErr = scm.ValidateForgejoTokenScopes(scopeCtx, githubToken, scmAPIURL)
+		}
+
+		if scopeErr != nil {
+			logger.Debug().Err(scopeErr).
+				Str("provider", scmProviderType).
+				Msg("SCM token scope check skipped (network error — non-fatal)")
+		}
+		for _, w := range scopeWarnings {
+			logger.Warn().
+				Str("provider", scmProviderType).
+				Str("missing_scope", w.MissingScope).
+				Str("consequence", w.Consequence).
+				Msg("SCM TOKEN SCOPE WARNING — promotion steps may fail when this scope is required")
+		}
+	}
+
 	// Register a Runnable that creates/updates the kardinal-version ConfigMap
 	// after the controller starts. `kardinal version` reads this ConfigMap.
 	controllerNS := os.Getenv("POD_NAMESPACE")
