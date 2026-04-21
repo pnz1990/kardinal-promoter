@@ -199,6 +199,7 @@ func newUIAPIServer(k8s client.Client, log zerolog.Logger) *uiAPIServer {
 func (s *uiAPIServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/ui/pipelines", s.handlePipelines)
 	mux.HandleFunc("/api/v1/ui/pipelines/", s.handlePipelinesSubpath)
+	mux.HandleFunc("/api/v1/ui/bundles", s.handleBundles)
 	mux.HandleFunc("/api/v1/ui/bundles/", s.handleBundleSubresource)
 	mux.HandleFunc("/api/v1/ui/gates", s.handleGates)
 	mux.HandleFunc("/api/v1/ui/gates/", s.handleGatesSubpath)
@@ -1346,4 +1347,121 @@ func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, n
 		result = append(result, r)
 	}
 	writeJSON(w, result)
+}
+
+// handleBundles handles POST /api/v1/ui/bundles — creates a Bundle from the UI
+// "Create Bundle" dialog. This is the UI equivalent of `kardinal create bundle`.
+//
+// Request body (JSON):
+//
+//	{
+//	  "pipeline":  "nginx-demo",
+//	  "image":     "ghcr.io/example/app:sha-abc1234",
+//	  "commitSHA": "abc1234",   // optional
+//	  "author":    "alice",      // optional
+//	  "namespace": "default"     // optional
+//	}
+//
+// Response (JSON on success, HTTP 201):
+//
+//	{"bundle": "nginx-demo-20260421120000-1234", "message": "bundle created"}
+func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Pipeline  string `json:"pipeline"`
+		Image     string `json:"image"`
+		CommitSHA string `json:"commitSHA"`
+		Author    string `json:"author"`
+		Namespace string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Pipeline == "" {
+		http.Error(w, "pipeline is required", http.StatusBadRequest)
+		return
+	}
+	if req.Image == "" {
+		http.Error(w, "image is required", http.StatusBadRequest)
+		return
+	}
+	ns := req.Namespace
+	if ns == "" {
+		ns = "default"
+	}
+
+	// Parse the image reference into repository + tag or digest.
+	imageRef := parseUIImageRef(req.Image)
+
+	// Build provenance from optional fields.
+	provenance := &v1alpha1.BundleProvenance{
+		CommitSHA: req.CommitSHA,
+		Author:    req.Author,
+		Timestamp: metav1.Now(),
+	}
+
+	bundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: sanitizeName(req.Pipeline) + "-",
+			Namespace:    ns,
+			Labels: map[string]string{
+				"kardinal.io/pipeline": req.Pipeline,
+			},
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:       "image",
+			Pipeline:   req.Pipeline,
+			Images:     []v1alpha1.ImageRef{imageRef},
+			Provenance: provenance,
+		},
+	}
+
+	if err := s.client.Create(r.Context(), bundle); err != nil {
+		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create bundle")
+		http.Error(w, fmt.Sprintf("failed to create bundle: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	s.log.Info().
+		Str("bundle", bundle.Name).
+		Str("pipeline", req.Pipeline).
+		Str("image", req.Image).
+		Msg("ui: bundle created")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"bundle":  bundle.Name,
+		"message": "bundle created — track with kardinal get bundles " + req.Pipeline,
+	})
+}
+
+// parseUIImageRef parses an image string into an ImageRef.
+// It handles three formats:
+//   - repo@sha256:digest       → {Repository: "repo", Digest: "sha256:..."}
+//   - repo:tag                 → {Repository: "repo", Tag: "tag"}
+//   - repo                     → {Repository: "repo"}
+func parseUIImageRef(image string) v1alpha1.ImageRef {
+	// Digest reference: split on @ (last @ to handle registry:port@sha256:...)
+	if idx := strings.LastIndex(image, "@"); idx >= 0 {
+		return v1alpha1.ImageRef{
+			Repository: image[:idx],
+			Digest:     image[idx+1:],
+		}
+	}
+	// Tag reference: split on last colon, but skip if it looks like a host:port with no tag
+	if idx := strings.LastIndex(image, ":"); idx >= 0 {
+		repo := image[:idx]
+		tag := image[idx+1:]
+		// Avoid splitting registry:port/image as repo="registry" tag="port/image"
+		if !strings.Contains(tag, "/") {
+			return v1alpha1.ImageRef{Repository: repo, Tag: tag}
+		}
+	}
+	return v1alpha1.ImageRef{Repository: image}
 }

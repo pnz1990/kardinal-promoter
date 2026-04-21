@@ -53,4 +53,7 @@ export const api = {
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),
+  /** Create a Bundle from the UI "Create Bundle" dialog (#917). */
+  createBundle: (pipeline: string, image: string, commitSHA?: string, author?: string, namespace = 'default') =>
+    post<{ bundle: string; message: string }>('/bundles', { pipeline, image, commitSHA, author, namespace }),
 }
