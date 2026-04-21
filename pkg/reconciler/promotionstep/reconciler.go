@@ -418,6 +418,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			return ctrl.Result{}, fmt.Errorf("patch failed state: %w", patchErr)
 		}
 		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
+		// Emit PromotionStep age at terminal state (Failed — step engine error).
+		observability.PromotionStepAgeSeconds.Observe(time.Since(ps.CreationTimestamp.Time).Seconds())
 		return ctrl.Result{}, nil
 	}
 
@@ -786,6 +788,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 				fmt.Sprintf("health check passed via %s", adapter.Name()))
 			// Emit Prometheus step counter for terminal success.
 			observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
+			// Emit PromotionStep age at terminal state (Verified).
+			// time.Since is called here as part of a CRD status write — Graph-first compliant.
+			observability.PromotionStepAgeSeconds.Observe(time.Since(ps.CreationTimestamp.Time).Seconds())
 			return ctrl.Result{}, nil
 		}
 
@@ -1434,6 +1439,8 @@ func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentI
 					d := step.CompletedAt.Sub(step.StartedAt.Time)
 					if d > 0 {
 						step.DurationMs = d.Milliseconds()
+						// Emit per-step execution duration metric.
+						observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
 					}
 				}
 			}
@@ -1450,6 +1457,8 @@ func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentI
 						d := step.CompletedAt.Sub(step.StartedAt.Time)
 						if d > 0 {
 							step.DurationMs = d.Milliseconds()
+							// Emit per-step execution duration metric for failed steps.
+							observability.StepDurationSeconds.WithLabelValues(step.Name).Observe(d.Seconds())
 						}
 					}
 					step.Message = failMessage

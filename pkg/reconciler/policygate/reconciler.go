@@ -549,6 +549,15 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 			outcome = "Failure"
 		}
 		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason)
+		// Emit gate blocking duration when gate transitions from blocked to allowed.
+		// Uses CreationTimestamp as the upper-bound proxy for blocking duration.
+		// A FirstBlockedAt status field would give exact duration; tracked in design doc 15.
+		if ready && !prevReady {
+			blockingDuration := r.now().Sub(gate.CreationTimestamp.Time)
+			if blockingDuration > 0 {
+				observability.GateBlockingDurationSeconds.Observe(blockingDuration.Seconds())
+			}
+		}
 	}
 	return nil
 }

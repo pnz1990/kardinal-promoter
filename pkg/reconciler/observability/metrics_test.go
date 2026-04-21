@@ -97,10 +97,48 @@ func TestMetricNames(t *testing.T) {
 		"kardinal_steps_total",
 		"kardinal_gate_evaluations_total",
 		"kardinal_pr_duration_seconds",
+		"kardinal_step_duration_seconds",
+		"kardinal_gate_blocking_duration_seconds",
+		"kardinal_promotionstep_age_seconds",
 	}
 
 	for _, name := range names {
 		assert.True(t, strings.HasPrefix(name, "kardinal_"),
 			"metric %s must be prefixed with kardinal_", name)
 	}
+}
+
+// TestStepDurationSeconds verifies that StepDurationSeconds can be observed per step label.
+func TestStepDurationSeconds(t *testing.T) {
+	t.Parallel()
+
+	require.NotPanics(t, func() {
+		observability.StepDurationSeconds.WithLabelValues("git-clone").Observe(12.5)
+		observability.StepDurationSeconds.WithLabelValues("kustomize").Observe(3.2)
+		observability.StepDurationSeconds.WithLabelValues("open-pr").Observe(8.0)
+	})
+}
+
+// TestGateBlockingDurationSeconds verifies that GateBlockingDurationSeconds
+// can be observed without panic.
+func TestGateBlockingDurationSeconds(t *testing.T) {
+	t.Parallel()
+
+	require.NotPanics(t, func() {
+		observability.GateBlockingDurationSeconds.Observe(3600)   // 1 hour
+		observability.GateBlockingDurationSeconds.Observe(900)    // 15 minutes
+		observability.GateBlockingDurationSeconds.Observe(172800) // 2 days
+	})
+}
+
+// TestPromotionStepAgeSeconds verifies that PromotionStepAgeSeconds can be
+// observed without panic.
+func TestPromotionStepAgeSeconds(t *testing.T) {
+	t.Parallel()
+
+	require.NotPanics(t, func() {
+		observability.PromotionStepAgeSeconds.Observe(60)   // 1 minute
+		observability.PromotionStepAgeSeconds.Observe(1800) // 30 minutes
+		observability.PromotionStepAgeSeconds.Observe(7200) // 2 hours
+	})
 }
