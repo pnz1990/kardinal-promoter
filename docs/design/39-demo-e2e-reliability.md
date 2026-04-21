@@ -47,8 +47,8 @@ The fix has two parts:
 
 ## Future (🔲)
 
-- 🔲 39.1 — PDCA scenario for schema drift: add a PDCA scenario that creates a Pipeline manifest with an unknown field and asserts that `ci.yml` fails with the expected error. This makes the CI validation step itself testable.
-- 🔲 39.2 — Update `README.md` examples section: the README may also reference the old `health.argoRollouts{}` syntax. Audit all docs for stale field references.
+- ✅ 39.1 — PDCA scenario for schema drift: add a PDCA scenario that creates a Pipeline manifest with an unknown field and asserts that `ci.yml` fails with the expected error. This makes the CI validation step itself testable. (PR #931)
+- ✅ 39.2 — Update `README.md` examples section: the README may also reference the old `health.argoRollouts{}` syntax. Audit all docs for stale field references. (PR #898)
 - 🔲 39.3 — Add kubeconform to `Makefile` as a `make validate-manifests` target so contributors can run it locally before pushing.
 
 ---
