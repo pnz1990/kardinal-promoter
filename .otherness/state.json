@@ -207,7 +207,7 @@
     },
     "912": {
       "title": "feat: CORS lockdown for UI API",
-      "state": "assigned",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -216,8 +216,8 @@
         "size/s",
         "priority/medium"
       ],
-      "assigned_to": "sess-3d4ec825",
-      "assigned_at": "2026-04-21T07:24:26Z",
+      "assigned_to": "sess-4f34f524",
+      "assigned_at": "2026-04-21T11:39:03Z",
       "branch": "feat/912",
       "worktree": "../kardinal-promoter.912",
       "file_spaces": [
@@ -225,11 +225,13 @@
         "src/styles/",
         "src/hooks/",
         "src/components/"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:39:47Z"
     },
     "913": {
       "title": "feat: In-cluster kubectl port-forward UX",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -237,7 +239,9 @@
         "area/ui",
         "size/s",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:40:25Z"
     },
     "914": {
       "title": "feat: No outbound event notifications",
@@ -269,7 +273,7 @@
     },
     "916": {
       "title": "feat: No GitHub Actions native bundle creation",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -277,7 +281,17 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "assigned_to": "sess-4f34f524",
+      "assigned_at": "2026-04-21T11:40:46Z",
+      "branch": "feat/916",
+      "worktree": "../kardinal-promoter.916",
+      "file_spaces": [
+        "cmd/",
+        ".github/"
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T11:51:23Z"
     },
     "917": {
       "title": "feat: No UI for Bundle creation / triggering promotions",
@@ -381,9 +395,14 @@
       "last_seen": "2026-04-21T07:24:26Z",
       "item": "912",
       "cycle": 1
+    },
+    "sess-4f34f524": {
+      "last_seen": "2026-04-21T11:39:03Z",
+      "item": "912",
+      "cycle": 1
     }
   },
   "report_issue": 1,
   "sm_cycle_count": 3,
-  "pm_cycle_count": 4
+  "pm_cycle_count": 5
 }
