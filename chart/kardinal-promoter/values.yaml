@@ -100,10 +100,16 @@ affinity: {}
 # -- GitHub token for SCM operations (opening PRs, detecting merges).
 # Provide either a direct value (not recommended for production) or a secretRef.
 # The secretRef.key defaults to "token".
+#
+# Zero-downtime credential rotation: when secretRef is set, the controller
+# automatically watches the Secret and reloads the SCM provider on token
+# change — no restart required. This enables teams that rotate PATs on a
+# schedule to do so without a promotion gap.
+#
 # Example:
 #   github:
 #     token: "ghp_..."
-#   OR
+#   OR (recommended for production, enables zero-downtime rotation)
 #   github:
 #     secretRef:
 #       name: github-token
@@ -112,7 +118,9 @@ affinity: {}
 github:
   # -- Direct token value (use secretRef in production)
   token: ""
-  # -- Reference to an existing Secret containing the GitHub token
+  # -- Reference to an existing Secret containing the GitHub token.
+  # When set, the controller watches this Secret and reloads the SCM provider
+  # on token change without a restart (zero-downtime credential rotation).
   secretRef:
     name: ""
     namespace: ""
