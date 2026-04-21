@@ -103,7 +103,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - 🔲 **No reusable PromotionTemplate concept** — Kargo has reusable promotion step sequences via `PromotionTemplate` spec that can be referenced across Stages. In kardinal, every Pipeline.spec.environment must repeat the full promotion step list (git-clone, kustomize, git-commit, open-pr, wait-for-merge, health-check). For an organization with 50 pipelines, every step list change requires 50 Pipeline YAML edits. Add a `PromotionPolicy` CRD that encapsulates a named step sequence. Environments reference it via `spec.promotionPolicy: name`. The translator inlines the steps at graph-build time. This is an adoption blocker for large-scale platform teams.
 
-- 🔲 **`kardinal init` generates Pipeline YAML but does not scaffold the GitOps repo** — `cmd/kardinal/cmd/init.go` generates a Pipeline CRD YAML interactively. It does not create the GitOps repository branch structure (`env/test`, `env/uat`, `env/prod`), does not write `kustomization.yaml` overlays, and has no `--demo` mode. The Future item in Lens 5 (time-to-first-Bundle under 10 min) depends on `kardinal init` doing the repo scaffold. The command exists but solves only 20% of the onboarding problem. A new user still needs to understand GitOps repo structure before they can create a working Pipeline.
+- ✅ **`kardinal init` generates Pipeline YAML but does not scaffold the GitOps repo** — `cmd/kardinal/cmd/init.go` now supports `--scaffold-gitops` (creates `environments/<env>/kustomization.yaml` overlays in a `--gitops-dir` directory, default `.gitops`) and `--demo` (uses `ghcr.io/pnz1990/kardinal-test-app:sha-DEMO` as the placeholder image). The scaffold is idempotent — existing files are never overwritten. This closes the 80% of the onboarding gap where users needed to understand GitOps repo structure before creating a working Pipeline. (PR #tbd, 2026-04-21)
 
 ### Lens 7: New gaps identified by competitive scan (2026-04-20)
 
@@ -164,7 +164,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 8. No Kubernetes Events emitted by reconcilers — `kubectl describe` is silent; operators cannot diagnose without Go logs
 
 **Adoption wins (high effort/impact):**
-1. `kardinal init` full GitOps repo scaffolding (currently generates Pipeline YAML only)
+1. ~~`kardinal init` full GitOps repo scaffolding~~ ✅ Done — `--scaffold-gitops` and `--demo` flags added (PR #tbd, 2026-04-21)
 2. GitHub Actions wrapper action
 3. GitHub Discussions community presence
 4. Reusable PromotionTemplate CRD

@@ -19,11 +19,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 
 	"github.com/spf13/cobra"
 )
+
+// demoImageRef is the placeholder image used when --demo is passed.
+// It is not a real image SHA — it signals to the user which image to substitute.
+const demoImageRef = "ghcr.io/pnz1990/kardinal-test-app:sha-DEMO"
 
 // InitConfig holds the parameters gathered by the kardinal init wizard.
 type InitConfig struct {
@@ -56,20 +61,30 @@ func approvalModeFunc(idx, total int) string {
 
 func newInitCmd() *cobra.Command {
 	var (
-		stdoutFlag bool
-		outputFlag string
+		stdoutFlag       bool
+		outputFlag       string
+		scaffoldGitOps   bool
+		gitopsDirFlag    string
+		demoFlag         bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Interactive wizard to generate a Pipeline YAML",
+		Short: "Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo",
 		Long: `kardinal init guides you through creating a Pipeline CRD YAML.
 
 It prompts for application name, namespace, environments, Git repo, and
 update strategy, then writes a ready-to-apply pipeline.yaml.
 
+Use --scaffold-gitops to also create the GitOps repository branch structure:
+  environments/<env>/kustomization.yaml for each environment.
+
+Use --demo to scaffold with the kardinal-test-app placeholder image.
+
 Example:
   kardinal init
+  kardinal init --scaffold-gitops --gitops-dir ./my-gitops
+  kardinal init --demo --scaffold-gitops
   kubectl apply -f pipeline.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := runInitWizard(cmd.InOrStdin(), cmd.ErrOrStderr())
@@ -98,14 +113,94 @@ Example:
 				"Pipeline YAML written to %s\nApply with: kubectl apply -f %s\n",
 				outFile, outFile,
 			)
+
+			if scaffoldGitOps || demoFlag {
+				dir := gitopsDirFlag
+				if dir == "" {
+					dir = ".gitops"
+				}
+				imageRef := "REPLACE_ME:latest"
+				if demoFlag {
+					imageRef = demoImageRef
+				}
+				if err := scaffoldGitOpsFn(cmd.OutOrStdout(), cfg.Environments, dir, imageRef); err != nil {
+					return fmt.Errorf("scaffold gitops: %w", err)
+				}
+			}
+
 			return nil
 		},
 	}
 
 	cmd.Flags().BoolVar(&stdoutFlag, "stdout", false, "Print to stdout instead of writing a file")
 	cmd.Flags().StringVarP(&outputFlag, "output", "o", "", "Output file (default: pipeline.yaml)")
+	cmd.Flags().BoolVar(&scaffoldGitOps, "scaffold-gitops", false, "Create GitOps repo structure (environments/<env>/kustomization.yaml)")
+	cmd.Flags().StringVar(&gitopsDirFlag, "gitops-dir", ".gitops", "Directory for the GitOps scaffold (default: .gitops)")
+	cmd.Flags().BoolVar(&demoFlag, "demo", false, "Scaffold with kardinal-test-app placeholder image (implies --scaffold-gitops)")
 
 	return cmd
+}
+
+// scaffoldGitOpsFn creates the GitOps directory structure for the given environments.
+// It is idempotent: existing files are not overwritten.
+// imageRef is placed in each environment's kustomization.yaml images block.
+func scaffoldGitOpsFn(out io.Writer, environments []string, gitopsDir string, imageRef string) error {
+	for _, env := range environments {
+		envDir := filepath.Join(gitopsDir, "environments", env)
+		if err := os.MkdirAll(envDir, 0o755); err != nil {
+			return fmt.Errorf("create dir %s: %w", envDir, err)
+		}
+		kustomizationPath := filepath.Join(envDir, "kustomization.yaml")
+
+		if _, err := os.Stat(kustomizationPath); err == nil {
+			// File already exists — skip to preserve user edits.
+			_, _ = fmt.Fprintf(out, "  skipped (already exists): %s\n", kustomizationPath)
+			continue
+		}
+
+		content := buildKustomization(imageRef)
+		if err := os.WriteFile(kustomizationPath, []byte(content), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", kustomizationPath, err)
+		}
+		_, _ = fmt.Fprintf(out, "  created: %s\n", kustomizationPath)
+	}
+	_, _ = fmt.Fprintf(out, "GitOps scaffold written to %s\n", gitopsDir)
+	return nil
+}
+
+// buildKustomization returns a minimal Kustomize overlay for an environment.
+// The images block uses imageRef as a placeholder for the application image.
+func buildKustomization(imageRef string) string {
+	// Parse imageRef into name and newTag for the Kustomize images block.
+	// Cases:
+	//   "repo:tag"           → name="repo",        newTag="tag"
+	//   "repo@sha256:digest" → name="repo",        newTag="sha256:digest"
+	//   "REPLACE_ME:latest"  → name="REPLACE_ME",  newTag="latest"
+	name := imageRef
+	tag := ""
+	if atIdx := strings.Index(imageRef, "@"); atIdx >= 0 {
+		// Digest ref: everything after "@" is the tag (including "sha256:...")
+		name = imageRef[:atIdx]
+		tag = imageRef[atIdx+1:]
+	} else if colonIdx := strings.Index(imageRef, ":"); colonIdx >= 0 {
+		name = imageRef[:colonIdx]
+		tag = imageRef[colonIdx+1:]
+	}
+
+	var sb strings.Builder
+	sb.WriteString("apiVersion: kustomize.config.k8s.io/v1beta1\n")
+	sb.WriteString("kind: Kustomization\n")
+	sb.WriteString("\n")
+	sb.WriteString("# Add resources here, e.g.:\n")
+	sb.WriteString("# resources:\n")
+	sb.WriteString("#   - ../../base\n")
+	sb.WriteString("\n")
+	sb.WriteString("images:\n")
+	sb.WriteString("  - name: " + name + "\n")
+	if tag != "" {
+		sb.WriteString("    newTag: " + tag + "\n")
+	}
+	return sb.String()
 }
 
 // runInitWizard prompts the user interactively and returns an InitConfig.
