@@ -267,6 +267,32 @@ spec:
                       description: Update holds the manifest update configuration
                         for this environment.
                       properties:
+                        argocd:
+                          description: |-
+                            ArgoCD holds ArgoCD-native update configuration.
+                            Used when Strategy is "argocd". Patches the ArgoCD Application's
+                            spec.source.helm.valuesObject directly without a git commit.
+                          properties:
+                            application:
+                              description: Application is the name of the ArgoCD Application
+                                resource to patch.
+                              minLength: 1
+                              type: string
+                            imageKey:
+                              description: |-
+                                ImageKey is the dot-separated key path within spec.source.helm.valuesObject
+                                where the image tag should be written.
+                                Example: "image.tag" writes to spec.source.helm.valuesObject.image.tag.
+                                Defaults to "image.tag" if empty.
+                              type: string
+                            namespace:
+                              description: |-
+                                Namespace is the Kubernetes namespace where the ArgoCD Application lives.
+                                Defaults to "argocd" if empty.
+                              type: string
+                          required:
+                          - application
+                          type: object
                         helm:
                           description: |-
                             Helm holds Helm-specific update configuration.
@@ -290,6 +316,7 @@ spec:
                           enum:
                           - kustomize
                           - helm
+                          - argocd
                           type: string
                       type: object
                     waitForMergeTimeout:
