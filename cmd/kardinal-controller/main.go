@@ -50,6 +50,7 @@ import (
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
+	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 	policygaterecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	psreconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
@@ -261,6 +262,14 @@ func main() {
 		Client: mgr.GetClient(),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ScheduleClockReconciler")
+	}
+
+	// NotificationHookReconciler: watches Bundle, PolicyGate, and PromotionStep objects
+	// and delivers outbound webhooks when promotion events occur.
+	if err := (&nhookrecon.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up NotificationHookReconciler")
 	}
 
 	// SubscriptionReconciler: polls OCI registries and Git repositories on an interval

@@ -1,0 +1,135 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: notificationhooks.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: NotificationHook
+    listKind: NotificationHookList
+    plural: notificationhooks
+    shortNames:
+    - nhook
+    singular: notificationhook
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.webhook.url
+      name: URL
+      type: string
+    - jsonPath: .spec.events
+      name: Events
+      type: string
+    - jsonPath: .status.lastSentAt
+      name: Last-Sent
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          NotificationHook defines an outbound webhook that is triggered when specific
+          promotion events occur. The controller delivers a JSON payload to the configured
+          URL on each qualifying event.
+
+          Architecture: this CRD uses the Owned-node pattern — the reconciler watches
+          Bundle, PolicyGate, and PromotionStep objects and writes delivery results to
+          status. HTTP calls are made at-most-once per event (idempotent via LastEventKey).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: NotificationHookSpec defines the desired state of a NotificationHook.
+            properties:
+              events:
+                description: |-
+                  Events is the list of event types that trigger delivery.
+                  At least one event type is required.
+                  Valid values: Bundle.Verified, Bundle.Failed, PolicyGate.Blocked, PromotionStep.Failed.
+                items:
+                  description: NotificationHookEventType enumerates the events that
+                    can trigger a NotificationHook delivery.
+                  enum:
+                  - Bundle.Verified
+                  - Bundle.Failed
+                  - PolicyGate.Blocked
+                  - PromotionStep.Failed
+                  type: string
+                minItems: 1
+                type: array
+              pipelineSelector:
+                description: |-
+                  PipelineSelector restricts notifications to events originating from the named Pipeline.
+                  When empty, events from all Pipelines are delivered.
+                type: string
+              webhook:
+                description: Webhook defines the HTTP endpoint to deliver notifications
+                  to.
+                properties:
+                  authorizationHeader:
+                    description: |-
+                      AuthorizationHeader is the value of the Authorization header to include in the POST.
+                      Typically "Bearer <token>" or "Token <secret>".
+                      Store sensitive values in a Kubernetes Secret and reference it via envFrom if needed.
+                    type: string
+                  url:
+                    description: URL is the HTTPS URL to POST the notification payload
+                      to.
+                    minLength: 1
+                    type: string
+                required:
+                - url
+                type: object
+            required:
+            - events
+            - webhook
+            type: object
+          status:
+            description: NotificationHookStatus defines the observed state of a NotificationHook.
+            properties:
+              failureMessage:
+                description: |-
+                  FailureMessage records the last webhook delivery failure, if any.
+                  Cleared on next successful delivery.
+                type: string
+              lastEvent:
+                description: LastEvent is the event type of the last successfully
+                  delivered notification.
+                type: string
+              lastEventKey:
+                description: |-
+                  LastEventKey is a deterministic string identifying the last delivered event
+                  (e.g. "Bundle.Verified/nginx-demo-abc123"). Used for idempotency.
+                type: string
+              lastSentAt:
+                description: |-
+                  LastSentAt is the RFC3339 timestamp of the last successful webhook delivery.
+                  Used for idempotency: the reconciler will not re-deliver the same event if
+                  lastEvent and lastSentAt match the current event key.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
