@@ -442,7 +442,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-973": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No kardinal status command for in-flight promotion details",
       "issue": "973",
       "labels": [
@@ -453,7 +453,11 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": "997",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/997",
+      "pr_merged": true,
+      "done_at": "2026-04-21T15:33:20Z"
     },
     "issue-974": {
       "state": "todo",
