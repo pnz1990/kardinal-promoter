@@ -148,8 +148,11 @@ If you want passive artifact detection without modifying CI pipelines, Kargo win
 a larger community, and a longer track record in production.
 
 **ArgoCD integration depth**: If you are all-in on ArgoCD, Kargo's `argocd-update`
-promotion step and ArgoCD-native health checks are deeply integrated. kardinal's ArgoCD
-adapter covers health verification but the update mechanism is GitOps-native (git commits).
+promotion step and ArgoCD-native health checks are deeply integrated. kardinal now
+matches this with `update.strategy: argocd` — the `argocd-set-image` step patches
+`spec.source.helm.valuesObject` directly via the Kubernetes API, with no git commit
+required. Teams using inline ArgoCD Application Helm values can promote without
+restructuring their GitOps setup. See [ArgoCD-native promotion](argocd-native-promotion.md).
 
 ---
 

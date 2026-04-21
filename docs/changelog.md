@@ -8,9 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-**UI accessibility compliance, DX polish, keyboard shortcuts**
+**ArgoCD-native promotion, UI accessibility compliance, DX polish, keyboard shortcuts**
 
 ### Added
+
+- **`argocd-set-image` step — ArgoCD-native promotion** (`update.strategy: argocd`) — patches `spec.source.helm.valuesObject.<imageKey>` on an ArgoCD `Application` resource directly via the Kubernetes API, with no git commit. For teams using inline ArgoCD Helm values. Configured via `update.argocd.{application, namespace, imageKey}`. Promotion sequence: `argocd-set-image → health-check`. [Docs](argocd-native-promotion.md). (#966)
 
 - **`kardinal-agent` standalone binary** — separate binary for spoke-cluster distributed mode (`cmd/kardinal-agent/`); runs only the PromotionStep reconciler for a specific shard, without Bundle, Pipeline, PolicyGate, UI, or webhook components. Required flag: `--shard`. Defaults to ports :8085/:8086 to avoid collision with the controller. (#886)
 - **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — `kubectl get bundle` now shows Type, Pipeline, Phase, Age; `kubectl get promotionstep` (shortname: `ps`) now shows Pipeline, Env, Bundle, State, Age. No more `kubectl describe` to find which pipeline a step belongs to. (#903)
