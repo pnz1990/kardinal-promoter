@@ -400,7 +400,7 @@
       "done_at": "2026-04-21T15:10:40Z"
     },
     "issue-970": {
-      "state": "todo",
+      "state": "in_review",
       "title": "feat: PDCA coverage must never be 0/0",
       "issue": "970",
       "labels": [
@@ -411,7 +411,9 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_number": 1000,
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1000"
     },
     "issue-971": {
       "state": "todo",
