@@ -380,6 +380,272 @@
       ],
       "pr_merged": true,
       "done_at": "2026-04-20T23:16:22Z"
+    },
+    "issue-969": {
+      "state": "todo",
+      "title": "feat: Git credential rotation with zero downtime",
+      "issue": "969",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-970": {
+      "state": "todo",
+      "title": "feat: PDCA coverage must never be 0/0",
+      "issue": "970",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/test",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-971": {
+      "state": "todo",
+      "title": "feat: 39.3",
+      "issue": "971",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/test",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-972": {
+      "state": "todo",
+      "title": "feat: Missing Prometheus metrics for step duration and gate blocking time",
+      "issue": "972",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/health",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-973": {
+      "state": "todo",
+      "title": "feat: No kardinal status command for in-flight promotion details",
+      "issue": "973",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-974": {
+      "state": "todo",
+      "title": "feat: kardinal logs surfaces static snapshot only",
+      "issue": "974",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-975": {
+      "state": "todo",
+      "title": "feat: No Kubernetes TokenReview-based auth for UI API",
+      "issue": "975",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-976": {
+      "state": "todo",
+      "title": "feat: No admission webhook for dependsOn cycle detection",
+      "issue": "976",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-977": {
+      "state": "todo",
+      "title": "feat: SCM token scopes are not validated at startup",
+      "issue": "977",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/scm",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-978": {
+      "state": "todo",
+      "title": "feat: helm install to first Bundle in under 10 minutes",
+      "issue": "978",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/docs",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-979": {
+      "state": "todo",
+      "title": "feat: No community presence",
+      "issue": "979",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/docs",
+        "size/s",
+        "priority/low"
+      ],
+      "priority": "low",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-980": {
+      "state": "todo",
+      "title": "feat: No ADOPTERS.md or case studies",
+      "issue": "980",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/docs",
+        "size/s",
+        "priority/low"
+      ],
+      "priority": "low",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-981": {
+      "state": "todo",
+      "title": "feat: No kardinal completion works for all shells",
+      "issue": "981",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-982": {
+      "state": "todo",
+      "title": "feat: Bundle status.conditions are declared but never populated",
+      "issue": "982",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "priority": "high",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-983": {
+      "state": "todo",
+      "title": "feat: No namespace-scoped controller mode",
+      "issue": "983",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-984": {
+      "state": "todo",
+      "title": "feat: Bitbucket and Azure DevOps SCM providers are absent",
+      "issue": "984",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/scm",
+        "size/m",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-985": {
+      "state": "todo",
+      "title": "feat: No reusable PromotionTemplate concept",
+      "issue": "985",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/m",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-986": {
+      "state": "todo",
+      "title": "feat: kardinal init generates Pipeline YAML but does not scaffold the GitOps repo",
+      "issue": "986",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/cli",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "created_at": "2026-04-21T13:48:40Z"
+    },
+    "issue-987": {
+      "state": "todo",
+      "title": "feat: RequeueAfter: time.Millisecond in bundle reconciler is a production hot loop",
+      "issue": "987",
+      "labels": [
+        "kardinal",
+        "kind/bug",
+        "area/controller",
+        "size/s",
+        "priority/high"
+      ],
+      "priority": "high",
+      "created_at": "2026-04-21T13:48:40Z"
     }
   },
   "session_heartbeats": {
