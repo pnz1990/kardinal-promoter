@@ -4,6 +4,11 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(scm): add Bitbucket Cloud and Azure DevOps SCM providers (#1035)
+- feat(api): PromotionTemplate CRD — reusable step sequences for Pipeline environments (#1032)
+- feat(pm): board_project_id + active_milestone config (design doc 43) (#1030)
+- docs(comparison): add NotificationHook webhook notifications row (#1028)
+
 - test(bundle): assert RequeueAfter >= 500ms in handleNew regression guard (#1027)
 - docs: add ADOPTERS.md with PDCA self-use entry (#1025)
 - feat(helm): add controller.watchNamespace for namespace-scoped install mode (#1024)
