@@ -20,7 +20,7 @@ kardinal version
 
 ### kardinal init
 
-Interactive wizard to generate a Pipeline CRD YAML.
+Interactive wizard to generate a Pipeline CRD YAML and optionally scaffold the GitOps repository structure.
 
 ```bash
 kardinal init
@@ -31,6 +31,9 @@ The wizard prompts for application name, namespace, environments, Git repository
 Options:
 - `--stdout`: print generated YAML to stdout instead of writing to a file
 - `--output <file>`, `-o <file>`: write to the specified file (default: `pipeline.yaml`)
+- `--scaffold-gitops`: create `environments/<env>/kustomization.yaml` files for each environment in the GitOps directory (idempotent — existing files are not overwritten)
+- `--gitops-dir <dir>`: directory for the GitOps scaffold (default: `.gitops`)
+- `--demo`: scaffold with `ghcr.io/pnz1990/kardinal-test-app:sha-DEMO` as the placeholder image (implies `--scaffold-gitops`)
 
 Example interactive session:
 
@@ -44,6 +47,25 @@ kardinal init
 # Update strategy (kustomize/helm) [kustomize]: kustomize
 # Pipeline YAML written to pipeline.yaml
 # Apply with: kubectl apply -f pipeline.yaml
+```
+
+Example with GitOps scaffolding:
+
+```bash
+kardinal init --scaffold-gitops --gitops-dir ./my-gitops
+# Pipeline YAML written to pipeline.yaml
+# Apply with: kubectl apply -f pipeline.yaml
+#   created: my-gitops/environments/test/kustomization.yaml
+#   created: my-gitops/environments/uat/kustomization.yaml
+#   created: my-gitops/environments/prod/kustomization.yaml
+# GitOps scaffold written to my-gitops
+```
+
+Example with demo mode:
+
+```bash
+kardinal init --demo
+# Scaffolds with ghcr.io/pnz1990/kardinal-test-app:sha-DEMO as the placeholder image
 ```
 
 The last environment automatically gets `approval: pr-review`; earlier environments get `approval: auto`.
