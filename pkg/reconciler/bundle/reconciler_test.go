@@ -1826,3 +1826,230 @@ func TestBundleReconciler_HistoryGC_NonTerminalNotDeleted(t *testing.T) {
 		types.NamespacedName{Name: "my-app-old", Namespace: "default"}, &terminal),
 		"terminal bundle within limit must not be deleted")
 }
+
+// findCondition returns the condition with the given type from a slice, or nil.
+func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == condType {
+			return &conditions[i]
+		}
+	}
+	return nil
+}
+
+// TestBundleConditions_Available verifies that a newly created Bundle has
+// Ready=False/Available set after the first reconcile.
+func TestBundleConditions_Available(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "cond-test", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cond-test", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cond-test", Namespace: "default"}, &got))
+
+	assert.Equal(t, "Available", got.Status.Phase)
+	ready := findCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready, "Ready condition must be present after Available phase")
+	assert.Equal(t, metav1.ConditionFalse, ready.Status, "Ready must be False when Available")
+	assert.Equal(t, "Available", ready.Reason, "Ready.Reason must be Available")
+}
+
+// TestBundleConditions_Promoting verifies that an Available Bundle has
+// Ready=False/Promoting after the translator advances it to Promoting.
+func TestBundleConditions_Promoting(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pipe", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "cond-prom", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c, Translator: &mockTranslator{graphName: "g"}}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cond-prom", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cond-prom", Namespace: "default"}, &got))
+
+	assert.Equal(t, "Promoting", got.Status.Phase)
+	ready := findCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready, "Ready condition must be present after Promoting phase")
+	assert.Equal(t, metav1.ConditionFalse, ready.Status, "Ready must be False when Promoting")
+	assert.Equal(t, "Promoting", ready.Reason, "Ready.Reason must be Promoting")
+}
+
+// TestBundleConditions_Failed verifies that a Bundle has Ready=False/Failed and
+// Failed=True when translation fails.
+func TestBundleConditions_Failed(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pipe", Namespace: "default"},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "cond-fail", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c, Translator: &mockTranslator{err: fmt.Errorf("simulated translation failure")}}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cond-fail", Namespace: "default"},
+	})
+	// Reconcile returns the translation error.
+	assert.Error(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cond-fail", Namespace: "default"}, &got))
+
+	assert.Equal(t, "Failed", got.Status.Phase)
+
+	ready := findCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready, "Ready condition must be present after Failed phase")
+	assert.Equal(t, metav1.ConditionFalse, ready.Status, "Ready must be False when Failed")
+	assert.Equal(t, "Failed", ready.Reason)
+
+	failed := findCondition(got.Status.Conditions, "Failed")
+	require.NotNil(t, failed, "Failed condition must be present after translation error")
+	assert.Equal(t, metav1.ConditionTrue, failed.Status)
+	assert.Equal(t, "TranslationError", failed.Reason)
+}
+
+// TestBundleConditions_Superseded verifies that Ready=False/Superseded is set
+// when a Bundle is self-superseded.
+func TestBundleConditions_Superseded(t *testing.T) {
+	// newer bundle exists for the same pipeline+type
+	older := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "cond-super-old",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute)),
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	newer := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "cond-super-new",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(time.Now()),
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(older, newer).
+		WithStatusSubresource(older, newer).
+		WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", func(o client.Object) []string {
+			b := o.(*kardinalv1alpha1.Bundle)
+			if b.Spec.Pipeline != "" {
+				return []string{b.Spec.Pipeline}
+			}
+			return nil
+		}).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cond-super-old", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cond-super-old", Namespace: "default"}, &got))
+
+	assert.Equal(t, "Superseded", got.Status.Phase)
+	ready := findCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready, "Ready condition must be present after Superseded phase")
+	assert.Equal(t, metav1.ConditionFalse, ready.Status, "Ready must be False when Superseded")
+	assert.Equal(t, "Superseded", ready.Reason)
+}
+
+// TestBundleConditions_NoDuplicates verifies that reconciling the same Bundle
+// multiple times does not create duplicate condition entries.
+func TestBundleConditions_NoDuplicates(t *testing.T) {
+	// Start from Available to avoid the requeue path (which creates a new status object).
+	// Include the Pipeline so the orphan guard doesn't delete the Bundle.
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pipe", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "cond-dedup", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b).
+		Build()
+
+	// Reconciler with a translator that advances Available → Promoting on first reconcile.
+	r := &bundle.Reconciler{Client: c, Translator: &mockTranslator{graphName: "g"}}
+
+	// First reconcile: Available → Promoting (sets Ready=False/Promoting).
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cond-dedup", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Second reconcile on the same bundle (now Promoting): handles sync evidence.
+	_, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cond-dedup", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "cond-dedup", Namespace: "default"}, &got))
+
+	// Count how many Ready conditions exist — must be exactly one (no duplicates).
+	readyCount := 0
+	for _, cond := range got.Status.Conditions {
+		if cond.Type == "Ready" {
+			readyCount++
+		}
+	}
+	assert.Equal(t, 1, readyCount, "exactly one Ready condition must exist after multiple reconciles")
+}
