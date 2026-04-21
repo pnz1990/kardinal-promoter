@@ -442,7 +442,7 @@
       "done_at": "2026-04-21T17:10:13Z"
     },
     "issue-972": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: Missing Prometheus metrics for step duration and gate blocking time",
       "issue": "972",
       "labels": [
@@ -453,7 +453,9 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-21T17:33:19Z"
     },
     "issue-973": {
       "state": "done",
