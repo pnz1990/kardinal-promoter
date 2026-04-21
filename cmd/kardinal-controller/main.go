@@ -40,6 +40,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -214,6 +215,20 @@ func main() {
 			"to be installed separately. Also readable from "+
 			"KARDINAL_PIPELINE_ADMISSION_WEBHOOK=true environment variable.")
 
+	// --watch-namespace limits the controller's informer cache to a single namespace.
+	// When empty (default), the controller watches all namespaces (cluster-wide mode).
+	// When set, the controller watches only that namespace — suitable for multi-tenant
+	// clusters where a ClusterRole with cluster-wide access is not acceptable.
+	// Also readable from KARDINAL_WATCH_NAMESPACE environment variable.
+	// Design ref: docs/design/15-production-readiness.md §Lens 6
+	var watchNamespace string
+	flag.StringVar(&watchNamespace, "watch-namespace",
+		os.Getenv("KARDINAL_WATCH_NAMESPACE"),
+		"Namespace to watch (default: \"\" = cluster-wide). When set, the controller "+
+			"only reconciles resources in the given namespace and expects a Role/RoleBinding "+
+			"instead of a ClusterRole/ClusterRoleBinding. "+
+			"Also readable from KARDINAL_WATCH_NAMESPACE environment variable.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -235,6 +250,17 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
+	// Build cache options: when watchNamespace is set, limit the informer cache to
+	// that namespace only. This is the mechanism for namespace-scoped install mode.
+	// In namespace-scoped mode the Helm chart renders a Role/RoleBinding instead of
+	// a ClusterRole/ClusterRoleBinding. (docs/design/15-production-readiness.md §Lens 6)
+	cacheOpts := cache.Options{}
+	if watchNamespace != "" {
+		cacheOpts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
+		logger.Info().Str("watchNamespace", watchNamespace).
+			Msg("namespace-scoped mode: controller cache limited to single namespace")
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
@@ -252,6 +278,7 @@ func main() {
 		// by the framework, increments the ReconcilePanics metric, and returns a wrapped
 		// error for exponential backoff. DO NOT set RecoverPanic to false — that would
 		// revert to crash-loop-on-panic behaviour. (spec #920, docs/design/15-production-readiness.md)
+		Cache: cacheOpts,
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
