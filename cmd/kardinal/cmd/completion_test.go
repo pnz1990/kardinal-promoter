@@ -24,6 +24,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// coreSubcommands are the CLI subcommands that must be reachable via completion.
+// We verify these by exercising the __complete protocol directly, since cobra
+// generates dynamic completion scripts that do not embed command names statically.
+var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "approve"}
+
 func TestCompletion_Bash(t *testing.T) {
 	root := NewRootCmd()
 	var buf bytes.Buffer
@@ -37,6 +42,9 @@ func TestCompletion_Bash(t *testing.T) {
 	out := buf.String()
 	assert.True(t, len(out) > 0, "bash completion output must not be empty")
 	assert.Contains(t, out, "kardinal", "completion script must reference the binary name")
+	// Bash V2 completion is dynamic — command names are not embedded in the script;
+	// they are resolved at runtime via __complete. Verify the shell function name.
+	assert.Contains(t, out, "__start_kardinal", "bash completion must define __start_kardinal entry point")
 }
 
 func TestCompletion_Zsh(t *testing.T) {
@@ -51,6 +59,31 @@ func TestCompletion_Zsh(t *testing.T) {
 
 	out := buf.String()
 	assert.True(t, len(out) > 0, "zsh completion output must not be empty")
+	// Zsh completion is dynamic — command names are resolved at runtime via __complete.
+	// Verify the completion function name is present.
+	assert.Contains(t, out, "_kardinal", "zsh completion must define _kardinal function")
+}
+
+// TestCompletion_CoreSubcommandsComplete verifies that core subcommands are
+// reachable through cobra's __complete protocol. This catches command tree
+// mis-wiring that would silently break power-user tab completion
+// (design doc 15 §Future — kardinal completion CI test).
+func TestCompletion_CoreSubcommandsComplete(t *testing.T) {
+	for _, sub := range coreSubcommands {
+		t.Run(sub, func(t *testing.T) {
+			root := NewRootCmd()
+			var buf bytes.Buffer
+			root.SetOut(&buf)
+			root.SetErr(&buf)
+			// cobra's __complete command with a single empty string returns
+			// the top-level subcommand list (one per line).
+			root.SetArgs([]string{"__complete", ""})
+			_ = root.Execute()
+			out := buf.String()
+			assert.Contains(t, out, sub,
+				"__complete output must list subcommand %q — check that newXxxCmd() is added to root via AddCommand", sub)
+		})
+	}
 }
 
 func TestCompletion_Fish(t *testing.T) {
