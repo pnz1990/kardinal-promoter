@@ -99,9 +99,9 @@ func TestDynamicProvider_ConcurrentReload(t *testing.T) {
 // TestDynamicProvider_UnknownProvider verifies that NewDynamicProvider returns
 // an error for an unknown provider type.
 func TestDynamicProvider_UnknownProvider(t *testing.T) {
-	_, err := scm.NewDynamicProvider("bitbucket", "token", "", "")
+	_, err := scm.NewDynamicProvider("badprovider", "token", "", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bitbucket")
+	assert.Contains(t, err.Error(), "badprovider")
 }
 
 // TestSecretWatcher_CheckAndReload verifies that the SecretWatcher detects a
