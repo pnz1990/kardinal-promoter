@@ -564,7 +564,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-981": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No kardinal completion works for all shells",
       "issue": "981",
       "labels": [
@@ -575,7 +575,10 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "pr_number": 1001,
+      "done_at": "2026-04-21T16:19:35Z"
     },
     "issue-982": {
       "state": "done",
