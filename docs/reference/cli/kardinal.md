@@ -40,7 +40,7 @@ It communicates with the Kubernetes API server to read and write CRDs.
 * [kardinal refresh](kardinal_refresh.md)	 - Force re-reconciliation of a Pipeline (Kargo parity)
 * [kardinal resume](kardinal_resume.md)	 - Resume a paused pipeline
 * [kardinal rollback](kardinal_rollback.md)	 - Roll back a pipeline environment to a previous Bundle
-* [kardinal status](kardinal_status.md)	 - Show controller health and cluster resource summary
+* [kardinal status](kardinal_status.md)	 - Show controller health or per-pipeline in-flight promotion details
 * [kardinal validate](kardinal_validate.md)	 - Validate Pipeline and PolicyGate YAML before applying to the cluster
 * [kardinal version](kardinal_version.md)	 - Print the CLI, controller, and graph versions
 
