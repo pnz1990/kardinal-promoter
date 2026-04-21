@@ -131,6 +131,8 @@ If secrets expire or need rotation:
 
 - 🔲 **Simulation predictions are not machine-readable — SM cannot compare to actuals** — `otherness.simulate` produces a prose prediction ("I estimate 3 items will complete this batch"). The SM has no structured way to record the prediction and compare it to the actual count after the batch. Make predictions machine-readable: the COORDINATOR should write `predicted_items: N` to the session state file (`docs/aide/queue/current.json` or a new `docs/aide/metrics/last-prediction.json`). The SM reads this at batch end and computes `ratio = actual / predicted`, posting `[SIMULATION DELTA] predicted: N, actual: M, ratio: X.XX`. A ratio < 0.5 for 3 consecutive batches is a calibration alert. Without machine-readable predictions, the "loop prediction → behavior feedback loop" Future item in doc 12 cannot be implemented.
 
+- 🔲 **Machine-readable health comment format: embed structured data inside every SM batch report** — the SM batch report comment on Issue #1 is human-readable prose. There is no structured data block that a script or external tool can parse to extract the health signal without screen-scraping. Add an HTML comment block inside every SM batch report: `<!-- otherness-health: {"date":"...","loop":"GREEN|RED|STALL","last_feat_pr":N,"queue_depth":M,"pdca":"X/Y","consecutive_housekeeping":K} -->`. This block is invisible in the GitHub UI but parseable by `gh api` + `jq`. The single-page dashboard Future item (above) can then be implemented by reading this block from the last N comments, not by parsing prose. Without a machine-readable format, any health dashboard is fragile to prose changes across sessions. The format definition must precede the dashboard implementation.
+
 ---
 
 ## Zone 1 — Obligations
