@@ -293,7 +293,7 @@
     },
     "918": {
       "title": "feat: Warehouse-equivalent: no automatic discovery mode",
-      "state": "todo",
+      "state": "done",
       "priority": "medium",
       "labels": [
         "kardinal",
@@ -301,7 +301,9 @@
         "area/controller",
         "size/m",
         "priority/medium"
-      ]
+      ],
+      "pr_merged": true,
+      "done_at": "2026-04-21T10:24:01Z"
     },
     "904": {
       "title": "test: add CI check that CRD YAML printer columns match Go type annotations",
