@@ -492,7 +492,7 @@
       "done_at": "2026-04-21T17:54:38Z"
     },
     "issue-975": {
-      "state": "todo",
+      "state": "in_review",
       "title": "feat: No Kubernetes TokenReview-based auth for UI API",
       "issue": "975",
       "labels": [
@@ -503,7 +503,12 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "assigned_to": "sess-eeb0e756",
+      "assigned_at": "2026-04-21T18:37:25Z",
+      "branch": "feat/issue-975",
+      "worktree": "../kardinal-promoter.issue-975",
+      "pr_number": "1015"
     },
     "issue-976": {
       "state": "todo",

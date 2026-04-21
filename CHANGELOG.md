@@ -4,6 +4,15 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(security): add Kubernetes TokenReview-based auth for UI API (#1015)
+- 2 PRs merged: metrics + logs steps table. (#1013)
+- feat(cli): render status.steps[] per-step table in kardinal logs (#1012)
+- docs(comparison): replace 'Where Kargo Leads' with 'Known limitations' (#1010)
+- feat(docs): auto-generate cli-reference.md — published site always current (design doc 41) (#1004)
+- feat(tooling): add make validate-manifests target (kubeconform local check) (#1003)
+- feat(test): PDCA BROKEN guard — flag TOTAL==0 as workflow failure (#1000)
+- feat(observability): add step duration, gate blocking, and PromotionStep age metrics (#992)
+
 - feat(cli): verify kardinal completion for all shells via __complete protocol (#1001)
 - fix(ci): gofmt formatting in status_test.go (#999)
 - feat(cli): extend 'kardinal status' with per-pipeline in-flight promotion view (#997)
