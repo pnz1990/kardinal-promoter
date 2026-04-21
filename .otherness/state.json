@@ -645,7 +645,7 @@
       "created_at": "2026-04-21T13:48:40Z"
     },
     "issue-985": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No reusable PromotionTemplate concept",
       "issue": "985",
       "labels": [
