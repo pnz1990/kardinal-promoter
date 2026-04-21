@@ -20,3 +20,4 @@
 | 2026-04-20 | 2 | 0 | 630 | feat(agent): kardinal-agent binary for distributed mode (#886); design doc follow-up #887 | ✅ |
 | 2026-04-20 | 2 | 0 | 633 | fix(ci): Demo E2E CRD wait + Flux pipeline context (#897); docs drift: kardinal-agent roadmap + design doc 14 (#898) | ✅ |
 | 2026-04-21 | 50 | 0 | 12 | feat(cli): kardinal get subscriptions + SUB column in get pipelines (#948); stale state reconciliation (912,913) | ✅ |
+| 2026-04-21 | 50 | 0 | 12 | feat(ci): GitHub Actions native bundle creation action — image/digest inputs, retry, bundle-status-url output (#953) | ✅ |
