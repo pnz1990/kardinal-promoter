@@ -405,6 +405,7 @@
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 3,
-  "pm_cycle_count": 5
+  "sm_cycle_count": 4,
+  "pm_cycle_count": 6,
+  "chore_only_guard_count": 0
 }
