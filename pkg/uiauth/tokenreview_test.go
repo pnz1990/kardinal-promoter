@@ -22,11 +22,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	authv1 "k8s.io/api/authentication/v1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // mockReviewer is a test double for TokenReviewer.

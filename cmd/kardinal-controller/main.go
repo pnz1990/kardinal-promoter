@@ -48,7 +48,6 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
@@ -62,6 +61,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
@@ -424,7 +424,8 @@ func main() {
 		// Apply Bearer token authentication to all /api/v1/ui/* routes when
 		// --ui-auth-token is set. Static /ui/* assets bypass auth (no sensitive data).
 		var handler http.Handler = uiMux
-		if uiAuthToken != "" {
+		switch {
+		case uiAuthToken != "":
 			// O4 (spec issue-975): Static token takes precedence over TokenReview.
 			logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
 			tokenBytes := []byte(uiAuthToken)
@@ -443,7 +444,7 @@ func main() {
 				}
 				uiMux.ServeHTTP(w, r)
 			})
-		} else if uiTokenReviewAuth {
+		case uiTokenReviewAuth:
 			// O1–O3, O6–O8 (spec issue-975): Kubernetes TokenReview auth mode.
 			// Only activated when --ui-auth-token is not set (O4).
 			logger.Info().Msg("UI API TokenReview authentication enabled")
@@ -457,7 +458,7 @@ func main() {
 			} else {
 				handler = uiauth.Middleware(uiMux, reviewer)
 			}
-		} else {
+		default:
 			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
 		}
 
