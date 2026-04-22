@@ -30,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -107,6 +108,10 @@ type Reconciler struct {
 	// WorkDirFn returns the working directory for a given pipeline+bundle pair.
 	// Defaults to os.MkdirTemp if nil.
 	WorkDirFn func(pipelineName, bundleName string) string
+
+	// Recorder emits Kubernetes Events for PromotionStep state transitions.
+	// When nil, event emission is skipped (backward-compatible).
+	Recorder record.EventRecorder
 }
 
 // Reconcile processes one PromotionStep event.
@@ -314,6 +319,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	ps.Status.WorkDir = r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pending→promoting: %w", err)
+	}
+
+	// Emit Kubernetes Event for Promoting (step execution started).
+	if r.Recorder != nil {
+		r.Recorder.Event(ps, corev1.EventTypeNormal, "Promoting",
+			fmt.Sprintf("env %s: promotion started with %d steps", ps.Spec.Environment, len(seq)))
 	}
 
 	// Audit: promotion started.
@@ -1099,7 +1110,9 @@ func (r *Reconciler) handleBake(
 
 // patchState is a helper to patch state + message atomically.
 // For terminal states (StateFailed), it also writes an AuditEvent.
+// It also emits a Kubernetes Event for key state transitions when Recorder is set.
 func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep, state, message string) (ctrl.Result, error) {
+	prevState := ps.Status.State
 	patch := client.MergeFrom(ps.DeepCopy())
 	ps.Status.State = state
 	ps.Status.Message = message
@@ -1112,6 +1125,30 @@ func (r *Reconciler) patchState(ctx context.Context, ps *v1alpha1.PromotionStep,
 			AuditActionPromotionFailed, AuditOutcomeFailure, message)
 		// Emit Prometheus step counter for terminal failure.
 		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
+	}
+	// Emit Kubernetes Event on state change (idempotent: only when state actually changes).
+	if r.Recorder != nil && prevState != state {
+		envName := ps.Spec.Environment
+		switch state {
+		case StateWaitingForMerge:
+			prURL := ps.Status.PRURL
+			if prURL == "" {
+				if u, ok := ps.Status.Outputs["prURL"]; ok {
+					prURL = u
+				}
+			}
+			r.Recorder.Event(ps, corev1.EventTypeNormal, "WaitingForMerge",
+				fmt.Sprintf("env %s: PR opened, waiting for merge: %s", envName, prURL))
+		case StateVerified:
+			r.Recorder.Event(ps, corev1.EventTypeNormal, "Verified",
+				fmt.Sprintf("env %s: step completed successfully", envName))
+		case StateFailed:
+			r.Recorder.Event(ps, corev1.EventTypeWarning, "Failed",
+				fmt.Sprintf("env %s: step failed: %s", envName, message))
+		case StateHealthChecking:
+			r.Recorder.Event(ps, corev1.EventTypeNormal, "HealthChecking",
+				fmt.Sprintf("env %s: PR merged, running health check", envName))
+		}
 	}
 	return ctrl.Result{Requeue: true}, nil
 }
