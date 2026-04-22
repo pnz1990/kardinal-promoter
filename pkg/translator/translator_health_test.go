@@ -558,3 +558,83 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 	assert.Contains(t, watchKindNode.ReadyWhen[0], ".all(",
 		"WatchKind readyWhen must use .all() predicate")
 }
+
+// TestInjectHealthWatchNodes_ResourceRef verifies that health.type=resource with
+// health.resource set uses the specified name and namespace instead of the defaults.
+// This exercises the fix for PDCA S9 — the `resource:` sub-field was rejected
+// as an unknown field before ResourceRef was added to HealthConfig.
+func TestInjectHealthWatchNodes_ResourceRef(t *testing.T) {
+	pipeline := makePipeline("my-pipeline", []kardinalv1alpha1.EnvironmentSpec{
+		{
+			Name: "test",
+			Health: kardinalv1alpha1.HealthConfig{
+				Type: "resource",
+				Resource: &kardinalv1alpha1.ResourceRef{
+					Kind:      "Deployment",
+					Name:      "custom-app",
+					Namespace: "custom-ns",
+				},
+			},
+		},
+	})
+	g := makeTestGraph("test")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	var watchNode *graph.GraphNode
+	for i := range g.Spec.Nodes {
+		if strings.HasPrefix(g.Spec.Nodes[i].ID, "health") {
+			watchNode = &g.Spec.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, watchNode, "health Watch node must exist")
+
+	tmpl := watchNode.Ref
+	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
+	assert.Equal(t, "Deployment", tmpl["kind"])
+	md := tmpl["metadata"].(map[string]interface{})
+	// ResourceRef.Name overrides default (pipeline name "my-pipeline")
+	assert.Equal(t, "custom-app", md["name"], "resource name from ResourceRef.Name")
+	// ResourceRef.Namespace overrides default (env name "test")
+	assert.Equal(t, "custom-ns", md["namespace"], "resource namespace from ResourceRef.Namespace")
+}
+
+// TestInjectHealthWatchNodes_ResourceRef_Defaults verifies that health.resource with
+// only partial values falls back to defaults for unset fields.
+func TestInjectHealthWatchNodes_ResourceRef_Defaults(t *testing.T) {
+	pipeline := makePipeline("my-pipeline", []kardinalv1alpha1.EnvironmentSpec{
+		{
+			Name: "staging",
+			Health: kardinalv1alpha1.HealthConfig{
+				Type: "resource",
+				Resource: &kardinalv1alpha1.ResourceRef{
+					// Only namespace is set — name should default to pipeline name
+					Namespace: "staging-infra",
+				},
+			},
+		},
+	})
+	g := makeTestGraph("staging")
+
+	injected, err := injectHealthWatchNodes(pipeline, g)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected)
+
+	var watchNode *graph.GraphNode
+	for i := range g.Spec.Nodes {
+		if strings.HasPrefix(g.Spec.Nodes[i].ID, "health") {
+			watchNode = &g.Spec.Nodes[i]
+			break
+		}
+	}
+	require.NotNil(t, watchNode)
+
+	md := watchNode.Ref["metadata"].(map[string]interface{})
+	// Name defaults to pipeline name when ResourceRef.Name is empty
+	assert.Equal(t, "my-pipeline", md["name"], "empty ResourceRef.Name falls back to pipeline name")
+	// Namespace from ResourceRef.Namespace
+	assert.Equal(t, "staging-infra", md["namespace"], "ResourceRef.Namespace overrides env name")
+}
