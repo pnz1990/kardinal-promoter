@@ -562,7 +562,7 @@
       "done_at": "2026-04-22T01:50:35Z"
     },
     "issue-979": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: No community presence",
       "issue": "979",
       "labels": [
@@ -573,7 +573,9 @@
         "priority/low"
       ],
       "priority": "low",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-22T01:57:05Z"
     },
     "issue-980": {
       "state": "done",
@@ -708,6 +710,237 @@
       "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/988",
       "pr_merged": true,
       "done_at": "2026-04-21T14:00:11Z"
+    },
+    "issue-1054": {
+      "state": "todo",
+      "title": "feat: **Loop prediction \u2192 behavior feedback loop**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1053": {
+      "state": "todo",
+      "title": "feat: **Self-improvement tracking: skills library growth rate**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1052": {
+      "state": "todo",
+      "title": "feat: **Loop honesty signal: \"housekeeping-only\" PR detection**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1051": {
+      "state": "todo",
+      "title": "feat: **Skills inventory is never consulted before starting work",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1050": {
+      "state": "todo",
+      "title": "feat: **Simulation delta feedback is one-directional: SM posts it, COORDINATOR never reads it**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1049": {
+      "state": "todo",
+      "title": "feat: **Loop-caused journey regression has no dedicated detection or escalation path**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1048": {
+      "state": "todo",
+      "title": "feat: **Graph builder `dependsOn` validation error is silent in CLI output**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1047": {
+      "state": "todo",
+      "title": "feat: **No `maxConcurrentPromotions` cap per pipeline**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1046": {
+      "state": "todo",
+      "title": "feat: **Single-page health dashboard at Issue #1**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-1045": {
+      "state": "todo",
+      "title": "feat: **PDCA workflow result is not read by the SM",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium"
+    },
+    "issue-995": {
+      "state": "todo",
+      "title": "docs: document zero-downtime SCM credential rotation in quickstart and security guide",
+      "labels": [
+        "kardinal",
+        "priority/low",
+        "size/xs",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-963": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 18: Subscription CRD",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-962": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 17: GitLab Support",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-961": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 15: MetricCheck CRD and Upstream Soak Time",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-960": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 13: Rollback and Pause/Resume",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-959": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 9: Embedded React UI",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-958": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 8: CLI",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-957": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 5: Git Operations and GitHub PR Flow",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-956": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 1: CRD Types and Validation",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
+    },
+    "issue-955": {
+      "state": "todo",
+      "title": "docs(design): create design doc for Stage 0: Project Skeleton",
+      "labels": [
+        "kardinal",
+        "priority/high",
+        "kind/docs",
+        "area/docs"
+      ],
+      "priority": "medium"
     }
   },
   "session_heartbeats": {
