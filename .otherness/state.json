@@ -712,16 +712,11 @@
       "done_at": "2026-04-21T14:00:11Z"
     },
     "issue-1054": {
-      "state": "todo",
-      "title": "feat: **Loop prediction \u2192 behavior feedback loop**",
-      "labels": [
-        "kardinal",
-        "priority/medium",
-        "size/s",
-        "kind/enhancement",
-        "area/controller"
-      ],
-      "priority": "medium"
+      "state": "done",
+      "title": "feat: Loop prediction \u2192 behavior feedback loop",
+      "pr_number": 1064,
+      "pr_merged": true,
+      "done_at": "2026-04-22T05:32:39Z"
     },
     "issue-1053": {
       "state": "todo",
@@ -736,15 +731,11 @@
       "priority": "medium"
     },
     "issue-1052": {
-      "state": "todo",
-      "title": "feat: **Loop honesty signal: \"housekeeping-only\" PR detection**",
-      "labels": [
-        "kardinal",
-        "priority/medium",
-        "size/s",
-        "kind/enhancement",
-        "area/controller"
-      ],
+      "state": "done",
+      "title": "feat: Loop honesty signal: housekeeping-only PR detection",
+      "pr_number": 1062,
+      "pr_merged": true,
+      "done_at": "2026-04-22T05:23:36Z",
       "priority": "medium"
     },
     "issue-1051": {
@@ -772,7 +763,7 @@
       "priority": "medium"
     },
     "issue-1049": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Loop-caused journey regression has no dedicated detection or escalation path**",
       "labels": [
         "kardinal",
@@ -781,7 +772,8 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-1048": {
       "state": "todo",
@@ -796,7 +788,7 @@
       "priority": "medium"
     },
     "issue-1047": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **No `maxConcurrentPromotions` cap per pipeline**",
       "labels": [
         "kardinal",
@@ -805,10 +797,12 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T04:01:05Z"
     },
     "issue-1046": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Single-page health dashboard at Issue #1**",
       "labels": [
         "kardinal",
@@ -817,10 +811,12 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T03:39:07Z"
     },
     "issue-1045": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **PDCA workflow result is not read by the SM",
       "labels": [
         "kardinal",
@@ -829,10 +825,12 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T03:27:20Z"
     },
     "issue-995": {
-      "state": "todo",
+      "state": "done",
       "title": "docs: document zero-downtime SCM credential rotation in quickstart and security guide",
       "labels": [
         "kardinal",
@@ -841,7 +839,9 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T05:11:05Z"
     },
     "issue-963": {
       "state": "todo",
