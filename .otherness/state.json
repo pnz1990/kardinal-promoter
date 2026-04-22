@@ -1175,15 +1175,18 @@
       "done_at": "2026-04-22T08:22:16Z"
     },
     "issue-1007": {
-      "state": "todo",
-      "title": "feat(qa): \u00a73b docs gate for user-visible features",
+      "state": "done",
+      "title": "feat(qa): \u00a73b.5 docs gate for user-visible features",
       "labels": [
         "priority/medium",
         "size/s",
         "kind/enhancement"
       ],
       "priority": "medium",
-      "issue_number": 1007
+      "issue_number": 1007,
+      "pr_merged": true,
+      "done_at": "2026-04-22T10:24:05Z",
+      "pr_number": 1089
     },
     "issue-1006": {
       "state": "done",
