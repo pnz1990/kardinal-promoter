@@ -1,0 +1,70 @@
+{{- /*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+demo.yaml — optional demo Pipeline for the kardinal-promoter Helm chart.
+
+Enabled via: --set demo.enabled=true
+
+When enabled, a Pipeline named "demo" is created in the release namespace.
+It targets the pnz1990/kardinal-demo GitOps reference repository with
+environments: test (auto) → uat (auto) → prod (pr-review).
+
+Usage after install:
+  kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-<SHA>
+*/}}
+{{- if .Values.demo.enabled }}
+{{- $secretName := .Values.demo.secretRef.name | default .Values.github.secretRef.name | default "github-token" }}
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: demo
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo
+  annotations:
+    kardinal.io/demo: "true"
+    kardinal.io/demo-image: {{ .Values.demo.image | quote }}
+    kardinal.io/demo-instructions: |
+      Run `kardinal create bundle demo --image <image>` to trigger the first promotion.
+      Example:
+        SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+        kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: {{ $secretName | quote }}
+  environments:
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-test
+    - name: uat
+      path: environments/uat
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-uat
+    - name: prod
+      path: environments/prod
+      update:
+        strategy: kustomize
+      approval: pr-review
+      health:
+        type: argocd
+        argocd:
+          name: kardinal-test-app-prod
+{{- end }}

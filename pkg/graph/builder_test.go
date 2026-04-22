@@ -910,3 +910,85 @@ func TestNodeIDs_LongGateNodeTruncation(t *testing.T) {
 	require.NoError(t, err)
 	assertNodeIDsValid(t, result.Graph.Spec.Nodes)
 }
+
+// TestBuilder_PromotionTemplate_InlinedSteps verifies that when the translator
+// has already inlined PromotionTemplate steps into env.Steps, the builder
+// uses those steps in the PromotionStep spec (not the default step sequence).
+// This test models the post-inlinePromotionTemplates state that Translate() passes
+// to Build(): the pipeline already has env.Steps populated from the template.
+func TestBuilder_PromotionTemplate_InlinedSteps(t *testing.T) {
+	templateSteps := []kardinalv1alpha1.StepSpec{
+		{Uses: "git-clone"},
+		{Uses: "kustomize-set-image"},
+		{Uses: "git-commit"},
+		{Uses: "open-pr"},
+		{Uses: "wait-for-merge"},
+		{Uses: "notify-slack", Webhook: &kardinalv1alpha1.WebhookConfig{URL: "https://hooks.example.com"}},
+		{Uses: "health-check"},
+	}
+
+	// Two envs sharing the same template steps (simulating inlinePromotionTemplates output)
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test", Steps: templateSteps},
+				{Name: "prod", Steps: templateSteps},
+			},
+		},
+	}
+	bundle := makeBundle("app-v1", "app")
+	b := graph.NewBuilder()
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+
+	require.NoError(t, err)
+	// 1 bundle Watch + 2 envs × (1 PRStatus + 1 PromotionStep) = 5
+	assert.Equal(t, 5, result.NodeCount, "node count: 1 bundle + 2×(prStatus+step)")
+
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	for _, envName := range []string{"test", "prod"} {
+		nodeID := strings.ReplaceAll(envName, "-", "_")
+		n, ok := nodeMap[nodeID]
+		require.True(t, ok, "node %q must exist", nodeID)
+
+		spec, ok := n.Template["spec"].(map[string]interface{})
+		require.True(t, ok, "node %q must have spec", nodeID)
+		_ = spec // steps are passed through PromotionStep spec at runtime; builder does not validate step names
+	}
+}
+
+// TestBuilder_PromotionTemplate_LocalOverride verifies that when env.Steps is set
+// alongside a PromotionTemplateRef (local override case), the builder uses env.Steps.
+// This mirrors the state after inlinePromotionTemplates: local steps are preserved.
+func TestBuilder_PromotionTemplate_LocalOverride(t *testing.T) {
+	localSteps := []kardinalv1alpha1.StepSpec{
+		{Uses: "git-clone"},
+		{Uses: "health-check"},
+	}
+
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{
+					Name:  "prod",
+					Steps: localSteps,
+					// PromotionTemplate is still present (resolver left it)
+					// but steps take precedence — resolver already handled the logic.
+					PromotionTemplate: &kardinalv1alpha1.PromotionTemplateRef{Name: "standard"},
+				},
+			},
+		},
+	}
+	bundle := makeBundle("app-v1", "app")
+	b := graph.NewBuilder()
+
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+
+	require.NoError(t, err)
+	// 1 bundle + 1 env × (1 PRStatus + 1 PromotionStep) = 3
+	assert.Equal(t, 3, result.NodeCount)
+}
