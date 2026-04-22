@@ -1135,7 +1135,7 @@
       "issue_number": 1074
     },
     "issue-1073": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Simulation queue-adjustment is invisible to humans",
       "labels": [
         "kardinal",
@@ -1145,7 +1145,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1073
+      "issue_number": 1073,
+      "pr_merged": true,
+      "pr_number": 1120,
+      "done_at": "2026-04-22T21:44:45Z"
     },
     "issue-1057": {
       "state": "done",
