@@ -50,6 +50,8 @@ differently than the competitor's version).
 
 ## Future (🔲)
 
+- 🔲 QA docs gate — QA §3b-docs-gate: when a PR moves a Future item to ✅ Present for a user-visible feature (CLI, CRD, UI), verify docs/ files were updated or the feature is Layer 1 auto-documented. If neither: WRONG finding blocks approval.
+
 - 🔲 Version string freshness — PM §5j version staleness check: scan README and comparison.md for hardcoded version strings (e.g. `v0.6.0`) and compare against latest git tag. If stale by ≥1 minor version, open `kind/docs` issue. Dedup guard: skip if issue already open.
 
 - 🔲 Changelog completeness — every git tag must have a corresponding entry in CHANGELOG.md. PM §5n-changelog: scan git tags, compare against CHANGELOG.md `## [vX.Y.Z]` headers. For each missing entry: open `kind/docs` issue.
