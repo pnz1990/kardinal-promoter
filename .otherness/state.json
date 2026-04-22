@@ -1027,8 +1027,8 @@
       "issue_number": 1080
     },
     "issue-1079": {
-      "state": "todo",
-      "title": "feat: **SM health state definition: explicit thresholds for GREEN/RED/STALL**",
+      "state": "done",
+      "title": "feat: SM health state definition \u2014 explicit thresholds for GREEN/RED/STALL",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -1037,7 +1037,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1079
+      "issue_number": 1079,
+      "pr_number": 1103,
+      "pr_merged": true,
+      "done_at": "2026-04-22T14:31:31Z"
     },
     "issue-1078": {
       "state": "done",
