@@ -204,6 +204,67 @@ Each PromotionStep tracks:
 
 Use `kardinal get steps <pipeline>` to see all active PromotionSteps.
 
+## PromotionTemplate
+
+A `PromotionTemplate` is a reusable named step sequence that multiple Pipeline environments can reference. It solves the repetition problem: without templates, every environment in every Pipeline must repeat the full step list (git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check). For organizations with many pipelines, a step change (for example, adding a webhook notification after `git-commit`) requires editing every Pipeline YAML.
+
+**Create a template:**
+
+```yaml
+apiVersion: kardinal.io/v1alpha1
+kind: PromotionTemplate
+metadata:
+  name: standard-with-notify
+  namespace: kardinal-system
+spec:
+  description: "Standard promotion with post-commit Slack notification"
+  steps:
+    - uses: git-clone
+    - uses: kustomize-set-image
+    - uses: git-commit
+    - uses: notify-slack
+      webhook:
+        url: https://hooks.slack.com/services/T00/B00/XXX
+    - uses: open-pr
+    - uses: wait-for-merge
+    - uses: health-check
+```
+
+**Reference from a Pipeline environment:**
+
+```yaml
+spec:
+  environments:
+    - name: test
+      promotionTemplate:
+        name: standard-with-notify
+        namespace: kardinal-system   # optional — defaults to Pipeline namespace
+    - name: uat
+      promotionTemplate:
+        name: standard-with-notify
+    - name: prod
+      approval: pr-review
+      promotionTemplate:
+        name: standard-with-notify
+```
+
+**Resolution rules:**
+
+1. When `promotionTemplate` is set and `steps` is **empty**: the template's steps are inlined into the environment at translation time.
+2. When `promotionTemplate` is set and `steps` is **also set**: the local `steps` take precedence (local override wins). The template is validated (must exist) but its steps are not used.
+3. When `promotionTemplate` is **not set**: existing behavior — `steps` or the default sequence.
+
+**Important:** Template inlining happens at Graph build time (inside the translator), before the promotion DAG is created. The `PromotionTemplate` CR is read once per Bundle creation; there is no runtime dependency. Modifying a `PromotionTemplate` after a Graph is created does not affect in-flight promotions.
+
+**When to use templates:**
+- Shared notification or audit steps across many Pipelines
+- Organization-mandated steps (security scans, compliance webhooks) applied uniformly
+- Platform teams offering pre-tested step sequences that application teams reference
+
+**When NOT to use templates:**
+- When a single Pipeline has a custom step list that no other Pipeline will use — prefer `steps` directly.
+- When the step list is trivial (2–3 steps) — templates add indirection without benefit.
+
 ## PolicyGate
 
 A PolicyGate is a policy check that blocks a promotion until its CEL expression evaluates to true. PolicyGates are nodes in the promotion DAG, visible in the UI and inspectable via CLI.

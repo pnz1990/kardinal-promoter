@@ -16,7 +16,7 @@ package scm
 import "fmt"
 
 // NewProvider constructs an SCMProvider for the given provider type.
-// Supported types: "github" (default), "gitlab", "forgejo", "gitea".
+// Supported types: "github" (default), "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops".
 // Returns an error for unknown provider types.
 func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider, error) {
 	switch providerType {
@@ -26,7 +26,11 @@ func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider
 		return NewGitLabProvider(token, apiURL, webhookSecret), nil
 	case "forgejo", "gitea":
 		return NewForgejoProvider(token, apiURL, webhookSecret), nil
+	case "bitbucket":
+		return NewBitbucketProvider(token, apiURL, webhookSecret), nil
+	case "azuredevops":
+		return NewAzureDevOpsProvider(token, apiURL, webhookSecret), nil
 	default:
-		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\"", providerType)
+		return nil, fmt.Errorf("unknown SCM provider type %q: supported types are \"github\", \"gitlab\", \"forgejo\", \"gitea\", \"bitbucket\", \"azuredevops\"", providerType)
 	}
 }

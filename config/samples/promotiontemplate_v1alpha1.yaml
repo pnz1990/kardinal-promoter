@@ -1,0 +1,17 @@
+---
+# Example PromotionTemplate — reusable step sequence for all standard pipelines.
+# Environments reference this via spec.environments[].promotionTemplate.
+apiVersion: kardinal.io/v1alpha1
+kind: PromotionTemplate
+metadata:
+  name: standard
+  namespace: kardinal-system
+spec:
+  description: "Standard promotion: clone → kustomize → commit → PR → merge → healthcheck"
+  steps:
+    - uses: git-clone
+    - uses: kustomize-set-image
+    - uses: git-commit
+    - uses: open-pr
+    - uses: wait-for-merge
+    - uses: health-check
