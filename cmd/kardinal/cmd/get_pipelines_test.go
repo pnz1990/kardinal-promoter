@@ -145,3 +145,99 @@ func TestGetStepsOnce_TableOutput(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	assert.Greater(t, len(lines), 0, "output must have at least one line")
 }
+
+// TestGetPipelinesOnce_FailedBundle_ShowsError verifies that when a Bundle is in
+// Failed phase with a TranslationError condition, getPipelinesOnce appends an
+// ERROR: line after the pipeline table.
+func TestGetPipelinesOnce_FailedBundle_ShowsError(t *testing.T) {
+	s := buildGetPipelinesScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod"},
+			},
+		},
+	}
+
+	failedBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app-v1",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.BundleSpec{
+			Pipeline: "my-app",
+			Type:     "image",
+		},
+		Status: v1alpha1.BundleStatus{
+			Phase: "Failed",
+			Conditions: []metav1.Condition{
+				{
+					Type:    "Failed",
+					Status:  metav1.ConditionTrue,
+					Reason:  "TranslationError",
+					Message: `build: environment "prod" dependsOn unknown environment "staging"`,
+				},
+			},
+		},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, failedBundle).
+		WithStatusSubresource(failedBundle).
+		Build()
+
+	var buf bytes.Buffer
+	err := getPipelinesOnce(&buf, fc, "default", nil, false)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "my-app", "pipeline name must appear in table output")
+	assert.Contains(t, out, "ERROR:", "ERROR: prefix must appear when a bundle is Failed")
+	assert.Contains(t, out, `dependsOn unknown environment "staging"`,
+		"condition message must appear in error output")
+}
+
+// TestGetPipelinesOnce_HealthyBundles_NoErrorSection verifies that when all bundles
+// are healthy, no ERROR: section is printed.
+func TestGetPipelinesOnce_HealthyBundles_NoErrorSection(t *testing.T) {
+	s := buildGetPipelinesScheme(t)
+
+	pipeline := &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "default",
+		},
+		Spec: v1alpha1.PipelineSpec{
+			Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}},
+		},
+	}
+
+	goodBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app-v1",
+			Namespace: "default",
+		},
+		Spec:   v1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+		Status: v1alpha1.BundleStatus{Phase: "Verified"},
+	}
+
+	fc := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, goodBundle).
+		WithStatusSubresource(goodBundle).
+		Build()
+
+	var buf bytes.Buffer
+	err := getPipelinesOnce(&buf, fc, "default", nil, false)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.NotContains(t, out, "ERROR:", "no ERROR: section expected when bundles are healthy")
+}

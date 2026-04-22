@@ -262,6 +262,85 @@ func PolicyGatePhase(g v1alpha1.PolicyGate) string {
 	return "Pending"
 }
 
+// FormatBundleErrors writes a plain-text error notice for each Bundle in
+// the Failed phase. The notice is printed after the pipeline table so the
+// root cause of a silent "Phase: Error" is immediately visible to the operator
+// without requiring `kubectl describe graph`.
+//
+// Output format (one line per Failed bundle):
+//
+//	ERROR: pipeline <pipeline>: <condition-message>
+//
+// Conditions with reason TranslationError or CircularDependency are preferred
+// (they contain the exact root cause). If no such condition exists, the raw
+// phase is reported as a fallback.
+//
+// When no Failed bundles are present, nothing is written (no empty section).
+// On write error, the error is returned; the caller may choose to log and continue.
+func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle) error {
+	// Collect the best error message per pipeline (deduplicate multiple Failed bundles
+	// for the same pipeline — prefer the most recently created one).
+	type pipelineError struct {
+		pipeline string
+		message  string
+	}
+	// Use a slice to preserve stable order (sorted by pipeline name below).
+	seen := make(map[string]bool)
+	var errs []pipelineError
+
+	// Ordered reason preference: CircularDependency is more specific; TranslationError is generic.
+	preferredReasons := map[string]bool{
+		"CircularDependency": true,
+		"TranslationError":   true,
+	}
+
+	for _, b := range bundles {
+		if b.Status.Phase != "Failed" {
+			continue
+		}
+		pipeline := b.Spec.Pipeline
+		if pipeline == "" {
+			pipeline = b.Name // fallback: use bundle name if pipeline ref missing
+		}
+		if seen[pipeline] {
+			continue // deduplicate per pipeline
+		}
+		seen[pipeline] = true
+
+		// Search conditions for the best error message.
+		msg := ""
+		for _, cond := range b.Status.Conditions {
+			// metav1.ConditionTrue is the string "True"
+			if string(cond.Status) != "True" {
+				continue
+			}
+			if preferredReasons[cond.Reason] {
+				msg = cond.Message
+				break
+			}
+			if msg == "" {
+				msg = cond.Message // accept any True condition as a fallback
+			}
+		}
+		if msg == "" {
+			msg = "promotion failed — run `kubectl describe bundle " + b.Name + "` for details"
+		}
+
+		errs = append(errs, pipelineError{pipeline: pipeline, message: msg})
+	}
+
+	if len(errs) == 0 {
+		return nil
+	}
+
+	for _, e := range errs {
+		if _, err := fmt.Fprintf(w, "ERROR: pipeline %s: %s\n", e.pipeline, e.message); err != nil {
+			return fmt.Errorf("write bundle error: %w", err)
+		}
+	}
+	return nil
+}
+
 // FormatBundleTable writes a tabwriter-formatted table of bundles to w.
 func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)

@@ -612,3 +612,125 @@ func TestFormatPipelineTableWithOptions_NoNamespaceByDefault(t *testing.T) {
 	assert.NotContains(t, out, "NAMESPACE", "default table must not include NAMESPACE column")
 	assert.NotContains(t, out, "my-ns", "namespace must not appear in default table")
 }
+
+// TestFormatBundleErrors_FailedBundle_ShowsError verifies that a Failed bundle
+// results in an ERROR: line containing the pipeline name and condition message.
+func TestFormatBundleErrors_FailedBundle_ShowsError(t *testing.T) {
+	bundles := []v1alpha1.Bundle{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1"},
+			Spec: v1alpha1.BundleSpec{
+				Pipeline: "my-app",
+				Type:     "image",
+			},
+			Status: v1alpha1.BundleStatus{
+				Phase: "Failed",
+				Conditions: []metav1.Condition{
+					{
+						Type:    "Failed",
+						Status:  metav1.ConditionTrue,
+						Reason:  "TranslationError",
+						Message: `build: environment "prod" dependsOn unknown environment "staging"`,
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	out := buf.String()
+
+	assert.Contains(t, out, "ERROR:", "output must contain ERROR: prefix")
+	assert.Contains(t, out, "my-app", "output must contain pipeline name")
+	assert.Contains(t, out, `dependsOn unknown environment "staging"`, "output must contain the condition message")
+}
+
+// TestFormatBundleErrors_NoFailedBundles_NoOutput verifies that when no bundles
+// are in Failed phase, nothing is written.
+func TestFormatBundleErrors_NoFailedBundles_NoOutput(t *testing.T) {
+	bundles := []v1alpha1.Bundle{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+			Status:     v1alpha1.BundleStatus{Phase: "Verified"},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	assert.Empty(t, buf.String(), "no output expected when no bundles are Failed")
+}
+
+// TestFormatBundleErrors_EmptyList_NoOutput verifies that an empty bundle list
+// produces no output.
+func TestFormatBundleErrors_EmptyList_NoOutput(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatBundleErrors(&buf, nil))
+	assert.Empty(t, buf.String(), "no output expected for empty bundle list")
+}
+
+// TestFormatBundleErrors_CircularDependency verifies that a CircularDependency
+// condition is surfaced with its specific message.
+func TestFormatBundleErrors_CircularDependency(t *testing.T) {
+	bundles := []v1alpha1.Bundle{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "loop-app-v1"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "loop-app", Type: "image"},
+			Status: v1alpha1.BundleStatus{
+				Phase: "Failed",
+				Conditions: []metav1.Condition{
+					{
+						Type:    "InvalidSpec",
+						Status:  metav1.ConditionTrue,
+						Reason:  "CircularDependency",
+						Message: "pipeline has circular dependsOn: prod → staging → prod",
+					},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	out := buf.String()
+
+	assert.Contains(t, out, "ERROR:", "output must contain ERROR: prefix")
+	assert.Contains(t, out, "loop-app", "output must contain pipeline name")
+	assert.Contains(t, out, "circular dependsOn", "output must contain CircularDependency message")
+}
+
+// TestFormatBundleErrors_DuplicatePipeline_Deduplicates verifies that multiple
+// Failed bundles for the same pipeline produce only one error line.
+func TestFormatBundleErrors_DuplicatePipeline_Deduplicates(t *testing.T) {
+	bundles := []v1alpha1.Bundle{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+			Status: v1alpha1.BundleStatus{
+				Phase: "Failed",
+				Conditions: []metav1.Condition{
+					{Type: "Failed", Status: metav1.ConditionTrue, Reason: "TranslationError", Message: "err v1"},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-app-v2"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "my-app", Type: "image"},
+			Status: v1alpha1.BundleStatus{
+				Phase: "Failed",
+				Conditions: []metav1.Condition{
+					{Type: "Failed", Status: metav1.ConditionTrue, Reason: "TranslationError", Message: "err v2"},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	out := buf.String()
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	assert.Len(t, lines, 1, "only one error line per pipeline (deduplication)")
+	assert.Contains(t, out, "my-app", "pipeline name must appear in deduplicated output")
+}

@@ -41,7 +41,16 @@ func newGetPipelinesCmd() *cobra.Command {
 		Short:   "List Pipelines",
 		Long: `List Pipelines and their per-environment promotion status.
 
-Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).`,
+Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
+
+When a Bundle promotion fails (e.g. due to an invalid dependsOn reference
+or a circular dependency in the Pipeline spec), an ERROR: line is printed
+after the table with the pipeline name and root cause:
+
+  ERROR: pipeline my-app: build: environment "prod" dependsOn unknown environment "staging"
+
+This avoids the need to run kubectl describe bundle to find the root cause
+of a stalled promotion.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGetPipelines(cmd, args, allNamespaces, watchFlag)
@@ -104,7 +113,15 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		subsItems = subsList.Items
 	}
 
-	// If a specific name was given, filter.
+	// Fetch Bundles so we can surface Failed-phase error conditions after the table.
+	// Non-fatal: if the list fails, we still render the table without error notices.
+	var bundlesItems []v1alpha1.Bundle
+	var bundlesList v1alpha1.BundleList
+	if err := c.List(ctx, &bundlesList, opts...); err == nil {
+		bundlesItems = bundlesList.Items
+	}
+
+	// If a specific name was given, filter pipelines (and the bundle list to match).
 	items := pipelines.Items
 	if len(args) == 1 {
 		name := args[0]
@@ -115,6 +132,15 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 			}
 		}
 		items = filtered
+
+		// Also filter bundles to only those belonging to this pipeline.
+		var filteredBundles []v1alpha1.Bundle
+		for _, b := range bundlesItems {
+			if b.Spec.Pipeline == name {
+				filteredBundles = append(filteredBundles, b)
+			}
+		}
+		bundlesItems = filteredBundles
 	}
 
 	switch OutputFormat() {
@@ -123,6 +149,13 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		return FormatPipelineTableFull(w, items, promotionSteps.Items, subsItems, allNamespaces)
+		if err := FormatPipelineTableFull(w, items, promotionSteps.Items, subsItems, allNamespaces); err != nil {
+			return err
+		}
+		// Surface Bundle-level errors (e.g. dependsOn validation failures) that
+		// would otherwise be invisible in the table. Non-fatal: ignore write errors
+		// so a partial error notice does not mask the successfully rendered table.
+		_ = FormatBundleErrors(w, bundlesItems)
+		return nil
 	}
 }
