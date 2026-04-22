@@ -220,6 +220,32 @@ pdb:
 topologySpread:
   enabled: true
 
+# -- Demo mode — pre-installs a ready-to-use Pipeline targeting the
+# kardinal-demo reference GitOps repository (pnz1990/kardinal-demo).
+# When enabled, a `demo` Pipeline CR is created in the release namespace
+# with three environments (test, uat, prod) and kustomize update strategy.
+# Use `kardinal create bundle demo --image <image>` to trigger the first promotion.
+#
+# Time to first promotion with demo.enabled=true: under 10 minutes on a
+# fresh kind cluster (no manual GitOps repo setup required).
+#
+# Example:
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+#     --namespace kardinal-system --create-namespace \
+#     --set demo.enabled=true \
+#     --set github.token=$GITHUB_PAT
+demo:
+  # -- Enable the demo Pipeline. When true, a Pipeline named "demo" is created.
+  enabled: false
+  # -- Image tag used in the demo pipeline documentation.
+  # This is informational only (shown in the demo Pipeline annotations).
+  # Run `kardinal create bundle demo --image <real-image>` to start a promotion.
+  image: "ghcr.io/pnz1990/kardinal-test-app:sha-DEMO"
+  # -- Reference to the Secret containing the GitHub token.
+  # Defaults to the github.secretRef.name value (or "github-token" if both are empty).
+  secretRef:
+    name: ""
+
 # -- PrometheusRule for Prometheus Operator.
 # Creates a PrometheusRule CR with pre-built alerting rules for kardinal-promoter.
 # Requires the Prometheus Operator CRD (monitoring.coreos.com/v1/PrometheusRule).
