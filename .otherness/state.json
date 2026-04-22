@@ -1353,12 +1353,20 @@
       "last_seen": "2026-04-22T16:18:51Z",
       "item": "coord",
       "cycle": 1
+    },
+    "sess-3afe0bf4": {
+      "last_seen": "2026-04-22T22:54:00Z",
+      "item": "complete",
+      "cycle": 1
     }
   },
   "report_issue": 1,
   "sm_cycle_count": 4,
   "pm_cycle_count": 7,
   "chore_only_guard_count": 0,
-  "batch_count": 1,
-  "last_batch_at": "2026-04-22T11:58:16Z"
+  "batch_count": 2,
+  "last_batch_at": "2026-04-22T22:54:00Z",
+  "future_backlog": 59,
+  "meaningful_prs_last_session": 3,
+  "session_end": "COMPLETE"
 }
