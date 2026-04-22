@@ -387,6 +387,44 @@ EOF
 
 The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and `kardinal explain` shows why.
 
+## Verify your setup
+
+After running `/otherness.onboard` to scaffold the project, or after manually configuring
+the scheduled workflow, run the onboarding smoke test to validate your setup before the
+first scheduled run:
+
+```bash
+bash scripts/onboard-smoke-test.sh
+```
+
+This runs 4 checks and reports any gaps:
+
+1. **Workflow YAML structure** — `otherness-scheduled.yml` is parseable YAML
+2. **Bash syntax** — all `run:` blocks in the workflow are syntactically valid
+3. **Config syntax** — `otherness-config.yaml` is parseable YAML
+4. **Required secrets** — `AWS_ROLE_ARN` and `GH_TOKEN` are set in the repository secrets
+
+Example output when ready:
+
+```
+[ONBOARD SMOKE TEST] Project root: /path/to/your-project
+
+Check 1: Workflow YAML structure
+  ✓ YAML structure: .github/workflows/otherness-scheduled.yml is valid YAML
+Check 2: Bash syntax in workflow run: blocks
+  ✓ Bash syntax: all run: blocks are syntactically valid
+Check 3: otherness-config.yaml structure
+  ✓ Config structure: otherness-config.yaml is valid YAML
+Check 4: Required secrets (AWS_ROLE_ARN, GH_TOKEN)
+  ✓ Secrets: AWS_ROLE_ARN and GH_TOKEN are present
+
+[ONBOARD SMOKE TEST: 4/4 checks passed]
+
+All checks passed. Your project is ready for /otherness.run.
+```
+
+If any check fails, the output shows `[ONBOARD GAP]: <description>` with instructions to fix it.
+
 ## Adding to your CI pipeline
 
 Add a step to your CI pipeline that creates a Bundle after building and pushing your image.

@@ -265,16 +265,30 @@ func injectHealthWatchNodes(
 //
 // Convention (matches promotionstep/reconciler.go handleHealthChecking):
 //   - resource: Deployment name = pipeline.Name, namespace = env.Name
+//     (overridden by env.Health.Resource.Name/Namespace when set)
 //   - argocd:   Application name = pipeline.Name + "-" + env.Name, namespace = "argocd"
 //   - flux:     Kustomization name = pipeline.Name + "-" + env.Name, namespace = "flux-system"
 //   - argoRollouts: Rollout name = pipeline.Name, namespace = env.Name
 //   - flagger:  Canary name = pipeline.Name, namespace = env.Name
 func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec) health.CheckOptions {
+	// Resolve the resource name and namespace for type=resource.
+	// When env.Health.Resource is set, it overrides the default pipeline/env convention
+	// so operators can health-check a resource with a different name or in a different namespace.
+	resourceName := pipelineName
+	resourceNS := env.Name
+	if env.Health.Resource != nil {
+		if env.Health.Resource.Name != "" {
+			resourceName = env.Health.Resource.Name
+		}
+		if env.Health.Resource.Namespace != "" {
+			resourceNS = env.Health.Resource.Namespace
+		}
+	}
 	return health.CheckOptions{
 		Type: env.Health.Type,
 		Resource: health.ResourceConfig{
-			Name:          pipelineName,
-			Namespace:     env.Name,
+			Name:          resourceName,
+			Namespace:     resourceNS,
 			Condition:     "Available",
 			LabelSelector: env.Health.LabelSelector, // non-nil → WatchKind mode
 		},

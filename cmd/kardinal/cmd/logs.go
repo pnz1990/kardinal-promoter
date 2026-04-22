@@ -7,8 +7,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"sort"
+	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,10 +20,20 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
+// terminalStates are PromotionStep states that indicate the step will not
+// progress further. The follow loop exits when all filtered steps are terminal.
+var terminalStates = map[string]bool{
+	"Verified":       true,
+	"Failed":         true,
+	"Superseded":     true,
+	"AbortedByAlarm": true,
+}
+
 func newLogsCmd() *cobra.Command {
 	var (
 		envFlag    string
 		bundleFlag string
+		followFlag bool
 	)
 
 	cmd := &cobra.Command{
@@ -33,15 +47,22 @@ For each active PromotionStep, shows:
   - Step outputs (branch name, PR URL, PR number)
   - Conditions from the status
 
+Use --follow (-f) to stream step progress in real time, polling every 2 seconds
+until all steps reach a terminal state (Verified, Failed, or Superseded).
+
 Example:
   kardinal logs nginx-demo
   kardinal logs nginx-demo --env prod
-  kardinal logs nginx-demo --bundle nginx-demo-v1-29-0`,
+  kardinal logs nginx-demo --bundle nginx-demo-v1-29-0
+  kardinal logs nginx-demo --follow`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("logs: %w", err)
+			}
+			if followFlag {
+				return logsFollowFn(cmd.Context(), cmd.OutOrStdout(), c, ns, args[0], envFlag, bundleFlag)
 			}
 			return logsFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, bundleFlag)
 		},
@@ -49,6 +70,7 @@ Example:
 
 	cmd.Flags().StringVar(&envFlag, "env", "", "Filter by environment")
 	cmd.Flags().StringVar(&bundleFlag, "bundle", "", "Show logs for a specific bundle (default: most recent active)")
+	cmd.Flags().BoolVarP(&followFlag, "follow", "f", false, "Stream step progress, polling every 2s until terminal state")
 
 	return cmd
 }
@@ -58,20 +80,101 @@ func LogsFnForTest(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, b
 	return logsFn(w, c, ns, pipeline, envFilter, bundleFilter)
 }
 
-func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
-	ctx := context.Background()
+// logsFollowFn implements the --follow streaming mode.
+// It polls every 2 seconds and prints only new status.steps[] entries since the
+// last poll. Exits when all filtered PromotionSteps reach a terminal state,
+// or when the context is cancelled (SIGINT).
+func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
+	// Catch SIGINT for clean Ctrl+C exit.
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	var steps v1alpha1.PromotionStepList
-	if err := c.List(ctx, &steps,
+	// cursor tracks the last-seen step count per PromotionStep name.
+	cursor := make(map[string]int)
+
+	_, _ = fmt.Fprintf(w, "Following logs for pipeline %s (Ctrl+C to stop)...\n", pipeline)
+
+	for {
+		select {
+		case <-sigCtx.Done():
+			_, _ = fmt.Fprintln(w, "\nStopped.")
+			return nil
+		default:
+		}
+
+		filtered, err := fetchFilteredSteps(sigCtx, c, ns, pipeline, envFilter, bundleFilter)
+		if err != nil {
+			return fmt.Errorf("follow: %w", err)
+		}
+
+		if len(filtered) == 0 {
+			_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s\n", pipeline)
+		}
+
+		// Print new step entries since last poll.
+		for _, s := range filtered {
+			key := s.Spec.Environment + "/" + s.Spec.BundleName
+			prev := cursor[key]
+			newSteps := s.Status.Steps
+			if len(newSteps) > prev {
+				for _, step := range newSteps[prev:] {
+					dur := "-"
+					if step.DurationMs > 0 {
+						dur = fmt.Sprintf("%.1fs", float64(step.DurationMs)/1000.0)
+					}
+					_, _ = fmt.Fprintf(w, "[%s/%s] %-25s %-15s %s %s\n",
+						pipeline, s.Spec.Environment,
+						step.Name, string(step.State), dur, step.Message)
+				}
+				cursor[key] = len(newSteps)
+			}
+
+			// Print state change when step transitions to terminal.
+			if prev < len(newSteps) || cursor[key] == 0 {
+				if terminalStates[s.Status.State] && prev == cursor[key] {
+					_, _ = fmt.Fprintf(w, "[%s/%s] → %s\n", pipeline, s.Spec.Environment, s.Status.State)
+				}
+			}
+		}
+
+		// Check if all steps are terminal.
+		if len(filtered) > 0 && allTerminal(filtered) {
+			_, _ = fmt.Fprintln(w, "All steps reached terminal state.")
+			return nil
+		}
+
+		// Wait 2 seconds before next poll.
+		select {
+		case <-sigCtx.Done():
+			_, _ = fmt.Fprintln(w, "\nStopped.")
+			return nil
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// allTerminal returns true when every PromotionStep in the list is in a terminal state.
+func allTerminal(steps []v1alpha1.PromotionStep) bool {
+	for _, s := range steps {
+		if !terminalStates[s.Status.State] {
+			return false
+		}
+	}
+	return true
+}
+
+// fetchFilteredSteps retrieves and filters PromotionSteps for the given pipeline.
+func fetchFilteredSteps(ctx context.Context, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) ([]v1alpha1.PromotionStep, error) {
+	var stepList v1alpha1.PromotionStepList
+	if err := c.List(ctx, &stepList,
 		sigs_client.InNamespace(ns),
 		sigs_client.MatchingLabels{"kardinal.io/pipeline": pipeline},
 	); err != nil {
-		return fmt.Errorf("list promotion steps: %w", err)
+		return nil, fmt.Errorf("list promotion steps: %w", err)
 	}
 
-	// Filter by environment if specified.
 	var filtered []v1alpha1.PromotionStep
-	for _, s := range steps.Items {
+	for _, s := range stepList.Items {
 		if envFilter != "" && s.Spec.Environment != envFilter {
 			continue
 		}
@@ -81,7 +184,6 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 		filtered = append(filtered, s)
 	}
 
-	// If no bundle filter, keep only steps from non-Superseded bundles.
 	if bundleFilter == "" {
 		var bundles v1alpha1.BundleList
 		if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err == nil {
@@ -105,6 +207,25 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 		}
 	}
 
+	sort.Slice(filtered, func(i, j int) bool {
+		ei, ej := filtered[i].Spec.Environment, filtered[j].Spec.Environment
+		if ei != ej {
+			return ei < ej
+		}
+		return filtered[i].CreationTimestamp.Before(&filtered[j].CreationTimestamp)
+	})
+
+	return filtered, nil
+}
+
+func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
+	ctx := context.Background()
+
+	filtered, err := fetchFilteredSteps(ctx, c, ns, pipeline, envFilter, bundleFilter)
+	if err != nil {
+		return err
+	}
+
 	if len(filtered) == 0 {
 		_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s", pipeline)
 		if envFilter != "" {
@@ -113,15 +234,6 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 		_, _ = fmt.Fprintln(w)
 		return nil
 	}
-
-	// Sort by environment, then by bundle creation time.
-	sort.Slice(filtered, func(i, j int) bool {
-		ei, ej := filtered[i].Spec.Environment, filtered[j].Spec.Environment
-		if ei != ej {
-			return ei < ej
-		}
-		return filtered[i].CreationTimestamp.Before(&filtered[j].CreationTimestamp)
-	})
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for _, s := range filtered {

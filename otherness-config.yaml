@@ -5,7 +5,7 @@
 project:
   name: kardinal-promoter
   repo: pnz1990/kardinal-promoter
-  agent_version: v0.2.0  # pinned to stable release
+  agent_version: v0.3.0  # pinned to stable release
   upgrade_policy: "0.x.x"  # auto-upgrade any 0.* release
   report_issue: 1
   board_url: https://github.com/users/pnz1990/projects/1
@@ -98,3 +98,15 @@ hygiene:
   enabled: true
   max_issues_per_scan: 3
   cycle_interval: 3
+
+# ── Adversary check — monoculture break (doc 12) ──────────────────────────────
+# Runs scripts/adversary-check.sh before each item is added to the queue.
+# The script evaluates three failure-mode lenses: mechanism, blast radius,
+# competing approach. VERDICT=CHALLENGE logs a warning but does not block.
+# Set enabled: false to disable without removing the config.
+adversary:
+  enabled: true
+  script: scripts/adversary-check.sh
+  # CHALLENGE verdict action: "warn" (log and proceed) or "block" (skip item)
+  # Default: warn — the adversary challenges, not blocks.
+  on_challenge: warn

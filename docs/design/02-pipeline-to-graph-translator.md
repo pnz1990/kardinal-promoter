@@ -230,3 +230,16 @@ Test cases for `translator.go`:
 9. Config Bundle: verify different default step sequence (config-merge instead of kustomize-set-image).
 10. Empty Pipeline: verify error.
 11. Circular dependency: verify error.
+
+## Present
+
+✅ Multi-region fan-out via krocodile `forEach` (PR #612, 2026-04-22):
+   `EnvironmentSpec.Regions []string` — when ≥2 regions are set, the translator emits
+   a `forEach` Graph node. krocodile stamps out one PromotionStep per region; each
+   instance receives `spec.region = "${item}"`. `PromotionStepSpec.Region string` carries
+   the current region. Per-item `propagateWhen` (krocodile ≥ `745998f`) ensures all
+   regional instances must be Verified before downstream environments proceed.
+
+## Future
+
+_(no items)_

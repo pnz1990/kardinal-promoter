@@ -30,10 +30,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -69,6 +71,9 @@ type Reconciler struct {
 	// GraphChecker detects whether the Graph CR still exists.
 	// When nil, graph recreation is skipped (backward-compatible).
 	GraphChecker GraphChecker
+	// Recorder emits Kubernetes Events for Bundle phase transitions.
+	// When nil, event emission is skipped (backward-compatible).
+	Recorder record.EventRecorder
 }
 
 // Reconcile is called whenever a Bundle is created, updated, or deleted,
@@ -357,6 +362,12 @@ func (r *Reconciler) handleNew(ctx context.Context, log zerolog.Logger,
 		Str("pipeline", b.Spec.Pipeline).
 		Msg("bundle phase set to Available")
 
+	// Emit Kubernetes Event so operators see the transition in kubectl describe.
+	if r.Recorder != nil {
+		r.Recorder.Event(b, corev1.EventTypeNormal, "Available",
+			fmt.Sprintf("bundle received for pipeline %s; awaiting promotion", b.Spec.Pipeline))
+	}
+
 	// Requeue after a short delay to advance to Promoting.
 	// 500ms is the minimum safe floor: avoids the 1ms hot loop that bypasses
 	// controller-runtime rate limiting and pressures the API server and etcd
@@ -500,6 +511,11 @@ func (r *Reconciler) markSuperseded(ctx context.Context, log zerolog.Logger,
 		Str("pipeline", b.Spec.Pipeline).
 		Str("type", b.Spec.Type).
 		Msg("bundle superseded by newer bundle (self-supersession)")
+	// Emit Kubernetes Event for Superseded transition.
+	if r.Recorder != nil {
+		r.Recorder.Event(b, corev1.EventTypeNormal, "Superseded",
+			fmt.Sprintf("superseded by newer bundle for pipeline %s", b.Spec.Pipeline))
+	}
 	// Emit Prometheus counter for Superseded bundles.
 	observability.BundlesTotal.WithLabelValues("Superseded").Inc()
 	return ctrl.Result{}, nil
@@ -597,6 +613,11 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
 			log.Error().Err(patchErr).Msg("failed to patch bundle status to Failed")
 		}
+		// Emit Kubernetes Event for Failed transition.
+		if r.Recorder != nil {
+			r.Recorder.Event(b, corev1.EventTypeWarning, "Failed",
+				fmt.Sprintf("promotion failed for pipeline %s: %v", b.Spec.Pipeline, err))
+		}
 		// Emit Prometheus counter for Failed bundles.
 		observability.BundlesTotal.WithLabelValues("Failed").Inc()
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)
@@ -621,6 +642,12 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		Str("phase", "Promoting").
 		Str("graph", graphName).
 		Msg("bundle advancing to Promoting")
+
+	// Emit Kubernetes Event for Promoting transition.
+	if r.Recorder != nil {
+		r.Recorder.Event(b, corev1.EventTypeNormal, "Promoting",
+			fmt.Sprintf("graph %s created; promotion started for pipeline %s", graphName, b.Spec.Pipeline))
+	}
 
 	// Emit Prometheus counter for bundles entering Promoting (successful graph creation).
 	observability.BundlesTotal.WithLabelValues("Promoting").Inc()
@@ -729,10 +756,12 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 
 	// K-05: Compute deployment metrics when all environments are Verified.
 	// Only runs once (when metrics is nil and all envs just reached Verified).
+	metricsJustComputed := false
 	if b.Status.Metrics == nil {
 		metrics := computeBundleMetrics(b, envs)
 		if metrics != nil {
 			b.Status.Metrics = metrics
+			metricsJustComputed = true
 		}
 	}
 
@@ -747,6 +776,12 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch bundle evidence: %w", err)
+	}
+
+	// Emit Kubernetes Event when all environments just reached Verified (first time).
+	if metricsJustComputed && r.Recorder != nil {
+		r.Recorder.Event(b, corev1.EventTypeNormal, "Verified",
+			fmt.Sprintf("all %d environment(s) verified for pipeline %s", len(envs), b.Spec.Pipeline))
 	}
 
 	log.Info().Int("environments", len(envs)).Msg("bundle evidence synced from PromotionStep status")
