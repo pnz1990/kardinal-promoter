@@ -1287,6 +1287,37 @@
       "pr_merged": true,
       "done_at": "2026-04-22T13:13:24Z",
       "pr_number": 1100
+    },
+    "issue-1121": {
+      "state": "done",
+      "title": "feat: No per-step execution timeout \u2014 add step timeout to PromotionStep",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "branch": "feat/issue-1121",
+      "worktree": "../kardinal-promoter.issue-1121",
+      "assigned_to": "sess-8a03e242",
+      "assigned_at": "2026-04-22T21:48:26Z",
+      "pr_merged": true,
+      "pr_number": 1123,
+      "done_at": "2026-04-22T21:54:35Z"
+    },
+    "issue-1122": {
+      "state": "todo",
+      "title": "feat: kardinal logs missing --follow streaming mode",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/controller",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium"
     }
   },
   "session_heartbeats": {
