@@ -719,7 +719,7 @@
       "done_at": "2026-04-22T05:32:39Z"
     },
     "issue-1053": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Self-improvement tracking: skills library growth rate**",
       "labels": [
         "kardinal",
@@ -739,8 +739,10 @@
       "priority": "medium"
     },
     "issue-1051": {
-      "state": "todo",
-      "title": "feat: **Skills inventory is never consulted before starting work",
+      "title": "feat: Skills inventory is never consulted before starting work \u2014 proactive skills discovery is absent",
+      "state": "done",
+      "issue": "1051",
+      "priority": "medium",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -748,11 +750,21 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "created_at": "2026-04-22T06:22:01Z",
+      "assigned_to": "sess-e5e4adf9",
+      "assigned_at": "2026-04-22T06:22:01Z",
+      "branch": "feat/issue-1051",
+      "worktree": "../kardinal-promoter.issue-1051",
+      "pr_number": "1068",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1068",
+      "pr_merged": true,
+      "done_at": "2026-04-22T06:31:43Z"
     },
     "issue-1050": {
-      "state": "todo",
-      "title": "feat: **Simulation delta feedback is one-directional: SM posts it, COORDINATOR never reads it**",
+      "title": "feat: Simulation delta feedback is one-directional: SM posts it, COORDINATOR never reads it",
+      "state": "done",
+      "issue": "1050",
+      "priority": "medium",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -760,7 +772,15 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "created_at": "2026-04-22T05:57:41Z",
+      "assigned_to": "sess-e5e4adf9",
+      "assigned_at": "2026-04-22T05:57:41Z",
+      "branch": "feat/issue-1050",
+      "worktree": "../kardinal-promoter.issue-1050",
+      "pr_number": "1067",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1067",
+      "pr_merged": true,
+      "done_at": "2026-04-22T06:18:02Z"
     },
     "issue-1049": {
       "state": "done",
@@ -776,7 +796,7 @@
       "pr_merged": true
     },
     "issue-1048": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Graph builder `dependsOn` validation error is silent in CLI output**",
       "labels": [
         "kardinal",
@@ -785,7 +805,14 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "assigned_to": "sess-098b7383",
+      "assigned_at": "2026-04-22T06:49:26Z",
+      "branch": "feat/issue-1048",
+      "worktree": "../kardinal-promoter.issue-1048",
+      "pr_merged": true,
+      "done_at": "2026-04-22T07:15:50Z",
+      "pr_number": 1071
     },
     "issue-1047": {
       "state": "done",
@@ -844,7 +871,7 @@
       "done_at": "2026-04-22T05:11:05Z"
     },
     "issue-963": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 18: Subscription CRD",
       "labels": [
         "kardinal",
@@ -852,10 +879,14 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "done_at": "2026-04-22T02:29:51Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": []
     },
     "issue-962": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 17: GitLab Support",
       "labels": [
         "kardinal",
@@ -863,10 +894,14 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "done_at": "2026-04-22T02:29:53Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": []
     },
     "issue-961": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 15: MetricCheck CRD and Upstream Soak Time",
       "labels": [
         "kardinal",
@@ -874,10 +909,14 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "done_at": "2026-04-22T02:29:54Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": []
     },
     "issue-960": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 13: Rollback and Pause/Resume",
       "labels": [
         "kardinal",
@@ -885,10 +924,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-959": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 9: Embedded React UI",
       "labels": [
         "kardinal",
@@ -896,10 +936,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-958": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 8: CLI",
       "labels": [
         "kardinal",
@@ -907,10 +948,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-957": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 5: Git Operations and GitHub PR Flow",
       "labels": [
         "kardinal",
@@ -918,10 +960,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-956": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 1: CRD Types and Validation",
       "labels": [
         "kardinal",
@@ -929,10 +972,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-955": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 0: Project Skeleton",
       "labels": [
         "kardinal",
@@ -940,7 +984,273 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
+    },
+    "issue-1082": {
+      "state": "todo",
+      "title": "feat: **Onboarding time-to-first-run metric: track and publish the setup duration**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1082
+    },
+    "issue-1081": {
+      "state": "todo",
+      "title": "feat: **Zero-PR session detection: agent ran but produced no mergeable content**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1081
+    },
+    "issue-1080": {
+      "state": "todo",
+      "title": "feat: **Monoculture break: adversarial agent role for architecture reviews**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1080
+    },
+    "issue-1079": {
+      "state": "todo",
+      "title": "feat: **SM health state definition: explicit thresholds for GREEN/RED/STALL**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1079
+    },
+    "issue-1078": {
+      "state": "todo",
+      "title": "feat: **Otherness onboarding quality gate: `/otherness.onboard` output review**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1078
+    },
+    "issue-1077": {
+      "state": "todo",
+      "title": "feat: Workflow self-healing: bash -n CI guard",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/agent-loop",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "assigned_to": null,
+      "assigned_at": null,
+      "branch": null,
+      "worktree": null,
+      "file_spaces": [
+        ".github/workflows/"
+      ]
+    },
+    "issue-1076": {
+      "state": "done",
+      "title": "feat: **`pkg/cel/conversion/conversion.go` `GoNativeType` returns `nil, nil` for a nil CEL value",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1076,
+      "pr_merged": true,
+      "done_at": "2026-04-22T09:25:12Z"
+    },
+    "issue-1075": {
+      "state": "todo",
+      "title": "feat: **No image signature verification step**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1075
+    },
+    "issue-1074": {
+      "state": "todo",
+      "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1074
+    },
+    "issue-1073": {
+      "state": "todo",
+      "title": "feat: **Simulation queue-adjustment is invisible to humans",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1073
+    },
+    "issue-1066": {
+      "state": "todo",
+      "title": "\ud83d\udcca Autonomous Team Reports \u2014 2026-04-22",
+      "labels": [],
+      "priority": "medium",
+      "issue_number": 1066
+    },
+    "issue-1057": {
+      "state": "todo",
+      "title": "chore(sm): push sm.md PDCA check to pnz1990/otherness \u2014 token lacks push rights",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/xs",
+        "kind/chore",
+        "area/test"
+      ],
+      "priority": "medium",
+      "issue_number": 1057
+    },
+    "issue-1034": {
+      "state": "todo",
+      "title": "\ud83d\udcca Autonomous Team Reports \u2014 2026-04-21",
+      "labels": [],
+      "priority": "medium",
+      "issue_number": 1034
+    },
+    "issue-1008": {
+      "state": "done",
+      "title": "docs(changelog): CHANGELOG.md missing version sections for v0.1.0\u2013v0.8.1",
+      "labels": [
+        "kardinal",
+        "kind/docs",
+        "area/docs",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "assigned_to": "sess-2b4498ba",
+      "assigned_at": "2026-04-22T08:08:15Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": [
+        "CHANGELOG.md",
+        "docs/"
+      ],
+      "pr_number": 1085,
+      "done_at": "2026-04-22T08:22:16Z"
+    },
+    "issue-1007": {
+      "state": "done",
+      "title": "feat(qa): \u00a73b.5 docs gate for user-visible features",
+      "labels": [
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue_number": 1007,
+      "pr_merged": true,
+      "done_at": "2026-04-22T10:24:05Z",
+      "pr_number": 1089
+    },
+    "issue-1006": {
+      "state": "done",
+      "title": "feat(pm): \u00a75j comparison doc accuracy \u2014 flip rows when gaps are closed",
+      "labels": [
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue_number": 1006,
+      "pr_merged": true,
+      "done_at": "2026-04-22T10:09:52Z",
+      "pr_number": 1088
+    },
+    "issue-1005": {
+      "state": "todo",
+      "title": "feat(pm): \u00a75j version staleness check \u2014 scan README for stale version strings",
+      "labels": [
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue_number": 1005
+    },
+    "issue-954": {
+      "state": "todo",
+      "title": "chore(ci): add action-tests CI job to run .github/actions/create-bundle/test.sh",
+      "labels": [
+        "kardinal",
+        "priority/low",
+        "size/xs",
+        "kind/chore",
+        "area/test"
+      ],
+      "priority": "low",
+      "issue_number": 954
+    },
+    "issue-918": {
+      "state": "todo",
+      "title": "feat: Warehouse-equivalent: no automatic discovery mode",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/m",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 918
+    },
+    "issue-612": {
+      "state": "todo",
+      "title": "feat(graph): use forEach for multi-region fan-out and dynamic environment expansion",
+      "labels": [
+        "priority/low",
+        "size/l",
+        "kind/enhancement",
+        "area/controller",
+        "area/graph"
+      ],
+      "priority": "low",
+      "issue_number": 612
     }
   },
   "session_heartbeats": {

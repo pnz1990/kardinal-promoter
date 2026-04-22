@@ -4,6 +4,28 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(qa): §3b.5 docs gate for user-visible features (#1089)
+- feat(pm): §5n comparison doc accuracy — flip rows when gaps are closed (#1088)
+- fix(cel): add ErrNilCELValue sentinel to GoNativeType (#1087)
+- docs(changelog): add version sections for v0.1.0–v0.8.1 (#1085)
+- feat(cli): surface dependsOn validation errors in kardinal get pipelines (#1071)
+- feat(loop): proactive skills discovery — COORD §1b-skills + docs/aide/skills-inventory.md (#1068)
+- feat(loop): simulation delta read half — COORD adjusts session limit from ratio history (#1067)
+- 5 PRs merged: docs+4 loop improvements (#1065)
+- feat(loop): prediction vs actual delta in SM batch report (#1064)
+- feat(loop): skills library growth rate in SM batch report (#1063)
+- feat(loop): housekeeping_streak counter for LOOP STALL detection (#1062)
+- feat(loop): PDCA regression attribution + COORDINATOR halt gate (#1061)
+- docs(scm): document zero-downtime credential rotation (#1060)
+- feat(api): add maxConcurrentPromotions cap per pipeline (#1059)
+- feat(sm): add health snapshot comment to REPORT_ISSUE every batch (#1058)
+- feat(sm): add PDCA workflow result check to SM §4f health signal (#1056)
+- 2 PRs merged; 10 items queued. (#1055)
+- docs(community): add CONTRIBUTING.md and community links (#1044)
+- Vision scan done. No new items; backlog at 79. (#1042)
+- Added Bitbucket & Azure DevOps SCM support (#1040)
+- PR #1032: PromotionTemplate CRD merged (#1033)
+
 - feat(chart): add demo.enabled mode for under-10-minute quickstart (#1043)
 - fix(ci): restore missing newline — opencode step YAML invalid (#1041)
 - hotfix(ci): restore opencode SHA for v1.14.20 (#1039)
