@@ -16,6 +16,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -43,6 +44,9 @@ func (e *Engine) StepNames() []string {
 // ExecuteFrom is idempotent: re-executing from the same index repeats that step.
 // Callers must persist the returned nextIndex in PromotionStep.status.currentStepIndex
 // before returning from the reconciler.
+//
+// When state.StepTimeoutSeconds > 0, each step is executed with a per-step
+// context.WithTimeout to prevent hung steps from blocking the reconciler indefinitely.
 func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex int) (nextIndex int, result StepResult, err error) {
 	log := zerolog.Ctx(ctx)
 
@@ -55,7 +59,17 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 
 		log.Info().Str("step", name).Int("index", i).Msg("executing step")
 
-		result, err = step.Execute(ctx, state)
+		// Apply per-step timeout when configured (state.StepTimeoutSeconds > 0).
+		// The cancel function must be called to release resources even when the
+		// context is not cancelled — defer inside the loop body ensures this.
+		stepCtx := ctx
+		if state.StepTimeoutSeconds > 0 {
+			var cancel context.CancelFunc
+			stepCtx, cancel = context.WithTimeout(ctx, time.Duration(state.StepTimeoutSeconds)*time.Second)
+			defer cancel() //nolint:revive // intentional: cancel is called at function return
+		}
+
+		result, err = step.Execute(stepCtx, state)
 		if err != nil {
 			return i, result, fmt.Errorf("step %s: %w", name, err)
 		}

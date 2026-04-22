@@ -153,6 +153,29 @@ spec:
                             Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger
                             (those resource types are always single-named).
                           type: object
+                        resource:
+                          description: |-
+                            Resource specifies the exact Kubernetes resource to watch for health.type=resource.
+                            When set, overrides the default behavior (which watches a Deployment named after
+                            the pipeline in the environment namespace). Use this when the health target is
+                            in a different namespace or has a different name than the pipeline.
+
+                            Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger.
+                          properties:
+                            kind:
+                              description: |-
+                                Kind is the Kubernetes resource kind (e.g. "Deployment", "StatefulSet").
+                                Defaults to "Deployment" when unset.
+                              type: string
+                            name:
+                              description: Name is the resource name. Defaults to
+                                the pipeline name when unset.
+                              type: string
+                            namespace:
+                              description: Namespace is the resource namespace. Defaults
+                                to the environment name when unset.
+                              type: string
+                          type: object
                         timeout:
                           description: |-
                             Timeout is the maximum time to wait for health checks to pass.
@@ -242,6 +265,16 @@ spec:
                         Shard pins this environment to a specific kardinal-controller agent shard
                         in distributed mode. Leave empty for single-controller deployments.
                       type: string
+                    stepTimeoutSeconds:
+                      description: |-
+                        StepTimeoutSeconds is the maximum number of seconds a single promotion
+                        step (git-clone, kustomize-set-image, open-pr, etc.) may run before the
+                        reconciler cancels it via context.WithTimeout and marks the PromotionStep
+                        as Failed. When not set or 0 (default), no per-step timeout is applied.
+                        Useful for restricting execution in restricted-egress environments where
+                        git-clone against a slow SCM host can block the reconciler indefinitely.
+                      minimum: 1
+                      type: integer
                     steps:
                       description: |-
                         Steps overrides the default step sequence for this environment.

@@ -397,9 +397,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			AuthorName:  "kardinal-promoter",
 			AuthorEmail: "kardinal@kardinal.io",
 		},
-		SCM:       r.SCM,
-		GitClient: r.GitClient,
-		K8sClient: r.Client,
+		SCM:                r.SCM,
+		GitClient:          r.GitClient,
+		K8sClient:          r.Client,
+		StepTimeoutSeconds: env.StepTimeoutSeconds,
 	}
 
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, ps.Status.CurrentStepIndex)
@@ -838,13 +839,14 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	}
 
 	state := &steps.StepState{
-		Pipeline:    pipelineSpec,
-		Environment: envSpec,
-		Bundle:      bundleSpec,
-		Outputs:     cloneMap(ps.Status.Outputs),
-		SCM:         r.SCM,
-		GitClient:   r.GitClient,
-		K8sClient:   r.Client,
+		Pipeline:           pipelineSpec,
+		Environment:        envSpec,
+		Bundle:             bundleSpec,
+		Outputs:            cloneMap(ps.Status.Outputs),
+		SCM:                r.SCM,
+		GitClient:          r.GitClient,
+		K8sClient:          r.Client,
+		StepTimeoutSeconds: envSpec.StepTimeoutSeconds,
 	}
 
 	result, execErr := healthStep.Execute(ctx, state)
