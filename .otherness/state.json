@@ -1087,7 +1087,7 @@
       "done_at": "2026-04-22T09:25:12Z"
     },
     "issue-1075": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **No image signature verification step**",
       "labels": [
         "kardinal",
@@ -1097,7 +1097,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1075
+      "issue_number": 1075,
+      "pr_merged": true,
+      "pr_number": 1091,
+      "done_at": "2026-04-22T11:15:32Z"
     },
     "issue-1074": {
       "state": "todo",
