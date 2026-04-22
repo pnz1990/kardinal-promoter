@@ -988,7 +988,7 @@
       "pr_merged": true
     },
     "issue-1082": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Onboarding time-to-first-run metric: track and publish the setup duration**",
       "labels": [
         "kardinal",
@@ -998,7 +998,14 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1082
+      "issue_number": 1082,
+      "branch": "feat/issue-1082",
+      "worktree": "../kardinal-promoter.issue-1082",
+      "assigned_to": "sess-8a03e242",
+      "assigned_at": "2026-04-22T21:37:26Z",
+      "pr_merged": true,
+      "pr_number": 1119,
+      "done_at": "2026-04-22T21:41:45Z"
     },
     "issue-1081": {
       "state": "done",
