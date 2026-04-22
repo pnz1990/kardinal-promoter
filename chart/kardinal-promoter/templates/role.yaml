@@ -57,6 +57,7 @@ rules:
       - prstatuses
       - metricchecks
       - scheduleclocks
+      - notificationhooks
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["kardinal.io"]
     resources:
@@ -64,7 +65,13 @@ rules:
       - prstatuses/status
       - metricchecks/status
       - scheduleclocks/status
+      - notificationhooks/status
     verbs: ["get", "update", "patch"]
+  # kardinal.io CRDs — immutable audit records (write-only by controller)
+  - apiGroups: ["kardinal.io"]
+    resources:
+      - auditevents
+    verbs: ["get", "list", "watch", "create"]
   # kro Graph CRDs (generated promotion DAGs) — experimental.kro.run API group
   - apiGroups: ["experimental.kro.run"]
     resources: ["graphs", "graphs/status", "graphrevisions", "graphrevisions/status"]
