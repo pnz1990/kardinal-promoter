@@ -376,6 +376,31 @@ type HealthConfig struct {
 	// (those resource types are always single-named).
 	// +optional
 	LabelSelector map[string]string `json:"labelSelector,omitempty"`
+
+	// Resource specifies the exact Kubernetes resource to watch for health.type=resource.
+	// When set, overrides the default behavior (which watches a Deployment named after
+	// the pipeline in the environment namespace). Use this when the health target is
+	// in a different namespace or has a different name than the pipeline.
+	//
+	// Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger.
+	// +optional
+	Resource *ResourceRef `json:"resource,omitempty"`
+}
+
+// ResourceRef identifies a Kubernetes resource by kind, name, and namespace.
+type ResourceRef struct {
+	// Kind is the Kubernetes resource kind (e.g. "Deployment", "StatefulSet").
+	// Defaults to "Deployment" when unset.
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Name is the resource name. Defaults to the pipeline name when unset.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Namespace is the resource namespace. Defaults to the environment name when unset.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // DeliveryConfig holds in-cluster progressive delivery delegation configuration.
