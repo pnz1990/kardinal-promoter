@@ -712,16 +712,11 @@
       "done_at": "2026-04-21T14:00:11Z"
     },
     "issue-1054": {
-      "state": "todo",
-      "title": "feat: **Loop prediction \u2192 behavior feedback loop**",
-      "labels": [
-        "kardinal",
-        "priority/medium",
-        "size/s",
-        "kind/enhancement",
-        "area/controller"
-      ],
-      "priority": "medium"
+      "state": "done",
+      "title": "feat: Loop prediction \u2192 behavior feedback loop",
+      "pr_number": 1064,
+      "pr_merged": true,
+      "done_at": "2026-04-22T05:32:39Z"
     },
     "issue-1053": {
       "state": "todo",
@@ -976,7 +971,7 @@
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 4,
-  "pm_cycle_count": 7,
+  "sm_cycle_count": 5,
+  "pm_cycle_count": 8,
   "chore_only_guard_count": 0
 }
