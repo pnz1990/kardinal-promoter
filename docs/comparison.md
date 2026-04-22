@@ -31,6 +31,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
 | **Integration test step** | Yes — `integration-test` step runs a Kubernetes Job | No | No |
+| **Image signature verification** | Yes — `verify-image` step calls cosign to verify OCI signatures before promoting | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, PolicyGate.Blocked, PromotionStep.Failed; optional auth header; pipeline selector | Yes (Kargo via Argo Notifications) | No |
 | **Multi-cluster** | Yes (Pipeline CRD, kubeconfig Secrets) | Yes | Yes |
