@@ -1141,7 +1141,7 @@
       "issue_number": 1073
     },
     "issue-1057": {
-      "state": "todo",
+      "state": "done",
       "title": "chore(sm): push sm.md PDCA check to pnz1990/otherness \u2014 token lacks push rights",
       "labels": [
         "kardinal",
@@ -1151,7 +1151,10 @@
         "area/test"
       ],
       "priority": "medium",
-      "issue_number": 1057
+      "issue_number": 1057,
+      "done_at": "2026-04-22T00:00:00Z",
+      "pr_merged": false,
+      "note": "closed as stale"
     },
     "issue-1008": {
       "state": "done",
@@ -1215,7 +1218,7 @@
       "issue_number": 1005
     },
     "issue-954": {
-      "state": "todo",
+      "state": "done",
       "title": "chore(ci): add action-tests CI job to run .github/actions/create-bundle/test.sh",
       "labels": [
         "kardinal",
@@ -1225,7 +1228,10 @@
         "area/test"
       ],
       "priority": "low",
-      "issue_number": 954
+      "issue_number": 954,
+      "done_at": "2026-04-22T00:00:00Z",
+      "pr_merged": false,
+      "note": "needs-human: workflows permission required"
     },
     "issue-918": {
       "state": "done",
@@ -1294,6 +1300,11 @@
     "sess-8975a68f": {
       "last_seen": "2026-04-21T16:46:30Z",
       "item": "issue-971",
+      "cycle": 1
+    },
+    "sess-7b9a4752": {
+      "last_seen": "2026-04-22T16:18:51Z",
+      "item": "coord",
       "cycle": 1
     }
   },
