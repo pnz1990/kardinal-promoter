@@ -26,10 +26,19 @@ import (
 // ErrUnsupportedType is returned when the type is not supported.
 var ErrUnsupportedType = errors.New("unsupported type")
 
+// ErrNilCELValue is returned when GoNativeType receives a nil ref.Val.
+// This distinguishes "the CEL evaluator passed a nil pointer (evaluator failure or
+// missing variable)" from "the CEL expression legitimately returned null (types.NullType)".
+// Callers that need to treat nil as a non-error (e.g. optional-value checks) must
+// test for this sentinel explicitly with errors.Is(err, ErrNilCELValue).
+var ErrNilCELValue = errors.New("nil ref.Val: caller passed nil CEL value to GoNativeType")
+
 // GoNativeType transforms CEL output into corresponding Go types.
 func GoNativeType(v ref.Val) (interface{}, error) {
 	if v == nil {
-		return nil, nil
+		// Return ErrNilCELValue so callers can distinguish a nil pointer (evaluator
+		// failure, missing variable) from a legitimate CEL null (types.NullType below).
+		return nil, ErrNilCELValue
 	}
 	switch v.Type() {
 	case types.BoolType:
