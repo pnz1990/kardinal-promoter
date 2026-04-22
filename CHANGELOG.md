@@ -4,6 +4,16 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(cli): add kardinal logs --follow streaming mode (#1124)
+- feat(controller): add per-step execution timeout via stepTimeoutSeconds (#1123)
+- feat(loop): add sim-adjustment-notify.sh — surface queue limit changes (#1120)
+- feat(loop): add onboarding time-to-first-run metric script (#1119)
+- feat(pm): add PM §5j version staleness check script (#1118)
+- fix(ci): pin agent_version to v0.3.0 to stop failing upgrade path (#1115)
+- fix(workflow): add missing fi — restores scheduled sessions (5h outage) (#1113)
+- feat(graph): multi-region forEach fan-out for Pipeline environments (#1110)
+- Step A done; 0 changes; PDCA failing x5. (#1108)
+
 - feat(steps): add verify-image step for cosign signature verification (#1091)
 - fix(rbac): add notificationhooks and auditevents to ClusterRole/Role (#1095)
 - feat(qa): §3b.5 docs gate for user-visible features (#1089)
