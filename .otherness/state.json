@@ -1186,7 +1186,7 @@
       "issue_number": 1007
     },
     "issue-1006": {
-      "state": "todo",
+      "state": "done",
       "title": "feat(pm): \u00a75j comparison doc accuracy \u2014 flip rows when gaps are closed",
       "labels": [
         "priority/medium",
@@ -1194,7 +1194,10 @@
         "kind/enhancement"
       ],
       "priority": "medium",
-      "issue_number": 1006
+      "issue_number": 1006,
+      "pr_merged": true,
+      "done_at": "2026-04-22T10:09:52Z",
+      "pr_number": 1088
     },
     "issue-1005": {
       "state": "todo",
