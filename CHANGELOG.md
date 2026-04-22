@@ -4,6 +4,12 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(chart): add demo.enabled mode for under-10-minute quickstart (#1043)
+- fix(ci): restore missing newline — opencode step YAML invalid (#1041)
+- hotfix(ci): restore opencode SHA for v1.14.20 (#1039)
+- chore(ci): upgrade opencode to v1.14.20 (#1038)
+- docs(comparison): add Bitbucket Cloud and Azure DevOps to SCM providers row (#1037)
+
 - feat(scm): add Bitbucket Cloud and Azure DevOps SCM providers (#1035)
 - feat(api): PromotionTemplate CRD — reusable step sequences for Pipeline environments (#1032)
 - feat(pm): board_project_id + active_milestone config (design doc 43) (#1030)
