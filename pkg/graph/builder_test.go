@@ -1048,3 +1048,45 @@ func TestBuilder_MultiRegionFanOut(t *testing.T) {
 	_, hasRegion := testSpec["region"]
 	assert.False(t, hasRegion, "single-region test node must not have spec.region")
 }
+
+// TestBuilder_SingleRegionNoForEach verifies that when an environment declares exactly one
+// region (Regions: ["x"]), the builder treats it as single-region and does NOT emit a forEach
+// node. The threshold for multi-region fan-out is ≥2. This pins the correct fallback behavior
+// so a future refactor cannot accidentally fan out single-region environments (issue #1111).
+func TestBuilder_SingleRegionNoForEach(t *testing.T) {
+	b := graph.NewBuilder()
+
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "single-fleet", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{
+					Name:    "prod",
+					Regions: []string{"us-east-1"}, // exactly one region — must NOT produce forEach
+				},
+			},
+		},
+	}
+	bundle := makeBundle("single-fleet-v1", "single-fleet")
+
+	result, err := b.Build(graph.BuildInput{
+		Pipeline:    pipeline,
+		Bundle:      bundle,
+		PolicyGates: nil,
+	})
+	require.NoError(t, err)
+
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+
+	prodNode := nodeMap["prod"]
+	require.NotNil(t, prodNode, "prod node must exist")
+
+	// ForEach must be empty for a single-region environment
+	assert.Empty(t, prodNode.ForEach, "single-region environment (regions=[x]) must not have ForEach set")
+
+	// spec.region must NOT be set in the PromotionStep template
+	prodSpec, ok := prodNode.Template["spec"].(map[string]interface{})
+	require.True(t, ok, "prod node template must have spec")
+	_, hasRegion := prodSpec["region"]
+	assert.False(t, hasRegion, "single-region environment (regions=[x]) must not have spec.region in template")
+}
