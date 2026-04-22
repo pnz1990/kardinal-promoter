@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1335,4 +1336,55 @@ func TestPolicyGateReconciler_PRReviewGate_NoPRStatus(t *testing.T) {
 	var got kardinalv1alpha1.PolicyGate
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
 	assert.False(t, got.Status.Ready, "gate must block when no PRStatus exists (fail-closed)")
+}
+
+// TestPolicyGateReconciler_EmitsBlockedEvent verifies that a Kubernetes Event is
+// emitted when a gate first transitions to blocked (ready=false).
+func TestPolicyGateReconciler_EmitsBlockedEvent(t *testing.T) {
+	// Gate that will always block: expression evaluates to false (false literal).
+	gate := makeGateInstance("always-block-gate", "default", "app-v1", "false", "5m")
+	bundle := makeBundle("app-v1", "default")
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+
+	fakeRecorder := record.NewFakeRecorder(10)
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = time.Now
+	r.Recorder = fakeRecorder
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
+
+	// Expect a Blocked warning event.
+	select {
+	case ev := <-fakeRecorder.Events:
+		assert.Contains(t, ev, "Blocked")
+		assert.Contains(t, ev, "Warning")
+	default:
+		t.Fatal("expected Blocked event to be emitted, got none")
+	}
+}
+
+// TestPolicyGateReconciler_NoRecorderNoPanic verifies that a nil Recorder does not
+// cause a panic.
+func TestPolicyGateReconciler_NoRecorderNoPanic(t *testing.T) {
+	gate := makeGateInstance("no-recorder-gate", "default", "app-v1", "true", "5m")
+	bundle := makeBundle("app-v1", "default")
+
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
+
+	r, err := policygate.NewReconciler(c)
+	require.NoError(t, err)
+	r.NowFn = time.Now
+	// Recorder is nil — must not panic.
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
+	_, reconcileErr := r.Reconcile(context.Background(), req)
+	require.NoError(t, reconcileErr)
 }
