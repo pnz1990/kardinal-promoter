@@ -119,6 +119,11 @@ type StepState struct {
 	// manage cluster resources (e.g., integration-test Job creation).
 	// May be nil for unit tests or environments that do not use such steps.
 	K8sClient client.Client
+
+	// StepTimeoutSeconds is the per-step execution timeout in seconds.
+	// When > 0, ExecuteFrom wraps each step's context with context.WithTimeout.
+	// When 0, no per-step timeout is applied (default behaviour).
+	StepTimeoutSeconds int
 }
 
 // Step is a single unit of promotion work.

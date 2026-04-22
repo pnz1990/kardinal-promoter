@@ -135,17 +135,21 @@ jobs:
           AGENT_VERSION=$(python3 -c "
           import re
           for line in open('otherness-config.yaml'):
-              m = re.match(r'^\s+agent_version:\s*[\"\'']?([^\"\'#\n\s]+)[\"\'']?', line)
-              if m and m.group(1) not in ('','\"\"',\"''\"):
-                  print(m.group(1)); break
+              m = re.match(r'^\s+agent_version:\s*(.+)', line)
+              if m:
+                  val = m.group(1).split('#')[0].strip().strip('\"').strip(\"'\")
+                  if val and val not in ('', '\"\"', \"''\"):
+                      print(val); break
           " 2>/dev/null || echo "")
 
           UPGRADE_POLICY=$(python3 -c "
           import re
           for line in open('otherness-config.yaml'):
-              m = re.match(r'^\s+upgrade_policy:\s*[\"\'']?([^\"\'#\n\s]+)[\"\'']?', line)
-              if m and m.group(1) not in ('','\"\"',\"''\"):
-                  print(m.group(1)); break
+              m = re.match(r'^\s+upgrade_policy:\s*(.+)', line)
+              if m:
+                  val = m.group(1).split('#')[0].strip().strip('\"').strip(\"'\")
+                  if val and val not in ('', '\"\"', \"''\"):
+                      print(val); break
           " 2>/dev/null || echo "")
 
           echo "[otherness] agent_version=${AGENT_VERSION:-unset} upgrade_policy=${UPGRADE_POLICY:-none}"
@@ -164,6 +168,13 @@ jobs:
               if git -C ~/.otherness checkout "$NEWEST" --quiet 2>/dev/null; then
                 RESOLVED_VERSION="$NEWEST"
                 python3 -c "import re,sys; c=open('otherness-config.yaml').read(); c=re.sub(r'(\s+agent_version:\s*)[\"\'\'']?v[0-9]+\.[0-9]+\.[0-9]+[\"\'\'']?',lambda m:m.group(1)+sys.argv[1],c,count=1); open('otherness-config.yaml','w').write(c); print('[otherness] agent_version -> '+sys.argv[1])" "$NEWEST" 2>/dev/null || echo "::warning::Could not rewrite agent_version"
+                # Commit the rewrite to the working tree so the session branch PR includes it.
+                # Without this the upgrade fires every session forever (file is never persisted).
+                git config user.name "otherness[bot]" 2>/dev/null || true
+                git config user.email "otherness[bot]@users.noreply.github.com" 2>/dev/null || true
+                git add otherness-config.yaml 2>/dev/null && \
+                  git commit -m "chore(config): auto-upgrade agent_version $AGENT_VERSION -> $NEWEST" \
+                  2>/dev/null && echo "[otherness] upgrade committed to session branch" || true
               else
                 echo "::warning::Could not checkout $NEWEST -- staying on $AGENT_VERSION"
               fi
@@ -178,10 +189,11 @@ jobs:
               && echo "[otherness] Pinned to $AGENT_VERSION" \
               || echo "::warning::Could not checkout $AGENT_VERSION -- using HEAD"
           elif [ -z "$AGENT_VERSION" ]; then
-            echo "[otherness] Using HEAD: $(git -C ~/.otherness rev-parse --short HEAD)"
+            echo "[otherness] Using HEAD (no pin set)"
           fi
 
-          echo "[otherness] Active version: $(git -C ~/.otherness describe --tags --exact-match 2>/dev/null || git -C ~/.otherness rev-parse --short HEAD)"
+          ACTIVE=$(git -C ~/.otherness describe --tags --exact-match 2>/dev/null || git -C ~/.otherness rev-parse --short HEAD)
+          echo "[otherness] Active version: $ACTIVE"
 
       # ── Step 4: Sync command files ───────────────────────────────────────
       - name: Sync otherness command files
@@ -230,6 +242,8 @@ jobs:
           GH_TOKEN:            ${{ steps.app-token.outputs.token || secrets.GH_TOKEN }}
           GITHUB_TOKEN:        ${{ steps.app-token.outputs.token || secrets.GH_TOKEN }}
           OPENCODE_PERMISSION: '{"bash":"allow","read":"allow","edit":"allow","write":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":"allow","webfetch":"allow","task":"allow","todowrite":"allow","skill":"allow"}'
+          # speckit non-interactive permissions — design doc 42 §O2
+          SPECKIT_COPILOT_ALLOW_ALL_TOOLS: "1"
         with:
           model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
           use_github_token: "true"
@@ -297,6 +311,8 @@ jobs:
           # Pre-approve all tool permissions — no interactive TTY on runners.
           # ctx.ask() blocks indefinitely without this (doc 19 — confirmed fix).
           OPENCODE_PERMISSION: '{"bash":"allow","read":"allow","edit":"allow","write":"allow","glob":"allow","grep":"allow","list":"allow","external_directory":"allow","webfetch":"allow","task":"allow","todowrite":"allow","skill":"allow"}'
+          # speckit non-interactive permissions — design doc 42 §O2
+          SPECKIT_COPILOT_ALLOW_ALL_TOOLS: "1"
         with:
           model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
           use_github_token: "true"

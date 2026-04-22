@@ -209,6 +209,27 @@ type EnvironmentSpec struct {
 	// strings: "24h", "72h", "168h", etc.
 	// +optional
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
+
+	// StepTimeoutSeconds is the maximum number of seconds a single promotion
+	// step (git-clone, kustomize-set-image, open-pr, etc.) may run before the
+	// reconciler cancels it via context.WithTimeout and marks the PromotionStep
+	// as Failed. When not set or 0 (default), no per-step timeout is applied.
+	// Useful for restricting execution in restricted-egress environments where
+	// git-clone against a slow SCM host can block the reconciler indefinitely.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
+
+	// Regions enables multi-region fan-out for this environment (issue #612).
+	// When two or more region names are listed, the translator emits a single
+	// forEach Graph node that stamps out one PromotionStep per region. Each
+	// stamped PromotionStep receives spec.region = the region name, which the
+	// reconciler uses when constructing Git paths and PR labels.
+	// All regions must be Verified before downstream environments proceed.
+	// When empty or only one region is listed, the environment uses the default
+	// single-node behaviour (no forEach).
+	// +optional
+	Regions []string `json:"regions,omitempty"`
 }
 
 // PromotionTemplateRef is a reference to a PromotionTemplate CR.
@@ -365,6 +386,31 @@ type HealthConfig struct {
 	// (those resource types are always single-named).
 	// +optional
 	LabelSelector map[string]string `json:"labelSelector,omitempty"`
+
+	// Resource specifies the exact Kubernetes resource to watch for health.type=resource.
+	// When set, overrides the default behavior (which watches a Deployment named after
+	// the pipeline in the environment namespace). Use this when the health target is
+	// in a different namespace or has a different name than the pipeline.
+	//
+	// Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger.
+	// +optional
+	Resource *ResourceRef `json:"resource,omitempty"`
+}
+
+// ResourceRef identifies a Kubernetes resource by kind, name, and namespace.
+type ResourceRef struct {
+	// Kind is the Kubernetes resource kind (e.g. "Deployment", "StatefulSet").
+	// Defaults to "Deployment" when unset.
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Name is the resource name. Defaults to the pipeline name when unset.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Namespace is the resource namespace. Defaults to the environment name when unset.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // DeliveryConfig holds in-cluster progressive delivery delegation configuration.

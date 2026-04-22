@@ -88,6 +88,14 @@ spec:
                   The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub
                   directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path.
                 type: string
+              region:
+                description: |-
+                  Region identifies which geographic/cloud region this PromotionStep instance
+                  promotes into. Set by the krocodile Graph controller via forEach "${item}"
+                  substitution when the Pipeline environment has spec.regions with ≥2 entries.
+                  Empty for single-region environments. The reconciler uses this field when
+                  constructing region-scoped Git paths and PR labels (issue #612).
+                type: string
               requiredGates:
                 description: |-
                   RequiredGates holds the names of PolicyGate instances that must be ready

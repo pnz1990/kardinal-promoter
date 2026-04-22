@@ -5,6 +5,7 @@ package graph
 
 import (
 	"crypto/sha1" //nolint:gosec // SHA-1 used for content addressing only, not cryptographic security
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -485,7 +486,9 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName)
 		nodes = append(nodes, prStatusNode)
 
-		// PromotionStep node — node ID must be a valid CEL identifier
+		// PromotionStep node — node ID must be a valid CEL identifier.
+		// When the environment declares ≥2 regions, emit a forEach node so that
+		// krocodile stamps out one PromotionStep per region (issue #612).
 		stepNode := buildPromotionStepNode(
 			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs, prStatusNodeID,
 		)
@@ -524,6 +527,13 @@ func filteredDeps(envName string, deps map[string][]string, filteredSet map[stri
 // nodeID is the CEL-safe identifier (underscores) used in readyWhen/propagateWhen.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
 // prStatusNodeID is the node ID of the companion PRStatus Watch node.
+//
+// Multi-region fan-out (issue #612): when envSpec.Regions has ≥2 entries, the
+// returned node uses krocodile's forEach primitive. krocodile stamps out one
+// PromotionStep per region; each instance receives spec.region = the region name
+// via the "${item}" CEL substitution. The node ID and propagateWhen expressions
+// remain identical to single-region — krocodile evaluates propagateWhen per item
+// and gates downstream propagation until ALL instances are Verified.
 func buildPromotionStepNode(
 	pipelineName, bundleSlugK8s, envName, nodeID string,
 	envSpec kardinalv1alpha1.EnvironmentSpec,
@@ -588,6 +598,14 @@ func buildPromotionStepNode(
 		templateSpec["requiredGates"] = gateRefs
 	}
 
+	// Multi-region fan-out (issue #612): when ≥2 regions are declared on the
+	// environment, add spec.region = "${item}" to the template. krocodile will
+	// substitute the current region name for each forEach iteration.
+	multiRegion := len(envSpec.Regions) >= 2
+	if multiRegion {
+		templateSpec["region"] = "${item}"
+	}
+
 	template := map[string]interface{}{
 		"apiVersion": "kardinal.io/v1alpha1",
 		"kind":       "PromotionStep",
@@ -604,7 +622,7 @@ func buildPromotionStepNode(
 		fmt.Sprintf(`${!has(bundle.spec.intent) || !has(bundle.spec.intent.skipEnvironments) || !bundle.spec.intent.skipEnvironments.exists(s, s == %q)}`, envName),
 	}
 
-	return GraphNode{
+	node := GraphNode{
 		ID:          nodeID,
 		Template:    template,
 		IncludeWhen: includeWhen,
@@ -615,6 +633,22 @@ func buildPromotionStepNode(
 			fmt.Sprintf(`${%s.status.state == "Verified"}`, nodeID),
 		},
 	}
+
+	// Multi-region fan-out: set the ForEach field to a CEL array literal of the
+	// region names (issue #612). krocodile stamps one PromotionStep per region,
+	// substituting "${item}" with each region name in turn. Per-item propagateWhen
+	// was added in krocodile 745998f — all regional instances must be Verified
+	// before the downstream environment proceeds.
+	if multiRegion {
+		// Build a CEL array literal: ["us-east-1", "eu-west-1"]
+		// json.Marshal produces valid JSON which is also valid CEL for string arrays.
+		regionsJSON, err := json.Marshal(envSpec.Regions)
+		if err == nil {
+			node.ForEach = string(regionsJSON)
+		}
+	}
+
+	return node
 }
 
 // buildPolicyGateNode builds a Graph node for a PolicyGate instance.
