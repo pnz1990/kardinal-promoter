@@ -123,7 +123,12 @@ If secrets expire or need rotation:
 
 - ✅ **PDCA coverage must never be 0/0 — flag as BROKEN when it is** — the PDCA workflow now checks `TOTAL == 0` in the `Post PDCA evidence` step: if no scenarios ran, posts `[PDCA BROKEN — no scenarios executed; workflow failed before reaching scenario step]` to Issue #1 and adds `needs-human` label to Issue #413. Normal runs (TOTAL > 0) are unaffected. (PR #1000, 2026-04-21)
 
-- 🔲 **Single-page health dashboard at Issue #1** — a human looking at Issue #1 right now cannot quickly tell if the system is healthy, what it shipped today, and whether it is moving toward the vision or spinning. The report comments are verbose and require reading 20+ comments to form a picture. Add a pinned comment (updated by every session) with a machine-readable health block: last run status (PASS/FAIL), last PR merged (title + number), queue depth, days since last meaningful feature PR, PDCA coverage percentage. Template: `[HEALTH | kardinal-promoter | <date>] loop=GREEN|RED|STALL | last_pr=#NNN "<title>" | queue=N | pdca=X/Y (Z%)`. The SM should update this block every batch using `gh issue comment --edit`.
+- ✅ **Single-page health dashboard at Issue #1** — SM §4f-health-snapshot now maintains
+  a single comment on `REPORT_ISSUE` with sentinel `<!-- otherness-health-snapshot -->`.
+  Every batch: find existing sentinel comment and PATCH it; if not found, create a new one.
+  Shows: loop health (GREEN/AMBER/RED), pdca status, last feat/fix PR, queue depth, update
+  timestamp. Fail-open: API errors log a non-fatal warning and do not block the batch report.
+  (PR #1058, 2026-04-22)
 
 - 🔲 **Self-cadence: switch from 6h to 1h when queue is non-empty** — the cron is locked at `0 * * * *` (hourly per the security comment) but was changed to `0 */6 * * *` in PR #834 because "all 7 journeys passing, steady-state standby." The two are in conflict: the comment says hourly is required for progress, but the cron says 6h. The actual resolution: cadence should be *data-driven*: 1h when the queue has items, 6h in standby. Since GitHub Actions cron cannot be dynamic, implement this by having the session exit early (after posting a "standby" comment) if the queue is empty. This gives 6h effective cadence in standby without changing the cron, while ensuring 1h availability when work exists. Note: PR #861 reduced cadence to 6h but did NOT implement the data-driven exit-early mechanism.
 
