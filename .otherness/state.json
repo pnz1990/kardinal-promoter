@@ -1321,6 +1321,27 @@
       "pr_merged": true,
       "pr_number": 1124,
       "done_at": "2026-04-22T22:00:55Z"
+    },
+    "issue-1128": {
+      "state": "done",
+      "title": "feat(monitoring): ship Grafana dashboard JSON and Helm ConfigMap template",
+      "pr_number": 1139,
+      "pr_merged": true,
+      "done_at": "2026-04-22T23:55:16Z"
+    },
+    "issue-1135": {
+      "state": "done",
+      "title": "feat(pm): add changelog-completeness.sh \u2014 PM \u00a75n-changelog check",
+      "pr_number": 1140,
+      "pr_merged": true,
+      "done_at": "2026-04-22T23:55:16Z"
+    },
+    "issue-1111": {
+      "state": "done",
+      "title": "test(graph): add single-region edge-case test for BuildNodes",
+      "pr_number": 1141,
+      "pr_merged": true,
+      "done_at": "2026-04-22T23:55:16Z"
     }
   },
   "session_heartbeats": {
@@ -1361,11 +1382,11 @@
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 4,
-  "pm_cycle_count": 7,
+  "sm_cycle_count": 5,
+  "pm_cycle_count": 8,
   "chore_only_guard_count": 0,
-  "batch_count": 2,
-  "last_batch_at": "2026-04-22T22:54:00Z",
+  "batch_count": 3,
+  "last_batch_at": "2026-04-22T23:55:16Z",
   "future_backlog": 59,
   "meaningful_prs_last_session": 3,
   "session_end": "COMPLETE"
