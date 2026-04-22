@@ -1207,7 +1207,7 @@
       "pr_number": 1088
     },
     "issue-1005": {
-      "state": "todo",
+      "state": "done",
       "title": "feat(pm): \u00a75j version staleness check \u2014 scan README for stale version strings",
       "labels": [
         "priority/medium",
@@ -1215,7 +1215,10 @@
         "kind/enhancement"
       ],
       "priority": "medium",
-      "issue_number": 1005
+      "issue_number": 1005,
+      "pr_merged": true,
+      "pr_number": 1118,
+      "done_at": "2026-04-22T21:34:37Z"
     },
     "issue-954": {
       "state": "done",
