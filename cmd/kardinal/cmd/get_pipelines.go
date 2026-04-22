@@ -104,7 +104,15 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		subsItems = subsList.Items
 	}
 
-	// If a specific name was given, filter.
+	// Fetch Bundles so we can surface Failed-phase error conditions after the table.
+	// Non-fatal: if the list fails, we still render the table without error notices.
+	var bundlesItems []v1alpha1.Bundle
+	var bundlesList v1alpha1.BundleList
+	if err := c.List(ctx, &bundlesList, opts...); err == nil {
+		bundlesItems = bundlesList.Items
+	}
+
+	// If a specific name was given, filter pipelines (and the bundle list to match).
 	items := pipelines.Items
 	if len(args) == 1 {
 		name := args[0]
@@ -115,6 +123,15 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 			}
 		}
 		items = filtered
+
+		// Also filter bundles to only those belonging to this pipeline.
+		var filteredBundles []v1alpha1.Bundle
+		for _, b := range bundlesItems {
+			if b.Spec.Pipeline == name {
+				filteredBundles = append(filteredBundles, b)
+			}
+		}
+		bundlesItems = filteredBundles
 	}
 
 	switch OutputFormat() {
@@ -123,6 +140,13 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		return FormatPipelineTableFull(w, items, promotionSteps.Items, subsItems, allNamespaces)
+		if err := FormatPipelineTableFull(w, items, promotionSteps.Items, subsItems, allNamespaces); err != nil {
+			return err
+		}
+		// Surface Bundle-level errors (e.g. dependsOn validation failures) that
+		// would otherwise be invisible in the table. Non-fatal: ignore write errors
+		// so a partial error notice does not mask the successfully rendered table.
+		_ = FormatBundleErrors(w, bundlesItems)
+		return nil
 	}
 }
