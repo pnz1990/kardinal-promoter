@@ -243,7 +243,7 @@ injected into the controller Deployment automatically.
 4. Verify the rotation took effect by checking the controller log:
    ```bash
    kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=20 \
-     | grep "SCM token rotated"
+     | grep "SCM credentials rotated"
    ```
 
 ### Static mode (development / CI)
