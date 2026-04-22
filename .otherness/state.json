@@ -736,15 +736,11 @@
       "priority": "medium"
     },
     "issue-1052": {
-      "state": "todo",
-      "title": "feat: **Loop honesty signal: \"housekeeping-only\" PR detection**",
-      "labels": [
-        "kardinal",
-        "priority/medium",
-        "size/s",
-        "kind/enhancement",
-        "area/controller"
-      ],
+      "state": "done",
+      "title": "feat: Loop honesty signal: housekeeping-only PR detection",
+      "pr_number": 1062,
+      "pr_merged": true,
+      "done_at": "2026-04-22T05:23:36Z",
       "priority": "medium"
     },
     "issue-1051": {
@@ -772,7 +768,7 @@
       "priority": "medium"
     },
     "issue-1049": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Loop-caused journey regression has no dedicated detection or escalation path**",
       "labels": [
         "kardinal",
@@ -781,7 +777,8 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-1048": {
       "state": "todo",
