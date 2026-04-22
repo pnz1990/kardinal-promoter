@@ -1254,6 +1254,12 @@
       ],
       "priority": "low",
       "issue_number": 612
+    },
+    "issue-1094": {
+      "state": "done",
+      "title": "fix(rbac): add notificationhooks and auditevents to ClusterRole",
+      "pr": 1095,
+      "merged_at": "2026-04-22T11:46:32Z"
     }
   },
   "session_heartbeats": {
