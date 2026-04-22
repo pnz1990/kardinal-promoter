@@ -796,7 +796,7 @@
       "pr_merged": true
     },
     "issue-1048": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Graph builder `dependsOn` validation error is silent in CLI output**",
       "labels": [
         "kardinal",
@@ -805,7 +805,14 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "assigned_to": "sess-098b7383",
+      "assigned_at": "2026-04-22T06:49:26Z",
+      "branch": "feat/issue-1048",
+      "worktree": "../kardinal-promoter.issue-1048",
+      "pr_merged": true,
+      "done_at": "2026-04-22T07:15:50Z",
+      "pr_number": 1071
     },
     "issue-1047": {
       "state": "done",
@@ -897,7 +904,7 @@
       "priority": "medium"
     },
     "issue-960": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 13: Rollback and Pause/Resume",
       "labels": [
         "kardinal",
@@ -905,10 +912,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-959": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 9: Embedded React UI",
       "labels": [
         "kardinal",
@@ -916,10 +924,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-958": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 8: CLI",
       "labels": [
         "kardinal",
@@ -927,10 +936,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-957": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 5: Git Operations and GitHub PR Flow",
       "labels": [
         "kardinal",
@@ -938,10 +948,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-956": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 1: CRD Types and Validation",
       "labels": [
         "kardinal",
@@ -949,10 +960,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     },
     "issue-955": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 0: Project Skeleton",
       "labels": [
         "kardinal",
@@ -960,7 +972,8 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true
     }
   },
   "session_heartbeats": {
