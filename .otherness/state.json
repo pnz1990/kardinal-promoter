@@ -739,8 +739,10 @@
       "priority": "medium"
     },
     "issue-1051": {
-      "state": "todo",
-      "title": "feat: **Skills inventory is never consulted before starting work",
+      "title": "feat: Skills inventory is never consulted before starting work \u2014 proactive skills discovery is absent",
+      "state": "done",
+      "issue": "1051",
+      "priority": "medium",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -748,7 +750,15 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "created_at": "2026-04-22T06:22:01Z",
+      "assigned_to": "sess-e5e4adf9",
+      "assigned_at": "2026-04-22T06:22:01Z",
+      "branch": "feat/issue-1051",
+      "worktree": "../kardinal-promoter.issue-1051",
+      "pr_number": "1068",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1068",
+      "pr_merged": true,
+      "done_at": "2026-04-22T06:31:43Z"
     },
     "issue-1050": {
       "title": "feat: Simulation delta feedback is one-directional: SM posts it, COORDINATOR never reads it",
