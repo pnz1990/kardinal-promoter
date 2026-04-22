@@ -209,6 +209,17 @@ type EnvironmentSpec struct {
 	// strings: "24h", "72h", "168h", etc.
 	// +optional
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
+
+	// Regions enables multi-region fan-out for this environment (issue #612).
+	// When two or more region names are listed, the translator emits a single
+	// forEach Graph node that stamps out one PromotionStep per region. Each
+	// stamped PromotionStep receives spec.region = the region name, which the
+	// reconciler uses when constructing Git paths and PR labels.
+	// All regions must be Verified before downstream environments proceed.
+	// When empty or only one region is listed, the environment uses the default
+	// single-node behaviour (no forEach).
+	// +optional
+	Regions []string `json:"regions,omitempty"`
 }
 
 // PromotionTemplateRef is a reference to a PromotionTemplate CR.

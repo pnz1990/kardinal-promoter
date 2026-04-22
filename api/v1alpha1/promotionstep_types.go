@@ -52,6 +52,14 @@ type PromotionStepSpec struct {
 	// directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path.
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
+
+	// Region identifies which geographic/cloud region this PromotionStep instance
+	// promotes into. Set by the krocodile Graph controller via forEach "${item}"
+	// substitution when the Pipeline environment has spec.regions with ≥2 entries.
+	// Empty for single-region environments. The reconciler uses this field when
+	// constructing region-scoped Git paths and PR labels (issue #612).
+	// +optional
+	Region string `json:"region,omitempty"`
 }
 
 // StepExecutionState is the execution state of a single step within a PromotionStep.

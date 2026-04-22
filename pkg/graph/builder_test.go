@@ -992,3 +992,59 @@ func TestBuilder_PromotionTemplate_LocalOverride(t *testing.T) {
 	// 1 bundle + 1 env × (1 PRStatus + 1 PromotionStep) = 3
 	assert.Equal(t, 3, result.NodeCount)
 }
+
+// TestBuilder_MultiRegionFanOut verifies that when an environment declares ≥2 regions,
+// the translator emits a forEach node with the regions as a CEL array literal and
+// includes spec.region = "${item}" in the PromotionStep template (issue #612).
+func TestBuilder_MultiRegionFanOut(t *testing.T) {
+	b := graph.NewBuilder()
+
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{
+					Name:    "prod",
+					Regions: []string{"us-east-1", "eu-west-1"},
+				},
+			},
+		},
+	}
+	bundle := makeBundle("fleet-v1", "fleet")
+
+	result, err := b.Build(graph.BuildInput{
+		Pipeline:    pipeline,
+		Bundle:      bundle,
+		PolicyGates: nil,
+	})
+	require.NoError(t, err)
+
+	// Node count: 1 bundle + test(1 PRStatus + 1 PromotionStep) + prod(1 PRStatus + 1 PromotionStep) = 5
+	assert.Equal(t, 5, result.NodeCount)
+
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+
+	// test node must NOT have ForEach set
+	testNode := nodeMap["test"]
+	assert.Empty(t, testNode.ForEach, "single-region test node must not have ForEach")
+
+	// prod node MUST have ForEach set to a CEL array of the two regions
+	prodNode := nodeMap["prod"]
+	require.NotEmpty(t, prodNode.ForEach, "multi-region prod node must have ForEach set")
+	assert.Contains(t, prodNode.ForEach, "us-east-1", "ForEach must contain us-east-1")
+	assert.Contains(t, prodNode.ForEach, "eu-west-1", "ForEach must contain eu-west-1")
+
+	// The prod PromotionStep template must include spec.region = "${item}"
+	prodSpec, ok := prodNode.Template["spec"].(map[string]interface{})
+	require.True(t, ok, "prod node template must have spec")
+	regionVal, ok := prodSpec["region"]
+	require.True(t, ok, "prod template spec must have region field")
+	assert.Equal(t, "${item}", regionVal, "prod template spec.region must be ${item}")
+
+	// The test node template must NOT include spec.region
+	testSpec, ok := testNode.Template["spec"].(map[string]interface{})
+	require.True(t, ok, "test node template must have spec")
+	_, hasRegion := testSpec["region"]
+	assert.False(t, hasRegion, "single-region test node must not have spec.region")
+}
