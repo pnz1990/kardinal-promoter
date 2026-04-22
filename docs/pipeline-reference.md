@@ -100,6 +100,7 @@ spec:
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A health alarm resets the timer. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
 | `onHealthFailure` | No | `none` | What to do when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle at the previous image version; step → RollingBack. |
+| `regions` | No | (none) | Multi-region fan-out (#612). When two or more region names are listed (e.g. `["us-east-1", "eu-west-1"]`), the translator emits a single krocodile `forEach` Graph node that stamps out one PromotionStep per region. Each PromotionStep receives `spec.region` set to its region name. **All regions must be Verified before downstream environments proceed.** When empty or only one region is listed, the environment uses single-node behaviour (no fan-out). |
 
 ### spec.historyLimit
 
