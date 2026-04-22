@@ -120,7 +120,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - ✅ **Per-step execution timeout** — `Pipeline.spec.environments[].stepTimeoutSeconds` (optional, `Minimum=1`) is propagated via `StepState.StepTimeoutSeconds` to `Engine.ExecuteFrom`. When set, each step is executed under `context.WithTimeout(ctx, N*time.Second)`. A hung `git-clone` or `kustomize-build` is cancelled and the PromotionStep transitions to Failed rather than blocking the reconciler indefinitely. Table-driven tests in `pkg/steps/engine_test.go` verify both timeout cancellation and propagation of `context.DeadlineExceeded`. (PR #1121-impl, 2026-04-22)
 
-- 🔲 **`kardinal logs` has no `--follow` / streaming mode** — `cmd/kardinal/cmd/logs.go` renders a static snapshot of `PromotionStep.status.stepMessages` at the time of the call. There is no `--follow` flag to stream messages as steps execute. For a platform engineer watching an active `git-clone` → `open-pr` sequence, they must repeatedly run `kardinal logs <pipeline>` to see progress. Add a `--follow` flag that polls for status changes every 2s (or watches the resource) and streams new `stepMessages` entries as they are appended. This is the key observability feature a new user needs to trust that something is actually happening.
+- ✅ **`kardinal logs --follow` streaming mode** — `cmd/kardinal/cmd/logs.go` now accepts `--follow` / `-f`. When set, polls the PromotionStep list every 2 seconds, printing only newly-appeared `status.steps[]` entries (cursor-tracked per step). Exits when all active PromotionSteps reach a terminal state (Verified, Failed, Superseded, AbortedByAlarm). Signal-safe: exits cleanly on SIGINT. Static output (no `--follow`) is unchanged. Tests in `cmd/kardinal/cmd/logs_test.go` verify flag registration, allTerminal logic, and follow-exits-on-terminal behaviour. (PR #1122-impl, 2026-04-22)
 
 - ✅ **`kardinal status <pipeline>` is not per-pipeline** — `cmd/kardinal/cmd/status.go` extended with pipeline-name argument. `kardinal status <pipeline>` now shows: active bundle(s), PromotionStep table with ENV/STATE/ACTIVE-STEP/PR/AGE columns, and a "Blocking Policy Gates" table (GATE/ENV/EXPRESSION/REASON/LAST-CHECKED) when gates have `status.ready=false`. (PR #997, 2026-04-21)
 
@@ -180,6 +180,6 @@ Every item in this doc was identified by examining the live codebase against fiv
 3. GitHub Discussions community presence
 4. Reusable PromotionTemplate CRD
 5. ~~`kardinal status <pipeline>` per-pipeline in-flight view~~ ✅ Done (PR #997, 2026-04-21)
-6. `kardinal logs --follow` streaming mode — new users need real-time feedback during first promotion
+6. ~~`kardinal logs --follow` streaming mode~~ ✅ Done (PR #1122-impl) — polls every 2s, cursor-tracked incremental step output, exits on terminal state
 7. Grafana dashboard JSON shipped in Helm chart — makes Prometheus useful out-of-the-box
 8. `kardinal logs` per-step `status.steps[]` rendering — primary debugging surface for failed promotions ✅ (PR #974 series, 2026-04-21)
