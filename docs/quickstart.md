@@ -2,6 +2,42 @@
 
 This guide walks you through setting up your first promotion pipeline with kardinal-promoter. By the end, you will have a working pipeline that promotes the `kardinal-test-app` through test, uat, and prod environments using Git pull requests.
 
+## Fast Start — under 10 minutes
+
+No GitOps repo setup required. Install with `demo.enabled=true` and you get a pre-configured
+Pipeline targeting the [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo)
+reference repository — ready to promote immediately.
+
+```bash
+# 1. Install with demo mode (no GitOps repo setup required)
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  --namespace kardinal-system --create-namespace \
+  --set demo.enabled=true \
+  --set github.token=$GITHUB_PAT
+
+# 2. Verify the demo Pipeline is running
+kardinal get pipelines
+# NAME   PHASE     ENVIRONMENTS   AGE
+# demo   Waiting   test,uat,prod  10s
+
+# 3. Trigger the first promotion (get the latest test-app SHA from CI)
+SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
+```
+
+The demo Pipeline uses the reference `kardinal-demo` GitOps repo (already has the correct
+Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
+
+!!! note "Estimated time: under 10 minutes on a fresh kind cluster"
+    Prerequisites: kind cluster, `helm`, `kubectl`, `kardinal`, and a GitHub PAT
+    with `repo` write access to `pnz1990/kardinal-demo` (or your fork).
+
+---
+
+## Full Setup (bring your own GitOps repo)
+
+Use the full guide below to set up kardinal-promoter against your own GitOps repository.
+
 ## What you will build
 
 ```mermaid
