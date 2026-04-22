@@ -820,7 +820,7 @@
       "priority": "medium"
     },
     "issue-1045": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **PDCA workflow result is not read by the SM",
       "labels": [
         "kardinal",
@@ -829,7 +829,9 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T03:27:20Z"
     },
     "issue-995": {
       "state": "todo",
