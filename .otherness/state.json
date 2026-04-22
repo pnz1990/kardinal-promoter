@@ -1087,7 +1087,7 @@
       "done_at": "2026-04-22T09:25:12Z"
     },
     "issue-1075": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **No image signature verification step**",
       "labels": [
         "kardinal",
@@ -1097,7 +1097,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1075
+      "issue_number": 1075,
+      "pr_merged": true,
+      "pr_number": 1091,
+      "done_at": "2026-04-22T11:15:32Z"
     },
     "issue-1074": {
       "state": "todo",
@@ -1251,6 +1254,12 @@
       ],
       "priority": "low",
       "issue_number": 612
+    },
+    "issue-1094": {
+      "state": "done",
+      "title": "fix(rbac): add notificationhooks and auditevents to ClusterRole",
+      "pr": 1095,
+      "merged_at": "2026-04-22T11:46:32Z"
     }
   },
   "session_heartbeats": {
@@ -1283,5 +1292,7 @@
   "report_issue": 1,
   "sm_cycle_count": 4,
   "pm_cycle_count": 7,
-  "chore_only_guard_count": 0
+  "chore_only_guard_count": 0,
+  "batch_count": 1,
+  "last_batch_at": "2026-04-22T11:58:16Z"
 }
