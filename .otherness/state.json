@@ -1040,8 +1040,8 @@
       "issue_number": 1079
     },
     "issue-1078": {
-      "state": "todo",
-      "title": "feat: **Otherness onboarding quality gate: `/otherness.onboard` output review**",
+      "state": "done",
+      "title": "feat: Otherness onboarding quality gate: post-onboard smoke test",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -1050,7 +1050,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1078
+      "issue_number": 1078,
+      "pr_number": 1102,
+      "pr_merged": true,
+      "done_at": "2026-04-22T14:14:26Z"
     },
     "issue-1077": {
       "state": "todo",
