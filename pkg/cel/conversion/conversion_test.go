@@ -113,11 +113,11 @@ func TestGoNativeType_Table(t *testing.T) {
 			wantVal: v1.Time{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}.ToUnstructured(),
 		},
 		{
-			name: "list",
+			name:  "list",
 			input: listVal,
 		},
 		{
-			name: "map",
+			name:  "map",
 			input: mapVal,
 		},
 	}
