@@ -242,6 +242,16 @@ spec:
                         Shard pins this environment to a specific kardinal-controller agent shard
                         in distributed mode. Leave empty for single-controller deployments.
                       type: string
+                    stepTimeoutSeconds:
+                      description: |-
+                        StepTimeoutSeconds is the maximum number of seconds a single promotion
+                        step (git-clone, kustomize-set-image, open-pr, etc.) may run before the
+                        reconciler cancels it via context.WithTimeout and marks the PromotionStep
+                        as Failed. When not set or 0 (default), no per-step timeout is applied.
+                        Useful for restricting execution in restricted-egress environments where
+                        git-clone against a slow SCM host can block the reconciler indefinitely.
+                      minimum: 1
+                      type: integer
                     steps:
                       description: |-
                         Steps overrides the default step sequence for this environment.
