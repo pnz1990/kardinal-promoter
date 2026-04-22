@@ -808,7 +808,7 @@
       "priority": "medium"
     },
     "issue-1046": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Single-page health dashboard at Issue #1**",
       "labels": [
         "kardinal",
@@ -817,7 +817,9 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T03:39:07Z"
     },
     "issue-1045": {
       "state": "done",
