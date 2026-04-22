@@ -2058,3 +2058,154 @@ func TestBundleConditions_NoDuplicates(t *testing.T) {
 	}
 	assert.Equal(t, 1, readyCount, "exactly one Ready condition must exist after multiple reconciles")
 }
+
+// TestBundleReconciler_MaxConcurrentPromotions_CapEnforced verifies that when
+// maxConcurrentPromotions is set on the Pipeline and the cap is already reached,
+// an Available Bundle is requeued rather than advanced to Promoting.
+func TestBundleReconciler_MaxConcurrentPromotions_CapEnforced(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments:            []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+			MaxConcurrentPromotions: 1, // cap = 1
+		},
+	}
+	// First bundle is already Promoting — this fills the cap.
+	b1 := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	// Second bundle is Available — it should be requeued (cap reached).
+	b2 := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b1, b2).
+		WithStatusSubresource(b1, b2).
+		Build()
+
+	translator := &mockTranslator{graphName: "nginx-demo-v2-graph"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+	})
+
+	require.NoError(t, err)
+	assert.False(t, translator.called, "Translator.Translate must NOT be called when cap is reached")
+	assert.Equal(t, 30*time.Second, result.RequeueAfter, "bundle must be requeued with 30s delay")
+
+	// Verify the bundle stays in Available phase (not advanced to Promoting).
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
+		Name: "nginx-demo-v2", Namespace: "default",
+	}, &got))
+	assert.Equal(t, "Available", got.Status.Phase, "bundle must remain Available when cap is reached")
+}
+
+// TestBundleReconciler_MaxConcurrentPromotions_ZeroIsUnlimited verifies that
+// maxConcurrentPromotions=0 (the default) does not block any promotion.
+func TestBundleReconciler_MaxConcurrentPromotions_ZeroIsUnlimited(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments:            []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+			MaxConcurrentPromotions: 0, // 0 = unlimited
+		},
+	}
+	// Multiple bundles already Promoting.
+	for i := 1; i <= 5; i++ {
+		_ = &kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("nginx-demo-v%d", i), Namespace: "default"},
+			Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+			Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+		}
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v6", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	// Include 5 Promoting siblings + our Available bundle.
+	promotingSiblings := make([]kardinalv1alpha1.Bundle, 5)
+	for i := range promotingSiblings {
+		promotingSiblings[i] = kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("nginx-demo-v%d", i+1), Namespace: "default"},
+			Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+			Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+		}
+	}
+
+	s := newScheme()
+	builder := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b).
+		WithStatusSubresource(b)
+	for i := range promotingSiblings {
+		builder = builder.WithObjects(&promotingSiblings[i]).WithStatusSubresource(&promotingSiblings[i])
+	}
+	c := builder.Build()
+
+	translator := &mockTranslator{graphName: "nginx-demo-v6-graph"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v6", Namespace: "default"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, translator.called, "Translator must be called when cap is 0 (unlimited)")
+	assert.Zero(t, result.RequeueAfter, "no requeue delay when cap is 0")
+}
+
+// TestBundleReconciler_MaxConcurrentPromotions_CapNotReached verifies that when
+// cap is set but not yet reached, promotion proceeds normally.
+func TestBundleReconciler_MaxConcurrentPromotions_CapNotReached(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments:            []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+			MaxConcurrentPromotions: 2, // cap = 2; only 1 Promoting exists → allow
+		},
+	}
+	b1 := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
+	}
+	b2 := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v2", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+
+	s := newScheme()
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pipeline, b1, b2).
+		WithStatusSubresource(b1, b2).
+		Build()
+
+	translator := &mockTranslator{graphName: "nginx-demo-v2-graph"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v2", Namespace: "default"},
+	})
+
+	require.NoError(t, err)
+	assert.True(t, translator.called, "Translator must be called when cap is not yet reached")
+	assert.Zero(t, result.RequeueAfter, "no requeue delay when cap is not reached")
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
+		Name: "nginx-demo-v2", Namespace: "default",
+	}, &got))
+	assert.Equal(t, "Promoting", got.Status.Phase)
+}

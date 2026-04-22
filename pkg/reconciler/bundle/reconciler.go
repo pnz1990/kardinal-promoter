@@ -537,6 +537,36 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 		return ctrl.Result{}, nil
 	}
 
+	// maxConcurrentPromotions: enforce the per-pipeline cap before starting a new promotion.
+	// Count Bundles in Promoting phase for this pipeline in this namespace.
+	// When cap is 0 (default), enforcement is skipped for backward compatibility.
+	// Graph-first: this reads only Bundle.status.phase (our own CRD), no cross-CRD reads.
+	if cap := pipeline.Spec.MaxConcurrentPromotions; cap > 0 {
+		var bundleList kardinalv1alpha1.BundleList
+		if listErr := r.List(ctx, &bundleList, client.InNamespace(b.Namespace)); listErr != nil {
+			log.Warn().Err(listErr).Msg("maxConcurrentPromotions: failed to list bundles (non-fatal, skipping cap)")
+		} else {
+			activeCount := 0
+			for i := range bundleList.Items {
+				sibling := &bundleList.Items[i]
+				if sibling.Name == b.Name {
+					continue // exclude self
+				}
+				if sibling.Spec.Pipeline == b.Spec.Pipeline && sibling.Status.Phase == "Promoting" {
+					activeCount++
+				}
+			}
+			if activeCount >= cap {
+				log.Info().
+					Int("active", activeCount).
+					Int("cap", cap).
+					Str("pipeline", b.Spec.Pipeline).
+					Msg("maxConcurrentPromotions cap reached — requeuing Available bundle")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+		}
+	}
+
 	// Translate Pipeline+Bundle into a Graph
 	// Note: Pipeline.Spec.Paused enforcement is handled by the freeze PolicyGate
 	// (created by `kardinal pause`) which blocks all Graph nodes. The reconciler

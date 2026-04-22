@@ -47,6 +47,22 @@ type PipelineSpec struct {
 	// Eliminates TR-2 from docs/design/11-graph-purity-tech-debt.md.
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
+
+	// MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this
+	// pipeline at any given time. When 0 or unset (default), there is no cap and all
+	// Available Bundles are promoted concurrently. When set to a positive value, Bundles
+	// that exceed the cap are requeued until a promotion slot becomes available.
+	// This prevents promotion storms (e.g. a CI burst creating 50 Bundles simultaneously)
+	// from saturating git hosts, exhausting GitHub API rate limits, or creating merge
+	// conflicts in the GitOps repository.
+	//
+	// Example: maxConcurrentPromotions: 2 allows at most 2 active promotions at once.
+	// Additional Available Bundles wait in a 30-second polling loop.
+	//
+	// +kubebuilder:default=0
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxConcurrentPromotions int `json:"maxConcurrentPromotions,omitempty"`
 }
 
 // PipelineGit holds the shared GitOps repository configuration for a Pipeline.

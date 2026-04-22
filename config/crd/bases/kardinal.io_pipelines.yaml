@@ -419,6 +419,21 @@ spec:
                   beyond this limit are deleted oldest-first on each new Bundle creation.
                 minimum: 1
                 type: integer
+              maxConcurrentPromotions:
+                default: 0
+                description: |-
+                  MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this
+                  pipeline at any given time. When 0 or unset (default), there is no cap and all
+                  Available Bundles are promoted concurrently. When set to a positive value, Bundles
+                  that exceed the cap are requeued until a promotion slot becomes available.
+                  This prevents promotion storms (e.g. a CI burst creating 50 Bundles simultaneously)
+                  from saturating git hosts, exhausting GitHub API rate limits, or creating merge
+                  conflicts in the GitOps repository.
+
+                  Example: maxConcurrentPromotions: 2 allows at most 2 active promotions at once.
+                  Additional Available Bundles wait in a 30-second polling loop.
+                minimum: 0
+                type: integer
               paused:
                 default: false
                 description: Paused suspends all promotions in this pipeline when
