@@ -48,9 +48,8 @@ differently than the competitor's version).
 
 - ✅ **Comparison doc accuracy — PM §5n** checks ❌ rows in `docs/comparison.md` against design doc ✅ Present items, opens `kind/docs` issues for stale rows. Fail-open. Runs every N_PM_CYCLES. (PR #1006, 2026-04-22)
 - ✅ **Version string freshness — PM §5j** `scripts/version-staleness-check.sh` scans `README.md` and `docs/comparison.md` for hardcoded version strings, compares against latest git tag. If stale by ≥1 minor version: opens `kind/docs priority/high` issue. Dedup guard. Fail-open. (PR #1005-impl, 2026-04-22)
+- ✅ **Changelog completeness — PM §5n-changelog** `scripts/changelog-completeness.sh` scans git tags, compares against `CHANGELOG.md ## [vX.Y.Z]` headers. For each tag with no CHANGELOG entry: opens `kind/docs` issue with commit log for that release. Dedup guard. Fail-open. (PR #1135-series, 2026-04-22)
 
 ## Future (🔲)
 
 - 🔲 QA docs gate — QA §3b-docs-gate: when a PR moves a Future item to ✅ Present for a user-visible feature (CLI, CRD, UI), verify docs/ files were updated or the feature is Layer 1 auto-documented. If neither: WRONG finding blocks approval.
-
-- 🔲 Changelog completeness — every git tag must have a corresponding entry in CHANGELOG.md. PM §5n-changelog: scan git tags, compare against CHANGELOG.md `## [vX.Y.Z]` headers. For each missing entry: open `kind/docs` issue.
