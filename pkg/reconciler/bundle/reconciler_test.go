@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2208,4 +2209,135 @@ func TestBundleReconciler_MaxConcurrentPromotions_CapNotReached(t *testing.T) {
 		Name: "nginx-demo-v2", Namespace: "default",
 	}, &got))
 	assert.Equal(t, "Promoting", got.Status.Phase)
+}
+
+// TestBundleReconciler_EmitsAvailableEvent verifies that a Kubernetes Event is
+// emitted when a Bundle transitions to Available.
+func TestBundleReconciler_EmitsAvailableEvent(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+
+	fakeRecorder := record.NewFakeRecorder(10)
+	r := &bundle.Reconciler{Client: c, Recorder: fakeRecorder}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Expect an Available event.
+	select {
+	case ev := <-fakeRecorder.Events:
+		assert.Contains(t, ev, "Available")
+		assert.Contains(t, ev, "nginx-demo")
+	default:
+		t.Fatal("expected Available event to be emitted, got none")
+	}
+}
+
+// TestBundleReconciler_EmitsPromotingEvent verifies that a Kubernetes Event is
+// emitted when a Bundle transitions to Promoting.
+func TestBundleReconciler_EmitsPromotingEvent(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}},
+		},
+	}
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
+
+	fakeRecorder := record.NewFakeRecorder(10)
+	translator := &mockTranslator{graphName: "nginx-demo-v1-graph"}
+	r := &bundle.Reconciler{Client: c, Translator: translator, Recorder: fakeRecorder}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Expect a Promoting event.
+	select {
+	case ev := <-fakeRecorder.Events:
+		assert.Contains(t, ev, "Promoting")
+		assert.Contains(t, ev, "nginx-demo")
+	default:
+		t.Fatal("expected Promoting event to be emitted, got none")
+	}
+}
+
+// TestBundleReconciler_EmitsSupersededEvent verifies that a Kubernetes Event is
+// emitted when a Bundle supersedes itself.
+func TestBundleReconciler_EmitsSupersededEvent(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "prod"}},
+		},
+	}
+	// v1 (older) and v2 (newer) — v1 should supersede itself
+	now := time.Now()
+	b1 := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v1",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Second)},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	b2 := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-v2",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: now},
+		},
+		Spec:   kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+	}
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, b1, b2).WithStatusSubresource(b1, b2).Build()
+
+	fakeRecorder := record.NewFakeRecorder(10)
+	r := &bundle.Reconciler{Client: c, Recorder: fakeRecorder}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	// Expect a Superseded event.
+	select {
+	case ev := <-fakeRecorder.Events:
+		assert.Contains(t, ev, "Superseded")
+	default:
+		t.Fatal("expected Superseded event to be emitted, got none")
+	}
+}
+
+// TestBundleReconciler_NoRecorderNoPanic verifies that a nil Recorder does not
+// cause a panic (backward-compatibility with existing test setups).
+func TestBundleReconciler_NoRecorderNoPanic(t *testing.T) {
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+	s := newScheme()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+
+	// Recorder is nil — must not panic.
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+	})
+	require.NoError(t, err)
 }

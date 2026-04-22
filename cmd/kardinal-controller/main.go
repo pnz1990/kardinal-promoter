@@ -335,6 +335,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Translator:   newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
 		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
+		Recorder:     mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -348,6 +349,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create PolicyGateReconciler (CEL env init failed)")
 	}
+	pgReconciler.Recorder = mgr.GetEventRecorderFor("kardinal-controller") //nolint:staticcheck
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
@@ -358,6 +360,7 @@ func main() {
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		Shard:          shard,
+		Recorder:       mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}

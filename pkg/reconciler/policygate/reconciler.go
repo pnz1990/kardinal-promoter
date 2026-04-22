@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -46,6 +48,9 @@ type Reconciler struct {
 	eval *evaluator
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+	// Recorder emits Kubernetes Events when a PolicyGate first blocks.
+	// When nil, event emission is skipped (backward-compatible).
+	Recorder record.EventRecorder
 }
 
 // NewReconciler creates a Reconciler with an initialized CEL evaluator.
@@ -534,6 +539,7 @@ func (r *Reconciler) buildPRContext(ctx context.Context, ns, bundleName string) 
 func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
 	ready bool, reason string) error {
 	prevReady := gate.Status.Ready
+	isFirstEval := gate.Status.LastEvaluatedAt == nil
 	patch := client.MergeFrom(gate.DeepCopy())
 	now := metav1.NewTime(r.now())
 	gate.Status.Ready = ready
@@ -549,14 +555,32 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 			outcome = "Failure"
 		}
 		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason)
-		// Emit gate blocking duration when gate transitions from blocked to allowed.
-		// Uses CreationTimestamp as the upper-bound proxy for blocking duration.
-		// A FirstBlockedAt status field would give exact duration; tracked in design doc 15.
-		if ready && !prevReady {
-			blockingDuration := r.now().Sub(gate.CreationTimestamp.Time)
-			if blockingDuration > 0 {
-				observability.GateBlockingDurationSeconds.Observe(blockingDuration.Seconds())
-			}
+	}
+	// Emit Kubernetes Event on gate state change OR on first evaluation that blocks.
+	// First block: isFirstEval && !ready (gate immediately blocks on creation).
+	// State flip: ready != prevReady (gate transitions between allowed/blocked).
+	if r.Recorder != nil {
+		envName := gate.Labels[labelEnvironment]
+		pipeline := gate.Labels[labelPipeline]
+		if (!ready && isFirstEval) || (!ready && ready != prevReady) {
+			// Gate is blocking (first eval or newly blocked).
+			r.Recorder.Event(gate, corev1.EventTypeWarning, "Blocked",
+				fmt.Sprintf("env %s pipeline %s: gate %s blocking promotion: %s",
+					envName, pipeline, gate.Name, reason))
+		} else if ready && ready != prevReady {
+			// Gate just allowed (was blocked before).
+			r.Recorder.Event(gate, corev1.EventTypeNormal, "Allowed",
+				fmt.Sprintf("env %s pipeline %s: gate %s now allowing promotion",
+					envName, pipeline, gate.Name))
+		}
+	}
+	// Emit gate blocking duration when gate transitions from blocked to allowed.
+	// Uses CreationTimestamp as the upper-bound proxy for blocking duration.
+	// A FirstBlockedAt status field would give exact duration; tracked in design doc 15.
+	if ready && !prevReady {
+		blockingDuration := r.now().Sub(gate.CreationTimestamp.Time)
+		if blockingDuration > 0 {
+			observability.GateBlockingDurationSeconds.Observe(blockingDuration.Seconds())
 		}
 	}
 	return nil
