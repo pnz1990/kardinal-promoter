@@ -175,8 +175,8 @@ exit 0
 			},
 		},
 		Inputs: map[string]string{
-			"cosign.issuer":          testIssuer,
-			"cosign.identityRegexp":  testIdentity,
+			"cosign.issuer":         testIssuer,
+			"cosign.identityRegexp": testIdentity,
 		},
 		Outputs: map[string]string{},
 	}
