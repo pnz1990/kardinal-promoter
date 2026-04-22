@@ -24,3 +24,4 @@
 
 | 2026-04-21 | 51 | 20 | 0 | 0 | 12 | 1 | ~8min | 1 | feature-rich | — | — | 0 | 1 | 1 | TokenReview auth for UI API (PR #1015) |
 | 2026-04-21 | 1 | 0 | 0 | 0 | 12 | 1 | ~12min | 1 | feature-rich | — | — | 0 | 1 | 1 | feat(cli): kardinal init --scaffold-gitops --demo (PR #1022) || 2026-04-21 | 47 | 0 | ✅ | bundle RequeueAfter regression guard (PR #1027); CLI docs sync fix | ✅ |
+| 2026-04-21 | 22 | 20 | 0 | 0 | 12 | 1 | ~5min | 21 | feature-rich | — | — | 0 | 1 | 1 | Bitbucket+ADO SCM providers | 0 |

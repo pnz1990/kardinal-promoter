@@ -67,6 +67,15 @@ func (t *Translator) Translate(ctx context.Context,
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
 
+	// Inline PromotionTemplate steps before building the Graph.
+	// Each environment that references a PromotionTemplate has its steps replaced
+	// with those from the template (unless the environment overrides with local steps).
+	// This keeps the Builder pure (no k8s client) — spec O4.
+	pipeline, err = inlinePromotionTemplates(ctx, pipeline, t.k8s)
+	if err != nil {
+		return "", fmt.Errorf("translator.Translate: inline promotion templates: %w", err)
+	}
+
 	// Validate skip permissions before building the Graph.
 	// The result of this check flows into Bundle.status via the Bundle reconciler
 	// (which sets phase=Failed if Translate returns an error). This makes the

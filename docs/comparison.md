@@ -19,7 +19,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Pre-deploy gates** | Yes — `when: pre-deploy` blocks before git-clone starts | No | No |
 | **PR evidence body** | Structured (image digest, CI run, gate results, soak time, overrides) | None — tracked in Kargo UI | Git diff only |
 | **GitOps engine support** | ArgoCD, Flux, raw Kubernetes | ArgoCD (primary), others partial | ArgoCD, Flux, any |
-| **SCM providers** | GitHub, GitLab, Forgejo/Gitea | GitHub, GitLab | GitHub |
+| **SCM providers** | GitHub, GitLab, Forgejo/Gitea, Bitbucket Cloud, Azure DevOps | GitHub, GitLab | GitHub |
 | **Health checks** | Deployment, ArgoCD, Flux, Argo Rollouts, Flagger | ArgoCD Application | ArgoCD Application |
 | **Rollback mechanism** | Promotion of previous artifact through same pipeline | Manual | Manual git revert |
 | **Auto-rollback on health failure** | Yes — `onHealthFailure: rollback \| abort \| none` per stage | No | No |

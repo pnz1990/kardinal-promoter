@@ -17,7 +17,7 @@ spec:
     layout: <string>                    # "directory" (default) or "branch"
     sourceBranch: <string>              # Source branch for DRY templates (layout: branch only; default: spec.git.branch)
     branchPrefix: <string>              # Branch prefix for rendered envs (layout: branch only; default: "env/")
-    provider: <string>                  # "github" or "gitlab"
+     provider: <string>                  # "github", "gitlab", "forgejo", "bitbucket", or "azuredevops"
     secretRef:
       name: <string>                    # Secret containing the Git token
     webhookMode: <string>               # "webhook" (default) or "polling"
@@ -74,7 +74,7 @@ spec:
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch`: environments as separate branches (use with `sourceBranch` and `branchPrefix` for rendered manifests). |
 | `sourceBranch` | No | `spec.git.branch` | Only used with `layout: branch`. The branch containing DRY source templates. Promotions read from this branch before rendering. |
 | `branchPrefix` | No | `env/` | Only used with `layout: branch`. Prefix for rendered environment branches. For `branchPrefix: env/`, the `prod` environment writes to `env/prod`. |
-| `provider` | Yes | | `github` or `gitlab`. Selects the SCM provider for PR creation. |
+| `provider` | Yes | | SCM provider: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, or `azuredevops`. Selects the SCM provider for PR creation. For Bitbucket Cloud, use `bitbucket`. For Azure DevOps, use `azuredevops` with a PAT token and repo in `org/project/repo` format. |
 | `secretRef.name` | Yes | | Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. |
 | `webhookMode` | No | `webhook` | `webhook`: react to GitHub webhook events for fast PR merge detection. `polling`: fall back to periodic polling (use in environments where inbound webhooks are not reachable). |
 | `pollInterval` | No | `30s` | Polling interval when `webhookMode: polling`. Has no effect in webhook mode. |
