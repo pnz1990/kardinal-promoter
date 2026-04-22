@@ -118,7 +118,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 ### Lens 8: New gaps identified by vision scan (2026-04-20)
 
-- 🔲 **No per-step execution timeout** — `pkg/steps/steps/git_clone.go`, `kustomize.go`, and `helm_set_image.go` have no per-execution timeout. A `git clone` against a slow SCM host or a `kustomize build` on a large repo can block a PromotionStep's `Reconcile()` call indefinitely. With controller-runtime's default `MaxConcurrentReconciles=1` per resource type, a single hung step can stall ALL other PromotionSteps of that pipeline. Add a `Pipeline.spec.environments[].stepTimeoutSeconds` field (default: 300) propagated via `StepState.Config["stepTimeoutSeconds"]`. Each step executor must wrap its operation in `context.WithTimeout`. This is especially critical for `git-clone` where network hangs are common in restricted egress environments.
+- ✅ **Per-step execution timeout** — `Pipeline.spec.environments[].stepTimeoutSeconds` (optional, `Minimum=1`) is propagated via `StepState.StepTimeoutSeconds` to `Engine.ExecuteFrom`. When set, each step is executed under `context.WithTimeout(ctx, N*time.Second)`. A hung `git-clone` or `kustomize-build` is cancelled and the PromotionStep transitions to Failed rather than blocking the reconciler indefinitely. Table-driven tests in `pkg/steps/engine_test.go` verify both timeout cancellation and propagation of `context.DeadlineExceeded`. (PR #1121-impl, 2026-04-22)
 
 - 🔲 **`kardinal logs` has no `--follow` / streaming mode** — `cmd/kardinal/cmd/logs.go` renders a static snapshot of `PromotionStep.status.stepMessages` at the time of the call. There is no `--follow` flag to stream messages as steps execute. For a platform engineer watching an active `git-clone` → `open-pr` sequence, they must repeatedly run `kardinal logs <pipeline>` to see progress. Add a `--follow` flag that polls for status changes every 2s (or watches the resource) and streams new `stepMessages` entries as they are appended. This is the key observability feature a new user needs to trust that something is actually happening.
 
@@ -162,7 +162,7 @@ Every item in this doc was identified by examining the live codebase against fiv
 5. ~~HTTP plain-text for UI and webhook servers~~ ✅ Done (PR #937) — TLS support added via `--tls-cert-file`/`--tls-key-file`; cert-manager compatible
 6. ~~Bundle `status.conditions` never populated~~ ✅ Done — Ready/Failed/Promoting conditions now populated on every phase transition
 7. ~~`RequeueAfter: time.Millisecond` hot loop in bundle reconciler~~ ✅ Done — replaced with 500ms minimum safe floor
-8. No per-step execution timeout — a hung `git-clone` stalls all PromotionStep reconciles for that pipeline
+8. ~~No per-step execution timeout~~ ✅ Done (PR #1121-impl) — `stepTimeoutSeconds` field on `EnvironmentSpec`, propagated to engine via `StepState`, cancels hung steps via `context.WithTimeout`
 
 **Must-fix for competitive parity with Kargo:**
 1. Outbound event notifications (Slack/webhook)
