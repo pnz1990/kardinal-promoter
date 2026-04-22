@@ -1308,7 +1308,7 @@
       "done_at": "2026-04-22T21:54:35Z"
     },
     "issue-1122": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: kardinal logs missing --follow streaming mode",
       "labels": [
         "kardinal",
@@ -1317,7 +1317,10 @@
         "size/s",
         "priority/medium"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "pr_number": 1124,
+      "done_at": "2026-04-22T22:00:55Z"
     }
   },
   "session_heartbeats": {
