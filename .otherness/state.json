@@ -1072,7 +1072,7 @@
       ]
     },
     "issue-1076": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **`pkg/cel/conversion/conversion.go` `GoNativeType` returns `nil, nil` for a nil CEL value",
       "labels": [
         "kardinal",
@@ -1082,7 +1082,9 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1076
+      "issue_number": 1076,
+      "pr_merged": true,
+      "done_at": "2026-04-22T09:25:12Z"
     },
     "issue-1075": {
       "state": "todo",
