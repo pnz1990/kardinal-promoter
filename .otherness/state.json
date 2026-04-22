@@ -719,7 +719,7 @@
       "done_at": "2026-04-22T05:32:39Z"
     },
     "issue-1053": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Self-improvement tracking: skills library growth rate**",
       "labels": [
         "kardinal",
@@ -871,7 +871,7 @@
       "done_at": "2026-04-22T05:11:05Z"
     },
     "issue-963": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 18: Subscription CRD",
       "labels": [
         "kardinal",
@@ -879,10 +879,14 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "done_at": "2026-04-22T02:29:51Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": []
     },
     "issue-962": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 17: GitLab Support",
       "labels": [
         "kardinal",
@@ -890,10 +894,14 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "done_at": "2026-04-22T02:29:53Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": []
     },
     "issue-961": {
-      "state": "todo",
+      "state": "done",
       "title": "docs(design): create design doc for Stage 15: MetricCheck CRD and Upstream Soak Time",
       "labels": [
         "kardinal",
@@ -901,7 +909,11 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "done_at": "2026-04-22T02:29:54Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": []
     },
     "issue-960": {
       "state": "done",
@@ -974,6 +986,263 @@
       ],
       "priority": "medium",
       "pr_merged": true
+    },
+    "issue-1082": {
+      "state": "todo",
+      "title": "feat: **Onboarding time-to-first-run metric: track and publish the setup duration**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1082
+    },
+    "issue-1081": {
+      "state": "todo",
+      "title": "feat: **Zero-PR session detection: agent ran but produced no mergeable content**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1081
+    },
+    "issue-1080": {
+      "state": "todo",
+      "title": "feat: **Monoculture break: adversarial agent role for architecture reviews**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1080
+    },
+    "issue-1079": {
+      "state": "todo",
+      "title": "feat: **SM health state definition: explicit thresholds for GREEN/RED/STALL**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1079
+    },
+    "issue-1078": {
+      "state": "todo",
+      "title": "feat: **Otherness onboarding quality gate: `/otherness.onboard` output review**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1078
+    },
+    "issue-1077": {
+      "state": "todo",
+      "title": "feat: Workflow self-healing: bash -n CI guard",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/agent-loop",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "assigned_to": null,
+      "assigned_at": null,
+      "branch": null,
+      "worktree": null,
+      "file_spaces": [
+        ".github/workflows/"
+      ]
+    },
+    "issue-1076": {
+      "state": "todo",
+      "title": "feat: **`pkg/cel/conversion/conversion.go` `GoNativeType` returns `nil, nil` for a nil CEL value",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1076
+    },
+    "issue-1075": {
+      "state": "todo",
+      "title": "feat: **No image signature verification step**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1075
+    },
+    "issue-1074": {
+      "state": "todo",
+      "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1074
+    },
+    "issue-1073": {
+      "state": "todo",
+      "title": "feat: **Simulation queue-adjustment is invisible to humans",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 1073
+    },
+    "issue-1066": {
+      "state": "todo",
+      "title": "\ud83d\udcca Autonomous Team Reports \u2014 2026-04-22",
+      "labels": [],
+      "priority": "medium",
+      "issue_number": 1066
+    },
+    "issue-1057": {
+      "state": "todo",
+      "title": "chore(sm): push sm.md PDCA check to pnz1990/otherness \u2014 token lacks push rights",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/xs",
+        "kind/chore",
+        "area/test"
+      ],
+      "priority": "medium",
+      "issue_number": 1057
+    },
+    "issue-1034": {
+      "state": "todo",
+      "title": "\ud83d\udcca Autonomous Team Reports \u2014 2026-04-21",
+      "labels": [],
+      "priority": "medium",
+      "issue_number": 1034
+    },
+    "issue-1008": {
+      "state": "done",
+      "title": "docs(changelog): CHANGELOG.md missing version sections for v0.1.0\u2013v0.8.1",
+      "labels": [
+        "kardinal",
+        "kind/docs",
+        "area/docs",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "assigned_to": "sess-2b4498ba",
+      "assigned_at": "2026-04-22T08:08:15Z",
+      "branch": null,
+      "worktree": null,
+      "file_spaces": [
+        "CHANGELOG.md",
+        "docs/"
+      ],
+      "pr_number": 1085,
+      "done_at": "2026-04-22T08:22:16Z"
+    },
+    "issue-1007": {
+      "state": "todo",
+      "title": "feat(qa): \u00a73b docs gate for user-visible features",
+      "labels": [
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue_number": 1007
+    },
+    "issue-1006": {
+      "state": "todo",
+      "title": "feat(pm): \u00a75j comparison doc accuracy \u2014 flip rows when gaps are closed",
+      "labels": [
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue_number": 1006
+    },
+    "issue-1005": {
+      "state": "todo",
+      "title": "feat(pm): \u00a75j version staleness check \u2014 scan README for stale version strings",
+      "labels": [
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue_number": 1005
+    },
+    "issue-954": {
+      "state": "todo",
+      "title": "chore(ci): add action-tests CI job to run .github/actions/create-bundle/test.sh",
+      "labels": [
+        "kardinal",
+        "priority/low",
+        "size/xs",
+        "kind/chore",
+        "area/test"
+      ],
+      "priority": "low",
+      "issue_number": 954
+    },
+    "issue-918": {
+      "state": "todo",
+      "title": "feat: Warehouse-equivalent: no automatic discovery mode",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/m",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue_number": 918
+    },
+    "issue-612": {
+      "state": "todo",
+      "title": "feat(graph): use forEach for multi-region fan-out and dynamic environment expansion",
+      "labels": [
+        "priority/low",
+        "size/l",
+        "kind/enhancement",
+        "area/controller",
+        "area/graph"
+      ],
+      "priority": "low",
+      "issue_number": 612
     }
   },
   "session_heartbeats": {
