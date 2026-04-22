@@ -1242,7 +1242,7 @@
       "note": "already done in PR #948"
     },
     "issue-612": {
-      "state": "todo",
+      "state": "done",
       "title": "feat(graph): use forEach for multi-region fan-out and dynamic environment expansion",
       "labels": [
         "priority/low",
@@ -1252,7 +1252,9 @@
         "area/graph"
       ],
       "priority": "low",
-      "issue_number": 612
+      "issue_number": 612,
+      "pr_merged": true,
+      "done_at": "2026-04-22T16:15:45Z"
     },
     "issue-1094": {
       "state": "done",
