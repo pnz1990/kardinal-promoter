@@ -383,13 +383,13 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	}
 
 	state := &steps.StepState{
-		Pipeline:           pipeline.Spec,
-		PipelineName:       ps.Spec.PipelineName,
-		Environment:        env,
-		Bundle:             bundle.Spec,
-		BundleName:         ps.Spec.BundleName,
-		WorkDir:            workDir,
-		Outputs:            cloneMap(ps.Status.Outputs),
+		Pipeline:     pipeline.Spec,
+		PipelineName: ps.Spec.PipelineName,
+		Environment:  env,
+		Bundle:       bundle.Spec,
+		BundleName:   ps.Spec.BundleName,
+		WorkDir:      workDir,
+		Outputs:      cloneMap(ps.Status.Outputs),
 		Git: steps.GitConfig{
 			URL:         pipeline.Spec.Git.URL,
 			Branch:      pipeline.Spec.Git.Branch,
