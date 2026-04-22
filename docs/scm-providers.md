@@ -199,6 +199,64 @@ spec:
 
 ---
 
+## Credential rotation (zero-downtime)
+
+kardinal-promoter supports rotating SCM credentials at runtime without restarting the controller or
+causing a gap in active promotions.
+
+### How it works
+
+When the controller is configured to read the token from a Kubernetes Secret
+(via `--scm-token-secret-name` or the Helm `github.secretRef.name` value), a background
+`SecretWatcher` polls that Secret every **30 seconds**. When the token value changes, the
+watcher atomically reloads the SCM provider using `sync/atomic.Pointer` semantics — concurrent
+reconciler goroutines see a consistent token snapshot at all times and are never interrupted.
+
+The three controller flags that enable this mode are also configurable via environment variables:
+
+| Flag | Environment variable | Default |
+|---|---|---|
+| `--scm-token-secret-name` | `KARDINAL_SCM_TOKEN_SECRET_NAME` | (empty — static token mode) |
+| `--scm-token-secret-namespace` | `KARDINAL_SCM_TOKEN_SECRET_NAMESPACE` | `POD_NAMESPACE` → `kardinal-system` |
+| `--scm-token-secret-key` | `KARDINAL_SCM_TOKEN_SECRET_KEY` | `token` |
+
+When `--scm-token-secret-name` is **not set**, the controller uses the token passed via
+`--github-token` / `GITHUB_TOKEN` at startup (static mode). Rotating requires a controller
+restart in static mode.
+
+When `github.secretRef.name` is set in the Helm chart, these three environment variables are
+injected into the controller Deployment automatically.
+
+### Rotating a PAT (zero-downtime procedure)
+
+1. Generate the new token in your SCM provider and copy it.
+2. Update the Kubernetes Secret:
+   ```bash
+   kubectl create secret generic github-token \
+     --namespace kardinal-system \
+     --from-literal=token=<NEW_TOKEN> \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+3. Within 30 seconds the controller picks up the change. No controller restart is needed.
+   Promotions in flight are not interrupted — the atomic swap completes before the next
+   reconcile iteration reads the token.
+4. Verify the rotation took effect by checking the controller log:
+   ```bash
+   kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=20 \
+     | grep "SCM token rotated"
+   ```
+
+### Static mode (development / CI)
+
+If you install with `--set github.token=<token>` (Helm) or `--github-token` (controller flag),
+no Secret watching is configured. To rotate the token you must restart the controller:
+
+```bash
+kubectl rollout restart deployment/kardinal-promoter-controller -n kardinal-system
+```
+
+---
+
 ## Adding a new SCM provider
 
 Implement the `SCMProvider` interface in `pkg/scm/` and register it in

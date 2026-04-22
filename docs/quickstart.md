@@ -76,6 +76,8 @@ Starting with v0.6.0, kardinal-promoter bundles the krocodile Graph controller d
 
 ```bash
 # Option A: reference an existing Secret (recommended for production)
+# The controller watches this Secret and reloads the token automatically on rotation —
+# no controller restart needed. See "Credential rotation" in docs/scm-providers.md.
 kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT \
@@ -90,6 +92,7 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set github.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
+# Token rotation requires a controller restart when using this option.
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace \
   --set github.token=$GITHUB_PAT
