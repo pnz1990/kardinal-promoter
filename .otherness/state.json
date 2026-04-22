@@ -796,7 +796,7 @@
       "priority": "medium"
     },
     "issue-1047": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **No `maxConcurrentPromotions` cap per pipeline**",
       "labels": [
         "kardinal",
@@ -805,7 +805,9 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T04:01:05Z"
     },
     "issue-1046": {
       "state": "done",
