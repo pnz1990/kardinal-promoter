@@ -40,6 +40,7 @@ rules:
       - changewindows
       - rollbackpolicies
       - subscriptions
+      - promotiontemplates
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # kardinal.io CRDs — status subresources (write-back from reconcilers)
   - apiGroups: ["kardinal.io"]

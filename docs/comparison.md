@@ -19,7 +19,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Pre-deploy gates** | Yes — `when: pre-deploy` blocks before git-clone starts | No | No |
 | **PR evidence body** | Structured (image digest, CI run, gate results, soak time, overrides) | None — tracked in Kargo UI | Git diff only |
 | **GitOps engine support** | ArgoCD, Flux, raw Kubernetes | ArgoCD (primary), others partial | ArgoCD, Flux, any |
-| **SCM providers** | GitHub, GitLab, Forgejo/Gitea | GitHub, GitLab | GitHub |
+| **SCM providers** | GitHub, GitLab, Forgejo/Gitea, Bitbucket Cloud, Azure DevOps | GitHub, GitLab | GitHub |
 | **Health checks** | Deployment, ArgoCD, Flux, Argo Rollouts, Flagger | ArgoCD Application | ArgoCD Application |
 | **Rollback mechanism** | Promotion of previous artifact through same pipeline | Manual | Manual git revert |
 | **Auto-rollback on health failure** | Yes — `onHealthFailure: rollback \| abort \| none` per stage | No | No |
@@ -32,6 +32,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
 | **Integration test step** | Yes — `integration-test` step runs a Kubernetes Job | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
+| **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, PolicyGate.Blocked, PromotionStep.Failed; optional auth header; pipeline selector | Yes (Kargo via Argo Notifications) | No |
 | **Multi-cluster** | Yes (Pipeline CRD, kubeconfig Secrets) | Yes | Yes |
 | **Upstream soak time in gates** | Yes — `bundle.upstreamSoakMinutes >= 30` (contiguous healthy) | No | Elapsed time only |
 | **Cross-stage history in gates** | Yes — `upstream.<env>.recentSuccessCount`, `lastPromotedAt` | No | No |

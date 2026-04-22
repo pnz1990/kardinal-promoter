@@ -4,6 +4,25 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(chart): add demo.enabled mode for under-10-minute quickstart (#1043)
+- fix(ci): restore missing newline — opencode step YAML invalid (#1041)
+- hotfix(ci): restore opencode SHA for v1.14.20 (#1039)
+- chore(ci): upgrade opencode to v1.14.20 (#1038)
+- docs(comparison): add Bitbucket Cloud and Azure DevOps to SCM providers row (#1037)
+
+- feat(scm): add Bitbucket Cloud and Azure DevOps SCM providers (#1035)
+- feat(api): PromotionTemplate CRD — reusable step sequences for Pipeline environments (#1032)
+- feat(pm): board_project_id + active_milestone config (design doc 43) (#1030)
+- docs(comparison): add NotificationHook webhook notifications row (#1028)
+
+- test(bundle): assert RequeueAfter >= 500ms in handleNew regression guard (#1027)
+- docs: add ADOPTERS.md with PDCA self-use entry (#1025)
+- feat(helm): add controller.watchNamespace for namespace-scoped install mode (#1024)
+- feat(cli): add --scaffold-gitops and --demo flags to kardinal init (#1022)
+- feat(controller): ValidatingAdmissionWebhook for Pipeline dependsOn cycle detection (#1020)
+- chore: update REPORT_ISSUE to today's daily report (#892) (#1019)
+- fix(lint): resolve golangci-lint gofmt/goimports/gocritic failures (#1018)
+
 - feat(security): add Kubernetes TokenReview-based auth for UI API (#1015)
 - 2 PRs merged: metrics + logs steps table. (#1013)
 - feat(cli): render status.steps[] per-step table in kardinal logs (#1012)
