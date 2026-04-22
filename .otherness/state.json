@@ -838,7 +838,7 @@
       "done_at": "2026-04-22T03:27:20Z"
     },
     "issue-995": {
-      "state": "todo",
+      "state": "done",
       "title": "docs: document zero-downtime SCM credential rotation in quickstart and security guide",
       "labels": [
         "kardinal",
@@ -847,7 +847,9 @@
         "kind/docs",
         "area/docs"
       ],
-      "priority": "medium"
+      "priority": "medium",
+      "pr_merged": true,
+      "done_at": "2026-04-22T05:11:05Z"
     },
     "issue-963": {
       "state": "todo",
