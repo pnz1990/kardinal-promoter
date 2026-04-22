@@ -546,7 +546,7 @@
       "done_at": "2026-04-21T15:20:56Z"
     },
     "issue-978": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: helm install to first Bundle in under 10 minutes",
       "issue": "978",
       "labels": [
@@ -557,7 +557,9 @@
         "priority/medium"
       ],
       "priority": "medium",
-      "created_at": "2026-04-21T13:48:40Z"
+      "created_at": "2026-04-21T13:48:40Z",
+      "pr_merged": true,
+      "done_at": "2026-04-22T01:50:35Z"
     },
     "issue-979": {
       "state": "todo",
