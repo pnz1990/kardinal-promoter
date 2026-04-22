@@ -1014,7 +1014,7 @@
       "issue_number": 1081
     },
     "issue-1080": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Monoculture break: adversarial agent role for architecture reviews**",
       "labels": [
         "kardinal",
@@ -1024,7 +1024,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue_number": 1080
+      "issue_number": 1080,
+      "pr_merged": true,
+      "pr_number": 1105,
+      "done_at": "2026-04-22T15:07:48Z"
     },
     "issue-1079": {
       "state": "done",
