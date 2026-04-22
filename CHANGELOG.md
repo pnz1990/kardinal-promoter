@@ -48,6 +48,95 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 - 5 promoted, 5 reverted, 6 new gaps added. (#946)
 - 9 gaps logged; 7 new Future items added. (#944)
 - fix(workflow): Step 3 bash syntax error — restore scheduled runs (#943)
+
+## [v0.8.1] — 2026-04-17
+
+- feat(demo): complete demo environment and fix v0.8.1 release CI (#786)
+- feat(ui): keyboard shortcuts modal with focus trap accessibility (#783, #785)
+- fix(ui): resolve 3 CI failures from WCAG 2.1 AA enablement (#771, #780)
+- feat(ui): enable color-contrast and nested-interactive axe rules — WCAG 2.1 AA (#761, #762, #771)
+- fix(release): trivy exit-code 0 — report CVEs but don't block release (#787)
+- feat(scm): zero-downtime SCM credential rotation via Secret watcher (#994)
+- feat(cli): `kardinal completion` for all shells via `__complete` protocol (#1001)
+- fix(bundle): replace 1ms RequeueAfter hot loop with 500ms safe floor (#988)
+- feat(bundle): populate `status.conditions` on all phase transitions (#991)
+- feat(scm): validate SCM token scopes at controller startup (#996)
+
+## [v0.8.0] — 2026-04-17
+
+- feat(api): AuditEvent CRD — immutable promotion event log (#673, #679)
+- feat(api): AuditEvent step 2 — gate evaluation and rollback events (#680, #681)
+- feat(cli): `kardinal get auditevents` — list promotion events (#683, #684)
+- feat(cli): `kardinal audit summary` — aggregate promotion metrics (#685, #686)
+- feat(cli): improve error messages — actionable hints for common failures (#688, #689)
+- feat(api): admission webhook for Pipeline and Bundle validation (#573, #670)
+- chore(graph): upgrade krocodile pin 81c5a03 → 05db829 — explicit-keyword schema (#677)
+
+## [v0.7.0] — 2026-04-16
+
+- feat(graph): WatchKind health nodes for O(1) incremental cache (#611, #652)
+- fix(ui): fix Playwright E2E tests — 32/32 pass (#632, #650)
+- feat(docs): Kargo migration guide — concept mapping, side-by-side YAML, 7-step guide (#640)
+- fix(controller): add Watch on PRStatus and PolicyGate in PromotionStep reconciler (#644, #655)
+- chore(graph): upgrade krocodile pin 745998f → 81c5a03 with compat fixes (#646, #654)
+- refactor(graph): replace upstreamVerifiedN fields with upstreamStates list (#625, #660)
+- docs(health): document health.labelSelector WatchKind mode (#656, #659)
+- feat(helm): Helm chart with multi-cluster and RBAC support (#664)
+
+## [v0.6.0] — 2026-04-14
+
+- feat(pipeline): aggregate deployment metrics in Pipeline.status.deploymentMetrics (#498, #511)
+- chore(steps): replace exec.Command(kustomize) with pure-Go YAML (#494, #512)
+- fix(ci): enforce PR discipline, CI green gate, and live-cluster validation standard (#513)
+- fix(pdca): repair live-cluster validation infrastructure (#514)
+- feat(brand): cardinal logo across docs, UI, and README (#515)
+
+## [v0.5.0] — 2026-04-13
+
+- feat(policygate): PR review gate — bundle.pr[stage].isApproved CEL function (#452, #472)
+- feat(policygate): cross-stage history CEL context — upstream.\<env\>.recentSuccessCount (#453, #473)
+- feat(cli): `kardinal override` command with audit record (#451, #471)
+- feat(steps): integration-test step — Kubernetes Job as promotion step (#449, #470)
+- feat(policygate): MetricCheck result in CEL context — metrics.\<name\>.result (#452)
+- feat(api): ChangeWindow CRD — time-bounded deployment gates (#453)
+- fix(crd): regenerate deepcopy + PolicyGate CRD schema for all new fields
+
+## [v0.4.0] — 2026-04-11
+
+- fix(reconciler): implement delivery.delegate for argoRollouts health delegation (#122, #197)
+- docs(pipeline-reference): update delivery.delegate to mark argoRollouts as implemented (#197)
+
+## [v0.3.0] — 2026-04-11
+
+- fix(controller): wire --shard flag to PromotionStepReconciler for distributed mode (#121, #196)
+
+## [v0.2.1] — 2026-04-11
+
+- fix(steps): persist workDir to PromotionStep.status and cleanup on terminal state (#195)
+- feat(translator): inject health Watch nodes for HE-1/HE-2/HE-3 (#194)
+- fix(graph-purity): eliminate PS-2/BU-1/BU-2/BU-4/PG-3 logic leaks (#193)
+- feat(health): add WatchNodeTemplate for krocodile ShapeWatch node generation (#191)
+- feat(ui): add 5s polling, bundle history panel (#170)
+- fix(cli): extract policyGatePhase helper
+
+## [v0.2.0] — 2026-04-11
+
+- fix(graph): use CEL-safe identifiers for Graph node IDs (hyphens → underscores)
+- fix(graph,scm): separate CEL-safe and K8s-safe node naming; fix git-push
+- fix(reconciler): resolve git token from Pipeline.spec.git.secretRef
+- fix(api,rbac): add upstreamVerified/requiredGates to PromotionStepSpec; RBAC for Deployments
+- fix(api): add upstreamEnvironment to PolicyGateSpec for kro Graph data-flow
+- fix: 3 bugs found during Workshop 1 PROD step execution
+
+## [v0.1.0] — 2026-04-10
+
+- Initial release of kardinal-promoter
+- feat(steps): custom HTTP webhook steps (#124)
+- feat(metriccheck): MetricCheck CRD + Prometheus evaluator + CEL soak time context (#114)
+- feat(policygate): PolicyGate CRD with CEL expression evaluation
+- feat(api): Pipeline + Bundle + PromotionStep CRDs
+- feat(cli): `kardinal` CLI binary with get/create/explain/rollback commands
+- feat(controller): kardinal-controller binary with full reconciler stack
 - feat(controller): NotificationHook CRD for outbound event webhook notifications (#942)
 - feat(ui): insecure connection warning banner + port-forward documentation (#941)
 - feat(controller): CORS lockdown for UI API via --cors-allowed-origins flag (#940)
