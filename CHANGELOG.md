@@ -4,6 +4,8 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- feat(steps): add verify-image step for cosign signature verification (#1091)
+- fix(rbac): add notificationhooks and auditevents to ClusterRole/Role (#1095)
 - feat(qa): §3b.5 docs gate for user-visible features (#1089)
 - feat(pm): §5n comparison doc accuracy — flip rows when gaps are closed (#1088)
 - fix(cel): add ErrNilCELValue sentinel to GoNativeType (#1087)
