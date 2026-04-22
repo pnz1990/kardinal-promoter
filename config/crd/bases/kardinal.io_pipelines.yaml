@@ -224,6 +224,19 @@ spec:
                       required:
                       - name
                       type: object
+                    regions:
+                      description: |-
+                        Regions enables multi-region fan-out for this environment (issue #612).
+                        When two or more region names are listed, the translator emits a single
+                        forEach Graph node that stamps out one PromotionStep per region. Each
+                        stamped PromotionStep receives spec.region = the region name, which the
+                        reconciler uses when constructing Git paths and PR labels.
+                        All regions must be Verified before downstream environments proceed.
+                        When empty or only one region is listed, the environment uses the default
+                        single-node behaviour (no forEach).
+                      items:
+                        type: string
+                      type: array
                     shard:
                       description: |-
                         Shard pins this environment to a specific kardinal-controller agent shard
