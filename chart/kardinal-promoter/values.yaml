@@ -258,3 +258,26 @@ prometheusRule:
   additionalLabels: {}
   # -- Namespace to deploy the PrometheusRule into. Defaults to Release.Namespace.
   namespace: ""
+
+# -- Grafana dashboard ConfigMap for Grafana sidecar auto-discovery.
+# When enabled, creates a ConfigMap containing the kardinal-promoter Grafana dashboard JSON.
+# Designed for use with the Grafana sidecar (grafana.sidecar.dashboards.enabled=true in
+# kube-prometheus-stack or grafana Helm chart). The sidecar watches ConfigMaps labelled
+# with the configured label (default: grafana_dashboard=1) and loads dashboards automatically.
+#
+# Example (kube-prometheus-stack):
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+#     --set grafanaDashboard.enabled=true \
+#     --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
+grafanaDashboard:
+  # -- Create the Grafana dashboard ConfigMap.
+  enabled: false
+  # -- Labels to add to the ConfigMap for Grafana sidecar discovery.
+  # Set these to match your Grafana sidecar's label selector.
+  # kube-prometheus-stack default: grafana_dashboard: "1"
+  sidecarLabel:
+    grafana_dashboard: "1"
+  # -- Namespace for the dashboard ConfigMap. Defaults to Release.Namespace.
+  namespace: ""
+  # -- Annotations to add to the ConfigMap.
+  annotations: {}

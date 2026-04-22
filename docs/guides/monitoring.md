@@ -238,35 +238,48 @@ groups:
 
 ## Grafana Dashboard
 
-A community Grafana dashboard is available at:
+kardinal-promoter ships a pre-built Grafana dashboard covering:
 
-**Dashboard ID**: _pending submission to grafana.com_
+- **Promotion overview**: bundle phase counts (Verified/Failed/Superseded), step failure rate, gate blocks, reconcile errors
+- **Throughput**: bundle phase rate and step terminal rate over time
+- **Step latency**: P50/P99 per step type (git-clone, kustomize, open-pr, health-check), PR review latency, PromotionStep age
+- **Policy gates**: gate evaluation rate and blocking duration histograms
+- **Reconciler health**: reconcile rate, error rate, P99 latency, work queue depth per controller
+- **Go runtime**: goroutines, heap memory, CPU usage
 
-In the meantime, import the following JSON panels manually:
+### Option 1 — Grafana sidecar (kube-prometheus-stack)
 
-**Panel: Reconcile rate by controller**
-```json
-{
-  "targets": [{
-    "expr": "sum by (controller) (rate(controller_runtime_reconcile_total[5m]))",
-    "legendFormat": "{{controller}}"
-  }],
-  "type": "timeseries",
-  "title": "Reconcile rate (ops/s)"
-}
+Enable via Helm when using a Grafana sidecar that auto-discovers labelled ConfigMaps:
+
+```yaml
+# values.yaml
+grafanaDashboard:
+  enabled: true
+  sidecarLabel:
+    grafana_dashboard: "1"   # match your Grafana sidecar's label selector
 ```
 
-**Panel: Reconcile error rate**
-```json
-{
-  "targets": [{
-    "expr": "sum by (controller) (rate(controller_runtime_reconcile_errors_total[5m]))",
-    "legendFormat": "{{controller}} errors"
-  }],
-  "type": "timeseries",
-  "title": "Reconcile errors (errors/s)"
-}
+Install or upgrade:
+
+```bash
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+  --set grafanaDashboard.enabled=true \
+  --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 ```
+
+Grafana will pick up the dashboard automatically within 60 seconds. Search for **"kardinal-promoter"** in the Grafana dashboard list.
+
+### Option 2 — Manual import
+
+Download the dashboard JSON from the repository:
+
+```
+config/monitoring/kardinal-promoter-dashboard.json
+```
+
+In Grafana: **Dashboards → Import → Upload JSON file**. Select your Prometheus datasource when prompted.
+
+The dashboard UID is `kardinal-promoter-v1`. Importing a second time will overwrite the existing dashboard.
 
 ---
 

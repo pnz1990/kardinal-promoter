@@ -1,0 +1,24 @@
+{{- /*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+*/ -}}
+{{- if .Values.grafanaDashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-grafana-dashboard
+  namespace: {{ .Values.grafanaDashboard.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    {{- range $k, $v := .Values.grafanaDashboard.sidecarLabel }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+  annotations:
+    {{- range $k, $v := .Values.grafanaDashboard.annotations }}
+    {{ $k }}: {{ $v | quote }}
+    {{- end }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+data:
+  kardinal-promoter-dashboard.json: |
+    {{- .Files.Get "dashboards/kardinal-promoter-dashboard.json" | nindent 4 }}
+{{- end }}
