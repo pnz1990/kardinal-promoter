@@ -751,8 +751,10 @@
       "priority": "medium"
     },
     "issue-1050": {
-      "state": "todo",
-      "title": "feat: **Simulation delta feedback is one-directional: SM posts it, COORDINATOR never reads it**",
+      "title": "feat: Simulation delta feedback is one-directional: SM posts it, COORDINATOR never reads it",
+      "state": "done",
+      "issue": "1050",
+      "priority": "medium",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -760,7 +762,15 @@
         "kind/enhancement",
         "area/controller"
       ],
-      "priority": "medium"
+      "created_at": "2026-04-22T05:57:41Z",
+      "assigned_to": "sess-e5e4adf9",
+      "assigned_at": "2026-04-22T05:57:41Z",
+      "branch": "feat/issue-1050",
+      "worktree": "../kardinal-promoter.issue-1050",
+      "pr_number": "1067",
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1067",
+      "pr_merged": true,
+      "done_at": "2026-04-22T06:18:02Z"
     },
     "issue-1049": {
       "state": "done",
