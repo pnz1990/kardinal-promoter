@@ -97,11 +97,16 @@ try:
                    capture_output=True, check=True)
     target = os.path.join(state_wt, '.otherness', 'dry-run-state.json')
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    subprocess.run(['git','-C',state_wt,'checkout','_state','--','.otherness/dry-run-state.json'],
+    # Checkout both files so the commit tree preserves state.json (fix: was only dry-run-state.json,
+    # causing state.json to be deleted from _state on every push — issue #1188)
+    subprocess.run(['git','-C',state_wt,'checkout','_state','--',
+                    '.otherness/dry-run-state.json','.otherness/state.json'],
                    capture_output=True)
     state = {'count': 0, 'updated_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'last_merged_count': int('$MERGED_COUNT')}
     json.dump(state, open(target, 'w'), indent=2)
-    subprocess.run(['git','-C',state_wt,'add',target], capture_output=True)
+    # Stage both files: dry-run-state.json (updated), state.json (unchanged — preserves tree)
+    state_json_path = os.path.join(state_wt, '.otherness', 'state.json')
+    subprocess.run(['git','-C',state_wt,'add',target,state_json_path], capture_output=True)
     subprocess.run(['git','-C',state_wt,'commit','-m','sm: dry_run_count reset to 0'], capture_output=True)
     subprocess.run(['git','-C',state_wt,'push','origin','HEAD:_state'], capture_output=True)
     print('[ZERO-PR DETECT] dry_run_count=0 persisted to _state')
@@ -184,11 +189,16 @@ try:
                    capture_output=True, check=True)
     target = os.path.join(state_wt, '.otherness', 'dry-run-state.json')
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    subprocess.run(['git','-C',state_wt,'checkout','_state','--','.otherness/dry-run-state.json'],
+    # Checkout both files so the commit tree preserves state.json (fix: was only dry-run-state.json,
+    # causing state.json to be deleted from _state on every push — issue #1188)
+    subprocess.run(['git','-C',state_wt,'checkout','_state','--',
+                    '.otherness/dry-run-state.json','.otherness/state.json'],
                    capture_output=True)
     state = {'count': new_count, 'updated_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'last_merged_count': 0}
     json.dump(state, open(target, 'w'), indent=2)
-    subprocess.run(['git','-C',state_wt,'add',target], capture_output=True)
+    # Stage both files: dry-run-state.json (updated), state.json (unchanged — preserves tree)
+    state_json_path = os.path.join(state_wt, '.otherness', 'state.json')
+    subprocess.run(['git','-C',state_wt,'add',target,state_json_path], capture_output=True)
     subprocess.run(['git','-C',state_wt,'commit','-m',f'sm: dry_run_count={new_count}'], capture_output=True)
     subprocess.run(['git','-C',state_wt,'push','origin','HEAD:_state'], capture_output=True)
     print(f'[ZERO-PR DETECT] dry_run_count={new_count} persisted to _state')
