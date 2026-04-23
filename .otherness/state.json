@@ -1072,7 +1072,7 @@
       "done_at": "2026-04-22T14:14:26Z"
     },
     "issue-1077": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: Workflow self-healing: bash -n CI guard",
       "labels": [
         "kardinal",
@@ -1122,7 +1122,7 @@
       "done_at": "2026-04-22T11:15:32Z"
     },
     "issue-1074": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
       "labels": [
         "kardinal",
@@ -1342,6 +1342,28 @@
       "pr_number": 1141,
       "pr_merged": true,
       "done_at": "2026-04-22T23:55:16Z"
+    },
+    "issue-1134": {
+      "state": "done",
+      "title": "feat: QA docs gate",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/docs"
+      ],
+      "priority": "medium",
+      "assigned_to": "sess-b033281b",
+      "assigned_at": "2026-04-23T00:39:29Z",
+      "branch": "feat/issue-1134",
+      "worktree": "../kardinal-promoter.issue-1134",
+      "file_spaces": [
+        "docs/"
+      ],
+      "pr_number": 1144,
+      "pr_merged": true,
+      "done_at": "2026-04-23T00:52:45Z"
     }
   },
   "session_heartbeats": {
