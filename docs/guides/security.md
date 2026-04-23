@@ -169,11 +169,63 @@ Configure the org policy namespace via the controller flag `--policy-namespaces 
 
 ### Multi-tenant isolation
 
-For multi-tenant clusters:
+#### Current limitation
 
-1. Run one Pipeline per team namespace
-2. Apply a `NetworkPolicy` to restrict `kardinal-system` pod egress to the Kubernetes API server only
-3. Use separate GitHub App installations per team (when using OIDC)
+kardinal does not have a Project CRD. All Pipelines and Bundles installed in a shared
+namespace use the same `ClusterRole`. This means:
+
+- A platform team running kardinal for 20 application teams **cannot** grant Team A
+  write access to their Pipeline without also granting read access to Team B's Pipelines
+  and Bundles.
+- Kubernetes RBAC cannot distinguish between resources of the same kind in the same namespace
+  without label selectors — and kardinal's `ClusterRole` grants access to all kardinal CRDs.
+
+#### Recommended workaround: one install per team namespace
+
+Until a Project CRD or namespace-scoped RBAC isolation is added, the only safe
+multi-tenant configuration is **one kardinal installation per application namespace**.
+
+This uses the `controller.watchNamespace` Helm value (added in v0.6.0) to limit each
+controller to a single namespace, with a `Role`/`RoleBinding` scoped to that namespace
+instead of a cluster-wide `ClusterRole`.
+
+**Example: two teams, two installs**
+
+```bash
+# Team A — installs kardinal watching only the "team-a" namespace
+helm install kardinal-team-a oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+  --namespace team-a \
+  --create-namespace \
+  --set controller.watchNamespace=team-a \
+  --set controller.github.token.secretName=github-token
+
+# Team B — separate install watching only the "team-b" namespace
+helm install kardinal-team-b oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+  --namespace team-b \
+  --create-namespace \
+  --set controller.watchNamespace=team-b \
+  --set controller.github.token.secretName=github-token
+```
+
+Each install creates a `Role` and `RoleBinding` scoped to its watch namespace. Team A
+cannot see or modify Team B's Pipelines, Bundles, or PolicyGates.
+
+**Cost**: one controller replica per team namespace. For 20 teams, this means 20
+controller pods. Each controller is lightweight (~50 MB RAM), but the operational
+overhead of managing multiple Helm releases is real. Use a tool like ArgoCD's
+ApplicationSet or Flux's HelmRelease to manage the installs at scale.
+
+**When this is not appropriate**: if you have a central platform team that needs
+read access across all team namespaces for observability (e.g. `kardinal get pipelines
+--all-namespaces`), the per-namespace model will not provide that. In this case,
+consider running a read-only cluster-scoped installation alongside the namespace-scoped
+installs, using RBAC to restrict writes.
+
+#### Additional isolation steps
+
+1. Apply a `NetworkPolicy` to restrict each `kardinal-*` namespace pod egress to the Kubernetes API server only
+2. Use separate GitHub App installations per team (when using OIDC) so token blast radius is bounded
+3. Use separate GitHub token `Secrets` in each team namespace — never share a token across namespace installs
 
 ---
 
