@@ -1,0 +1,27 @@
+{
+  "batch_count": 1,
+  "features": {
+    "issue-954": {
+      "state": "in_review",
+      "title": "chore(ci): add action-tests CI job",
+      "branch": "feat/issue-954",
+      "blocked": true,
+      "blocked_reason": "workflows-permission"
+    },
+    "issue-1188": {
+      "state": "done",
+      "title": "fix(scripts): preserve state.json when zero-pr-detect.sh writes _state",
+      "pr_merged": true,
+      "pr_number": 1197,
+      "done_at": "2026-04-23T11:51:24Z"
+    }
+  },
+  "session_heartbeats": {
+    "sess-d13465ea": {
+      "last_seen": "2026-04-23T11:36:30Z",
+      "item": "coord",
+      "cycle": 1
+    }
+  },
+  "last_batch_at": "2026-04-23T11:54:49Z"
+}
