@@ -1410,16 +1410,18 @@
     },
     "issue-1154": {
       "state": "todo",
-      "title": "feat: **Workflow self-healing: detect and recover from syntax-error regression**",
+      "title": "feat: Workflow self-healing: detect and recover from syntax-error regression",
       "labels": [
         "kardinal",
         "priority/medium",
         "size/s",
         "kind/enhancement",
-        "area/controller"
+        "area/controller",
+        "needs-human"
       ],
       "priority": "medium",
-      "issue": "1154"
+      "blocked": true,
+      "blocked_reason": "needs-human: GitHub App lacks workflows permission to create .github/workflows/ files"
     },
     "issue-1155": {
       "state": "todo",
@@ -1537,8 +1539,8 @@
       "done_at": "2026-04-23T08:32:28Z"
     },
     "issue-1163": {
-      "state": "todo",
-      "title": "feat: **Metrics collected but not acted on: SM must read `docs/aide/metrics.md` and change queue",
+      "state": "done",
+      "title": "feat: SM metrics trend analysis",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -1547,7 +1549,7 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1163"
+      "pr": 1182
     },
     "issue-1164": {
       "state": "todo",
