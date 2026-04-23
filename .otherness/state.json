@@ -1500,7 +1500,7 @@
       "issue": "1160"
     },
     "issue-1161": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **`bash -n` CI guard for `otherness-scheduled.yml` run: blocks is NOT implemented**",
       "labels": [
         "kardinal",
@@ -1510,7 +1510,11 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1161"
+      "issue": "1161",
+      "pr_merged": true,
+      "pr_number": 1176,
+      "done_at": "2026-04-23T07:19:10Z",
+      "note": "Merged PR #1176: bash -n syntax validation script"
     },
     "issue-1162": {
       "state": "todo",
