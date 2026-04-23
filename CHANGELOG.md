@@ -4,6 +4,13 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- fix(scripts): preserve state.json when zero-pr-detect.sh writes _state (#1197)
+- feat(scripts): add gitops-promoter-gap-check.sh for competitive parity analysis (#1185)
+- feat(sm): add sm-metrics-trend.sh — act on collected metrics data (#1182)
+- feat(sm): velocity dimension in §4b batch report — loop vs. delivery health (#1181)
+- feat(coord): round-robin doc ordering with doc-15 priority 2× (#1180)
+- feat(ci): add backlog overflow alarm script for SM batch report (#1178)
+
 - feat(ci): add bash -n syntax validation script for otherness-scheduled.yml (#1176)
 - feat(pm): add kargo-gap-check.sh — automated competitive gap detection (#1131) (#1152)
 - docs(security): document multi-tenant isolation workaround (#1127) (#1151)
