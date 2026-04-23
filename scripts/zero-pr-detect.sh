@@ -97,8 +97,12 @@ try:
                    capture_output=True, check=True)
     target = os.path.join(state_wt, '.otherness', 'dry-run-state.json')
     os.makedirs(os.path.dirname(target), exist_ok=True)
+    # Checkout BOTH files to preserve state.json in the commit tree.
+    # Checking out only dry-run-state.json would clobber state.json on push.
     subprocess.run(['git','-C',state_wt,'checkout','_state','--','.otherness/dry-run-state.json'],
                    capture_output=True)
+    subprocess.run(['git','-C',state_wt,'checkout','_state','--','.otherness/state.json'],
+                   capture_output=True)  # preserve state.json — do not remove it from tree
     state = {'count': 0, 'updated_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'last_merged_count': int('$MERGED_COUNT')}
     json.dump(state, open(target, 'w'), indent=2)
     subprocess.run(['git','-C',state_wt,'add',target], capture_output=True)
@@ -184,8 +188,12 @@ try:
                    capture_output=True, check=True)
     target = os.path.join(state_wt, '.otherness', 'dry-run-state.json')
     os.makedirs(os.path.dirname(target), exist_ok=True)
+    # Checkout BOTH files to preserve state.json in the commit tree.
+    # Checking out only dry-run-state.json would clobber state.json on push.
     subprocess.run(['git','-C',state_wt,'checkout','_state','--','.otherness/dry-run-state.json'],
                    capture_output=True)
+    subprocess.run(['git','-C',state_wt,'checkout','_state','--','.otherness/state.json'],
+                   capture_output=True)  # preserve state.json — do not remove it from tree
     state = {'count': new_count, 'updated_at': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'last_merged_count': 0}
     json.dump(state, open(target, 'w'), indent=2)
     subprocess.run(['git','-C',state_wt,'add',target], capture_output=True)
