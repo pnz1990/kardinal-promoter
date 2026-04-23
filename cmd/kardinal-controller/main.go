@@ -429,7 +429,21 @@ func main() {
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up health check")
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	// readyz gates on informer cache sync: returns 503 until all informers are synced.
+	// Using healthz.Ping here would cause the pod to report as Ready before the cache is
+	// populated, which leads to a race condition where Bundles are created but the reconciler
+	// hasn't started yet (seen in PDCA S1 failures: "Starting EventSource" at check time).
+	// The cache-sync check ensures helm --wait only returns after reconcilers can process events.
+	// See: https://github.com/pnz1990/kardinal-promoter/issues/1132
+	cacheSyncChecker := healthz.Checker(func(req *http.Request) error {
+		ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
+		defer cancel()
+		if !mgr.GetCache().WaitForCacheSync(ctx) {
+			return fmt.Errorf("informer cache not yet synced")
+		}
+		return nil
+	})
+	if err := mgr.AddReadyzCheck("readyz", cacheSyncChecker); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 

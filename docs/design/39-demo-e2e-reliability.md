@@ -52,6 +52,7 @@ The fix has two parts:
 - ✅ 39.1 — PDCA scenario for schema drift: add a PDCA scenario that creates a Pipeline manifest with an unknown field and asserts that `ci.yml` fails with the expected error. This makes the CI validation step itself testable. (PR #931)
 - ✅ 39.2 — Update `README.md` examples section: the README may also reference the old `health.argoRollouts{}` syntax. Audit all docs for stale field references. (PR #898)
 - ✅ 39.3 — Add kubeconform to `Makefile` as a `make validate-manifests` target so contributors can run it locally before pushing. (PR #1001, 2026-04-21)
+- ✅ 39.4 — Fix PDCA S1 flap: `readyz` probe now gates on informer cache sync — pod reports Ready only after the cache is populated and reconcilers can process events. `helm --wait` now guarantees reconciliation is active before tests run. S1 timeout increased from 5min (20×15s) to 7.5min (30×15s) as defense-in-depth. Root cause: `healthz.Ping` was used for `/readyz`, allowing the pod to report Ready before `WaitForCacheSync` completed (~5min on resource-constrained CI runners). (PR #1132, 2026-04-23)
 
 ---
 
