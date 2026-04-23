@@ -1734,10 +1734,10 @@
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 5,
-  "pm_cycle_count": 8,
+  "sm_cycle_count": 6,
+  "pm_cycle_count": 9,
   "chore_only_guard_count": 0,
-  "batch_count": 4,
+  "batch_count": 5,
   "last_batch_at": "2026-04-22T23:55:16Z",
   "future_backlog": 59,
   "meaningful_prs_last_session": 3,
