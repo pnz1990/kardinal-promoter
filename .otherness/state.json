@@ -1424,7 +1424,7 @@
       "blocked_reason": "needs-human: GitHub App lacks workflows permission to create .github/workflows/ files"
     },
     "issue-1155": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
       "labels": [
         "kardinal",
@@ -1434,10 +1434,11 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1155"
+      "issue": "1155",
+      "done_reason": "closed on GitHub"
     },
     "issue-1156": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
       "labels": [
         "kardinal",
@@ -1447,10 +1448,11 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1156"
+      "issue": "1156",
+      "done_reason": "closed on GitHub"
     },
     "issue-1157": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Self-feeding queue: COORDINATOR auto-triggers vision scan when queue empties**",
       "labels": [
         "kardinal",
@@ -1460,10 +1462,11 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1157"
+      "issue": "1157",
+      "done_reason": "closed on GitHub"
     },
     "issue-1158": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **`otherness.learn` automatic invocation: skills extracted from every novel-pattern batch*",
       "labels": [
         "kardinal",
@@ -1473,7 +1476,8 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1158"
+      "issue": "1158",
+      "done_reason": "closed on GitHub"
     },
     "issue-1159": {
       "state": "todo",
@@ -1692,7 +1696,7 @@
       "done_at": "2026-04-23T08:11:36Z"
     },
     "issue-1130": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
       "labels": [
         "kardinal",
@@ -1702,7 +1706,8 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1130"
+      "issue": "1130",
+      "done_reason": "closed on GitHub"
     },
     "issue-1184": {
       "state": "done",
