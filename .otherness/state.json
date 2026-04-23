@@ -1364,6 +1364,22 @@
       "pr_number": 1144,
       "pr_merged": true,
       "done_at": "2026-04-23T00:52:45Z"
+    },
+    "issue-1132": {
+      "state": "done",
+      "title": "fix(controller): readyz probe gates on informer cache sync to fix PDCA S1",
+      "pr_merged": true,
+      "pr_number": 1147,
+      "done_at": "2026-04-23T02:04:15Z",
+      "assigned_to": "sess-65772043"
+    },
+    "issue-1133": {
+      "state": "done",
+      "title": "fix(controller): PDCA 5 consecutive failures \u2014 same root cause as #1132",
+      "pr_merged": true,
+      "pr_number": 1147,
+      "done_at": "2026-04-23T02:04:15Z",
+      "assigned_to": "sess-65772043"
     }
   },
   "session_heartbeats": {
@@ -1400,6 +1416,11 @@
     "sess-3afe0bf4": {
       "last_seen": "2026-04-22T22:54:00Z",
       "item": "complete",
+      "cycle": 1
+    },
+    "sess-65772043": {
+      "last_seen": "2026-04-23T02:04:15Z",
+      "item": "issue-1132",
       "cycle": 1
     }
   },
