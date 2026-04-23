@@ -1072,7 +1072,7 @@
       "done_at": "2026-04-22T14:14:26Z"
     },
     "issue-1077": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: Workflow self-healing: bash -n CI guard",
       "labels": [
         "kardinal",
@@ -1122,7 +1122,7 @@
       "done_at": "2026-04-22T11:15:32Z"
     },
     "issue-1074": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
       "labels": [
         "kardinal",
@@ -1231,7 +1231,7 @@
       "done_at": "2026-04-22T21:34:37Z"
     },
     "issue-954": {
-      "state": "done",
+      "state": "todo",
       "title": "chore(ci): add action-tests CI job to run .github/actions/create-bundle/test.sh",
       "labels": [
         "kardinal",
@@ -1244,7 +1244,12 @@
       "issue_number": 954,
       "done_at": "2026-04-22T00:00:00Z",
       "pr_merged": false,
-      "note": "needs-human: workflows permission required"
+      "note": "Implementation complete in feat/issue-954, push blocked by workflows permission. All 8 tests pass.",
+      "assigned_to": "sess-25d26ee2",
+      "assigned_at": "2026-04-23T05:11:14Z",
+      "branch": null,
+      "worktree": null,
+      "needs_human": true
     },
     "issue-918": {
       "state": "done",
@@ -1321,6 +1326,390 @@
       "pr_merged": true,
       "pr_number": 1124,
       "done_at": "2026-04-22T22:00:55Z"
+    },
+    "issue-1128": {
+      "state": "done",
+      "title": "feat(monitoring): ship Grafana dashboard JSON and Helm ConfigMap template",
+      "pr_number": 1139,
+      "pr_merged": true,
+      "done_at": "2026-04-22T23:55:16Z"
+    },
+    "issue-1135": {
+      "state": "done",
+      "title": "feat(pm): add changelog-completeness.sh \u2014 PM \u00a75n-changelog check",
+      "pr_number": 1140,
+      "pr_merged": true,
+      "done_at": "2026-04-22T23:55:16Z"
+    },
+    "issue-1111": {
+      "state": "done",
+      "title": "test(graph): add single-region edge-case test for BuildNodes",
+      "pr_number": 1141,
+      "pr_merged": true,
+      "done_at": "2026-04-22T23:55:16Z"
+    },
+    "issue-1134": {
+      "state": "done",
+      "title": "feat: QA docs gate",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/docs"
+      ],
+      "priority": "medium",
+      "assigned_to": "sess-b033281b",
+      "assigned_at": "2026-04-23T00:39:29Z",
+      "branch": "feat/issue-1134",
+      "worktree": "../kardinal-promoter.issue-1134",
+      "file_spaces": [
+        "docs/"
+      ],
+      "pr_number": 1144,
+      "pr_merged": true,
+      "done_at": "2026-04-23T00:52:45Z"
+    },
+    "issue-1132": {
+      "state": "done",
+      "title": "fix(controller): readyz probe gates on informer cache sync to fix PDCA S1",
+      "pr_merged": true,
+      "pr_number": 1147,
+      "done_at": "2026-04-23T02:04:15Z",
+      "assigned_to": "sess-65772043"
+    },
+    "issue-1133": {
+      "state": "done",
+      "title": "fix(controller): PDCA 5 consecutive failures \u2014 same root cause as #1132",
+      "pr_merged": true,
+      "pr_number": 1147,
+      "done_at": "2026-04-23T02:04:15Z",
+      "assigned_to": "sess-65772043"
+    },
+    "issue-1127": {
+      "state": "done",
+      "title": "docs(security): document multi-tenant isolation workaround",
+      "pr_merged": true,
+      "pr_number": "1151",
+      "done_at": "2026-04-23T03:32:14Z",
+      "labels": [
+        "kind/docs",
+        "kardinal"
+      ]
+    },
+    "issue-1131": {
+      "state": "done",
+      "title": "feat(pm): add kargo-gap-check.sh \u2014 automated competitive gap detection",
+      "pr_merged": true,
+      "pr_number": "1152",
+      "done_at": "2026-04-23T03:49:07Z",
+      "labels": [
+        "kind/enhancement",
+        "kardinal"
+      ]
+    },
+    "issue-1154": {
+      "state": "todo",
+      "title": "feat: Workflow self-healing: detect and recover from syntax-error regression",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller",
+        "needs-human"
+      ],
+      "priority": "medium",
+      "blocked": true,
+      "blocked_reason": "needs-human: GitHub App lacks workflows permission to create .github/workflows/ files"
+    },
+    "issue-1155": {
+      "state": "todo",
+      "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1155"
+    },
+    "issue-1156": {
+      "state": "todo",
+      "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1156"
+    },
+    "issue-1157": {
+      "state": "todo",
+      "title": "feat: **Self-feeding queue: COORDINATOR auto-triggers vision scan when queue empties**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1157"
+    },
+    "issue-1158": {
+      "state": "todo",
+      "title": "feat: **`otherness.learn` automatic invocation: skills extracted from every novel-pattern batch*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1158"
+    },
+    "issue-1159": {
+      "state": "todo",
+      "title": "feat: **Otherness setup guide completeness audit**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1159"
+    },
+    "issue-1160": {
+      "state": "todo",
+      "title": "feat: **ADVERSARY activation gate: COORDINATOR must not queue an item without an ADVERSARY pass*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1160"
+    },
+    "issue-1161": {
+      "state": "done",
+      "title": "feat: **`bash -n` CI guard for `otherness-scheduled.yml` run: blocks is NOT implemented**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1161",
+      "pr_merged": true,
+      "pr_number": 1176,
+      "done_at": "2026-04-23T07:19:10Z",
+      "note": "Merged PR #1176: bash -n syntax validation script"
+    },
+    "issue-1162": {
+      "state": "done",
+      "title": "SM velocity signal: distinguish loop health from delivery velocity",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1162",
+      "branch": "feat/issue-1162",
+      "worktree": "/home/runner/work/kardinal-promoter/kardinal-promoter.issue-1162",
+      "assigned_to": "sess-d0926a9a",
+      "assigned_at": "2026-04-23T08:14:41Z",
+      "pr_number": 1181,
+      "pr_merged": true,
+      "done_at": "2026-04-23T08:32:28Z"
+    },
+    "issue-1163": {
+      "state": "done",
+      "title": "feat: SM metrics trend analysis",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "pr": 1182
+    },
+    "issue-1164": {
+      "state": "todo",
+      "title": "feat: **Cross-session prior reasoning persistence: prevent re-litigating settled architecture qu",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1164"
+    },
+    "issue-1165": {
+      "state": "todo",
+      "title": "feat: **Future backlog size is uncapped and untracked",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1165"
+    },
+    "issue-1166": {
+      "state": "todo",
+      "title": "feat: **Pressure context history is unversioned",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1166"
+    },
+    "issue-1167": {
+      "state": "todo",
+      "title": "feat: **Frame-lock structural break: ADVERSARY must cite a competing design as its null hypothes",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1167"
+    },
+    "issue-1168": {
+      "state": "todo",
+      "title": "feat: **Skills usage count will always read zero",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1168"
+    },
+    "issue-1169": {
+      "state": "todo",
+      "title": "feat: **Design doc backlog counts are hardcoded stale timestamps",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1169"
+    },
+    "issue-1170": {
+      "state": "done",
+      "title": "feat: **Backlog overflow alarm is unimplemented: SM is supposed to flag at >40 items but never d",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1170",
+      "pr_merged": true,
+      "pr_number": 1178,
+      "done_at": "2026-04-23T07:34:19Z"
+    },
+    "issue-1171": {
+      "state": "todo",
+      "title": "feat: **Session token exhaustion is invisible: no detection when agent exits mid-queue due to bu",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1171"
+    },
+    "issue-1172": {
+      "state": "todo",
+      "title": "feat: **Pressure context is written by the same agents who evaluate it",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1172"
+    },
+    "issue-1173": {
+      "state": "done",
+      "title": "COORDINATOR alphabetic doc ordering starves doc 15 items",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1173",
+      "branch": "feat/issue-1173",
+      "worktree": "../kardinal-promoter.issue-1173",
+      "assigned_to": "sess-unknown",
+      "assigned_at": "2026-04-23T07:54:48Z",
+      "pr_number": 1180,
+      "pr_merged": true,
+      "done_at": "2026-04-23T08:11:36Z"
+    },
+    "issue-1130": {
+      "state": "todo",
+      "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1130"
+    },
+    "issue-1184": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 1185,
+      "done_at": "2026-04-23T10:15:12Z",
+      "title": "feat: add scripts/gitops-promoter-gap-check.sh for competitive parity analysis"
     }
   },
   "session_heartbeats": {
@@ -1358,14 +1747,24 @@
       "last_seen": "2026-04-22T22:54:00Z",
       "item": "complete",
       "cycle": 1
+    },
+    "sess-65772043": {
+      "last_seen": "2026-04-23T02:04:15Z",
+      "item": "issue-1132",
+      "cycle": 1
+    },
+    "sess-25d26ee2": {
+      "last_seen": "2026-04-23T05:18:41Z",
+      "item": "issue-954",
+      "cycle": 2
     }
   },
   "report_issue": 1,
-  "sm_cycle_count": 4,
-  "pm_cycle_count": 7,
+  "sm_cycle_count": 6,
+  "pm_cycle_count": 9,
   "chore_only_guard_count": 0,
-  "batch_count": 2,
-  "last_batch_at": "2026-04-22T22:54:00Z",
+  "batch_count": 5,
+  "last_batch_at": "2026-04-22T23:55:16Z",
   "future_backlog": 59,
   "meaningful_prs_last_session": 3,
   "session_end": "COMPLETE"
