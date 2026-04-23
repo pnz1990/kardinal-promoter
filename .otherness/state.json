@@ -1391,6 +1391,17 @@
         "kind/docs",
         "kardinal"
       ]
+    },
+    "issue-1131": {
+      "state": "done",
+      "title": "feat(pm): add kargo-gap-check.sh \u2014 automated competitive gap detection",
+      "pr_merged": true,
+      "pr_number": "1152",
+      "done_at": "2026-04-23T03:49:07Z",
+      "labels": [
+        "kind/enhancement",
+        "kardinal"
+      ]
     }
   },
   "session_heartbeats": {
