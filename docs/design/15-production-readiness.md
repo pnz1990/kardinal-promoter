@@ -150,6 +150,16 @@ Every item in this doc was identified by examining the live codebase against fiv
 
 - ✅ **PDCA 5 consecutive failures — root causes fixed** — The loop shipped features while PDCA was failing because the COORDINATOR halt gate requires `pdca_status=failure` in `state.json`, but this was not being updated by the scheduler. Root causes identified and fixed: RBAC crash (PR #1095), S9 invalid CRD field (fix in progress issue #1136), stale CRD schema (PR #1126). The halt gate has been separately verified in doc 12 — the issue was automated PDCA status not being written to `state.json` on failure. (issue #1133, 2026-04-22)
 
+### Lens 12: Product gaps identified by pressure lens scan (2026-04-23)
+
+- 🔲 **Project CRD for multi-tenant isolation has no tracking issue — workaround documentation is not a roadmap item** — Lens 6 item "No multi-tenant project isolation" is marked ✅ (PR #1127-docs) because a workaround was documented. The `✅` is misleading: Kargo's `Project` CRD namespaces all Stages/Promotions/Warehouses under one RBAC boundary; kardinal's workaround requires one controller replica per tenant namespace, which is operationally expensive and undocumented as a limitation. The competitive gap is open. The item must be re-opened as a `🔲` with the explicit constraint: documenting a workaround is not Kargo parity. Concrete implementation spec for a Project CRD: (a) `kardinal.io/v1alpha1 Project` with `spec.namespaces[]` listing watched namespaces; (b) a `ProjectReconciler` that syncs `Pipeline`/`Bundle`/`PolicyGate` from member namespaces into a single aggregated status; (c) `kubectl get projects` shows cross-namespace pipeline health in one view. Until this ships, a multi-team company evaluating kardinal will choose Kargo for the RBAC model alone. ⚠️ Inferred from pressure lens: "SM health signal says GREEN but products not advancing fast enough" — marking a competitive gap ✅ when only a workaround was documented is the doc-12 spec-only PR anti-pattern applied to product docs.
+
+- 🔲 **`PR #tbd` items in doc 15 have no verified PR numbers — 12 items may be spec-only false-positives** — doc 15 contains 12 `✅` items with `(PR #tbd, ...)` as the only PR reference. These items are marked as shipped but the PR numbers were never filled in. The codebase spot-checks (TokenReview: `pkg/uiauth/` exists; admission webhook: `pkg/admission/` exists; demo flag: `values.yaml` has 3 demo entries; namespace-scoped mode: `watchNamespace` in values) confirm the implementations exist. But: (1) without PR numbers, PDCA cannot verify these implementations survived subsequent changes; (2) Scan 1 cannot distinguish these from a spec-only PR that never touched code; (3) a git bisect that needs to know "when was TokenReview auth added?" has no anchor. Run: `gh pr list --repo pnz1990/kardinal-promoter --state merged --search "tokenreview OR uiauth OR watchNamespace OR scaffold-gitops OR demo.enabled" --limit 20` to find the real PR numbers. Update each `(PR #tbd)` with the actual PR number. This is not a new feature — it is a 30-minute cleanup that prevents a growing number of items from being permanently unverifiable. ⚠️ Inferred from pressure lens: "Is the loop honest enough?" — `✅ (PR #tbd)` is not a verifiable claim; it is a placeholder that was never completed.
+
+- 🔲 **GitOps Promoter parity gap analysis is absent — `kargo-gap-check.sh` covers only Kargo** — `scripts/kargo-gap-check.sh` monitors `akuity/kargo` issues for features kardinal lacks. There is no equivalent for `argoproj-labs/gitops-promoter`, which is releasing weekly and gaining traction as a lightweight Flux-native alternative. GitOps Promoter's differentiators over Kargo (and over kardinal): (a) native `PullRequest` CRD that tracks PR lifecycle as a K8s object; (b) `CommitStatus` CRD for PR-gates without external webhooks; (c) multi-commit "proposed commit set" batching. All three are patterns kardinal would benefit from evaluating. Add `scripts/gitops-promoter-gap-check.sh` following the same pattern as `kargo-gap-check.sh`: fetch newest `kind/enhancement` issues from `argoproj-labs/gitops-promoter`, cross-reference against doc-15 `🔲` items, output gaps with >3 thumbsup not covered. PM runs this in `pm.md §5n-gitops-promoter`. Without this scan, kardinal's competitive analysis has a structural blind spot: the Kargo comparison is updated weekly; the GitOps Promoter comparison is never updated. ⚠️ Inferred from pressure lens: "SM health signal says GREEN but products not advancing fast enough" — a competitive gap we cannot see is a gap we cannot close.
+
+- 🔲 **Doc-15 Triage notes fall out of date each batch — no mechanism keeps them synchronized with the Future section** — The Triage notes at the bottom of this doc list items as "open" that were resolved in Lenses 1–9. As of 2026-04-23: "Outbound event notifications," "ArgoCD-native image update," "GitHub Actions wrapper action," "GitHub Discussions," "Reusable PromotionTemplate CRD," and "Grafana dashboard" are all ✅ in the Future section but were still listed as open in the Triage section until fixed in this scan. This will happen again: whenever a Lens item is marked ✅, the Triage notes must also be updated. No agent or scan currently does this. Add a Scan 2 variant for doc-15: after running the standard stale file check, scan for items in the `## Triage notes` section that appear without `~~` strikethrough but have a corresponding `✅` item in the same file. Auto-strikethrough them with the PR reference. Without this sync, the Triage notes degrade into a misleading backlog of ghost work that makes the project appear less complete than it is. ⚠️ Inferred from pressure lens: "Is the visibility good enough?" — a human reading the Triage notes sees a different (worse) picture than the Future section shows.
+
 ---
 
 ## Triage notes
@@ -165,21 +175,21 @@ Every item in this doc was identified by examining the live codebase against fiv
 8. ~~No per-step execution timeout~~ ✅ Done (PR #1121-impl) — `stepTimeoutSeconds` field on `EnvironmentSpec`, propagated to engine via `StepState`, cancels hung steps via `context.WithTimeout`
 
 **Must-fix for competitive parity with Kargo:**
-1. Outbound event notifications (Slack/webhook)
-2. ArgoCD-native image update step
+1. ~~Outbound event notifications (Slack/webhook)~~ ✅ Done — NotificationHook CRD (PR #914)
+2. ~~ArgoCD-native image update step~~ ✅ Done — `update.strategy: argocd` (PR #915, 2026-04-21)
 3. ~~`kubectl get` printer columns on Bundle/PromotionStep CRDs~~ ✅ Done (PR #903)
-4. Bitbucket and Azure DevOps SCM providers — blocks enterprise adoption
+4. ~~Bitbucket and Azure DevOps SCM providers~~ ✅ Done — `BitbucketProvider` + `AzureDevOpsProvider` (PR #tbd, 2026-04-21)
 5. ~~Namespace-scoped controller mode~~ ✅ Done — `controller.watchNamespace` Helm value + Role/RoleBinding (PR #tbd, 2026-04-21)
 6. ~~Image signature verification step (cosign verify)~~ ✅ Done (PR #1091, 2026-04-22) — `verify-image` step added; requires cosign in execution environment
-7. `maxConcurrentPromotions` cap per pipeline — prevents promotion storms from CI bursts
+7. ~~`maxConcurrentPromotions` cap per pipeline~~ ✅ Done (PR #1059, 2026-04-22)
 8. ~~No Kubernetes Events emitted by reconcilers~~ ✅ Done (PR #1099, 2026-04-22) — `kubectl describe` now shows events; Bundle/PromotionStep/PolicyGate all emit events
 
 **Adoption wins (high effort/impact):**
 1. ~~`kardinal init` full GitOps repo scaffolding~~ ✅ Done — `--scaffold-gitops` and `--demo` flags added (PR #tbd, 2026-04-21)
-2. GitHub Actions wrapper action
-3. GitHub Discussions community presence
-4. Reusable PromotionTemplate CRD
+2. ~~GitHub Actions wrapper action~~ ✅ Done — `.github/actions/create-bundle/action.yml` (PR #916)
+3. ~~GitHub Discussions community presence~~ ✅ Done — `CONTRIBUTING.md` + community section (PR #tbd, 2026-04-22); Discussions board requires manual enable (needs-human issue #979)
+4. ~~Reusable PromotionTemplate CRD~~ ✅ Done — `PromotionTemplate` CRD + translator inlining (PR #985, 2026-04-21)
 5. ~~`kardinal status <pipeline>` per-pipeline in-flight view~~ ✅ Done (PR #997, 2026-04-21)
 6. ~~`kardinal logs --follow` streaming mode~~ ✅ Done (PR #1122-impl) — polls every 2s, cursor-tracked incremental step output, exits on terminal state
-7. Grafana dashboard JSON shipped in Helm chart — makes Prometheus useful out-of-the-box
-8. `kardinal logs` per-step `status.steps[]` rendering — primary debugging surface for failed promotions ✅ (PR #974 series, 2026-04-21)
+7. ~~Grafana dashboard JSON shipped in Helm chart~~ ✅ Done — `config/monitoring/kardinal-promoter-dashboard.json` (PR #1128-series, 2026-04-22)
+8. ~~`kardinal logs` per-step `status.steps[]` rendering~~ ✅ Done (PR #974 series, 2026-04-21)
