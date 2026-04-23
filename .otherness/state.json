@@ -21,6 +21,13 @@
       "pr_merged": true,
       "pr_number": 1199,
       "done_at": "2026-04-23T12:59:31Z"
+    },
+    "issue-1172": {
+      "state": "done",
+      "title": "feat(scripts): add check-pressure-context-drift.sh",
+      "pr_merged": true,
+      "pr_number": 1200,
+      "done_at": "2026-04-23T13:16:35Z"
     }
   },
   "session_heartbeats": {
