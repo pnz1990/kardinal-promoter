@@ -27,3 +27,4 @@
 | 2026-04-21 | 22 | 20 | 0 | 0 | 12 | 1 | ~5min | 21 | feature-rich | — | — | 0 | 1 | 1 | Bitbucket+ADO SCM providers | 0 |
 | 2026-04-22 | 1 | 0 | 726+9 | feat(cli): surface dependsOn validation errors in kardinal get pipelines (PR #1071) | ✅ |
 | 2026-04-22 | 1 | 3 | 735 | feat(graph): multi-region forEach fan-out for Pipeline environments (PR #1110) | ✅ |
+| 2026-04-23 | 1 | 2 | 802 | feat(sm): sm-metrics-trend.sh — act on collected metrics (PR #1182); issue-1154 blocked on workflows permission | ✅ |
