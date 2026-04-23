@@ -1231,7 +1231,7 @@
       "done_at": "2026-04-22T21:34:37Z"
     },
     "issue-954": {
-      "state": "in_review",
+      "state": "todo",
       "title": "chore(ci): add action-tests CI job to run .github/actions/create-bundle/test.sh",
       "labels": [
         "kardinal",
@@ -1247,8 +1247,8 @@
       "note": "Implementation complete in feat/issue-954, push blocked by workflows permission. All 8 tests pass.",
       "assigned_to": "sess-25d26ee2",
       "assigned_at": "2026-04-23T05:11:14Z",
-      "branch": "feat/issue-954",
-      "worktree": "../kardinal-promoter.issue-954",
+      "branch": null,
+      "worktree": null,
       "needs_human": true
     },
     "issue-918": {
@@ -1663,8 +1663,8 @@
       "issue": "1172"
     },
     "issue-1173": {
-      "state": "todo",
-      "title": "feat: **COORDINATOR alphabetic doc ordering starves doc 15 (production-readiness) items permanen",
+      "state": "done",
+      "title": "COORDINATOR alphabetic doc ordering starves doc 15 items",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -1673,7 +1673,14 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1173"
+      "issue": "1173",
+      "branch": "feat/issue-1173",
+      "worktree": "../kardinal-promoter.issue-1173",
+      "assigned_to": "sess-unknown",
+      "assigned_at": "2026-04-23T07:54:48Z",
+      "pr_number": 1180,
+      "pr_merged": true,
+      "done_at": "2026-04-23T08:11:36Z"
     },
     "issue-1130": {
       "state": "todo",
