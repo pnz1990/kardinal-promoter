@@ -1380,6 +1380,17 @@
       "pr_number": 1147,
       "done_at": "2026-04-23T02:04:15Z",
       "assigned_to": "sess-65772043"
+    },
+    "issue-1127": {
+      "state": "done",
+      "title": "docs(security): document multi-tenant isolation workaround",
+      "pr_merged": true,
+      "pr_number": "1151",
+      "done_at": "2026-04-23T03:32:14Z",
+      "labels": [
+        "kind/docs",
+        "kardinal"
+      ]
     }
   },
   "session_heartbeats": {
