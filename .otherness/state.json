@@ -1231,7 +1231,7 @@
       "done_at": "2026-04-22T21:34:37Z"
     },
     "issue-954": {
-      "state": "done",
+      "state": "in_review",
       "title": "chore(ci): add action-tests CI job to run .github/actions/create-bundle/test.sh",
       "labels": [
         "kardinal",
@@ -1244,7 +1244,12 @@
       "issue_number": 954,
       "done_at": "2026-04-22T00:00:00Z",
       "pr_merged": false,
-      "note": "needs-human: workflows permission required"
+      "note": "Implementation complete in feat/issue-954, push blocked by workflows permission. All 8 tests pass.",
+      "assigned_to": "sess-25d26ee2",
+      "assigned_at": "2026-04-23T05:11:14Z",
+      "branch": "feat/issue-954",
+      "worktree": "../kardinal-promoter.issue-954",
+      "needs_human": true
     },
     "issue-918": {
       "state": "done",
@@ -1402,6 +1407,279 @@
         "kind/enhancement",
         "kardinal"
       ]
+    },
+    "issue-1154": {
+      "state": "todo",
+      "title": "feat: **Workflow self-healing: detect and recover from syntax-error regression**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1154"
+    },
+    "issue-1155": {
+      "state": "todo",
+      "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1155"
+    },
+    "issue-1156": {
+      "state": "todo",
+      "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1156"
+    },
+    "issue-1157": {
+      "state": "todo",
+      "title": "feat: **Self-feeding queue: COORDINATOR auto-triggers vision scan when queue empties**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1157"
+    },
+    "issue-1158": {
+      "state": "todo",
+      "title": "feat: **`otherness.learn` automatic invocation: skills extracted from every novel-pattern batch*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1158"
+    },
+    "issue-1159": {
+      "state": "todo",
+      "title": "feat: **Otherness setup guide completeness audit**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1159"
+    },
+    "issue-1160": {
+      "state": "todo",
+      "title": "feat: **ADVERSARY activation gate: COORDINATOR must not queue an item without an ADVERSARY pass*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1160"
+    },
+    "issue-1161": {
+      "state": "todo",
+      "title": "feat: **`bash -n` CI guard for `otherness-scheduled.yml` run: blocks is NOT implemented**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1161"
+    },
+    "issue-1162": {
+      "state": "todo",
+      "title": "feat: **SM health signal says GREEN but product is not advancing: distinguish \"healthy loop\" fro",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1162"
+    },
+    "issue-1163": {
+      "state": "todo",
+      "title": "feat: **Metrics collected but not acted on: SM must read `docs/aide/metrics.md` and change queue",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1163"
+    },
+    "issue-1164": {
+      "state": "todo",
+      "title": "feat: **Cross-session prior reasoning persistence: prevent re-litigating settled architecture qu",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1164"
+    },
+    "issue-1165": {
+      "state": "todo",
+      "title": "feat: **Future backlog size is uncapped and untracked",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1165"
+    },
+    "issue-1166": {
+      "state": "todo",
+      "title": "feat: **Pressure context history is unversioned",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1166"
+    },
+    "issue-1167": {
+      "state": "todo",
+      "title": "feat: **Frame-lock structural break: ADVERSARY must cite a competing design as its null hypothes",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1167"
+    },
+    "issue-1168": {
+      "state": "todo",
+      "title": "feat: **Skills usage count will always read zero",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1168"
+    },
+    "issue-1169": {
+      "state": "todo",
+      "title": "feat: **Design doc backlog counts are hardcoded stale timestamps",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1169"
+    },
+    "issue-1170": {
+      "state": "todo",
+      "title": "feat: **Backlog overflow alarm is unimplemented: SM is supposed to flag at >40 items but never d",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1170"
+    },
+    "issue-1171": {
+      "state": "todo",
+      "title": "feat: **Session token exhaustion is invisible: no detection when agent exits mid-queue due to bu",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1171"
+    },
+    "issue-1172": {
+      "state": "todo",
+      "title": "feat: **Pressure context is written by the same agents who evaluate it",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1172"
+    },
+    "issue-1173": {
+      "state": "todo",
+      "title": "feat: **COORDINATOR alphabetic doc ordering starves doc 15 (production-readiness) items permanen",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1173"
+    },
+    "issue-1130": {
+      "state": "todo",
+      "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1130"
     }
   },
   "session_heartbeats": {
@@ -1444,13 +1722,18 @@
       "last_seen": "2026-04-23T02:04:15Z",
       "item": "issue-1132",
       "cycle": 1
+    },
+    "sess-25d26ee2": {
+      "last_seen": "2026-04-23T05:18:41Z",
+      "item": "issue-954",
+      "cycle": 2
     }
   },
   "report_issue": 1,
   "sm_cycle_count": 5,
   "pm_cycle_count": 8,
   "chore_only_guard_count": 0,
-  "batch_count": 3,
+  "batch_count": 4,
   "last_batch_at": "2026-04-22T23:55:16Z",
   "future_backlog": 59,
   "meaningful_prs_last_session": 3,
