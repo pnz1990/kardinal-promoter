@@ -14,6 +14,13 @@
       "pr_merged": true,
       "pr_number": 1197,
       "done_at": "2026-04-23T11:51:24Z"
+    },
+    "issue-1171": {
+      "state": "done",
+      "title": "feat(scripts): add session-complete-marker.sh",
+      "pr_merged": true,
+      "pr_number": 1199,
+      "done_at": "2026-04-23T12:59:31Z"
     }
   },
   "session_heartbeats": {
