@@ -1703,6 +1703,13 @@
       ],
       "priority": "medium",
       "issue": "1130"
+    },
+    "issue-1184": {
+      "state": "done",
+      "pr_merged": true,
+      "pr_number": 1185,
+      "done_at": "2026-04-23T10:15:12Z",
+      "title": "feat: add scripts/gitops-promoter-gap-check.sh for competitive parity analysis"
     }
   },
   "session_heartbeats": {
