@@ -1,5 +1,5 @@
 {
-  "batch_count": 1,
+  "batch_count": 2,
   "features": {
     "issue-954": {
       "state": "in_review",
@@ -28,6 +28,242 @@
       "pr_merged": true,
       "pr_number": 1200,
       "done_at": "2026-04-23T13:16:35Z"
+    },
+    "issue-1196": {
+      "state": "todo",
+      "title": "feat: **Cross-session prior reasoning persistence: prevent re-litigating settled architecture qu",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue": "1196"
+    },
+    "issue-1195": {
+      "state": "todo",
+      "title": "feat: **ADVERSARY activation gate: COORDINATOR must not queue an item without an ADVERSARY pass*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue": "1195"
+    },
+    "issue-1194": {
+      "state": "todo",
+      "title": "feat: **`otherness.learn` automatic invocation: skills extracted from every novel-pattern batch*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue": "1194"
+    },
+    "issue-1193": {
+      "state": "todo",
+      "title": "feat: **Self-feeding queue: COORDINATOR auto-triggers vision scan when queue empties**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue": "1193"
+    },
+    "issue-1192": {
+      "state": "todo",
+      "title": "feat: **Doc-15 items are structurally starved by the COORDINATOR's alphabetic doc ordering",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue": "1192"
+    },
+    "issue-1191": {
+      "state": "todo",
+      "title": "feat: **Self-cadence: switch from 6h to 1h when queue is non-empty**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement"
+      ],
+      "priority": "medium",
+      "issue": "1191"
+    },
+    "issue-1190": {
+      "state": "done",
+      "title": "feat: Workflow self-healing: detect and recover from syntax-error regression",
+      "labels": [
+        "kardinal",
+        "kind/enhancement",
+        "area/agent-loop",
+        "size/s",
+        "priority/medium"
+      ],
+      "priority": "medium",
+      "issue": "1190",
+      "assigned_to": "sess-e8f8105a",
+      "assigned_at": "2026-04-23T13:47:52Z",
+      "branch": "feat/issue-1190",
+      "worktree": "../kardinal-promoter.issue-1190",
+      "file_spaces": [
+        ".github/workflows/",
+        "scripts/"
+      ],
+      "note": "needs-human: GitHub App lacks workflows write permission - branch deleted"
+    },
+    "issue-1187": {
+      "state": "todo",
+      "title": "feat: Project CRD for multi-tenant isolation",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/xl",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1187"
+    },
+    "issue-1169": {
+      "state": "done",
+      "title": "feat: **Design doc backlog counts are hardcoded stale timestamps",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1169",
+      "assigned_to": "sess-e8f8105a",
+      "assigned_at": "2026-04-23T00:00:00Z",
+      "branch": "feat/issue-1169",
+      "worktree": "../kardinal-promoter.issue-1169",
+      "file_spaces": [
+        "docs/design/"
+      ],
+      "pr_number": 1202,
+      "pr_url": "https://github.com/pnz1990/kardinal-promoter/pull/1202",
+      "pr_merged": true,
+      "done_at": "2026-04-23T00:00:00Z"
+    },
+    "issue-1168": {
+      "state": "todo",
+      "title": "feat: **Skills usage count will always read zero",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1168"
+    },
+    "issue-1167": {
+      "state": "todo",
+      "title": "feat: **Frame-lock structural break: ADVERSARY must cite a competing design as its null hypothes",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1167"
+    },
+    "issue-1166": {
+      "state": "todo",
+      "title": "feat: **Pressure context history is unversioned",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1166"
+    },
+    "issue-1165": {
+      "state": "todo",
+      "title": "feat: **Future backlog size is uncapped and untracked",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1165"
+    },
+    "issue-1164": {
+      "state": "todo",
+      "title": "feat: **Cross-session prior reasoning persistence: prevent re-litigating settled architecture qu",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1164"
+    },
+    "issue-1160": {
+      "state": "todo",
+      "title": "feat: **ADVERSARY activation gate: COORDINATOR must not queue an item without an ADVERSARY pass*",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1160"
+    },
+    "issue-1159": {
+      "state": "todo",
+      "title": "feat: **Otherness setup guide completeness audit**",
+      "labels": [
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1159"
+    },
+    "issue-1154": {
+      "state": "todo",
+      "title": "feat: **Workflow self-healing: detect and recover from syntax-error regression**",
+      "labels": [
+        "needs-human",
+        "kardinal",
+        "priority/medium",
+        "size/s",
+        "kind/enhancement",
+        "area/controller"
+      ],
+      "priority": "medium",
+      "issue": "1154"
     }
   },
   "session_heartbeats": {
@@ -35,7 +271,15 @@
       "last_seen": "2026-04-23T11:36:30Z",
       "item": "coord",
       "cycle": 1
+    },
+    "sess-e8f8105a": {
+      "last_seen": "2026-04-23T00:00:00Z",
+      "item": "complete",
+      "cycle": 1
     }
   },
-  "last_batch_at": "2026-04-23T11:54:49Z"
+  "last_batch_at": "2026-04-23T00:00:00Z",
+  "meaningful_prs_last_session": 1,
+  "session_end": "COMPLETE",
+  "future_backlog": 68
 }
