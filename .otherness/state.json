@@ -1621,7 +1621,7 @@
       "issue": "1169"
     },
     "issue-1170": {
-      "state": "todo",
+      "state": "done",
       "title": "feat: **Backlog overflow alarm is unimplemented: SM is supposed to flag at >40 items but never d",
       "labels": [
         "kardinal",
@@ -1631,7 +1631,10 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1170"
+      "issue": "1170",
+      "pr_merged": true,
+      "pr_number": 1178,
+      "done_at": "2026-04-23T07:34:19Z"
     },
     "issue-1171": {
       "state": "todo",
