@@ -1517,8 +1517,8 @@
       "note": "Merged PR #1176: bash -n syntax validation script"
     },
     "issue-1162": {
-      "state": "todo",
-      "title": "feat: **SM health signal says GREEN but product is not advancing: distinguish \"healthy loop\" fro",
+      "state": "done",
+      "title": "SM velocity signal: distinguish loop health from delivery velocity",
       "labels": [
         "kardinal",
         "priority/medium",
@@ -1527,7 +1527,14 @@
         "area/controller"
       ],
       "priority": "medium",
-      "issue": "1162"
+      "issue": "1162",
+      "branch": "feat/issue-1162",
+      "worktree": "/home/runner/work/kardinal-promoter/kardinal-promoter.issue-1162",
+      "assigned_to": "sess-d0926a9a",
+      "assigned_at": "2026-04-23T08:14:41Z",
+      "pr_number": 1181,
+      "pr_merged": true,
+      "done_at": "2026-04-23T08:32:28Z"
     },
     "issue-1163": {
       "state": "todo",
