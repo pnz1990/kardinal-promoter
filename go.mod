@@ -9,7 +9,7 @@ require (
 	github.com/google/cel-go v0.28.0
 	github.com/mattn/go-isatty v0.0.21
 	github.com/prometheus/client_golang v1.23.2
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	k8s.io/api v0.35.3
