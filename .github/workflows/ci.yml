@@ -29,7 +29,7 @@ jobs:
       has_web: ${{ steps.check.outputs.has_web }}
       has_e2e: ${{ steps.check.outputs.has_e2e }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Detect project artifacts
         id: check
         run: |
@@ -48,7 +48,7 @@ jobs:
     name: docs-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Validate YAML files
         run: |
           pip install pyyaml --quiet
@@ -98,7 +98,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           go-version-file: go.mod
@@ -179,7 +179,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           go-version-file: go.mod
@@ -194,7 +194,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           go-version-file: go.mod
@@ -211,7 +211,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           # Use go1.25.9+ to ensure stdlib vulns GO-2026-4947, GO-2026-4946,
@@ -229,7 +229,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           go-version-file: go.mod
@@ -247,7 +247,7 @@ jobs:
     if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Scan filesystem for HIGH/CRITICAL CVEs
         uses: aquasecurity/trivy-action@0.35.0
         with:
@@ -268,7 +268,7 @@ jobs:
       needs.preflight.outputs.has_e2e == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
           go-version-file: go.mod
@@ -286,7 +286,7 @@ jobs:
     if: needs.preflight.outputs.has_web == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: oven-sh/setup-bun@v2
       - name: Install dependencies
         run: bun install
@@ -315,7 +315,7 @@ jobs:
     name: helm lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Check if chart exists
         id: chart_check
         run: |
