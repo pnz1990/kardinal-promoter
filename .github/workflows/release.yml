@@ -130,7 +130,7 @@ jobs:
 
       # ── SLSA Level 2 provenance ──────────────────────────────────────────────
       - name: Generate SLSA provenance attestation
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/pnz1990/kardinal-promoter/controller
           subject-digest: ${{ steps.build-controller.outputs.digest }}
