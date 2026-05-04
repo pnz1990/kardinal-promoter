@@ -173,7 +173,7 @@ jobs:
       # Blocking here leaves a published image without a GitHub Release entry.
       # CVE remediation is tracked separately via Dependabot and the SARIF report.
       - name: Scan controller image for HIGH/CRITICAL CVEs (trivy)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
           format: sarif
@@ -192,7 +192,7 @@ jobs:
         continue-on-error: true
 
       - name: Scan krocodile image for HIGH/CRITICAL CVEs (trivy)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.KROCODILE_COMMIT }}
           format: sarif
