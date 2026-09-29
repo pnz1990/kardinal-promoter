@@ -52,14 +52,20 @@ The controller exposes a REST API at `/api/v1/ui/` that proxies CRD reads from t
 
 | Endpoint | Returns | Source CRD |
 |---|---|---|
-| `GET /api/v1/ui/pipelines` | All Pipelines with current Bundle status | Pipeline + Bundle CRDs |
-| `GET /api/v1/ui/pipelines/:name` | Single Pipeline with environment status | Pipeline + Bundle + PromotionStep CRDs |
-| `GET /api/v1/ui/pipelines/:name/graph` | Graph spec + node statuses for current Bundle | Graph + PromotionStep + PolicyGate CRDs |
-| `GET /api/v1/ui/pipelines/:name/bundles` | Bundle history for a Pipeline | Bundle CRDs |
-| `GET /api/v1/ui/bundles/:name` | Single Bundle with evidence | Bundle CRD |
-| `GET /api/v1/ui/policygates` | All PolicyGate templates (not instances) | PolicyGate CRDs in policy namespaces |
+| `GET /api/v1/ui/pipelines` | All Pipelines with the active Bundle and blocker/failed-step counts | Pipeline + Bundle + PolicyGate + PromotionStep |
+| `GET /api/v1/ui/pipelines/{name}/bundles` | Bundle history for a Pipeline | Bundle |
+| `GET /api/v1/ui/bundles/{name}/graph[?namespace=]` | Promotion DAG for one Bundle: one node per environment and per gate instance, edges from the Pipeline's dependencies (waves, `dependsOn`, else list order). Steps and gates come from the Bundle's namespace; `namespace` picks the Bundle when names repeat | Pipeline + Bundle + PromotionStep + PolicyGate |
+| `GET /api/v1/ui/bundles/{name}/steps` | PromotionSteps of a Bundle | PromotionStep |
+| `GET /api/v1/ui/gates` | PolicyGates | PolicyGate |
+| `GET /api/v1/ui/steps/{namespace}/{name}/events` | Events of that PromotionStep only; `404` when the step does not exist | PromotionStep + Event |
+| `POST /api/v1/ui/bundles`, `/promote`, `/rollback` | Create a Bundle | Bundle |
+| `POST /api/v1/ui/pause`, `/resume` | Pause or resume a Pipeline | Pipeline |
+| `POST /api/v1/ui/gates/{namespace}/{name}/approve` | Add an override to a gate (retried on write conflicts) | PolicyGate |
+| `POST /api/v1/ui/validate-cel` | Check a CEL expression | none |
 
 All endpoints return JSON. The controller reads CRDs using its existing Kubernetes client and transforms them into UI-friendly JSON structures (omitting internal fields, resolving references).
+
+Authentication (shared token, or TokenReview plus a SubjectAccessReview for every object read or written) and CORS are described in [the security guide](../guides/security.md#ui-api-access-control). A failed list returns `500` instead of an empty result.
 
 ## Data Refresh
 
@@ -308,10 +314,10 @@ The following capabilities are declared in `docs/aide/vision.md` §F8 but not ye
 The embedded UI (`cmd/kardinal-controller/ui_api.go`) currently serves all endpoints with **no authentication**. The UI listen address (`:8082`) is bound to all interfaces. A platform team at a Series B company would fail this in a security review on day one.
 
 - ✅ **UI API authentication** — `--ui-auth-token` flag (env: `KARDINAL_UI_TOKEN`) added to `main.go`. When set, all `/api/v1/ui/*` routes require `Authorization: Bearer <token>`. Static `/ui/*` assets bypass auth. Constant-time comparison via `crypto/subtle`. Default is open (no token) for backwards compatibility. Implemented in PR #909.
-- ✅ **TLS for UI and webhook HTTP servers** — `--tls-cert-file` / `--tls-key-file` flags (env: `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`) added to `main.go`. When both are set, `http.ListenAndServeTLS` is used for both the UI server (`:8082`) and webhook server (`:8083`). Falls back to plain HTTP when neither is set (backwards compatible). Helm values `controller.tlsCertFile` and `controller.tlsKeyFile` support cert-manager volume mount pattern. Implemented in PR #911.
+- ✅ **TLS for UI and webhook HTTP servers** — `--tls-cert-file` / `--tls-key-file` flags (env: `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`) added to `main.go`. When both are set, `http.ListenAndServeTLS` is used for both the UI server (`:8082`) and webhook server (`:8083`). Falls back to plain HTTP when neither is set (backwards compatible). Helm values `controller.tlsCertFile` and `controller.tlsKeyFile` support cert-manager volume mount pattern. Implemented in PR #911. **Update (audit remediation, 2026-09-29):** `listenAndServeWithTLS()` is replaced by `httpServer` (`cmd/kardinal-controller/http_server.go`), a manager Runnable: both servers start after the informer caches sync, have read/write/idle timeouts, drain in-flight requests on shutdown, and a bind or serve error stops the controller instead of only being logged. Setting only one of the two TLS flags is now a startup error instead of a silent fallback to plain HTTP.
 - ✅ **CORS lockdown for UI API** — `--cors-allowed-origins` flag (env: `KARDINAL_CORS_ORIGINS`) added to `main.go`. Default (empty): same-origin only — cross-origin requests to `/api/v1/ui/*` are rejected with 403. Set to an explicit comma-separated list to allow specific origins. Set to `*` to allow all origins (development opt-out). CORS headers are only applied to `/api/v1/ui/*`; static `/ui/*` assets and webhook routes are unaffected. Implemented in PR #912.
 - ✅ **In-cluster `kubectl port-forward` UX** — `InsecureConnectionBanner` component renders a dismissible amber warning when the UI is accessed over plain HTTP from a non-localhost address. Localhost (`localhost`, `127.0.0.1`) is exempt since port-forward to localhost is the documented access method. `docs/installation.md` now has an "Accessing the UI" section documenting `kubectl port-forward svc/kardinal-controller 8082`. Implemented in PR #913.
-- ✅ **Kubernetes TokenReview-based auth for UI API** (PR #tbd, 2026-04-21) — `--ui-tokenreview-auth` flag (env: `KARDINAL_UI_TOKENREVIEW_AUTH=true`) added. When enabled and `--ui-auth-token` is not set, the UI API authenticates bearer tokens via `authenticationv1.TokenReview`. Cluster-native authentication: users authenticate with their kubeconfig tokens. Static `--ui-auth-token` takes precedence when both are set. Fail-closed: TokenReview API failure → 503. Implementation in `pkg/uiauth/tokenreview.go` with testable `TokenReviewer` interface.
+- ✅ **Kubernetes TokenReview-based auth for UI API** (PR #tbd, 2026-04-21) — `--ui-tokenreview-auth` flag (env: `KARDINAL_UI_TOKENREVIEW_AUTH=true`) added. When enabled and `--ui-auth-token` is not set, the UI API authenticates bearer tokens via `authenticationv1.TokenReview`. Cluster-native authentication: users authenticate with their kubeconfig tokens. Static `--ui-auth-token` takes precedence when both are set. Fail-closed: TokenReview API failure → 503. Implementation in `pkg/uiauth/tokenreview.go` with testable `TokenReviewer` interface. **Update (audit remediation, 2026-09-29):** TokenReview mode now also authorizes: every object the UI API reads or writes for the caller is checked with a `SubjectAccessReview` (`pkg/uiauth/access.go`, `AuthorizingClient`), so a user cannot see or change more through the UI than through `kubectl`. Denied → 403, review API failure → 503, and the controller exits at startup if the review clients cannot be built (previously it logged and served an open UI). Results are cached for 30s per token and action. The web client now sends the token (kept in `sessionStorage`) and shows a sign-in dialog on 401; before this, enabling either auth mode made the UI unusable. User RBAC is documented in `docs/guides/security.md` §UI API Access Control.
 ---
 
 ## Enterprise polish design (added 2026-04-17)

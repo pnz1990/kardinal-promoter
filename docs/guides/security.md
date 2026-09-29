@@ -207,18 +207,18 @@ instead of a cluster-wide `ClusterRole`.
 
 ```bash
 # Team A — installs kardinal watching only the "team-a" namespace
-helm install kardinal-team-a oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
-  --set controller.github.token.secretName=github-token
+  --set github.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
-helm install kardinal-team-b oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
-  --set controller.github.token.secretName=github-token
+  --set github.secretRef.name=github-token
 ```
 
 Each install creates a `Role` and `RoleBinding` scoped to its watch namespace. Team A
@@ -388,13 +388,17 @@ rules:
 By default, no NetworkPolicy is applied. In environments with a NetworkPolicy-capable CNI (Calico, Cilium, etc.), enable the built-in policy to restrict the controller's network access:
 
 ```bash
-helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+helm upgrade kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set networkPolicy.enabled=true
 ```
 
 The policy allows:
-- **Ingress**: kubelet health probes (port 8081) and Prometheus scraping (port 8080)
-- **Egress**: Kubernetes API server (`:443`, `:6443`), DNS (`:53`), HTTPS for SCM providers and go-git operations (`:443`), and traffic to `kro-system` for kro Graph controller communication
+- **Ingress**: one rule per port: metrics (`8080`), health probes (`8081`), UI (`8082`) and
+  webhook/Bundle API (`8083`). Restrict who can reach each port with
+  `networkPolicy.ingressFrom.{metrics,health,ui,webhook}`.
+- **Egress**: DNS (`:53`), and `:443` and `:6443` to any address (Kubernetes API server, SCM
+  providers, go-git). Traffic to kro is allowed only when `networkPolicy.kroNamespace` is
+  set. Add more rules with `networkPolicy.extraEgress`.
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
@@ -402,17 +406,16 @@ Disable with `--set networkPolicy.enabled=false` if your CNI does not support Ne
 
 ## Admission Validation
 
-The `ValidatingAdmissionPolicy` (Kubernetes 1.28+, enabled by default) validates `PolicyGate` resources at admission time:
-
-1. `spec.expression` must not be empty
-2. `spec.recheckInterval`, if set, must match Go duration format (e.g. `5m`, `30s`, `1h`)
+The CRDs validate their fields with OpenAPI schema rules, so `kubectl apply` rejects bad
+values before they are stored. Examples: enum fields such as `update.strategy`, non-empty
+required strings such as `PolicyGate` `spec.expression`, the Go duration format of
+`spec.recheckInterval` (`5m`, `30s`, `1h`), and the rules for environment names. This works
+on every supported Kubernetes version and needs no admission webhook.
 
 Full CEL syntax validation (catching invalid CEL expressions) requires a validating webhook — see issue #317.
 
-Disable for clusters without VAP support:
-```bash
-helm upgrade kardinal ... --set validatingAdmissionPolicy.enabled=false
-```
+The chart no longer installs a `ValidatingAdmissionPolicy`. The
+`validatingAdmissionPolicy.enabled` value is deprecated and has no effect.
 
 ---
 
@@ -422,51 +425,116 @@ The embedded UI server runs on port `:8082` and serves two surfaces:
 
 | Path prefix | Content | Default |
 |---|---|---|
-| `/ui/*` | React app (HTML/JS/CSS) | Open — no sensitive data |
-| `/api/v1/ui/*` | Pipeline state, Bundle history, gate details | Open — unprotected by default |
+| `/ui/*` | React app (HTML/JS/CSS) | Public: no data, and it must load before the browser can send a token |
+| `/api/v1/ui/*` | Pipeline state, Bundle history, gate details, and the promote, rollback, pause/resume and gate-approve actions | Open unless one of the modes below is enabled |
 
-Without authentication, any pod in the cluster that can reach `:8082` can read all pipeline state. Enable Bearer token protection for production deployments.
+Without authentication, any pod in the cluster that can reach `:8082` can read all
+pipeline state and can promote, roll back, pause and approve gates. Enable one of the
+two modes below for production deployments.
 
-### Enabling Bearer token authentication
+### Option 1: shared UI token
 
-Set the `--ui-auth-token` flag (or `KARDINAL_UI_TOKEN` environment variable):
+Store a random token in a Secret and point the chart at it (`--ui-auth-token`, or the
+`KARDINAL_UI_TOKEN` environment variable):
 
 ```bash
-# Helm values
-helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
-  --set controller.uiAuthToken="$(openssl rand -hex 32)"
+kubectl create secret generic kardinal-ui-token -n kardinal-system \
+  --from-literal=token="$(openssl rand -hex 32)"
+
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  -n kardinal-system --reuse-values \
+  --set ui.auth.tokenSecretRef.name=kardinal-ui-token
 ```
 
-Or set it directly in the Deployment:
-
-```yaml
-env:
-  - name: KARDINAL_UI_TOKEN
-    valueFrom:
-      secretKeyRef:
-        name: kardinal-ui-token
-        key: token
-```
-
-When set, all `/api/v1/ui/*` requests must include:
+Every `/api/v1/ui/*` request must then include:
 
 ```
 Authorization: Bearer <token>
 ```
 
-Requests without a valid Bearer token receive `HTTP 401` with a `Www-Authenticate: Bearer realm="kardinal-ui"` header.
+Requests without the token get `HTTP 401` with a `Www-Authenticate: Bearer realm="kardinal-ui"`
+header. The comparison is constant-time. Everyone who has the token has full UI access:
+there is no per-user authorization in this mode.
 
-The static React assets at `/ui/*` are **not** gated — they contain no sensitive data and must load before the browser can supply a token.
+### Option 2: Kubernetes tokens (TokenReview)
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  -n kardinal-system --reuse-values \
+  --set ui.auth.tokenReview=true
+```
+
+This sets `--ui-tokenreview-auth=true`. Users sign in with a Kubernetes token, for example
+`kubectl create token <service-account> -n <namespace>`. For every `/api/v1/ui/*` request
+the controller:
+
+1. Validates the token with a `TokenReview`. An invalid token gets `401`.
+2. Checks every object the request reads or writes with a `SubjectAccessReview` for that
+   user. A denied check gets `403` naming the verb, resource and namespace. A user never
+   sees or changes more through the UI than `kubectl` would allow them.
+3. Fails closed. If the review API cannot be reached, the request gets `503`. If the review
+   clients cannot be built, the controller does not start.
+4. Caches review results for 30 seconds per token and per action. A revoked token or a
+   removed RoleBinding keeps working through the UI for up to 30 seconds.
+
+When the chart enables this mode, it also grants the controller `create` on
+`tokenreviews` and `subjectaccessreviews`. If a shared UI token is set as well, the shared
+token wins and TokenReview is not used.
+
+The user needs these permissions:
+
+| UI action | Permissions |
+|---|---|
+| View pipelines, bundles, gates and steps | `get`, `list` on `pipelines`, `bundles`, `policygates`, `promotionsteps` (`kardinal.io`) |
+| View step events | `list` on `events` (core) |
+| Promote, roll back | `create` on `bundles` |
+| Pause, resume | `update`, `patch` on `pipelines` |
+| Approve a gate | `update`, `patch` on `policygates` |
+
+The list views read all namespaces, so the user needs a ClusterRole bound with a
+ClusterRoleBinding. When the controller runs with `--watch-namespace`, lists are checked
+against that namespace only, and a Role and RoleBinding there are enough.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kardinal-ui-viewer
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["pipelines", "bundles", "policygates", "promotionsteps"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list"]
+```
+
+### Signing in from the browser
+
+When the API answers `401`, the UI opens a **Sign in to kardinal** dialog. Paste the
+shared UI token or a Kubernetes token. The token is kept in `sessionStorage` for that
+browser tab only, is cleared when the tab closes, and is sent as the `Authorization`
+header on every API call. If the token later stops working (it expired or was rotated),
+the UI drops it and asks again.
+
+### Cross-origin requests (CORS)
+
+The UI calls its API on the same origin, which always works. A cross-origin request to
+`/api/v1/ui/*` gets `403` unless its origin is listed in `--cors-allowed-origins`
+(chart value `ui.corsAllowedOrigins`). `*` allows every origin and is for development
+only.
 
 ### Accessing the UI securely (before TLS is configured)
 
 Until TLS is configured, the recommended access method is:
 
 ```bash
-kubectl port-forward svc/kardinal-kardinal-promoter 8082:8082 -n kardinal-system
+kubectl port-forward svc/kardinal-promoter 8082:8082 -n kardinal-system
 ```
 
-Then access the UI at `http://localhost:8082/ui/`. The browser may display a warning when accessed over plain HTTP (`window.location.protocol != 'https:'`).
+The Service is named after the Helm release (`<fullname>`, `kardinal-promoter` for a
+release named `kardinal-promoter`). Then open the UI at `http://localhost:8082/ui/`. The
+browser may display a warning when accessed over plain HTTP.
 
 > **Production note**: Do not expose port 8082 via a LoadBalancer or Ingress without TLS and auth enabled. Use port-forward for operator access or configure TLS as described below.
 
@@ -476,7 +544,7 @@ Then access the UI at `http://localhost:8082/ui/`. The browser may display a war
 
 Both the UI server (`:8082`) and the webhook/bundle-API server (`:8083`) support TLS via the `--tls-cert-file` and `--tls-key-file` flags (environment variables `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`).
 
-When both flags are set, both servers switch to `https.ListenAndServeTLS`. When neither is set, both remain on plain HTTP (backwards compatible). Providing only one of the two flags is detected at startup and logs a warning before falling back to plain HTTP.
+When both flags are set, both servers serve HTTPS. When neither is set, both serve plain HTTP. Setting only one of the two flags is a startup error: the controller exits instead of silently serving plain HTTP.
 
 ### Helm: cert-manager integration (recommended)
 
@@ -520,7 +588,7 @@ extraVolumeMounts:
 Or set directly at deploy time:
 
 ```bash
-helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+helm upgrade kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set controller.tlsCertFile=/etc/kardinal-tls/tls.crt \
   --set controller.tlsKeyFile=/etc/kardinal-tls/tls.key
 ```
