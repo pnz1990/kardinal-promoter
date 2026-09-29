@@ -16,6 +16,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
@@ -35,11 +38,11 @@ func newOverrideTestScheme() *runtime.Scheme {
 	return s
 }
 
-func makeTestGate(name, ns string) *v1alpha1.PolicyGate {
+func makeTestGate(name string) *v1alpha1.PolicyGate {
 	return &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: ns,
+			Namespace: "default",
 		},
 		Spec: v1alpha1.PolicyGateSpec{
 			Expression: "!schedule.isWeekend",
@@ -51,7 +54,7 @@ func makeTestGate(name, ns string) *v1alpha1.PolicyGate {
 // TestOverrideFn_BasicOverride verifies that the override CLI function
 // appends an override to PolicyGate.spec.overrides[].
 func TestOverrideFn_BasicOverride(t *testing.T) {
-	gate := makeTestGate("no-weekend-deploy", "default")
+	gate := makeTestGate("no-weekend-deploy")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -83,7 +86,7 @@ func TestOverrideFn_BasicOverride(t *testing.T) {
 
 // TestOverrideFn_InvalidExpiry verifies that an invalid --expires-in returns an error.
 func TestOverrideFn_InvalidExpiry(t *testing.T) {
-	gate := makeTestGate("my-gate", "default")
+	gate := makeTestGate("my-gate")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -111,7 +114,7 @@ func TestOverrideFn_GateNotFound(t *testing.T) {
 
 // TestOverrideFn_MultipleOverrides verifies that multiple overrides accumulate.
 func TestOverrideFn_MultipleOverrides(t *testing.T) {
-	gate := makeTestGate("rate-limit-gate", "default")
+	gate := makeTestGate("rate-limit-gate")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -137,7 +140,7 @@ func TestOverrideFn_MultipleOverrides(t *testing.T) {
 // TestOverrideFn_EmptyStageAppliesGlobally verifies that an empty stage
 // means the override applies to all environments.
 func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
-	gate := makeTestGate("global-gate", "default")
+	gate := makeTestGate("global-gate")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -157,4 +160,32 @@ func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
 
 	require.Len(t, updatedGate.Spec.Overrides, 1)
 	assert.Equal(t, "", updatedGate.Spec.Overrides[0].Stage)
+}
+
+// C09b-cli-06: an override that lands between our read and our write is kept.
+func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
+	calls := 0
+	c := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).
+		WithObjects(makeTestGate("g")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl sigs_client.WithWatch, obj sigs_client.Object,
+				patch sigs_client.Patch, opts ...sigs_client.PatchOption) error {
+				calls++
+				if calls == 1 {
+					require.NoError(t, cmd.ExportedOverrideFn(io.Discard, cl, "default", "demo", "", "g",
+						"second operator", "2h"))
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	require.NoError(t, cmd.ExportedOverrideFn(io.Discard, c, "default", "demo", "prod", "g", "first operator", "1h"))
+
+	var g v1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "g", Namespace: "default"}, &g))
+	var reasons []string
+	for _, o := range g.Spec.Overrides {
+		reasons = append(reasons, o.Reason)
+	}
+	assert.Equal(t, []string{"second operator", "first operator"}, reasons)
 }

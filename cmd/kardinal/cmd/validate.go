@@ -14,11 +14,16 @@
 package cmd
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -31,13 +36,18 @@ func newValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate Pipeline and PolicyGate YAML before applying to the cluster",
-		Long: `Validate a Pipeline or PolicyGate YAML file without connecting to the cluster.
+		Long: `Validate Pipeline and PolicyGate YAML without connecting to the cluster.
+The file may hold several documents; each Pipeline and PolicyGate is checked.
 
 Checks:
-  - Schema: required fields present, valid enum values
-  - Dependencies: no circular deps, all referenced environments exist  
-  - CEL: PolicyGate expressions are syntactically valid (if present)
-  - Lint: health.type set on environments with health configuration
+  - Pipeline: at least one environment, every environment named, spec.git.url
+    set, and the environment dependencies form a valid graph (no cycles, no
+    unknown dependsOn)
+  - PolicyGate: spec.expression set and compiles with the controller's
+    PolicyGate CEL environment
+
+This is not full CRD schema validation; 'kubectl apply --dry-run=server'
+checks the schema.
 
 Exit codes:
   0 — file is valid
@@ -59,26 +69,48 @@ func runValidate(cmd *cobra.Command, file string) error {
 		return fmt.Errorf("cannot read %s: %w", file, err)
 	}
 
-	// Parse the kind from the YAML.
-	var meta struct {
-		Kind string `yaml:"kind"`
-	}
-	if err := yaml.Unmarshal(data, &meta); err != nil {
-		return fmt.Errorf("cannot parse %s as YAML: %w", file, err)
-	}
-
 	out := cmd.OutOrStdout()
-
-	switch meta.Kind {
-	case "Pipeline":
-		return validatePipeline(out, file, data)
-	case "PolicyGate":
-		return validatePolicyGate(out, file, data)
-	case "":
-		return fmt.Errorf("%s: missing 'kind' field", file)
-	default:
-		return fmt.Errorf("%s: unsupported kind %q — only Pipeline and PolicyGate are supported", file, meta.Kind)
+	dec := k8syaml.NewYAMLOrJSONDecoder(strings.NewReader(string(data)), 4096)
+	docs, failed := 0, 0
+	for {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("cannot parse %s as YAML: %w", file, err)
+		}
+		if len(raw) == 0 || string(raw) == "null" {
+			continue // empty document
+		}
+		docs++
+		var meta struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return fmt.Errorf("cannot parse %s as YAML: %w", file, err)
+		}
+		switch meta.Kind {
+		case "Pipeline":
+			err = validatePipeline(out, file, raw)
+		case "PolicyGate":
+			err = validatePolicyGate(out, file, raw)
+		case "":
+			return fmt.Errorf("%s: missing 'kind' field", file)
+		default:
+			return fmt.Errorf("%s: unsupported kind %q — only Pipeline and PolicyGate are supported", file, meta.Kind)
+		}
+		if err != nil {
+			failed++
+		}
 	}
+	if docs == 0 {
+		return fmt.Errorf("%s: no documents found", file)
+	}
+	if failed > 0 {
+		return fmt.Errorf("validation failed")
+	}
+	return nil
 }
 
 func validatePipeline(out io.Writer, file string, data []byte) error {
@@ -100,8 +132,13 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		}
 	}
 
+	// Schema: the CRD requires spec.git.url (minLength 1).
+	if pipeline.Spec.Git.URL == "" {
+		errs = append(errs, "spec.git.url is required")
+	}
+
 	// Dependency: no circular deps (uses the graph builder's topoSort).
-	if len(errs) == 0 && len(pipeline.Spec.Environments) > 0 {
+	if len(pipeline.Spec.Environments) > 0 && !hasUnnamedEnv(pipeline) {
 		b := graph.NewBuilder()
 		dummyBundle := &kardinalv1alpha1.Bundle{}
 		dummyBundle.Name = "validate-dummy"
@@ -155,26 +192,27 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	return nil
 }
 
-// validateCELExpression does a basic syntax check on a CEL expression.
+func hasUnnamedEnv(p kardinalv1alpha1.Pipeline) bool {
+	for _, env := range p.Spec.Environments {
+		if env.Name == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateCELExpression compiles expr with the controller's PolicyGate CEL
+// environment, the same check the controller runs on a template gate.
 func validateCELExpression(expr string) error {
 	if len(expr) == 0 {
 		return fmt.Errorf("expression is empty")
 	}
-	// Basic sanity: check for unbalanced parentheses.
-	var depth int
-	for _, c := range expr {
-		switch c {
-		case '(':
-			depth++
-		case ')':
-			depth--
-		}
-		if depth < 0 {
-			return fmt.Errorf("unbalanced parentheses")
-		}
+	msg, invalid, err := celSyntaxCheck(context.Background(), expr)
+	if err != nil {
+		return err
 	}
-	if depth != 0 {
-		return fmt.Errorf("unbalanced parentheses")
+	if invalid {
+		return errors.New(msg)
 	}
 	return nil
 }

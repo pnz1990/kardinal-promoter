@@ -21,48 +21,63 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // CLIVersion is the static CLI version string, overridable at build time via ldflags.
 var CLIVersion = "v0.1.0-dev"
 
 func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var controllerNS string
+	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Print the CLI, controller, and graph versions",
-		RunE:  runVersion,
+		Short: "Print the CLI, controller, and kro (Graph) versions",
+		Long: `Print the CLI version, the controller version (the kardinal-version ConfigMap
+the controller writes to its namespace) and the kro version (the image tag of
+the kro controller in kro-system). Cluster versions show as unknown when the
+cluster cannot be reached.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			controllerVer, graphVer := "unknown", ""
+			// Best-effort: without a cluster the CLI version is still printed.
+			if c, _, err := buildClient(); err == nil {
+				controllerVer, graphVer = clusterVersions(context.Background(), c, controllerNS)
+			}
+			return versionFn(cmd.OutOrStdout(), controllerVer, graphVer)
+		},
 	}
+	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
+		"Namespace kardinal-promoter is installed in")
+	return cmd
 }
 
-func runVersion(cmd *cobra.Command, _ []string) error {
-	controllerVer := "unknown"
-	graphVer := ""
+// clusterVersions returns the controller version from the kardinal-version
+// ConfigMap in controllerNS ("unknown" when absent) and the kro version the
+// way doctor finds it ("" when kro is not found).
+func clusterVersions(ctx context.Context, c sigs_client.Reader, controllerNS string) (string, string) {
+	controllerVer := controllerVersion(ctx, c, controllerNS)
+	graphVer, _, _ := kroVersion(ctx, c)
+	if graphVer != "" {
+		graphVer = "kro " + graphVer
+	}
+	return controllerVer, graphVer
+}
 
-	// Best-effort: try to read from the kardinal-version ConfigMap.
-	client, _, err := buildClient()
-	if err == nil {
-		var cm corev1.ConfigMap
-		if cmErr := client.Get(context.Background(),
-			types.NamespacedName{
-				Namespace: "kardinal-system",
-				Name:      "kardinal-version",
-			}, &cm); cmErr == nil {
-			if v, ok := cm.Data["version"]; ok && v != "" {
-				controllerVer = v
-			}
-			if v, ok := cm.Data["graph"]; ok && v != "" {
-				graphVer = v
-			}
+// controllerVersion reads the kardinal-version ConfigMap the controller
+// writes to its namespace at start-up; "unknown" when it is absent.
+func controllerVersion(ctx context.Context, c sigs_client.Reader, controllerNS string) string {
+	var cm corev1.ConfigMap
+	if err := c.Get(ctx, types.NamespacedName{Namespace: controllerNS, Name: "kardinal-version"}, &cm); err == nil {
+		if v := cm.Data["version"]; v != "" {
+			return v
 		}
 	}
-
-	return versionFn(cmd.OutOrStdout(), controllerVer, graphVer)
+	return "unknown"
 }
 
 // versionFn is the testable implementation of the version command.
 // It writes CLI, Controller, and Graph version lines to w.
 // controllerVer is the controller version resolved from the ConfigMap ("unknown" if absent).
-// graphVer is the graph engine version from the ConfigMap (empty string when unavailable).
+// graphVer is the kro version (empty string when unavailable).
 func versionFn(w interface{ Write([]byte) (int, error) }, controllerVer, graphVer string) error {
 	cliVer := buildInfoVersion()
 

@@ -2,6 +2,10 @@
 
 Create kardinal resources
 
+```
+kardinal create [flags]
+```
+
 ### Options
 
 ```
@@ -14,11 +18,11 @@ Create kardinal resources
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal create bundle](kardinal_create_bundle.md)	 - Create a Bundle to trigger promotion through a Pipeline
+* [kardinal create bundle](kardinal-create-bundle.md)	 - Create a Bundle to trigger promotion through a Pipeline
 

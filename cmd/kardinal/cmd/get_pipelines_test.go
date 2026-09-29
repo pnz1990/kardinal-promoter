@@ -15,13 +15,16 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -109,41 +112,101 @@ func TestGetPipelinesOnce_TableOutput(t *testing.T) {
 	assert.Greater(t, len(lines), 1, "output must have at least a header and one data row")
 }
 
-// TestGetStepsOnce_TableOutput verifies that getStepsOnce produces
-// the expected steps table output (same as the non-watch path).
-func TestGetStepsOnce_TableOutput(t *testing.T) {
-	s := buildGetPipelinesScheme(t)
-
-	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-app-test",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    "my-app",
-				"kardinal.io/environment": "test",
-				"kardinal.io/bundle":      "bundle-abc",
+// C09b-cli-25 / C09b-cli-27: get steps lists the steps of the pipeline's
+// active Bundles only, and says so when there are none instead of listing
+// every step.
+func TestGetStepsOnce(t *testing.T) {
+	bundle := func(name, phase string) *v1alpha1.Bundle {
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+		b.Spec.Pipeline = "demo"
+		b.Status.Phase = phase
+		return b
+	}
+	created := policyTestNow.Add(-time.Hour)
+	cases := []struct {
+		name     string
+		output   string
+		objs     []sigs_client.Object
+		want     string
+		contains []string
+		excludes []string
+	}{
+		{
+			name: "active bundle only",
+			objs: []sigs_client.Object{
+				bundle("old", "Superseded"), bundle("new", "Promoting"),
+				explainStep("demo", "old", "test", "Failed", "old-msg", created),
+				explainStep("demo", "new", "test", "Promoting", "new-msg", created),
 			},
+			contains: []string{"new-msg", "Promoting"},
+			excludes: []string{"old-msg", "Failed"},
 		},
-		Spec: v1alpha1.PromotionStepSpec{
-			PipelineName: "my-app",
-			Environment:  "test",
-			BundleName:   "bundle-abc",
+		{
+			name: "no active bundles",
+			objs: []sigs_client.Object{
+				bundle("old", "Superseded"),
+				explainStep("demo", "old", "test", "Verified", "", created),
+			},
+			want: "No active bundles for pipeline \"demo\".\n",
 		},
-		Status: v1alpha1.PromotionStepStatus{
-			State: "Verified",
+		{
+			name:   "no active bundles as json",
+			output: "json",
+			objs: []sigs_client.Object{
+				bundle("old", "Superseded"),
+				explainStep("demo", "old", "test", "Verified", "", created),
+			},
+			want: "[]\n",
 		},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			globalOutput = tc.output
+			t.Cleanup(func() { globalOutput = "" })
+			var buf bytes.Buffer
+			require.NoError(t, getStepsOnce(&buf, policyClient(t, tc.objs...), "default", "demo"))
+			if tc.want != "" {
+				assert.Equal(t, tc.want, buf.String())
+			}
+			for _, s := range tc.contains {
+				assert.Contains(t, buf.String(), s)
+			}
+			for _, s := range tc.excludes {
+				assert.NotContains(t, buf.String(), s)
+			}
+		})
+	}
+}
 
-	fc := fake.NewClientBuilder().WithScheme(s).WithObjects(step).Build()
-
-	var buf bytes.Buffer
-	err := getStepsOnce(&buf, fc, "default", "my-app")
-	require.NoError(t, err)
-
-	out := buf.String()
-	// Steps table must have at least headers
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	assert.Greater(t, len(lines), 0, "output must have at least one line")
+// C09b-cli-25: --watch clears the screen only for a table on a terminal and
+// prints no footer into -o json output; it stops when the context is done.
+func TestWatchLoop(t *testing.T) {
+	for _, output := range []string{"", "json"} {
+		t.Run("output="+output, func(t *testing.T) {
+			globalOutput = output
+			t.Cleanup(func() { globalOutput = "" })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var buf bytes.Buffer
+			renders := 0
+			err := watchLoop(ctx, &buf, time.Millisecond, func() error {
+				renders++
+				if renders == 2 {
+					cancel()
+				}
+				_, _ = buf.WriteString("frame\n")
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 2, renders)
+			assert.NotContains(t, buf.String(), "\033[", "no clear-screen on a pipe")
+			if output == "json" {
+				assert.Equal(t, "frame\nframe\n", buf.String())
+			} else {
+				assert.Contains(t, buf.String(), "(watching")
+			}
+		})
+	}
 }
 
 // TestGetPipelinesOnce_FailedBundle_ShowsError verifies that when a Bundle is in

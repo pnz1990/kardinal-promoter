@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,13 +31,17 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
-// imageRepoPattern matches valid OCI image repository references.
-// Valid: nginx, docker.io/library/nginx, ghcr.io/org/repo
-// Invalid: "not valid@@@", " ", spaces, multiple colons in unusual positions
-// This is a best-effort check; the full OCI spec is more complex.
-var imageRepoPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._\-/]*$`)
+// imageRepoPattern matches an image repository (the reference without its tag
+// or digest): an optional registry host[:port]/ followed by lowercase path
+// components, as in the distribution reference grammar.
+// Valid: nginx, docker.io/library/nginx, ghcr.io/org/repo, localhost:5000/app
+// Invalid: "not valid@@@", " ", uppercase path components
+var imageRepoPattern = regexp.MustCompile(
+	`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?(?::[0-9]+)?/)?` +
+		`[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
 
 // imageDigestPattern matches an OCI content digest (algorithm:encoded).
 var imageDigestPattern = regexp.MustCompile(`^[a-z0-9]+(?:[+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]+$`)
@@ -153,12 +158,19 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		},
 	}
 
+	// The gate templates the controller would pass to the builder (controller
+	// default policy namespaces, or the Pipeline's spec.policyNamespaces).
+	gates, err := translator.CollectGates(context.Background(), c, nil, &pipe)
+	if err != nil {
+		return fmt.Errorf("dry-run: collect policy gates: %w", err)
+	}
+
 	// Run graph.Builder.Build — pure function, no cluster writes
 	b := graph.NewBuilder()
 	result, err := b.Build(graph.BuildInput{
 		Pipeline:    &pipe,
 		Bundle:      bundle,
-		PolicyGates: nil, // dry-run uses no gates (preview mode)
+		PolicyGates: gates,
 	})
 	if err != nil {
 		return fmt.Errorf("dry-run: graph build failed: %w", err)
@@ -169,19 +181,25 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	_, _ = fmt.Fprintf(w, "\nPromotion graph: %d node(s)\n", result.NodeCount)
 	_, _ = fmt.Fprintf(w, "\nEnvironments in promotion order:\n")
 
-	// Show the environments by iterating the graph nodes
-	seen := map[string]bool{}
+	// The gate instances the Graph would create, per environment.
+	gatesByEnv := map[string][]string{}
 	for _, node := range result.Graph.Spec.Nodes {
-		// Node IDs have format: <celSafeSlug(pipeline)>-<env>-<type>
-		// Split on first two hyphens to extract the environment segment.
-		parts := strings.SplitN(node.ID, "-", 3)
-		if len(parts) >= 2 {
-			env := parts[1]
-			if !seen[env] {
-				seen[env] = true
-				_, _ = fmt.Fprintf(w, "  \u2022 %s\n", env)
-			}
+		if node.Template["kind"] != "PolicyGate" {
+			continue
 		}
+		meta, _ := node.Template["metadata"].(map[string]interface{})
+		labels, _ := meta["labels"].(map[string]interface{})
+		env, _ := labels["kardinal.io/environment"].(string)
+		name, _ := labels["kardinal.io/gate-name"].(string)
+		gatesByEnv[env] = append(gatesByEnv[env], name)
+	}
+	for _, env := range pipe.Spec.Environments {
+		line := "  \u2022 " + env.Name
+		if g := gatesByEnv[env.Name]; len(g) > 0 {
+			sort.Strings(g)
+			line += " (gates: " + strings.Join(g, ", ") + ")"
+		}
+		_, _ = fmt.Fprintln(w, line)
 	}
 
 	_, _ = fmt.Fprintf(w, "\nNo resources were created. Remove --dry-run to apply.\n")
@@ -198,7 +216,7 @@ func parseImageRefs(images []string) ([]v1alpha1.ImageRef, error) {
 		// This prevents silently-succeeding bundles with obviously wrong image strings
 		// (e.g. "not-valid-image@@@") that would later fail kustomize-set-image.
 		if repo != "" && !imageRepoPattern.MatchString(repo) {
-			return nil, fmt.Errorf("invalid image repository %q: must match [a-zA-Z0-9][a-zA-Z0-9._-/]* (e.g. ghcr.io/org/image)", repo)
+			return nil, fmt.Errorf("invalid image repository %q: want [host[:port]/]path (e.g. ghcr.io/org/image)", repo)
 		}
 		if digest != "" && !imageDigestPattern.MatchString(digest) {
 			return nil, fmt.Errorf("invalid image digest %q in %q: must look like sha256:<hex>", digest, img)

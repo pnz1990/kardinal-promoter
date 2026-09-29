@@ -16,7 +16,6 @@
 package cmd
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
@@ -30,39 +29,25 @@ import (
 // approve is deprecated (it had no effect), so cobra leaves it out of completion.
 var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "override"}
 
-func TestCompletion_Bash(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion", "bash"})
-
-	err := root.Execute()
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.True(t, len(out) > 0, "bash completion output must not be empty")
-	assert.Contains(t, out, "kardinal", "completion script must reference the binary name")
-	// Bash V2 completion is dynamic — command names are not embedded in the script;
-	// they are resolved at runtime via __complete. Verify the shell function name.
-	assert.Contains(t, out, "__start_kardinal", "bash completion must define __start_kardinal entry point")
-}
-
-func TestCompletion_Zsh(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion", "zsh"})
-
-	err := root.Execute()
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.True(t, len(out) > 0, "zsh completion output must not be empty")
-	// Zsh completion is dynamic — command names are resolved at runtime via __complete.
-	// Verify the completion function name is present.
-	assert.Contains(t, out, "_kardinal", "zsh completion must define _kardinal function")
+// C09a-cli-22: each script starts with its shell's header and defines the
+// kardinal entry point.
+func TestCompletion_Scripts(t *testing.T) {
+	cases := []struct {
+		shell, header, entry string
+	}{
+		{"bash", "# bash completion V2 for kardinal", "__start_kardinal()"},
+		{"zsh", "#compdef kardinal", "_kardinal()"},
+		{"fish", "# fish completion for kardinal", "function __kardinal_perform_completion"},
+		{"powershell", "# powershell completion for kardinal", "Register-ArgumentCompleter"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.shell, func(t *testing.T) {
+			out, err := executeRoot(t, "completion", tc.shell)
+			require.NoError(t, err)
+			assert.True(t, strings.HasPrefix(out, tc.header), "want header %q, got:\n%.80s", tc.header, out)
+			assert.Contains(t, out, tc.entry)
+		})
+	}
 }
 
 // TestCompletion_CoreSubcommandsComplete verifies that core subcommands are
@@ -70,84 +55,39 @@ func TestCompletion_Zsh(t *testing.T) {
 // mis-wiring that would silently break power-user tab completion
 // (design doc 15 §Future — kardinal completion CI test).
 func TestCompletion_CoreSubcommandsComplete(t *testing.T) {
+	// __complete with an empty word lists one "name\tdescription" per line,
+	// then a ":<directive>" line.
+	out, err := executeRoot(t, "__complete", "")
+	require.NoError(t, err)
+	names := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		names[strings.SplitN(line, "\t", 2)[0]] = true
+	}
 	for _, sub := range coreSubcommands {
-		t.Run(sub, func(t *testing.T) {
-			root := NewRootCmd()
-			var buf bytes.Buffer
-			root.SetOut(&buf)
-			root.SetErr(&buf)
-			// cobra's __complete command with a single empty string returns
-			// the top-level subcommand list (one per line).
-			root.SetArgs([]string{"__complete", ""})
-			_ = root.Execute()
-			out := buf.String()
-			assert.Contains(t, out, sub,
-				"__complete output must list subcommand %q — check that newXxxCmd() is added to root via AddCommand", sub)
-		})
+		assert.True(t, names[sub],
+			"__complete output must list subcommand %q — check that newXxxCmd() is added to root via AddCommand", sub)
 	}
 }
 
-func TestCompletion_Fish(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion", "fish"})
+func TestCompletion_ArgErrors(t *testing.T) {
+	_, err := executeRoot(t, "completion", "tcsh")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid argument "tcsh" for "kardinal completion"`)
 
-	err := root.Execute()
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.True(t, len(out) > 0, "fish completion output must not be empty")
-}
-
-func TestCompletion_PowerShell(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion", "powershell"})
-
-	err := root.Execute()
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.True(t, len(out) > 0, "powershell completion output must not be empty")
-}
-
-func TestCompletion_UnknownShell(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion", "tcsh"})
-
-	err := root.Execute()
-	assert.Error(t, err, "unknown shell must return an error")
-}
-
-func TestCompletion_NoArg(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion"})
-
-	err := root.Execute()
-	assert.Error(t, err, "missing shell argument must return an error")
+	_, err = executeRoot(t, "completion")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "accepts 1 arg(s), received 0")
 }
 
 func TestCompletion_HelpIncludesInstallInstructions(t *testing.T) {
-	root := NewRootCmd()
-	var buf bytes.Buffer
-	root.SetOut(&buf)
-	root.SetErr(&buf)
-	root.SetArgs([]string{"completion", "--help"})
-
-	// --help exits with 0 via cobra
-	_ = root.Execute()
-
-	out := buf.String()
-	assert.True(t, strings.Contains(out, "bash") || strings.Contains(out, "source"),
-		"help text must mention bash or source")
+	out, err := executeRoot(t, "completion", "--help")
+	require.NoError(t, err)
+	for _, want := range []string{
+		"source <(kardinal completion bash)",
+		"kardinal completion zsh",
+		"kardinal completion fish > ~/.config/fish/completions/kardinal.fish",
+		"kardinal completion powershell >> $PROFILE",
+	} {
+		assert.Contains(t, out, want)
+	}
 }
