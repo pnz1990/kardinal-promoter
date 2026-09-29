@@ -9,19 +9,26 @@
 //   Esc  close the currently open side panel (node detail or bundle diff)
 //   /    focus the pipeline search input (#800)
 //
-// All shortcuts are suppressed when an input, textarea, or contenteditable
-// element has focus so that users can type normally without triggering actions.
+// All shortcuts are suppressed when an input, textarea, select or
+// contenteditable element has focus, when Ctrl/Cmd/Alt is held (so browser
+// shortcuts such as Ctrl+R keep working), and while a modal dialog is open
+// (the dialog handles its own keys).
 
 import { useEffect, useCallback } from 'react'
 
-/** Returns true when the event target is a text-input-like element. */
+/** Returns true when the event target is a form field or editable element. */
 function isInputFocused(e: KeyboardEvent): boolean {
   const target = e.target as HTMLElement | null
   if (!target) return false
   const tag = (target.tagName ?? '').toLowerCase()
-  if (tag === 'input' || tag === 'textarea') return true
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
   if (target.isContentEditable) return true
   return false
+}
+
+/** Returns true while an aria-modal dialog is on screen. */
+function isModalOpen(): boolean {
+  return document.querySelector('[aria-modal="true"]') !== null
 }
 
 export interface KeyboardShortcutHandlers {
@@ -39,15 +46,17 @@ export interface KeyboardShortcutHandlers {
  * useKeyboardShortcuts attaches a document-level keydown listener for the
  * four global shortcuts: ?, r, Esc, /. The listener is cleaned up on unmount.
  *
- * Input/textarea focus suppresses all shortcuts except Esc (which clears the
- * filter input when it has focus — that is handled by PipelineList directly).
+ * A focused form field suppresses every shortcut, Esc included: the field
+ * handles its own Esc (PipelineList's search box clears its filter).
  */
 export function useKeyboardShortcuts(handlers: KeyboardShortcutHandlers): void {
   const { onHelp, onRefresh, onEscape, onSearch } = handlers
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       if (isInputFocused(e)) return
+      if (isModalOpen()) return
 
       switch (e.key) {
         case '?':

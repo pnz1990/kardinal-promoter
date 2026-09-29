@@ -3,7 +3,7 @@
 
 // ThemeContext.test.tsx — unit tests for ThemeProvider and useTheme.
 import { renderHook, act } from '@testing-library/react'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { ThemeProvider, useTheme, type Theme } from './ThemeContext'
 
 // Mock localStorage.
@@ -106,12 +106,48 @@ describe('ThemeProvider', () => {
     expect(document.documentElement.getAttribute('data-theme')).toBeNull()
   })
 
-  it('rejects unknown localStorage values, falls back to system preference', () => {
+  it.each([
+    { os: 'dark' as const, want: 'dark' },
+    { os: 'light' as const, want: 'light' },
+  ])('ignores an unknown saved value and follows the OS setting ($os)', ({ os, want }) => {
+    systemPreference = os
     localStorageMock.setItem('kardinal-theme', 'solarized' as Theme)
     const { result } = renderHook(() => useTheme(), {
       wrapper: ThemeProvider,
     })
-    // 'solarized' is not a valid Theme — should fall back to system (dark)
-    expect(['dark', 'light']).toContain(result.current.theme)
+    expect(result.current.theme).toBe(want)
+  })
+})
+
+// Audit C10b-web-20: the theme follows the OS until the user picks one.
+describe('ThemeProvider — following the OS setting', () => {
+  let osChange: ((e: MediaQueryListEvent) => void) | undefined
+  const realMatchMedia = window.matchMedia
+
+  beforeEach(() => {
+    localStorageMock.clear()
+    systemPreference = 'dark'
+    osChange = undefined
+    window.matchMedia = ((query: string) => ({
+      ...realMatchMedia(query),
+      addEventListener: (_: string, h: (e: MediaQueryListEvent) => void) => { osChange = h },
+    })) as typeof window.matchMedia
+  })
+  afterEach(() => { window.matchMedia = realMatchMedia })
+
+  it('does not save a theme the user never picked', () => {
+    renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    expect(localStorageMock.getItem('kardinal-theme')).toBeNull()
+  })
+
+  it.each([
+    { name: 'follows an OS switch to light when nothing is saved', stored: undefined, want: 'light' },
+    { name: 'follows an OS switch when the saved value is not a theme', stored: 'solarized', want: 'light' },
+    { name: 'keeps the theme the user picked when the OS switches', stored: 'dark', want: 'dark' },
+  ])('$name', ({ stored, want }) => {
+    if (stored) localStorageMock.setItem('kardinal-theme', stored)
+    const { result } = renderHook(() => useTheme(), { wrapper: ThemeProvider })
+    act(() => osChange?.({ matches: true } as MediaQueryListEvent))
+    expect(result.current.theme).toBe(want)
   })
 })

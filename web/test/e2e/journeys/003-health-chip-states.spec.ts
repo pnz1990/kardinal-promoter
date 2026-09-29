@@ -30,13 +30,12 @@ test.describe('Journey 003 — Health chip CSS class regression guard (#532)', (
     expect(chipClass).toContain('health-chip--')
   })
 
-  test('Step 3: Pipeline detail HealthChip has data-health-state attribute', async ({ page }) => {
+  test('Step 3: Bundle timeline chips carry their phase as a class and data attribute', async ({ page }) => {
     await page.getByText('kardinal-test-app').first().click()
-    // Bundle timeline chips should have data-bundle-phase
-    const bundleChip = page.locator('[data-bundle-phase]').first()
-    // May not be visible if no bundles, but should exist after selection
-    await page.waitForTimeout(500)
-    // The timeline shows after bundles load
+    const promoting = page.locator('[data-bundle-phase="Promoting"]')
+    await expect(promoting).toHaveCount(1)
+    await expect(promoting).toHaveClass(/bundle-chip--promoting/)
+    await expect(page.locator('[data-bundle-phase="Superseded"]')).toHaveClass(/bundle-chip--superseded/)
   })
 
   test('Step 4: HealthChip has no inline background-color (CSS class instead)', async ({ page }) => {

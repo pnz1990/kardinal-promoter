@@ -45,24 +45,21 @@ describe('KeyboardShortcutsPanel', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  it('focus trap: Tab from close button wraps to close button (single focusable)', () => {
-    render(<KeyboardShortcutsPanel onClose={onClose} />)
-    const closeBtn = screen.getByLabelText('Close keyboard shortcuts')
-    // Focus is on close button (only focusable element)
-    closeBtn.focus()
-    // Tab from last focusable should wrap to first
-    fireEvent.keyDown(document, { key: 'Tab', shiftKey: false })
-    // With only one focusable, focus should still be on close button
-    expect(document.activeElement).toBe(closeBtn)
-  })
-
-  it('focus trap: Shift+Tab from close button wraps backward', () => {
+  // C10a-web-16: jsdom never moves focus on a synthetic Tab, so "focus stayed"
+  // proves nothing. The trap must cancel the Tab itself (the panel has one
+  // control, so both directions stay on it). The 2+ control wrap is tested in
+  // useModalFocus.test.tsx, the hook this panel uses.
+  it.each([
+    { name: 'Tab', shiftKey: false },
+    { name: 'Shift+Tab', shiftKey: true },
+  ])('focus trap: $name on the only control is cancelled and focus stays', ({ shiftKey }) => {
     render(<KeyboardShortcutsPanel onClose={onClose} />)
     const closeBtn = screen.getByLabelText('Close keyboard shortcuts')
     closeBtn.focus()
-    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
-    // With only one focusable, focus should still be on close button
-    expect(document.activeElement).toBe(closeBtn)
+    const ev = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true })
+    closeBtn.dispatchEvent(ev)
+    expect(ev.defaultPrevented).toBe(true)
+    expect(closeBtn).toHaveFocus()
   })
 
   it('moves focus to close button on mount (#783 O1)', () => {
@@ -96,5 +93,11 @@ describe('KeyboardShortcutsPanel', () => {
     // Focus should return to the trigger element
     expect(document.activeElement).toBe(trigger)
     document.body.removeChild(trigger)
+  })
+
+  it.each(['Escape', '?'])('closes on %s', key => {
+    render(<KeyboardShortcutsPanel onClose={onClose} />)
+    fireEvent.keyDown(document.activeElement!, { key })
+    expect(onClose).toHaveBeenCalledOnce()
   })
 })

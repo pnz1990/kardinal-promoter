@@ -58,12 +58,9 @@ test.describe('Journey 010 — Responsive layout at 1280px', () => {
     await page.getByText('kardinal-test-app').first().click()
     await page.waitForTimeout(300)
 
-    // Click the first DAG node to open NodeDetail split panel (340px)
-    const firstNode = page.locator('svg [role="button"]').first()
-    if (await firstNode.count() > 0) {
-      await firstNode.click()
-      await page.waitForTimeout(200)
-    }
+    // Click a DAG node to open the NodeDetail split panel (340px)
+    await page.getByRole('button', { name: /test — /i }).click()
+    await expect(page.locator('[data-testid="node-detail"]').first()).toBeVisible()
 
     const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth)
     expect(scrollWidth).toBeLessThanOrEqual(VIEWPORT_1280.width)

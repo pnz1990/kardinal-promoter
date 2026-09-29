@@ -154,7 +154,9 @@ The supported access method for in-cluster deployments without Ingress is `kubec
 kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
 ```
 
-Then open <http://localhost:8082/ui/> in your browser.
+Then open <http://localhost:8082/ui/> in your browser. If you installed with a
+release name other than `kardinal-promoter`, the Service is named
+`<release>-kardinal-promoter`.
 
 !!! tip "Why port-forward?"
     Port-forwarding routes traffic through the Kubernetes API server over a secure

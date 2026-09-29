@@ -12,88 +12,87 @@
 // limitations under the License.
 
 // components/ReleaseMetricsBar.tsx — Release efficiency metrics panel (#465).
-// FR-504-01: Mean time to production, rollback rate, deploy count.
-// FR-504-02: Trend indicators ↑/↓/= vs previous batch.
-// FR-504-03: Computed client-side from bundle list — no new backend API.
-// FR-504-04: Empty state when fewer than 5 bundles.
+// Computed client-side from the last 10 bundles of the pipeline:
+//  - Time to prod: mean time from bundle creation until the pipeline's last
+//    environment passed its health check (status.environments[].healthCheckedAt).
+//  - Rollback rate: share of bundles that are rollbacks (spec.provenance.rollbackOf).
+//  - Deploys: bundles that reached the last environment.
+// The bar is hidden until at least one bundle has reached the last environment.
 import type { Bundle } from '../types'
+import { sortBundlesNewestFirst } from '../bundleSelection'
 
-/** Minimum number of bundles needed to show meaningful metrics. */
-const MIN_BUNDLES = 5
+/** Number of most recent bundles the metrics cover. */
+const WINDOW = 10
 
 /** Computed release efficiency metrics. */
 export interface ReleaseMetrics {
-  /** Total number of bundles analyzed. */
+  /** Number of bundles analyzed (at most WINDOW). */
   totalBundles: number
-  /** Percentage of bundles that were rollbacks (0-100). */
+  /** Number of those bundles that are rollbacks. */
+  rollbackCount: number
+  /** Percentage of bundles that are rollbacks (0-100). */
   rollbackRatePct: number
-  /** Mean time from bundle creation to Verified phase, in hours. Null if no data. */
-  meanTtpHours: number | null
-  /** Total deploys in the current window. */
+  /** Mean time from bundle creation to the last environment's health check, in hours. */
+  meanTtpHours: number
+  /** Bundles that reached the last environment. */
   deployCount: number
+}
+
+/** Time the bundle passed the health check in `env`, in ms, or undefined. */
+function verifiedAt(b: Bundle, env: string): number | undefined {
+  const at = b.environments?.find(e => e.name === env)?.healthCheckedAt
+  if (!at) return undefined
+  const t = new Date(at).getTime()
+  return isNaN(t) ? undefined : t
 }
 
 /**
  * Compute release efficiency metrics from the last `window` bundles.
- * Returns null when fewer than MIN_BUNDLES are available.
+ * `finalEnvironment` is the pipeline's last environment (usually prod).
+ * Returns null when no bundle in the window has reached it.
  * Does not mutate the input array.
  */
 export function computeReleaseMetrics(
   bundles: Bundle[],
-  window = 10,
+  finalEnvironment: string | undefined,
+  window = WINDOW,
 ): ReleaseMetrics | null {
-  if (bundles.length < MIN_BUNDLES) return null
+  if (!finalEnvironment) return null
+  const recent = sortBundlesNewestFirst(bundles).slice(0, window)
 
-  // Take the most recent `window` bundles (sorted newest first by createdAt).
-  const sorted = [...bundles].sort((a, b) => {
-    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0
-    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0
-    return tb - ta
-  })
-  const recent = sorted.slice(0, window)
-
-  const rollbackCount = recent.filter(b => b.isRollback).length
-  const rollbackRatePct = Math.round((rollbackCount / recent.length) * 100)
-
-  // Mean TTP: average of (prod Verified time - createdAt) for Verified bundles.
-  // If we have no timing data, use null.
   let ttpSum = 0
-  let ttpCount = 0
+  let deployCount = 0
   for (const b of recent) {
-    if (b.phase === 'Verified' && b.createdAt) {
-      const created = new Date(b.createdAt).getTime()
-      const now = Date.now()
-      // Approximate: use bundle age as TTP proxy when we don't have healthCheckedAt.
-      // A real implementation would read bundle.environments[prod].healthCheckedAt.
-      const prodVerified = b.environments?.find(e => e.name === 'prod' || e.name === 'production')
-      if (prodVerified) {
-        ttpSum += (now - created) / (1000 * 3600) // convert to hours
-        ttpCount++
-      }
-    }
+    const done = verifiedAt(b, finalEnvironment)
+    if (done === undefined) continue
+    deployCount++
+    const created = b.createdAt ? new Date(b.createdAt).getTime() : NaN
+    ttpSum += isNaN(created) ? 0 : Math.max(0, done - created)
   }
-  const meanTtpHours = ttpCount > 0 ? Math.round(ttpSum / ttpCount) : null
+  if (deployCount === 0) return null
 
+  const rollbackCount = recent.filter(b => !!b.provenance?.rollbackOf).length
   return {
     totalBundles: recent.length,
-    rollbackRatePct,
-    meanTtpHours,
-    deployCount: recent.length,
+    rollbackCount,
+    rollbackRatePct: Math.round((rollbackCount / recent.length) * 100),
+    meanTtpHours: ttpSum / deployCount / 3_600_000,
+    deployCount,
   }
 }
 
-/** Format hours as a human-readable string: <1h → "< 1h", 1-48h → "Xh", >48h → "Xd". */
-function formatHours(hours: number): string {
+/** Format hours: < 1h → "< 1h", < 48h → "Xh", otherwise "Xd". */
+export function formatHours(hours: number): string {
   if (hours < 1) return '< 1h'
-  if (hours < 48) return `${hours}h`
+  if (hours < 48) return `${Math.round(hours)}h`
   return `${Math.round(hours / 24)}d`
 }
 
-/** Return a color for the rollback rate percentage. */
+/** Color for the rollback rate percentage. */
 function rollbackColor(pct: number): string {
-  if (pct === 0) return 'var(--color-success)'   // green
-  if (pct < 20) return '#f59e0b'   // amber
-  return '#ef4444'                   // red
+  if (pct === 0) return 'var(--color-success)'
+  if (pct < 20) return 'var(--color-warning)'
+  return 'var(--color-error)'
 }
 
 interface MetricCellProps {
@@ -101,19 +100,20 @@ interface MetricCellProps {
   value: string
   sub?: string
   color?: string
+  last?: boolean
 }
 
-function MetricCell({ label, value, sub, color }: MetricCellProps) {
+function MetricCell({ label, value, sub, color, last }: MetricCellProps) {
   return (
-    <div style={{ flex: 1, padding: '0.5rem 0.75rem', borderRight: '1px solid #1e293b' }}>
-      <div style={{ fontSize: '0.65rem', color: 'var(--color-text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
+    <div style={{ flex: 1, padding: '0.5rem 0.75rem', borderRight: last ? undefined : '1px solid var(--color-border-muted)' }}>
+      <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
         {label}
       </div>
       <div style={{ fontSize: '1rem', fontWeight: 700, color: color ?? 'var(--color-text)', fontVariantNumeric: 'tabular-nums' }}>
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.1rem' }}>
+        <div style={{ fontSize: '0.65rem', color: 'var(--color-text-muted)', marginTop: '0.1rem' }}>
           {sub}
         </div>
       )}
@@ -123,65 +123,50 @@ function MetricCell({ label, value, sub, color }: MetricCellProps) {
 
 interface ReleaseMetricsBarProps {
   bundles: Bundle[]
+  /** The pipeline's last environment; metrics count bundles that reached it. */
+  finalEnvironment?: string
 }
 
 /**
  * ReleaseMetricsBar renders inline release efficiency metrics for a pipeline.
  * Computed client-side from the bundle list — no new backend API needed.
  */
-export function ReleaseMetricsBar({ bundles }: ReleaseMetricsBarProps) {
-  const metrics = computeReleaseMetrics(bundles)
+export function ReleaseMetricsBar({ bundles, finalEnvironment }: ReleaseMetricsBarProps) {
+  const metrics = computeReleaseMetrics(bundles, finalEnvironment)
+  if (!metrics) return null
 
-  if (!metrics) {
-    return (
-      <div style={{
-        background: '#0c1628',
-        border: '1px solid #1e293b',
-        borderRadius: '6px',
-        padding: '0.6rem 0.75rem',
-        fontSize: '0.75rem',
-        // Hardcoded light color — this div always has a dark background (#0c1628).
-        // var(--color-text-faint) flips to dark in light mode and would fail contrast.
-        // #94a3b8 (slate-400) = 7.06:1 on #0c1628 — WCAG AA ✓
-        color: '#94a3b8',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.4rem',
-      }}>
-        <span>📊</span>
-        <span>Not enough data — need 5+ bundles to show release metrics.</span>
-      </div>
-    )
-  }
-
+  const scope = `last ${metrics.totalBundles} bundle${metrics.totalBundles === 1 ? '' : 's'}`
   return (
-    <div style={{
-      background: '#0c1628',
-      border: '1px solid #1e293b',
-      borderRadius: '6px',
-      display: 'flex',
-      overflow: 'hidden',
-    }}
-    aria-label="Release metrics"
+    <section
+      aria-label="Release metrics"
+      style={{
+        background: 'var(--color-surface)',
+        border: '1px solid var(--color-border-muted)',
+        borderRadius: '6px',
+        display: 'flex',
+        overflow: 'hidden',
+        marginBottom: '1rem',
+      }}
     >
       <MetricCell
-        label="Time to Prod"
-        value={metrics.meanTtpHours !== null ? formatHours(metrics.meanTtpHours) : '—'}
-        sub="mean (last 10)"
+        label={`Time to ${finalEnvironment}`}
+        value={formatHours(metrics.meanTtpHours)}
+        sub={`mean, ${scope}`}
         color="var(--color-code)"
       />
       <MetricCell
-        label="Rollback Rate"
+        label="Rollback rate"
         value={`${metrics.rollbackRatePct}%`}
-        sub={`${Math.round(metrics.rollbackRatePct * metrics.deployCount / 100)} rollbacks`}
+        sub={`${metrics.rollbackCount} rollback${metrics.rollbackCount === 1 ? '' : 's'}`}
         color={rollbackColor(metrics.rollbackRatePct)}
       />
       <MetricCell
-        label="Deploys"
+        label={`Deploys to ${finalEnvironment}`}
         value={String(metrics.deployCount)}
-        sub="last 10 bundles"
+        sub={scope}
         color="var(--color-accent)"
+        last
       />
-    </div>
+    </section>
   )
 }

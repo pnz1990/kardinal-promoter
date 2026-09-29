@@ -3,33 +3,64 @@
 //
 // Journey 006: Pause → UI updates → Resume.
 
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
+
+// Serve the pipeline list with kardinal-test-app paused once `paused()` is true,
+// so the test sees what the UI does after the controller has set spec.paused.
+async function servePausedAfter(page: Page, paused: () => boolean) {
+  await page.route('**/api/v1/ui/pipelines', async route => {
+    const res = await route.fetch()
+    const list = await res.json()
+    for (const p of list) if (p.name === 'kardinal-test-app') p.paused = paused()
+    await route.fulfill({ response: res, json: list })
+  })
+}
 
 test.describe('Journey 006 — Pause and Resume pipeline', () => {
-  test.beforeEach(async ({ page }) => {
+  test('Step 1: ActionBar shows Pause for a running pipeline', async ({ page }) => {
     await page.goto('/')
     await page.getByText('kardinal-test-app').first().click()
-    await page.waitForTimeout(500)
+    const toolbar = page.getByRole('toolbar', { name: 'Pipeline actions' })
+    await expect(toolbar.getByRole('button', { name: 'Pause pipeline' })).toBeVisible()
+    await expect(toolbar.getByRole('button', { name: 'Resume pipeline' })).toHaveCount(0)
   })
 
-  test('Step 1: ActionBar is visible for selected pipeline', async ({ page }) => {
-    // ActionBar renders when a pipeline is selected
-    // It shows Pause/Resume buttons
-    const pauseBtn = page.getByRole('button', { name: /pause/i })
-    await expect(pauseBtn).toBeVisible()
+  test('Step 2: Pause asks first, sends the pipeline and namespace, then shows PAUSED', async ({ page }) => {
+    let paused = false
+    await servePausedAfter(page, () => paused)
+    await page.goto('/')
+    await page.getByText('kardinal-test-app').first().click()
+
+    await page.getByRole('toolbar', { name: 'Pipeline actions' }).getByRole('button', { name: 'Pause pipeline' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Pause pipeline?' })
+    await expect(dialog).toBeVisible()
+
+    const pauseRequest = page.waitForRequest(req => req.url().endsWith('/api/v1/ui/pause') && req.method() === 'POST')
+    paused = true
+    await dialog.getByRole('button', { name: 'Pause pipeline' }).click()
+    const req = await pauseRequest
+    expect(req.postDataJSON()).toEqual({ pipeline: 'kardinal-test-app', namespace: 'default' })
+
+    await expect(dialog).toBeHidden()
+    await expect(page.getByText(/PAUSED — no new promotions/)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Resume pipeline' })).toBeVisible()
   })
 
-  test('Step 2: Pause button triggers pause action', async ({ page }) => {
-    const pauseBtn = page.getByRole('button', { name: /pause/i })
-    await pauseBtn.click()
-    // After pause, the button label may change or show paused state
-    // Mock server responds with { message: "paused" }
-    await page.waitForTimeout(300)
-    // Test passes if no error is thrown
-  })
+  test('Step 3: A paused pipeline shows Resume, and Resume sends the pipeline and namespace', async ({ page }) => {
+    let paused = true
+    await servePausedAfter(page, () => paused)
+    await page.goto('/')
+    await page.getByText('kardinal-test-app').first().click()
 
-  test('Step 3: Resume button is present (for paused pipeline)', async ({ page }) => {
-    // The ActionBar renders both Pause and Resume buttons — use role=button with name match
-    await expect(page.getByRole('button', { name: /pause/i }).first()).toBeVisible()
+    const toolbar = page.getByRole('toolbar', { name: 'Pipeline actions' })
+    await expect(toolbar.getByRole('button', { name: 'Pause pipeline' })).toHaveCount(0)
+    await toolbar.getByRole('button', { name: 'Resume pipeline' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Resume pipeline?' })
+
+    const resumeRequest = page.waitForRequest(req => req.url().endsWith('/api/v1/ui/resume') && req.method() === 'POST')
+    paused = false
+    await dialog.getByRole('button', { name: 'Resume pipeline' }).click()
+    expect((await resumeRequest).postDataJSON()).toEqual({ pipeline: 'kardinal-test-app', namespace: 'default' })
+    await expect(toolbar.getByRole('button', { name: 'Pause pipeline' })).toBeVisible()
   })
 })

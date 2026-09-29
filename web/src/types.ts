@@ -1,4 +1,19 @@
-// types.ts — TypeScript types matching the Go API response shapes.
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// types.ts — TypeScript types matching the Go API response shapes
+// (cmd/kardinal-controller/ui_api.go). Keep the two in sync.
+
+/** PromotionStep status.state values (api/v1alpha1), plus the graph API's synthetic NotStarted. */
+export type PromotionStepState =
+  | 'Pending' | 'Promoting' | 'WaitingForMerge' | 'HealthChecking'
+  | 'Verified' | 'Failed' | 'AbortedByAlarm' | 'RollingBack' | 'NotStarted'
+
+/** Bundle status.phase values. */
+export type BundlePhase = 'Available' | 'Promoting' | 'Verified' | 'Failed' | 'Superseded'
+
+/** status.steps[].state values. */
+export type StepExecutionState = 'Pending' | 'InProgress' | 'Completed' | 'Failed'
 
 export interface Pipeline {
   name: string
@@ -15,7 +30,8 @@ export interface Pipeline {
   blockerCount?: number
   /** #462: number of PromotionSteps with state=Failed for the active bundle. */
   failedStepCount?: number
-  /** #462: days since the active bundle was created (stale inventory indicator). */
+  /** #462: days since the active bundle was created (stale inventory indicator).
+   *  0 means created today; undefined means the pipeline has no active bundle. */
   inventoryAgeDays?: number
   /** #462: RFC3339 timestamp of the last environment that reached Verified. */
   lastMergedAt?: string
@@ -43,8 +59,6 @@ export interface Bundle {
   provenance?: Provenance
   /** #503: Per-environment promotion statuses for the timeline view. */
   environments?: BundleEnvStatus[]
-  /** #504: True when this bundle was created as a rollback of a previous bundle. */
-  isRollback?: boolean
   /** #563: Container images in this Bundle — used by NodeDetail diff preview. */
   images?: ImageRef[]
 }
@@ -61,13 +75,18 @@ export interface BundleEnvStatus {
   name: string
   phase?: string
   prURL?: string
+  /** RFC 3339 time the post-merge health check for this environment completed. */
+  healthCheckedAt?: string
 }
 
 export interface Provenance {
   commitSHA?: string
   ciRunURL?: string
   author?: string
-  timestamp?: string
+  /** metav1.Time: serialized as null (not omitted) when unset. */
+  timestamp?: string | null
+  /** Name of the Bundle this Bundle rolls back, when it is a rollback. */
+  rollbackOf?: string
 }
 
 export interface GraphNode {
@@ -81,9 +100,10 @@ export interface GraphNode {
   outputs?: Record<string, string>
   /** CEL expression for PolicyGate nodes. Populated by the graph API. */
   expression?: string
-  /** ISO timestamp of last CEL evaluation for PolicyGate nodes. */
+  /** ISO timestamp of last CEL evaluation. Set on PolicyGate nodes only. */
   lastEvaluatedAt?: string
-  /** ISO timestamp when the PromotionStep was created — used for elapsed timers (#330). */
+  /** ISO timestamp when the PromotionStep was created — used for elapsed timers (#330).
+   *  Set on PromotionStep nodes only. */
   startedAt?: string
 }
 
@@ -108,8 +128,10 @@ export interface PromotionStep {
   message?: string
   prURL?: string
   outputs?: Record<string, string>
-  /** Index of the currently executing sub-step within the step sequence. */
+  /** Index of the currently executing sub-step within `steps`. */
   currentStepIndex?: number
+  /** Per-step progress from status.steps[], in execution order. */
+  steps?: StepStatus[]
   /** #341: Kubernetes conditions from status.conditions — shows transition history. */
   conditions?: Array<{
     type: string
@@ -126,6 +148,16 @@ export interface PromotionStep {
   bakeResets?: number
 }
 
+/** One entry of PromotionStep status.steps[]. */
+export interface StepStatus {
+  name: string
+  state: StepExecutionState
+  startedAt?: string
+  completedAt?: string
+  durationMs?: number
+  message?: string
+}
+
 export interface PolicyGate {
   name: string
   namespace: string
@@ -133,7 +165,13 @@ export interface PolicyGate {
   ready: boolean
   reason?: string
   lastEvaluatedAt?: string
-  /** #502: Override history from spec.overrides[] — shown in GateDetailPanel. */
+  /** Pipeline, bundle and environment of a gate instance (kardinal.io/* labels). Empty on templates. */
+  pipeline?: string
+  bundle?: string
+  environment?: string
+  /** True for a PolicyGate template: never evaluated for a bundle, always ready=false. */
+  template?: boolean
+  /** #502: Override history from spec.overrides[]. */
   overrides?: PolicyGateOverride[]
 }
 
