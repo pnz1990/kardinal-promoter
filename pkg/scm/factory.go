@@ -13,12 +13,20 @@
 
 package scm
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // NewProvider constructs an SCMProvider for the given provider type.
 // Supported types: "github" (default), "gitlab", "forgejo", "gitea", "bitbucket", "azuredevops".
 // Returns an error for unknown provider types.
+//
+// Surrounding whitespace is trimmed from the token: a Secret written with
+// --from-file or echo ends in a newline, which net/http refuses to send in a
+// header (C06-scm-health-27).
 func NewProvider(providerType, token, apiURL, webhookSecret string) (SCMProvider, error) {
+	token = strings.TrimSpace(token)
 	switch providerType {
 	case "github", "":
 		return NewGitHubProvider(token, apiURL, webhookSecret), nil

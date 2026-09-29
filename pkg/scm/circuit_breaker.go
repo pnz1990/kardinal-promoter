@@ -55,20 +55,24 @@ const (
 	defaultBaseBackoff = 30 * time.Second
 	// defaultMaxBackoff caps the exponential backoff.
 	defaultMaxBackoff = 10 * time.Minute
-	// defaultHalfOpenTimeout is how long the circuit stays open before moving to half-open.
+	// defaultHalfOpenTimeout is how long a half-open probe may take before
+	// another caller is allowed to probe (the first one never reported back).
 	defaultHalfOpenTimeout = 2 * time.Minute
 )
 
 // CircuitBreaker implements the circuit-breaker pattern for SCM API calls.
 // It tracks consecutive failures and opens the circuit when the threshold is
-// exceeded. Respects Retry-After and X-RateLimit-Reset headers.
+// exceeded. Respects Retry-After and, when the quota is exhausted, the
+// rate-limit reset headers.
 //
 // State transitions:
 //
 //	Closed → Open: on N consecutive failures (N = FailureThreshold)
-//	Open → HalfOpen: after HalfOpenTimeout elapses
+//	Open → HalfOpen: when the backoff (or the server's retry time) elapses
 //	HalfOpen → Closed: on one success
 //	HalfOpen → Open: on one failure
+//
+// In half-open only one caller at a time is let through as the probe.
 type CircuitBreaker struct {
 	// FailureThreshold is the number of consecutive failures before opening.
 	FailureThreshold int
@@ -76,13 +80,16 @@ type CircuitBreaker struct {
 	BaseBackoff time.Duration
 	// MaxBackoff caps the exponential backoff.
 	MaxBackoff time.Duration
-	// HalfOpenTimeout is how long the circuit stays open before half-open probe.
+	// HalfOpenTimeout is how long a half-open probe may run before another
+	// caller may probe, so a probe that never reports back cannot wedge the
+	// breaker.
 	HalfOpenTimeout time.Duration
 
 	mu               sync.Mutex
 	state            CircuitState
 	consecutiveFails int
 	openUntil        time.Time // when to transition Open → HalfOpen
+	probeStarted     time.Time // when the current half-open probe was admitted; zero if none
 }
 
 // NewCircuitBreaker creates a circuit breaker with sensible defaults.
@@ -122,19 +129,22 @@ func (e *ErrCircuitOpen) Error() string {
 }
 
 // Allow returns nil if the call may proceed, or ErrCircuitOpen if it must be
-// blocked. It also returns the probe flag — true when this call is the
-// half-open probe (the caller should call RecordSuccess/RecordFailure when done).
+// blocked. In half-open only the first caller is admitted as the probe; the
+// others are blocked until it calls RecordSuccess or RecordFailure, or until
+// HalfOpenTimeout passes.
 func (cb *CircuitBreaker) Allow() error {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
 	switch cb.currentState() {
-	case CircuitClosed:
-		return nil
 	case CircuitOpen:
 		return &ErrCircuitOpen{RetryAfter: cb.openUntil}
 	case CircuitHalfOpen:
-		// Allow the probe through; transition will be decided by RecordSuccess/RecordFailure
+		now := time.Now()
+		if !cb.probeStarted.IsZero() && now.Sub(cb.probeStarted) < cb.HalfOpenTimeout {
+			return &ErrCircuitOpen{RetryAfter: cb.probeStarted.Add(cb.HalfOpenTimeout)}
+		}
+		cb.probeStarted = now
 		return nil
 	default:
 		return nil
@@ -147,6 +157,19 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	defer cb.mu.Unlock()
 	cb.consecutiveFails = 0
 	cb.state = CircuitClosed
+	cb.probeStarted = time.Time{}
+}
+
+// RecordResponse records the outcome of an HTTP call that returned resp.
+// Rate limits and server errors (see IsTransientResponse) count as failures;
+// any other response, including a 4xx, counts as success because retrying
+// cannot fix it.
+func (cb *CircuitBreaker) RecordResponse(resp *http.Response) {
+	if IsTransientResponse(resp) {
+		cb.RecordFailure(RetryAfterFromResponse(resp))
+		return
+	}
+	cb.RecordSuccess()
 }
 
 // RecordFailure records a failed call.
@@ -156,6 +179,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 func (cb *CircuitBreaker) RecordFailure(retryAfter time.Time) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
+	defer func() { cb.probeStarted = time.Time{} }()
 
 	if cb.currentState() == CircuitHalfOpen {
 		// Probe failed — reopen the circuit with doubled timeout
@@ -191,17 +215,24 @@ func (cb *CircuitBreaker) backoffDuration(step int) time.Duration {
 }
 
 // RetryAfterFromResponse extracts the retry-after time from HTTP response headers.
-// Checks Retry-After (seconds or HTTP-date) and X-RateLimit-Reset (Unix timestamp).
-// Returns zero time if no header is present or parseable.
+// It reads Retry-After (seconds or HTTP-date) and, only when the quota is
+// exhausted (remaining is "0"), the rate-limit window reset: X-RateLimit-Reset
+// (GitHub, Forgejo) or RateLimit-Reset (GitLab), as a Unix timestamp. The reset
+// is sent on every response, so using it for a plain 5xx would keep the
+// circuit open for up to an hour. Returns zero time if nothing applies.
 func RetryAfterFromResponse(resp *http.Response) time.Time {
 	if resp == nil {
 		return time.Time{}
 	}
 
-	// X-RateLimit-Reset is a Unix timestamp (GitHub, GitLab)
-	if v := resp.Header.Get("X-RateLimit-Reset"); v != "" {
-		if unix, err := strconv.ParseInt(v, 10, 64); err == nil && unix > 0 {
-			return time.Unix(unix, 0)
+	for _, prefix := range []string{"X-RateLimit-", "RateLimit-"} {
+		if resp.Header.Get(prefix+"Remaining") != "0" {
+			continue
+		}
+		if v := resp.Header.Get(prefix + "Reset"); v != "" {
+			if unix, err := strconv.ParseInt(v, 10, 64); err == nil && unix > 0 {
+				return time.Unix(unix, 0)
+			}
 		}
 	}
 
@@ -219,11 +250,23 @@ func RetryAfterFromResponse(resp *http.Response) time.Time {
 	return time.Time{}
 }
 
-// IsRateLimitError returns true if the HTTP status code indicates a rate limit
-// (429 Too Many Requests) or a transient server error (5xx).
-func IsRateLimitError(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests ||
-		(statusCode >= 500 && statusCode < 600)
+// IsTransientResponse returns true if the response is a rate limit or a
+// transient server error: 429, 5xx, or a 403 that carries a rate-limit signal
+// (GitHub sends primary and secondary rate limits as 403 with
+// X-RateLimit-Remaining: 0 or Retry-After).
+func IsTransientResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return true
+	case resp.StatusCode >= 500 && resp.StatusCode < 600:
+		return true
+	case resp.StatusCode == http.StatusForbidden:
+		return resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.Header.Get("Retry-After") != ""
+	}
+	return false
 }
 
 // latestTime returns the later of two times.

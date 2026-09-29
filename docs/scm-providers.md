@@ -6,12 +6,25 @@ controller at startup.
 
 ## Supported Providers
 
-| Provider | `--scm-provider` value | PR type | Webhook validation |
-|---|---|---|---|
-| GitHub | `github` (default) | Pull Requests | HMAC-SHA256 (`X-Hub-Signature-256`) |
-| GitLab | `gitlab` | Merge Requests | Token comparison (`X-Gitlab-Token`) |
-| Forgejo / Codeberg | `forgejo` | Pull Requests | HMAC-SHA256 (`X-Gitea-Signature`) |
-| Gitea | `gitea` | Pull Requests | HMAC-SHA256 (`X-Gitea-Signature`) |
+| Provider | `--scm-provider` value | PR type | Webhook header checked | PR labels | Approvals read |
+|---|---|---|---|---|---|
+| GitHub / GitHub Enterprise | `github` (default) | Pull Requests | `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes |
+| GitLab (incl. subgroups) | `gitlab` | Merge Requests | `X-Gitlab-Token` (shared token) | Yes | Yes |
+| Forgejo / Codeberg | `forgejo` | Pull Requests | `X-Forgejo-Signature` or `X-Gitea-Signature` (HMAC-SHA256) | Yes | Yes |
+| Gitea | `gitea` | Pull Requests | `X-Gitea-Signature` or `X-Hub-Signature-256` (HMAC-SHA256) | Yes | Yes |
+| Bitbucket Cloud | `bitbucket` | Pull Requests | `X-Hub-Signature` (HMAC-SHA256) | No (Bitbucket has no PR labels) | Yes |
+| Azure DevOps | `azuredevops` | Pull Requests | `X-AzureDevOps-Token` (custom header you add to the service hook) | Yes (PR tags) | Yes |
+
+All providers send webhooks to the same endpoint, `http://<controller-host>:8083/webhook/scm`.
+Webhooks only speed things up: without them, the controller still sees merges by polling.
+
+Bitbucket Cloud and Azure DevOps are newer and less tested than GitHub and GitLab.
+On Bitbucket, PRs carry no `kardinal` or `kardinal/rollback` labels, so find rollback
+PRs by their `[kardinal] Rollback` title instead.
+
+SCM webhooks are delivered to `POST /webhook/scm` on the webhook port (`8083`). Without
+`--webhook-secret` the endpoint rejects every event with `401`, and merges are detected by
+PR status polling instead.
 
 ---
 
@@ -44,7 +57,7 @@ export KARDINAL_SCM_PROVIDER=github
 ### Webhook configuration
 
 1. In your GitHub repository, go to **Settings → Webhooks → Add webhook**.
-2. Set **Payload URL** to `http://<controller-host>:8083/webhook`.
+2. Set **Payload URL** to `http://<controller-host>:8083/webhook/scm`.
 3. Set **Content type** to `application/json`.
 4. Set **Secret** to the same value as `--webhook-secret`.
 5. Select **Pull request** events.
@@ -97,7 +110,7 @@ for production deployments.
 ### Webhook configuration
 
 1. In your GitLab project, go to **Settings → Webhooks**.
-2. Set **URL** to `http://<controller-host>:8083/webhook`.
+2. Set **URL** to `http://<controller-host>:8083/webhook/scm`.
 3. Set **Secret token** to the same value as `--webhook-secret`.
 4. Enable **Merge request events**.
 5. Click **Add webhook**.
@@ -155,13 +168,14 @@ Create an API token in your Forgejo/Gitea instance under **Settings → Applicat
 ### Webhook configuration
 
 1. In your Forgejo/Gitea repository, go to **Settings → Webhooks → Add Webhook → Gitea**.
-2. Set **Target URL** to `http://<controller-host>:8083/webhook`.
+2. Set **Target URL** to `http://<controller-host>:8083/webhook/scm`.
 3. Set **Secret** to the same value as `--webhook-secret`.
 4. Select **Pull Request** events.
 5. Click **Add Webhook**.
 
-> Forgejo/Gitea validates webhooks using HMAC-SHA256 (same algorithm as GitHub).
-> The signature is sent in the `X-Gitea-Signature` header.
+> Forgejo/Gitea signs webhooks with HMAC-SHA256 (same algorithm as GitHub). Forgejo
+> sends the signature in `X-Forgejo-Signature` and `X-Gitea-Signature`; Gitea sends
+> `X-Gitea-Signature`. The controller accepts any of them.
 
 ### Codeberg.org (public Forgejo instance)
 
@@ -176,10 +190,50 @@ kardinal-controller \
 
 ---
 
+## Bitbucket Cloud
+
+```bash
+kardinal-controller \
+  --scm-provider bitbucket \
+  --github-token $BITBUCKET_ACCESS_TOKEN \
+  --webhook-secret $KARDINAL_WEBHOOK_SECRET
+```
+
+Use a repository, project or workspace **access token** with pull request write
+access. The controller sends it as a Bearer token, so app passwords do not work.
+The repository is `workspace/repo`, taken from the Pipeline's `spec.git.url`.
+
+Webhook: in the repository go to **Repository settings → Webhooks → Add webhook**,
+set the URL to `http://<controller-host>:8083/webhook/scm`, set **Secret** to the
+value of `--webhook-secret`, and select the **Pull request: Merged** trigger.
+
+---
+
+## Azure DevOps
+
+```bash
+kardinal-controller \
+  --scm-provider azuredevops \
+  --github-token $ADO_PAT \
+  --webhook-secret $KARDINAL_WEBHOOK_SECRET
+```
+
+Use a PAT with **Code (Read & write)**. The repository is `org/project/repo`, taken
+from `spec.git.url` (`https://dev.azure.com/org/project/_git/repo`).
+
+Webhook: create a **Web Hooks** service hook for **Pull request updated**, set the URL
+to `http://<controller-host>:8083/webhook/scm`, and add the HTTP header
+`X-AzureDevOps-Token: <value of --webhook-secret>`. A PR counts as merged only when its
+status is `completed`.
+
+---
+
 ## Pipeline CRD configuration
 
-Set `spec.git.provider` in your Pipeline to document which SCM is used for that pipeline.
-The controller reads the provider from the startup flag, not from the Pipeline CRD.
+The controller uses one SCM provider for every Pipeline, chosen by `--scm-provider`
+(or `KARDINAL_SCM_PROVIDER`). `spec.git.provider` is **not read**: it does not select a
+provider, and the CRD accepts only `github` or `gitlab` there. Leave it unset. The
+repository comes from `spec.git.url`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -188,13 +242,12 @@ metadata:
   name: my-pipeline
 spec:
   git:
-    provider: forgejo          # Informational: "github", "gitlab", "forgejo", or "gitea"
-    repo: "myorg/myrepo"
+    url: https://codeberg.org/myorg/myrepo
     branch: main
   environments:
     - name: dev
     - name: prod
-      promotionPolicy: pr-review
+      approval: pr-review
 ```
 
 ---

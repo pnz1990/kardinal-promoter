@@ -23,8 +23,9 @@ func init() {
 	parentsteps.Register(&healthCheckStep{})
 }
 
-// healthCheckStep is a stub that always returns Success.
-// Real health adapter implementations are added in Stage 7 (item 014).
+// healthCheckStep marks the end of the step sequence. It checks nothing: the
+// PromotionStep reconciler checks health in its HealthChecking state after the
+// sequence finishes, using the adapters in pkg/health.
 type healthCheckStep struct{}
 
 func (s *healthCheckStep) Name() string { return "health-check" }
@@ -32,6 +33,6 @@ func (s *healthCheckStep) Name() string { return "health-check" }
 func (s *healthCheckStep) Execute(_ context.Context, _ *parentsteps.StepState) (parentsteps.StepResult, error) {
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: "health check passed (stub — real adapters in Stage 7)",
+		Message: "steps done; health is checked next by the PromotionStep reconciler",
 	}, nil
 }

@@ -101,6 +101,20 @@ describe('DAGView — node rendering', () => {
     const elements = screen.getAllByText(/weekend-gate/i)
     expect(elements.length).toBeGreaterThanOrEqual(1)
   })
+
+  it('names a PolicyGate node by its gate, not its environment', () => {
+    // The API sets environment to the guarded environment (C07-controller-13).
+    const nodes: GraphNode[] = [{
+      id: 'gate-app-v1-no-weekend-prod',
+      type: 'PolicyGate',
+      label: 'no-weekend',
+      environment: 'prod',
+      state: 'Block',
+    }]
+    render(<DAGView nodes={nodes} edges={[]} />)
+    expect(screen.getByRole('button', { name: 'no-weekend — Block' })).toBeInTheDocument()
+    expect(screen.getByText(/no-weekend/, { selector: 'text' })).toBeInTheDocument()
+  })
 })
 
 describe('DAGView — node interaction', () => {
