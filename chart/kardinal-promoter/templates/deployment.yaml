@@ -91,7 +91,7 @@ spec:
             - name: KARDINAL_SCM_TOKEN_SECRET_NAME
               value: {{ . | quote }}
             - name: KARDINAL_SCM_TOKEN_SECRET_NAMESPACE
-              value: {{ $.Values.github.secretRef.namespace | default $.Release.Namespace | quote }}
+              value: {{ $.Release.Namespace | quote }}
             - name: KARDINAL_SCM_TOKEN_SECRET_KEY
               value: {{ include "kardinal-promoter.githubSecretKey" $ | quote }}
             {{- end }}

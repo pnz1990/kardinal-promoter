@@ -94,6 +94,11 @@ Install-mode checks. Rendered from deployment.yaml so a bad combination fails
 {{- if and .Values.github.token .Values.github.secretRef.name -}}
 {{- fail "set github.token or github.secretRef.name, not both" -}}
 {{- end -}}
+{{- with .Values.github.secretRef.namespace -}}
+{{- if ne . $.Release.Namespace -}}
+{{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{/*

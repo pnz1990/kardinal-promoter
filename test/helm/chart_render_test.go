@@ -874,6 +874,13 @@ func TestChartGitHubTokenNotPlaintext(t *testing.T) {
 		"--set", "github.token="+dummy, "--set", "github.secretRef.name=github-token")
 	assert.Error(t, err, "github.token and github.secretRef.name together must fail")
 	assert.NotContains(t, out, dummy)
+
+	// GITHUB_TOKEN uses a secretKeyRef, which reads only the Pod's namespace,
+	// so a Secret in another namespace would split the startup token from
+	// the rotation watcher.
+	render(t, "kardinal-promoter", "--set", "github.secretRef.name=github-token", "--set", "github.secretRef.namespace="+releaseNS)
+	out, err = helmTemplate(t, "kardinal-promoter", "--set", "github.secretRef.name=github-token", "--set", "github.secretRef.namespace=team-a")
+	assert.Error(t, err, "github.secretRef.namespace outside the release namespace must fail:\n%s", out)
 }
 
 // ── C08-api-config-31: logLevel sets both loggers ─────────────────────────────

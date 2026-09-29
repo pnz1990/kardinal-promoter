@@ -147,8 +147,8 @@ github:
   # -- Existing Secret holding the token.
   secretRef:
     name: ""
-    # -- Namespace the rotation watcher reads the Secret from (defaults to the
-    # release namespace). GITHUB_TOKEN always comes from the release namespace.
+    # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
+    # secretKeyRef, which only reads the Pod's namespace.
     namespace: ""
     key: "token"
 
