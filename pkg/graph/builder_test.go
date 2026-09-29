@@ -4,13 +4,16 @@
 package graph_test
 
 import (
+	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -59,7 +62,7 @@ func makePolicyGate(name, ns, appliesTo, expression string) kardinalv1alpha1.Pol
 }
 
 // Test 1: Linear 3-env pipeline, no gates, default intent.
-// Expected: 3 PromotionStep + 3 PRStatus Watch nodes = 6 total.
+// Expected: 1 Bundle ref + 3 PromotionStep + 3 PRStatus nodes = 7 total.
 func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "uat", "prod")
@@ -71,7 +74,8 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 		PolicyGates: nil,
 	})
 	require.NoError(t, err)
-	// 3 envs × (1 PRStatus + 1 PromotionStep) = 6
+	assertKroValid(t, result.Graph)
+	// 1 Bundle ref + 3 envs × (1 PRStatus + 1 PromotionStep) = 7
 	assert.Equal(t, 7, result.NodeCount)
 	assert.Len(t, result.Graph.Spec.Nodes, 7)
 
@@ -97,7 +101,7 @@ func TestBuilder_Linear3EnvNoGates(t *testing.T) {
 }
 
 // Test 2: Linear 3-env with 2 org gates on prod.
-// Expected: 3 PromotionStep + 3 PRStatus Watch + 2 PolicyGate nodes = 8 total.
+// Expected: 1 Bundle ref + 3 PromotionStep + 3 PRStatus + 2 PolicyGate nodes = 9 total.
 func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "uat", "prod")
@@ -114,6 +118,7 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 		PolicyGates: gates,
 	})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 	assert.Equal(t, 9, result.NodeCount, "3 PromotionStep + 3 PRStatus + 2 PolicyGate + 1 Bundle Watch = 9 nodes")
 	assert.Len(t, result.Graph.Spec.Nodes, 9)
 
@@ -157,7 +162,8 @@ func TestBuilder_FanOut(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	// 4 envs × (1 PRStatus + 1 PromotionStep) = 8
+	assertKroValid(t, result.Graph)
+	// 1 Bundle ref + 4 envs × (1 PRStatus + 1 PromotionStep) = 9
 	assert.Equal(t, 9, result.NodeCount)
 
 	// Both prod nodes must reference staging (using CEL-safe underscore IDs)
@@ -180,7 +186,8 @@ func TestBuilder_TargetEnvironment(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
+	assertKroValid(t, result.Graph)
+	// 1 Bundle ref + 2 envs × (1 PRStatus + 1 PromotionStep) = 5
 	assert.Equal(t, 5, result.NodeCount, "test and staging envs: 2 PRStatus + 2 PromotionStep + 1 Bundle Watch")
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
@@ -220,6 +227,7 @@ func TestBuilder_SkipEnvironments_WithPermission(t *testing.T) {
 		PolicyGates: []kardinalv1alpha1.PolicyGate{skipGate},
 	})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	// skipEnvironments is filtered statically: kro's includeWhen=false is
@@ -240,9 +248,9 @@ func TestBuilder_SkipEnvironments_WithPermission(t *testing.T) {
 }
 
 // Test 6: intent.skipEnvironments = [staging] without SkipPermission.
-// ValidateSkipPermissions must return an error; Build must succeed (check moved outside Build).
-// Graph-purity: GB-2 eliminated — skip-permission check is no longer inside Build(),
-// it is called by the Translator and the result flows through Bundle.status.
+// Build must refuse the skip: an org gate applies to staging and no org
+// skip-permission gate allows skipping it. The Bundle reconciler records the
+// error as phase Failed with condition Failed/TranslationError.
 func TestBuilder_SkipEnvironments_WithoutPermission(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "staging", "prod")
@@ -264,21 +272,17 @@ func TestBuilder_SkipEnvironments_WithoutPermission(t *testing.T) {
 	}
 	gates := []kardinalv1alpha1.PolicyGate{orgGate}
 
-	// ValidateSkipPermissions must return an error — skip is denied.
-	// The Translator calls this before Build() and returns the error to the Bundle reconciler.
-	err := graph.ValidateSkipPermissions(pipeline, bundle, gates)
+	err := graph.ValidateSkipPermissions(bundle, gates, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "skip denied", "error must mention skip denied")
 
-	// Build itself must succeed — the skip-environment is filtered out by filterByIntent.
-	// The caller (Translator) is responsible for preventing Build from being called
-	// when ValidateSkipPermissions fails.
 	_, buildErr := b.Build(graph.BuildInput{
 		Pipeline:    pipeline,
 		Bundle:      bundle,
 		PolicyGates: gates,
 	})
-	require.NoError(t, buildErr, "Build must succeed when skip check has been separated out")
+	require.Error(t, buildErr, "Build must refuse a skip that no permission allows")
+	assert.Contains(t, buildErr.Error(), "skip denied")
 }
 
 // Test 7: Shard label on prod environment.
@@ -296,6 +300,7 @@ func TestBuilder_ShardLabel(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	prodNode := nodeMap["prod"]
@@ -307,12 +312,13 @@ func TestBuilder_ShardLabel(t *testing.T) {
 		"prod node must have kardinal.io/shard = cluster-b")
 }
 
-// Test 8: Custom steps on prod.
+// Test 8: Custom steps are not implemented, so Build rejects them loudly
+// instead of silently running the default sequence.
 func TestBuilder_CustomSteps(t *testing.T) {
 	b := graph.NewBuilder()
 	envs := []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "test"},
-		{Name: "prod"},
+		{Name: "prod", Steps: []kardinalv1alpha1.StepSpec{{Uses: "my-custom-step"}}},
 	}
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
@@ -320,11 +326,10 @@ func TestBuilder_CustomSteps(t *testing.T) {
 	}
 	bundle := makeBundle("app-v1", "app")
 
-	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
-	require.NoError(t, err)
-	// Just check that the builder doesn't fail; custom steps are populated in PromotionStep spec
-	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
-	assert.Equal(t, 5, result.NodeCount)
+	_, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `environment "prod" declares 1 steps`)
+	assert.Contains(t, err.Error(), "not implemented")
 }
 
 // Test 9: Config Bundle uses config-merge step type.
@@ -341,7 +346,8 @@ func TestBuilder_ConfigBundle(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	// 2 envs × (1 PRStatus + 1 PromotionStep) = 4
+	assertKroValid(t, result.Graph)
+	// 1 Bundle ref + 2 envs × (1 PRStatus + 1 PromotionStep) = 5
 	assert.Equal(t, 5, result.NodeCount)
 
 	// Config Bundle nodes should have stepType indicating config-merge
@@ -406,6 +412,7 @@ func TestBuilder_PolicyGateGatesDependentStep(t *testing.T) {
 		PolicyGates: []kardinalv1alpha1.PolicyGate{gate},
 	})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	// Find the gate node (IDs use camelCase: "no-weekend" → "noWeekend")
 	var gateNode *graph.GraphNode
@@ -477,6 +484,7 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 
@@ -517,7 +525,7 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 	// Check PromotionStep node has prStatusRef referencing the Watch node
 	testStepNode, ok := nodeMap["test"]
 	require.True(t, ok, "PromotionStep node for 'test' must exist")
-	assert.True(t, containsCELRef(testStepNode.Template, "prstatus"),
+	assert.True(t, containsCELRef(testStepNode.Template, prStatusTestNode.ID),
 		"PromotionStep node must have CEL reference to PRStatus Watch node")
 }
 
@@ -531,13 +539,12 @@ func nodeByID(nodes []graph.GraphNode) map[string]graph.GraphNode {
 	return m
 }
 
-// containsCELRef returns true if the template map contains a CEL expression
-// referencing the given node ID.
 // containsCELRef reports whether any ${...} expression in template references
-// a node whose ID starts with nodeID — the reference is what creates the
-// Graph dependency edge, wherever it sits inside the expression.
+// the node nodeID (exactly: a reference to "prodEu" does not count as one to
+// "prod"). The reference is what creates the Graph dependency edge, wherever
+// it sits inside the expression.
 func containsCELRef(template map[string]interface{}, nodeID string) bool {
-	re := regexp.MustCompile(`(?:\$\{|[\s(\[,!&|])` + regexp.QuoteMeta(nodeID) + `[A-Za-z0-9]*\.`)
+	re := regexp.MustCompile(`(?:\$\{|[\s(\[,!&|])` + regexp.QuoteMeta(nodeID) + `\.`)
 	return containsInMapFunc(template, func(s string) bool {
 		return strings.Contains(s, "${") && re.MatchString(s)
 	})
@@ -733,6 +740,7 @@ func TestBuilder_WaveTopology_3Waves(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := make(map[string]graph.GraphNode)
 	for _, n := range result.Graph.Spec.Nodes {
@@ -752,18 +760,19 @@ func TestBuilder_WaveTopology_3Waves(t *testing.T) {
 		"prod-ap must depend on prod-us (wave 3 depends on wave 2)")
 }
 
-// TestBuilder_WaveTopology_2Wave_Plus_Serial verifies that a mix of wave and
-// non-wave envs works: the non-wave env uses sequential default.
+// TestBuilder_WaveTopology_2Wave_Plus_Serial verifies that a wave listed
+// after sequential environments waits for the last of them: "prod-1 and
+// prod-2 start together after staging" (C01-graph-01).
 func TestBuilder_WaveTopology_2Wave_Plus_Serial(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "mixed-pipe", Namespace: "default"},
 		Spec: kardinalv1alpha1.PipelineSpec{
 			Environments: []kardinalv1alpha1.EnvironmentSpec{
-				{Name: "test"},            // no wave — sequential
+				{Name: "test"},            // no wave — sequential root
 				{Name: "staging"},         // no wave — sequential: depends on test
-				{Name: "prod-1", Wave: 1}, // wave 1 — no predecessors via wave
-				{Name: "prod-2", Wave: 1}, // wave 1 — no predecessors via wave
+				{Name: "prod-1", Wave: 1}, // wave 1 — follows staging
+				{Name: "prod-2", Wave: 1}, // wave 1 — follows staging, parallel to prod-1
 			},
 		},
 	}
@@ -771,24 +780,94 @@ func TestBuilder_WaveTopology_2Wave_Plus_Serial(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
-	nodeMap := make(map[string]graph.GraphNode)
-	for _, n := range result.Graph.Spec.Nodes {
-		nodeMap[n.ID] = n
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	assert.Equal(t, []string{"test"}, upstreamIDs(t, nodeMap, "staging"))
+	assert.Equal(t, []string{"staging"}, upstreamIDs(t, nodeMap, "prod1"))
+	assert.Equal(t, []string{"staging"}, upstreamIDs(t, nodeMap, "prod2"))
+}
+
+// TestBuilder_WaveTopology_Ordering covers the wave rules: a wave waits for
+// every environment of the previous wave and for the sequential environment
+// listed before it; gaps in wave numbers do not create roots; only the first
+// environment is a root (C01-graph-01, C12-examples-demo-02, E2E-21).
+func TestBuilder_WaveTopology_Ordering(t *testing.T) {
+	tests := []struct {
+		name string
+		envs []kardinalv1alpha1.EnvironmentSpec
+		want map[string][]string // node ID → upstream node IDs
+	}{
+		{
+			name: "wave-topology example",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"}, {Name: "staging"},
+				{Name: "prod-eu", Wave: 1}, {Name: "prod-us", Wave: 1}, {Name: "prod-ap", Wave: 2},
+			},
+			want: map[string][]string{
+				"test": nil, "staging": {"test"},
+				"prodEu": {"staging"}, "prodUs": {"staging"}, "prodAp": {"prodEu", "prodUs"},
+			},
+		},
+		{
+			name: "wave numbers with gaps",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test", Wave: 10}, {Name: "staging", Wave: 20}, {Name: "prod", Wave: 30},
+			},
+			want: map[string][]string{"test": nil, "staging": {"test"}, "prod": {"staging"}},
+		},
+		{
+			name: "sequential environment between waves",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "eu", Wave: 1}, {Name: "us", Wave: 1},
+				{Name: "soak"},
+				{Name: "global", Wave: 2},
+			},
+			want: map[string][]string{
+				"eu": nil, "us": nil, "soak": {"eu", "us"}, "global": {"eu", "soak", "us"},
+			},
+		},
+		{
+			name: "wave listed before sequential environments",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "canary", Wave: 1}, {Name: "prod"},
+			},
+			want: map[string][]string{"canary": nil, "prod": {"canary"}},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "waves", Namespace: "default"},
+				Spec:       kardinalv1alpha1.PipelineSpec{Environments: tt.envs},
+			}
+			result, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: makeBundle("waves-v1", "waves")})
+			require.NoError(t, err)
+			assertKroValid(t, result.Graph)
+			nodeMap := nodeByID(result.Graph.Spec.Nodes)
+			for id, want := range tt.want {
+				assert.Equal(t, want, upstreamIDs(t, nodeMap, id), "upstreams of %s", id)
+			}
+		})
+	}
+}
 
-	// staging depends on test (sequential)
-	assert.True(t, containsCELRef(nodeMap["staging"].Template, "test"),
-		"staging must depend on test (sequential default)")
-
-	// wave-1 envs have no wave-derived deps (they are the first wave)
-	prod1 := nodeMap["prod_1"]
-	prod2 := nodeMap["prod_2"]
-	// prod-1 and prod-2 are wave 1 — they have no automatic dependencies (first wave)
-	// They may still depend on sequential predecessor if Wave is set. Since Wave>0,
-	// sequential default is NOT applied — they are independent wave roots.
-	_ = prod1
-	_ = prod2
+// upstreamIDs returns the sorted node IDs a PromotionStep node's
+// spec.upstreamStates references, or nil for a root.
+func upstreamIDs(t *testing.T, nodes map[string]graph.GraphNode, id string) []string {
+	t.Helper()
+	n, ok := nodes[id]
+	require.True(t, ok, "node %q must exist", id)
+	re := regexp.MustCompile(`filter\(x_, (?:size\()?([A-Za-z][A-Za-z0-9]*)[.)]`)
+	var ids []string
+	for _, ref := range findUpstreamRefs(t, n) {
+		s, _ := ref.(string)
+		m := re.FindStringSubmatch(s)
+		require.NotNil(t, m, "unexpected upstreamStates entry %q", s)
+		ids = append(ids, m[1])
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // TestBuilder_WaveTopology_WithExplicitDependsOn verifies that explicit dependsOn
@@ -810,6 +889,7 @@ func TestBuilder_WaveTopology_WithExplicitDependsOn(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := make(map[string]graph.GraphNode)
 	for _, n := range result.Graph.Spec.Nodes {
@@ -839,13 +919,13 @@ func TestBuilder_WaveTopology_NoWave_BackwardCompat(t *testing.T) {
 	}
 
 	// Verify sequential dependency preserved
-	uatNode := nodeMap["uat"]
-	require.NotNil(t, uatNode)
+	uatNode, ok := nodeMap["uat"]
+	require.True(t, ok, "uat node must exist")
 	assert.True(t, containsCELRef(uatNode.Template, "test"),
 		"uat must depend on test in sequential (no-wave) pipeline")
 
-	prodNode := nodeMap["prod"]
-	require.NotNil(t, prodNode)
+	prodNode, ok := nodeMap["prod"]
+	require.True(t, ok, "prod node must exist")
 	assert.True(t, containsCELRef(prodNode.Template, "uat"),
 		"prod must depend on uat in sequential (no-wave) pipeline")
 }
@@ -869,18 +949,55 @@ var kroReservedNodeIDs = map[string]bool{
 	"loop": true, "package": true, "return": true, "var": true, "void": true, "while": true,
 }
 
-// assertNodeIDsValid checks that every node ID in a built Graph passes kro's
-// node ID validation and is unique.
-func assertNodeIDsValid(t *testing.T, nodes []graph.GraphNode) {
+// assertKroValid checks a built Graph the way kro and the API server will,
+// independently of graph.ValidateNodeIDs: every node ID matches kro's grammar,
+// is not reserved, is unique and is not a forEach iterator name; every
+// template renders a unique, valid metadata.name; every literal label value
+// is valid; and the Graph name and labels are valid label values.
+func assertKroValid(t *testing.T, g *graph.Graph) {
 	t.Helper()
+	assert.Empty(t, validation.IsValidLabelValue(g.Name), "Graph name %q", g.Name)
+	for k, v := range g.Labels {
+		assert.Empty(t, validation.IsValidLabelValue(v), "Graph label %s=%q", k, v)
+	}
+	iterators := map[string]bool{}
+	for _, n := range g.Spec.Nodes {
+		for _, dim := range n.ForEach {
+			for name := range dim {
+				iterators[name] = true
+			}
+		}
+	}
 	seen := map[string]bool{}
-	for _, n := range nodes {
+	names := map[string]string{}
+	for _, n := range g.Spec.Nodes {
 		id := n.ID
 		assert.True(t, reKroNodeID.MatchString(id),
 			"node ID %q does not match kro's node ID grammar ^[A-Za-z][A-Za-z0-9]*$", id)
 		assert.False(t, kroReservedNodeIDs[id], "node ID %q is reserved by kro", id)
 		assert.False(t, seen[id], "duplicate node ID %q", id)
+		assert.False(t, iterators[id], "node ID %q is a forEach iterator name", id)
 		seen[id] = true
+		if n.Template == nil {
+			continue
+		}
+		md, ok := n.Template["metadata"].(map[string]interface{})
+		require.True(t, ok, "node %s has no template metadata", id)
+		name, _ := md["name"].(string)
+		key := fmt.Sprint(n.Template["kind"]) + "/" + name
+		if prev, dup := names[key]; dup {
+			t.Errorf("nodes %s and %s both render %s", prev, id, key)
+		}
+		names[key] = id
+		// A forEach name ends in "-${region}"; a region is a DNS-1123 label.
+		rendered := strings.ReplaceAll(name, "${region}", "us-east-1")
+		assert.Empty(t, validation.IsDNS1123Subdomain(rendered), "node %s metadata.name %q", id, name)
+		labels, _ := md["labels"].(map[string]interface{})
+		for k, v := range labels {
+			if s, ok := v.(string); ok && !strings.Contains(s, "${") {
+				assert.Empty(t, validation.IsValidLabelValue(s), "node %s label %s=%q", id, k, s)
+			}
+		}
 	}
 }
 
@@ -905,7 +1022,7 @@ func TestNodeIDs_KroValid(t *testing.T) {
 			b := graph.NewBuilder()
 			result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 			require.NoError(t, err)
-			assertNodeIDsValid(t, result.Graph.Spec.Nodes)
+			assertKroValid(t, result.Graph)
 		})
 	}
 }
@@ -936,7 +1053,7 @@ func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
 	b := graph.NewBuilder()
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle, PolicyGates: gates})
 	require.NoError(t, err)
-	assertNodeIDsValid(t, result.Graph.Spec.Nodes)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 	var gateIDs []string
@@ -952,86 +1069,53 @@ func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
 	}
 }
 
-// TestBuilder_PromotionTemplate_InlinedSteps verifies that when the translator
-// has already inlined PromotionTemplate steps into env.Steps, the builder
-// uses those steps in the PromotionStep spec (not the default step sequence).
-// This test models the post-inlinePromotionTemplates state that Translate() passes
-// to Build(): the pipeline already has env.Steps populated from the template.
-func TestBuilder_PromotionTemplate_InlinedSteps(t *testing.T) {
-	templateSteps := []kardinalv1alpha1.StepSpec{
+// TestBuilder_RejectsCustomStepsAndTemplates verifies that Build refuses
+// spec.environments[].steps and promotionTemplate. The PromotionStep
+// reconciler always runs the default sequence, so accepting them would
+// silently skip the steps the author declared (C01-graph-27).
+func TestBuilder_RejectsCustomStepsAndTemplates(t *testing.T) {
+	steps := []kardinalv1alpha1.StepSpec{
 		{Uses: "git-clone"},
-		{Uses: "kustomize-set-image"},
-		{Uses: "git-commit"},
-		{Uses: "open-pr"},
-		{Uses: "wait-for-merge"},
 		{Uses: "notify-slack", Webhook: &kardinalv1alpha1.WebhookConfig{URL: "https://hooks.example.com"}},
-		{Uses: "health-check"},
 	}
-
-	// Two envs sharing the same template steps (simulating inlinePromotionTemplates output)
-	pipeline := &kardinalv1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec: kardinalv1alpha1.PipelineSpec{
-			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
-			Environments: []kardinalv1alpha1.EnvironmentSpec{
-				{Name: "test", Steps: templateSteps},
-				{Name: "prod", Steps: templateSteps},
-			},
+	tests := []struct {
+		name    string
+		env     kardinalv1alpha1.EnvironmentSpec
+		wantErr string
+	}{
+		{
+			name:    "steps",
+			env:     kardinalv1alpha1.EnvironmentSpec{Name: "prod", Steps: steps},
+			wantErr: `environment "prod" declares 2 steps`,
+		},
+		{
+			name: "promotion template",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod",
+				PromotionTemplate: &kardinalv1alpha1.PromotionTemplateRef{Name: "standard"}},
+			wantErr: `environment "prod" references PromotionTemplate "standard"`,
+		},
+		{
+			name: "both",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Steps: steps,
+				PromotionTemplate: &kardinalv1alpha1.PromotionTemplateRef{Name: "standard"}},
+			wantErr: `environment "prod" declares 2 steps`,
 		},
 	}
-	bundle := makeBundle("app-v1", "app")
-	b := graph.NewBuilder()
-
-	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
-
-	require.NoError(t, err)
-	// 1 bundle Watch + 2 envs × (1 PRStatus + 1 PromotionStep) = 5
-	assert.Equal(t, 5, result.NodeCount, "node count: 1 bundle + 2×(prStatus+step)")
-
-	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	for _, envName := range []string{"test", "prod"} {
-		nodeID := strings.ReplaceAll(envName, "-", "_")
-		n, ok := nodeMap[nodeID]
-		require.True(t, ok, "node %q must exist", nodeID)
-
-		spec, ok := n.Template["spec"].(map[string]interface{})
-		require.True(t, ok, "node %q must have spec", nodeID)
-		_ = spec // steps are passed through PromotionStep spec at runtime; builder does not validate step names
-	}
-}
-
-// TestBuilder_PromotionTemplate_LocalOverride verifies that when env.Steps is set
-// alongside a PromotionTemplateRef (local override case), the builder uses env.Steps.
-// This mirrors the state after inlinePromotionTemplates: local steps are preserved.
-func TestBuilder_PromotionTemplate_LocalOverride(t *testing.T) {
-	localSteps := []kardinalv1alpha1.StepSpec{
-		{Uses: "git-clone"},
-		{Uses: "health-check"},
-	}
-
-	pipeline := &kardinalv1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
-		Spec: kardinalv1alpha1.PipelineSpec{
-			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
-			Environments: []kardinalv1alpha1.EnvironmentSpec{
-				{
-					Name:  "prod",
-					Steps: localSteps,
-					// PromotionTemplate is still present (resolver left it)
-					// but steps take precedence — resolver already handled the logic.
-					PromotionTemplate: &kardinalv1alpha1.PromotionTemplateRef{Name: "standard"},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+				Spec: kardinalv1alpha1.PipelineSpec{
+					Git:          kardinalv1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
+					Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, tt.env},
 				},
-			},
-		},
+			}
+			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: makeBundle("app-v1", "app")})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Contains(t, err.Error(), "not implemented")
+		})
 	}
-	bundle := makeBundle("app-v1", "app")
-	b := graph.NewBuilder()
-
-	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
-
-	require.NoError(t, err)
-	// 1 bundle + 1 env × (1 PRStatus + 1 PromotionStep) = 3
-	assert.Equal(t, 3, result.NodeCount)
 }
 
 // TestBuilder_MultiRegionFanOut verifies that when an environment declares ≥2 regions,
@@ -1060,6 +1144,7 @@ func TestBuilder_MultiRegionFanOut(t *testing.T) {
 		PolicyGates: nil,
 	})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	// Node count: 1 bundle + test(1 PRStatus + 1 PromotionStep) + prod(1 PRStatus + 1 PromotionStep) = 5
 	assert.Equal(t, 5, result.NodeCount)
@@ -1119,6 +1204,7 @@ func TestBuilder_SingleRegionNoForEach(t *testing.T) {
 		PolicyGates: nil,
 	})
 	require.NoError(t, err)
+	assertKroValid(t, result.Graph)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 

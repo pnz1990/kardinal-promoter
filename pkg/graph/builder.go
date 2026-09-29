@@ -6,6 +6,7 @@ package graph
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,6 +24,12 @@ type BuildInput struct {
 
 	// PolicyGates contains all gates from all policy namespaces + pipeline namespace.
 	PolicyGates []kardinalv1alpha1.PolicyGate
+
+	// PolicyNamespaces are the controller's org policy namespaces (not the
+	// Pipeline's spec.policyNamespaces). Only skip-permission gates in these
+	// namespaces can permit skipping an org-gated environment. Empty means
+	// DefaultPolicyNamespace.
+	PolicyNamespaces []string
 }
 
 // BuildResult is the output of the graph builder.
@@ -31,7 +38,14 @@ type BuildResult struct {
 	Graph *Graph
 	// NodeCount is the total number of nodes generated.
 	NodeCount int
+	// Environments are the environments this Bundle promotes through, in
+	// topological order, after targetEnvironment and skipEnvironments.
+	Environments []string
 }
+
+// regionIterator is the forEach iterator name of a multi-region
+// PromotionStep node. ValidateNodeIDs rejects a node with this ID.
+const regionIterator = "region"
 
 // DefaultGraphServiceAccount is the ServiceAccount (in the Pipeline's
 // namespace) that kro impersonates when it applies a kardinal Graph.
@@ -53,14 +67,27 @@ func NewBuilder() *Builder {
 }
 
 // Build generates a Graph spec. Returns an error if the Pipeline is invalid
-// (circular deps, unknown target env, skip denied, etc.).
-// Does NOT write to Kubernetes.
+// (circular deps, unknown target or skipped env, skip denied, names that give
+// invalid or colliding node IDs, env.steps, etc.). Every error wraps
+// ErrInvalid: Build does NOT read or write Kubernetes, so the same input
+// always fails the same way.
 func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
+	res, err := b.build(input)
+	if err != nil {
+		return nil, asInvalid(err)
+	}
+	return res, nil
+}
+
+func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if input.Pipeline == nil {
 		return nil, fmt.Errorf("build: pipeline is nil")
 	}
 	if input.Bundle == nil {
 		return nil, fmt.Errorf("build: bundle is nil")
+	}
+	if err := validateInput(input.Pipeline, input.Bundle, input.PolicyGates); err != nil {
+		return nil, err
 	}
 
 	// Step 1: resolve environment ordering
@@ -70,6 +97,9 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 2: filter environments by Bundle intent
+	if err := validateSkipNames(input.Pipeline, input.Bundle); err != nil {
+		return nil, err
+	}
 	filteredEnvs, err := filterByIntent(orderedEnvs, deps, input.Bundle)
 	if err != nil {
 		return nil, err
@@ -78,18 +108,24 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
 
-	// Step 3: validate skip permissions — REMOVED from Build().
-	// Skip-permission validation is now done by the caller (Translator.Translate)
-	// before calling Build(), so the result is written to Bundle.status by the
-	// Bundle reconciler (Graph-first: validation result flows through CRD status).
-	// See docs/design/11-graph-purity-tech-debt.md GB-2.
+	// Step 3: validate skip permissions. The error reaches Bundle.status
+	// through the Translate error (phase Failed, reason TranslationError).
+	// The permission expressions are evaluated on the Graph: see
+	// skipPermissionGates.
+	if err := ValidateSkipPermissions(input.Bundle, input.PolicyGates, input.PolicyNamespaces); err != nil {
+		return nil, err
+	}
 
 	// Step 4: collect and match PolicyGates by environment
 	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates)
+	skipGates := skipPermissionGates(filteredEnvs, deps, input.Bundle, input.PolicyGates, input.PolicyNamespaces)
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv)
+	nodes, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
 	if err != nil {
+		return nil, err
+	}
+	if err := ValidateNodeIDs(nodes); err != nil {
 		return nil, err
 	}
 
@@ -97,8 +133,9 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 	g := assembleGraph(input.Pipeline, input.Bundle, nodes, b.serviceAccountName())
 
 	return &BuildResult{
-		Graph:     g,
-		NodeCount: len(nodes),
+		Graph:        g,
+		NodeCount:    len(nodes),
+		Environments: filteredEnvs,
 	}, nil
 }
 
@@ -125,16 +162,14 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 		nameSet[e.Name] = true
 	}
 
-	// Expand wave topology (K-06): if any environment has Wave > 0, build
-	// wave-derived dependsOn edges before falling through to the default logic.
-	// Wave N environments depend on ALL wave-(N-1) environments. Wave edges are
-	// unioned with any explicit DependsOn entries on the same environment.
-	waveDeps := expandWaveDeps(envs)
+	// Expand wave topology (K-06). See defaultDeps for the rules; explicit
+	// DependsOn entries are unioned with the wave-derived edges.
+	waves := indexWaves(envs)
 
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
 	for i, e := range envs {
-		// Start with any wave-derived edges.
-		merged := append([]string(nil), waveDeps[e.Name]...)
+		// Start with the edges to the previous wave, if there is one.
+		merged := waves.waveDeps(e)
 		// Union with explicit DependsOn.
 		for _, dep := range e.DependsOn {
 			if !nameSet[dep] {
@@ -145,16 +180,14 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 				merged = append(merged, dep)
 			}
 		}
-
-		switch {
-		case len(merged) > 0:
-			deps[e.Name] = merged
-		case i > 0 && e.Wave == 0:
-			// Default: depends on previous in list (only when wave is not used)
-			deps[e.Name] = []string{envs[i-1].Name}
-		default:
-			deps[e.Name] = nil
+		if len(e.DependsOn) == 0 {
+			for _, dep := range waves.defaultDeps(envs, i) {
+				if !containsStr(merged, dep) {
+					merged = append(merged, dep)
+				}
+			}
 		}
+		deps[e.Name] = merged
 	}
 
 	// Topological sort (Kahn's algorithm) to detect cycles
@@ -174,9 +207,6 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error)
 	for n := range nodes {
 		inDegree[n] = 0
 	}
-	for _, depsFor := range deps {
-		_ = depsFor
-	}
 	// Build reverse map: node → dependents (nodes that depend on it)
 	dependents := make(map[string][]string, len(nodes))
 	for n, ds := range deps {
@@ -193,7 +223,7 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error)
 			queue = append(queue, n)
 		}
 	}
-	sortStrings(queue) // deterministic order
+	sort.Strings(queue) // deterministic order
 
 	var sorted []string
 	for len(queue) > 0 {
@@ -201,7 +231,7 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error)
 		queue = queue[1:]
 		sorted = append(sorted, n)
 		next := dependents[n]
-		sortStrings(next)
+		sort.Strings(next)
 		for _, d := range next {
 			inDegree[d]--
 			if inDegree[d] == 0 {
@@ -350,65 +380,6 @@ func envPathTo(orderedEnvs []string, deps map[string][]string, target string) []
 	return result
 }
 
-// --- Step 3: validate skip permissions ---
-
-// ValidateSkipPermissions checks whether the Bundle's intent to skip environments
-// is permitted by the org-level PolicyGates. Returns an error if any skip is denied.
-//
-// This function was previously called inside Build() which made the check invisible
-// to the Graph. It is now exported so callers (Translator) can call it before Build(),
-// allowing the Bundle reconciler to write the result to Bundle.status (Graph-first).
-// See docs/design/11-graph-purity-tech-debt.md GB-2 (elimination in progress).
-func ValidateSkipPermissions(pipeline *kardinalv1alpha1.Pipeline,
-	bundle *kardinalv1alpha1.Bundle, allGates []kardinalv1alpha1.PolicyGate) error {
-	if bundle.Spec.Intent == nil {
-		return nil
-	}
-	for _, skip := range bundle.Spec.Intent.SkipEnvironments {
-		// Check if any org gate applies to this environment
-		hasOrgGate := false
-		for _, g := range allGates {
-			if g.Labels["kardinal.io/scope"] == "org" && appliesToEnv(g, skip) {
-				hasOrgGate = true
-				break
-			}
-		}
-		if !hasOrgGate {
-			// No org gate → skip is allowed without permission check
-			continue
-		}
-		// Org gate exists — look for a SkipPermission gate
-		permitted := false
-		for _, g := range allGates {
-			if g.Labels["kardinal.io/type"] == "skip-permission" &&
-				appliesToEnv(g, skip) && g.Spec.SkipPermission {
-				permitted = true
-				break
-			}
-		}
-		if !permitted {
-			return fmt.Errorf("build: skip denied for environment %q: "+
-				"org-level gate applies and no skip-permission gate allows it", skip)
-		}
-	}
-	return nil
-}
-
-// appliesToEnv returns true if the gate's kardinal.io/applies-to label
-// contains the given environment name.
-func appliesToEnv(gate kardinalv1alpha1.PolicyGate, envName string) bool {
-	appliesTo := gate.Labels["kardinal.io/applies-to"]
-	if appliesTo == "" {
-		return false
-	}
-	for _, e := range strings.Split(appliesTo, ",") {
-		if strings.TrimSpace(e) == envName {
-			return true
-		}
-	}
-	return false
-}
-
 // --- Step 4: match PolicyGates by environment ---
 
 // matchGatesByEnv returns a map of environmentName → []PolicyGate for gates
@@ -421,14 +392,16 @@ func matchGatesByEnv(filteredEnvs []string,
 		envSet[e] = true
 	}
 	for _, g := range allGates {
-		// Skip skip-permission type gates
-		if g.Labels["kardinal.io/type"] == "skip-permission" {
+		// Skip-permission gates are placed by skipPermissionGates.
+		if isSkipPermissionGate(g) {
 			continue
 		}
 		appliesTo := g.Labels["kardinal.io/applies-to"]
+		matched := make(map[string]bool)
 		for _, e := range strings.Split(appliesTo, ",") {
 			e = strings.TrimSpace(e)
-			if envSet[e] {
+			if envSet[e] && !matched[e] {
+				matched[e] = true
 				result[e] = append(result[e], g)
 			}
 		}
@@ -442,15 +415,15 @@ func matchGatesByEnv(filteredEnvs []string,
 // dependency order, with correct readyWhen and gating edges.
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
-	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate) ([]GraphNode, error) {
+	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
+	skipGates map[string][]skipPermissionGate) ([]GraphNode, error) {
 	// Build env spec map for quick lookup
 	envSpecMap := make(map[string]kardinalv1alpha1.EnvironmentSpec)
 	for _, e := range pipeline.Spec.Environments {
 		envSpecMap[e.Name] = e
 	}
 
-	bundleSlug := bundleVersionSlug(bundle.Name) // CEL-safe (underscores) — used in node IDs + gateNodeName
-	bundleSlugK8s := slugify(bundle.Name)        // K8s-safe (hyphens) — used in metadata.name only
+	bundleSlug := bundleVersionSlug(bundle.Name) // camelCase — node IDs only
 	pipelineName := pipeline.Name
 
 	// Filter deps to only include filtered envs
@@ -464,7 +437,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	regionCount := make(map[string]int)
 	for _, e := range filteredEnvs {
 		if n := len(envSpecMap[e].Regions); n >= 2 {
-			regionCount[celSafeSlug(e)] = n
+			regionCount[CELSafeSlug(e)] = n
 		}
 	}
 
@@ -491,31 +464,38 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		envSpec := envSpecMap[envName]
 
 		// Compute upstream deps for this env (filtered to only include surviving envs)
-		// Return as CEL-safe IDs (matching the step node IDs built with celSafeSlug).
+		// Return as CEL-safe IDs (matching the step node IDs built with CELSafeSlug).
 		rawUpstreams := filteredDeps(envName, deps, filteredSet)
 		upstreams := make([]string, len(rawUpstreams))
 		for i, up := range rawUpstreams {
-			upstreams[i] = celSafeSlug(up)
+			upstreams[i] = CELSafeSlug(up)
 		}
 
 		// PolicyGate nodes for this environment
 		gates := gatesByEnv[envName]
-		gateNodeIDs := make([]string, 0, len(gates))
+		gateNodeIDs := make([]string, 0, len(gates)+len(skipGates[envName]))
 		for _, gate := range gates {
-			gateNodeID := gateNodeName(pipelineName, bundleSlug, gate.Name, gate.Namespace, envName)
-			gateNodeK8s := gateNodeK8sName(bundleSlugK8s, gate.Name, gate.Namespace, envName)
+			gateNodeID := gateNodeName(bundleSlug, gate.Name, gate.Namespace, envName)
+			gateNodeK8s := gateNodeK8sName(bundle.Name, gate.Name, gate.Namespace, envName)
 			gateNodeIDs = append(gateNodeIDs, gateNodeID)
+			nodes = append(nodes, buildPolicyGateNode(gateNodeID, gateNodeK8s, gate, pipelineName, bundle.Name, envName))
+		}
 
-			gateNode := buildPolicyGateNode(gateNodeID, gateNodeK8s, gate, pipelineName, bundle.Name, envName, upstreams)
-			nodes = append(nodes, gateNode)
+		// Skip-permission gate instances: this environment follows a skipped
+		// org-gated environment, so it waits for the permission expressions.
+		for _, sg := range skipGates[envName] {
+			gateNodeID := gateNodeName(bundleSlug, sg.gate.Name, sg.gate.Namespace, envName)
+			gateNodeK8s := gateNodeK8sName(bundle.Name, sg.gate.Name, sg.gate.Namespace, envName)
+			gateNodeIDs = append(gateNodeIDs, gateNodeID)
+			nodes = append(nodes, buildSkipPermissionNode(gateNodeID, gateNodeK8s, sg, pipelineName, bundle.Name, envName))
 		}
 
 		// PRStatus node — created alongside each PromotionStep.
 		// The open-pr step writes this CRD; the PRStatusReconciler updates status.merged.
 		// The PromotionStep spec carries the prStatusRef so it can watch it without polling.
-		stepNodeID := celSafeSlug(envName)
+		stepNodeID := CELSafeSlug(envName)
 		prStatusNodeID := prStatusNodeName(bundleSlug, envName)
-		prStatusK8sName := prStatusNodeK8sName(bundleSlugK8s, envName)
+		prStatusK8sName := prStatusNodeK8sName(bundle.Name, envName)
 		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName,
 			envSpec.Approval == "pr-review")
 		nodes = append(nodes, prStatusNode)
@@ -523,9 +503,12 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		// PromotionStep node — node ID must be a valid CEL identifier.
 		// When the environment declares ≥2 regions, emit a forEach node so that
 		// kro stamps out one PromotionStep per region (issue #612).
-		stepNode := buildPromotionStepNode(
-			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, regionCount, gateNodeIDs, prStatusNodeID,
+		stepNode, err := buildPromotionStepNode(
+			pipelineName, envName, stepNodeID, envSpec, bundle, upstreams, regionCount, gateNodeIDs, prStatusNodeID,
 		)
+		if err != nil {
+			return nil, err
+		}
 		nodes = append(nodes, stepNode)
 	}
 
@@ -599,24 +582,23 @@ func verifiedCond(upstreamID string, regions int) string {
 // one PromotionStep per region named <pipeline>-<bundle>-<env>-<region>, each
 // with spec.region set to the region name.
 func buildPromotionStepNode(
-	pipelineName, bundleSlugK8s, envName, nodeID string,
+	pipelineName, envName, nodeID string,
 	envSpec kardinalv1alpha1.EnvironmentSpec,
 	bundle *kardinalv1alpha1.Bundle,
 	upstreams []string,
 	regionCount map[string]int,
 	gateNodeIDs []string,
 	prStatusNodeID string,
-) GraphNode {
+) (GraphNode, error) {
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
 
-	// Kubernetes resource name uses hyphens (RFC 1123 subdomain); envName may contain
-	// hyphens which are allowed in K8s names.
-	k8sResourceName := fmt.Sprintf("%s-%s-%s", pipelineName, bundleSlugK8s, envName)
-
+	// metadata.name is a DNS-1123 subdomain: "<pipeline>-<bundle>-<env>",
+	// hash-suffixed when the Bundle or environment name is not a slug.
 	multiRegion := len(envSpec.Regions) >= 2
+	k8sResourceName := promotionStepK8sName(pipelineName, bundle.Name, envName, multiRegion)
 	if multiRegion {
-		k8sResourceName += "-${region}"
+		k8sResourceName += "-${" + regionIterator + "}"
 	}
 
 	// Build the PromotionStep resource template
@@ -672,7 +654,7 @@ func buildPromotionStepNode(
 	}
 
 	if multiRegion {
-		templateSpec["region"] = "${region}"
+		templateSpec["region"] = "${" + regionIterator + "}"
 	}
 
 	template := map[string]interface{}{
@@ -694,23 +676,28 @@ func buildPromotionStepNode(
 	// names (issue #612). json.Marshal output is valid CEL for string lists.
 	if multiRegion {
 		regionsJSON, err := json.Marshal(envSpec.Regions)
-		if err == nil {
-			node.ForEach = []map[string]string{{"region": "${" + string(regionsJSON) + "}"}}
-			node.ReadyWhen = []string{`${each.status.state == "Verified"}`}
+		if err != nil {
+			return GraphNode{}, fmt.Errorf("build: environment %q: encode regions: %w", envName, err)
 		}
+		node.ForEach = []map[string]string{{regionIterator: "${" + string(regionsJSON) + "}"}}
+		node.ReadyWhen = []string{`${each.status.state == "Verified"}`}
 	}
 
-	return node
+	return node, nil
 }
 
 // buildPolicyGateNode builds a Graph node for a PolicyGate instance.
 // nodeID is the CEL-safe identifier used in CEL expressions.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
+//
+// spec.overrides is deliberately not copied. kro server-side applies the
+// template with force and re-applies it on drift, so a template-owned
+// overrides list would revert every `kardinal override` patch on the live
+// instance. The CLI records overrides on the instances instead.
 func buildPolicyGateNode(
 	nodeID, k8sName string,
 	gate kardinalv1alpha1.PolicyGate,
 	pipelineName, bundleName, envName string,
-	upstreams []string,
 ) GraphNode {
 	// Propagate scope and applies-to from the gate template so that
 	// `kardinal policy list` can show the correct scope (org/team) and
@@ -754,6 +741,11 @@ func buildPolicyGateNode(
 		"message":         gate.Spec.Message,
 		"recheckInterval": gate.Spec.RecheckInterval,
 	}
+	// when is copied only when set: the CRD defaults it to post-deploy, and an
+	// empty string would fail the enum.
+	if gate.Spec.When != "" {
+		templateSpec["when"] = gate.Spec.When
+	}
 
 	return GraphNode{
 		ID: nodeID,
@@ -769,6 +761,22 @@ func buildPolicyGateNode(
 			fmt.Sprintf(`${%s.status.ready == true}`, nodeID),
 		},
 	}
+}
+
+// buildSkipPermissionNode builds the instance of a skip-permission gate that
+// holds envName, the environment after one or more skipped org-gated
+// environments. The instance is an ordinary PolicyGate: the reconciler
+// evaluates the permission expression, and envName is promoted only once it
+// is true. The labels say what the instance stands for.
+func buildSkipPermissionNode(nodeID, k8sName string, sg skipPermissionGate,
+	pipelineName, bundleName, envName string) GraphNode {
+	node := buildPolicyGateNode(nodeID, k8sName, sg.gate, pipelineName, bundleName, envName)
+	meta := node.Template["metadata"].(map[string]interface{})
+	meta["labels"].(map[string]interface{})[LabelGateType] = GateTypeSkipPermission
+	meta["annotations"] = map[string]interface{}{
+		AnnotationSkippedEnvironments: strings.Join(sg.skipped, ","),
+	}
+	return node
 }
 
 // buildPRStatusNode builds a Graph node for a PRStatus CRD.
@@ -849,159 +857,6 @@ func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 	}
 }
 
-// --- naming helpers ---
-
-// GraphNameFrom returns the deterministic Graph CR name for a (pipeline, bundle) pair.
-// This is exported so the Bundle reconciler can compute the expected graph name
-// without importing translator-layer code.
-func GraphNameFrom(pipeline, bundle string) string {
-	return graphNameFrom(pipeline, bundle)
-}
-
-// graphNameFrom generates a Graph name from the pipeline and bundle names.
-// Both names are slugified (lowercased, non-alphanumeric → dash).
-// Truncates to 63 chars (Kubernetes name limit).
-func graphNameFrom(pipeline, bundle string) string {
-	slug := slugify(pipeline) + "-" + slugify(bundle)
-	if len(slug) > 63 {
-		slug = slug[:59] + "-" + slug[len(slug)-3:]
-	}
-	if len(slug) > 63 {
-		slug = slug[:63]
-	}
-	return slug
-}
-
-// gateNodeName generates a unique node ID for a PolicyGate instance.
-// The ID is the CEL variable name other nodes use to reference the gate.
-// kro node IDs must match ^[A-Za-z][A-Za-z0-9]*$, so we use camelCase
-// (see celSafeSlug).
-// Includes namespace to prevent collisions when same gate name exists in
-// multiple namespaces.
-//
-// Components are slugged individually with celSafeSlug then joined with digit
-// separators ("0" between parts, "00" before the bundle suffix). Digit separators
-// survive camelCase without creating word boundaries (digits don't trigger
-// capitalisation), preserving uniqueness across different (name, ns, env, bundle)
-// combinations.
-func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string {
-	ns := gateNS
-	if ns == "" {
-		ns = "default"
-	}
-	// Slug each component individually, then join with digit separators so that
-	// two components whose camelCase forms would otherwise collide remain distinct.
-	// Example: gateName="a", ns="bC", env="d" → "a0bC0d00<bundle>"
-	//          gateName="aB", ns="c", env="d" → "aB0c0d00<bundle>"  (no collision)
-	return celSafeSlug(gateName) + "0" +
-		celSafeSlug(ns) + "0" +
-		celSafeSlug(envName) + "00" +
-		bundleSlug
-}
-
-// gateNodeK8sName generates the Kubernetes resource name (hyphens, RFC 1123) for a
-// PolicyGate instance. Separate from gateNodeName which returns the CEL-safe ID.
-func gateNodeK8sName(bundleSlugK8s, gateName, gateNS, envName string) string {
-	ns := gateNS
-	if ns == "" {
-		ns = "default"
-	}
-	return slugify(fmt.Sprintf("%s-%s-%s--%s", gateName, ns, envName, bundleSlugK8s))
-}
-
-// bundleVersionSlug returns a CEL-safe slug from the bundle name for use in node IDs.
-//
-// Dual-slug convention (GB-3/GB-4 in docs/design/11-graph-purity-tech-debt.md):
-//   - celSafeSlug / bundleVersionSlug → camelCase, valid CEL identifiers and kro node IDs
-//     Used in: node IDs, CEL expressions, gateNodeName
-//   - slugify → hyphens, valid Kubernetes resource names
-//     Used in: metadata.name fields only
-//
-// Always use celSafeSlug for IDs appearing in CEL expressions.
-// Always use slugify for Kubernetes resource names.
-func bundleVersionSlug(bundleName string) string {
-	return celSafeSlug(bundleName)
-}
-
-// slugify replaces characters not valid in Kubernetes names with dashes.
-// Produces kebab-case (hyphens) suitable for metadata.name fields.
-// Do NOT use for CEL expression identifiers — use celSafeSlug instead.
-// See dual-slug convention in bundleVersionSlug doc comment.
-func slugify(s string) string {
-	var b strings.Builder
-	for _, c := range s {
-		switch {
-		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-':
-			b.WriteRune(c)
-		case c >= 'A' && c <= 'Z':
-			b.WriteRune(c - 'A' + 'a')
-		default:
-			b.WriteRune('-')
-		}
-	}
-	return b.String()
-}
-
-// celSafeSlug creates an identifier safe for use as both a CEL variable name
-// and as a kro Graph node ID.
-//
-// kro requires node IDs to match ^[A-Za-z][A-Za-z0-9]*$ (no hyphens or
-// underscores) because other nodes reference them as CEL identifiers.
-//
-// Solution: camelCase. Non-alphanumeric characters (hyphens, underscores, dots,
-// etc.) become word boundaries — the following letter is capitalised and the
-// separator is dropped. The result always matches [a-zA-Z][a-zA-Z0-9]*.
-//
-// Examples:
-//
-//	"kardinal-test-app-uat"  → "kardinalTestAppUat"
-//	"no_weekend_deploys"     → "noWeekendDeploys"
-//	"prod-eu"                → "prodEu"
-//	"0bad"                   → "x0bad"  (leading digit guarded by "x" prefix)
-//	"MyApp"                  → "myApp"  (leading uppercase lowercased)
-//
-// IMPORTANT: This function exists in two places and must be kept identical:
-//   - pkg/graph/builder.go
-//   - pkg/translator/translator.go
-func celSafeSlug(s string) string {
-	var b strings.Builder
-	upperNext := false
-	for _, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z':
-			if upperNext {
-				b.WriteRune(c - 'a' + 'A')
-				upperNext = false
-			} else {
-				b.WriteRune(c)
-			}
-		case c >= 'A' && c <= 'Z':
-			switch {
-			case b.Len() == 0:
-				b.WriteRune(c - 'A' + 'a') // first char always lowercase
-			case upperNext:
-				b.WriteRune(c) // already upper — preserve
-				upperNext = false
-			default:
-				b.WriteRune(c)
-			}
-		case c >= '0' && c <= '9':
-			if b.Len() == 0 {
-				b.WriteString("x") // guard leading digit with a safe prefix
-			}
-			b.WriteRune(c)
-			upperNext = false
-		default:
-			// hyphens, underscores, spaces, dots → camelCase word boundary
-			upperNext = true
-		}
-	}
-	if b.Len() == 0 {
-		return "x"
-	}
-	return b.String()
-}
-
 // defaultStepType returns the primary step type for the given bundle type.
 func defaultStepType(bundleType string) string {
 	switch bundleType {
@@ -1012,46 +867,96 @@ func defaultStepType(bundleType string) string {
 	}
 }
 
-// sortStrings is a simple in-place sort for small slices (avoids import of sort package).
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
+// waveIndex groups environments by wave number (K-06).
+type waveIndex struct {
+	byWave map[int][]string // wave number → env names, sorted
+	sorted []int            // wave numbers present, ascending
+	// firstPos is the list position of the first environment of each wave.
+	firstPos map[int]int
 }
 
-// expandWaveDeps builds wave-derived dependency edges (K-06).
-// For each environment with Wave > 0, it produces edges to ALL environments
-// that have Wave == (this.Wave - 1). If no environments use Wave, returns an
-// empty map and the caller falls through to the default sequential logic.
-func expandWaveDeps(envs []kardinalv1alpha1.EnvironmentSpec) map[string][]string {
-	waveDeps := make(map[string][]string, len(envs))
-
-	// Index environments by wave number.
-	byWave := make(map[int][]string)
-	for _, e := range envs {
-		if e.Wave > 0 {
-			byWave[e.Wave] = append(byWave[e.Wave], e.Name)
-		}
-	}
-	if len(byWave) == 0 {
-		return waveDeps // no wave topology — caller uses default logic
-	}
-
-	for _, e := range envs {
-		if e.Wave <= 1 {
-			continue // wave 1 (or non-wave) has no predecessors via wave
-		}
-		prev := byWave[e.Wave-1]
-		if len(prev) == 0 {
+func indexWaves(envs []kardinalv1alpha1.EnvironmentSpec) waveIndex {
+	w := waveIndex{byWave: map[int][]string{}, firstPos: map[int]int{}}
+	for i, e := range envs {
+		if e.Wave <= 0 {
 			continue
 		}
-		sorted := append([]string(nil), prev...)
-		sortStrings(sorted)
-		waveDeps[e.Name] = sorted
+		if _, ok := w.byWave[e.Wave]; !ok {
+			w.sorted = append(w.sorted, e.Wave)
+			w.firstPos[e.Wave] = i
+		}
+		w.byWave[e.Wave] = append(w.byWave[e.Wave], e.Name)
 	}
-	return waveDeps
+	for _, names := range w.byWave {
+		sort.Strings(names)
+	}
+	sort.Ints(w.sorted)
+	return w
+}
+
+// lowerWave returns the number of the highest wave below e's wave, or 0 for
+// environments without a wave and for the lowest wave. Gaps in the numbering
+// (10, 20, 30) are skipped rather than turning a wave into a DAG root.
+func (w waveIndex) lowerWave(e kardinalv1alpha1.EnvironmentSpec) int {
+	if e.Wave <= 0 {
+		return 0
+	}
+	prev := 0
+	for _, n := range w.sorted {
+		if n >= e.Wave {
+			break
+		}
+		prev = n
+	}
+	return prev
+}
+
+// waveDeps returns the upstreams every wave environment has, whatever its
+// dependsOn says: all environments of the previous wave, so a wave waits for
+// the whole previous wave. Returns nil for environments without a wave and
+// for the lowest wave.
+func (w waveIndex) waveDeps(e kardinalv1alpha1.EnvironmentSpec) []string {
+	prev := w.lowerWave(e)
+	if prev == 0 {
+		return nil
+	}
+	return append([]string(nil), w.byWave[prev]...)
+}
+
+// defaultDeps returns the implicit upstreams of envs[i] when it has no
+// explicit dependsOn:
+//
+//   - An environment without a wave follows the environment listed before it,
+//     or every environment of that environment's wave.
+//   - A wave follows the last environment without a wave listed before the
+//     wave's first environment ("prod-eu and prod-us start together after
+//     staging"). For a wave above the lowest this is added only when that
+//     environment is listed after the previous wave started, because
+//     otherwise the previous wave already follows it.
+//
+// Only an environment with nothing before it is a root.
+func (w waveIndex) defaultDeps(envs []kardinalv1alpha1.EnvironmentSpec, i int) []string {
+	e := envs[i]
+	if e.Wave <= 0 {
+		if i == 0 {
+			return nil
+		}
+		prev := envs[i-1]
+		if prev.Wave > 0 {
+			return append([]string(nil), w.byWave[prev.Wave]...)
+		}
+		return []string{prev.Name}
+	}
+	for j := w.firstPos[e.Wave] - 1; j >= 0; j-- {
+		if envs[j].Wave > 0 {
+			continue
+		}
+		if lower := w.lowerWave(e); lower != 0 && j < w.firstPos[lower] {
+			return nil
+		}
+		return []string{envs[j].Name}
+	}
+	return nil
 }
 
 // containsStr reports whether s contains target.
@@ -1062,21 +967,4 @@ func containsStr(s []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// prStatusNodeName generates the CEL-safe node ID for a PRStatus node.
-// Format: prstatus0<bundleSlug>0<envSlug>
-// Uses digit separator "0" because kro node IDs may not contain underscores.
-func prStatusNodeName(bundleSlug, envName string) string {
-	return "prstatus0" + bundleSlug + "0" + celSafeSlug(envName)
-}
-
-// prStatusNodeK8sName generates the Kubernetes resource name (hyphens) for a
-// PRStatus node. Truncated to 63 chars.
-func prStatusNodeK8sName(bundleSlugK8s, envName string) string {
-	raw := fmt.Sprintf("prstatus-%s-%s", bundleSlugK8s, slugify(envName))
-	if len(raw) > 63 {
-		raw = raw[:63]
-	}
-	return raw
 }
