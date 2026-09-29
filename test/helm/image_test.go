@@ -185,30 +185,32 @@ func ldflagsVars(where, text string) ([]ldflagsVar, error) {
 // other symbol.
 func declaresStringVar(t *testing.T, dir, name string) bool {
 	t.Helper()
-	pkgs, err := parser.ParseDir(token.NewFileSet(), filepath.Join(repoRoot(t), dir), func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	paths, err := filepath.Glob(filepath.Join(repoRoot(t), dir, "*.go"))
 	require.NoError(t, err, dir)
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, decl := range f.Decls {
-				gd, ok := decl.(*ast.GenDecl)
-				if !ok || gd.Tok != token.VAR {
-					continue
-				}
-				for _, spec := range gd.Specs {
-					vs := spec.(*ast.ValueSpec)
-					for i, id := range vs.Names {
-						if id.Name != name {
-							continue
-						}
-						if ident, ok := vs.Type.(*ast.Ident); ok {
-							return ident.Name == "string"
-						}
-						if vs.Type == nil && i < len(vs.Values) {
-							lit, ok := vs.Values[i].(*ast.BasicLit)
-							return ok && lit.Kind == token.STRING
-						}
+	fset := token.NewFileSet()
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, p, nil, 0)
+		require.NoError(t, err, p)
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, id := range vs.Names {
+					if id.Name != name {
+						continue
+					}
+					if ident, ok := vs.Type.(*ast.Ident); ok {
+						return ident.Name == "string"
+					}
+					if vs.Type == nil && i < len(vs.Values) {
+						lit, ok := vs.Values[i].(*ast.BasicLit)
+						return ok && lit.Kind == token.STRING
 					}
 				}
 			}

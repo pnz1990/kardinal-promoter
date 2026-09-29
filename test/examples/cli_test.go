@@ -56,9 +56,10 @@ func shellWords(line string) []string {
 			}
 		case depth > 0:
 			cur.WriteRune(r)
-			if r == '(' {
+			switch r {
+			case '(':
 				depth++
-			} else if r == ')' {
+			case ')':
 				depth--
 			}
 		case r == '\'' || r == '"':

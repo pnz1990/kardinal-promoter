@@ -63,8 +63,8 @@ func repoRoot(t *testing.T) string {
 }
 
 // runScript runs a hack/ script with fake tools and returns its combined
-// output, its error, and the recorded tool invocations.
-func runScript(t *testing.T, script string, env map[string]string) (string, error, []string) {
+// output, the recorded tool invocations, and its error.
+func runScript(t *testing.T, script string, env map[string]string) (string, []string, error) {
 	t.Helper()
 	bin := t.TempDir()
 	for name, body := range map[string]string{
@@ -96,7 +96,7 @@ func runScript(t *testing.T, script string, env map[string]string) (string, erro
 			}
 		}
 	}
-	return string(out), err, calls
+	return string(out), calls, err
 }
 
 // clusterCalls drops the read-only kubeconfig lookups the guard makes.
@@ -115,7 +115,7 @@ func clusterCalls(calls []string) []string {
 func TestClusterSetupScriptsTargetOnlyTheirKindContext(t *testing.T) {
 	for _, script := range []string{"setup-e2e-env.sh", "e2e-setup.sh"} {
 		t.Run(script, func(t *testing.T) {
-			out, err, calls := runScript(t, script, map[string]string{
+			out, calls, err := runScript(t, script, map[string]string{
 				"FAKE_CURRENT_CONTEXT": "arn:aws:eks:us-east-2:111111111111:cluster/prod",
 				"FAKE_KIND_CONTEXT":    "kind-kardinal-e2e",
 				"FAKE_KIND_CLUSTERS":   "kardinal-e2e",
@@ -172,7 +172,7 @@ func TestClusterSetupScriptsRefuseNonKindTargets(t *testing.T) {
 				for k, v := range tt.env {
 					env[k] = v
 				}
-				out, err, calls := runScript(t, script, env)
+				out, calls, err := runScript(t, script, env)
 				require.Error(t, err, "script must refuse: %s", out)
 				assert.Contains(t, out, "ERROR: ")
 				assert.Empty(t, clusterCalls(calls), "no kubectl/helm call may run before the guard")

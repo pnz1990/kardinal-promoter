@@ -27,9 +27,10 @@ import (
 	"sort"
 	"strings"
 
-	kardinalcmd "github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
+
+	kardinalcmd "github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
 )
 
 func main() {
@@ -115,28 +116,24 @@ func genQuickReference(root *cobra.Command, outPath string) error {
 		return cmdEntries[i].name < cmdEntries[j].name
 	})
 
-	f, err := os.Create(outPath)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outPath, err)
-	}
-
-	fmt.Fprintf(f, "# CLI Reference\n\n")
-	fmt.Fprintf(f, "<!-- AUTO-GENERATED — do not edit by hand.\n")
-	fmt.Fprintf(f, "     Run: go run ./hack/gen-cli-docs/main.go to regenerate.\n")
-	fmt.Fprintf(f, "     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
-	fmt.Fprintf(f, "!!! note \"Auto-generated\"\n")
-	fmt.Fprintf(f, "    Generated from the kardinal CLI source. Every command is documented.\n")
-	fmt.Fprintf(f, "    See [detailed reference pages](reference/cli/) for flags and examples.\n\n")
-	fmt.Fprintf(f, "| Command | Description |\n")
-	fmt.Fprintf(f, "|---|---|\n")
+	var b strings.Builder
+	b.WriteString("# CLI Reference\n\n")
+	b.WriteString("<!-- AUTO-GENERATED — do not edit by hand.\n")
+	b.WriteString("     Run: go run ./hack/gen-cli-docs/main.go to regenerate.\n")
+	b.WriteString("     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
+	b.WriteString("!!! note \"Auto-generated\"\n")
+	b.WriteString("    Generated from the kardinal CLI source. Every command is documented.\n")
+	b.WriteString("    See [detailed reference pages](reference/cli/) for flags and examples.\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---|---|\n")
 
 	for _, e := range cmdEntries {
-		fmt.Fprintf(f, "| [`%s`](%s) | %s |\n", e.name, e.link, e.desc)
+		fmt.Fprintf(&b, "| [`%s`](%s) | %s |\n", e.name, e.link, e.desc)
 	}
 
-	fmt.Fprintf(f, "\nFor full flag documentation, examples, and output formats, see the\n")
-	fmt.Fprintf(f, "[individual command pages](reference/cli/).\n")
-	if err := f.Close(); err != nil {
+	b.WriteString("\nFor full flag documentation, examples, and output formats, see the\n")
+	b.WriteString("[individual command pages](reference/cli/).\n")
+	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", outPath, err)
 	}
 	return nil
