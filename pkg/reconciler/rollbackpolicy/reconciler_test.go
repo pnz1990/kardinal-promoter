@@ -94,6 +94,13 @@ func makeBundleStep(name, pipelineName, environment, bundleName string, failures
 	}
 }
 
+// unlabelledBundleStep removes the kardinal.io/bundle label, as on a step
+// created outside the Graph, leaving spec.bundleName as the only reference.
+func unlabelledBundleStep(st *v1alpha1.PromotionStep) *v1alpha1.PromotionStep {
+	delete(st.Labels, "kardinal.io/bundle")
+	return st
+}
+
 // makeBundle creates a Bundle for testing.
 func makeBundle(name, pipeline string) *v1alpha1.Bundle {
 	return &v1alpha1.Bundle{
@@ -365,6 +372,27 @@ func TestReconciler_ReadsStepsOfBundleRef(t *testing.T) {
 			},
 			wantFailures: 4,
 			wantRollback: true,
+		},
+		{
+			name: "step without the bundle label is matched on spec.bundleName",
+			steps: []*v1alpha1.PromotionStep{
+				unlabelledBundleStep(makeBundleStep("a-old", "nginx-demo", "prod", "bundle-0", 9)),
+				unlabelledBundleStep(makeBundleStep("b-new", "nginx-demo", "prod", "bundle-1", 3)),
+			},
+			wantFailures: 3,
+			wantRollback: true,
+		},
+		{
+			name: "spec.bundleName wins over a disagreeing label",
+			steps: []*v1alpha1.PromotionStep{
+				func() *v1alpha1.PromotionStep {
+					st := makeBundleStep("a-old", "nginx-demo", "prod", "bundle-0", 9)
+					st.Labels["kardinal.io/bundle"] = "bundle-1"
+					return st
+				}(),
+				makeBundleStep("b-new", "nginx-demo", "prod", "bundle-1", 0),
+			},
+			wantFailures: 0,
 		},
 		{
 			name: "only another bundle's step exists: wait",

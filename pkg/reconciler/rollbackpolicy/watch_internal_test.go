@@ -43,6 +43,16 @@ func TestPoliciesForStep(t *testing.T) {
 	assert.Equal(t, []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "match", Namespace: "default"}}},
 		r.policiesForStep(context.Background(), step))
 
+	specOnly := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "app-v2-prod", Namespace: "default",
+			Labels: map[string]string{labelPipeline: "app", labelEnvironment: "prod"},
+		},
+		Spec: v1alpha1.PromotionStepSpec{BundleName: "app-v2"},
+	}
+	assert.Equal(t, []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "match", Namespace: "default"}}},
+		r.policiesForStep(context.Background(), specOnly), "spec.bundleName identifies the Bundle without the label")
+
 	unlabelled := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "x", Namespace: "default"}}
 	assert.Empty(t, r.policiesForStep(context.Background(), unlabelled))
 }

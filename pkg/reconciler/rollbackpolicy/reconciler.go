@@ -159,7 +159,6 @@ func (r *Reconciler) bundleStepFailures(ctx context.Context, rp *v1alpha1.Rollba
 		client.MatchingLabels{
 			labelPipeline:    rp.Spec.PipelineName,
 			labelEnvironment: rp.Spec.Environment,
-			labelBundle:      rp.Spec.BundleRef,
 		},
 	); err != nil {
 		return 0, 0, fmt.Errorf("list promotionsteps for bundle %s: %w", rp.Spec.BundleRef, err)
@@ -167,8 +166,7 @@ func (r *Reconciler) bundleStepFailures(ctx context.Context, rp *v1alpha1.Rollba
 	maxFailures, count := 0, 0
 	for i := range stepList.Items {
 		step := &stepList.Items[i]
-		// Defence in depth: the label and spec must agree on the Bundle.
-		if step.Spec.BundleName != "" && step.Spec.BundleName != rp.Spec.BundleRef {
+		if stepBundle(step) != rp.Spec.BundleRef {
 			continue
 		}
 		count++
@@ -177,6 +175,16 @@ func (r *Reconciler) bundleStepFailures(ctx context.Context, rp *v1alpha1.Rollba
 		}
 	}
 	return maxFailures, count, nil
+}
+
+// stepBundle returns the Bundle a PromotionStep promotes: spec.bundleName, or
+// the kardinal.io/bundle label when the spec field is empty. The spec field is
+// authoritative; steps created outside the Graph may not carry the label.
+func stepBundle(step *v1alpha1.PromotionStep) string {
+	if step.Spec.BundleName != "" {
+		return step.Spec.BundleName
+	}
+	return step.Labels[labelBundle]
 }
 
 // ensureRollbackBundle creates a rollback Bundle if one doesn't already exist.
@@ -272,8 +280,12 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 // policiesForStep maps a PromotionStep to the RollbackPolicies that monitor its
 // Bundle in its environment.
 func (r *Reconciler) policiesForStep(ctx context.Context, obj client.Object) []reconcile.Request {
-	labels := obj.GetLabels()
-	bundle := labels[labelBundle]
+	step, ok := obj.(*v1alpha1.PromotionStep)
+	if !ok {
+		return nil
+	}
+	labels := step.GetLabels()
+	bundle := stepBundle(step)
 	if bundle == "" {
 		return nil
 	}

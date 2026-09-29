@@ -40,8 +40,8 @@ type SubscriptionSpec struct {
 
 	// Namespace must be empty or equal to the Subscription's own namespace.
 	// Bundles are always created in the Subscription's namespace; any other
-	// value puts the Subscription in phase Error and creates no Bundle.
-	// Deprecated: leave empty.
+	// value puts the Subscription in phase Error and creates no Bundle. Leave
+	// it empty: the field is kept only so existing manifests still apply.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
