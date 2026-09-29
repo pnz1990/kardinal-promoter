@@ -143,3 +143,81 @@ func TestCircuitBreaker_RecordFailure_WithRetryAfter(t *testing.T) {
 	assert.Greater(t, delta, 4*time.Minute)
 	assert.Less(t, delta, 6*time.Minute)
 }
+
+// TestCircuitBreaker_HalfOpenAdmitsOneProbe proves that when the backoff
+// elapses only one caller probes the SCM, and that a probe that never reports
+// back does not wedge the breaker (C06-scm-health-18).
+func TestCircuitBreaker_HalfOpenAdmitsOneProbe(t *testing.T) {
+	cb := NewCircuitBreaker()
+	for i := 0; i < cb.FailureThreshold; i++ {
+		cb.RecordFailure(time.Time{})
+	}
+	cb.mu.Lock()
+	cb.openUntil = time.Now().Add(-time.Second)
+	cb.mu.Unlock()
+
+	admitted := 0
+	for i := 0; i < 20; i++ {
+		if cb.Allow() == nil {
+			admitted++
+		}
+	}
+	assert.Equal(t, 1, admitted)
+
+	cb.mu.Lock()
+	cb.probeStarted = time.Now().Add(-cb.HalfOpenTimeout - time.Second)
+	cb.mu.Unlock()
+	assert.NoError(t, cb.Allow(), "an expired probe lets the next caller probe")
+	assert.Error(t, cb.Allow())
+}
+
+// TestIsTransientResponse covers which responses count against the breaker
+// (C06-scm-health-17).
+func TestIsTransientResponse(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		header map[string]string
+		want   bool
+	}{
+		{"429", http.StatusTooManyRequests, nil, true},
+		{"500", http.StatusInternalServerError, nil, true},
+		{"502", http.StatusBadGateway, nil, true},
+		{"503", http.StatusServiceUnavailable, nil, true},
+		{"403 rate limit exhausted", http.StatusForbidden, map[string]string{"X-RateLimit-Remaining": "0"}, true},
+		{"403 secondary rate limit", http.StatusForbidden, map[string]string{"Retry-After": "60"}, true},
+		{"403 permission denied", http.StatusForbidden, map[string]string{"X-RateLimit-Remaining": "4999"}, false},
+		{"404", http.StatusNotFound, nil, false},
+		{"422", http.StatusUnprocessableEntity, nil, false},
+		{"200", http.StatusOK, nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{}
+			for k, v := range tc.header {
+				h.Set(k, v)
+			}
+			assert.Equal(t, tc.want, IsTransientResponse(&http.Response{StatusCode: tc.status, Header: h}))
+		})
+	}
+	assert.False(t, IsTransientResponse(nil))
+}
+
+// TestRetryAfterFromResponse_ResetOnlyWhenExhausted proves a 5xx with quota
+// left does not open the circuit until the hourly reset, and that GitLab's
+// RateLimit-Reset is honoured when the quota is gone (C06-scm-health-18).
+func TestRetryAfterFromResponse_ResetOnlyWhenExhausted(t *testing.T) {
+	reset := strconv.FormatInt(time.Now().Add(50*time.Minute).Unix(), 10)
+
+	h := http.Header{}
+	h.Set("X-RateLimit-Remaining", "4000")
+	h.Set("X-RateLimit-Reset", reset)
+	assert.True(t, RetryAfterFromResponse(&http.Response{StatusCode: http.StatusBadGateway, Header: h}).IsZero())
+
+	g := http.Header{}
+	g.Set("RateLimit-Remaining", "0")
+	g.Set("RateLimit-Reset", reset)
+	delta := time.Until(RetryAfterFromResponse(&http.Response{StatusCode: http.StatusTooManyRequests, Header: g}))
+	assert.Greater(t, delta, 45*time.Minute)
+	assert.Less(t, delta, 55*time.Minute)
+}

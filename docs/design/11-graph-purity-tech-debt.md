@@ -100,7 +100,7 @@ This section is preserved for historical reference.
 
 | ID | Issue | Description | Fix Approach |
 |---|---|---|---|
-| SCM-3 / SCM-4 | #154 | `EnsureLabels` on hot path; `time.Since` in template | Setup reconciler; pre-computed CRD field |
+| SCM-3 / SCM-4 | #154 | `EnsureLabels` on hot path (removed: it was never called); `time.Since` in template | Setup reconciler; pre-computed CRD field |
 | CLI-7 / MC-1 | #155 | PolicyGate three-way state in CLI; threshold Go enum | Add `status.phase` to PolicyGate; CEL expression field |
 
 ---
@@ -368,7 +368,7 @@ If an aggregated API provider for GitHub were contributed to kro, kardinal could
 | `GetPRStatus()` in reconciler hot path (#133) | Live GitHub API call in 5 code paths | Watch node on `GithubArtifact` for the PR branch |
 | `PRStatus` CRD reconciler (#133) | kardinal-owned reconciler calls GitHub | Replaced by `GithubArtifact` Watch node |
 | `git clone` in step engine (#140) | `exec.Command("git clone")` | Watch node on `GithubArtifact` for repo path |
-| `EnsureLabels()` repo config (#149) | GitHub API call in promotion path | One-time `GithubArtifact` setup Watch node |
+| `EnsureLabels()` repo config (#149) | Removed; it was never called. GitHub creates labels on first use | — |
 | `PAT-in-Secret` auth model | User manages PAT lifecycle | OAuth device flow via `GithubAuthentication` |
 | Subscription CRD polling (#18 planned) | Polling reconciler with `time.After` | Watch node on `GithubArtifact` where `status.sha` changes → create Bundle |
 

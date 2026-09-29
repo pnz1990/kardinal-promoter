@@ -15,6 +15,8 @@ package promotionstep
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -72,6 +74,32 @@ func TestExtractRepo(t *testing.T) {
 			input:    "https://github.example.com/corp/platform-gitops/pull/7",
 			expected: "corp/platform-gitops",
 		},
+		// C06-scm-health-03: non-GitHub shapes and git remote URLs.
+		{
+			name:     "git remote with .git suffix",
+			input:    "https://github.com/owner/repo.git",
+			expected: "owner/repo",
+		},
+		{
+			name:     "GitLab subgroup MR",
+			input:    "https://gitlab.com/group/sub/proj/-/merge_requests/3",
+			expected: "group/sub/proj",
+		},
+		{
+			name:     "GitLab subgroup remote",
+			input:    "https://gitlab.com/group/sub/proj.git",
+			expected: "group/sub/proj",
+		},
+		{
+			name:     "Azure DevOps PR",
+			input:    "https://dev.azure.com/org/proj/_git/repo/pullrequest/7",
+			expected: "org/proj/repo",
+		},
+		{
+			name:     "Azure DevOps remote",
+			input:    "https://dev.azure.com/org/proj/_git/repo",
+			expected: "org/proj/repo",
+		},
 	}
 
 	for _, tc := range cases {
@@ -80,6 +108,60 @@ func TestExtractRepo(t *testing.T) {
 			assert.Equal(t, tc.expected, got)
 		})
 	}
+}
+
+// TestExtractPRNumber covers the PR URL shape of every provider
+// (C06-scm-health-03).
+func TestExtractPRNumber(t *testing.T) {
+	cases := []struct {
+		input string
+		want  int
+	}{
+		{"https://github.com/o/r/pull/42", 42},
+		{"https://gitlab.com/g/s/p/-/merge_requests/3", 3},
+		{"https://bitbucket.org/ws/r/pull-requests/5", 5},
+		{"https://codeberg.org/o/r/pulls/9", 9},
+		{"https://dev.azure.com/org/proj/_git/repo/pullrequest/7", 7},
+		{"https://github.com/o/r", 0},
+		{"", 0},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, extractPRNumber(tc.input), tc.input)
+	}
+}
+
+// TestWorkDir_PerPromotionStep proves sibling environments of one Bundle and
+// same-named Pipelines in two namespaces get distinct checkouts
+// (C05-steps-01, C05-steps-02).
+func TestWorkDir_PerPromotionStep(t *testing.T) {
+	r := &Reconciler{}
+	mk := func(ns, env string) *v1alpha1.PromotionStep {
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "app-v2-" + env},
+			Spec:       v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "app-v2", Environment: env},
+		}
+	}
+	base := r.workDir(mk("team-a", "prod-eu"))
+	assert.NotEqual(t, base, r.workDir(mk("team-a", "prod-us")), "sibling environment")
+	assert.NotEqual(t, base, r.workDir(mk("team-b", "prod-eu")), "other namespace")
+	assert.Equal(t, base, r.workDir(mk("team-a", "prod-eu")), "stable across reconciles")
+}
+
+// TestCleanWorkDir_IgnoresStatusWorkDir proves cleanWorkDir removes the
+// computed checkout, not whatever path status.workDir holds.
+func TestCleanWorkDir_IgnoresStatusWorkDir(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	require.NoError(t, os.MkdirAll(victim, 0o755))
+	own := filepath.Join(root, "own")
+	require.NoError(t, os.MkdirAll(own, 0o755))
+
+	r := &Reconciler{WorkDirFn: func(_, _ string) string { return own }}
+	ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{WorkDir: victim}}
+	r.cleanWorkDir(zerolog.Nop(), ps)
+
+	assert.DirExists(t, victim, "a tampered status.workDir must not be deleted")
+	assert.NoDirExists(t, own)
 }
 
 // TestAppendCondition_NewCondition verifies that a new condition is appended.

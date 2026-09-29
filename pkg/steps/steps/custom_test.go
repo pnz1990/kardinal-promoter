@@ -16,9 +16,11 @@ package steps_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -111,46 +113,125 @@ func TestCustomWebhookStep_Fail(t *testing.T) {
 	assert.Contains(t, result.Message, "integration tests did not pass")
 }
 
-// TestCustomWebhookStep_Timeout verifies that a slow server causes a non-blocking retry
-// (StepPending with RequeueAfter) on the first timeout, not immediate StepFailed.
-// After maxRetries timeouts the step permanently fails.
+// TestCustomWebhookStep_Timeout verifies that a server that does not answer
+// within webhook.timeoutSeconds fails the step, as documented (C05-steps-24).
 func TestCustomWebhookStep_Timeout(t *testing.T) {
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Simulate a very slow server that never responds within the timeout.
-		time.Sleep(5 * time.Second)
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
+	defer close(release)
 
 	step := parentsteps.NewCustomWebhookStep("slow-check")
-	step.HTTPClient = &http.Client{}
-
-	// First attempt: timeout → StepPending (non-blocking retry scheduled).
 	state := makeCustomStepState(srv.URL)
-	state.Inputs["webhook.timeoutSeconds"] = "1" // 1 second timeout
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	result, err := step.Execute(ctx, state)
-	require.NoError(t, err)
-	assert.Equal(t, parentsteps.StepPending, result.Status, "first timeout should return StepPending (non-blocking retry)")
-	assert.Equal(t, parentsteps.RetryBackoff, result.RequeueAfter, "should request retry backoff requeue")
-	assert.Equal(t, "1", state.Outputs["_custom.retryAttempt"], "attempt counter must be persisted in outputs")
-
-	// Simulate the reconciler persisting outputs and requeueing for attempt 2.
 	state.Inputs["webhook.timeoutSeconds"] = "1"
 
-	result2, err2 := step.Execute(context.Background(), state)
-	require.NoError(t, err2)
-	assert.Equal(t, parentsteps.StepPending, result2.Status, "second timeout should still return StepPending")
-	assert.Equal(t, "2", state.Outputs["_custom.retryAttempt"])
+	result, err := step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepFailed, result.Status, "a timeout must fail the step, not retry")
+	assert.Zero(t, result.RequeueAfter)
+	assert.Contains(t, result.Message, "deadline exceeded")
+	assert.NotContains(t, state.Outputs, "_custom.retryAttempt")
+}
 
-	// Attempt 3 (maxRetries=3, attempt index 2 → next would be 3 = maxRetries): permanently failed.
-	result3, err3 := step.Execute(context.Background(), state)
-	require.NoError(t, err3)
-	assert.Equal(t, parentsteps.StepFailed, result3.Status, "after maxRetries the step must permanently fail")
-	assert.Contains(t, result3.Message, "all 3 attempts failed")
+// TestCustomWebhookStep_ErrorResponses verifies 4xx and non-JSON responses
+// fail at once, and that an error body is truncated before it reaches the
+// PromotionStep status (C05-steps-24, C05-steps-25).
+func TestCustomWebhookStep_ErrorResponses(t *testing.T) {
+	long := strings.Repeat("S", 5000)
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		wantMsg string
+	}{
+		{"404 html", http.StatusNotFound, "<html>not found</html>", "HTTP 404: <html>not found</html>"},
+		{"403 long body", http.StatusForbidden, long, "(truncated)"},
+		{"200 not json", http.StatusOK, "<html>ok</html>", "not the expected JSON"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt32(&calls, 1)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			state := makeCustomStepState(srv.URL)
+			result, err := parentsteps.NewCustomWebhookStep("check").Execute(context.Background(), state)
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepFailed, result.Status)
+			assert.Zero(t, result.RequeueAfter, "must not be retried")
+			assert.Contains(t, result.Message, tc.wantMsg)
+			assert.Less(t, len(result.Message), 400, "the echoed body must be truncated")
+			assert.EqualValues(t, 1, atomic.LoadInt32(&calls))
+		})
+	}
+}
+
+// TestCustomWebhookStep_BodyHasNoSecrets verifies the step's own webhook.*
+// inputs, including the Authorization value, are not sent in the body
+// (C05-steps-23).
+func TestCustomWebhookStep_BodyHasNoSecrets(t *testing.T) {
+	var raw []byte
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ = io.ReadAll(r.Body)
+		auth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(webhookResponseBody{Result: "pass"})
+	}))
+	defer srv.Close()
+
+	state := makeCustomStepState(srv.URL)
+	state.Inputs["webhook.secretRef.name"] = "hook-secret"
+	state.Inputs["webhook.authorization"] = "Bearer SUPER-SECRET-TOKEN"
+	state.Inputs["suite"] = "smoke"
+
+	result, err := parentsteps.NewCustomWebhookStep("check").Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, "Bearer SUPER-SECRET-TOKEN", auth, "the header is still sent")
+	assert.NotContains(t, string(raw), "SUPER-SECRET-TOKEN")
+	assert.NotContains(t, string(raw), "webhook.")
+	var body webhookRequestBody
+	require.NoError(t, json.Unmarshal(raw, &body))
+	assert.Equal(t, map[string]string{"suite": "smoke"}, body.Inputs)
+}
+
+// TestCustomWebhookStep_URLValidation verifies non-http schemes and the
+// link-local cloud metadata endpoint are refused (C05-steps-25).
+func TestCustomWebhookStep_URLValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		wantMsg string
+	}{
+		{"file scheme", "file:///etc/passwd", "must be an http or https URL"},
+		{"relative", "/hook", "must be an http or https URL"},
+		{"metadata ipv4", "http://169.254.169.254/latest/meta-data/", "not allowed"},
+		{"metadata ipv6", "http://[fd00:ec2::254]/latest/meta-data/", "not allowed"},
+		{"link-local ipv6", "http://[fe80::1]:80/", "not allowed"},
+		{"unspecified", "http://0.0.0.0:80/", "not allowed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := makeCustomStepState(tc.url)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			result, err := parentsteps.NewCustomWebhookStep("check").Execute(ctx, state)
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepFailed, result.Status)
+			assert.Zero(t, result.RequeueAfter, "a refused address must not be retried")
+			assert.Contains(t, result.Message, tc.wantMsg)
+		})
+	}
 }
 
 // TestCustomWebhookStep_AuthHeader verifies that the Authorization header is sent from Inputs.
@@ -318,6 +399,7 @@ func TestCustomWebhookStep_MissingURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepFailed, result.Status)
 	assert.Contains(t, result.Message, "webhook.url")
+	assert.Contains(t, result.Message, "not a built-in step", "a typo must be named as such (C05-steps-34)")
 }
 
 // TestCustomWebhookStep_UnexpectedResult verifies that an unknown result value returns Failed.

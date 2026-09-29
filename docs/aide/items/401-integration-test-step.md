@@ -8,7 +8,7 @@
 
 ## Summary
 
-New built-in step `integration-test` in `pkg/steps/steps/`. Creates a Kubernetes Job, waits for completion, writes result to PromotionStep status.outputs. On failure: triggers configured `onFailure` (abort/rollback).
+New built-in step `integration-test` in `pkg/steps/steps/`. Creates a Kubernetes Job, waits for completion, writes result to PromotionStep status.outputs. On failure: the step fails, which fails the promotion. A configurable `onFailure` policy was planned but is not implemented.
 
 ## Acceptance Criteria
 
@@ -16,7 +16,7 @@ New built-in step `integration-test` in `pkg/steps/steps/`. Creates a Kubernetes
 - [ ] Creates a `batch/v1 Job` in target namespace with configured image+command
 - [ ] Watches Job until `status.succeeded >= 1` (pass) or `status.failed >= 1` (fail)
 - [ ] On pass: outputs `{test_result: "passed", exit_code: "0"}` in step outputs
-- [ ] On fail: returns error to reconciler with `onFailure` signal respected
+- [ ] ~~On fail: returns error to reconciler with `onFailure` signal respected~~ — not implemented; a failed Job fails the step
 - [ ] Job cleanup: Job is deleted (or TTL) after result is written to step outputs
 - [ ] Timeout: `config.timeout` (default 30m) cancels the watch and fails the step
 - [ ] Step config validated: `image` is required

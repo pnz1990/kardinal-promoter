@@ -15,8 +15,10 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -24,8 +26,19 @@ func init() {
 	parentsteps.Register(&gitCommitStep{})
 }
 
-// gitCommitStep stages all changes and creates a commit with structured provenance.
-// It is idempotent: if there are no changes, it creates an empty commit to record intent.
+// outputNoChanges is set to "true" by git-commit when the working tree already
+// matched the target; git-push, open-pr and wait-for-merge then do nothing.
+const outputNoChanges = "noChanges"
+
+// noChangesMessage is the step message used when the environment is already
+// at the target version.
+const noChangesMessage = "no changes: environment already at the target version"
+
+// noChanges reports whether git-commit found nothing to commit in this run.
+func noChanges(state *parentsteps.StepState) bool {
+	return state.Outputs[outputNoChanges] == "true"
+}
+
 type gitCommitStep struct{}
 
 func (s *gitCommitStep) Name() string { return "git-commit" }
@@ -48,10 +61,22 @@ func (s *gitCommitStep) Execute(ctx context.Context, state *parentsteps.StepStat
 		authorEmail = "kardinal@kardinal.io"
 	}
 
-	if err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName, authorEmail); err != nil {
+	err := state.GitClient.CommitAll(ctx, state.WorkDir, message, authorName, authorEmail)
+	if errors.Is(err, scm.ErrNothingToCommit) {
+		return parentsteps.StepResult{
+			Status:  parentsteps.StepSuccess,
+			Message: noChangesMessage,
+			Outputs: map[string]string{outputNoChanges: "true"},
+		}, nil
+	}
+	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("commit failed: %v", err)},
 			fmt.Errorf("git-commit: %w", err)
 	}
 
-	return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "committed changes"}, nil
+	return parentsteps.StepResult{
+		Status:  parentsteps.StepSuccess,
+		Message: "committed changes",
+		Outputs: map[string]string{outputNoChanges: "false"},
+	}, nil
 }
