@@ -1,0 +1,126 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: rollbackpolicies.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: RollbackPolicy
+    listKind: RollbackPolicyList
+    plural: rollbackpolicies
+    shortNames:
+    - rbp
+    singular: rollbackpolicy
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.shouldRollback
+      name: ShouldRollback
+      type: boolean
+    - jsonPath: .status.consecutiveFailures
+      name: Failures
+      type: integer
+    - jsonPath: .spec.failureThreshold
+      name: Threshold
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          RollbackPolicy monitors consecutive health-check failures on a PromotionStep
+          and triggers an auto-rollback by creating a rollback Bundle when the
+          failure threshold is exceeded.
+
+          Architecture: the RollbackPolicyReconciler reads
+          PromotionStep.status.consecutiveHealthFailures and writes
+          status.shouldRollback (own CRD status). This makes the rollback
+          decision observable by the Graph, eliminating PS-6 and PS-7 from
+          docs/design/11-graph-purity-tech-debt.md.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              RollbackPolicySpec defines the desired state of a RollbackPolicy.
+              RollbackPolicy objects are created per environment that has autoRollback
+              configured. They are typically created by the Pipeline/Graph controller
+              when a Bundle is promoted to an environment with AutoRollback enabled.
+            properties:
+              bundleRef:
+                description: |-
+                  BundleRef is the name of the Bundle being monitored.
+                  When ConsecutiveHealthFailures on the associated PromotionStep reaches
+                  FailureThreshold, a rollback Bundle is created from this Bundle's spec.
+                minLength: 1
+                type: string
+              environment:
+                description: Environment is the environment this policy monitors.
+                minLength: 1
+                type: string
+              failureThreshold:
+                description: |-
+                  FailureThreshold is the number of consecutive health-check failures
+                  required to trigger a rollback. Defaults to 3 if <= 0.
+                type: integer
+              pipelineName:
+                description: PipelineName is the Pipeline this policy monitors.
+                minLength: 1
+                type: string
+            required:
+            - bundleRef
+            - environment
+            - pipelineName
+            type: object
+          status:
+            description: |-
+              RollbackPolicyStatus holds the observed state of the rollback policy.
+              Written exclusively by the RollbackPolicyReconciler.
+            properties:
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures is the most recent consecutive health failure count
+                  observed from the associated PromotionStep.
+                type: integer
+              lastEvaluatedAt:
+                description: LastEvaluatedAt is the timestamp of the most recent reconcile
+                  evaluation.
+                format: date-time
+                type: string
+              rollbackBundleName:
+                description: |-
+                  RollbackBundleName is the name of the rollback Bundle created when
+                  ShouldRollback became true. Nil if no rollback has been triggered.
+                type: string
+              shouldRollback:
+                description: |-
+                  ShouldRollback is true when the failure threshold has been exceeded
+                  and a rollback Bundle has been (or is being) created.
+                  The Graph can read this field via a Watch node expression.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

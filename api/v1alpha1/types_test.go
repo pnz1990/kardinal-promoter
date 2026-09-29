@@ -53,7 +53,7 @@ func TestPipelineRoundtrip(t *testing.T) {
 					Path:     "environments/test",
 					Approval: "auto",
 					Update:   v1alpha1.UpdateConfig{Strategy: "kustomize"},
-					Health:   v1alpha1.HealthConfig{Type: "deployment", Timeout: "30m"},
+					Health:   v1alpha1.HealthConfig{Type: "resource", Timeout: "30m"},
 				},
 				{Name: "uat", Approval: "auto", Update: v1alpha1.UpdateConfig{Strategy: "kustomize"}},
 				{
@@ -98,7 +98,7 @@ func TestPipelineRoundtrip(t *testing.T) {
 	assert.Equal(t, "environments/test", e0.Path)
 	assert.Equal(t, "auto", e0.Approval)
 	assert.Equal(t, "kustomize", e0.Update.Strategy)
-	assert.Equal(t, "deployment", e0.Health.Type)
+	assert.Equal(t, "resource", e0.Health.Type)
 	assert.Equal(t, "30m", e0.Health.Timeout)
 
 	e2 := got.Spec.Environments[2]
@@ -343,11 +343,13 @@ func TestPromotionStepStatusState(t *testing.T) {
 }
 
 // TestPromotionStepStateValues verifies each valid state value can be
-// marshaled and unmarshaled.
+// marshaled and unmarshaled. TestPromotionStepStateEnum checks this list
+// against the CRD enum.
 func TestPromotionStepStateValues(t *testing.T) {
 	validStates := []string{
 		"Pending", "Promoting", "WaitingForMerge",
 		"HealthChecking", "Verified", "Failed",
+		"AbortedByAlarm", "RollingBack",
 	}
 	for _, state := range validStates {
 		t.Run(state, func(t *testing.T) {

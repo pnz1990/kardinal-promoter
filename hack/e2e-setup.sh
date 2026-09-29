@@ -48,8 +48,7 @@ echo "[e2e-setup] Installing kardinal-promoter CRDs and controller..."
   --namespace kardinal-system --create-namespace \
   --set image.repository="$IMG_REPO" \
   --set image.tag="$IMG_TAG" \
-  --set image.pullPolicy=Never \
-  --set validatingAdmissionPolicy.enabled=false
+  --set image.pullPolicy=Never
 
 # ── 5. Wait for controller to be ready ───────────────────────────────────────
 echo "[e2e-setup] Waiting for the controller to be ready..."

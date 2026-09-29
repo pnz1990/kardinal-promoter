@@ -100,7 +100,6 @@ jobs:
             --set image.repository=ghcr.io/pnz1990/kardinal-promoter \
             --set image.tag=dev \
             --set image.pullPolicy=Never \
-            --set validatingAdmissionPolicy.enabled=false \
             --wait --timeout 300s
           kubectl get pods -n kardinal-system
 

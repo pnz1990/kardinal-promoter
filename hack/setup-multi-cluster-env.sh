@@ -79,7 +79,6 @@ kind load docker-image "${KARDINAL_IMAGE_REPO}:${KARDINAL_IMAGE_TAG}" --name "$K
   --set image.repository="$KARDINAL_IMAGE_REPO" \
   --set image.tag="$KARDINAL_IMAGE_TAG" \
   --set image.pullPolicy=Never \
-  --set validatingAdmissionPolicy.enabled=false \
   --wait --timeout 180s
 
 # ── Step 3: Install ArgoCD on kind ───────────────────────────────────────────

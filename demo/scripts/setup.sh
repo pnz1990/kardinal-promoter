@@ -260,8 +260,7 @@ helm --kube-context "kind-${CONTROL_CLUSTER}" upgrade --install kardinal-promote
   --set image.repository="${KARDINAL_IMAGE_REPO}" \
   --set image.tag="${KARDINAL_IMAGE_TAG}" \
   --set image.pullPolicy="${PULL_POLICY}" \
-  --set github.secretRef.name=github-token \
-  --set validatingAdmissionPolicy.enabled=false
+  --set github.secretRef.name=github-token
 
 kubectl rollout status deployment/kardinal-promoter -n kardinal-system --timeout=180s
 

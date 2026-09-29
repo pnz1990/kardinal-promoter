@@ -84,8 +84,6 @@ else
   fi
   # CRDs must be applied first — the Helm chart includes CRD-dependent resources
   # (ScheduleClock) that require CRDs to exist before the chart can be rendered. (#593)
-  # ValidatingAdmissionPolicy is disabled here because it requires k8s 1.30+ (GA) or
-  # the beta feature gate enabled on 1.28/1.29 kind clusters.
   "${KUBECTL[@]}" apply -f config/crd/bases/
 
   "${HELM[@]}" upgrade --install kardinal-promoter \
@@ -95,7 +93,6 @@ else
     --set image.tag="$KARDINAL_IMAGE_TAG" \
     --set image.pullPolicy=Never \
     --set github.secretRef.name=github-token \
-    --set validatingAdmissionPolicy.enabled=false \
     --wait --timeout 180s
 fi
 

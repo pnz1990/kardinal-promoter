@@ -133,6 +133,8 @@ jobs:
           controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
           git diff --exit-code config/crd/bases/ api/v1alpha1/zz_generated.deepcopy.go || \
             (echo "CRD schemas are stale — run 'make manifests generate' and commit" && exit 1)
+          diff -r --exclude=.gitkeep config/crd/bases/ chart/kardinal-promoter/crds/ || \
+            (echo "chart/kardinal-promoter/crds is stale — run 'make manifests' and commit" && exit 1)
 
       - name: Validate demo and example manifests against the CRD schemas
         # Decodes every example and demo manifest strictly into the Go API
@@ -289,12 +291,22 @@ jobs:
           echo "has_chart=$(test -d chart/kardinal-promoter && echo true || echo false)" >> $GITHUB_OUTPUT
       - name: Install Helm
         if: steps.chart_check.outputs.has_chart == 'true'
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: "latest"
+          version: v3.22.0
       - name: Lint chart
         if: steps.chart_check.outputs.has_chart == 'true'
         run: helm lint chart/kardinal-promoter
       - name: Template chart
         if: steps.chart_check.outputs.has_chart == 'true'
         run: helm template kardinal-promoter chart/kardinal-promoter
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        if: steps.chart_check.outputs.has_chart == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Chart render tests
+        if: steps.chart_check.outputs.has_chart == 'true'
+        env:
+          KARDINAL_REQUIRE_HELM: "1"
+        run: go test ./test/helm/... -count=1
