@@ -135,7 +135,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Evaluate CEL expression
-	pass, reason, evalErr := r.eval.evaluate(gate.Spec.Expression, celCtx)
+	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
 	if evalErr != nil {
 		// Fail-closed on evaluation error
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).

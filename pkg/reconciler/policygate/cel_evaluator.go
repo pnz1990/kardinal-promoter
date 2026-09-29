@@ -25,8 +25,10 @@
 package policygate
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	goccel "github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -36,23 +38,47 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
 )
 
+// Limits on one gate expression. Any gate author can write an expression, and
+// all gates share the controller's PolicyGate workers, so an expression must
+// not be able to compute or allocate without bound (C04-gates-25).
+const (
+	// celCostLimit is the runtime cost budget of one evaluation, the same
+	// per-expression limit Kubernetes uses for CRD validation rules.
+	celCostLimit = 1_000_000
+	// celEvalTimeout bounds the wall-clock time of one evaluation.
+	celEvalTimeout = time.Second
+	// celInterruptCheckFrequency is how many comprehension iterations run
+	// between checks of the evaluation deadline.
+	celInterruptCheckFrequency = 100
+	// maxCachedPrograms bounds the compiled-program cache. When it is full the
+	// cache is cleared; programs are recompiled on demand.
+	maxCachedPrograms = 1024
+)
+
 // evaluator wraps a goccel.Env and provides cached CEL expression evaluation.
 // All evaluation errors are fail-closed: a failing or erroring expression
 // returns (false, reason, err) — it does not permit the gate to pass.
 //
-// EvaluateExpression evaluates a CEL expression against the given context map.
-// Used by the UI validate-cel endpoint and e2e tests.
-// Returns (pass, reason, error). All errors are fail-closed (pass=false).
-func (r *Reconciler) EvaluateExpression(expr string, ctx map[string]interface{}) (bool, string, error) {
-	return r.eval.evaluate(expr, ctx)
-}
-
-// The program cache is keyed by expression string. Cache is valid for the
-// lifetime of the Evaluator (reset on controller restart).
+// The program cache is keyed by expression string and bounded by
+// maxCachedPrograms. It only saves compilation work: it holds no gate state.
 type evaluator struct {
 	env   *goccel.Env
 	cache map[string]goccel.Program
 	mu    sync.Mutex
+	// timeout bounds one evaluation; celEvalTimeout unless a test changes it.
+	timeout time.Duration
+}
+
+// ValidateExpression compiles a PolicyGate expression in the same CEL
+// environment the reconciler evaluates it in, without evaluating it. The UI
+// validate-cel endpoint uses it, so the UI accepts exactly the expressions the
+// controller accepts (C04-gates-26).
+func ValidateExpression(expr string) error {
+	ev, err := newEvaluator()
+	if err != nil {
+		return fmt.Errorf("policygate CEL environment: %w", err)
+	}
+	return ev.validate(expr)
 }
 
 // newEvaluator creates an Evaluator backed by a CEL environment that includes
@@ -90,7 +116,6 @@ func newEvaluator() (*evaluator, error) {
 		library.Maps(),
 		library.Lists(),
 		library.Random(),
-		library.Omit(),
 		// changewindow.isAllowed(name) → bool
 		// Returns true when the named ChangeWindow is NOT currently blocking.
 		// Equivalent to: !changewindow["name"]
@@ -134,8 +159,9 @@ func newEvaluator() (*evaluator, error) {
 		return nil, fmt.Errorf("cel.NewEnv: %w", err)
 	}
 	return &evaluator{
-		env:   env,
-		cache: make(map[string]goccel.Program),
+		env:     env,
+		cache:   make(map[string]goccel.Program),
+		timeout: celEvalTimeout,
 	}, nil
 }
 
@@ -172,13 +198,15 @@ func changeWindowActive(mapVal, nameVal ref.Val) (bool, ref.Val) {
 //   - err: non-nil if compilation or evaluation failed (implies pass=false)
 //
 // All errors are fail-closed: the gate does not pass on any error.
-func (e *evaluator) evaluate(expr string, ctx map[string]interface{}) (bool, string, error) {
+func (e *evaluator) evaluate(ctx context.Context, expr string, vars map[string]interface{}) (bool, string, error) {
 	prg, err := e.getOrCompile(expr)
 	if err != nil {
 		return false, fmt.Sprintf("CEL compile error: %s", err), err
 	}
 
-	out, _, err := prg.Eval(ctx)
+	evalCtx, cancel := context.WithTimeout(ctx, e.timeout)
+	defer cancel()
+	out, _, err := prg.ContextEval(evalCtx, vars)
 	if err != nil {
 		return false, fmt.Sprintf("CEL evaluation error: %s", err), err
 	}
@@ -208,8 +236,11 @@ func EvaluateForTest(expr string, ctx map[string]interface{}) (bool, string, err
 	if err != nil {
 		return false, "", fmt.Errorf("newEvaluator: %w", err)
 	}
-	return ev.evaluate(expr, ctx)
+	return ev.evaluate(context.Background(), expr, ctx)
 }
+
+// getOrCompile returns the compiled program for expr, compiling it with the
+// cost limit and interrupt checks on a cache miss.
 func (e *evaluator) getOrCompile(expr string) (goccel.Program, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -223,11 +254,17 @@ func (e *evaluator) getOrCompile(expr string) (goccel.Program, error) {
 		return nil, issues.Err()
 	}
 
-	prg, err := e.env.Program(ast)
+	prg, err := e.env.Program(ast,
+		goccel.CostLimit(celCostLimit),
+		goccel.InterruptCheckFrequency(celInterruptCheckFrequency),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("cel.Program: %w", err)
 	}
 
+	if len(e.cache) >= maxCachedPrograms {
+		clear(e.cache)
+	}
 	e.cache[expr] = prg
 	return prg, nil
 }

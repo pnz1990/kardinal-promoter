@@ -88,7 +88,7 @@ func TestDocumentedCELContext(t *testing.T) {
 			celCtx, _, err := r.buildContext(t.Context(), gate, "app-v1")
 			require.NoError(t, err, "build context for %q", de.expr)
 			if de.boolResult {
-				ok, reason, err := r.eval.evaluate(de.expr, celCtx)
+				ok, reason, err := r.eval.evaluate(t.Context(), de.expr, celCtx)
 				require.NoError(t, err, "%s: %s", de.where, reason)
 				if de.mustBeTrue {
 					assert.True(t, ok, "%s: documented type is wrong: %s", de.where, reason)

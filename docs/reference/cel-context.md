@@ -180,6 +180,16 @@ kardinal uses the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/
 | `random.seededInt` | `(int, int, string) → int` | `random.seededInt(0, 100, bundle.version) < 10` |
 | `random.seededString` | `(int, string) → string` | `random.seededString(8, bundle.version)` |
 
+`random.seededString` returns lowercase letters and digits. The length must be
+between 1 and 1024. The same seed always gives the same string.
+
+### Evaluation limits
+
+Each evaluation of a gate expression has a runtime cost limit of 1,000,000 (the
+per-expression limit Kubernetes uses for CRD validation rules) and a time limit
+of 1 second. An expression that goes over either limit fails to evaluate, and
+the gate blocks with a `CEL evaluation error` reason.
+
 ### String extensions
 
 Standard `cel-go/ext` string functions are available:
