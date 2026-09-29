@@ -18,6 +18,8 @@
 package main
 
 import (
+	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,7 +29,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -37,7 +41,8 @@ import (
 const (
 	// bundleAPIMaxBody is the maximum request body size for the bundle API (1 MB).
 	bundleAPIMaxBody = 1 << 20
-	// bundleRateLimit is the maximum number of Bundle creation requests per minute per token.
+	// bundleRateLimit is the maximum number of Bundle creation requests per minute.
+	// There is one bundle API token, so this cap is shared by every CI caller.
 	bundleRateLimit = 60
 )
 
@@ -51,8 +56,12 @@ type bundleCreateRequest struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Images lists the container images in this Bundle.
 	Images []v1alpha1.ImageRef `json:"images,omitempty"`
+	// ConfigRef is the GitOps commit for "config" and "mixed" bundles.
+	ConfigRef *v1alpha1.ConfigRef `json:"configRef,omitempty"`
 	// Provenance carries build metadata.
 	Provenance *v1alpha1.BundleProvenance `json:"provenance,omitempty"`
+	// Intent limits or shapes the promotion (targetEnvironment, skipEnvironments).
+	Intent *v1alpha1.BundleIntent `json:"intent,omitempty"`
 }
 
 // bundleCreateResponse is the JSON response for POST /api/v1/bundles.
@@ -97,8 +106,11 @@ type bundleAPIServer struct {
 	client    client.Client
 	token     string
 	namespace string
-	limiter   *tokenRateLimiter
-	log       zerolog.Logger
+	// onlyNamespace, when set (--watch-namespace), is the only namespace the API
+	// may create Bundles in; the controller does not reconcile any other.
+	onlyNamespace string
+	limiter       *tokenRateLimiter
+	log           zerolog.Logger
 }
 
 // newBundleAPIServer constructs a bundleAPIServer.
@@ -134,12 +146,12 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			return
 		}
 		providedToken := strings.TrimPrefix(authHeader, "Bearer ")
-		if providedToken != s.token {
+		if s.token == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(s.token)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Rate limit per token.
+		// Rate limit (one token, so one shared window for all callers).
 		if !s.limiter.Allow(providedToken) {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
@@ -152,20 +164,18 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			return
 		}
 
+		// Reject unknown fields so a misspelt or unsupported key (for example
+		// "intent" before it was supported) fails loudly instead of being dropped.
 		var req bundleCreateRequest
-		if err := json.Unmarshal(body, &req); err != nil {
-			http.Error(w, fmt.Sprintf("invalid JSON: %v", err), http.StatusBadRequest)
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			http.Error(w, fmt.Sprintf("invalid request body: %v", err), http.StatusBadRequest)
 			return
 		}
-
-		// Validate required fields.
-		if req.Pipeline == "" {
-			http.Error(w, "pipeline is required", http.StatusBadRequest)
+		if msg := validateBundleCreateRequest(&req); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
 			return
-		}
-		bundleType := req.Type
-		if bundleType == "" {
-			bundleType = "image"
 		}
 
 		// Determine namespace.
@@ -173,13 +183,26 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 		if ns == "" {
 			ns = s.namespace
 		}
+		if s.onlyNamespace != "" && ns != s.onlyNamespace {
+			http.Error(w, fmt.Sprintf("namespace %q is not watched by this controller", ns), http.StatusForbidden)
+			return
+		}
 
-		// Generate a unique bundle name: pipeline-YYYYMMDDHHMMSS-<nanosuffix>.
-		now := time.Now().UTC()
-		name := fmt.Sprintf("%s-%s-%d", sanitizeName(req.Pipeline),
-			now.Format("20060102150405"), now.UnixNano()%10000)
+		// The Pipeline must exist in the target namespace. This also stops the
+		// token from creating Bundles in namespaces that have no such Pipeline.
+		var pipeline v1alpha1.Pipeline
+		if err := s.client.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: req.Pipeline}, &pipeline); err != nil {
+			if apierrors.IsNotFound(err) {
+				http.Error(w, fmt.Sprintf("pipeline %s/%s not found", ns, req.Pipeline), http.StatusNotFound)
+				return
+			}
+			s.log.Error().Err(err).Str("namespace", ns).Str("pipeline", req.Pipeline).Msg("bundle API: failed to get pipeline")
+			http.Error(w, "failed to look up pipeline", http.StatusInternalServerError)
+			return
+		}
 
 		// Set timestamp on provenance if not provided.
+		now := time.Now().UTC()
 		if req.Provenance == nil {
 			req.Provenance = &v1alpha1.BundleProvenance{}
 		}
@@ -187,28 +210,40 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			req.Provenance.Timestamp = metav1.NewTime(now)
 		}
 
+		// Name: pipeline-YYYYMMDDHHMMSS-<random>. GenerateName makes the API
+		// server pick a unique suffix, so concurrent requests cannot collide.
 		bundle := &v1alpha1.Bundle{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: ns,
+				GenerateName: fmt.Sprintf("%s-%s-", sanitizeName(req.Pipeline), now.Format("20060102150405")),
+				Namespace:    ns,
 				Labels: map[string]string{
 					"kardinal.io/pipeline": req.Pipeline,
 				},
 			},
 			Spec: v1alpha1.BundleSpec{
-				Type:       bundleType,
+				Type:       req.Type,
 				Pipeline:   req.Pipeline,
 				Images:     req.Images,
+				ConfigRef:  req.ConfigRef,
 				Provenance: req.Provenance,
+				Intent:     req.Intent,
 			},
 		}
 		lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
 		if err := s.client.Create(r.Context(), bundle); err != nil {
-			s.log.Error().Err(err).Str("name", name).Msg("failed to create bundle")
-			http.Error(w, fmt.Sprintf("failed to create bundle: %v", err), http.StatusInternalServerError)
+			s.log.Error().Err(err).Str("namespace", ns).Str("pipeline", req.Pipeline).Msg("failed to create bundle")
+			switch {
+			case apierrors.IsInvalid(err):
+				http.Error(w, "bundle rejected by validation", http.StatusBadRequest)
+			case apierrors.IsAlreadyExists(err):
+				http.Error(w, "bundle already exists", http.StatusConflict)
+			default:
+				http.Error(w, "failed to create bundle", http.StatusInternalServerError)
+			}
 			return
 		}
+		name := bundle.Name
 
 		s.log.Info().
 			Str("name", name).
@@ -223,6 +258,38 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			s.log.Error().Err(encErr).Msg("failed to encode bundle create response")
 		}
 	}
+}
+
+// validateBundleCreateRequest checks the request and fills in defaults. It
+// returns a client-facing error message, or "" when the request is valid.
+func validateBundleCreateRequest(req *bundleCreateRequest) string {
+	if req.Pipeline == "" {
+		return "pipeline is required"
+	}
+	if len(validation.IsDNS1123Subdomain(req.Pipeline)) > 0 || len(validation.IsValidLabelValue(req.Pipeline)) > 0 {
+		return "pipeline must be a valid Kubernetes object name of at most 63 characters"
+	}
+	if req.Type == "" {
+		req.Type = "image"
+	}
+	needImages, needConfig := false, false
+	switch req.Type {
+	case "image":
+		needImages = true
+	case "config":
+		needConfig = true
+	case "mixed":
+		needImages, needConfig = true, true
+	default:
+		return fmt.Sprintf("type must be one of image, config, mixed (got %q)", req.Type)
+	}
+	if needImages && len(req.Images) == 0 {
+		return fmt.Sprintf("type %q requires at least one entry in images", req.Type)
+	}
+	if needConfig && (req.ConfigRef == nil || req.ConfigRef.CommitSHA == "") {
+		return fmt.Sprintf("type %q requires configRef.commitSHA", req.Type)
+	}
+	return ""
 }
 
 // sanitizeName replaces characters not valid in Kubernetes names with hyphens.

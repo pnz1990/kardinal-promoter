@@ -252,6 +252,14 @@
             "type": "string"
           }
         },
+        "allowedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^/*@,\\s]+$"
+          }
+        },
         "auth": {
           "type": "object",
           "additionalProperties": false,

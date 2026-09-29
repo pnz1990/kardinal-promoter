@@ -5,6 +5,7 @@ package admission
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,9 +26,12 @@ const maxAdmissionBody = 1 << 20 // 1 MB
 // The handler:
 //  1. Decodes the AdmissionReview request.
 //  2. Unmarshals the Pipeline object from request.object.raw.
-//  3. Calls graph.DetectCycle to check for circular dependsOn.
-//  4. Returns an AdmissionReview response: allowed=true (no cycle) or
-//     allowed=false with a descriptive message (cycle detected).
+//  3. Calls graph.DetectCycle to check the environment ordering (cycles,
+//     unknown dependsOn, no environments). DELETE is always allowed.
+//  4. Returns an AdmissionReview response: allowed=true, or allowed=false
+//     with the ordering error as the message.
+//
+// Bodies over 1 MB are rejected with 413 rather than truncated.
 //
 // Mount at POST /webhook/validate/pipeline on the webhook server.
 // Requires a ValidatingWebhookConfiguration pointing at this path to be
@@ -41,8 +45,13 @@ func PipelineWebhookHandler(log zerolog.Logger) http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxAdmissionBody))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAdmissionBody))
 		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			log.Error().Err(err).Msg("admission: failed to read body")
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
@@ -80,8 +89,13 @@ func PipelineWebhookHandler(log zerolog.Logger) http.HandlerFunc {
 }
 
 // validatePipeline decodes the Pipeline from the raw object bytes and checks
-// for circular dependsOn. Returns an AdmissionResponse.
+// its environment ordering (unknown dependsOn, no environments, cycles).
+// DELETE is always allowed: the request carries no object and there is
+// nothing to validate. Returns an AdmissionResponse.
 func validatePipeline(req *admissionv1.AdmissionRequest, log zerolog.Logger) *admissionv1.AdmissionResponse {
+	if req.Operation == admissionv1.Delete {
+		return allow()
+	}
 	var pipeline kardinalv1alpha1.Pipeline
 	if err := json.Unmarshal(req.Object.Raw, &pipeline); err != nil {
 		log.Error().Err(err).Msg("admission: failed to unmarshal Pipeline")
@@ -89,12 +103,13 @@ func validatePipeline(req *admissionv1.AdmissionRequest, log zerolog.Logger) *ad
 	}
 
 	if err := graph.DetectCycle(&pipeline); err != nil {
+		// The error names the actual problem (cycle, unknown dependsOn, or no
+		// environments), so report it as-is.
 		log.Info().
 			Str("pipeline", pipeline.Name).
 			Err(err).
-			Msg("admission: Pipeline rejected — circular dependsOn detected")
-		return deny(fmt.Sprintf("Pipeline rejected: circular dependsOn detected — %v. "+
-			"Fix by removing one dependsOn reference to break the cycle.", err))
+			Msg("admission: Pipeline rejected — invalid environment ordering")
+		return deny(fmt.Sprintf("Pipeline rejected: %v", err))
 	}
 
 	log.Debug().

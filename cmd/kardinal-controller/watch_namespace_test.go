@@ -19,18 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 )
-
-// buildCacheOpts replicates the cache option logic from main() for unit testing.
-// This allows testing the namespace-scoped mode without starting a real manager.
-func buildCacheOpts(watchNamespace string) cache.Options {
-	opts := cache.Options{}
-	if watchNamespace != "" {
-		opts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
-	}
-	return opts
-}
 
 // TestWatchNamespaceFlagParsed verifies that when watchNamespace is set, the
 // cache options include the namespace in DefaultNamespaces (spec O1).
