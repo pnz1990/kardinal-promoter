@@ -146,10 +146,10 @@ environments:
 | `Healthy` | `Synced` to the promoted commit | `Succeeded` or `""` | **Healthy** |
 | `Healthy` | `Synced` to an older commit | any | Wait (`revision=<old>, waiting for <new>`) |
 | `Healthy` | `Synced` | `Running` | Wait (sync in progress) |
-| `Progressing`, `Missing` or `Suspended` | any | any | Wait → fails after timeout |
+| `Progressing`, `Missing` or `Suspended` | any | any | Wait → `onHealthFailure` at `health.timeout` |
 | any | `OutOfSync` | any | Wait (mid-sync) |
-| `Degraded` | any | any | Unhealthy (counts as a failure) → fails after timeout |
-| any | any | `Failed` or `Error` | Unhealthy (counts as a failure) → fails after timeout |
+| `Degraded` | any | any | Unhealthy (counts as a failure) → `onHealthFailure` at `health.timeout` |
+| any | any | `Failed` or `Error` | Unhealthy (counts as a failure) → `onHealthFailure` at `health.timeout` |
 | not found | — | — | Unhealthy (counts as a failure) |
 
 **Known limitations:**
@@ -259,10 +259,10 @@ environments:
 | `Progressing` | Wait | Canary steps running |
 | `Paused` | Wait | Waiting at a manual pause step |
 | `Healthy` | **Healthy** | All replicas on new image, analysis passed |
-| `Degraded` | Unhealthy → timeout → fail | Rollout failed / analysis failed |
-| Not found | Unhealthy → timeout → fail | Rollout CR not yet created |
+| `Degraded` | Unhealthy → `onHealthFailure` at `health.timeout` | Rollout failed / analysis failed |
+| Not found | Unhealthy → `onHealthFailure` at `health.timeout` | Rollout CR not yet created |
 
-**Degraded handling:** `Degraded` counts as a health failure (`status.consecutiveHealthFailures`, which a `RollbackPolicy` can act on) and the PromotionStep fails when `health.timeout` expires. The timeout sets `Failed`; `onHealthFailure` applies only to a terminal result or, with `bake.policy: fail-on-alarm`, to an alarm during the bake window.
+**Degraded handling:** `Degraded` counts as a health failure (`status.consecutiveHealthFailures`, which a `RollbackPolicy` can act on). It is not terminal, so `onHealthFailure` applies when `health.timeout` expires (`none` fails the step, `abort` sets AbortedByAlarm, `rollback` creates a rollback Bundle), or at once during a bake window with `bake.policy: fail-on-alarm`.
 
 The adapter checks the Rollout phase, not its revision: a Rollout still `Healthy` on the previous version can report Verified before the change reaches it. Use a `bake` window when that matters.
 
@@ -321,7 +321,7 @@ environments:
 | `Finalising` | Wait | Scaling down canary |
 | `Succeeded` | **Healthy** | Canary promoted — promotion Verified |
 | `Failed` | **Failed at once** | Canary analysis failed, Flagger rolled back |
-| Not found | Unhealthy → timeout → fail | Canary CR not found |
+| Not found | Unhealthy → `onHealthFailure` at `health.timeout` | Canary CR not found |
 
 **Failed handling:** a `Failed` phase is terminal, so `onHealthFailure` applies at once: `none` fails the step, `abort` sets AbortedByAlarm, and `rollback` creates a rollback Bundle for the previous version.
 

@@ -245,8 +245,9 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 
 // recordMergeCommit fills in status.mergeCommitSHA of a merged PR. It retries
 // for mergeCommitWindow after the merge was recorded; after that, or when the
-// SCM provider cannot report merge commits, the health check falls back to
-// checking the Bundle images.
+// SCM provider cannot report merge commits, the argocd and resource health
+// checks fall back to checking the Bundle images; the flux check has no such
+// fallback and does not compare revisions (see docs/health-adapters.md).
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
 	if prs.Status.MergeCommitSHA != "" || prs.Spec.PRNumber == 0 || !r.canGetMergeCommit() {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")

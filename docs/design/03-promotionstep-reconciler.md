@@ -100,7 +100,7 @@ The adapter is called repeatedly (every 10 seconds) until it returns Healthy, th
 When delegation is configured (`delivery.delegate: argoRollouts`), the health adapter watches the Rollout or Canary status instead of the Deployment. The adapter returns Healthy only when the progressive delivery rollout completes successfully.
 
 Transition to Verified: when the health adapter returns Healthy.
-Transition to Failed: when the health timeout expires or the delegate reports Degraded/Failed.
+Transition by `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack): when `health.timeout` expires without a Healthy result, or the adapter reports a terminal result (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`). An Argo Rollouts `Degraded` phase is unhealthy, not terminal: it is counted and reaches `onHealthFailure` through the timeout.
 
 ### State: Verified
 
@@ -196,7 +196,7 @@ func (r *PromotionStepReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 3. Call `adapter.Check(ctx, opts)` with `opts.ExpectedRevision` (the pushed or merged commit) and the Bundle images, so a healthy environment still on the previous revision is not Verified.
 4. If Healthy: set `status.state = "Verified"` (or start/advance the bake window), record evidence, copy to Bundle.
 5. If progressing: requeue after 10 seconds. If unhealthy: increment `status.consecutiveHealthFailures` and requeue. If terminal (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`): apply `onHealthFailure` at once.
-6. If `health.timeout` expired before the first healthy check: set `status.state = "Failed"` with reason "health check timeout after <timeout>; last result: ...". The timeout does not apply once the bake window has started.
+6. If `health.timeout` expired before the first healthy check: increment `status.consecutiveHealthFailures` and apply `onHealthFailure` with reason "health check timeout after <timeout>; last result: ...". A crash-looping image counts as progressing until the Deployment's `progressDeadlineSeconds`, so the timeout is what fails it (or rolls it back) when that deadline is longer. The timeout does not apply once the bake window has started.
 
 ## Evidence Collection
 

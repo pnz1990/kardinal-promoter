@@ -114,7 +114,7 @@ On a branch shared with other environments, a later commit can reach Argo CD bef
 | `operationState.phase = Failed` or `Error` | Unhealthy (counts as a health failure) |
 | Application not found | Unhealthy (counts as a health failure) |
 
-Waiting and unhealthy results both end in `Failed` when `health.timeout` expires. Only unhealthy results count toward `status.consecutiveHealthFailures`. See [Timings and failures](#timings-and-failures).
+Unhealthy results count toward `status.consecutiveHealthFailures`; waiting results do not. When `health.timeout` expires without a Healthy result, whichever of the two the last check returned, the timeout counts as one more health failure and applies `onHealthFailure`. See [Timings and failures](#timings-and-failures).
 
 ## Adapter: flux
 
@@ -143,10 +143,18 @@ health:
 |---|---|
 | `Ready=True`, generation matches, promoted commit applied | Healthy |
 | `Ready=True`, older commit applied | Wait |
-| `Ready=True`, a later commit applied (another push to the same branch reached Flux before it fetched ours) | Wait, then Failed at `health.timeout`: unlike `argocd`, this adapter has no image check to fall back on. Give each environment its own branch, or use the `resource` adapter |
+| `Ready=True`, a later commit applied (another push to the same branch reached Flux before it fetched ours) | Wait, then `onHealthFailure` at `health.timeout`: unlike `argocd`, this adapter has no image check to fall back on. Give each environment its own branch, or use the `resource` adapter |
 | `Ready=Unknown` (reconciling) or generation not observed yet | Wait |
 | `Ready=False` (reconciliation failed or stalled) | Unhealthy (counts as a health failure) |
 | Not found | Unhealthy (counts as a health failure) |
+
+**Known limitation: the commit is not always known.** The adapter compares `lastAppliedRevision` only when the controller knows the promoted commit. For a direct push that is the pushed commit. For a PR it is the merge commit, which the controller asks the SCM provider for after the merge. Until it has one, the check does not compare revisions, and a Kustomization that is `Ready=True` on the **previous** commit passes, so the step can be Verified before Flux applies the change. There is no image check to fall back on, unlike `argocd` and `resource`. The commit is unknown when:
+
+- the provider does not return one (for example an Azure DevOps PR without `lastMergeCommit`, or a Bitbucket PR whose `merge_commit` is empty);
+- the lookup keeps failing for 10 minutes after the merge, after which the controller stops asking;
+- the merge is reported by a webhook and the health check runs before the next poll records the merge commit.
+
+Until this is fixed, use `argocd` or `resource` where a stale Verified matters, or add a `bake` window longer than the Kustomization's `interval`: when Flux applies the change inside the window, any check that is not Healthy restarts the window (or, with `bake.policy: fail-on-alarm`, applies `onHealthFailure`).
 
 ## Adapter: argoRollouts
 
@@ -217,7 +225,7 @@ Every adapter reads objects through the reconciler's own Kubernetes client, so i
 
 | Setting | Value | Effect |
 |---|---|---|
-| `health.timeout` | default `10m` | Maximum time from entering HealthChecking to the **first** healthy check. When it expires the step fails with `health check timeout after <timeout>; last result: ...`. It stops applying once a `bake` window has started, so a bake longer than the timeout completes. |
+| `health.timeout` | default `10m` | Maximum time from entering HealthChecking to the **first** healthy check. When it expires it counts as a health failure (`status.consecutiveHealthFailures`) and applies `onHealthFailure`, with the message `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: ...`. It stops applying once a `bake` window has started, so a bake longer than the timeout completes. |
 | Check interval | 10s | A step is checked at most once every 10s, however often it is reconciled. |
 | `bake.minutes` | — | The environment must stay healthy for this long, contiguously, after the first healthy check. With `policy: reset-on-alarm` (default) an unhealthy check restarts the window. With `fail-on-alarm` it applies `onHealthFailure`. |
 
@@ -227,6 +235,8 @@ Each health check has one of four results:
 - **Waiting** — the promoted revision is still rolling out or syncing. It does not count as a failure.
 - **Unhealthy** — for example Degraded, `Ready=False`, not found, or replicas unavailable after the rollout finished. Each check increments `status.consecutiveHealthFailures`, which a `RollbackPolicy` you create reads (see [Rollback](rollback.md)).
 - **Failed** — Deployment `ProgressDeadlineExceeded` or Flagger canary `Failed`. `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
+
+Reaching `health.timeout` without a Healthy result is treated like a Failed result: it is counted and applies `onHealthFailure`. A new image that crash-loops is **Waiting**, not Unhealthy: Kubernetes reports the rollout as still progressing (`Progressing=True`, reason `ReplicaSetUpdated`) until the Deployment's `progressDeadlineSeconds` (default 600s) passes. Set `progressDeadlineSeconds` below `health.timeout` to fail such a rollout sooner; otherwise the timeout fails it.
 
 An error reading the target from the API server (not a "not found") is retried at the next interval and does not count as a failure.
 
