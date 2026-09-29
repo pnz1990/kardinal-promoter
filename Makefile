@@ -24,7 +24,7 @@ IMG      ?= $(IMG_REPO):$(IMG_TAG)
 KIND_CLUSTER ?= kardinal-e2e
 
 .PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration test-cover \
-        lint lint-local vet vuln generate manifests \
+        lint lint-local vet vuln generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
         install-kro setup-e2e-env setup-e2e-env-fast setup-multi-cluster-env eks-up eks-down \
         e2e-setup e2e-teardown kind-up kind-down \
@@ -91,7 +91,7 @@ vuln: $(GOVULNCHECK)
 
 ## Generate (CRD manifests + DeepCopy)
 ## IMPORTANT: Run 'make manifests generate' after any change to api/v1alpha1/ types,
-##            then commit the updated config/crd/bases/ and zz_generated.deepcopy.go.
+##            then commit the updated config/crd/bases/, docs/reference/api.md and zz_generated.deepcopy.go.
 ##            CI enforces this via the 'Check CRD and deepcopy are up to date' step.
 generate: $(CONTROLLER_GEN)
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
@@ -101,6 +101,12 @@ manifests: $(CONTROLLER_GEN)
 	rm -f chart/kardinal-promoter/crds/*.yaml
 	mkdir -p chart/kardinal-promoter/crds
 	cp config/crd/bases/*.yaml chart/kardinal-promoter/crds/
+	$(MAKE) api-docs
+
+## docs/reference/api.md is generated from config/crd/bases.
+## TestAPIReferenceIsUpToDate (hack/gen-api-docs, run by "go test ./...") fails when it is stale.
+api-docs: ## Regenerate docs/reference/api.md from the CRDs in config/crd/bases
+	$(GO) run ./hack/gen-api-docs --crds config/crd/bases --output docs/reference/api.md
 
 ## Install CRDs and chart into the CURRENT kube context, running $(IMG) (build and load it first)
 install: manifests ## Install CRDs and chart into the current kube context (image $(IMG_REPO):$(IMG_TAG))
