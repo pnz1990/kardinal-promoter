@@ -81,9 +81,9 @@ spec:
                     type: string
                   pathGlob:
                     description: |-
-                      PathGlob is an optional glob pattern for files to watch.
-                      Only commits that touch matching paths trigger Bundle creation.
-                      Empty string watches all paths.
+                      PathGlob is reserved for path filtering, which is not implemented.
+                      A non-empty value puts the Subscription in phase Error; leave it empty
+                      (every new commit on the branch creates a Bundle).
                     type: string
                   repoURL:
                     description: RepoURL is the HTTPS Git repository URL.
@@ -103,21 +103,31 @@ spec:
                       Uses Go duration format (e.g. "5m", "1h").
                     type: string
                   registry:
-                    description: Registry is the OCI registry URL (e.g. "ghcr.io/myorg/myapp").
+                    description: |-
+                      Registry is the image repository to poll, without a tag or digest
+                      (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or
+                      "http://localhost:5000/myapp" for a plain-HTTP registry). Only public
+                      repositories are supported: the watcher uses the registry's anonymous
+                      token flow and sends no credentials.
                     minLength: 1
                     type: string
                   tagFilter:
                     description: |-
                       TagFilter is an optional regular expression that image tags must match.
-                      Empty string matches all tags.
+                      Empty string matches all tags. With one matching tag its digest is
+                      tracked (a moving tag such as "^main$"); when every matching tag is a
+                      semantic version the highest wins; otherwise the most recently built
+                      image wins (at most 50 matching tags). No matching tag is an error.
                     type: string
                 required:
                 - registry
                 type: object
               namespace:
                 description: |-
-                  Namespace is the namespace where Bundles will be created.
-                  Defaults to the Subscription's own namespace.
+                  Namespace must be empty or equal to the Subscription's own namespace.
+                  Bundles are always created in the Subscription's namespace; any other
+                  value puts the Subscription in phase Error and creates no Bundle.
+                  Deprecated: leave empty.
                 type: string
               pipeline:
                 description: Pipeline is the name of the Pipeline CRD that Bundles
@@ -152,7 +162,8 @@ spec:
               lastSeenDigest:
                 description: |-
                   LastSeenDigest is the OCI digest or Git commit SHA from the last successful check.
-                  Used for deduplication — a new Bundle is only created when this changes.
+                  The first check only records it (no Bundle); a later check that sees a
+                  different value creates a Bundle.
                 type: string
               message:
                 description: Message provides a human-readable reason for the current

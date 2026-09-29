@@ -13,8 +13,22 @@ an artifact source on a configurable interval.
 
 | Type | Source | Trigger |
 |---|---|---|
-| `image` | OCI registry (ghcr.io, ECR, etc.) | New tag matching optional regex filter |
-| `git` | Git repository (HTTPS) | New commit on watched branch |
+| `image` | Public OCI registry repository (ghcr.io, Docker Hub, Quay, a plain-HTTP local registry) | A new artifact among the tags matching `tagFilter` (see [Tag selection](#tag-selection)) |
+| `git` | Public Git repository over smart HTTP(S) | New commit on the watched branch |
+
+Only **public** repositories are supported. The OCI watcher uses the registry's
+anonymous token flow and the Git watcher sends no credentials, so a private
+repository (or a registry that always requires credentials, such as ECR) puts the
+Subscription in phase `Error` with an "access denied" or "requires credentials"
+message. For private artifacts, create Bundles from CI with the Bundle webhook
+instead.
+
+Every request has a 30-second timeout.
+
+A Subscription creates Bundles only in its **own namespace**, for the Pipeline named
+in `spec.pipeline` in that namespace. `spec.namespace` is deprecated: leave it empty.
+Any value other than the Subscription's own namespace puts the Subscription in phase
+`Error` and creates no Bundle.
 
 ## Example: OCI Image Subscription
 
@@ -28,29 +42,61 @@ spec:
   type: image
   pipeline: my-app-pipeline
   image:
-    registry: ghcr.io/myorg/my-app
-    tagFilter: "^sha-"      # only tags starting with "sha-"
-    interval: 5m            # poll every 5 minutes
+    registry: ghcr.io/myorg/my-app      # no tag, no digest, no credentials
+    tagFilter: '^v\d+\.\d+\.\d+$'        # semantic version tags
+    interval: 5m                        # poll every 5 minutes (minimum 30s)
 ```
 
-When `ghcr.io/myorg/my-app` has a new tag matching `^sha-`, the controller creates:
+`registry` is a repository reference: `host/path`, a Docker Hub short name
+(`nginx`, `myorg/app`, `docker.io/library/nginx`), or a URL with an explicit
+`http://` or `https://` scheme for a local registry (`http://localhost:5000/my-app`).
+
+When `v1.4.0` is pushed after `v1.3.2`, the controller creates:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
 kind: Bundle
 metadata:
-  name: my-app-image-sha-abc1234
+  name: my-app-image-v1-4-0-3f2a9c1b     # <subscription>-<tag>-<first 8 digest chars>
   labels:
     kardinal.io/pipeline: my-app-pipeline
     kardinal.io/subscription: my-app-image
+    kardinal.io/source-digest: 3f2a9c1b...
 spec:
   type: image
   pipeline: my-app-pipeline
   images:
     - repository: ghcr.io/myorg/my-app
-      tag: sha-abc1234
-      digest: sha256:abc123...
+      tag: v1.4.0
+      digest: sha256:3f2a9c1b...
 ```
+
+Bundle names are lowercased and made DNS-safe (`Build_42` becomes `build-42`) and are
+at most 63 characters. The digest suffix means a re-pushed mutable tag (`latest`,
+`main`) gets a new Bundle rather than colliding with the previous one.
+
+## Tag selection
+
+The watcher lists the repository's tags, keeps those matching `tagFilter` (all tags
+when empty), and picks one artifact:
+
+| Matching tags | Selected | Registry requests per poll |
+|---|---|---|
+| Exactly one (for example `tagFilter: "^main$"`) | That tag; a new Bundle is created whenever its digest changes | tag list + 1 |
+| All are semantic versions (`1.2.3`, `v1.2.3`, pre-releases) | The highest version | tag list + 1 |
+| Anything else, up to 50 tags | The most recently built image (the image config `created` time) | tag list + about 2 per tag |
+| Anything else, more than 50 tags | Nothing: phase `Error` asking you to narrow `tagFilter` | tag list |
+| None | Nothing: phase `Error` ("no tag ... matches tagFilter") | tag list |
+
+Tags such as `sha-abc1234` are not ordered, so "most recently built" has to read every
+matching image and a busy repository soon passes the 50-tag limit. Prefer semantic
+version tags or a single moving tag. A moving tag is safe to promote: the Bundle
+records the digest, and the kustomize step writes that digest, not only the tag.
+Registries rate-limit anonymous clients (Docker Hub counts manifest reads), so keep
+the interval reasonable.
+
+When a multi-architecture index is used, the digest is the index digest and the build
+time comes from its `linux/amd64` image (or the first platform when there is none).
 
 ## Example: Git Repository Subscription
 
@@ -66,9 +112,14 @@ spec:
   git:
     repoURL: https://github.com/myorg/my-gitops-repo
     branch: main
-    pathGlob: "config/**"   # only commits touching config/ files
     interval: 5m
 ```
+
+Every new commit on `branch` creates a `config` Bundle named
+`<subscription>-<first 8 SHA chars>`. `pathGlob` is not implemented: a Subscription
+that sets it goes to phase `Error` instead of silently creating a Bundle for every
+commit. The repository must speak the Git smart HTTP protocol (GitHub, GitLab,
+Gitea, `git http-backend`); an empty advertisement or a missing branch is an error.
 
 ## Status Fields
 
@@ -77,21 +128,29 @@ spec:
 | `status.phase` | `Watching` \| `Error` |
 | `status.lastCheckedAt` | RFC3339 timestamp of last poll |
 | `status.lastBundleCreated` | Name of the last Bundle created |
-| `status.lastSeenDigest` | Digest/SHA from last successful check (deduplication) |
+| `status.lastSeenDigest` | Digest/SHA from the last successful check. The first check only records it. |
 | `status.message` | Error details when phase=Error |
 
 ## Deduplication
 
-The controller tracks `status.lastSeenDigest`. A Bundle is only created when the digest
-changes from the last known value. Multiple reconcile runs for the same digest do not
-create duplicate Bundles.
+The first poll records the current digest in `status.lastSeenDigest` as a baseline and
+creates no Bundle: an artifact that already existed when the Subscription was created is
+not promoted. Each later poll that sees a different digest creates one Bundle.
+
+Before creating a Bundle the controller also looks for an existing Bundle with the same
+`kardinal.io/subscription` and `kardinal.io/source-digest` labels, so a restart or two
+replicas polling at once do not create duplicates. If a Bundle with the generated name
+already exists for a different digest, the Subscription goes to phase `Error`.
+
+Bundles carry labels, not owner references: deleting a Subscription does not delete
+the Bundles it created or stop their promotions.
 
 ## Checking Subscription Status
 
 ```bash
 kubectl get subscriptions
 # NAME              TYPE    PIPELINE            PHASE     LAST-BUNDLE            AGE
-# my-app-image      image   my-app-pipeline     Watching  my-app-image-sha-abc   5m
+# my-app-image      image   my-app-pipeline     Watching  my-app-image-v1-4-0-3f2a9c1b   5m
 
 kubectl describe subscription my-app-image
 ```

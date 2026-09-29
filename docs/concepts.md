@@ -373,7 +373,7 @@ health:
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
-**Image Subscription** (watches OCI registries for new image tags):
+**Image Subscription** (watches a public OCI repository for new images):
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -385,7 +385,7 @@ spec:
   pipeline: my-app
   image:
     registry: ghcr.io/myorg/my-app
-    tagFilter: "^sha-"
+    tagFilter: "^main$"          # one moving tag: a new Bundle for each new digest
     interval: 5m
 ```
 
@@ -402,11 +402,13 @@ spec:
   git:
     repoURL: https://github.com/myorg/app-config
     branch: main
-    pathGlob: "configs/my-app/**"
     interval: 5m
 ```
 
-When a new image tag or Git commit is discovered, a Bundle of the appropriate type (`image` or `config`) is created automatically.
+The first poll records the current digest or commit as a baseline. After that, each new
+image or commit creates a Bundle of the matching type (`image` or `config`) in the
+Subscription's own namespace. Only public repositories are supported. See
+[Subscription](subscription.md) for tag selection rules and limits.
 
 ## Rendered Manifests
 

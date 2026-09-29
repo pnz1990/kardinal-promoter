@@ -130,8 +130,8 @@ spec:
   type: image
   image:
     registry: ghcr.io/myorg/my-app
-    tagFilter: "^1\\..*"         # semver-compatible regex
-  interval: 2m
+    tagFilter: '^1\.\d+\.\d+$'   # 1.x.y semantic versions; the highest is promoted
+    interval: 2m
 ```
 
 ---
@@ -159,6 +159,13 @@ kubectl get warehouse my-app -n kargo-demo -o yaml
 # Translate repoURL → spec.image.registry
 # Translate semverConstraint → spec.image.tagFilter (Go regex)
 ```
+
+When every tag matching `tagFilter` is a semantic version, the highest version is
+selected (Kargo `SemVer`). A filter that matches exactly one tag tracks that tag's
+digest (Kargo `Digest`). Other tag sets are ordered by image build time (Kargo
+`NewestBuild`), limited to 50 matching tags. Subscriptions only poll public
+repositories; Warehouses that use registry credentials should create Bundles from CI
+instead. See [Subscription](../subscription.md).
 
 ### Step 3: Remove Kargo `Promotion` objects (if any)
 
