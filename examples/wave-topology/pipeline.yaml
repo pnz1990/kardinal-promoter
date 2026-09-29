@@ -1,11 +1,13 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: rollouts-demo
+  name: wave-demo
   namespace: default
 spec:
   git:
-    url: https://github.com/pnz1990/kardinal-demo
+    # Placeholder: pnz1990/kardinal-demo has only test, uat and prod overlays.
+    # Point this at a repo with an environments/<name> overlay per environment.
+    url: https://github.com/myorg/gitops-repo
     branch: main
     layout: directory
     provider: github

@@ -77,11 +77,12 @@ This two-part check prevents a false positive where Flux reconciled the previous
 ```yaml
 health:
   type: flux
-  flux:
-    name: my-app-prod        # Kustomization name (required)
-    namespace: flux-system   # default: "flux-system"
   timeout: 20m               # default: 10m
 ```
+
+The adapter always looks for a Kustomization named `<pipeline>-<env>`
+(`kardinal-test-app-prod`) in the `flux-system` namespace. The name and
+namespace cannot be overridden.
 
 ## Validation
 

@@ -81,6 +81,9 @@ For a config Bundle, the `config-merge` step copies the environment's directory
 same directory in the GitOps repo. Nothing outside that directory is copied, and files
 deleted in the config commit are not deleted.
 
+[`examples/config-promotion/`](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/config-promotion)
+has a Pipeline and a config Bundle.
+
 ### Bundle intent
 
 The `spec.intent` field declares how far the Bundle should be promoted:

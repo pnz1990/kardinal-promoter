@@ -1,6 +1,7 @@
 # chart/templates/pipeline.yaml — Helm template for team Pipeline CRD.
 # Rendered by the ApplicationSet for each team folder.
 # Values come from teams/<name>/pipeline-values.yaml.
+# Each environment writes environments/<name> in gitRepo.
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
@@ -20,6 +21,6 @@ spec:
   {{- range .Values.environments }}
     - name: {{ .name }}
       path: environments/{{ .name }}
-      approvalMode: {{ .approval | default "auto" }}
+      approval: {{ .approval | default "auto" }}
   {{- end }}
   historyLimit: {{ .Values.historyLimit | default 10 }}

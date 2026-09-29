@@ -33,9 +33,11 @@ Thumbs.db
 *.out
 coverage.txt
 
-# Compiled binaries in repo root (standalone agent sometimes builds here)
+# Compiled binaries in the repo root. Anchored with a leading / so they do not
+# also match the cmd/kardinal*/ source directories.
 /kardinal-controller
 /kardinal
+/kardinal-agent
 
 # Worktree artifacts that must not land in main repo root
 CLAIM
@@ -50,7 +52,6 @@ terraform/.terraform/
 terraform/**/.terraform/
 terraform/eks-e2e/terraform.tfstate
 terraform/eks-e2e/terraform.tfstate.backup
-terraform/eks-e2e/.terraform.lock.hcl
 terraform/eks-e2e/terraform.tfvars
 # otherness working-tree artifacts — stored on _state branch
 .otherness/handoff.md

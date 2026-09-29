@@ -1,8 +1,6 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-//go:build ignore
-
 // hack/gen-cli-docs/main.go generates CLI reference documentation from the
 // kardinal Cobra command tree. It produces:
 //
@@ -15,7 +13,7 @@
 // Run:
 //
 //	go run ./hack/gen-cli-docs/main.go
-//	go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/
+//	go run ./hack/gen-cli-docs/main.go --output /tmp/cli/ --quickref /tmp/cli-reference.md
 //
 // Design ref: docs/design/41-published-docs-freshness.md §41.1
 package main
@@ -37,6 +35,7 @@ import (
 
 func main() {
 	outDir := flag.String("output", "docs/reference/cli/", "output directory for generated CLI docs")
+	quickRefPath := flag.String("quickref", "docs/cli-reference.md", "output file for the consolidated quick-reference page")
 	flag.Parse()
 
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
@@ -71,21 +70,17 @@ func main() {
 			old := filepath.Join(*outDir, e.Name())
 			newPath := filepath.Join(*outDir, newName)
 			if err := os.Rename(old, newPath); err != nil {
-				log.Printf("rename %s: %v", e.Name(), err)
+				log.Fatalf("rename %s: %v", e.Name(), err)
 			}
 		}
 	}
 
 	// Generate the consolidated quick-reference page (docs/cli-reference.md).
 	// This replaces the hand-authored version that was drifting out of sync.
-	// The output path is two levels up from the detail pages directory:
-	//   docs/reference/cli/ -> docs/reference/ -> docs/ -> docs/cli-reference.md
-	quickRefPath := filepath.Join(filepath.Dir(filepath.Clean(*outDir+"/../")), "cli-reference.md")
-	if err := genQuickReference(root, quickRefPath); err != nil {
-		log.Printf("warning: could not generate cli-reference.md: %v", err)
-	} else {
-		log.Printf("CLI quick-reference generated: %s", quickRefPath)
+	if err := genQuickReference(root, *quickRefPath); err != nil {
+		log.Fatalf("generate %s: %v", *quickRefPath, err)
 	}
+	log.Printf("CLI quick-reference generated: %s", *quickRefPath)
 
 	log.Printf("CLI docs generated in %s", *outDir)
 }
@@ -124,28 +119,26 @@ func genQuickReference(root *cobra.Command, outPath string) error {
 		return cmdEntries[i].name < cmdEntries[j].name
 	})
 
-	f, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	fmt.Fprintf(f, "# CLI Reference\n\n")
-	fmt.Fprintf(f, "<!-- AUTO-GENERATED — do not edit by hand.\n")
-	fmt.Fprintf(f, "     Run: go run ./hack/gen-cli-docs/main.go to regenerate.\n")
-	fmt.Fprintf(f, "     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
-	fmt.Fprintf(f, "!!! note \"Auto-generated\"\n")
-	fmt.Fprintf(f, "    Generated from the kardinal CLI source. Every command is documented.\n")
-	fmt.Fprintf(f, "    See [detailed reference pages](reference/cli/) for flags and examples.\n\n")
-	fmt.Fprintf(f, "| Command | Description |\n")
-	fmt.Fprintf(f, "|---|---|\n")
+	var b strings.Builder
+	b.WriteString("# CLI Reference\n\n")
+	b.WriteString("<!-- AUTO-GENERATED — do not edit by hand.\n")
+	b.WriteString("     Run: go run ./hack/gen-cli-docs/main.go to regenerate.\n")
+	b.WriteString("     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
+	b.WriteString("!!! note \"Auto-generated\"\n")
+	b.WriteString("    Generated from the kardinal CLI source. Every command is documented.\n")
+	b.WriteString("    See [detailed reference pages](reference/cli/) for flags and examples.\n\n")
+	b.WriteString("| Command | Description |\n")
+	b.WriteString("|---|---|\n")
 
 	for _, e := range cmdEntries {
-		fmt.Fprintf(f, "| [`%s`](%s) | %s |\n", e.name, e.link, e.desc)
+		fmt.Fprintf(&b, "| [`%s`](%s) | %s |\n", e.name, e.link, e.desc)
 	}
 
-	fmt.Fprintf(f, "\nFor full flag documentation, examples, and output formats, see the\n")
-	fmt.Fprintf(f, "[individual command pages](reference/cli/).\n")
+	b.WriteString("\nFor full flag documentation, examples, and output formats, see the\n")
+	b.WriteString("[individual command pages](reference/cli/).\n")
+	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", outPath, err)
+	}
 	return nil
 }
 
