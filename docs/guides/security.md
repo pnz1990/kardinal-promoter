@@ -388,7 +388,7 @@ rules:
 By default, no NetworkPolicy is applied. In environments with a NetworkPolicy-capable CNI (Calico, Cilium, etc.), enable the built-in policy to restrict the controller's network access:
 
 ```bash
-helm upgrade kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set networkPolicy.enabled=true
 ```
 
@@ -562,14 +562,14 @@ spec:
   duration: 2160h  # 90 days
   renewBefore: 360h
   dnsNames:
-    - kardinal-kardinal-promoter.kardinal-system.svc.cluster.local
+    - kardinal-promoter.kardinal-system.svc.cluster.local
   issuerRef:
     name: letsencrypt-prod  # your ClusterIssuer
     kind: ClusterIssuer
 ```
 
 ```yaml
-# 2. Mount the cert-manager Secret and configure Helm
+# 2. tls-values.yaml: mount the cert-manager Secret and point the controller at it
 controller:
   tlsCertFile: /etc/kardinal-tls/tls.crt
   tlsKeyFile: /etc/kardinal-tls/tls.key
@@ -583,7 +583,7 @@ controller:
       readOnly: true
 ```
 
-Or pass the file with `helm upgrade kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter -f tls-values.yaml`.
+Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -f tls-values.yaml`.
 The paths must point at a mounted certificate: if the files cannot be read, the controller
 exits at startup instead of serving plain HTTP.
 
