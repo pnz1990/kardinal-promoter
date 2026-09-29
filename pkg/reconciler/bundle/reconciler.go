@@ -27,7 +27,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -67,9 +66,8 @@ const (
 // Bundle condition types.
 const (
 	condReady = "Ready"
-	// condInvalidSpec is True when the Pipeline, the Bundle intent or the
-	// PolicyGates cannot be built into a Graph. A changed Pipeline retries the
-	// Bundle; for a Bundle that has a Graph, so does a successful recreate.
+	// condInvalidSpec is True when the Pipeline or the Bundle intent cannot be
+	// built into a Graph. A corrected Pipeline retries the Bundle.
 	condInvalidSpec = "InvalidSpec"
 	// condFailed is True while a PromotionStep has failed or kro rejected the Graph.
 	condFailed = "Failed"
@@ -231,9 +229,7 @@ func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 // Graph in place when the Pipeline spec changed (#626), recreates a Graph that
 // was deleted externally (#490), and mirrors the Graph's Accepted and Ready
 // conditions into the Bundle. It only changes b in memory; the caller patches.
-// The returned error is a failed re-translate or recreate; it wraps
-// graph.ErrInvalid when the Graph cannot be built (see handleSyncEvidence).
-// A successful re-translate or recreate clears InvalidSpec.
+// The returned error is a failed re-translate or recreate.
 func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) error {
 	if r.Translator == nil || r.GraphChecker == nil {
@@ -260,7 +256,6 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 			return fmt.Errorf("recreate graph %s: %w", name, tErr)
 		}
 		b.Status.GraphRef = graphName
-		meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
 		log.Info().Str("graph", graphName).Msg("graph recreated after external deletion")
 		return nil
 	}
@@ -335,9 +330,7 @@ func graphRejected(b *kardinalv1alpha1.Bundle) *metav1.Condition {
 //     it (ledger G6).
 //  4. Store the new hash in b (the caller patches it).
 //
-// On a transient translate error the stored hash is kept, so the update is
-// retried. On a graph.ErrInvalid error handleSyncEvidence stores the new hash
-// with the Bundle Failed, so only the next Pipeline change retries.
+// On a translate error the stored hash is kept, so the update is retried.
 func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline) error {
 	currentHash := pipelineSpecHashFor(pipeline)
@@ -362,7 +355,6 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		return fmt.Errorf("update graph for changed pipeline spec: %w", err)
 	}
 	b.Status.PipelineSpecHash = currentHash
-	meta.RemoveStatusCondition(&b.Status.Conditions, condInvalidSpec)
 	return nil
 }
 
@@ -621,15 +613,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	// while the Pipeline's freeze gate exists (see pkg/lifecycle/pause.go), so
 	// a paused Pipeline still gets its Graph and resumes where it stopped.
 	graphName, err := r.Translator.Translate(ctx, &pipeline, b)
-	if errors.Is(err, graph.ErrInvalid) {
-		// The Graph cannot be built from this Pipeline, Bundle and gates (a
-		// denied skip, custom steps, an invalid name or node ID). A retry
-		// fails the same way, so fail the Bundle with the reason.
-		return r.markInvalid(ctx, log, b, &pipeline, err)
-	}
 	if err != nil {
-		// An API or RBAC error (timeout, conflict, missing permission). Stay
-		// Available and retry with backoff; the condition shows the error.
+		// The Pipeline passed validation, so this is an API or RBAC error
+		// (timeout, conflict, missing permission). Stay Available and retry
+		// with backoff; the condition shows the error.
 		log.Error().Err(err).Msg("failed to translate bundle to graph")
 		patch := client.MergeFrom(b.DeepCopy())
 		if setBundleCondition(b, condReady, metav1.ConditionFalse, "TranslationError",
@@ -678,13 +665,25 @@ func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bun
 	return n, nil
 }
 
-// markInvalid fails a Bundle that has no Graph yet because its Pipeline,
-// intent or gates cannot be built into one. The Pipeline spec hash is stored,
-// so a changed Pipeline retries the Bundle (retryIfPipelineChanged).
+// markInvalid fails a Bundle whose Pipeline or intent cannot be built into a
+// Graph. The Pipeline spec hash is stored, so a changed Pipeline retries the
+// Bundle (retryIfPipelineChanged).
 func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle,
 	pipeline *kardinalv1alpha1.Pipeline, cause error) (ctrl.Result, error) {
+	reason := "InvalidIntent"
+	if cycleErr := graph.DetectCycle(pipeline); cycleErr != nil {
+		reason = "InvalidPipeline"
+		if strings.Contains(cycleErr.Error(), "circular dependency") {
+			reason = "CircularDependency"
+		}
+	}
+	msg := fmt.Sprintf("%v — apply a corrected Pipeline to retry", cause)
+
 	patch := client.MergeFrom(b.DeepCopy())
-	reason, msg, _ := setInvalid(b, pipeline, cause)
+	b.Status.Phase = phaseFailed
+	b.Status.PipelineSpecHash = pipelineSpecHashFor(pipeline)
+	setBundleCondition(b, condReady, metav1.ConditionFalse, "Failed", "promotion failed: "+msg)
+	setBundleCondition(b, condInvalidSpec, metav1.ConditionTrue, reason, msg)
 	if err := r.Status().Patch(ctx, b, patch); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -696,37 +695,6 @@ func (r *Reconciler) markInvalid(ctx context.Context, log zerolog.Logger, b *kar
 		fmt.Sprintf("promotion failed for pipeline %s: %s", b.Spec.Pipeline, msg))
 	observability.BundlesTotal.WithLabelValues(phaseFailed).Inc()
 	return ctrl.Result{}, nil
-}
-
-// setInvalid marks b Failed with InvalidSpec for cause, in memory, and stores
-// the hash of the Pipeline spec that failed, so the next Pipeline change
-// retries. The reason is CircularDependency or InvalidPipeline for a bad
-// environment order, GraphBuildFailed for a Translate error wrapping
-// graph.ErrInvalid, and InvalidIntent otherwise. changed reports whether the
-// InvalidSpec condition changed.
-//
-// Graph-first: a pure mutation of the in-memory Bundle before a status patch.
-func setInvalid(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline,
-	cause error) (reason, msg string, changed bool) {
-	reason = "InvalidIntent"
-	hint := "apply a corrected Pipeline to retry"
-	if errors.Is(cause, graph.ErrInvalid) {
-		reason = "GraphBuildFailed"
-		hint = "fix the Pipeline, Bundle or PolicyGate it names; a Pipeline change retries this Bundle"
-	}
-	if cycleErr := graph.DetectCycle(pipeline); cycleErr != nil {
-		reason = "InvalidPipeline"
-		if strings.Contains(cycleErr.Error(), "circular dependency") {
-			reason = "CircularDependency"
-		}
-	}
-	msg = fmt.Sprintf("%v — %s", cause, hint)
-
-	b.Status.Phase = phaseFailed
-	b.Status.PipelineSpecHash = pipelineSpecHashFor(pipeline)
-	setBundleCondition(b, condReady, metav1.ConditionFalse, "Failed", "promotion failed: "+msg)
-	changed = setBundleCondition(b, condInvalidSpec, metav1.ConditionTrue, reason, msg)
-	return reason, msg, changed
 }
 
 // retryIfPipelineChanged moves a Bundle that failed validation back to
@@ -772,11 +740,8 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 // Bundle.status.environments and, for an active Bundle, derives the phase:
 //   - Promoting → Failed when an environment failed or kro rejected the Graph;
 //   - Promoting → Verified when every environment the Graph promotes is Verified;
-//   - Promoting or Failed → Failed with InvalidSpec when syncErr wraps
-//     graph.ErrInvalid: the changed Pipeline or the gates cannot be built into
-//     a Graph, so a retry fails the same way;
-//   - Failed → Promoting when nothing is failing any more and the Graph builds
-//     (Superseded instead when a newer sibling is in flight or Verified).
+//   - Failed → Promoting when nothing is failing any more (Superseded instead
+//     when a newer sibling is in flight or Verified).
 //
 // before is b as read at the start of the reconcile; the status is patched
 // only when it changed, so an event with nothing new writes nothing.
@@ -798,22 +763,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	b.Status.Environments = environmentStatuses(b, pipeline, steps, now)
 
 	var after []func()
-	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
 	switch {
-	case invalidBuild:
-		wasFailed := before.Status.Phase == phaseFailed
-		reason, msg, changed := setInvalid(b, pipeline, syncErr)
-		setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "InvalidSpec", syncErr.Error())
-		if changed {
-			log.Warn().Str("reason", reason).Err(syncErr).Msg("bundle failed: graph cannot be built")
-			after = append(after, func() {
-				r.event(b, corev1.EventTypeWarning, "Failed",
-					fmt.Sprintf("promotion failed for pipeline %s: %s", b.Spec.Pipeline, msg))
-				if !wasFailed {
-					observability.BundlesTotal.WithLabelValues(phaseFailed).Inc()
-				}
-			})
-		}
 	case syncErr != nil:
 		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "UpdateFailed", syncErr.Error()) {
 			msg := syncErr.Error()
@@ -821,10 +771,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 				r.event(b, corev1.EventTypeWarning, "GraphSyncFailed", msg)
 			})
 		}
-	case meta.IsStatusConditionFalse(b.Status.Conditions, condGraphSynced) &&
-		!meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec):
-		// While InvalidSpec is True the Graph still has the spec before the
-		// failed change, so it is not current.
+	case meta.IsStatusConditionFalse(b.Status.Conditions, condGraphSynced):
 		setBundleCondition(b, condGraphSynced, metav1.ConditionTrue, "Synced", "graph is current")
 	}
 
@@ -860,7 +807,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			}
 		}
 	case phaseFailed:
-		if failedEnv == nil && rejected == nil && !meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
+		if failedEnv == nil && rejected == nil {
 			newer, err := r.hasNewerSibling(ctx, b, true)
 			switch {
 			case err != nil:
@@ -881,7 +828,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	result := soakRequeue(b)
-	if syncErr != nil && !invalidBuild {
+	if syncErr != nil {
 		log.Error().Err(syncErr).Msg("graph sync failed — requeuing")
 		result = ctrl.Result{RequeueAfter: requeueSlow}
 	}
