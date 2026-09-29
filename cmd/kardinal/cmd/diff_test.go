@@ -160,3 +160,54 @@ func TestTruncDigest(t *testing.T) {
 		assert.Equal(t, tc.expected, got, "input: %q", tc.input)
 	}
 }
+
+// C09a-cli-20: a digest-only image is not "(absent)", images that share a
+// repository are paired in order, provenance has its own header, and rows
+// that differ are marked.
+func TestFormatDiffTable_EdgeCases(t *testing.T) {
+	a := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "a"},
+		Spec: v1alpha1.BundleSpec{
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/org/app", Digest: "sha256:1111111111111111"},
+				{Repository: "ghcr.io/org/sidecar", Tag: "v1"},
+				{Repository: "ghcr.io/org/sidecar", Tag: "v7"},
+			},
+			Provenance: &v1alpha1.BundleProvenance{CommitSHA: "abcdef0123456", Author: "alice"},
+		},
+	}
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "b"},
+		Spec: v1alpha1.BundleSpec{
+			Images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/org/sidecar", Tag: "v1"},
+				{Repository: "ghcr.io/org/app", Tag: "v2"},
+				{Repository: "ghcr.io/org/sidecar", Tag: "v8"},
+				{Repository: "ghcr.io/org/new", Tag: "v1"},
+			},
+			Provenance: &v1alpha1.BundleProvenance{CommitSHA: "abcdef0123456", Author: "bob"},
+		},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, FormatDiffTable(&buf, a, b))
+	want := "" +
+		"ARTIFACT              BUNDLE-A (a)         BUNDLE-B (b)   CHANGED\n" +
+		"ghcr.io/org/app       -                    v2             *\n" +
+		"  digest              sha256:11111111...   --             *\n" +
+		"ghcr.io/org/sidecar   v1                   v1\n" +
+		"ghcr.io/org/sidecar   v7                   v8             *\n" +
+		"ghcr.io/org/new       (absent)             v1             *\n" +
+		"PROVENANCE\n" +
+		"  commit              abcdef01             abcdef01\n" +
+		"  author              alice                bob            *\n"
+	assert.Equal(t, want, buf.String())
+}
+
+func TestFormatDiffTable_NoProvenance(t *testing.T) {
+	a := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "a"},
+		Spec: v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "nginx", Tag: "1.25"}}}}
+	var buf bytes.Buffer
+	require.NoError(t, FormatDiffTable(&buf, a, a))
+	assert.Equal(t, "ARTIFACT   BUNDLE-A (a)   BUNDLE-B (a)   CHANGED\nnginx      1.25           1.25\n", buf.String())
+}

@@ -6,8 +6,10 @@ Open the kardinal UI dashboard in a browser (Kargo parity)
 
 Open the embedded kardinal UI in the default system browser.
 
-The UI is served by the controller at /ui/ (default port 8082).
-Uses port-forwarding to access the controller's UI port from localhost.
+The UI is served by the controller at /ui/ (default port 8082). This command
+only prints and opens the URL (default http://localhost:8082/ui/); it does not
+port-forward. For an in-cluster controller, start a kubectl port-forward to
+port 8082 first (see "Accessing the UI" in docs/installation.md).
 
 Example:
   kardinal dashboard
@@ -31,7 +33,7 @@ kardinal dashboard [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO

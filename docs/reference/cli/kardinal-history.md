@@ -9,10 +9,11 @@ were promoted to which environments and when.
 
 Output columns:
   BUNDLE      Bundle name
-  ACTION      promote or rollback
+  ACTION      promote, or rollback when the Bundle is a rollback Bundle
   ENV         Target environment
   PR          Pull request number or --
-  DURATION    Time to complete (from step creation to Verified)
+  DURATION    Time from step creation to Verified (or to its last completed
+              step when it failed); ... while running, -- when unknown
   TIMESTAMP   When the step was created
 
 ```
@@ -33,7 +34,7 @@ kardinal history <pipeline> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO

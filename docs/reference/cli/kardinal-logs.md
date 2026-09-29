@@ -13,7 +13,8 @@ For each active PromotionStep, shows:
   - Conditions from the status
 
 Use --follow (-f) to stream step progress in real time, polling every 2 seconds
-until all steps reach a terminal state (Verified, Failed, or Superseded).
+until all steps reach a terminal state (Verified, Failed, or AbortedByAlarm).
+Each state change is printed once.
 
 Example:
   kardinal logs nginx-demo
@@ -40,7 +41,7 @@ kardinal logs <pipeline> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO

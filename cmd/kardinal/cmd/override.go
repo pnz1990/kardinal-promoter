@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -117,11 +119,22 @@ func overrideFn(
 		CreatedBy: createdBy,
 	}
 
-	// Patch: append override to spec.overrides
-	patch := sigs_client.MergeFrom(gate.DeepCopy())
-	gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-	if patchErr := c.Patch(ctx, &gate, patch); patchErr != nil {
-		return fmt.Errorf("patch policygate %s: %w", gateName, patchErr)
+	// Append to spec.overrides. A merge patch replaces the whole list, so it
+	// carries the resourceVersion and is retried on conflict: a concurrent
+	// override is re-read, not overwritten.
+	appendErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		patch := sigs_client.MergeFromWithOptions(gate.DeepCopy(), sigs_client.MergeFromWithOptimisticLock{})
+		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+		err := c.Patch(ctx, &gate, patch)
+		if apierrors.IsConflict(err) {
+			if getErr := c.Get(ctx, sigs_client.ObjectKeyFromObject(&gate), &gate); getErr != nil {
+				return getErr
+			}
+		}
+		return err
+	})
+	if appendErr != nil {
+		return fmt.Errorf("patch policygate %s: %w", gateName, appendErr)
 	}
 
 	stageInfo := "all stages"

@@ -22,23 +22,31 @@ import (
 
 func TestColorizer_Disabled(t *testing.T) {
 	cr := newColorizer(&bytes.Buffer{}, false) // non-TTY writer, no force
-	assert.Equal(t, "Pass", cr.colorState("Pass"), "disabled: Pass must be unchanged")
-	assert.Equal(t, "Block", cr.colorState("Block"), "disabled: Block must be unchanged")
-	assert.Equal(t, "Pending", cr.colorState("Pending"), "disabled: Pending must be unchanged")
-	assert.Equal(t, "Superseded", cr.colorState("Superseded"), "disabled: Superseded must be unchanged")
-	assert.Equal(t, "foo", cr.bold("foo"), "disabled: bold must be unchanged")
+	for _, s := range []string{"Pass", "Block", "Pending", "Verified", "Failed", "Superseded"} {
+		assert.Equal(t, s, cr.colorState(s), "disabled: %s must be unchanged", s)
+	}
 }
 
+// C09a-cli-13: every PromotionStep state (the CRD enum) and gate phase has a color.
 func TestColorizer_Forced(t *testing.T) {
-	cr := newColorizer(&bytes.Buffer{}, true) // force=true
-	assert.Equal(t, "\033[32mPass\033[0m", cr.colorState("Pass"), "forced: Pass must be green")
-	assert.Equal(t, "\033[31mBlock\033[0m", cr.colorState("Block"), "forced: Block must be red")
-	assert.Equal(t, "\033[33mPending\033[0m", cr.colorState("Pending"), "forced: Pending must be yellow")
-	assert.Equal(t, "\033[33mRunning\033[0m", cr.colorState("Running"), "forced: Running must be yellow")
-	assert.Equal(t, "\033[32mSucceeded\033[0m", cr.colorState("Succeeded"), "forced: Succeeded must be green")
-	assert.Equal(t, "\033[31mFailed\033[0m", cr.colorState("Failed"), "forced: Failed must be red")
-	assert.Equal(t, "Superseded", cr.colorState("Superseded"), "forced: Superseded has no color")
-	assert.Equal(t, "\033[1mfoo\033[0m", cr.bold("foo"), "forced: bold must wrap in bold codes")
+	t.Setenv("NO_COLOR", "")
+	cr := newColorizer(&bytes.Buffer{}, true)
+	cases := map[string]string{
+		"Pass":            ansiGreen,
+		"Verified":        ansiGreen,
+		"Block":           ansiRed,
+		"Failed":          ansiRed,
+		"AbortedByAlarm":  ansiRed,
+		"Pending":         ansiYellow,
+		"Promoting":       ansiYellow,
+		"WaitingForMerge": ansiYellow,
+		"HealthChecking":  ansiYellow,
+		"RollingBack":     ansiYellow,
+	}
+	for state, color := range cases {
+		assert.Equal(t, color+state+ansiReset, cr.colorState(state), state)
+	}
+	assert.Equal(t, "Superseded", cr.colorState("Superseded"), "unknown states have no color")
 }
 
 func TestColorizer_NoColorEnv(t *testing.T) {

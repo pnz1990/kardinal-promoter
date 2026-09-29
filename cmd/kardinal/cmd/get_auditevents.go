@@ -112,10 +112,7 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 	_, _ = fmt.Fprintln(tw, "TIMESTAMP\tPIPELINE\tBUNDLE\tENV\tACTION\tOUTCOME\tMESSAGE")
 	for _, ae := range events {
 		ts := ae.Spec.Timestamp.UTC().Format("2006-01-02T15:04Z")
-		msg := ae.Spec.Message
-		if len(msg) > 50 {
-			msg = msg[:47] + "..."
-		}
+		msg := truncateRunes(ae.Spec.Message, 50)
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			ts,
 			ae.Spec.PipelineName,

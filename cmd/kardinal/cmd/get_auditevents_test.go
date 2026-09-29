@@ -179,11 +179,6 @@ func TestGetAuditEventsFn_Limit(t *testing.T) {
 		})
 	}
 
-	clientObjs := make([]runtime.Object, len(objs))
-	for i := range objs {
-		clientObjs[i] = &objs[i]
-	}
-
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 		&objs[0], &objs[1], &objs[2], &objs[3], &objs[4],
 	).Build()
