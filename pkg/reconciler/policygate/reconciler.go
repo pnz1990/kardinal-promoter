@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -35,6 +37,9 @@ const (
 	labelEnvironment = "kardinal.io/environment"
 	// labelPipeline is the pipeline the gate is associated with.
 	labelPipeline = "kardinal.io/pipeline"
+	// conditionReady is the gate condition whose lastTransitionTime marks when
+	// the gate last flipped between allowed and blocked.
+	conditionReady = "Ready"
 	// defaultRecheckInterval is used when gate.Spec.RecheckInterval is empty or invalid.
 	defaultRecheckInterval = 5 * time.Minute
 	// historyLimit is the number of recent Bundles to include in history stats.
@@ -158,9 +163,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
-	// Emit Prometheus metric. Only emit on state changes to avoid double-counting
-	// on re-reconcile with the same result. We check whether ready actually changed
-	// by comparing to the previous status before the patch.
+	// Emit Prometheus metric. This counts every evaluation, including rechecks
+	// with an unchanged result; it is a rate of evaluations, not of transitions.
 	gateResult := "blocked"
 	if pass {
 		gateResult = "allowed"
@@ -206,8 +210,15 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 	}
 
 	// Patch status to reflect the validation result. ready=false for templates
-	// (only instances are evaluated against a real bundle context and may become ready=true).
-	if patchErr := r.patchStatus(ctx, gate, false, reason); patchErr != nil {
+	// (only instances are evaluated against a real bundle context and may become
+	// ready=true). A template is not evaluated, so lastEvaluatedAt stays unset and
+	// no Ready condition, audit record or Blocked event is written: a template is
+	// not blocking anything (C04-gates-11).
+	patch := client.MergeFrom(gate.DeepCopy())
+	gate.Status.Ready = false
+	gate.Status.Reason = reason
+	gate.Status.LastEvaluatedAt = nil
+	if patchErr := r.Status().Patch(ctx, gate, patch); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch template gate status: %w", patchErr)
 	}
 
@@ -609,11 +620,32 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	ready bool, reason string) error {
 	prevReady := gate.Status.Ready
 	isFirstEval := gate.Status.LastEvaluatedAt == nil
+	// blockedSince is when the current blocking episode started, read before
+	// the condition is updated.
+	var blockedSince time.Time
+	if c := meta.FindStatusCondition(gate.Status.Conditions, conditionReady); c != nil && c.Status == metav1.ConditionFalse {
+		blockedSince = c.LastTransitionTime.Time
+	}
 	patch := client.MergeFrom(gate.DeepCopy())
 	now := metav1.NewTime(r.now())
 	gate.Status.Ready = ready
 	gate.Status.Reason = reason
 	gate.Status.LastEvaluatedAt = &now
+	// The Ready condition's lastTransitionTime moves only when the gate flips,
+	// unlike lastEvaluatedAt, so it identifies one blocking episode. The
+	// NotificationHook reconciler keys PolicyGate.Blocked on it.
+	cond := metav1.Condition{
+		Type:               conditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             "Blocked",
+		Message:            truncateMessage(reason),
+		ObservedGeneration: gate.Generation,
+		LastTransitionTime: now,
+	}
+	if ready {
+		cond.Status, cond.Reason = metav1.ConditionTrue, "Allowed"
+	}
+	meta.SetStatusCondition(&gate.Status.Conditions, cond)
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("status patch: %w", err)
 	}
@@ -643,16 +675,36 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 					envName, pipeline, gate.Name))
 		}
 	}
-	// Emit gate blocking duration when gate transitions from blocked to allowed.
-	// Uses CreationTimestamp as the upper-bound proxy for blocking duration.
-	// A FirstBlockedAt status field would give exact duration; tracked in design doc 15.
-	if ready && !prevReady {
-		blockingDuration := r.now().Sub(gate.CreationTimestamp.Time)
+	// Emit gate blocking duration when gate transitions from blocked to allowed:
+	// the time since the Ready condition turned False. A gate that passes on
+	// its first evaluation was never blocked and is not observed. Gates
+	// evaluated before the condition existed fall back to CreationTimestamp
+	// (C04-gates-32).
+	if ready && !prevReady && !isFirstEval {
+		if blockedSince.IsZero() {
+			blockedSince = gate.CreationTimestamp.Time
+		}
+		blockingDuration := now.Sub(blockedSince)
 		if blockingDuration > 0 {
 			observability.GateBlockingDurationSeconds.Observe(blockingDuration.Seconds())
 		}
 	}
 	return nil
+}
+
+// maxConditionMessage bounds the Ready condition message; a CEL error can be long.
+const maxConditionMessage = 1024
+
+// truncateMessage shortens msg to maxConditionMessage bytes on a rune boundary.
+func truncateMessage(msg string) string {
+	if len(msg) <= maxConditionMessage {
+		return msg
+	}
+	cut := maxConditionMessage
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
 }
 
 // now returns the current time, using NowFn if set (for testing).

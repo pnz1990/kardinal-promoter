@@ -182,6 +182,9 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 		types.NamespacedName{Name: "no-weekend-template", Namespace: "platform-policies"}, &got))
 	assert.Contains(t, got.Status.Reason, "valid CEL syntax",
 		"valid template must indicate valid syntax in status.reason")
+	// A template is not evaluated against a bundle (C04-gates-11).
+	assert.Nil(t, got.Status.LastEvaluatedAt, "template must not look evaluated")
+	assert.Empty(t, got.Status.Conditions, "template must not carry a Ready condition")
 }
 
 // TestPolicyGateReconciler_RequeueAfterRecheckInterval verifies RequeueAfter.

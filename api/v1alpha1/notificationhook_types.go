@@ -69,8 +69,6 @@ type NotificationHookSpec struct {
 // NotificationHookStatus defines the observed state of a NotificationHook.
 type NotificationHookStatus struct {
 	// LastSentAt is the RFC3339 timestamp of the last successful webhook delivery.
-	// Used for idempotency: the reconciler will not re-deliver the same event if
-	// lastEvent and lastSentAt match the current event key.
 	// +optional
 	LastSentAt string `json:"lastSentAt,omitempty"`
 
@@ -79,9 +77,29 @@ type NotificationHookStatus struct {
 	LastEvent string `json:"lastEvent,omitempty"`
 
 	// LastEventKey is a deterministic string identifying the last delivered event
-	// (e.g. "Bundle.Verified/nginx-demo-abc123"). Used for idempotency.
+	// (e.g. "Bundle.Verified/nginx-demo-abc123"). Idempotency uses
+	// processedEventKeys; this field is informational.
 	// +optional
 	LastEventKey string `json:"lastEventKey,omitempty"`
+
+	// ObservedGeneration is the hook generation the controller last reconciled.
+	// Zero means the hook was never reconciled. On that first reconcile only the
+	// newest qualifying event that already exists is delivered; older ones are
+	// recorded as processed rather than backfilled.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ProcessedEventKeys lists the keys of the qualifying events that were
+	// delivered, or given up on after the retry limit. Each event is delivered
+	// once. The list is pruned to events that still qualify, so it stays bounded.
+	// +optional
+	ProcessedEventKeys []string `json:"processedEventKeys,omitempty"`
+
+	// FailedAttempts counts consecutive failed deliveries. The controller retries
+	// with exponential backoff and gives up on an event after 10 attempts.
+	// Reset to zero on a successful delivery.
+	// +optional
+	FailedAttempts int32 `json:"failedAttempts,omitempty"`
 
 	// FailureMessage records the last webhook delivery failure, if any.
 	// Cleared on next successful delivery.
