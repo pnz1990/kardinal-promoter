@@ -319,6 +319,116 @@ func TestLifecycle_TransientTranslateErrorIsRetried(t *testing.T) {
 	assert.Equal(t, "Promoting", lcGet(t, c, "app-v1").Status.Phase)
 }
 
+// errTranslator returns err while it is set and counts its calls.
+type errTranslator struct {
+	err   error
+	calls int
+}
+
+func (m *errTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
+	m.calls++
+	if m.err != nil {
+		return "", m.err
+	}
+	return "app-" + b.Name, nil
+}
+
+// C02-bundle-05, C02-bundle-10: a Translate error that wraps graph.ErrInvalid
+// (a denied skip, custom steps, an invalid name or node ID) is permanent, so
+// it fails the Bundle with InvalidSpec instead of retrying forever, on each
+// path that translates: the first Graph (Available), the re-translate after a
+// Pipeline change, and the recreate of a deleted Graph. The Bundle stays
+// Failed without re-translating until something changes, and recovers once
+// the Graph builds.
+func TestLifecycle_InvalidGraphBuildFailsBundle(t *testing.T) {
+	buildErr := fmt.Errorf("translator.Translate: build: %w",
+		fmt.Errorf("skip denied for environment %q: %w", "uat", graph.ErrInvalid))
+	tests := []struct {
+		name  string
+		phase string
+		// hash is the stored PipelineSpecHash; "" for a Bundle not yet translated.
+		hash    string
+		checker bundle.GraphChecker
+		// changePipeline is true when the fix is a Pipeline change; otherwise
+		// the next reconcile retries (the recreate path translates each time).
+		changePipeline bool
+		// wantCalls is the total number of Translate calls at the end.
+		wantCalls int
+	}{
+		{name: "first graph of an available bundle", phase: "Available",
+			checker: existsChecker{}, changePipeline: true, wantCalls: 2},
+		{name: "re-translate after a pipeline change", phase: "Promoting", hash: "hash-of-an-older-spec",
+			checker: existsChecker{}, changePipeline: true, wantCalls: 2},
+		// graphStatusReader{} never finds the Graph, so each of the four
+		// reconciles recreates it.
+		{name: "recreate of a deleted graph", phase: "Promoting",
+			checker: &graphStatusReader{}, wantCalls: 4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			b := lcBundle("app-v1", "image", tc.phase, time.Now().UTC())
+			if tc.phase != "Available" {
+				b.Status.GraphRef = "app-app-v1"
+				b.Status.PipelineSpecHash = tc.hash
+			}
+			c := lcClient(lcPipeline("app", lcEnvs("test", "uat")...), b)
+			tr := &errTranslator{err: buildErr}
+			r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: tc.checker}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"}}
+
+			res, err := r.Reconcile(ctx, req)
+			require.NoError(t, err, "a permanent build error is not retried with backoff")
+			assert.Zero(t, res.RequeueAfter, "a permanent build error is not requeued")
+			require.Equal(t, 1, tr.calls)
+			got := lcGet(t, c, "app-v1")
+			assert.Equal(t, "Failed", got.Status.Phase)
+			inv := meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec")
+			require.NotNil(t, inv)
+			assert.Equal(t, metav1.ConditionTrue, inv.Status)
+			assert.Equal(t, "GraphBuildFailed", inv.Reason)
+			assert.Contains(t, inv.Message, `skip denied for environment "uat"`)
+			ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, ready)
+			assert.Equal(t, "Failed", ready.Reason)
+			assert.NotEqual(t, "hash-of-an-older-spec", got.Status.PipelineSpecHash,
+				"the hash of the failed spec is stored, so a Pipeline change retries")
+			if tc.phase != "Available" {
+				synced := meta.FindStatusCondition(got.Status.Conditions, "GraphSynced")
+				require.NotNil(t, synced)
+				assert.Equal(t, metav1.ConditionFalse, synced.Status)
+				assert.Equal(t, "InvalidSpec", synced.Reason)
+			}
+
+			// Nothing changed: the Bundle stays Failed and is not rewritten.
+			rv := got.ResourceVersion
+			lcReconcile(t, r, "app-v1")
+			got = lcGet(t, c, "app-v1")
+			assert.Equal(t, "Failed", got.Status.Phase, "an invalid build does not recover by itself")
+			assert.Equal(t, rv, got.ResourceVersion)
+			if tc.changePipeline {
+				assert.Equal(t, 1, tr.calls, "the same spec is not translated again")
+			}
+
+			// The user fixes the cause; the Graph builds and the Bundle promotes.
+			tr.err = nil
+			if tc.changePipeline {
+				var pl kardinalv1alpha1.Pipeline
+				require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "app", Namespace: "default"}, &pl))
+				pl.Spec.Environments = lcEnvs("test", "uat", "prod")
+				require.NoError(t, c.Update(ctx, &pl))
+			}
+			for range 2 {
+				lcReconcile(t, r, "app-v1")
+			}
+			got = lcGet(t, c, "app-v1")
+			assert.Equal(t, "Promoting", got.Status.Phase)
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
+			assert.Equal(t, tc.wantCalls, tr.calls)
+		})
+	}
+}
+
 // C02-bundle-06: a Bundle with intent.targetEnvironment finishes when the
 // environments up to the target are Verified.
 func TestLifecycle_TargetEnvironmentBundleFinishes(t *testing.T) {
