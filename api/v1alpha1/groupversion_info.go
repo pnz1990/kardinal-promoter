@@ -16,8 +16,9 @@ var (
 	// GroupVersion is the group version for all kardinal-promoter CRDs.
 	GroupVersion = schema.GroupVersion{Group: "kardinal.io", Version: "v1alpha1"}
 
-	// SchemeBuilder is used to register types with the scheme.
-	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
+	// SchemeBuilder is used to register types with the scheme. controller-runtime
+	// v0.24 deprecates this helper for api packages; kro's api package uses it too.
+	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion} //nolint:staticcheck // SA1019, see above
 
 	// AddToScheme adds all v1alpha1 types to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
