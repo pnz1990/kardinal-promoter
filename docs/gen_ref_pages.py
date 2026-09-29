@@ -40,8 +40,9 @@ else:
 | `kardinal policy simulate` | Simulate PolicyGate evaluation |
 | `kardinal policy test` | Test a CEL expression |
 | `kardinal policy list` | List active PolicyGate instances |
-| `kardinal pause` | Pause promotion for a pipeline |
+| `kardinal pause` | Pause a pipeline: no new step starts, in-flight steps hold at the next safe point |
 | `kardinal resume` | Resume promotion for a pipeline |
 | `kardinal rollback` | Roll back an environment to a previous bundle |
-| `kardinal approve` | Manually approve a Bundle for an environment |
+| `kardinal promote` | Promote the Bundle verified upstream into an environment |
+| `kardinal override` | Force-pass a PolicyGate with an audit record |
 """)

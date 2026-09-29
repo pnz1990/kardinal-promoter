@@ -477,7 +477,7 @@ human reviewer confirms the diff and gate compliance before the change lands.
 
 ### Missing `historyLimit`
 
-The default `historyLimit: 20` retains 20 Bundles per Pipeline. In high-frequency
+The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In high-frequency
 pipelines (multiple deployments per day), reduce this to `5`. The Git audit trail in
 GitHub is permanent regardless — only the CRD state in etcd is bounded.
 

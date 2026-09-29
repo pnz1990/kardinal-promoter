@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -441,6 +442,34 @@ func TestLifecycle_FinishedBundleFreesCapSlot(t *testing.T) {
 			assert.Equal(t, "Promoting", lcGet(t, c, "app-v2").Status.Phase)
 		})
 	}
+}
+
+// C02-bundle-03: when the Bundle list for the cap cannot be read, the Bundle
+// waits and the error is retried; it does not start promoting past the cap.
+func TestLifecycle_CapListErrorDoesNotSkipCap(t *testing.T) {
+	p := lcPipeline("app", lcEnvs("test")...)
+	p.Spec.MaxConcurrentPromotions = 1
+	t0 := time.Now().UTC().Add(-time.Hour)
+	c := indexedBuilder(newScheme()).
+		WithObjects(p, lcBundle("app-v1", "config", "Promoting", t0),
+			lcBundle("app-v2", "config", "Available", t0.Add(30*time.Minute))).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*kardinalv1alpha1.BundleList); ok {
+					return apierrors.NewServiceUnavailable("etcd leader change")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	tr := &countingTranslator{}
+	r := &bundle.Reconciler{Client: c, Translator: tr}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "app-v2", Namespace: "default"},
+	})
+	require.Error(t, err, "a failed read is retried, not treated as a free slot")
+	assert.Equal(t, 0, tr.calls, "no Graph is created past the cap")
+	assert.Equal(t, "Available", lcGet(t, c, "app-v2").Status.Phase)
 }
 
 // C02-bundle-04: within the same second the created-at annotation, not the

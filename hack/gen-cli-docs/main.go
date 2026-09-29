@@ -98,7 +98,9 @@ func genQuickReference(root *cobra.Command, outPath string) error {
 	var cmdEntries []cmdEntry
 	var walk func(cmd *cobra.Command, prefix string)
 	walk = func(cmd *cobra.Command, prefix string) {
-		if cmd.Hidden || cmd.Name() == "help" {
+		// Deprecated commands are skipped, as doc.GenMarkdownTree skips them,
+		// so every row links to a generated page.
+		if cmd.Hidden || cmd.Deprecated != "" || cmd.Name() == "help" {
 			return
 		}
 		fullName := strings.TrimSpace(prefix + " " + cmd.Name())

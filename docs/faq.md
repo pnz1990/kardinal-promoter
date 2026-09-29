@@ -131,14 +131,17 @@ Each reconciler is idempotent and safe to re-run after a crash.
 
 ### How do I manually approve a blocked bundle?
 
-Use `kardinal approve` to patch the Bundle with an approval label, which bypasses
-upstream gate requirements:
+Force-pass the blocking PolicyGate with `kardinal override`. It records who
+overrode the gate, why, and until when:
 
 ```bash
-kardinal approve <bundle-name> --env prod
+kardinal override <pipeline> --stage prod --gate <gate-name> \
+  --reason "hotfix for INC-123" --expires-in 1h
 ```
 
-See [CLI Reference](cli-reference.md#kardinal-approve) for full options.
+`kardinal approve` is deprecated: the label it set was never read by any gate,
+so it bypassed nothing. It now exits with an error that points to
+`kardinal override`. See [kardinal override](reference/cli/kardinal-override.md).
 
 ### How do I pause a promotion mid-flight?
 
@@ -146,8 +149,10 @@ See [CLI Reference](cli-reference.md#kardinal-approve) for full options.
 kardinal pause <pipeline>
 ```
 
-This prevents new Graphs from advancing. Existing in-flight PRs are not closed.
-Resume with `kardinal resume <pipeline>`.
+No new promotion step starts, and a step that has not opened its PR yet holds
+before its next git step. Steps waiting for a PR merge or running health checks
+finish, and open PRs are not closed. Resume with `kardinal resume <pipeline>`;
+held steps continue where they stopped. See [Pause and Resume](rollback.md#pause-and-resume).
 
 ### What triggers a rollback?
 

@@ -60,7 +60,7 @@ spec:
         - uses: <string>                # Step name (built-in or custom)
           config: <map>                 # Step-specific configuration (for custom steps: url, timeout)
 
-  historyLimit: <int>                   # Number of Bundles to retain (default: 20)
+  historyLimit: <int>                   # Number of Bundles to retain (default: 50)
 ```
 
 ## Field Details
@@ -104,9 +104,21 @@ spec:
 
 ### spec.historyLimit
 
-Number of Bundles (and their associated Graph objects) to retain per Pipeline. Older Bundles are garbage-collected. The Git PR history is permanent regardless of this setting.
+Number of finished Bundles (Verified, Failed or Superseded) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
 
-Default: 20.
+Default: 50.
+
+### spec.paused
+
+When `true`, no PromotionStep of the Pipeline leaves `Pending`, and a step in `Promoting` holds before its next git step. Steps waiting for a PR merge or running a health check finish. The controller keeps a freeze PolicyGate named `freeze-<pipeline>` while the Pipeline is paused. `kardinal pause` / `kardinal resume` and the UI set this field. See [Pause and Resume](rollback.md#pause-and-resume).
+
+Default: `false`.
+
+### spec.maxConcurrentPromotions
+
+Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.
+
+Default: `0`.
 
 ## Health Check Defaults
 

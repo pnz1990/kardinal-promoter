@@ -592,8 +592,10 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	if limit := pipeline.Spec.MaxConcurrentPromotions; limit > 0 {
 		active, err := r.countPromoting(ctx, b)
 		if err != nil {
-			log.Warn().Err(err).Msg("maxConcurrentPromotions: failed to list bundles (non-fatal, skipping cap)")
-		} else if active >= limit {
+			// A failed read is not a free slot: retry instead of promoting past the cap.
+			return ctrl.Result{}, fmt.Errorf("maxConcurrentPromotions: count promoting bundles: %w", err)
+		}
+		if active >= limit {
 			log.Info().Int("active", active).Int("limit", limit).Str("pipeline", b.Spec.Pipeline).
 				Msg("maxConcurrentPromotions reached — Available bundle waiting")
 			patch := client.MergeFrom(b.DeepCopy())

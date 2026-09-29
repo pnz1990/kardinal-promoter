@@ -1,6 +1,17 @@
 ## kardinal pause
 
-Pause a pipeline, preventing new promotions from starting
+Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
+
+### Synopsis
+
+Pause a pipeline.
+
+Sets spec.paused on the Pipeline and creates the freeze PolicyGate
+freeze-<pipeline>. While the pipeline is paused, no PromotionStep leaves
+Pending and a step that is still preparing its change (clone, update,
+commit, open PR) holds before its next step. A step that is waiting for a
+PR merge or running its health check finishes, so a merged change is never
+left unverified. Resume with: kardinal resume <pipeline>.
 
 ```
 kardinal pause <pipeline> [flags]
