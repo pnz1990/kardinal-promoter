@@ -224,7 +224,8 @@ type GateResult struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// Bundle is an immutable, versioned snapshot of what to deploy.
+// Bundle is a versioned snapshot of what to deploy. Treat it as immutable:
+// the API does not reject changes to spec, but nothing re-reads a changed one.
 // It carries build provenance and travels through a Pipeline's environments.
 type Bundle struct {
 	metav1.TypeMeta   `json:",inline"`

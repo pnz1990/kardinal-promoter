@@ -1,17 +1,5 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package v1alpha1
 
@@ -43,6 +31,7 @@ type MetricCheckSpec struct {
 
 	// Interval is how often to re-evaluate the metric (e.g. "1m", "5m").
 	// Defaults to "1m" if empty.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Interval string `json:"interval,omitempty"`
 }
@@ -87,8 +76,8 @@ type MetricCheckStatus struct {
 // these results via `metrics.<name>.value` and `metrics.<name>.result`.
 //
 // MetricCheck objects are typically created alongside PolicyGates that
-// reference them. They are cluster-scoped to the same namespace as the
-// PolicyGate that uses them.
+// reference them. MetricCheck is namespaced and must be in the same
+// namespace as the PolicyGate that uses it.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

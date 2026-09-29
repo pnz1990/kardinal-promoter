@@ -1,17 +1,5 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package v1alpha1
 
@@ -43,7 +31,8 @@ type NotificationWebhookConfig struct {
 
 	// AuthorizationHeader is the value of the Authorization header to include in the POST.
 	// Typically "Bearer <token>" or "Token <secret>".
-	// Store sensitive values in a Kubernetes Secret and reference it via envFrom if needed.
+	// The value is stored in plain text in the spec and sent as is: anyone who can
+	// read this NotificationHook can read it.
 	// +optional
 	AuthorizationHeader string `json:"authorizationHeader,omitempty"`
 }
@@ -93,7 +82,6 @@ type NotificationHookStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=nhook
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.spec.webhook.url`
-// +kubebuilder:printcolumn:name="Events",type=string,JSONPath=`.spec.events`
 // +kubebuilder:printcolumn:name="Last-Sent",type=string,JSONPath=`.status.lastSentAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
