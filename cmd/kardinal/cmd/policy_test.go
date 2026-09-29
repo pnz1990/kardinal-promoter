@@ -23,6 +23,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -282,6 +283,31 @@ func TestPolicySimulate_GithubDemoExample(t *testing.T) {
 	out, err = runSimulate(t, c, simulateOptions{Time: "Tuesday 10am", SoakMinutes: 45})
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(out, "RESULT: PASS\n"), out)
+}
+
+// Without --soak-minutes every upstream environment has soaked 0 minutes: a
+// soak gate blocks on its expression, it does not fail to evaluate. The
+// pre-#1246 simulate had no upstream map, so upstream.uat.soakMinutes was
+// "no such attribute(s): upstream".
+func TestPolicySimulate_NoSoakMinutesIsZeroSoak(t *testing.T) {
+	tests := []struct {
+		name, expr string
+	}{
+		{name: "upstream map", expr: "upstream.uat.soakMinutes >= 30"},
+		{name: "bundle field", expr: "bundle.upstreamSoakMinutes >= 30"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"),
+				policyGate("require-uat-soak", "default", "prod", tt.expr))
+			out, err := runSimulate(t, c, simulateOptions{Time: "Tuesday 10am"})
+			require.NoError(t, err)
+			assert.Contains(t, out, "RESULT: BLOCKED")
+			assert.Regexp(t, `require-uat-soak: +BLOCK +\(`+regexp.QuoteMeta(tt.expr)+` = false\)`, out)
+			assert.NotContains(t, out, "no such attribute")
+			assert.NotContains(t, out, celEvalErrorPrefix)
+		})
+	}
 }
 
 func TestPolicySimulate_NoGates(t *testing.T) {
