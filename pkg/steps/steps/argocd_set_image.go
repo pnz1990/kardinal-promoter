@@ -16,6 +16,7 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -47,11 +48,29 @@ func init() {
 //
 // The step is idempotent: patching the same tag twice is a no-op with StepSuccess.
 // No git operations are performed — the entire promotion is a single Kubernetes patch.
+//
+// Because nothing is reviewed, the step refuses to run for an environment
+// with approval: pr-review (C05-steps-11), and for config Bundles, which it
+// cannot apply.
 type argoCDSetImageStep struct{}
+
+// argoCDPRReviewRejected is the failure message for argocd + pr-review.
+const argoCDPRReviewRejected = "argocd-set-image: update.strategy argocd patches the Application directly " +
+	"and cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based strategy " +
+	"(kustomize or helm) for a reviewed promotion"
 
 func (s *argoCDSetImageStep) Name() string { return "argocd-set-image" }
 
 func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
+	// A spec the strategy refuses is a permanent error: retrying cannot fix it.
+	if state.Environment.Approval == "pr-review" {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: argoCDPRReviewRejected},
+			parentsteps.Permanent(errors.New(argoCDPRReviewRejected))
+	}
+	if state.Bundle.Type == "config" {
+		msg := "argocd-set-image: config Bundles are not supported by update.strategy argocd"
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
+	}
 	// O4: K8sClient is required.
 	if state.K8sClient == nil {
 		return parentsteps.StepResult{
@@ -72,7 +91,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepFailed,
 			Message: "argocd-set-image: argocd.application input is required",
-		}, fmt.Errorf("argocd-set-image: argocd.application input is required")
+		}, parentsteps.Permanent(fmt.Errorf("argocd-set-image: argocd.application input is required"))
 	}
 
 	namespace := state.Inputs["argocd.namespace"]

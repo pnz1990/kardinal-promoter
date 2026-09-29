@@ -90,13 +90,13 @@ Built-in step implementations:
 
 | Step | Description |
 |---|---|
-| `git-clone` | Clones the GitOps repo (and optionally a config source repo) to a temporary work directory |
-| `kustomize-set-image` | Runs `kustomize edit set-image` to update the image reference |
-| `kustomize-build` | Runs `kustomize build` and writes rendered plain YAML (rendered-manifests pattern) |
+| `git-clone` | Clones the GitOps repo into a work directory owned by this PromotionStep (one per namespace, Pipeline, Bundle and environment). For config Bundles it also checks out the `configRef` commit into a separate directory next to it |
+| `kustomize-set-image` | Edits the environment's `kustomization.yaml` `images:` list the way `kustomize edit set image` does (no binary needed) |
+| `kustomize-build` | Runs `kustomize build` on the environment path and writes `rendered-<env>.yaml` to the checkout. It is only in the `layout: branch` sequence, which is not implemented yet and fails at `git-clone`, so it never runs today |
 | `helm-set-image` | Updates `values.yaml` image tag for Helm-based repos |
-| `config-merge` | Cherry-picks or overlays a Git commit into the environment directory (config Bundles) |
-| `git-commit` | Commits changes to the environment branch |
-| `git-push` | Pushes the branch; idempotent if already pushed |
+| `config-merge` | Copies the environment directory of the Bundle's `configRef` commit over the environment directory (config Bundles). Files deleted in the config commit are not deleted |
+| `git-commit` | Commits the working tree changes. When nothing changed it records that, and the later steps skip the push and the PR |
+| `git-push` | `pr-review`: force-pushes `kardinal/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. `auto`: pushes the base branch; if it moved, the sequence restarts from a fresh clone (at most 3 times) |
 | `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |

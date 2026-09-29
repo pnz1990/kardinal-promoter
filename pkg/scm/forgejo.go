@@ -62,7 +62,7 @@ func NewForgejoProvider(token, apiURL, webhookSecret string) *ForgejoProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuit:       NewCircuitBreaker(),
-		client:        &http.Client{},
+		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
 
@@ -98,22 +98,30 @@ func (f *ForgejoProvider) OpenPR(ctx context.Context, repo, title, body, head, b
 // findExistingPR lists open PRs for the repository and returns the one with the
 // matching head branch.
 func (f *ForgejoProvider) findExistingPR(ctx context.Context, owner, repo, head string) (string, int, error) {
-	var prs []struct {
+	type pull struct {
 		Number  int    `json:"number"`
 		HTMLURL string `json:"html_url"`
 		Head    struct {
+			Ref   string `json:"ref"`
 			Label string `json:"label"`
 		} `json:"head"`
 	}
-	if err := f.do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v1/repos/%s/%s/pulls?state=open&limit=50", owner, repo),
-		nil, &prs); err != nil {
-		return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
-	}
-	for _, pr := range prs {
-		// The head label is "owner:branch" in Forgejo
-		if pr.Head.Label == head || strings.HasSuffix(pr.Head.Label, ":"+head) {
-			return pr.HTMLURL, pr.Number, nil
+	// The list API has no head filter, so read every page (C06-scm-health-15).
+	for page := 1; page <= maxListPages; page++ {
+		var prs []pull
+		if err := f.do(ctx, http.MethodGet,
+			fmt.Sprintf("/api/v1/repos/%s/%s/pulls?state=open&limit=%d&page=%d", owner, repo, forgejoPageSize, page),
+			nil, &prs); err != nil {
+			return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
+		}
+		for _, pr := range prs {
+			// The head label is "owner:branch" in Forgejo
+			if pr.Head.Ref == head || pr.Head.Label == head || strings.HasSuffix(pr.Head.Label, ":"+head) {
+				return pr.HTMLURL, pr.Number, nil
+			}
+		}
+		if len(prs) < forgejoPageSize {
+			break
 		}
 	}
 	return "", 0, fmt.Errorf("PR already exists for %s but could not find it in open PRs", head)
@@ -201,6 +209,8 @@ func (f *ForgejoProvider) GetPRReviewStatus(ctx context.Context, repo string, pr
 			Login string `json:"login"`
 		} `json:"user"`
 		State string `json:"state"`
+		// Dismissed reviews no longer count (C06-scm-health-23).
+		Dismissed bool `json:"dismissed"`
 	}
 	if err := f.do(ctx, http.MethodGet,
 		fmt.Sprintf("/api/v1/repos/%s/%s/pulls/%d/reviews", owner, name, prNumber), nil, &reviews); err != nil {
@@ -210,7 +220,7 @@ func (f *ForgejoProvider) GetPRReviewStatus(ctx context.Context, repo string, pr
 	// Take the most recent review per user.
 	latestByUser := make(map[string]string, len(reviews))
 	for _, r := range reviews {
-		if r.User.Login == "" {
+		if r.User.Login == "" || r.Dismissed {
 			continue
 		}
 		switch r.State {
@@ -233,13 +243,15 @@ func (f *ForgejoProvider) GetPRReviewStatus(ctx context.Context, repo string, pr
 }
 
 // ParseWebhookEvent parses a Forgejo/Gitea pull request webhook payload.
-// Forgejo signs payloads with HMAC-SHA256 and sends the hex digest in
-// the X-Gitea-Signature header (same algorithm as GitHub's X-Hub-Signature-256).
+// Forgejo signs payloads with HMAC-SHA256 and sends the hex digest in the
+// X-Gitea-Signature / X-Forgejo-Signature headers, and the same digest with a
+// "sha256=" prefix in X-Hub-Signature-256. Both forms are accepted.
 func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (WebhookEvent, error) {
 	if f.WebhookSecret != "" {
 		mac := hmac.New(sha256.New, []byte(f.WebhookSecret))
 		mac.Write(payload)
 		expected := hex.EncodeToString(mac.Sum(nil))
+		signature = strings.ToLower(strings.TrimPrefix(signature, "sha256="))
 		if subtle.ConstantTimeCompare([]byte(signature), []byte(expected)) != 1 {
 			return WebhookEvent{}, fmt.Errorf("webhook HMAC mismatch")
 		}
@@ -261,17 +273,19 @@ func (f *ForgejoProvider) ParseWebhookEvent(payload []byte, signature string) (W
 		return WebhookEvent{}, fmt.Errorf("parse Forgejo webhook payload: %w", err)
 	}
 
-	merged := raw.PullRequest.Merged || (raw.Action == "closed" && raw.PullRequest.State == "closed" && raw.PullRequest.Merged)
+	if raw.PullRequest.Merged {
+		return mergedPREvent(raw.Repository.FullName, raw.Number), nil
+	}
 	return WebhookEvent{
 		EventType:    "pull_request",
 		PRNumber:     raw.Number,
 		RepoFullName: raw.Repository.FullName,
-		Merged:       merged,
 		Action:       raw.Action,
 	}, nil
 }
 
-// AddLabelsToPR replaces the label set on the pull request issue.
+// AddLabelsToPR adds labels to the pull request issue (POST issues/{n}/labels
+// adds; it does not replace the existing set).
 // Forgejo/Gitea uses the issues/labels endpoint with a label ID list.
 // Since we only have label names, we first create labels (idempotent), then apply.
 func (f *ForgejoProvider) AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error {
@@ -299,18 +313,25 @@ func (f *ForgejoProvider) AddLabelsToPR(ctx context.Context, repo string, prNumb
 
 // ensureLabels returns the IDs of the given label names, creating them if they do not exist.
 func (f *ForgejoProvider) ensureLabels(ctx context.Context, owner, repo string, names []string) ([]int, error) {
-	// List existing labels.
-	var existing []struct {
+	// List existing labels, every page, so an existing label is not
+	// re-created.
+	type label struct {
 		ID   int    `json:"id"`
 		Name string `json:"name"`
 	}
-	if err := f.do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v1/repos/%s/%s/labels?limit=50", owner, repo), nil, &existing); err != nil {
-		return nil, fmt.Errorf("list labels: %w", err)
-	}
-	labelIDs := make(map[string]int, len(existing))
-	for _, l := range existing {
-		labelIDs[l.Name] = l.ID
+	labelIDs := map[string]int{}
+	for page := 1; page <= maxListPages; page++ {
+		var existing []label
+		if err := f.do(ctx, http.MethodGet,
+			fmt.Sprintf("/api/v1/repos/%s/%s/labels?limit=%d&page=%d", owner, repo, forgejoPageSize, page), nil, &existing); err != nil {
+			return nil, fmt.Errorf("list labels: %w", err)
+		}
+		for _, l := range existing {
+			labelIDs[l.Name] = l.ID
+		}
+		if len(existing) < forgejoPageSize {
+			break
+		}
 	}
 
 	ids := make([]int, 0, len(names))
@@ -367,13 +388,8 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		if IsRateLimitError(resp.StatusCode) {
-			retryAfter := RetryAfterFromResponse(resp)
-			f.circuit.RecordFailure(retryAfter)
-		} else {
-			f.circuit.RecordSuccess()
-		}
-		return fmt.Errorf("forgejo API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
+		f.circuit.RecordResponse(resp)
+		return newAPIError("forgejo", method, path, resp, raw)
 	}
 
 	f.circuit.RecordSuccess()

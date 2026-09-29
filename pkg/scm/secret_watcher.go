@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -79,16 +80,6 @@ func NewSecretWatcher(
 	}
 }
 
-// CheckAndReloadForTest exposes checkAndReload for unit testing.
-// Do not call in production code.
-func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
-	log := w.Log.With().
-		Str("secret", w.SecretNamespace+"/"+w.SecretName).
-		Str("key", w.SecretKey).
-		Logger()
-	w.checkAndReload(ctx, log)
-}
-
 // Start implements manager.Runnable. It polls the Secret at secretWatchInterval
 // until the context is cancelled.
 func (w *SecretWatcher) Start(ctx context.Context) error {
@@ -135,7 +126,9 @@ func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) 
 		return
 	}
 
-	token := string(tokenBytes)
+	// Trim so a trailing newline neither breaks the header nor looks like a
+	// rotation on every poll.
+	token := strings.TrimSpace(string(tokenBytes))
 	if token == w.lastToken {
 		// Token unchanged — no-op.
 		return

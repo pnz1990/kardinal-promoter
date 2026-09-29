@@ -76,6 +76,10 @@ spec:
 ```
 
 Both types go through the same Pipeline, same PolicyGates, and same PR flow.
+For a config Bundle, the `config-merge` step copies the environment's directory
+(`environments/<name>` or `environments[].path`) from the `configRef` commit over the
+same directory in the GitOps repo. Nothing outside that directory is copied, and files
+deleted in the config commit are not deleted.
 
 ### Bundle intent
 
@@ -420,23 +424,13 @@ This is the standard pattern for large Argo CD deployments because:
 - Argo CD never runs `kustomize build` on every reconciliation cycle (significant performance gain at scale)
 - CODEOWNERS rules can be placed on individual rendered YAML files in the environment branch
 
-Enable this pattern by setting `renderManifests: true` on an environment and using
-`layout: branch` in `spec.git`:
+**Not implemented yet.** `layout: branch` is accepted by the API, but the `git-clone`
+step fails every promotion that uses it with `layout: branch is not implemented`, and
+nothing writes rendered YAML to an environment branch. `renderManifests`, `sourceBranch`
+and `branchPrefix` are not Pipeline fields. Use `layout: directory` (the default).
 
-```yaml
-spec:
-  git:
-    layout: branch
-    sourceBranch: main     # DRY templates live here
-    branchPrefix: env/     # rendered manifests go to env/dev, env/staging, env/prod
-  environments:
-    - name: prod
-      approval: pr-review
-      renderManifests: true
-```
-
-See [Rendered Manifests](rendered-manifests.md) for a complete guide including
-Argo CD ApplicationSet configuration and CODEOWNERS integration.
+See [Rendered Manifests](rendered-manifests.md) for the planned design, including
+Argo CD configuration and CODEOWNERS integration.
 
 ## Advanced Patterns
 
@@ -455,9 +449,9 @@ pull-request generators for fully isolated ephemeral Pipelines per PR.
 
 ### Repository strategies
 
-`layout: directory` (one branch, environments as directories) works well for small
-teams and monorepos. `layout: branch` (environments as separate branches) works well
-for multi-repo and rendered-manifest workflows.
+`layout: directory` (one branch, environments as directories) is the supported layout.
+`layout: branch` (environments as separate branches, for rendered-manifest workflows)
+is planned; promotions that use it fail today.
 
 See [Advanced Patterns](advanced-patterns.md) for detailed guidance on all of these.
 

@@ -1,5 +1,16 @@
 # Rendered Manifests
 
+!!! warning "Not implemented yet"
+    The rendered manifests pattern described on this page is **planned, not shipped**.
+    `layout: branch` (on `spec.git` or on an environment) is accepted by the API, but the
+    `git-clone` step fails the promotion with
+    `layout: branch is not implemented` before it touches the
+    repository. Nothing writes to `env/<name>` branches today, and the `kustomize-build`
+    step never runs: the only default sequence that includes it is the `layout: branch` one.
+    `renderManifests`, `sourceBranch` and `branchPrefix` are not fields of the Pipeline CRD.
+    Use the default `layout: directory` until this lands. The rest of this page describes
+    the intended design.
+
 The rendered manifests pattern is an advanced GitOps workflow in which Kustomize (or Helm)
 templates are executed at promotion time and the rendered YAML is committed directly to Git.
 Argo CD and Flux sync from the rendered output, not from the source templates.
@@ -73,13 +84,14 @@ env/prod branch (rendered):
   service.yaml
 ```
 
-kardinal-promoter reads from the source branch, runs `kustomize-set-image` then
-`kustomize-build`, and commits the result to the environment branch via a PR (for
-`pr-review` environments) or a direct push (for `auto` environments).
+In the planned design, kardinal-promoter reads from the source branch, runs
+`kustomize-set-image` then `kustomize-build`, and commits the result to the environment
+branch via a PR (for `pr-review` environments) or a direct push (for `auto` environments).
 
-## Pipeline Configuration
+## Pipeline Configuration (planned)
 
-Configure `layout: branch` on each environment that should use the rendered manifests pattern:
+The intended configuration sets `layout: branch` on each environment that should use
+the rendered manifests pattern:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -94,48 +106,22 @@ spec:
     secretRef: { name: github-token }
 
   environments:
-    - name: dev
-      path: overlays/dev          # overlay path within the source branch
-      approval: auto
-      layout: branch              # use rendered manifests branch layout
-      health:
-        type: resource
-
-    - name: staging
-      path: overlays/staging
-      approval: auto
-      layout: branch
-      health:
-        type: argocd
-
     - name: prod
-      path: overlays/prod
+      path: overlays/prod          # overlay path within the source branch
       approval: pr-review
-      layout: branch
+      layout: branch               # today: the promotion fails at git-clone
       health:
         type: argocd
 ```
 
-When `layout: branch` is set, the default step sequence becomes:
+Applying this Pipeline today makes every promotion to `prod` fail at `git-clone` with a
+message that says the layout is not implemented. No branch is pushed and no PR is opened.
 
-```
-git-clone → kustomize-set-image → kustomize-build → git-commit → git-push
-         → [open-pr → wait-for-merge]  # for pr-review environments
-         → health-check
-```
-
-The `kustomize-build` step:
-1. Runs `kustomize build <env.path>` in the cloned working directory
-2. Writes the rendered YAML to `rendered-<env>.yaml` in the work directory
-3. Stores the path in `Outputs["renderedManifestPath"]` for subsequent steps
-
-The `git-commit` step picks up the rendered manifest file and commits it to the
-environment branch (`env/<name>` by convention).
-
-See `examples/rendered-manifests/` for a complete working example.
-
-When the `branchPrefix` field is set, the default step sequence auto-infers the branch
-names. Manual `steps` configuration is only needed for non-standard naming schemes.
+What exists today is the `kustomize-build` step itself: it runs `kustomize build <env.path>`
+in the checkout and writes the result to `rendered-<env>.yaml` at the checkout root, with
+the path in `Outputs["renderedManifestPath"]`. It needs the `kustomize` binary in the
+controller image. It never runs today, because the only default sequence that includes
+it is the `layout: branch` one, which stops at `git-clone`.
 
 ## Argo CD Configuration
 
@@ -231,8 +217,6 @@ write to Git first.
 
 ## Examples
 
-See `examples/rendered-manifests/` for a complete working example including:
-- GitOps repo structure with source and env branches
-- Pipeline CRD with `renderManifests: true`
-- Argo CD ApplicationSet targeting rendered branches
-- CODEOWNERS file for the `env/prod` branch
+`examples/rendered-manifests/` shows the planned repository structure and Pipeline.
+It does not promote successfully today: its environments use `layout: branch`, so every
+promotion fails at `git-clone`.
