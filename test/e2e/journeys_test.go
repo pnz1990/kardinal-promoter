@@ -480,10 +480,23 @@ func TestJourney4Rollback(t *testing.T) {
 		},
 	}
 
-	// Deployment exists but is NOT available → health check fails.
+	// The Deployment runs the bad image and its rollout finished, but its
+	// replica is NOT available → health check fails. (A Deployment still on
+	// the previous image is only "not rolled out yet" and does not count.)
+	one := int32(1)
 	unhealthyDeploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "prod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "prod", Generation: 1},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &one,
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "nginx", Image: "ghcr.io/nginx/nginx:1.30.0-bad"},
+			}}},
+		},
 		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			Replicas:           1,
+			UpdatedReplicas:    1,
+			AvailableReplicas:  0,
 			Conditions: []appsv1.DeploymentCondition{
 				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
 			},
