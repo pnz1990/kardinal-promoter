@@ -42,9 +42,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
 const (
@@ -105,13 +105,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // SetupWithManager registers the ScheduleClockReconciler with the controller-runtime Manager.
-// The tick write does not re-trigger the clock (GenerationChangedPredicate): it
+// The tick write does not re-trigger the clock (eventfilter.SpecOrAnnotationChanged): it
 // used to cause a second write whenever the reconcile crossed a second
 // boundary, and each write re-evaluates every gate (C04-gates-36). Ticks come
-// from RequeueAfter; a spec edit still reconciles at once.
+// from RequeueAfter; a spec edit, or an annotation change such as
+// kardinal.io/manual-tick, still reconciles (and ticks) at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.ScheduleClock{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&kardinalv1alpha1.ScheduleClock{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Complete(r)
 }
 

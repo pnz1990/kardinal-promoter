@@ -55,10 +55,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
 const (
@@ -479,7 +479,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		// Status writes of the hook itself must not re-trigger it; retries use RequeueAfter.
-		For(&v1alpha1.NotificationHook{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&v1alpha1.NotificationHook{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(mapToAllHooks)).

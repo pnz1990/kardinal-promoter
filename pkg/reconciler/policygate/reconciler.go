@@ -30,6 +30,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -45,6 +46,10 @@ const (
 	conditionReady = "Ready"
 	// defaultRecheckInterval is used when gate.Spec.RecheckInterval is empty or invalid.
 	defaultRecheckInterval = 5 * time.Minute
+	// minRecheckInterval is the shortest re-evaluation interval, the same as
+	// MetricCheck's. A smaller recheckInterval ("1ms") would re-evaluate and
+	// patch the gate in a hot loop.
+	minRecheckInterval = 10 * time.Second
 	// historyLimit is the number of recent Bundles to include in history stats.
 	historyLimit = 10
 )
@@ -758,7 +763,8 @@ var metricCheckResultChanged = predicate.Funcs{
 // the clock interval. The per-gate RequeueAfter: recheckInterval still runs as
 // well; it is the only periodic re-evaluation when no ScheduleClock exists.
 //
-// The gate's own status writes do not re-trigger it (GenerationChangedPredicate):
+// The gate's own status writes do not re-trigger it (eventfilter.SpecOrAnnotationChanged;
+// a spec edit or an annotation such as kardinal.io/force-recheck does):
 // every evaluation writes lastEvaluatedAt, and re-evaluating on that write
 // doubled the evaluations and the status writes (C04-gates-36).
 //
@@ -782,7 +788,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
 		// the gates in the same namespace that read metrics are re-evaluated
 		// immediately.
@@ -845,7 +851,9 @@ func extractVersion(bundle *kardinalv1alpha1.Bundle) string {
 	return ""
 }
 
-// parseRecheckInterval parses a Go duration string, returning defaultRecheckInterval on error.
+// parseRecheckInterval parses a Go duration string, returning
+// defaultRecheckInterval on error and raising values below minRecheckInterval
+// to minRecheckInterval.
 func parseRecheckInterval(s string) time.Duration {
 	if s == "" {
 		return defaultRecheckInterval
@@ -853,6 +861,9 @@ func parseRecheckInterval(s string) time.Duration {
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
 		return defaultRecheckInterval
+	}
+	if d < minRecheckInterval {
+		return minRecheckInterval
 	}
 	return d
 }

@@ -54,7 +54,7 @@ Gates re-evaluate at `recheckInterval` so time-based gates unblock without exter
 
 **Acceptance Scenarios**:
 
-1. **Given** `recheckInterval: 1s`, **When** 1 second passes after evaluation, **Then** the reconciler re-evaluates and updates `lastEvaluatedAt`
+1. **Given** `recheckInterval: 10s` (the minimum; a smaller value is raised to 10s), **When** 10 seconds pass after evaluation, **Then** the reconciler re-evaluates and updates `lastEvaluatedAt`
 2. **Given** a gate evaluating a stale `lastEvaluatedAt` (controller restarted), **When** Graph checks `readyWhen`, **Then** the freshness check fails and Graph does not advance until re-evaluated
 
 ---

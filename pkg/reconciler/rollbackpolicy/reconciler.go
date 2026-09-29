@@ -41,10 +41,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
 const (
@@ -268,11 +268,11 @@ func (r *Reconciler) now() time.Time {
 // SetupWithManager registers the RollbackPolicyReconciler with controller-runtime.
 //
 // It watches PromotionStep so a threshold crossing is acted on when the step's
-// status changes, not only on the 30s requeue. Only spec changes of the
-// RollbackPolicy itself trigger a reconcile: its own status writes do not.
+// status changes, not only on the 30s requeue. Only spec or annotation changes
+// of the RollbackPolicy itself trigger a reconcile: its own status writes do not.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep)).
 		Complete(r)
 }

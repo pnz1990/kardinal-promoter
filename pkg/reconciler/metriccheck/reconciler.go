@@ -20,9 +20,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
 const (
@@ -128,12 +128,12 @@ func (r *Reconciler) now() time.Time {
 }
 
 // SetupWithManager registers the MetricCheckReconciler with the controller-runtime Manager.
-// Only spec changes trigger a reconcile: the reconciler's own status patch
+// Only spec or annotation changes trigger a reconcile: the reconciler's own status patch
 // would otherwise cause a second Prometheus query right after each one.
 // Re-evaluation is driven by RequeueAfter.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
 		Complete(r)
 }
