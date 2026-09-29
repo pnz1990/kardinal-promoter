@@ -80,7 +80,7 @@ func StampCreatedAt(obj metav1.Object, now time.Time) {
 // Bundles carry it. The name is the last resort, so the order is total and
 // stable across reconciles.
 func CompareCreation(a, b *v1alpha1.Bundle) int {
-	if c := a.CreationTimestamp.Time.Compare(b.CreationTimestamp.Time); c != 0 {
+	if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
 		return c
 	}
 	ta, okA := createdAt(a)

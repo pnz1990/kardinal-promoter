@@ -102,11 +102,22 @@ func TestControllerIntegration(t *testing.T) {
 		},
 	}
 
-	// Build fake client with both objects pre-created
+	// Build fake client with both objects pre-created. The PromotionStep
+	// index is the one PipelineReconciler.SetupWithManager registers; the
+	// reconciler returns the error of a List it cannot run.
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(pipeline, bundle).
 		WithStatusSubresource(pipeline, bundle).
+		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName",
+			func(obj client.Object) []string {
+				s, ok := obj.(*kardinalv1alpha1.PromotionStep)
+				if !ok {
+					return nil
+				}
+				return []string{s.Spec.PipelineName}
+			},
+		).
 		Build()
 
 	ctx := context.Background()
