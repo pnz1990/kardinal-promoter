@@ -255,3 +255,30 @@ func TestUIAPI_CreateBundle_StampsCreatedAt(t *testing.T) {
 	_, err := time.Parse(time.RFC3339Nano, created[0].Annotations[lifecycle.AnnotationCreatedAt])
 	assert.NoError(t, err)
 }
+
+// TestBundleAPI_StampsCreatedAt covers the CI half of C02-bundle-04: Bundles
+// created through POST /api/v1/bundles carry sub-second creation order, so two
+// pushes in the same second supersede in the order they were made, whatever
+// their generated names.
+func TestBundleAPI_StampsCreatedAt(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).Build()
+	handler := newBundleAPIServer(c, "test-token", "default").Handler()
+	for range 2 {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/bundles",
+			strings.NewReader(`{"pipeline":"app","type":"image","images":[{"repository":"ghcr.io/org/app","tag":"1"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer test-token")
+		w := httptest.NewRecorder()
+		handler(w, req)
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	}
+	created := uiLcCreated(t, c)
+	require.Len(t, created, 2)
+	var stamps []time.Time
+	for _, b := range created {
+		at, err := time.Parse(time.RFC3339Nano, b.Annotations[lifecycle.AnnotationCreatedAt])
+		require.NoError(t, err, "bundle %s has a created-at stamp", b.Name)
+		stamps = append(stamps, at)
+	}
+	assert.False(t, stamps[0].Equal(stamps[1]), "the stamps order the two bundles")
+}

@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 const (
@@ -201,6 +202,7 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 				Provenance: req.Provenance,
 			},
 		}
+		lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
 		if err := s.client.Create(r.Context(), bundle); err != nil {
 			s.log.Error().Err(err).Str("name", name).Msg("failed to create bundle")
