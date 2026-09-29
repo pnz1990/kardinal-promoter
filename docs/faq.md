@@ -180,11 +180,12 @@ Yes. Combine conditions:
 ```yaml
 spec:
   expression: >
-    !schedule.isWeekend() ||
-    bundle.metadata.annotations.exists(a, a == 'kardinal.io/hotfix')
+    !schedule.isWeekend ||
+    ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-Annotate the Bundle at creation time to mark it as a hotfix.
+Label the Bundle `kardinal.io/hotfix=true` at creation time to mark it as a hotfix.
+Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 
 ### How often does kardinal re-evaluate a gate?
 
@@ -197,7 +198,7 @@ transitions from blocked to allowed, the Graph controller immediately advances.
 ```bash
 kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 # RESULT: BLOCKED
-# no-weekend-deploys: !schedule.isWeekend() evaluated to false
+# no-weekend-deploys: !schedule.isWeekend evaluated to false
 
 kardinal policy test --file my-gate.yaml
 # PASS: expression is valid CEL

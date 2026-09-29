@@ -199,18 +199,16 @@ kind: MetricCheck
 metadata:
   name: success-rate
   namespace: platform-policies
-  labels:
-    kardinal.io/applies-to: prod
 spec:
+  provider: prometheus
   query: |
     sum(rate(http_requests_total{status=~"2.."}[5m])) /
     sum(rate(http_requests_total[5m]))
   prometheusURL: http://prometheus.monitoring.svc:9090
   threshold:
-    operator: ">="
+    operator: gte   # one of lt, gt, lte, gte, eq
     value: 0.95
-  recheckInterval: 1m
-  windowDuration: 5m
+  interval: 1m
 ```
 
 ### Step 5: Convert AnalysisRunArguments to PolicyGate CEL expressions
@@ -227,7 +225,9 @@ metadata:
   labels:
     kardinal.io/applies-to: prod
 spec:
-  expression: "metrics.successRate >= 0.95"
+  # metrics.<MetricCheck name>.result is "Pass" when the threshold holds;
+  # .value is the raw value as a string (use double(...) to compare it).
+  expression: 'metrics["success-rate"].result == "Pass"'
   message: "Success rate below 95%"
   recheckInterval: 1m
 ```

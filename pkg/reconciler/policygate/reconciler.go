@@ -230,9 +230,17 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	now := r.now()
 	version := extractVersion(&bundle)
 
+	// bundle.labels is always a map (empty when the Bundle has no labels), so
+	// has(bundle.labels.hotfix) and "kardinal.io/rollback" in bundle.labels work.
+	labelsCtx := make(map[string]interface{}, len(bundle.Labels))
+	for k, v := range bundle.Labels {
+		labelsCtx[k] = v
+	}
+
 	bundleCtx := map[string]interface{}{
 		"type":    bundle.Spec.Type,
 		"version": version,
+		"labels":  labelsCtx,
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",

@@ -56,11 +56,11 @@ state — not just the current stage:
 # In a prod PolicyGate — reads upstream uat stage's soak time
 expression: "bundle.upstreamSoakMinutes >= 60"
 
-# Read upstream metrics
-expression: "metrics.errorRate < 0.01"
+# Read a MetricCheck result
+expression: 'metrics["error-rate"].result == "Pass"'
 
 # Combine schedule + soak + metadata
-expression: '!schedule.isWeekend && bundle.upstreamSoakMinutes >= 30 && bundle.labels.hotfix != "true"'
+expression: '!schedule.isWeekend && bundle.upstreamSoakMinutes >= 30 && !(has(bundle.labels.hotfix) && bundle.labels.hotfix == "true")'
 ```
 
 Neither Kargo nor GitOps Promoter can express "do not promote to prod unless UAT has been

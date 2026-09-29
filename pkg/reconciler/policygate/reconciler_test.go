@@ -983,13 +983,12 @@ func TestPolicyGateReconciler_ChangeWindowBothSyntaxesEquivalent(t *testing.T) {
 	// Build context with one active window.
 	cwCtx := map[string]interface{}{"my-freeze": true}
 	ctx := map[string]interface{}{
-		"bundle":         map[string]interface{}{},
-		"schedule":       map[string]interface{}{"isWeekend": false, "hour": 10, "dayOfWeek": "Tuesday"},
-		"environment":    map[string]interface{}{"name": "prod"},
-		"metrics":        map[string]interface{}{},
-		"upstream":       map[string]interface{}{},
-		"previousBundle": map[string]interface{}{},
-		"changewindow":   cwCtx,
+		"bundle":       map[string]interface{}{},
+		"schedule":     map[string]interface{}{"isWeekend": false, "hour": 10, "dayOfWeek": "Tuesday"},
+		"environment":  map[string]interface{}{"name": "prod"},
+		"metrics":      map[string]interface{}{},
+		"upstream":     map[string]interface{}{},
+		"changewindow": cwCtx,
 	}
 
 	tableTests := []struct {

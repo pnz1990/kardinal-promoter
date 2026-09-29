@@ -45,7 +45,7 @@ metadata:
   namespace: platform-policies
 spec:
   when: pre-deploy
-  expression: 'metrics.staging_error_rate.value < 0.01'
+  expression: 'double(metrics["staging-error-rate"].value) < 0.01'
   message: "Staging error rate is above 1% — do not start prod deployment"
   recheckInterval: 1m
 ```
@@ -111,44 +111,46 @@ All matching PolicyGates from both sources are injected into the Graph.
 
 ## CEL Context
 
-All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release.
+All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release; a test evaluates every attribute and example on this page against the controller's real context. Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). See the [CEL context reference](reference/cel-context.md) for the full list.
 
 ### Core attributes
 
 | Attribute | Type | Description | Example |
 |---|---|---|---|
+| `bundle.type` | string | Bundle type | `"image"` |
 | `bundle.version` | string | Image tag or semver | `"1.29.0"` |
-| `bundle.labels.*` | map[string]string | Bundle labels | `bundle.labels.hotfix == true` |
+| `bundle.labels` | map | Bundle `metadata.labels`; values are strings. Always a map (empty when the Bundle has no labels) | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
 | `bundle.provenance.author` | string | Who triggered the CI build | `"dependabot[bot]"` |
 | `bundle.provenance.commitSHA` | string | Source commit | `"abc123"` |
 | `bundle.provenance.ciRunURL` | string | CI run link | `"https://..."` |
-| `bundle.intent.target` | string | Target environment | `"prod"` |
+| `bundle.intent.targetEnvironment` | string | `spec.intent.targetEnvironment` (empty when unset) | `"prod"` |
 | `schedule.isWeekend` | bool | Saturday or Sunday | `false` |
 | `schedule.hour` | int | Hour in UTC (0-23) | `14` |
 | `schedule.dayOfWeek` | string | Day name | `"Tuesday"` |
 | `environment.name` | string | Target environment name | `"prod"` |
-| `environment.approval` | string | Approval mode | `"pr-review"` |
 
 ### Metric and soak attributes
 
 | Attribute | Type | Description |
 |---|---|---|
-| `metrics.*` | float64 | MetricCheck results injected by name (requires a `MetricCheck` CRD targeting this environment) |
+| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's namespace, as a string (`""` after a query error). Convert with `double(...)` |
+| `metrics.<name>.result` | string | `"Pass"` or `"Fail"`: the MetricCheck's own threshold result |
 | `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
-| `previousBundle.version` | string | Previously deployed version in this environment |
 
 ### Cross-stage history attributes (K-10)
 
 Available for all gates. The history is computed from Bundle CRD status across the last 10
 promotions for the pipeline — no external API calls. The lookup is scoped to the last 10
-Bundles by creation time.
+Bundles by creation time. `upstream` has an entry for every environment in this Bundle's
+status or in that history (not only the gated environment's upstreams); any other name is an
+evaluation error and the gate blocks.
 
 | Attribute | Type | Description |
 |---|---|---|
 | `upstream.<env>.recentSuccessCount` | int | Number of bundles with `Verified` status for `<env>` in the last 10 promotions |
 | `upstream.<env>.recentFailureCount` | int | Number of bundles with `Failed` status for `<env>` in the last 10 promotions |
 | `upstream.<env>.lastPromotedAt` | string | RFC3339 timestamp of the last successful promotion for `<env>` (empty string if never) |
-| `upstream.<env>.soakMinutes` | int | Minutes since the current bundle's health check for `<env>` (unchanged) |
+| `upstream.<env>.soakMinutes` | int | This Bundle's soak minutes in `<env>` (from `Bundle.status.environments[].soakMinutes`; 0 when the Bundle has no status for `<env>`) |
 
 ### PR review attributes (K-08)
 
@@ -178,7 +180,6 @@ expression: |
   upstream.staging.soakMinutes >= 60 &&
   upstream.staging.recentSuccessCount >= 3 &&
   !changewindow["holiday-freeze"]
-```
 
 # Block until the staging PR is approved
 expression: 'bundle.pr["staging"].isApproved'
@@ -191,7 +192,9 @@ expression: '!schedule.isWeekend && bundle.pr["staging"].isApproved'
 ```
 
 When no PRStatus exists for the named stage (e.g. the `open-pr` step has not run yet),
-`bundle.pr["staging"]` returns an empty map — `isApproved` evaluates to `false` (fail-closed).
+`bundle.pr` has no `"staging"` key, so `bundle.pr["staging"].isApproved` is an evaluation
+error and the gate blocks (fail-closed). To treat a missing PR as "not approved" without an
+error, write `"staging" in bundle.pr && bundle.pr["staging"].isApproved`.
 
 ### ChangeWindow attributes (K-04)
 
@@ -298,8 +301,8 @@ expression: "bundle.upstreamSoakMinutes >= 30"
 # Block automated dependency updates from reaching prod
 expression: 'bundle.provenance.author != "dependabot[bot]"'
 
-# Only allow bundles with a hotfix label
-expression: "bundle.labels.hotfix == true"
+# Only allow bundles with a hotfix label (label values are strings)
+expression: 'has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"'
 
 # Block if the target is too many major versions ahead
 expression: 'bundle.version.startsWith("1.")'
@@ -308,11 +311,11 @@ expression: 'bundle.version.startsWith("1.")'
 ### Metric-based
 
 ```yaml
-# Require 99.5% success rate in the upstream environment
-expression: "metrics.successRate >= 0.995"
+# Require 99.5% success rate (MetricCheck "success-rate"; value is a string)
+expression: 'double(metrics["success-rate"].value) >= 0.995'
 
-# Block if latency is too high
-expression: "metrics.p99LatencyMs < 500"
+# Block while the "p99-latency" MetricCheck's own threshold fails
+expression: 'metrics["p99-latency"].result == "Pass"'
 ```
 
 ### Composite

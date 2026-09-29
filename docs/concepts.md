@@ -297,17 +297,16 @@ PolicyGate expressions are evaluated against a context that includes:
 | Attribute | Type | Example |
 |---|---|---|
 | `bundle.version` | string | "1.29.0" |
-| `bundle.labels.*` | map | bundle.labels.hotfix == true |
+| `bundle.labels` | map of string | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
 | `bundle.provenance.author` | string | "dependabot[bot]" |
 | `bundle.provenance.commitSHA` | string | "abc123" |
-| `bundle.intent.target` | string | "prod" |
+| `bundle.intent.targetEnvironment` | string | "prod" |
 | `schedule.isWeekend` | bool | false |
 | `schedule.hour` | int | 14 |
 | `schedule.dayOfWeek` | string | "Tuesday" |
 | `environment.name` | string | "prod" |
-| `environment.approval` | string | "pr-review" |
 
-Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`), and previously deployed version (`previousBundle.version`). See the [CEL context reference](policy-gates.md#cel-context) for the full list.
+Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`, `upstream.<env>.soakMinutes`) and change windows (`changewindow.*`). Referencing an attribute that does not exist blocks the gate. See the [CEL context reference](reference/cel-context.md) for the full list.
 
 ### Inspecting gates
 

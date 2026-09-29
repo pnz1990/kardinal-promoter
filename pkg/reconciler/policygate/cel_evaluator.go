@@ -63,14 +63,15 @@ type evaluator struct {
 // Functions available in expressions:
 //   - Standard strings (cel-go/ext)
 //   - json.marshal(v) / json.unmarshal(s)
-//   - maps.merge(map1, map2)
+//   - map1.merge(map2) — a member function; there is no global maps.merge
 //   - lists.setAtIndex / insertAtIndex / removeAtIndex
-//   - random.seededInt(min, max, seed)
+//   - random.seededInt(min, max, seed) / random.seededString(length, seed) (seed is a string)
 //   - changewindow.isAllowed(name) → bool  (true when the named window is NOT active/blocking)
 //   - changewindow.isBlocked(name) → bool  (true when the named window IS active/blocking)
 //
-// Context variables (populated by buildContext in reconciler.go):
-//   - bundle, environment, metrics, upstream, previousBundle, changewindow
+// Context variables (populated by buildContext in reconciler.go and documented,
+// with a test that holds the docs to it, in docs/reference/cel-context.md):
+//   - bundle, environment, metrics, upstream, changewindow
 //   - schedule — a plain map variable {isWeekend:bool, hour:int, dayOfWeek:string}
 //     NOTE: schedule.* is a map injection, NOT a CEL library function.
 //     It is only available here (PolicyGate CEL context), not in kro
@@ -83,7 +84,6 @@ func newEvaluator() (*evaluator, error) {
 		goccel.Variable("environment", goccel.DynType),
 		goccel.Variable("metrics", goccel.DynType),
 		goccel.Variable("upstream", goccel.DynType),
-		goccel.Variable("previousBundle", goccel.DynType),
 		goccel.Variable("changewindow", goccel.DynType),
 		ext.Strings(),
 		library.JSON(),
