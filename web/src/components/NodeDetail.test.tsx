@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, within, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { NodeDetail } from './NodeDetail'
-import type { GraphNode, PromotionStep } from '../types'
+import type { GraphEdge, GraphNode, PromotionStep } from '../types'
 
 // Mock the API client — NodeDetail calls validateCEL for PolicyGate nodes
 vi.mock('../api/client', () => ({
@@ -294,29 +294,100 @@ describe('NodeDetail — elapsed timer (C10b-web-25)', () => {
   })
 })
 
+// uat → gate → prod, the shape the graph API sends. Promote and Roll back follow
+// pipelineActions.ts (the same rule as the lane).
+function prodGraph(uat: string, prod: string) {
+  const nodes: GraphNode[] = [
+    makePromotionStepNode({ id: 'step-uat', label: 'uat', environment: 'uat', state: uat }),
+    makePolicyGateNode({ id: 'gate-prod', state: 'Pass' }),
+    makePromotionStepNode({ id: 'step-prod', label: 'prod', environment: 'prod', state: prod }),
+  ]
+  const edges: GraphEdge[] = [
+    { from: 'step-uat', to: 'gate-prod' },
+    { from: 'gate-prod', to: 'step-prod' },
+  ]
+  return { nodes, edges }
+}
+
+function renderProd(uat: string, prod: string, opts: { onActionDone?: () => void; clicked?: string; withGraph?: boolean } = {}) {
+  const { nodes, edges } = prodGraph(uat, prod)
+  const onActionDone = opts.onActionDone ?? vi.fn()
+  const graphProps = opts.withGraph === false ? {} : { nodes, edges }
+  const utils = render(
+    <NodeDetail
+      // The selected node is the copy from the click; the graph has the current state.
+      node={makePromotionStepNode({ id: 'step-prod', label: 'prod', environment: 'prod', state: opts.clicked ?? prod })}
+      onClose={vi.fn()}
+      pipelineName="my-app"
+      namespace="team-a"
+      steps={[makeStep({ environment: 'prod', state: prod })]}
+      onActionDone={onActionDone}
+      {...graphProps}
+    />,
+  )
+  return { onActionDone, ...utils, nodes, edges }
+}
+
+const buttonNames = () =>
+  screen.queryAllByRole('button', { name: /^(Promote to|Roll back) prod$/ }).map(b => b.textContent)
+
+describe('NodeDetail — Promote and Roll back only where they can act (C10b-web-08)', () => {
+  it.each([
+    { name: 'not reached yet, upstream verified', uat: 'Verified', prod: 'NotStarted', want: ['▶Promote to prod'] },
+    { name: 'failed, upstream verified', uat: 'Verified', prod: 'Failed', want: ['▶Promote to prod'] },
+    { name: 'stopped by an alarm, upstream verified', uat: 'Verified', prod: 'AbortedByAlarm', want: ['▶Promote to prod'] },
+    { name: 'verified', uat: 'Verified', prod: 'Verified', want: ['↩Roll back prod'] },
+    { name: 'promoting', uat: 'Verified', prod: 'Promoting', want: [] },
+    { name: 'waiting for merge', uat: 'Verified', prod: 'WaitingForMerge', want: [] },
+    { name: 'health checking', uat: 'Verified', prod: 'HealthChecking', want: [] },
+    { name: 'rolling back', uat: 'Verified', prod: 'RollingBack', want: [] },
+    { name: 'not reached yet, upstream still promoting', uat: 'Promoting', prod: 'NotStarted', want: [] },
+    { name: 'failed, upstream failed too', uat: 'Failed', prod: 'Failed', want: [] },
+  ])('$name → $want', ({ uat, prod, want }) => {
+    renderProd(uat, prod)
+    expect(buttonNames()).toEqual(want)
+  })
+
+  it('offers no Promote on the first environment (nothing upstream)', () => {
+    render(
+      <NodeDetail
+        node={makePromotionStepNode({ id: 'step-test', environment: 'test', state: 'Failed' })}
+        onClose={vi.fn()}
+        pipelineName="my-app"
+        nodes={[makePromotionStepNode({ id: 'step-test', environment: 'test', state: 'Failed' })]}
+        edges={[]}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: /^(Promote to|Roll back)/ })).toBeNull()
+  })
+
+  it('offers no Promote without the graph, since the upstream state is unknown', () => {
+    renderProd('Verified', 'NotStarted', { withGraph: false })
+    expect(buttonNames()).toEqual([])
+  })
+
+  it('uses the current graph state, not the state the node had when clicked', () => {
+    // Clicked while Verified, now promoting: no Roll back.
+    renderProd('Verified', 'Promoting', { clicked: 'Verified' })
+    expect(buttonNames()).toEqual([])
+  })
+
+  it('offers neither on a gate', () => {
+    const { nodes, edges } = prodGraph('Verified', 'NotStarted')
+    render(<NodeDetail node={nodes[1]} onClose={vi.fn()} pipelineName="my-app" nodes={nodes} edges={edges} />)
+    expect(screen.queryByRole('button', { name: /^(Promote to|Roll back)/ })).toBeNull()
+  })
+})
+
 describe('NodeDetail — promote and rollback ask first (C10b-web-08)', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  function renderStep(onActionDone = vi.fn()) {
-    render(
-      <NodeDetail
-        node={makePromotionStepNode({ environment: 'prod', label: 'prod', state: 'Verified' })}
-        onClose={vi.fn()}
-        pipelineName="my-app"
-        namespace="team-a"
-        steps={[makeStep({ environment: 'prod', state: 'Verified' })]}
-        onActionDone={onActionDone}
-      />,
-    )
-    return onActionDone
-  }
-
   it.each([
-    { action: 'promote', opener: /^Promote to prod$/, title: 'Promote my-app to prod?', confirm: 'Promote to prod', done: 'Promotion started: bundle b' },
-    { action: 'rollback', opener: /^Roll back prod$/, title: 'Roll back prod?', confirm: 'Roll back prod', done: 'Rollback started: bundle b' },
-  ] as const)('$action: opens a dialog, calls the API only on confirm, then refreshes', async ({ action, opener, title, confirm, done }) => {
+    { action: 'promote', prod: 'NotStarted', opener: /^Promote to prod$/, title: 'Promote my-app to prod?', confirm: 'Promote to prod', done: 'Promotion started: bundle b' },
+    { action: 'rollback', prod: 'Verified', opener: /^Roll back prod$/, title: 'Roll back prod?', confirm: 'Roll back prod', done: 'Rollback started: bundle b' },
+  ] as const)('$action: opens a dialog, calls the API only on confirm, then refreshes', async ({ action, prod, opener, title, confirm, done }) => {
     const { api } = await import('../api/client')
-    const onActionDone = renderStep()
+    const { onActionDone, rerender, nodes, edges } = renderProd('Verified', prod)
     fireEvent.click(screen.getByRole('button', { name: opener }))
     const dialog = screen.getByRole('dialog', { name: title })
     expect(api[action]).not.toHaveBeenCalled()
@@ -325,11 +396,27 @@ describe('NodeDetail — promote and rollback ask first (C10b-web-08)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.getByRole('status')).toHaveTextContent(done)
     expect(onActionDone).toHaveBeenCalledOnce()
+
+    // The refresh moves the step on and the button goes; the result stays.
+    const moved = nodes.map(n => (n.id === 'step-prod' ? { ...n, state: 'Promoting' } : n))
+    rerender(
+      <NodeDetail
+        node={nodes[2]}
+        onClose={vi.fn()}
+        pipelineName="my-app"
+        namespace="team-a"
+        onActionDone={onActionDone}
+        nodes={moved}
+        edges={edges}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: opener })).toBeNull()
+    expect(screen.getByRole('status')).toHaveTextContent(done)
   })
 
   it('Cancel does nothing', async () => {
     const { api } = await import('../api/client')
-    renderStep()
+    renderProd('Verified', 'NotStarted')
     fireEvent.click(screen.getByRole('button', { name: /^Promote to prod$/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -339,7 +426,7 @@ describe('NodeDetail — promote and rollback ask first (C10b-web-08)', () => {
   it('keeps the dialog open and says what failed', async () => {
     const { api } = await import('../api/client')
     ;(api.promote as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('API error 404: pipeline not found'))
-    const onActionDone = renderStep()
+    const { onActionDone } = renderProd('Verified', 'NotStarted')
     fireEvent.click(screen.getByRole('button', { name: /^Promote to prod$/ }))
     const dialog = screen.getByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Promote to prod' }))

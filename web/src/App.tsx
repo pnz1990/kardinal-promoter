@@ -826,6 +826,8 @@ export function App() {
                     steps={activeSteps}
                     activeBundle={activeBundle}
                     onActionDone={() => { void manualRefresh() }}
+                    nodes={graph?.nodes ?? []}
+                    edges={graph?.edges ?? []}
                   />
                 </ErrorBoundary>
               )}

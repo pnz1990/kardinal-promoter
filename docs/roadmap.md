@@ -102,7 +102,7 @@ All of the following are implemented and shipped:
 
 **CLI** — full command set: `get`, `explain`, `create`, `rollback`, `approve`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
-**UI** — full control plane UI: fleet health dashboard, pipeline operations view, per-stage bake countdown, bundle promotion timeline, policy gate detail panel, release efficiency metrics bar, in-UI actions (approve/pause/resume/rollback/override)
+**UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Approving a bundle and overriding a gate are CLI-only (`kardinal approve`, `kardinal override`)
 
 **Distributed mode** — shard routing: `shard:` field on Pipeline environments routes PromotionSteps to the correct controller instance. The `kardinal-agent` standalone binary for spoke clusters is available (PR #886).
 
@@ -133,7 +133,7 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 
 ## UI — Full Control Plane (shipped v0.5.0–v0.6.0)
 
-All 7 UI issues (#462–#468) are implemented and shipped.
+The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI shows and does today.
 
 ### Currently available
 
@@ -142,13 +142,15 @@ All 7 UI issues (#462–#468) are implemented and shipped.
 - PolicyGate expression display with CEL highlighting
 - HealthChip status chips
 - Live polling with staleness indicator
-- **Fleet-wide health dashboard (#467)** — home page sortable table: blocked count, CI red, interventions pending, recent activity feed
-- **Pipeline operations view (#462)** — per-pipeline list with sortable health columns: inventory age, last merge, blockage time, interventions/deploy
-- **Per-stage workflow detail (#463)** — step list, bake countdown with health overlay, override history
-- **In-UI actions (#464)** — approve gates, pause/resume bundles, rollback, override with mandatory reason, restart failed steps
+- **Fleet-wide health bar (#467)** — on the home page: counts of blocked, CI red (a failed step), promoting, and full-CD pipelines; click a count to filter the list
+- **Pipeline operations view (#462)** — sortable pipeline table: status, blocking gates, failed steps, inventory age, last merge, CD level
+- **Per-stage detail (#463)** — click an environment for the steps the controller runs, their conditions, Kubernetes events, and elapsed time
+- **In-UI actions (#464)** — create a bundle, pause/resume a pipeline, promote an environment whose upstream environments are Verified, roll back a Verified environment. Pause, resume, promote, and roll back ask for confirmation first
 - **Release efficiency metrics bar (#465)** — over the last 10 bundles: mean time from bundle creation to the last environment's health check, rollback rate, deploys to the last environment
-- **Bundle promotion timeline (#466)** — full artifact history with diff links, rollback records, override audit trail
-- **Policy gate detail panel (#468)** — CEL expression highlighting, current variable values, blocking duration, override history
+- **Bundle promotion timeline (#466)** — the 10 newest bundles, colored by phase; shift-click a second bundle to compare images, environments, and provenance side by side
+- **Policy gates (#468)** — a panel with each gate of the bundle on screen, its state, and its CEL expression; click a gate for the highlighted expression, when it was last evaluated, and a syntax check
+
+Not in the UI: approving a bundle and overriding a gate (use `kardinal approve` and `kardinal override`), the bake countdown, and gate override history (see `kardinal explain` or `kubectl get policygate <name> -o yaml`).
 
 ---
 

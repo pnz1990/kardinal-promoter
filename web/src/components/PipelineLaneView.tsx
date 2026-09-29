@@ -10,7 +10,8 @@
 //
 // Promote shows only where it can do something: every upstream environment is
 // Verified and this one is not reached yet, failed, or stopped by an alarm.
-// Rollback shows on Verified environments. Both ask first (PipelineActionDialog),
+// Rollback shows on Verified environments. The rule lives in pipelineActions.ts
+// so NodeDetail offers the same actions. Both ask first (PipelineActionDialog),
 // show the result in the lane, and ask the parent to refresh.
 //
 // Adapted from Kargo's horizontal stage cards pattern.
@@ -19,6 +20,7 @@ import { useState, type CSSProperties } from 'react'
 import type { GraphEdge, GraphNode } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
+import { canPromote, canRollback } from '../pipelineActions'
 import '../styles/PipelineLaneView.css'
 
 interface Props {
@@ -39,39 +41,6 @@ interface Props {
   /** Called after a promote or rollback request succeeds, so the parent can refresh. */
   onActionDone?: () => void
   loading?: boolean
-}
-
-/** States where a promotion can be started again for the environment. */
-const PROMOTABLE_STATES = new Set(['NotStarted', 'Failed', 'AbortedByAlarm'])
-
-/**
- * The PromotionStep nodes directly upstream of node, looking through PolicyGate
- * (and any other non-step) nodes between them.
- */
-export function upstreamSteps(node: GraphNode, nodes: GraphNode[], edges: GraphEdge[]): GraphNode[] {
-  const byId = new Map(nodes.map(n => [n.id, n]))
-  const found = new Map<string, GraphNode>()
-  const seen = new Set<string>([node.id])
-  const queue = [node.id]
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    for (const e of edges) {
-      if (e.to !== id || seen.has(e.from)) continue
-      seen.add(e.from)
-      const from = byId.get(e.from)
-      if (!from) continue
-      if (from.type === 'PromotionStep') found.set(from.id, from)
-      else queue.push(from.id)
-    }
-  }
-  return [...found.values()]
-}
-
-/** True when a new promotion to node's environment makes sense right now. */
-export function canPromote(node: GraphNode, nodes: GraphNode[], edges: GraphEdge[]): boolean {
-  if (!PROMOTABLE_STATES.has(node.state)) return false
-  const upstream = upstreamSteps(node, nodes, edges)
-  return upstream.length > 0 && upstream.every(n => n.state === 'Verified')
 }
 
 /** CSS class modifier for a given stage state. */
@@ -141,7 +110,7 @@ export function PipelineLaneView({
         const isSelected = selectedNode?.id === node.id
         const accent = stageAccentColor(node.state)
         const showPromote = !!pipelineName && canPromote(node, nodes, edges)
-        const showRollback = !!pipelineName && node.state === 'Verified'
+        const showRollback = !!pipelineName && canRollback(node)
         const showPRLink = node.prURL && node.state === 'WaitingForMerge'
         const cardClass = [
           'stage-card',

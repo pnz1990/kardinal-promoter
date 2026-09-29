@@ -8,12 +8,27 @@ import type { StepEvent } from '../components/EventsPanel'
 
 const BASE = '/api/v1/ui'
 
+/** A read that gets no answer in this time fails, so one hung request cannot
+ *  stop the 5 s polling (the poll waits for the previous one to finish). */
+export const REQUEST_TIMEOUT_MS = 10_000
+
 async function get<T>(path: string): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`)
-  if (!resp.ok) {
-    throw new Error(`API error ${resp.status}: ${resp.statusText}`)
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const resp = await fetch(`${BASE}${path}`, { signal: ctrl.signal })
+    if (!resp.ok) {
+      throw new Error(`API error ${resp.status}: ${resp.statusText}`)
+    }
+    return await (resp.json() as Promise<T>)
+  } catch (e) {
+    if (ctrl.signal.aborted) {
+      throw new Error(`GET ${BASE}${path} got no answer within ${REQUEST_TIMEOUT_MS / 1000} s. The UI tries again on the next refresh.`)
+    }
+    throw e
+  } finally {
+    clearTimeout(timer)
   }
-  return resp.json() as Promise<T>
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {

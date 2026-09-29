@@ -23,7 +23,7 @@ const api = vi.hoisted(() => ({
 }))
 vi.mock('../api/client', () => ({ api }))
 
-import { PipelineLaneView, canPromote } from './PipelineLaneView'
+import { PipelineLaneView } from './PipelineLaneView'
 
 const makeNode = (overrides: Partial<GraphNode> = {}): GraphNode => ({
   id: 'step-test',
@@ -125,23 +125,7 @@ function lane(states: { test: string; uat: string; prod: string }) {
   return { nodes, edges }
 }
 
-describe('canPromote (C10b-web-08)', () => {
-  it.each([
-    { name: 'not reached yet, upstream verified (through a gate)', env: 'prod', states: { test: 'Verified', uat: 'Verified', prod: 'NotStarted' }, want: true },
-    { name: 'failed, upstream verified', env: 'prod', states: { test: 'Verified', uat: 'Verified', prod: 'Failed' }, want: true },
-    { name: 'stopped by an alarm, upstream verified', env: 'uat', states: { test: 'Verified', uat: 'AbortedByAlarm', prod: 'NotStarted' }, want: true },
-    { name: 'not reached yet, upstream still promoting', env: 'prod', states: { test: 'Verified', uat: 'Promoting', prod: 'NotStarted' }, want: false },
-    { name: 'in flight', env: 'uat', states: { test: 'Verified', uat: 'Promoting', prod: 'NotStarted' }, want: false },
-    { name: 'waiting for merge', env: 'uat', states: { test: 'Verified', uat: 'WaitingForMerge', prod: 'NotStarted' }, want: false },
-    { name: 'already verified', env: 'uat', states: { test: 'Verified', uat: 'Verified', prod: 'NotStarted' }, want: false },
-    { name: 'first environment (nothing upstream)', env: 'test', states: { test: 'Failed', uat: 'NotStarted', prod: 'NotStarted' }, want: false },
-  ])('$name → $want', ({ env, states, want }) => {
-    const { nodes, edges } = lane(states)
-    const node = nodes.find(n => n.environment === env && n.type === 'PromotionStep')!
-    expect(canPromote(node, nodes, edges)).toBe(want)
-  })
-})
-
+// The rule itself is tested in pipelineActions.test.ts; these check the lane uses it.
 describe('PipelineLaneView — promote and roll back (C10b-web-08)', () => {
   beforeEach(() => {
     api.promote.mockReset()

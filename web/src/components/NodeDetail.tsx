@@ -5,6 +5,8 @@
 // For PolicyGate nodes: shows CEL expression and last evaluated timestamp.
 // For PromotionStep nodes: shows the step sequence the controller resolved for
 // this promotion (status.steps[]), conditions, events, and promote/rollback.
+// Promote and Roll back follow the same rule as the pipeline lane
+// (pipelineActions.ts), so they only show where they can do something.
 //
 // #326: NodeDetail is rendered as a sibling of the DAGView in App.tsx's flex
 // layout, so it shifts the DAG left rather than overlapping it.
@@ -16,7 +18,7 @@
 //
 // #527: EventsPanel — K8s events for the selected step, refreshed with each poll.
 import { useState, useEffect } from 'react'
-import type { GraphNode, PromotionStep, Bundle, StepStatus } from '../types'
+import type { GraphEdge, GraphNode, PromotionStep, Bundle, StepStatus } from '../types'
 import { HealthChip } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
@@ -24,6 +26,7 @@ import CopyButton from './CopyButton'
 import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
 import { formatElapsedSince } from '../timeFormat'
 import { isHttpURL } from '../prLink'
+import { canPromote, canRollback } from '../pipelineActions'
 
 interface Props {
   node: GraphNode | null
@@ -40,6 +43,11 @@ interface Props {
   activeBundle?: Bundle
   /** Called after a promote or rollback request succeeds, so the parent can refresh. */
   onActionDone?: () => void
+  /** Graph nodes of the active bundle: the current state of this node and its upstream
+   *  environments. Without them Promote stays hidden (the upstream state is unknown). */
+  nodes?: GraphNode[]
+  /** Graph edges of the active bundle — used to find the upstream environments. */
+  edges?: GraphEdge[]
 }
 
 /** PromotionStep states in which work is running (Go never reports "Running"). */
@@ -308,7 +316,7 @@ function StepProgress({ step }: { step: PromotionStep }) {
 
 const labelStyle = { color: 'var(--color-text)' } as const
 
-export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle, onActionDone }: Props) {
+export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle, onActionDone, nodes = [], edges = [] }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
   const [stepLoading, setStepLoading] = useState(false)
   // Promote / rollback: the dialog being confirmed and the last result.
@@ -409,6 +417,11 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
     ? formatElapsedSince(node.startedAt ?? node.lastEvaluatedAt)
     : ''
   const showsImages = node.state !== 'RollingBack' && IN_FLIGHT_STATES.has(node.state)
+  // The selected node is a copy taken at click time; the graph has its current state.
+  const liveNode = nodes.find(n => n.id === node.id) ?? node
+  const canAct = isPromotionStep && !!pipelineName && !!node.environment
+  const showPromote = canAct && canPromote(liveNode, nodes, edges)
+  const showRollback = canAct && canRollback(liveNode)
 
   return (
     <div data-testid="node-detail" style={{
@@ -458,52 +471,57 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         </div>
       )}
 
-      {/* Promote / rollback — shown on PromotionStep nodes when a pipeline is known */}
-      {isPromotionStep && pipelineName && node.environment && (
+      {/* Promote / rollback — only where they can do something (pipelineActions.ts).
+          The result stays visible after the step moves on and the buttons go. */}
+      {canAct && (showPromote || showRollback || actionResult) && (
         <div style={{ marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          <button
-            type="button"
-            onClick={() => setConfirmAction('promote')}
-            title={`Promote ${pipelineName} to ${node.environment}`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.35rem 0.8rem',
-              background: 'var(--color-accent-bg)',
-              color: 'var(--color-accent)',
-              border: '1px solid var(--color-accent)',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '0.8rem',
-              fontWeight: 500,
-            }}
-          >
-            <span aria-hidden="true">▶</span>
-            <span>Promote to {node.environment}</span>
-          </button>
+          {showPromote && (
+            <button
+              type="button"
+              onClick={() => setConfirmAction('promote')}
+              title={`Promote ${pipelineName} to ${node.environment}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.8rem',
+                background: 'var(--color-accent-bg)',
+                color: 'var(--color-accent)',
+                border: '1px solid var(--color-accent)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: 500,
+              }}
+            >
+              <span aria-hidden="true">▶</span>
+              <span>Promote to {node.environment}</span>
+            </button>
+          )}
           {/* Rollback button (#331) */}
-          <button
-            type="button"
-            onClick={() => setConfirmAction('rollback')}
-            title={`Roll back ${node.environment} to the previous verified version`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.35rem 0.8rem',
-              background: 'transparent',
-              color: 'var(--color-error)',
-              border: '1px solid var(--color-error)',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '0.8rem',
-              fontWeight: 500,
-            }}
-          >
-            <span aria-hidden="true">↩</span>
-            <span>Roll back {node.environment}</span>
-          </button>
+          {showRollback && (
+            <button
+              type="button"
+              onClick={() => setConfirmAction('rollback')}
+              title={`Roll back ${node.environment} to the previous verified version`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.8rem',
+                background: 'transparent',
+                color: 'var(--color-error)',
+                border: '1px solid var(--color-error)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: 500,
+              }}
+            >
+              <span aria-hidden="true">↩</span>
+              <span>Roll back {node.environment}</span>
+            </button>
+          )}
           {actionResult && (
             <div role="status" style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
               {actionResult}
