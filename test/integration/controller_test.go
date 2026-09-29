@@ -180,7 +180,9 @@ func TestControllerIntegration(t *testing.T) {
 		assert.Equal(t, "Available", got.Status.Phase, "Bundle phase must still be 'Available' after second reconcile")
 	})
 
-	t.Run("PipelineReconciler sets Ready condition to False", func(t *testing.T) {
+	t.Run("PipelineReconciler sets Ready condition from validation", func(t *testing.T) {
+		// dev → prod is a valid Pipeline, so Ready is True with reason Valid
+		// (C02-bundle-15: Ready used to be False for every Pipeline).
 		r := &pipelinereconciler.Reconciler{Client: fakeClient}
 
 		req := reconcile.Request{
@@ -206,7 +208,7 @@ func TestControllerIntegration(t *testing.T) {
 			}
 			if len(got.Status.Conditions) > 0 {
 				cond := got.Status.Conditions[0]
-				if cond.Type == "Ready" && cond.Status == metav1.ConditionFalse {
+				if cond.Type == "Ready" && cond.Status == metav1.ConditionTrue {
 					return // success
 				}
 			}
@@ -217,7 +219,8 @@ func TestControllerIntegration(t *testing.T) {
 		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: pipelineName, Namespace: namespace}, &got))
 		require.NotEmpty(t, got.Status.Conditions, "Pipeline must have at least one condition")
 		assert.Equal(t, "Ready", got.Status.Conditions[0].Type, "Pipeline.status.conditions[0].type must be 'Ready'")
-		assert.Equal(t, metav1.ConditionFalse, got.Status.Conditions[0].Status, "Pipeline.status.conditions[0].status must be 'False'")
+		assert.Equal(t, metav1.ConditionTrue, got.Status.Conditions[0].Status, "Pipeline.status.conditions[0].status must be 'True'")
+		assert.Equal(t, "Valid", got.Status.Conditions[0].Reason)
 	})
 
 	t.Run("PipelineReconciler is idempotent", func(t *testing.T) {
@@ -239,6 +242,6 @@ func TestControllerIntegration(t *testing.T) {
 		require.NoError(t, fakeClient.Get(ctx, client.ObjectKey{Name: pipelineName, Namespace: namespace}, &got))
 		require.NotEmpty(t, got.Status.Conditions, "Pipeline must still have conditions after second reconcile")
 		assert.Equal(t, "Ready", got.Status.Conditions[0].Type, "condition type must still be 'Ready'")
-		assert.Equal(t, metav1.ConditionFalse, got.Status.Conditions[0].Status, "condition status must still be 'False'")
+		assert.Equal(t, metav1.ConditionTrue, got.Status.Conditions[0].Status, "condition status must still be 'True'")
 	})
 }
