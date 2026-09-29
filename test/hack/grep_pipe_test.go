@@ -43,12 +43,12 @@ func TestQuietGrepPipesFindsOnlyGrepQ(t *testing.T) {
 	assert.Equal(t, []string{"a | grep -q x", "b | grep -Eqi x", "c |   grep --quiet x"}, quietGrepPipes(script))
 }
 
-// TestScriptsDoNotPipeIntoGrepQ checks the demo and hack scripts, which run
-// under pipefail or are sourced by scripts that do.
+// TestScriptsDoNotPipeIntoGrepQ checks the demo, hack and scripts/ shell
+// scripts, which run under pipefail or are sourced by scripts that do.
 func TestScriptsDoNotPipeIntoGrepQ(t *testing.T) {
 	root := repoRoot(t)
 	var files []string
-	for _, pattern := range []string{"demo/scripts/*.sh", "hack/*.sh"} {
+	for _, pattern := range []string{"demo/scripts/*.sh", "hack/*.sh", "scripts/*.sh"} {
 		m, err := filepath.Glob(filepath.Join(root, pattern))
 		require.NoError(t, err)
 		files = append(files, m...)
