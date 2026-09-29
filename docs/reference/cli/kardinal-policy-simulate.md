@@ -38,7 +38,7 @@ kardinal policy simulate [flags]
       --env string                  Environment name (required)
   -h, --help                        help for simulate
       --pipeline string             Pipeline name (required)
-      --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces takes precedence (default [platform-policies])
+      --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces and its own namespace are read as well (default [platform-policies])
       --soak-minutes int            Simulated soak time of each upstream environment, in minutes
       --time string                 Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)
 ```

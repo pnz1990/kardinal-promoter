@@ -38,8 +38,9 @@ type Translator struct {
 }
 
 // New creates a new Translator.
-// policyNS is the list of namespaces to scan for org-level PolicyGates
-// (typically []string{"platform-policies"}).
+// policyNS is the list of org policy namespaces: they are always scanned for
+// PolicyGates, and only gates in them may grant a skip permission. Empty
+// means graph.DefaultPolicyNamespace.
 func New(
 	graphClient *graph.GraphClient,
 	builder *graph.Builder,
@@ -48,7 +49,7 @@ func New(
 	log zerolog.Logger,
 ) *Translator {
 	if len(policyNS) == 0 {
-		policyNS = []string{"platform-policies"}
+		policyNS = []string{graph.DefaultPolicyNamespace}
 	}
 	return &Translator{
 		graphClient: graphClient,
@@ -73,9 +74,10 @@ func (t *Translator) WithRESTMapper(m meta.RESTMapper) *Translator {
 	return t
 }
 
-// Translate translates a Pipeline+Bundle pair to a Graph CR and creates it.
-// Idempotent: if the Graph already exists, returns without error.
-// Returns the name of the generated Graph.
+// Translate translates a Pipeline+Bundle pair to a Graph CR and applies it:
+// it creates the Graph, or updates the spec of the Graph this Bundle already
+// controls, and refuses a Graph of the same name controlled by another owner
+// (graph.ErrGraphOwnedByOther). Returns the name of the Graph.
 func (t *Translator) Translate(ctx context.Context,
 	pipeline *kardinalv1alpha1.Pipeline,
 	bundle *kardinalv1alpha1.Bundle) (string, error) {
@@ -83,8 +85,10 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("pipeline", pipeline.Name).
 		Str("bundle", bundle.Name).
 		Logger()
+	ctx = log.WithContext(ctx)
 
-	// Collect PolicyGates from all policy namespaces + pipeline namespace
+	// Collect PolicyGates from the org policy namespaces, the Pipeline's
+	// spec.policyNamespaces, and the Pipeline namespace.
 	gates, err := t.collectGates(ctx, pipeline)
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: collect gates: %w", err)
@@ -92,29 +96,15 @@ func (t *Translator) Translate(ctx context.Context,
 
 	log.Debug().Int("gates", len(gates)).Msg("collected policy gates")
 
-	// Inline PromotionTemplate steps before building the Graph.
-	// Each environment that references a PromotionTemplate has its steps replaced
-	// with those from the template (unless the environment overrides with local steps).
-	// This keeps the Builder pure (no k8s client) — spec O4.
-	pipeline, err = inlinePromotionTemplates(ctx, pipeline, t.k8s)
-	if err != nil {
-		return "", fmt.Errorf("translator.Translate: inline promotion templates: %w", err)
-	}
-
-	// Validate skip permissions before building the Graph.
-	// The result of this check flows into Bundle.status via the Bundle reconciler
-	// (which sets phase=Failed if Translate returns an error). This makes the
-	// skip-permission decision observable via CRD status rather than invisible
-	// inside graph.Builder. Eliminates GB-2 from 11-graph-purity-tech-debt.md.
-	if err := graph.ValidateSkipPermissions(pipeline, bundle, gates); err != nil {
-		return "", fmt.Errorf("translator.Translate: skip permission denied: %w", err)
-	}
-
-	// Build Graph spec
+	// Build validates the input (names, skip permissions, node IDs) and
+	// returns the Graph spec. Only the controller's org namespaces count as
+	// org policy: a Pipeline's own spec.policyNamespaces adds gates but can
+	// never grant a skip.
 	result, err := t.builder.Build(graph.BuildInput{
-		Pipeline:    pipeline,
-		Bundle:      bundle,
-		PolicyGates: gates,
+		Pipeline:         pipeline,
+		Bundle:           bundle,
+		PolicyGates:      gates,
+		PolicyNamespaces: t.policyNS,
 	})
 	if err != nil {
 		return "", fmt.Errorf("translator.Translate: build: %w", err)
@@ -125,33 +115,50 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("graph", result.Graph.Name).
 		Msg("graph spec built")
 
-	// Inject health ref nodes for each environment that has health.type configured.
-	// HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md:
-	// The translator emits read-only ref nodes for health verification so the
-	// Graph can observe real K8s resource health. Each node's readyWhen feeds
-	// the Graph's Ready condition and the UI.
-	if injected, injErr := injectHealthNodes(pipeline, result.Graph, t.servedKind); injErr != nil {
-		// Non-fatal: log and continue without Watch nodes rather than failing the promotion.
-		// The PromotionStep reconciler's Go adapter path remains as a fallback.
-		log.Warn().Err(injErr).Msg("health Watch node injection failed — continuing without Watch nodes")
-	} else if injected > 0 {
-		log.Debug().Int("healthNodes", injected).Msg("health Watch nodes injected into Graph")
+	// Health ref nodes for the environments in this Graph (ledger gaps G3,
+	// G4). Namespaces the Graph identity may not read get no ref.
+	h := healthInjector{
+		log:    log,
+		served: t.servedKind,
+		mayRead: func(ns string) bool {
+			return t.identity.MayRead(result.Graph.Namespace, ns)
+		},
+	}
+	injected := h.inject(pipeline, result.Graph, result.Environments)
+	if err := graph.ValidateNodeIDs(result.Graph.Spec.Nodes); err != nil {
+		return "", fmt.Errorf("translator.Translate: health nodes: %w", err)
 	}
 
 	// kro applies the Graph as spec.serviceAccountName; it must exist and be
-	// bound before kro's first reconcile or every apply is forbidden.
-	if err := t.identity.Ensure(ctx, result.Graph); err != nil {
+	// bound before kro's first reconcile or every apply is forbidden. A ref
+	// into a namespace the reader role could not be bound in would be a hard
+	// kro error, so those health refs are dropped for this Graph.
+	unbound, err := t.identity.Ensure(ctx, result.Graph)
+	if err != nil {
 		return "", fmt.Errorf("translator.Translate: graph identity: %w", err)
 	}
+	if dropped := dropHealthNodes(result.Graph, injected, unbound); len(dropped) > 0 {
+		log.Warn().Strs("nodes", dropped).Strs("namespaces", unbound).
+			Msg("health ref nodes dropped: the Graph identity cannot read their namespaces")
+	}
 
-	// Create the Graph CR
 	if err := t.graphClient.Create(ctx, result.Graph); err != nil {
 		return "", fmt.Errorf("translator.Translate: create graph: %w", err)
 	}
 
+	// Remove reader RoleBindings no Graph in the namespace reads through any
+	// more. Best effort: a failure leaves a binding for a later translation.
+	if t.identity != nil {
+		if graphs, err := t.graphClient.List(ctx, result.Graph.Namespace); err != nil {
+			log.Warn().Err(err).Msg("graph identity: list graphs for prune")
+		} else if err := t.identity.Prune(ctx, result.Graph.Namespace, graphs); err != nil {
+			log.Warn().Err(err).Msg("graph identity: prune reader rolebindings")
+		}
+	}
+
 	log.Info().
 		Str("graph", result.Graph.Name).
-		Int("nodes", result.NodeCount).
+		Int("nodes", len(result.Graph.Spec.Nodes)).
 		Msg("translation complete: graph applied")
 
 	return result.Graph.Name, nil
@@ -171,105 +178,133 @@ func (t *Translator) servedKind(apiVersion, kind string) bool {
 	return err == nil
 }
 
-// injectHealthWatchNodes adds health ref nodes assuming every health kind is
-// served by the cluster. See injectHealthNodes.
-func injectHealthWatchNodes(pipeline *kardinalv1alpha1.Pipeline, g *graph.Graph) (int, error) {
-	return injectHealthNodes(pipeline, g, nil)
-}
-
-// injectHealthNodes post-processes the Graph spec to add read-only ref nodes
-// for each environment with a configured health.type.
+// healthInjector adds read-only health ref nodes to a Graph.
 //
 // This is the translator-layer implementation of HE-1, HE-2, HE-3 from
-// docs/design/11-graph-purity-tech-debt.md.
-//
-// For each environment env with health.type set:
-//  1. Build a WatchNodeSpec from pkg/health.WatchNodeTemplate
-//  2. Build the Graph node ID: "health<EnvSlug>" (camelCase via celSafeSlug)
-//  3. Append a ref node: metadata.name for a single object, metadata.selector
-//     for a collection
-//
-// The health condition is not added to the PromotionStep node's readyWhen:
-// kro only lets readyWhen reference the node itself (ledger gap G3).
-//
-// served, when non-nil, filters out kinds the cluster does not serve (ledger
-// gap G4). Returns the count of injected nodes.
-func injectHealthNodes(
-	pipeline *kardinalv1alpha1.Pipeline,
-	g *graph.Graph,
-	served func(apiVersion, kind string) bool,
-) (int, error) {
+// docs/design/11-graph-purity-tech-debt.md. The health condition is not added
+// to the PromotionStep node's readyWhen: kro only lets readyWhen reference the
+// node itself (ledger gap G3).
+type healthInjector struct {
+	log zerolog.Logger
+	// served, when non-nil, filters out kinds the cluster does not serve
+	// (ledger gap G4).
+	served func(apiVersion, kind string) bool
+	// mayRead, when non-nil, filters out refs into namespaces the Graph
+	// identity may not read.
+	mayRead func(namespace string) bool
+}
+
+// inject adds a ref node for each of envs (the environments the Graph
+// promotes) whose health.type is set: metadata.name for a single object,
+// metadata.selector for a collection. The node ID is "health" plus the
+// camelCase environment name, with a number appended if another node already
+// has that ID. It returns the namespace of each added node by node ID.
+func (h healthInjector) inject(pipeline *kardinalv1alpha1.Pipeline, g *graph.Graph,
+	envs []string) map[string]string {
 	if pipeline == nil || g == nil {
-		return 0, nil
+		return nil
+	}
+	inGraph := make(map[string]bool, len(envs))
+	for _, e := range envs {
+		inGraph[e] = true
+	}
+	taken := make(map[string]bool, len(g.Spec.Nodes))
+	for _, n := range g.Spec.Nodes {
+		taken[n.ID] = true
 	}
 
-	injected := 0
+	injected := map[string]string{}
 	for _, env := range pipeline.Spec.Environments {
-		if env.Health.Type == "" {
-			continue // no health check configured for this env
+		if env.Health.Type == "" || !inGraph[env.Name] {
+			continue
 		}
+		log := h.log.With().Str("environment", env.Name).Str("healthType", env.Health.Type).Logger()
 
-		// Build the resource name. We use the same convention as the PromotionStep
-		// reconciler's handleHealthChecking: pipeline.Name + "-" + env.Name for
-		// argocd/flux, and pipeline.Name for resource/argoRollouts/flagger.
-		opts := healthOptsForEnv(pipeline.Name, env)
-
-		spec, err := health.WatchNodeTemplate(env.Health.Type, opts)
+		spec, err := health.WatchNodeTemplate(env.Health.Type, healthOptsForEnv(pipeline.Name, env))
 		if err != nil {
-			// Unknown health type — skip this env rather than failing the whole promotion.
+			log.Warn().Err(err).Msg("no health ref node: unknown health type")
 			continue
 		}
-		if served != nil && !served(spec.APIVersion, spec.Kind) {
+		if h.served != nil && !h.served(spec.APIVersion, spec.Kind) {
+			log.Info().Str("kind", spec.Kind).Msg("no health ref node: kind not served by the cluster")
+			continue
+		}
+		ns := spec.Namespace
+		if ns == "" {
+			// An empty namespace on a selector ref lists every namespace.
+			ns = g.Namespace
+		}
+		if h.mayRead != nil && !h.mayRead(ns) {
+			log.Warn().Str("namespace", ns).
+				Msg("no health ref node: namespace not in --graph-reader-namespaces")
 			continue
 		}
 
-		// Node ID: "health" + TitleCase(celSafeSlug(env.Name))
-		// e.g. "prod-eu" → celSafeSlug → "prodEu" → "healthProdEu"
-		// The "health" prefix + TitleCase keeps the ID a valid kro node ID
-		// ([A-Za-z][A-Za-z0-9]*).
-		envSlug := celSafeSlug(env.Name)
-		if len(envSlug) > 0 {
-			envSlug = strings.ToUpper(envSlug[:1]) + envSlug[1:]
+		base := "health" + upperFirst(graph.CELSafeSlug(env.Name))
+		nodeID := base
+		for i := 2; taken[nodeID]; i++ {
+			nodeID = fmt.Sprintf("%s%d", base, i)
 		}
-		nodeID := "health" + envSlug
+		taken[nodeID] = true
 
-		var healthNode graph.GraphNode
+		metadata := map[string]interface{}{"namespace": ns}
+		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
 		if spec.UseWatchKind {
-			// Collection ref: metadata.selector. kro evaluates readyWhen per
-			// element with the element bound to "each".
-			healthNode = graph.GraphNode{
-				ID: nodeID,
-				Ref: map[string]interface{}{
-					"apiVersion": spec.APIVersion,
-					"kind":       spec.Kind,
-					"metadata": map[string]interface{}{
-						"namespace": spec.Namespace,
-						"selector": map[string]interface{}{
-							"matchLabels": stringMapToInterface(spec.LabelSelector),
-						},
-					},
-				},
-				ReadyWhen: []string{"${" + strings.ReplaceAll(spec.ReadyWhen, "healthNode", "each") + "}"},
+			// Collection ref: kro evaluates readyWhen per element with the
+			// element bound to "each".
+			metadata["selector"] = map[string]interface{}{
+				"matchLabels": stringMapToInterface(spec.LabelSelector),
 			}
+			readyWhen = strings.ReplaceAll(spec.ReadyWhen, "healthNode", "each")
 		} else {
-			// Single named ref.
-			healthNode = graph.GraphNode{
-				ID: nodeID,
-				Ref: map[string]interface{}{
-					"apiVersion": spec.APIVersion,
-					"kind":       spec.Kind,
-					"metadata": map[string]interface{}{
-						"name":      spec.Name,
-						"namespace": spec.Namespace,
-					},
-				},
-				ReadyWhen: []string{"${" + strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID) + "}"},
-			}
+			metadata["name"] = spec.Name
 		}
-		g.Spec.Nodes = append(g.Spec.Nodes, healthNode)
-		injected++
+		g.Spec.Nodes = append(g.Spec.Nodes, graph.GraphNode{
+			ID: nodeID,
+			Ref: map[string]interface{}{
+				"apiVersion": spec.APIVersion,
+				"kind":       spec.Kind,
+				"metadata":   metadata,
+			},
+			ReadyWhen: []string{"${" + readyWhen + "}"},
+		})
+		injected[nodeID] = ns
 	}
-	return injected, nil
+	if len(injected) > 0 {
+		h.log.Debug().Int("healthNodes", len(injected)).Msg("health ref nodes injected into Graph")
+	}
+	return injected
+}
+
+// dropHealthNodes removes the injected health nodes whose namespace is in
+// namespaces and returns their IDs. Nothing references a health node, so
+// removing one leaves a valid Graph.
+func dropHealthNodes(g *graph.Graph, injected map[string]string, namespaces []string) []string {
+	if len(namespaces) == 0 {
+		return nil
+	}
+	drop := make(map[string]bool, len(namespaces))
+	for _, ns := range namespaces {
+		drop[ns] = true
+	}
+	var dropped []string
+	kept := g.Spec.Nodes[:0]
+	for _, n := range g.Spec.Nodes {
+		if ns, ok := injected[n.ID]; ok && drop[ns] {
+			dropped = append(dropped, n.ID)
+			continue
+		}
+		kept = append(kept, n)
+	}
+	g.Spec.Nodes = kept
+	return dropped
+}
+
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func stringMapToInterface(in map[string]string) map[string]interface{} {
@@ -331,81 +366,29 @@ func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec)
 	}
 }
 
-// celSafeSlug produces an identifier safe for use as both a CEL variable name
-// and as a kro Graph node ID. Mirrors graph.celSafeSlug exactly — must
-// be kept in sync with pkg/graph/builder.go.
+// collectGates lists PolicyGate templates from the org policy namespaces
+// (t.policyNS), the Pipeline's spec.policyNamespaces, and the Pipeline's
+// namespace. De-duplicates by name+namespace and skips gate instances
+// (labelled kardinal.io/gate-template).
 //
-// See graph.celSafeSlug for full documentation. Summary: produces camelCase so
-// the result matches kro's node ID pattern [A-Za-z][A-Za-z0-9]*.
-func celSafeSlug(s string) string {
-	var b strings.Builder
-	upperNext := false
-	for _, c := range s {
-		switch {
-		case c >= 'a' && c <= 'z':
-			if upperNext {
-				b.WriteRune(c - 'a' + 'A')
-				upperNext = false
-			} else {
-				b.WriteRune(c)
-			}
-		case c >= 'A' && c <= 'Z':
-			switch {
-			case b.Len() == 0:
-				b.WriteRune(c - 'A' + 'a')
-			case upperNext:
-				b.WriteRune(c)
-				upperNext = false
-			default:
-				b.WriteRune(c)
-			}
-		case c >= '0' && c <= '9':
-			if b.Len() == 0 {
-				b.WriteString("x")
-			}
-			b.WriteRune(c)
-			upperNext = false
-		default:
-			upperNext = true
-		}
-	}
-	if b.Len() == 0 {
-		return "x"
-	}
-	return b.String()
-}
-
-// collectGates lists PolicyGate templates from all policy namespaces and the
-// pipeline's namespace. De-duplicates by name+namespace and skips gate
-// instances (labelled kardinal.io/gate-template).
-//
-// Policy namespace resolution (TR-2 elimination — docs/design/11-graph-purity-tech-debt.md):
-// If pipeline.spec.policyNamespaces is set, use those namespaces instead of the
-// controller-wide default (t.policyNS). This makes the policy namespace list
-// explicit in the Pipeline spec rather than hardcoded in the controller.
+// spec.policyNamespaces only adds namespaces (TR-2,
+// docs/design/11-graph-purity-tech-debt.md). The org namespaces are always
+// scanned, so a Pipeline cannot opt out of org policy by listing other
+// namespaces.
 func (t *Translator) collectGates(ctx context.Context,
 	pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, error) {
 	seen := make(map[string]bool)
 	var gates []kardinalv1alpha1.PolicyGate
 
-	// Use Pipeline.spec.policyNamespaces when set; fall back to controller-wide default.
-	baseNS := t.policyNS
-	if len(pipeline.Spec.PolicyNamespaces) > 0 {
-		baseNS = pipeline.Spec.PolicyNamespaces
-	}
-
-	namespaces := append([]string(nil), baseNS...)
-	// Add pipeline namespace if not already included
-	pipelineNS := pipeline.Namespace
-	alreadyIncluded := false
-	for _, ns := range namespaces {
-		if ns == pipelineNS {
-			alreadyIncluded = true
-			break
+	var namespaces []string
+	scanned := map[string]bool{}
+	for _, list := range [][]string{t.policyNS, pipeline.Spec.PolicyNamespaces, {pipeline.Namespace}} {
+		for _, ns := range list {
+			if ns != "" && !scanned[ns] {
+				scanned[ns] = true
+				namespaces = append(namespaces, ns)
+			}
 		}
-	}
-	if !alreadyIncluded {
-		namespaces = append(namespaces, pipelineNS)
 	}
 
 	for _, ns := range namespaces {

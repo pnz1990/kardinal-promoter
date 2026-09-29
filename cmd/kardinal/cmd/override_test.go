@@ -38,11 +38,14 @@ func newOverrideTestScheme() *runtime.Scheme {
 	return s
 }
 
-func makeTestGate(name string) *v1alpha1.PolicyGate {
+// makeTestGate returns a gate instance (it carries kardinal.io/bundle), named
+// directly by the tests below.
+func makeTestGate(name, ns string) *v1alpha1.PolicyGate {
 	return &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: "default",
+			Namespace: ns,
+			Labels:    map[string]string{"kardinal.io/bundle": "my-app-x7k2m"},
 		},
 		Spec: v1alpha1.PolicyGateSpec{
 			Expression: "!schedule.isWeekend",
@@ -54,7 +57,7 @@ func makeTestGate(name string) *v1alpha1.PolicyGate {
 // TestOverrideFn_BasicOverride verifies that the override CLI function
 // appends an override to PolicyGate.spec.overrides[].
 func TestOverrideFn_BasicOverride(t *testing.T) {
-	gate := makeTestGate("no-weekend-deploy")
+	gate := makeTestGate("no-weekend-deploy", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -86,7 +89,7 @@ func TestOverrideFn_BasicOverride(t *testing.T) {
 
 // TestOverrideFn_InvalidExpiry verifies that an invalid --expires-in returns an error.
 func TestOverrideFn_InvalidExpiry(t *testing.T) {
-	gate := makeTestGate("my-gate")
+	gate := makeTestGate("my-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -114,7 +117,7 @@ func TestOverrideFn_GateNotFound(t *testing.T) {
 
 // TestOverrideFn_MultipleOverrides verifies that multiple overrides accumulate.
 func TestOverrideFn_MultipleOverrides(t *testing.T) {
-	gate := makeTestGate("rate-limit-gate")
+	gate := makeTestGate("rate-limit-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -140,7 +143,7 @@ func TestOverrideFn_MultipleOverrides(t *testing.T) {
 // TestOverrideFn_EmptyStageAppliesGlobally verifies that an empty stage
 // means the override applies to all environments.
 func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
-	gate := makeTestGate("global-gate")
+	gate := makeTestGate("global-gate", "default")
 	fc := fake.NewClientBuilder().
 		WithScheme(newOverrideTestScheme()).
 		WithObjects(gate).
@@ -162,11 +165,82 @@ func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
 	assert.Equal(t, "", updatedGate.Spec.Overrides[0].Stage)
 }
 
+// gateInstance returns an instance of template for pipeline and env, as a
+// Graph stamps it.
+func gateInstance(name, template, pipeline, env string) *v1alpha1.PolicyGate {
+	g := makeTestGate(name, "default")
+	g.Labels["kardinal.io/pipeline"] = pipeline
+	g.Labels["kardinal.io/environment"] = env
+	g.Labels["kardinal.io/gate-template"] = template
+	return g
+}
+
+// TestOverrideFn_TemplateName verifies that the documented form, --gate with
+// the gate template name, records the override on the instances the
+// PolicyGate reconciler evaluates, and never on the template (C01-graph-05,
+// C09b-cli-05, C12-examples-demo-03, E2E-20).
+func TestOverrideFn_TemplateName(t *testing.T) {
+	tests := []struct {
+		name      string
+		stage     string
+		want      []string // instances that get the override
+		wantErr   string
+		instances bool
+	}{
+		{name: "stage", stage: "prod", instances: true, want: []string{"no-weekend-deploy-prod-b1"}},
+		{name: "every stage", instances: true, want: []string{"no-weekend-deploy-prod-b1", "no-weekend-deploy-uat-b1"}},
+		{name: "stage without instance", stage: "test", instances: true, wantErr: "is a template"},
+		{name: "no instances", stage: "prod", wantErr: "is a template"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			template := &v1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploy", Namespace: "default",
+					Labels: map[string]string{"kardinal.io/applies-to": "prod,uat"}},
+				Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+			}
+			objs := []sigs_client.Object{template,
+				// Another pipeline's instance of the same template.
+				gateInstance("no-weekend-deploy-prod-other", "no-weekend-deploy", "other-app", "prod")}
+			if tt.instances {
+				objs = append(objs,
+					gateInstance("no-weekend-deploy-prod-b1", "no-weekend-deploy", "my-app", "prod"),
+					gateInstance("no-weekend-deploy-uat-b1", "no-weekend-deploy", "my-app", "uat"))
+			}
+			fc := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).WithObjects(objs...).Build()
+
+			var buf bytes.Buffer
+			err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", tt.stage, "no-weekend-deploy",
+				"P0 hotfix", "1h")
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+
+			var list v1alpha1.PolicyGateList
+			require.NoError(t, fc.List(context.Background(), &list))
+			var got []string
+			for _, g := range list.Items {
+				if len(g.Spec.Overrides) > 0 {
+					got = append(got, g.Name)
+					assert.Equal(t, tt.stage, g.Spec.Overrides[0].Stage)
+				}
+			}
+			assert.ElementsMatch(t, tt.want, got)
+			for _, name := range tt.want {
+				assert.Contains(t, buf.String(), "gate="+name)
+			}
+		})
+	}
+}
+
 // C09b-cli-06: an override that lands between our read and our write is kept.
 func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
 	calls := 0
 	c := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).
-		WithObjects(makeTestGate("g")).
+		WithObjects(makeTestGate("g", "default")).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Patch: func(ctx context.Context, cl sigs_client.WithWatch, obj sigs_client.Object,
 				patch sigs_client.Patch, opts ...sigs_client.PatchOption) error {

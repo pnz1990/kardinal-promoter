@@ -25,8 +25,14 @@ type PolicyGateSpec struct {
 	// +optional
 	RecheckInterval string `json:"recheckInterval,omitempty"`
 
-	// SkipPermission controls whether bundles with intent.skipEnvironments can
-	// bypass this gate. When false, skip requests are denied.
+	// SkipPermission marks a skip-permission gate as granting skips. A Bundle
+	// may skip (intent.skipEnvironments) an environment an org gate applies to
+	// only when a gate labelled kardinal.io/type=skip-permission, with
+	// skipPermission true, in an org policy namespace, applies to that
+	// environment. Gates in other namespaces never grant a skip. The permission
+	// gate's expression is evaluated like any gate, in front of the next
+	// environment the Bundle promotes, so that environment waits until it is true.
+	// On any other gate this field has no effect.
 	// +kubebuilder:default=false
 	// +optional
 	SkipPermission bool `json:"skipPermission,omitempty"`
@@ -108,9 +114,16 @@ type PolicyGateStatus struct {
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Last-Evaluated",type=date,JSONPath=`.status.lastEvaluatedAt`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63 || self.metadata.name.contains('--') || self.metadata.name.startsWith('freeze-')",message="PolicyGate names are at most 63 characters: the name is copied into the kardinal.io/gate-template label of every gate instance"
 
 // PolicyGate is a CEL-powered policy check represented as a node in the
 // promotion Graph. Platform teams define org-level gates; teams add their own.
+//
+// A gate's name must be at most 63 characters, because the Graph copies it
+// into a label of each instance. The rule exempts the two kinds of PolicyGate
+// kardinal names itself: gate instances ("<gate>-<namespace>-<env>--<bundle>",
+// see pkg/graph gateNodeK8sName, which can be longer) and pause freeze gates
+// ("freeze-<pipeline>"). Neither is ever used as a template.
 type PolicyGate struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
