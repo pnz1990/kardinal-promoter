@@ -19,4 +19,4 @@ Item 701 eliminates pkg/cel — now feasible with ScheduleClock providing watch-
 re-evaluation. Per docs/design/11-graph-purity-tech-debt.md:
 - PolicyGate reconciler reads schedule.* from CRD status context (already works)
 - CLI policy simulate calls server-side API (item 700 fix contributes to this path)
-- No krocodile changes needed
+- No Graph controller changes needed

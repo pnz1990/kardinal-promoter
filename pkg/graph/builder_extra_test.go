@@ -5,6 +5,8 @@
 package graph_test
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,15 +125,10 @@ func TestBuilder_SkipAllEnvironments(t *testing.T) {
 	bundle.Spec.Intent = &kardinalv1alpha1.BundleIntent{
 		SkipEnvironments: []string{"test"},
 	}
-	// skipEnvironments is now expressed as includeWhen (#619), not Go-level filtering.
-	// Build succeeds — the node is present but krocodile will exclude it via includeWhen.
-	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
-	require.NoError(t, err)
-	// test node present with includeWhen excluding it
-	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	testNode, ok := nodeMap["test"]
-	require.True(t, ok, "test node must be present (excluded via includeWhen, not removed)")
-	require.NotEmpty(t, testNode.IncludeWhen, "test node must have includeWhen for skipEnvironments")
+	// skipEnvironments is filtered statically (ledger gap G2); skipping every
+	// environment leaves nothing to promote.
+	_, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	require.Error(t, err)
 }
 
 // TestBuilder_GraphLabels verifies the generated Graph has correct labels.
@@ -154,7 +151,7 @@ func TestBuilder_GraphAPIVersion(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	assert.Equal(t, "experimental.kro.run/v1alpha1", result.Graph.APIVersion)
+	assert.Equal(t, "kro.run/v1alpha1", result.Graph.APIVersion)
 	assert.Equal(t, "Graph", result.Graph.Kind)
 }
 
@@ -176,5 +173,89 @@ func TestBuilder_SlugifyUppercase(t *testing.T) {
 	for _, c := range name {
 		assert.True(t, (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-',
 			"Graph name must contain only [a-z0-9-], got char %q in %q", c, name)
+	}
+}
+
+// TestBuilder_UpstreamGating verifies that a PromotionStep's upstreamStates
+// only resolve once the upstream is Verified. kro does not gate dependents on
+// readyWhen for a standalone Graph, so the builder makes the reference itself
+// unresolvable until then (ledger gap G1).
+func TestBuilder_UpstreamGating(t *testing.T) {
+	b := graph.NewBuilder()
+	result, err := b.Build(graph.BuildInput{
+		Pipeline: makeLinearPipeline("app", "test", "prod"),
+		Bundle:   makeBundle("app-v1", "app"),
+	})
+	require.NoError(t, err)
+
+	prodSpec := nodeByID(result.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})
+	assert.Equal(t,
+		[]interface{}{`${["Verified"].filter(x_, test.status.state == "Verified")[0]}`},
+		prodSpec["upstreamStates"])
+}
+
+// TestBuilder_UpstreamGating_MultiRegion verifies that a step downstream of a
+// forEach environment waits for every region to be Verified.
+func TestBuilder_UpstreamGating_MultiRegion(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "canary", Regions: []string{"us-east-1", "eu-west-1", "ap-south-1"}},
+				{Name: "prod"},
+			},
+		},
+	}
+	result, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: makeBundle("fleet-v1", "fleet")})
+	require.NoError(t, err)
+
+	prodSpec := nodeByID(result.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})
+	assert.Equal(t,
+		[]interface{}{`${["Verified"].filter(x_, size(canary) == 3 && canary.all(s_, s_.status.state == "Verified"))[0]}`},
+		prodSpec["upstreamStates"],
+		"size() guards against the vacuous all() on an empty or partially stamped collection")
+}
+
+// TestBuilder_ServiceAccountName verifies the Graph carries the applier
+// ServiceAccount kro impersonates, with a default and an override.
+func TestBuilder_ServiceAccountName(t *testing.T) {
+	in := graph.BuildInput{Pipeline: makeLinearPipeline("app", "test"), Bundle: makeBundle("app-v1", "app")}
+
+	result, err := graph.NewBuilder().Build(in)
+	require.NoError(t, err)
+	assert.Equal(t, graph.DefaultGraphServiceAccount, result.Graph.Spec.ServiceAccountName)
+
+	b := graph.NewBuilder()
+	b.ServiceAccountName = "custom-sa"
+	result, err = b.Build(in)
+	require.NoError(t, err)
+	assert.Equal(t, "custom-sa", result.Graph.Spec.ServiceAccountName)
+}
+
+// TestBuilder_OnlyKroKeywords verifies every node uses only keywords the kro
+// Graph schema defines and wraps readyWhen/includeWhen entries in ${...}.
+func TestBuilder_OnlyKroKeywords(t *testing.T) {
+	gate := makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend")
+	pipeline := makeLinearPipeline("app", "test", "prod")
+	pipeline.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"}
+	result, err := graph.NewBuilder().Build(graph.BuildInput{
+		Pipeline: pipeline, Bundle: makeBundle("app-v1", "app"),
+		PolicyGates: []kardinalv1alpha1.PolicyGate{gate},
+	})
+	require.NoError(t, err)
+
+	allowed := map[string]bool{"id": true, "template": true, "ref": true, "readyWhen": true, "includeWhen": true, "forEach": true}
+	for _, n := range result.Graph.Spec.Nodes {
+		raw, err := json.Marshal(n)
+		require.NoError(t, err)
+		var fields map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &fields))
+		for k := range fields {
+			assert.True(t, allowed[k], "node %q uses non-kro keyword %q", n.ID, k)
+		}
+		for _, expr := range append(append([]string{}, n.ReadyWhen...), n.IncludeWhen...) {
+			assert.True(t, strings.HasPrefix(expr, "${") && strings.HasSuffix(expr, "}"),
+				"node %q expression %q must be wrapped in ${...}", n.ID, expr)
+		}
 	}
 }

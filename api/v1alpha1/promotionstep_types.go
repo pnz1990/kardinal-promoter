@@ -37,7 +37,7 @@ type PromotionStepSpec struct {
 	// Each entry is a string like "Verified", set by the kro Graph controller via CEL
 	// expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2
 	// pattern (issue 625) -- a single list scales to any number of upstream environments.
-	// krocodile collectStrings() scans []any recursively so list items create DAG edges.
+	// kro scans list items for CEL references, so each entry creates a DAG edge.
 	// +optional
 	UpstreamStates []string `json:"upstreamStates,omitempty"`
 
@@ -54,7 +54,7 @@ type PromotionStepSpec struct {
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
 	// Region identifies which geographic/cloud region this PromotionStep instance
-	// promotes into. Set by the krocodile Graph controller via forEach "${item}"
+	// promotes into. Set by the kro Graph controller via forEach "${region}"
 	// substitution when the Pipeline environment has spec.regions with ≥2 entries.
 	// Empty for single-region environments. The reconciler uses this field when
 	// constructing region-scoped Git paths and PR labels (issue #612).

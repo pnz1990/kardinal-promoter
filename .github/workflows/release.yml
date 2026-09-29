@@ -60,58 +60,6 @@ jobs:
           GOOS=darwin  GOARCH=arm64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-darwin-arm64  ./cmd/kardinal/
           GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=${VERSION}" -o dist/kardinal-windows-amd64.exe ./cmd/kardinal/
 
-      # ── Build krocodile image ──────────────────────────────────────────────
-      # We build and push the krocodile Graph controller image ourselves so
-      # that every kardinal release bundles a known-good, versioned krocodile
-      # image. Users do not need to run hack/install-krocodile.sh.
-      - name: Read pinned krocodile commit
-        id: krocodile
-        run: |
-          COMMIT=$(grep 'KROCODILE_COMMIT:-' hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,40\}' | head -1)
-          echo "KROCODILE_COMMIT=${COMMIT}" >> $GITHUB_ENV
-          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
-          echo "Pinned krocodile commit: ${COMMIT}"
-
-      - name: Clone krocodile at pinned commit
-        run: |
-          git clone --quiet --no-tags --depth=500 \
-            https://github.com/ellistarn/kro.git /tmp/kro -b krocodile
-          git -C /tmp/kro fetch --depth=1 origin ${{ steps.krocodile.outputs.commit }} || \
-            git -C /tmp/kro fetch --unshallow
-          git -C /tmp/kro checkout ${{ steps.krocodile.outputs.commit }}
-          echo "krocodile checked out at $(git -C /tmp/kro rev-parse --short HEAD)"
-
-      - name: Build krocodile binary
-        run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            GOTOOLCHAIN=auto go build \
-            -ldflags="-w -s" \
-            -o /tmp/kro/bin/graph-controller-amd64 \
-            /tmp/kro/experimental/cmd/
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            GOTOOLCHAIN=auto go build \
-            -ldflags="-w -s" \
-            -o /tmp/kro/bin/graph-controller-arm64 \
-            /tmp/kro/experimental/cmd/
-        working-directory: /tmp/kro
-
-      - name: Build and push krocodile image (multi-arch)
-        uses: docker/build-push-action@v7
-        with:
-          context: /tmp/kro
-          file: hack/Dockerfile.krocodile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.KROCODILE_COMMIT }}
-            ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.VERSION }}
-          labels: |
-            org.opencontainers.image.title=krocodile-graph-controller
-            org.opencontainers.image.description=krocodile Graph controller bundled with kardinal-promoter
-            org.opencontainers.image.version=${{ env.VERSION }}
-            org.opencontainers.image.revision=${{ env.KROCODILE_COMMIT }}
-            org.opencontainers.image.source=https://github.com/ellistarn/kro/tree/krocodile
-
       # ── Build kardinal-promoter controller image ───────────────────────────
       - name: Build and push kardinal-promoter controller image (multi-arch)
         id: build-controller
@@ -191,32 +139,9 @@ jobs:
           category: trivy-controller
         continue-on-error: true
 
-      - name: Scan krocodile image for HIGH/CRITICAL CVEs (trivy)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: ghcr.io/pnz1990/kardinal-promoter/krocodile:${{ env.KROCODILE_COMMIT }}
-          format: sarif
-          output: trivy-krocodile-results.sarif
-          severity: HIGH,CRITICAL
-          exit-code: 0
-          ignore-unfixed: true
-        continue-on-error: true
-
-      - name: Upload trivy SARIF report (krocodile)
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: trivy-krocodile-results.sarif
-          category: trivy-krocodile
-        continue-on-error: true
-
       # ── Package and publish Helm chart ─────────────────────────────────────
-      - name: Update chart version and krocodile tag
+      - name: Update chart version
         run: |
-          # Stamp chart version and krocodile image tag into values.yaml
-          sed -i "s|tag: \"\"  # defaults to krocodile.pinnedCommit|tag: \"${KROCODILE_COMMIT}\"|g" \
-            chart/kardinal-promoter/values.yaml || true
-          # The chart uses the tag from values.yaml; also update Chart.yaml
           sed -i "s|^appVersion:.*|appVersion: \"${VERSION}\"|" chart/kardinal-promoter/Chart.yaml
           sed -i "s|^version:.*|version: ${VERSION#v}|" chart/kardinal-promoter/Chart.yaml
 
@@ -256,7 +181,20 @@ jobs:
             ### Changes
             ${{ env.CHANGELOG }}
 
-            ### Install (single command — includes krocodile)
+            ### Install
+
+            kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro)
+            Graph controller (kro >= v0.10.0 with the `GraphKind` feature gate). Install kro first:
+
+            ```bash
+            helm install kro oci://registry.k8s.io/kro/charts/kro \
+              --namespace kro-system --create-namespace \
+              --version 0.10.0-rc.0 \
+              --set config.featureGates.GraphKind=true \
+              --set rbac.mode=aggregation
+            ```
+
+            Then install kardinal-promoter:
 
             ```bash
             helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
@@ -264,10 +202,6 @@ jobs:
               --version ${{ env.VERSION }} \
               --set github.secretRef.name=github-token
             ```
-
-            > No separate krocodile install needed. The chart bundles and installs
-            > krocodile (commit `${{ env.KROCODILE_COMMIT }}`) automatically.
-            > Use `--set krocodile.enabled=false` if you already run krocodile.
 
             ### CLI
 
@@ -290,7 +224,6 @@ jobs:
             | Image | Tag | Platform |
             |---|---|---|
             | `ghcr.io/pnz1990/kardinal-promoter/controller` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
-            | `ghcr.io/pnz1990/kardinal-promoter/krocodile` | `${{ env.KROCODILE_COMMIT }}` | linux/amd64, linux/arm64 |
           files: dist/*
           draft: false
           prerelease: ${{ contains(env.VERSION, '-') }}

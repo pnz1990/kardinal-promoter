@@ -4,7 +4,6 @@
 package graph
 
 import (
-	"crypto/sha1" //nolint:gosec // SHA-1 used for content addressing only, not cryptographic security
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,10 +33,19 @@ type BuildResult struct {
 	NodeCount int
 }
 
+// DefaultGraphServiceAccount is the ServiceAccount (in the Pipeline's
+// namespace) that kro impersonates when it applies a kardinal Graph.
+// See identity.go for how the controller provisions it.
+const DefaultGraphServiceAccount = "kardinal-graph"
+
 // Builder generates Graph specs from Pipeline + Bundle + PolicyGates.
 // It implements the full translation algorithm from
 // docs/design/02-pipeline-to-graph-translator.md.
-type Builder struct{}
+type Builder struct {
+	// ServiceAccountName is written to Graph.spec.serviceAccountName.
+	// Empty means DefaultGraphServiceAccount.
+	ServiceAccountName string
+}
 
 // NewBuilder creates a new Builder.
 func NewBuilder() *Builder {
@@ -86,12 +94,19 @@ func (b *Builder) Build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 7: assemble Graph
-	g := assembleGraph(input.Pipeline, input.Bundle, nodes)
+	g := assembleGraph(input.Pipeline, input.Bundle, nodes, b.serviceAccountName())
 
 	return &BuildResult{
 		Graph:     g,
 		NodeCount: len(nodes),
 	}, nil
+}
+
+func (b *Builder) serviceAccountName() string {
+	if b == nil || b.ServiceAccountName == "" {
+		return DefaultGraphServiceAccount
+	}
+	return b.ServiceAccountName
 }
 
 // --- Step 1: resolve environment ordering ---
@@ -287,8 +302,21 @@ func filterByIntent(orderedEnvs []string, deps map[string][]string,
 		result = envPathTo(orderedEnvs, deps, target)
 	}
 
-	// skipEnvironments: NOT filtered in Go here (#619 — Graph-first).
-	// PromotionStep nodes have includeWhen expressions for this (#619).
+	// skipEnvironments: filtered here, not with includeWhen on the
+	// PromotionStep node. kro's includeWhen is contagious — a false
+	// includeWhen also excludes every node that depends on the skipped node,
+	// so a skipped "uat" would drop "prod" too. filteredDeps bridges the
+	// skipped environment so "prod" depends on "test" directly.
+	// See docs/design/16-graph-capability-ledger.md gap G2.
+	if skips := bundle.Spec.Intent.SkipEnvironments; len(skips) > 0 {
+		kept := result[:0]
+		for _, e := range result {
+			if !containsStr(skips, e) {
+				kept = append(kept, e)
+			}
+		}
+		result = kept
+	}
 	if len(result) == 0 {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
@@ -411,7 +439,7 @@ func matchGatesByEnv(filteredEnvs []string,
 // --- Step 5 & 6: build nodes and wire edges ---
 
 // buildNodes generates all PromotionStep and PolicyGate Graph nodes in
-// dependency order, with correct readyWhen, propagateWhen, and edge fields.
+// dependency order, with correct readyWhen and gating edges.
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate) ([]GraphNode, error) {
@@ -431,15 +459,20 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		filteredSet[e] = true
 	}
 
+	// Environments that fan out per region become forEach collections;
+	// dependents must reference them with collection expressions.
+	regionCount := make(map[string]int)
+	for _, e := range filteredEnvs {
+		if n := len(envSpecMap[e].Regions); n >= 2 {
+			regionCount[celSafeSlug(e)] = n
+		}
+	}
+
 	var nodes []GraphNode
 
-	// Bundle Watch node: brings bundle.spec.* into Graph CEL scope (#622).
-	// This is a single named Watch reference (not WatchKind) — the translator
-	// knows the exact Bundle name at graph generation time.
-	//
-	// krocodile ≥ 05db829 (explicit-keyword schema): identity-only Watch nodes
-	// must use the ref: keyword, not template:. template: always means Own.
-	// The Bundle Watch is read-only — use ref: to dereference it into scope.
+	// Bundle ref node: brings bundle.spec.* into Graph CEL scope (#622).
+	// A named ref — the translator knows the exact Bundle name at graph
+	// generation time. ref: reads the object without owning it.
 	bundleWatchNode := GraphNode{
 		ID: "bundle",
 		Ref: map[string]interface{}{
@@ -450,7 +483,7 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 				"namespace": bundle.Namespace,
 			},
 		},
-		// ReadyWhen/PropagateWhen intentionally omitted — ref: is read-only.
+		// ReadyWhen intentionally omitted — ref: is read-only.
 	}
 	nodes = append(nodes, bundleWatchNode)
 
@@ -477,20 +510,21 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 			nodes = append(nodes, gateNode)
 		}
 
-		// PRStatus Watch node — created alongside each PromotionStep.
+		// PRStatus node — created alongside each PromotionStep.
 		// The open-pr step writes this CRD; the PRStatusReconciler updates status.merged.
 		// The PromotionStep spec carries the prStatusRef so it can watch it without polling.
 		stepNodeID := celSafeSlug(envName)
 		prStatusNodeID := prStatusNodeName(bundleSlug, envName)
 		prStatusK8sName := prStatusNodeK8sName(bundleSlugK8s, envName)
-		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName)
+		prStatusNode := buildPRStatusNode(prStatusNodeID, prStatusK8sName, pipelineName, bundle.Name, envName,
+			envSpec.Approval == "pr-review")
 		nodes = append(nodes, prStatusNode)
 
 		// PromotionStep node — node ID must be a valid CEL identifier.
 		// When the environment declares ≥2 regions, emit a forEach node so that
-		// krocodile stamps out one PromotionStep per region (issue #612).
+		// kro stamps out one PromotionStep per region (issue #612).
 		stepNode := buildPromotionStepNode(
-			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, gateNodeIDs, prStatusNodeID,
+			pipelineName, bundleSlugK8s, envName, stepNodeID, envSpec, bundle, upstreams, regionCount, gateNodeIDs, prStatusNodeID,
 		)
 		nodes = append(nodes, stepNode)
 	}
@@ -523,22 +557,53 @@ func filteredDeps(envName string, deps map[string][]string, filteredSet map[stri
 	return result
 }
 
+// resolvableWhen returns a CEL template expression that evaluates to value
+// when cond is true and fails with "index out of bounds" when cond is false.
+//
+// kro's standalone Graph does not hold dependents back on readyWhen (the
+// executor's GateReadiness option is only enabled for RGD instances). It does
+// treat "index out of bounds" as data-pending: the node is left Unresolved,
+// nothing is created or pruned, and kro retries when a watched object changes.
+// Embedding a gate condition in a field the dependent needs therefore holds
+// the dependent back until cond holds. The iterator name carries an
+// underscore so it can never collide with a node ID ([A-Za-z][A-Za-z0-9]*).
+// See docs/design/16-graph-capability-ledger.md gap G1.
+func resolvableWhen(cond, value string) string {
+	return fmt.Sprintf("${[%s].filter(x_, %s)[0]}", value, cond)
+}
+
+// verifiedCond returns the CEL condition "upstream PromotionStep is Verified".
+// For a forEach (multi-region) upstream the node is a list; every region must
+// be Verified, and the size check keeps a not-yet-expanded collection from
+// passing vacuously.
+func verifiedCond(upstreamID string, regions int) string {
+	if regions >= 2 {
+		return fmt.Sprintf(`size(%s) == %d && %s.all(s_, s_.status.state == "Verified")`,
+			upstreamID, regions, upstreamID)
+	}
+	return fmt.Sprintf(`%s.status.state == "Verified"`, upstreamID)
+}
+
 // buildPromotionStepNode builds a Graph node for a PromotionStep.
-// nodeID is the CEL-safe identifier (underscores) used in readyWhen/propagateWhen.
+// nodeID is the CEL-safe identifier used in CEL expressions.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
-// prStatusNodeID is the node ID of the companion PRStatus Watch node.
+// prStatusNodeID is the node ID of the companion PRStatus node.
+// regionCount maps multi-region upstream node IDs to their region count.
+//
+// Gating: spec.upstreamStates and spec.requiredGates only resolve once every
+// upstream PromotionStep is Verified and every PolicyGate is ready (see
+// resolvableWhen). Until then kro does not create this PromotionStep.
 //
 // Multi-region fan-out (issue #612): when envSpec.Regions has ≥2 entries, the
-// returned node uses krocodile's forEach primitive. krocodile stamps out one
-// PromotionStep per region; each instance receives spec.region = the region name
-// via the "${item}" CEL substitution. The node ID and propagateWhen expressions
-// remain identical to single-region — krocodile evaluates propagateWhen per item
-// and gates downstream propagation until ALL instances are Verified.
+// returned node uses kro's forEach with a "region" iterator. kro stamps out
+// one PromotionStep per region named <pipeline>-<bundle>-<env>-<region>, each
+// with spec.region set to the region name.
 func buildPromotionStepNode(
 	pipelineName, bundleSlugK8s, envName, nodeID string,
 	envSpec kardinalv1alpha1.EnvironmentSpec,
 	bundle *kardinalv1alpha1.Bundle,
 	upstreams []string,
+	regionCount map[string]int,
 	gateNodeIDs []string,
 	prStatusNodeID string,
 ) GraphNode {
@@ -548,6 +613,11 @@ func buildPromotionStepNode(
 	// Kubernetes resource name uses hyphens (RFC 1123 subdomain); envName may contain
 	// hyphens which are allowed in K8s names.
 	k8sResourceName := fmt.Sprintf("%s-%s-%s", pipelineName, bundleSlugK8s, envName)
+
+	multiRegion := len(envSpec.Regions) >= 2
+	if multiRegion {
+		k8sResourceName += "-${region}"
+	}
 
 	// Build the PromotionStep resource template
 	templateMeta := map[string]interface{}{
@@ -565,45 +635,44 @@ func buildPromotionStepNode(
 
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
-		// bundleName: live CEL reference to Bundle Watch node metadata.name (#622).
+		// bundleName: live CEL reference to the Bundle ref node metadata.name (#622).
 		// Enables the Graph to react to Bundle changes without regenerating the spec.
 		"bundleName":  "${bundle.metadata.name}",
 		"environment": envName,
 		"stepType":    stepType,
-		// prStatusRef points to the companion PRStatus Watch node.
+		// prStatusRef points to the companion PRStatus node.
 		// The PromotionStep reconciler reads spec.prStatusRef.name to find the
 		// PRStatus CRD instead of polling GitHub directly (eliminates PS-4, SCM-2).
 		"prStatusRef": fmt.Sprintf("${%s.metadata.name}", prStatusNodeID),
 	}
 
-	// Add upstream state references as a list — creates CEL dependency edges.
-	// krocodile's collectStrings() scans []any recursively, so list elements with
-	// ${upstream.status.state} CEL expressions correctly establish dependency edges
-	// from all upstream PromotionStep nodes. Using a single list avoids the N-field
-	// upstreamVerified / upstreamVerified2 / ... scaling anti-pattern (#625).
+	// Upstream states as a list — creates CEL dependency edges and gates this
+	// step on every upstream being Verified. Using a single list avoids the
+	// N-field upstreamVerified / upstreamVerified2 / ... anti-pattern (#625).
 	if len(upstreams) > 0 {
 		upstreamRefs := make([]interface{}, len(upstreams))
 		for i, up := range upstreams {
-			upstreamRefs[i] = fmt.Sprintf("${%s.status.state}", up)
+			upstreamRefs[i] = resolvableWhen(verifiedCond(up, regionCount[up]), `"Verified"`)
 		}
 		templateSpec["upstreamStates"] = upstreamRefs
 	}
 
-	// Add required gates reference (creates fan-in edges from gate nodes)
+	// Required gates — creates fan-in edges from gate nodes and holds this
+	// step back until every gate reports status.ready == true. The resolved
+	// value is the gate name, which the PromotionStep reconciler reads.
 	if len(gateNodeIDs) > 0 {
 		gateRefs := make([]interface{}, len(gateNodeIDs))
 		for i, gid := range gateNodeIDs {
-			gateRefs[i] = fmt.Sprintf("${%s.metadata.name}", gid)
+			gateRefs[i] = resolvableWhen(
+				fmt.Sprintf("%s.status.ready == true", gid),
+				fmt.Sprintf("%s.metadata.name", gid),
+			)
 		}
 		templateSpec["requiredGates"] = gateRefs
 	}
 
-	// Multi-region fan-out (issue #612): when ≥2 regions are declared on the
-	// environment, add spec.region = "${item}" to the template. krocodile will
-	// substitute the current region name for each forEach iteration.
-	multiRegion := len(envSpec.Regions) >= 2
 	if multiRegion {
-		templateSpec["region"] = "${item}"
+		templateSpec["region"] = "${region}"
 	}
 
 	template := map[string]interface{}{
@@ -613,38 +682,21 @@ func buildPromotionStepNode(
 		"spec":       templateSpec,
 	}
 
-	stateRef := fmt.Sprintf("${%s.status.state}", nodeID)
-	_ = stateRef // used in readyWhen/propagateWhen expressions
-
-	// includeWhen for skipEnvironments (#619 -- Graph-first).
-	// bundle.spec.intent.skipEnvironments is live via the Bundle Watch node (#622).
-	includeWhen := []string{
-		fmt.Sprintf(`${!has(bundle.spec.intent) || !has(bundle.spec.intent.skipEnvironments) || !bundle.spec.intent.skipEnvironments.exists(s, s == %q)}`, envName),
-	}
-
 	node := GraphNode{
-		ID:          nodeID,
-		Template:    template,
-		IncludeWhen: includeWhen,
+		ID:       nodeID,
+		Template: template,
 		ReadyWhen: []string{
 			fmt.Sprintf(`${%s.status.state == "Verified"}`, nodeID),
 		},
-		PropagateWhen: []string{
-			fmt.Sprintf(`${%s.status.state == "Verified"}`, nodeID),
-		},
 	}
 
-	// Multi-region fan-out: set the ForEach field to a CEL array literal of the
-	// region names (issue #612). krocodile stamps one PromotionStep per region,
-	// substituting "${item}" with each region name in turn. Per-item propagateWhen
-	// was added in krocodile 745998f — all regional instances must be Verified
-	// before the downstream environment proceeds.
+	// Multi-region fan-out: forEach over a CEL list literal of the region
+	// names (issue #612). json.Marshal output is valid CEL for string lists.
 	if multiRegion {
-		// Build a CEL array literal: ["us-east-1", "eu-west-1"]
-		// json.Marshal produces valid JSON which is also valid CEL for string arrays.
 		regionsJSON, err := json.Marshal(envSpec.Regions)
 		if err == nil {
-			node.ForEach = string(regionsJSON)
+			node.ForEach = []map[string]string{{"region": "${" + string(regionsJSON) + "}"}}
+			node.ReadyWhen = []string{`${each.status.state == "Verified"}`}
 		}
 	}
 
@@ -652,7 +704,7 @@ func buildPromotionStepNode(
 }
 
 // buildPolicyGateNode builds a Graph node for a PolicyGate instance.
-// nodeID is the CEL-safe identifier (underscores) used in readyWhen/propagateWhen.
+// nodeID is the CEL-safe identifier used in CEL expressions.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
 func buildPolicyGateNode(
 	nodeID, k8sName string,
@@ -711,33 +763,34 @@ func buildPolicyGateNode(
 			"metadata":   templateMeta,
 			"spec":       templateSpec,
 		},
+		// ReadyWhen is the UI/Graph health signal. The blocking itself is done
+		// by the dependent PromotionStep's spec.requiredGates expression.
 		ReadyWhen: []string{
-			fmt.Sprintf(`${%s.status.ready == true}`, nodeID),
-		},
-		PropagateWhen: []string{
 			fmt.Sprintf(`${%s.status.ready == true}`, nodeID),
 		},
 	}
 }
 
-// buildPRStatusNode builds a Graph Watch node for a PRStatus CRD.
+// buildPRStatusNode builds a Graph node for a PRStatus CRD.
 //
-// The PRStatus CRD is created as a placeholder by the Graph; the open-pr step
-// populates spec.prURL, spec.prNumber, spec.repo after opening the PR.
-// The PRStatus reconciler monitors GitHub and sets status.merged = true.
+// The Graph creates the PRStatus as a placeholder with no spec; the open-pr
+// step populates spec.prURL, spec.prNumber, spec.repo after opening the PR.
+// The PRStatus reconciler monitors the SCM and sets status.merged = true.
 //
-// This node uses readyWhen (not propagateWhen) so it does NOT block downstream
-// PromotionSteps. The PromotionStep reconciler checks prStatusRef.status.merged
-// in its own WaitingForMerge state. Using propagateWhen would create a circular
-// dependency: PromotionStep references prstatus.metadata.name (creating a dep),
-// but if prstatus.propagateWhen == false, the PromotionStep could never start.
+// The template deliberately has no spec: kro server-side applies templates
+// and re-applies them on drift, so any spec field in the template would be
+// owned by kro and reverted after the open-pr step writes it.
+//
+// ReadyWhen is a health signal only (green in the UI once merged). It does
+// not gate the PromotionStep, which references this node's metadata.name and
+// enforces the merge gate in its own WaitingForMerge state. It is emitted only
+// for pr-review environments: an auto environment never opens a PR, so a
+// merged == true readyWhen would keep the Graph from ever reaching Ready.
 //
 // Graph-purity: this node provides observable PR merge state for the UI and
 // for the PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
-func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string) GraphNode {
+func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string, prReview bool) GraphNode {
 	templateMeta := map[string]interface{}{
-		// The name is set at runtime by the open-pr step; the Graph creates a
-		// placeholder. The PRStatus reconciler then updates its status.
 		"name": k8sName,
 		"labels": map[string]interface{}{
 			"kardinal.io/pipeline":    pipelineName,
@@ -746,46 +799,30 @@ func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string
 		},
 	}
 
-	templateSpec := map[string]interface{}{
-		// prURL, prNumber, repo will be written by the open-pr step after the
-		// PR is created. The Graph creates the CRD with empty spec; the step
-		// patches spec once it has the GitHub response.
-		"prURL":    "",
-		"prNumber": 0,
-		"repo":     "",
-	}
-
-	return GraphNode{
+	node := GraphNode{
 		ID: nodeID,
 		Template: map[string]interface{}{
 			"apiVersion": "kardinal.io/v1alpha1",
 			"kind":       "PRStatus",
 			"metadata":   templateMeta,
-			"spec":       templateSpec,
 		},
-		// ReadyWhen: health signal only — green in UI when PR is merged.
-		// NOT propagateWhen: the PromotionStep references this node's metadata.name
-		// which creates a dependency edge. Adding propagateWhen would block the
-		// PromotionStep from starting (circular: PS can't start → PR never opened
-		// → PRStatus never merged → propagateWhen never true → PS never starts).
-		ReadyWhen: []string{
-			fmt.Sprintf(`${%s.status.merged == true}`, nodeID),
-		},
-		// PropagateWhen is intentionally omitted — always propagates (unblocked).
-		// Merge-gate is enforced by the PromotionStep WaitingForMerge state machine.
 	}
+	if prReview {
+		node.ReadyWhen = []string{fmt.Sprintf(`${%s.status.merged == true}`, nodeID)}
+	}
+	return node
 }
 
 // --- Step 7: assemble Graph ---
 
 func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
-	nodes []GraphNode) *Graph {
+	nodes []GraphNode, serviceAccountName string) *Graph {
 	graphName := graphNameFrom(pipeline.Name, bundle.Name)
 	isController := true
 
 	return &Graph{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "experimental.kro.run/v1alpha1",
+			APIVersion: GraphGVK.GroupVersion().String(),
 			Kind:       "Graph",
 		},
 		ObjectMeta: metav1.ObjectMeta{
@@ -806,7 +843,8 @@ func assembleGraph(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 			},
 		},
 		Spec: GraphSpec{
-			Nodes: nodes,
+			Nodes:              nodes,
+			ServiceAccountName: serviceAccountName,
 		},
 	}
 }
@@ -835,9 +873,9 @@ func graphNameFrom(pipeline, bundle string) string {
 }
 
 // gateNodeName generates a unique node ID for a PolicyGate instance.
-// The ID is used as both the Kubernetes resource name (metadata.name) and as
-// the CEL variable name in readyWhen/propagateWhen expressions. CEL identifiers
-// must not contain hyphens, so we use camelCase (see celSafeSlug).
+// The ID is the CEL variable name other nodes use to reference the gate.
+// kro node IDs must match ^[A-Za-z][A-Za-z0-9]*$, so we use camelCase
+// (see celSafeSlug).
 // Includes namespace to prevent collisions when same gate name exists in
 // multiple namespaces.
 //
@@ -846,11 +884,6 @@ func graphNameFrom(pipeline, bundle string) string {
 // survive camelCase without creating word boundaries (digits don't trigger
 // capitalisation), preserving uniqueness across different (name, ns, env, bundle)
 // combinations.
-//
-// krocodile (e082fe9+, PR #109) validates node IDs via IsDNS1123Label(strings.ToLower(id)),
-// which enforces a 63-character limit per DNS label segment. If the full composed ID
-// exceeds this limit, it is truncated to 54 chars and an 8-char SHA-1 hash suffix
-// is appended (54 + "0" + 8 = 63 chars), preserving uniqueness.
 func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string {
 	ns := gateNS
 	if ns == "" {
@@ -860,11 +893,10 @@ func gateNodeName(pipeline, bundleSlug, gateName, gateNS, envName string) string
 	// two components whose camelCase forms would otherwise collide remain distinct.
 	// Example: gateName="a", ns="bC", env="d" → "a0bC0d00<bundle>"
 	//          gateName="aB", ns="c", env="d" → "aB0c0d00<bundle>"  (no collision)
-	full := celSafeSlug(gateName) + "0" +
+	return celSafeSlug(gateName) + "0" +
 		celSafeSlug(ns) + "0" +
 		celSafeSlug(envName) + "00" +
 		bundleSlug
-	return truncateNodeID(full)
 }
 
 // gateNodeK8sName generates the Kubernetes resource name (hyphens, RFC 1123) for a
@@ -880,8 +912,8 @@ func gateNodeK8sName(bundleSlugK8s, gateName, gateNS, envName string) string {
 // bundleVersionSlug returns a CEL-safe slug from the bundle name for use in node IDs.
 //
 // Dual-slug convention (GB-3/GB-4 in docs/design/11-graph-purity-tech-debt.md):
-//   - celSafeSlug / bundleVersionSlug → camelCase, valid CEL identifiers AND DNS labels
-//     Used in: node IDs, readyWhen/propagateWhen CEL expressions, gateNodeName
+//   - celSafeSlug / bundleVersionSlug → camelCase, valid CEL identifiers and kro node IDs
+//     Used in: node IDs, CEL expressions, gateNodeName
 //   - slugify → hyphens, valid Kubernetes resource names
 //     Used in: metadata.name fields only
 //
@@ -910,42 +942,15 @@ func slugify(s string) string {
 	return b.String()
 }
 
-// truncateNodeID ensures a graph node ID fits within the 63-character DNS label
-// limit enforced by krocodile (e082fe9+, PR #109) via IsDNS1123Label(strings.ToLower(id)).
-//
-// When the ID is short enough it is returned unchanged. When it exceeds 63 chars,
-// the first 54 characters are kept and an 8-hex-char SHA-1 digest of the full ID
-// is appended with a "0" separator: 54 + "0" + 8 = 63 chars exactly.
-// The hash preserves uniqueness — two different long IDs that share the same 54-char
-// prefix will have different hash suffixes.
-func truncateNodeID(id string) string {
-	const maxLen = 63
-	const prefixLen = 54
-	if len(id) <= maxLen {
-		return id
-	}
-	h := sha1.New() //nolint:gosec
-	h.Write([]byte(id))
-	return id[:prefixLen] + "0" + fmt.Sprintf("%x", h.Sum(nil))[:8]
-}
-
 // celSafeSlug creates an identifier safe for use as both a CEL variable name
-// and as a krocodile graph node ID.
+// and as a kro Graph node ID.
 //
-// krocodile (e082fe9+) embeds node IDs into Kubernetes label key prefixes using
-// the format "<nodeID>.<graphName>.<namespace>.internal.kro.run/reference".
-// Kubernetes label key prefixes must be valid RFC 1123 DNS subdomains, which
-// means each dot-separated segment may only contain [a-z0-9-] — no underscores.
-// krocodile calls strings.ToLower(nodeID) when constructing the prefix, so the
-// result of celSafeSlug must contain no underscores or hyphens after lowercasing.
-//
-// CEL identifier rules additionally forbid hyphens (only [a-zA-Z0-9_] allowed).
+// kro requires node IDs to match ^[A-Za-z][A-Za-z0-9]*$ (no hyphens or
+// underscores) because other nodes reference them as CEL identifiers.
 //
 // Solution: camelCase. Non-alphanumeric characters (hyphens, underscores, dots,
 // etc.) become word boundaries — the following letter is capitalised and the
-// separator is dropped. This satisfies both constraints simultaneously:
-//   - Valid CEL identifier: [a-zA-Z][a-zA-Z0-9]* ✓
-//   - Valid DNS label after strings.ToLower(): [a-z0-9]+ ✓
+// separator is dropped. The result always matches [a-zA-Z][a-zA-Z0-9]*.
 //
 // Examples:
 //
@@ -1059,10 +1064,9 @@ func containsStr(s []string, target string) bool {
 	return false
 }
 
-// prStatusNodeName generates the CEL-safe node ID for a PRStatus Watch node.
+// prStatusNodeName generates the CEL-safe node ID for a PRStatus node.
 // Format: prstatus0<bundleSlug>0<envSlug>
-// Uses digit separator "0" (not underscore) because celSafeSlug now produces
-// camelCase where underscores are invalid DNS label characters.
+// Uses digit separator "0" because kro node IDs may not contain underscores.
 func prStatusNodeName(bundleSlug, envName string) string {
 	return "prstatus0" + bundleSlug + "0" + celSafeSlug(envName)
 }

@@ -39,7 +39,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Cross-stage history in gates** | Yes — `upstream.<env>.recentSuccessCount`, `lastPromotedAt` | No | No |
 | **Artifact discovery** | Bundle created by CI/CLI; Subscription CRD with OCI + Git watchers | Warehouse (automatic OCI/git scanning) | Git commit-based |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight) | No |
-| **Architecture** | Graph-first (krocodile DAG) | Stage/controller | Controller |
+| **Architecture** | Graph-first (kro Graph DAG) | Stage/controller | Controller |
 | **Maturity** | v0.8.1, active development | v1.10.x, production-grade | v0.27.x, experimental |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 

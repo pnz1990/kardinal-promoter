@@ -29,8 +29,6 @@ jobs:
     name: e2e journey ${{ github.event.inputs.journey || 'all' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Note: GOTOOLCHAIN is NOT set at job level. The krocodile install step needs
-    # GOTOOLCHAIN=auto to download go1.26+ for building the krocodile controller.
     # Our own build steps set GOTOOLCHAIN=local explicitly.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -52,11 +50,11 @@ jobs:
       - name: Create kind cluster
         run: kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
 
-      - name: Install krocodile Graph controller
+      - name: Install kro Graph controller
         run: |
-          # Builds krocodile from the pinned commit, containerises it, loads into kind,
-          # and applies CRDs + RBAC + Deployment. See hack/install-krocodile.sh.
-          KIND_CLUSTER=kardinal-e2e bash hack/install-krocodile.sh
+          # Installs the upstream kro Helm chart with the GraphKind feature gate.
+          # See hack/install-kro.sh.
+          KUBE_CONTEXT=kind-kardinal-e2e bash hack/install-kro.sh
 
       - name: Build and load controller image
         env:
@@ -83,20 +81,15 @@ jobs:
           # VAP graduates to stable in k8s 1.30; re-enable when cluster is upgraded.
           make manifests
           kubectl apply -f config/crd/bases/
-          # krocodile is already installed by the prior step (hack/install-krocodile.sh).
-          # Disabling krocodile.enabled prevents Helm from trying to adopt the existing
-          # kro-system namespace (which lacks Helm management labels) and failing with
-          # "invalid ownership metadata".
           helm upgrade --install kardinal chart/kardinal-promoter \
             --namespace kardinal-system --create-namespace \
-            --set validatingAdmissionPolicy.enabled=false \
-            --set krocodile.enabled=false
+            --set validatingAdmissionPolicy.enabled=false
 
       - name: Verify both controllers are running
         run: |
           kubectl get pods -n kro-system
           kubectl get pods -n kardinal-system
-          kubectl get crd graphs.experimental.kro.run
+          kubectl get crd graphs.kro.run
 
       - name: Run selected journeys
         env:

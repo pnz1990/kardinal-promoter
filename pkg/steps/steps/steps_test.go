@@ -39,6 +39,7 @@ type mockGitClient struct {
 	cloneCalls  int
 	commitCalls int
 	pushCalls   int
+	pushBranch  string
 	failClone   bool
 	failCommit  bool
 	failPush    bool
@@ -62,8 +63,9 @@ func (m *mockGitClient) CommitAll(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
 
-func (m *mockGitClient) Push(_ context.Context, _, _, _, _ string) error {
+func (m *mockGitClient) Push(_ context.Context, _, _, branch, _ string) error {
 	m.pushCalls++
+	m.pushBranch = branch
 	if m.failPush {
 		return errors.New("mock push error")
 	}
@@ -205,6 +207,22 @@ func TestGitPushStep_Success(t *testing.T) {
 	assert.Equal(t, 1, git.pushCalls)
 	// Outputs should contain the branch name.
 	assert.Contains(t, result.Outputs["branch"], "kardinal/")
+}
+
+// An auto environment pushes straight to the base branch; there is no PR.
+func TestGitPushStep_AutoPushesBaseBranch(t *testing.T) {
+	git := &mockGitClient{}
+	state := makeState(git, nil)
+	state.Environment.Approval = "auto"
+
+	step, err := parentsteps.Lookup("git-push")
+	require.NoError(t, err)
+
+	result, err := step.Execute(context.Background(), state)
+	require.NoError(t, err)
+	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.Equal(t, "main", git.pushBranch)
+	assert.Equal(t, "main", result.Outputs["branch"])
 }
 
 func TestOpenPRStep_Success(t *testing.T) {

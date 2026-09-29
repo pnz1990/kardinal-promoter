@@ -79,7 +79,7 @@ type PRStatusStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PRStatus is a controller-internal CRD that tracks the merge state of a GitHub
-// pull request, making it observable by the krocodile Graph via a Watch node.
+// pull request, making it observable by the kro Graph.
 //
 // Architecture: PromotionStep open-pr step creates a PRStatus CR. The
 // PRStatusReconciler polls GitHub (or receives webhook events) and writes

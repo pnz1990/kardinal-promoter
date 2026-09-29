@@ -3,7 +3,7 @@
 #
 # Sets up a complete kardinal-promoter E2E environment on a kind cluster.
 # This goes beyond unit tests — it creates a real environment where:
-#   - krocodile Graph controller runs and processes real Graph CRs
+#   - the kro Graph controller runs and processes real Graph CRs
 #   - ArgoCD runs and syncs real Application resources
 #   - kardinal-test-app is deployed across test/uat/prod namespaces
 #   - kardinal-promoter can run the full promotion loop end-to-end
@@ -14,8 +14,7 @@
 #
 # Prerequisites: kubectl, kind, helm
 #
-# NOTE: kardinal-promoter and krocodile are installed together via the Helm chart.
-# hack/install-krocodile.sh is preserved for local development use only.
+# kro (the Graph controller) is a prerequisite installed by hack/install-kro.sh.
 
 set -euo pipefail
 
@@ -30,10 +29,10 @@ KARDINAL_DEMO_TOKEN="${KARDINAL_DEMO_TOKEN:-${GITHUB_TOKEN}}"
 echo "=== kardinal-promoter E2E Environment Setup ==="
 echo "Cluster: $KIND_CLUSTER | Chart: ${CHART_VERSION:-local} | ArgoCD: $ARGOCD_VERSION"
 
-# ── Step 1: Install kardinal-promoter + krocodile via Helm ───────────────────
-# The Helm chart bundles krocodile — no separate install script needed.
+# ── Step 1: Install kro, then kardinal-promoter via Helm ─────────────────────
 echo ""
-echo "[1/5] Installing kardinal-promoter (with bundled krocodile)..."
+echo "[1/5] Installing kro and kardinal-promoter..."
+bash hack/install-kro.sh
 
 if [ -n "$KARDINAL_DEMO_TOKEN" ]; then
   kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
@@ -64,26 +63,11 @@ else
     chart/kardinal-promoter \
     --namespace kardinal-system --create-namespace \
     --set github.secretRef.name=github-token \
-    --set krocodile.image.repository=krocodile-graph-controller \
-    --set "krocodile.image.tag=${KROCODILE_COMMIT:-948ad6c}" \
     --set validatingAdmissionPolicy.enabled=false \
-    --wait --timeout 180s || {
-    echo ""
-    echo "[WARNING] Helm install with --wait timed out or failed."
-    echo "This may be because the krocodile image is not available in the local registry."
-    echo "Falling back to install-krocodile.sh for local dev..."
-    helm upgrade --install kardinal-promoter \
-      chart/kardinal-promoter \
-      --namespace kardinal-system --create-namespace \
-      --set github.secretRef.name=github-token \
-      --set krocodile.enabled=false \
-      --set validatingAdmissionPolicy.enabled=false
-    KROCODILE_COMMIT="${KROCODILE_COMMIT:-948ad6c}" KIND_CLUSTER=$KIND_CLUSTER \
-      bash hack/install-krocodile.sh
-  }
+    --wait --timeout 180s
 fi
 
-echo "[1/5] kardinal-promoter and krocodile installed."
+echo "[1/5] kro and kardinal-promoter installed."
 
 # ── Step 2: Install ArgoCD ────────────────────────────────────────────────────
 if [ "$SKIP_ARGOCD" != "1" ]; then

@@ -1147,6 +1147,41 @@ func TestSupersessionGuard_ClosesOpenPRAndFails(t *testing.T) {
 	assert.Contains(t, got.Status.Message, "superseded", "failure message must mention supersession")
 }
 
+// TestSupersessionGuard_PendingStepNeverStarts verifies that a Pending step of
+// a Superseded Bundle is cancelled before it pushes or opens a PR. The
+// superseded Bundle's Graph stays in place and still creates downstream steps
+// once their gates open.
+func TestSupersessionGuard_PendingStepNeverStarts(t *testing.T) {
+	s := buildScheme(t)
+	bundle := makeBundle("superseded-bundle", "my-pipeline")
+	bundle.Status.Phase = "Superseded"
+	step := makeStep("late-prod-step", "my-pipeline", "superseded-bundle", "prod")
+	pipeline := makePipeline("my-pipeline")
+
+	git := &mockGit{}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(step, bundle, pipeline).
+		WithStatusSubresource(step).
+		Build()
+	r := promotionstep.Reconciler{
+		Client:    c,
+		SCM:       &mockSCM{},
+		GitClient: git,
+		WorkDirFn: func(_, _ string) string { return t.TempDir() },
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "late-prod-step", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	var got v1alpha1.PromotionStep
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "late-prod-step", Namespace: "default"}, &got))
+	assert.Equal(t, "Failed", got.Status.State, "Pending step must be Failed when bundle is Superseded")
+	assert.Contains(t, got.Status.Message, "superseded")
+}
+
 // --- #409: orphan cleanup lifecycle tests ---
 
 // TestOrphanCleanup_DeleteBundle_PromotingPhase verifies that when a Bundle in

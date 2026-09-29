@@ -8,7 +8,7 @@
 
 kardinal-promoter is a Kubernetes-native promotion controller. It moves versioned artifact bundles through environment pipelines using Git pull requests as the approval mechanism, with policy gates expressed as CEL and represented as visible nodes in the promotion DAG.
 
-The execution engine is [kro's Graph primitive](https://github.com/ellistarn/kro/tree/krocodile/experimental), a general-purpose Kubernetes DAG reconciler. Graph handles dependency ordering, parallel execution, conditional inclusion, and teardown. kardinal-promoter handles the promotion-specific logic: Git writes, PR lifecycle, policy evaluation, and health verification.
+The execution engine is [kro's Graph primitive](https://github.com/kubernetes-sigs/kro), a general-purpose Kubernetes DAG reconciler. Graph handles dependency ordering, parallel execution, conditional inclusion, and teardown. kardinal-promoter handles the promotion-specific logic: Git writes, PR lifecycle, policy evaluation, and health verification.
 
 All state lives in Kubernetes CRDs. There is no external database, no dedicated API server, and no state outside of etcd. The CLI, UI, and webhook endpoints create and read CRDs. A user can operate the entire system with `kubectl`.
 
@@ -16,9 +16,9 @@ All state lives in Kubernetes CRDs. There is no external database, no dedicated 
 
 ## Relationship to kro and Graph
 
-kro's Graph primitive (`experimental.kro.run/v1alpha1/Graph`) is a namespace-scoped CRD that defines a set of nodes with Kubernetes resource templates, CEL expressions for data flow, and dependency inference from those expressions. It supports `readyWhen`, `includeWhen`, `forEach`, `propagateWhen`, and `finalizes` on each node. The Graph controller reconciles the DAG using scoped walks and hash-based change detection. Reference implementation: [ellistarn/kro/tree/krocodile/experimental](https://github.com/ellistarn/kro/tree/krocodile/experimental).
+kro's Graph primitive (`kro.run/v1alpha1/Graph`) is a namespace-scoped CRD that defines a set of nodes with Kubernetes resource templates (`template`) or references to existing objects (`ref`), CEL expressions for data flow, and dependency inference from those expressions. It supports `readyWhen`, `includeWhen` and `forEach` on each node. Reference implementation: [kubernetes-sigs/kro](https://github.com/kubernetes-sigs/kro) v0.10.0-rc.0+, `GraphKind` feature gate.
 
-> **API group note (krocodile commit `48224264`, 2026-04-10)**: Graph CRD moved from `kro.run` to `experimental.kro.run` to eliminate CRD conflicts with upstream kro. Use `experimental.kro.run` in all GVK/GVR references.
+> **Upstream note (2026-09)**: kardinal targets upstream kro (`kro.run/v1alpha1`). This document was written against the earlier experimental Graph controller, which used a separate API group, a `propagateWhen` gate and a `finalizes` hook. Upstream has none of these; kardinal gates dependents with resolvability expressions (see [01-graph-integration.md](01-graph-integration.md)). Current gaps: [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
 Within the kro ecosystem, the relationship is:
 
@@ -208,7 +208,10 @@ Evidence (metrics, gate results, approver, timing) is copied into Bundle `status
 
 ### 3.5 PolicyGate Blocking and re-evaluation — `propagateWhen`, not `readyWhen`
 
-> **Critical note (2026-04-09, verified against krocodile/experimental):** The Graph primitive's
+> **Upstream (2026-09):** `propagateWhen` does not exist in kro. The blocking model below is
+> implemented with resolvability gating; see [01-graph-integration.md](01-graph-integration.md).
+>
+> **Critical note (2026-04-09, verified against the earlier experimental Graph controller):** The Graph primitive's
 > `readyWhen` is a **health signal only**. It feeds the Graph's aggregated `Ready` condition but
 > does **not** gate downstream execution. Dependents proceed as soon as a node's data is in scope,
 > regardless of `readyWhen`. The field that gates downstream data flow is `propagateWhen`.
@@ -813,7 +816,7 @@ Referencing attributes from a later phase causes a CEL evaluation error. The gat
 For a Pipeline `[dev, staging, prod]` with two org prod gates, the controller generates:
 
 ```yaml
-apiVersion: experimental.kro.run/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: Graph
 metadata:
   name: my-app-v1-29-0
@@ -1355,8 +1358,8 @@ On in-flight failure (PromotionStep `status.state = "Failed"`), Graph stops all 
 | promotionsteps.kardinal.io | get, list, watch, create, update | Step lifecycle |
 | policygates.kardinal.io | get, list, watch | Controller reads. Create/update restricted to platform-policies namespace via RBAC. |
 | bundles.kardinal.io | get, list, watch, create, update, delete | Bundle management |
-| graphs.experimental.kro.run | get, list, watch, create, update, delete | Graph lifecycle |
-| graphrevisions.experimental.kro.run | get, list, watch | Revision tracking |
+| graphs.kro.run | get, list, watch, create, update, delete | Graph lifecycle |
+| serviceaccounts, rolebindings | get, create, update | Graph identity (`spec.serviceAccountName`) |
 | deployments.apps | get, list, watch | Health (resource adapter) |
 | applications.argoproj.io | get, list, watch | Health (argocd adapter) |
 | kustomizations.kustomize.toolkit.fluxcd.io | get, list, watch | Health (flux adapter) |
@@ -1423,17 +1426,17 @@ Git cache at `/var/cache/kardinal/` uses an emptyDir volume.
 
 ### Tracking Policy
 
-The krocodile/experimental branch is under active development. Before implementing any Graph
-integration, check the current state:
+kro's Graph kind is alpha. Before implementing any Graph integration, check the current state:
 
 ```bash
-# Always check recent krocodile commits before Graph work
-gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=20' \
-  --jq '.[] | {sha: .sha[0:8], message: .commit.message[0:80], date: .commit.committer.date}'
+# Always check recent kro releases before Graph work
+gh api 'repos/kubernetes-sigs/kro/releases?per_page=5' \
+  --jq '.[] | {tag: .tag_name, date: .published_at}'
 ```
 
-Read the design docs at `experimental/docs/design/` — these are the authoritative source for Graph
-semantics. When they disagree with this document, the krocodile docs win.
+Read the [Graph docs](https://kro.run/next/docs/concepts/graph/overview/) and `pkg/graphengine/` in
+kubernetes-sigs/kro — these are the authoritative source for Graph semantics. When they disagree
+with this document, kro wins. Current gaps: [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
 **Contribution-first policy:** When Graph doesn't support something kardinal-promoter needs,
 contribute upstream instead of writing a workaround. A landed contribution eliminates the
@@ -1441,7 +1444,7 @@ workaround permanently. Workarounds are only acceptable when a contribution woul
 more than one sprint. Every workaround must be labeled with `TODO(contribute-upstream):` in the
 code and an open GitHub issue.
 
-**Breaking change detection:** krocodile is installed at a pinned commit in all test clusters (CI and local kind). When a krocodile update breaks tests, an issue is filed before the next sprint starts. The pinned commit is updated deliberately, not automatically. Never let a krocodile API change be discovered during implementation.
+**Breaking change detection:** kro is installed at a pinned version (`hack/install-kro.sh`) in all test clusters (CI and local kind). When a kro update breaks tests, an issue is filed before the next sprint starts. The pin is updated deliberately, not automatically. Never let a kro API change be discovered during implementation.
 
 ### Gaps and Proposed Contributions
 
@@ -1453,7 +1456,7 @@ code and an open GitHub issue.
 | Partial DAG instantiation | Bundle `intent.target` limits which environments are included | Handled in the Pipeline-to-Graph translation layer (only include nodes up to target) | No Graph change needed |
 | Node-level status surface | kardinal-ui needs per-node promotion context beyond Graph readyWhen | Read child CRD status directly (PromotionStep, PolicyGate) | No Graph change needed |
 
-### Semantic Facts (as of 2026-04-09 — verify against krocodile before implementing)
+### Semantic Facts (as of 2026-04-09, earlier experimental Graph controller — superseded; see 01-graph-integration.md)
 
 | Feature | Behavior | Verified |
 |---|---|---|

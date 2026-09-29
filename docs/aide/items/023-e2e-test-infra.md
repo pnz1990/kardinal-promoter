@@ -23,7 +23,7 @@ This is the final gate before cutting a v0.3.0 release.
 
 Add a new CI job `e2e-kind` that:
 - Spins up a kind cluster with `kind create cluster`
-- Installs the krocodile Graph controller (pinned commit `1b0ce353`)
+- Installs the kro Graph controller (then a pinned pre-upstream fork commit; now kro v0.10.0-rc.0 via `hack/install-kro.sh`)
 - Applies CRDs via `kubectl apply -f config/crd/bases/`
 - Builds and loads the controller image into kind
 - Applies a test Pipeline and Bundle YAML from `test/e2e-kind/fixtures/`

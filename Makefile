@@ -19,7 +19,7 @@ IMG ?= kardinal-promoter:dev
 
 .PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration lint vet generate manifests \
         install uninstall docker-build helm-lint validate-manifests \
-        install-krocodile \
+        install-kro \
         test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
         kind-up kind-down tools help lint-local
@@ -149,18 +149,16 @@ validate-manifests: ## Validate all Pipeline manifests in demo/ and examples/ ag
 	@echo "✅ All Pipeline manifests valid against current CRD schema."
 
 ## Kind cluster for E2E
-kind-up: ## Create local kind cluster and install kardinal-promoter (with bundled krocodile)
+kind-up: ## Create local kind cluster and install kro + kardinal-promoter
 	kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
 	kubectl config use-context kind-kardinal-e2e
-	$(MAKE) install-krocodile
+	$(MAKE) install-kro
 	$(MAKE) install
 
-install-krocodile: ## Build and load krocodile image into kind (local dev only — not needed for Helm chart install)
-	@echo "Note: In production, krocodile is bundled in the Helm chart (krocodile.enabled=true)."
-	@echo "This target is for local development when using 'make install' with a local chart."
-	bash hack/install-krocodile.sh
+install-kro: ## Install upstream kro with the Graph controller (GraphKind feature gate) — a prerequisite
+	bash hack/install-kro.sh
 
-setup-e2e-env: ## Full single-cluster E2E: kind + krocodile + ArgoCD + test app in test/uat/prod
+setup-e2e-env: ## Full single-cluster E2E: kind + kro + ArgoCD + test app in test/uat/prod
 	bash hack/setup-e2e-env.sh
 
 setup-e2e-env-fast: ## Single-cluster E2E without ArgoCD (faster, for integration testing)
@@ -181,7 +179,7 @@ eks-down: ## Destroy EKS prod cluster (saves cost when not running E2E)
 kind-down:
 	kind delete cluster --name kardinal-e2e
 
-e2e-setup: ## Convenience: create kind cluster + install krocodile + kardinal (same as kind-up but more verbose output)
+e2e-setup: ## Convenience: create kind cluster + install kro + kardinal (same as kind-up but more verbose output)
 	bash hack/e2e-setup.sh
 
 e2e-teardown: ## Convenience: tear down the e2e kind cluster

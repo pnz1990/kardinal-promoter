@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hack/e2e-setup.sh
 #
-# Creates a kind cluster, installs krocodile and kardinal-promoter, and
+# Creates a kind cluster, installs kro (Graph controller) and kardinal-promoter, and
 # applies the quickstart examples. Run once before executing e2e tests.
 #
 # Usage:
@@ -30,9 +30,9 @@ kind create cluster \
 kubectl config use-context "kind-$KIND_CLUSTER"
 echo "[e2e-setup] Kind cluster created."
 
-# ── 2. Install krocodile Graph controller ────────────────────────────────────
-echo "[e2e-setup] Installing krocodile..."
-KIND_CLUSTER="$KIND_CLUSTER" bash "$SCRIPT_DIR/install-krocodile.sh"
+# ── 2. Install the kro Graph controller ──────────────────────────────────────
+echo "[e2e-setup] Installing kro..."
+KUBE_CONTEXT="kind-$KIND_CLUSTER" bash "$SCRIPT_DIR/install-kro.sh"
 
 # ── 3. Build and load kardinal-promoter image ────────────────────────────────
 echo "[e2e-setup] Building kardinal-promoter image..."

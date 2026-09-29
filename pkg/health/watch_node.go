@@ -19,15 +19,16 @@ import (
 	"fmt"
 )
 
-// WatchNodeSpec describes a krocodile Watch-reference node template for health verification.
+// WatchNodeSpec describes a kro Graph ref node for health verification.
 //
-// The translator uses this struct to emit a Watch node in the Graph spec instead of
+// The translator uses this struct to emit a ref node in the Graph spec instead of
 // calling the Go health adapter at reconcile time. This moves health verification
 // into the Graph layer (HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md).
 //
 // The node variable name in ReadyWhen is always "healthNode" — the translator assigns
 // a unique Graph node ID (e.g. "healthProd") and must substitute "healthNode" with
-// the actual ID when generating the Graph spec.
+// the actual ID (or with "each" for a selector collection) when generating the
+// Graph spec.
 type WatchNodeSpec struct {
 	// APIVersion is the Kubernetes API version of the resource to watch.
 	// Example: "apps/v1", "argoproj.io/v1alpha1".
@@ -37,32 +38,32 @@ type WatchNodeSpec struct {
 	// Example: "Deployment", "Application", "Kustomization".
 	Kind string
 
-	// Name is the resource name to watch. Empty for WatchKind nodes.
+	// Name is the resource name to watch. Empty for selector (collection) nodes.
 	Name string
 
 	// Namespace is the resource namespace to watch.
 	Namespace string
 
-	// LabelSelector is the label selector for WatchKind nodes.
+	// LabelSelector is the label selector for collection nodes.
 	// When non-empty, UseWatchKind is true and Name is ignored.
-	// The translator emits a WatchKind node (no metadata.name in template)
-	// instead of a Watch node (with metadata.name).
+	// The translator emits a ref node with metadata.selector (a collection)
+	// instead of metadata.name (a single object).
 	LabelSelector map[string]string
 
-	// UseWatchKind indicates that a krocodile WatchKind node should be emitted
-	// instead of a Watch node. WatchKind nodes use an O(1) incremental cache
-	// (krocodile PR #118) and watch a collection of resources by label selector.
+	// UseWatchKind indicates that a selector (collection) ref node should be
+	// emitted instead of a named ref node.
 	UseWatchKind bool
 
-	// ReadyWhen is a krocodile CEL expression evaluated against the watched resource.
-	// The node variable placeholder is "healthNode". The translator must substitute
-	// "healthNode" with the actual Graph node ID before emitting the Graph spec.
+	// ReadyWhen is a CEL expression (without the ${} wrapper) evaluated against
+	// the watched resource. The node variable placeholder is "healthNode".
 	//
-	// For Watch nodes (UseWatchKind=false):
+	// For named nodes (UseWatchKind=false) the translator substitutes the Graph
+	// node ID:
 	//   "healthNode.status.conditions.exists(c, c.type == 'Available' && c.status == 'True')"
 	//
-	// For WatchKind nodes (UseWatchKind=true), healthNode is a list:
-	//   "healthNode.all(d, d.status.conditions.exists(c, c.type == 'Available' && c.status == 'True'))"
+	// For collection nodes (UseWatchKind=true) kro evaluates readyWhen once per
+	// element with the element bound to "each", so the translator substitutes
+	// "each"; the collection is ready when every element is.
 	ReadyWhen string
 
 	// HealthType is the adapter type that produced this spec.
@@ -70,14 +71,14 @@ type WatchNodeSpec struct {
 	HealthType string
 }
 
-// WatchNodeTemplate returns a krocodile Watch-reference node spec for the given health type
-// and configuration. The translator calls this function to get the Watch node template
+// WatchNodeTemplate returns a Graph ref node spec for the given health type
+// and configuration. The translator calls this function to get the ref node identity
 // and readyWhen CEL expression for a Pipeline environment's health check.
 //
 // This function is pure and has no side effects. It is safe to call from any context.
 //
 // The ReadyWhen expression uses "healthNode" as the node variable placeholder. The
-// translator must replace "healthNode" with the actual Graph node ID (e.g. "health_prod")
+// translator must replace "healthNode" with the actual Graph node ID (e.g. "healthProd")
 // before emitting the Graph spec.
 func WatchNodeTemplate(healthType string, opts CheckOptions) (WatchNodeSpec, error) {
 	switch healthType {
@@ -126,13 +127,13 @@ func watchNodeResource(cfg ResourceConfig) WatchNodeSpec {
 	}
 }
 
-// watchNodeResourceWatchKind builds a WatchKind node spec for a collection of Deployments
-// matched by label selector. Uses krocodile's O(1) incremental cache (PR #118).
+// watchNodeResourceWatchKind builds a collection node spec for the Deployments
+// matched by label selector.
 //
-// readyWhen: ALL matched Deployments must have the Available condition True.
-// UseWatchKind=true causes the translator to emit a WatchKind node (no metadata.name,
-// spec.labelSelector present) instead of a Watch node.
-// The krocodile CEL scope variable for this node is a list; list.all() checks all items.
+// readyWhen: every matched Deployment must have the Available condition True.
+// UseWatchKind=true causes the translator to emit a ref node with
+// metadata.selector instead of metadata.name. kro evaluates readyWhen per
+// element, so the expression is written for a single Deployment.
 func watchNodeResourceWatchKind(cfg ResourceConfig) WatchNodeSpec {
 	condition := cfg.Condition
 	if condition == "" {
@@ -144,10 +145,9 @@ func watchNodeResourceWatchKind(cfg ResourceConfig) WatchNodeSpec {
 		Namespace:     cfg.Namespace,
 		LabelSelector: cfg.LabelSelector,
 		UseWatchKind:  true,
-		// healthNode is a list of Deployment objects when UseWatchKind=true.
-		// list.all() checks that every Deployment in the collection is healthy.
+		// Per-element expression: the translator binds healthNode to "each".
 		ReadyWhen: fmt.Sprintf(
-			"healthNode.all(d, d.status.conditions.exists(c, c.type == %q && c.status == 'True'))",
+			"healthNode.status.conditions.exists(c, c.type == %q && c.status == 'True')",
 			condition,
 		),
 		HealthType: "resource",

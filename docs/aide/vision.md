@@ -29,7 +29,7 @@ enforce_admins workaround first. See docs/design/12-autonomous-loop-discipline.m
 **1. PDCA Validation Infrastructure** — the agent must be able to use the product for real.
 Before generating any feature queue, ensure the validation infrastructure exists:
 - `pnz1990/kardinal-test-app` exists at https://github.com/pnz1990/kardinal-test-app ✅
-- `make setup-e2e-env` creates a kind cluster with krocodile + ArgoCD + test app deployed
+- `make setup-e2e-env` creates a kind cluster with kro + ArgoCD + test app deployed
 - The full promotion loop can be tested: real image → real ArgoCD sync → real health check
 
 **2. Complete remaining backlog** — see milestone pages for open issues.
@@ -56,7 +56,7 @@ engineer would. It does NOT rely on unit tests alone.
 | Component | Location | Purpose |
 |---|---|---|
 | Test application | `github.com/pnz1990/kardinal-test-app` | Real app with Dockerfile; CI pushes to `ghcr.io/pnz1990/kardinal-test-app` |
-| E2E environment | `make setup-e2e-env` | kind + krocodile + ArgoCD + app in test/uat/prod namespaces |
+| E2E environment | `make setup-e2e-env` | kind + kro + ArgoCD + app in test/uat/prod namespaces |
 | Pipeline | `examples/quickstart/pipeline.yaml` | 3-stage promotion: test → uat → prod |
 | Policy gates | `examples/quickstart/policy-gates.yaml` | No-weekend-deploys gate for prod |
 
@@ -95,11 +95,11 @@ queue with Workshop 2 items while #123 is open, post `[NEEDS HUMAN]`.**
 
 ## ⚠️ Second Objective: Graph Purity (milestone v0.2.1)
 
-**After Workshop 1 is executed, the team's second objective is eliminating all logic leaks that do NOT require krocodile changes.**
+**After Workshop 1 is executed, the team's second objective is eliminating all logic leaks that do NOT require Graph controller changes.**
 
 This is milestone `v0.2.1`. See `docs/design/11-graph-purity-tech-debt.md` for the full list and agent instructions. 41 leaks are fixable in kardinal alone. Start with issue #133 (PRStatus CRD — eliminates 6 API call paths).
 
-Issues blocked on krocodile (#130, #132, #136, #138) must NOT be worked on. They are labeled `blocked-on-krocodile`.
+Issues blocked on upstream Graph changes (#130, #132, #136, #138) must NOT be worked on. They are labeled `blocked-on-upstream`.
 
 **No new logic leaks are permitted going forward.** Any new `time.Now()`, external HTTP call, or cross-CRD mutation in a reconciler requires explicit human approval before implementation. QA must block such PRs.
 
@@ -152,40 +152,37 @@ kro's Graph primitive (`kro.run/v1alpha1/Graph`) is the core DAG engine. Within 
 
 Building on Graph directly (rather than on RGD) avoids a translation shim. The controller generates a Graph spec whose nodes are exactly the PromotionStep and PolicyGate CRDs that kardinal-promoter needs. No intermediate abstraction, no unused resource-composition semantics.
 
-Reference: [ellistarn/kro — krocodile branch](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+Reference: [kubernetes-sigs/kro](https://github.com/kubernetes-sigs/kro) — [Graph overview](https://kro.run/next/docs/concepts/graph/overview/)
 
 ### kro Tracking and Contribution Policy
 
-The krocodile/experimental branch is under **autonomous, continuous development** —
-commits land multiple times per day, entire subsystems are rewritten in a single PR,
-and breaking API changes arrive without deprecation windows. This is intentional:
-the project is pre-1.0 and moving fast. Our agents must treat krocodile as a
+kro's Graph kind is **alpha** (v0.10.0-rc.0, `GraphKind` feature gate) and breaking
+changes can land between releases. Our agents must treat kro as a
 first-class dependency that requires active stewardship, not a stable library.
 
 **Every engineer and coordinator must:**
 
-1. **Check the krocodile git log before implementing any Graph integration.** Run:
+1. **Check kro releases before implementing any Graph integration.** Run:
    ```bash
-   gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=20' \
-     --jq '.[] | {sha: .sha[0:8], message: .commit.message[0:80], date: .commit.committer.date}'
+   gh api 'repos/kubernetes-sigs/kro/releases?per_page=5' \
+     --jq '.[] | {tag: .tag_name, date: .published_at}'
    ```
-   Look for changes to `experimental/docs/design/`, `experimental/crds/`, and
-   `experimental/controller/`. If more than 10 new commits have landed since our
-   pinned commit, treat it as a mandatory upgrade task before proceeding.
+   Look for changes to `pkg/graphengine/`, `api/v1alpha1/` and the Graph docs. If a
+   release newer than our pin has landed, treat it as a mandatory upgrade task before proceeding.
 
 2. **Read the design docs before implementing.** The canonical source of truth for
-   Graph semantics is `experimental/docs/design/` in the krocodile branch, not our
-   own docs. When they disagree, the krocodile docs win.
+   Graph semantics is kro's Graph docs and `pkg/graphengine/`, not our
+   own docs. When they disagree, kro wins.
 
 3. **Contribute upstream rather than work around.** If Graph lacks a capability
-   kardinal-promoter needs, open a PR to krocodile first. A contribution that lands
+   kardinal-promoter needs, log it in `docs/design/16-graph-capability-ledger.md` and open a PR to kro first. A contribution that lands
    upstream eliminates a workaround from our codebase permanently. Workarounds are
    accepted only when a contribution would block progress for more than one sprint.
    See §Upstream Issue and PR Protocol below for how to do this.
 
 4. **Pin the Graph CRD version in our Helm chart and test infrastructure.** Install
-   krocodile at a specific commit hash in all test clusters (CI and local kind) via
-   `hack/install-krocodile.sh`. When krocodile updates break our tests, file a GitHub
+   kro at a specific version in all test clusters (CI and local kind) via
+   `hack/install-kro.sh`. When kro updates break our tests, file a GitHub
    issue labelled `kind/bug,area/graph` with the breaking commit and impact before it
    blocks a sprint.
 
@@ -194,41 +191,39 @@ first-class dependency that requires active stewardship, not a stable library.
    (dependency edge mechanism), spec 01 (Graph CRD schema), and spec 02 (node
    templates). Stale design docs are a bug.
 
-### Periodic krocodile Review (Coordinator responsibility)
+### Periodic kro Review (Coordinator responsibility)
 
 **Every batch cycle**, before generating the work queue, the coordinator must:
 
 ```bash
-# 1. Check new commits since our pin
-PINNED=$(grep "KROCODILE_COMMIT:-" hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,\}')
-gh api 'repos/ellistarn/kro/commits?sha=krocodile&per_page=50' \
-  --jq ".[] | select(.sha | startswith(\"$PINNED\") | not) | \
-    {sha: .sha[0:8], message: .commit.message[0:100]}"
+# 1. Compare our pin with the latest kro release
+PINNED=$(grep 'KRO_VERSION:-' hack/install-kro.sh | grep -o '[0-9][0-9a-z.-]*' | head -1)
+gh api 'repos/kubernetes-sigs/kro/releases?per_page=5' --jq '.[].tag_name'
 
-# 2. Read the diff of the controller and types
-cd /tmp && git clone -q --depth=200 https://github.com/ellistarn/kro.git kro-review -b krocodile
-git -C /tmp/kro-review log $PINNED..HEAD --oneline -- experimental/controller/ experimental/docs/
+# 2. Read the Graph engine and API diff since our pin
+cd /tmp && git clone -q https://github.com/kubernetes-sigs/kro.git kro-review
+git -C /tmp/kro-review log v$PINNED..origin/main --oneline -- pkg/graphengine/ api/v1alpha1/
 ```
 
-For each batch that has ≥5 new krocodile commits, the coordinator **must** include
-a `chore(graph): upgrade krocodile to <newsha>` item in the queue. This is not
-optional. An unreviewed krocodile gap accumulates silent breakage.
+When a kro release newer than our pin exists, the coordinator **must** include
+a `chore(graph): upgrade kro to <version>` item in the queue. This is not
+optional. An unreviewed kro gap accumulates silent breakage.
 
-### Primitive Rethink (Quarterly or after major krocodile releases)
+### Primitive Rethink (Quarterly or after major kro releases)
 
 **At least once per quarter**, a dedicated agent session must answer these questions:
 
-> **Are our primitives still the right ones given what krocodile now provides?**
+> **Are our primitives still the right ones given what kro now provides?**
 
 Specifically:
 
 | Question | Why it matters |
 |---|---|
-| Can `PromotionStep` become a pure krocodile Watch node instead of an Owned reconciler? | Every new krocodile Watch capability potentially eliminates reconciler code |
-| Can any `pkg/reconciler/*` be deleted because krocodile now handles that pattern natively? | krocodile adds Definition nodes, drift timers, CEL AST path extraction — these eliminate workarounds |
-| Does `pkg/translator/translator.go` still need to hand-build Graph specs, or can krocodile generate from higher-level input? | The translator is our biggest complexity surface |
-| Are our node ID schemes, CEL expression patterns, and propagateWhen conventions still idiomatic given the latest krocodile design docs? | Conventions drift silently |
-| Do any of our current `blocked-on-krocodile` GitHub issues now have a solution in HEAD? | New krocodile features often close our blocked issues |
+| Can `PromotionStep` become a pure kro `ref` node instead of an Owned reconciler? | Every new kro `ref` capability potentially eliminates reconciler code |
+| Can any `pkg/reconciler/*` be deleted because kro now handles that pattern natively? | New Graph node kinds and CEL functions eliminate workarounds |
+| Does `pkg/translator/translator.go` still need to hand-build Graph specs, or can kro generate from higher-level input? | The translator is our biggest complexity surface |
+| Are our node ID schemes, CEL expression patterns, and resolvability-gating conventions still idiomatic given the latest kro Graph docs? | Conventions drift silently |
+| Do any of our current `blocked-on-upstream` issues or open gaps in `docs/design/16-graph-capability-ledger.md` now have a solution in kro? | New kro features often close our blocked issues |
 
 The output of a rethink session must be:
 - At least one GitHub issue opened (`kind/enhancement,area/graph`) if a simplification is found
@@ -237,34 +232,34 @@ The output of a rethink session must be:
 
 ### Upstream Issue and PR Protocol
 
-When kardinal-promoter hits a krocodile limitation or bug, agents must engage
-upstream rather than work around it locally. The krocodile maintainer (Ellis Tarn,
-`@ellistarn`) is responsive and the project benefits from real-world usage reports.
+When kardinal-promoter hits a kro Graph limitation or bug, agents must engage
+upstream rather than work around it locally. Record the gap in
+`docs/design/16-graph-capability-ledger.md` first; the project benefits from real-world usage reports.
 
-**When to open a krocodile issue:**
-- A bug in krocodile causes a kardinal feature to fail (e.g., propagateWhen stuck state)
+**When to open a kro issue:**
+- A bug in kro causes a kardinal feature to fail
 - An API contract changes in a way that breaks our integration (e.g., node ID format)
-- krocodile's behavior differs from its own design docs
+- kro's behavior differs from its own Graph docs
 
-**When to open a krocodile PR:**
+**When to open a kro PR:**
 - A missing primitive forces a workaround that violates Graph-first architecture
 - A validation is too strict or too loose for real-world use (e.g., node ID format enforcement)
 - A bug has a clear, small fix that we can provide
 
 **How to do it:**
 ```bash
-# Clone at our pinned commit
-git clone https://github.com/ellistarn/kro.git /tmp/kro-upstream -b krocodile
+# Clone upstream kro
+git clone https://github.com/kubernetes-sigs/kro.git /tmp/kro-upstream
 cd /tmp/kro-upstream
 
-# For issues: use the GitHub CLI with the krocodile repo
-gh issue create --repo ellistarn/kro \
+# For issues: use the GitHub CLI with the kro repo
+gh issue create --repo kubernetes-sigs/kro \
   --title "<clear title referencing the specific controller file/function>" \
   --body "## Summary
 <what kardinal-promoter observed>
 
 ## Root cause
-<specific file:line in krocodile>
+<specific file:line in kro>
 
 ## Reproduction
 <minimal Graph spec or test case>
@@ -275,51 +270,50 @@ gh issue create --repo ellistarn/kro \
 # For PRs: create a branch, make the fix, open PR
 git checkout -b fix/<descriptive-name>
 # ... make the fix ...
-gh pr create --repo ellistarn/kro \
+gh pr create --repo kubernetes-sigs/kro \
   --title "fix: <description>" \
   --body "<summary, root cause, test coverage>"
 ```
 
 **After upstream engagement:**
 - Record the issue/PR URL in the kardinal issue that motivated it (cross-link)
-- Label the kardinal issue `blocked-on-krocodile` if we must wait
+- Label the kardinal issue `blocked-on-upstream` if we must wait
 - Check the upstream issue/PR every batch cycle and update when it lands
 - When it lands: upgrade our pin, remove the workaround, close the kardinal issue
 
-**Krocodile issue/PR history** (update this table as we engage):
+**Upstream issue/PR history** (update this table as we engage):
 
-| Date | krocodile issue/PR | Cardinal issue | Status |
+| Date | Upstream issue/PR | Cardinal issue | Status |
 |---|---|---|---|
-| 2026-04-14 | [#109](https://github.com/ellistarn/kro/pull/109) DNS label validation | bdb6968 compat fix | Merged, we're on 948ad6c |
-| 2026-04-14 | propagateWhen stuck state (reported via DM) | propagation bug | Under investigation by Ellis |
+| 2026-04-14 | #109 DNS label validation (pre-upstream Graph controller fork) | bdb6968 compat fix | Merged, fork pin 948ad6c |
+| 2026-04-14 | propagateWhen stuck state (pre-upstream fork, reported via DM) | propagation bug | Superseded by the move to upstream kro |
 
-Key semantic facts as of 2026-04-14 (verify against krocodile before implementing):
-- `readyWhen` = health signal (UI, `kubectl get graph`) — does NOT block downstream
-- `propagateWhen` = data-flow gate — DOES block downstream when unsatisfied
-- `spec.nodes` (not `spec.resources`) is the field name for the node list
-- `experimental.kro.run` is the API group for Graph CRDs
-- Node IDs must be valid DNS-1123 labels after `strings.ToLower()` — no underscores, no hyphens, ≤63 chars (PR #109)
-- Drift timers (default 30min) replace unconditional 1s requeues — watch events are primary
-- Propagation hash includes `propagateWhen` state — gate transitions trigger downstream (commit `0b609d0`)
-- **Pinned krocodile commit: `948ad6c`** (validates DNS labels in node IDs, includes drift timers and propagation hash fix)
+Key semantic facts for upstream kro v0.10.0-rc.0 (verify against kro before implementing):
+- `readyWhen` = self-only health signal (UI, `kubectl get graph`) — does NOT block downstream
+- Dependents are gated by resolvability: a template expression that only resolves once the upstream condition holds
+- `spec.nodes` is the field name for the node list; each node sets `template` or `ref`
+- `kro.run` is the API group for Graph CRDs; the `GraphKind` feature gate must be on
+- Node IDs must match `^[A-Za-z][A-Za-z0-9]*$`
+- kro applies children as the Graph's `spec.serviceAccountName`
+- **Pinned kro version: see `hack/install-kro.sh`**
 
 ### Graph-First: The Core Architectural Commitment
 
-**The world is a DAG. Everything in kardinal-promoter is a derivation of the krocodile Graph primitive.**
+**The world is a DAG. Everything in kardinal-promoter is a derivation of the kro Graph primitive.**
 
 This is not aspirational. It is the governing constraint on every implementation decision.
 See `docs/design/10-graph-first-architecture.md` for the full decision record.
 
 The layer model:
 ```
-L1: krocodile Graph API       — universal DAG primitive, CEL evaluation
+L1: kro Graph API            — universal DAG primitive, CEL evaluation
 L2: kardinal APIs             — PromotionStep, PolicyGate, Bundle, Pipeline CRDs
                                 All expressed as Graph Watch or Owned nodes
 L3: kardinal customer APIs    — Pipeline and PolicyGate definitions
 ```
 
 **If a feature cannot be expressed as a Graph node** (Watch node, Owned node, or CEL
-extension on the Graph environment), that is a signal krocodile is missing a primitive
+extension on the Graph environment), that is a signal kro is missing a primitive
 that should be contributed upstream. Agents must STOP and escalate to human. No logic
 may leak outside the Graph layer without explicit human approval.
 
@@ -328,7 +322,7 @@ may leak outside the Graph layer without explicit human approval.
 2. Explicit `dependsOn` edges — eliminates data-flow-as-dependency hacks
 
 **Known transitional exception (must not grow):**
-- `pkg/cel/` — the standalone PolicyGate CEL evaluator. Exists because krocodile lacks
+- `pkg/cel/` — the standalone PolicyGate CEL evaluator. Exists because kro lacks
   `recheckAfter`. Must be deleted once `recheckAfter` is contributed upstream.
   See `docs/design/10-graph-first-architecture.md` §Known Exceptions.
 

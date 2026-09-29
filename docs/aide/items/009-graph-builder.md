@@ -56,7 +56,7 @@ func (c *GraphClient) Delete(ctx context.Context, namespace, name string) error
 func (c *GraphClient) List(ctx context.Context, namespace string, labels map[string]string) ([]*Graph, error)
 ```
 
-Use `GraphGVR` from `pkg/graph/types.go` (authoritative: `experimental.kro.run/v1alpha1/graphs`).
+Use `GraphGVR` from `pkg/graph/types.go` (authoritative: `kro.run/v1alpha1/graphs`).
 All operations use structured logging via `zerolog.Ctx(ctx)`. Errors wrapped with `fmt.Errorf("graph.Create: %w", err)`.
 
 ### 2. `pkg/graph/builder.go`

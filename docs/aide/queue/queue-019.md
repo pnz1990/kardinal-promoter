@@ -23,7 +23,7 @@ first step because it directly eliminates the documented transitional workaround
 
 ## Notes
 
-Item 601 is the most impactful graph purity fix that doesn't require krocodile changes.
+Item 601 is the most impactful graph purity fix that doesn't require Graph controller changes.
 Per `docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation`:
 - `ScheduleClock` CRD + reconciler (writes status.tick on interval)
 - `schedule.*` CEL library registered on Graph DefaultEnvironment  

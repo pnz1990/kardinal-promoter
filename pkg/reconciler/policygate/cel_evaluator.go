@@ -73,8 +73,8 @@ type evaluator struct {
 //   - bundle, environment, metrics, upstream, previousBundle, changewindow
 //   - schedule — a plain map variable {isWeekend:bool, hour:int, dayOfWeek:string}
 //     NOTE: schedule.* is a map injection, NOT a CEL library function.
-//     It is only available here (PolicyGate CEL context), not in krocodile
-//     Graph readyWhen/propagateWhen expressions. See issue #616 and
+//     It is only available here (PolicyGate CEL context), not in kro
+//     Graph readyWhen/includeWhen expressions. See issue #616 and
 //     docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation.
 func newEvaluator() (*evaluator, error) {
 	env, err := goccel.NewEnv(

@@ -61,21 +61,24 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 | Integration test step | ✅ | ❌ | ❌ |
 | Emergency override with audit record | ✅ | ❌ | ❌ |
 | Cross-stage history in gates | ✅ | ❌ | ❌ |
-| Graph-first architecture (krocodile) | ✅ | ❌ | ❌ |
+| Graph-first architecture (kro Graph) | ✅ | ❌ | ❌ |
 
 See [detailed comparison →](comparison.md)
 
 ## Quick install
 
-Since v0.6.0, kardinal-promoter bundles the krocodile Graph controller — a single Helm install is all you need.
+kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro) Graph controller (v0.10.0-rc.0, `GraphKind` feature gate). Install kro first, then kardinal.
 
 ```bash
+# 0. Install kro with the Graph feature gate (from a kardinal-promoter checkout)
+bash hack/install-kro.sh
+
 # 1. Create GitHub token secret
 kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-# 2. Install kardinal-promoter (includes krocodile Graph controller)
+# 2. Install kardinal-promoter
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --create-namespace \

@@ -117,12 +117,25 @@ func TestBuilder_Linear3EnvWithProdGates(t *testing.T) {
 	assert.Equal(t, 9, result.NodeCount, "3 PromotionStep + 3 PRStatus + 2 PolicyGate + 1 Bundle Watch = 9 nodes")
 	assert.Len(t, result.Graph.Spec.Nodes, 9)
 
-	// Verify PolicyGate nodes have propagateWhen set
+	// Verify PolicyGate nodes carry a readyWhen health signal and that the
+	// prod PromotionStep blocks on each gate via spec.requiredGates.
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	var gateIDs []string
 	for _, n := range result.Graph.Spec.Nodes {
 		if containsStr(n.ID, "noWeekendDeploys") || containsStr(n.ID, "stagingSoak30m") {
-			assert.NotEmpty(t, n.PropagateWhen,
-				"PolicyGate node %q must have PropagateWhen set", n.ID)
+			gateIDs = append(gateIDs, n.ID)
+			require.NotEmpty(t, n.ReadyWhen, "PolicyGate node %q must have ReadyWhen set", n.ID)
+			assert.Equal(t, "${"+n.ID+".status.ready == true}", n.ReadyWhen[0])
 		}
+	}
+	require.Len(t, gateIDs, 2)
+	prodSpec, _ := nodeMap["prod"].Template["spec"].(map[string]interface{})
+	required, _ := prodSpec["requiredGates"].([]interface{})
+	require.Len(t, required, 2, "prod must require both gates")
+	for _, gid := range gateIDs {
+		assert.Contains(t, required,
+			"${["+gid+".metadata.name].filter(x_, "+gid+".status.ready == true)[0]}",
+			"requiredGates must only resolve once gate %q is ready", gid)
 	}
 }
 
@@ -209,14 +222,14 @@ func TestBuilder_SkipEnvironments_WithPermission(t *testing.T) {
 	require.NoError(t, err)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-	// (#619) staging IS in the node map -- skipEnvironments no longer filters in Go.
-	// The node has includeWhen: false so krocodile excludes it from execution.
-	assert.Contains(t, nodeMap, "staging",
-		"staging must be in Graph spec -- includeWhen handles exclusion at runtime")
-	// The staging PromotionStep must have includeWhen referencing this env
-	require.NotEmpty(t, nodeMap["staging"].IncludeWhen)
-	assert.Contains(t, nodeMap["staging"].IncludeWhen[0], `"staging"`,
-		"includeWhen must reference the env name 'staging'")
+	// skipEnvironments is filtered statically: kro's includeWhen=false is
+	// contagious to dependents, so a runtime exclusion would also drop prod
+	// (docs/design/16-graph-capability-ledger.md G2).
+	assert.NotContains(t, nodeMap, "staging",
+		"staging must be removed from the Graph spec when skipped")
+	for _, n := range result.Graph.Spec.Nodes {
+		assert.Empty(t, n.IncludeWhen, "node %q must not carry includeWhen", n.ID)
+	}
 	assert.Contains(t, nodeMap, "test")
 	assert.Contains(t, nodeMap, "prod")
 
@@ -380,8 +393,8 @@ func TestBuilder_CircularDependency(t *testing.T) {
 	assert.Contains(t, err.Error(), "Fix:", "error must include fix hint")
 }
 
-// Test 12: PropagateWhen on PolicyGate nodes is set correctly.
-func TestBuilder_PropagateWhenOnPolicyGates(t *testing.T) {
+// Test 12: PolicyGate nodes gate the dependent PromotionStep.
+func TestBuilder_PolicyGateGatesDependentStep(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("app", "test", "prod")
 	bundle := makeBundle("app-v1", "app")
@@ -403,8 +416,15 @@ func TestBuilder_PropagateWhenOnPolicyGates(t *testing.T) {
 		}
 	}
 	require.NotNil(t, gateNode, "gate node must be present")
-	assert.NotEmpty(t, gateNode.PropagateWhen, "PolicyGate node must have PropagateWhen")
 	assert.NotEmpty(t, gateNode.ReadyWhen, "PolicyGate node must have ReadyWhen (health signal)")
+
+	prodSpec, _ := nodeByID(result.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})
+	required, _ := prodSpec["requiredGates"].([]interface{})
+	require.Len(t, required, 1)
+	assert.Contains(t, required[0].(string), gateNode.ID+".status.ready == true",
+		"prod must not resolve until the gate is ready")
+	testSpec, _ := nodeByID(result.Graph.Spec.Nodes)["test"].Template["spec"].(map[string]interface{})
+	assert.NotContains(t, testSpec, "requiredGates", "test is not gated")
 }
 
 // Test 13: Graph name is bounded to 63 characters.
@@ -452,6 +472,7 @@ func TestBuilder_OwnerReferences(t *testing.T) {
 func TestBuilder_PRStatusWatchNode(t *testing.T) {
 	b := graph.NewBuilder()
 	pipeline := makeLinearPipeline("nginx-demo", "test", "prod")
+	pipeline.Spec.Environments[0].Approval = "pr-review"
 	bundle := makeBundle("nginx-demo-v1", "nginx-demo")
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
@@ -459,32 +480,39 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
 
-	// PRStatus Watch node for "test" env must exist
-	var prStatusTestNode *graph.GraphNode
-	for id, n := range nodeMap {
-		if containsStr(id, "prstatus") && containsStr(id, "test") {
-			n := n
-			prStatusTestNode = &n
-			break
+	prStatusNode := func(env string) *graph.GraphNode {
+		for id, n := range nodeMap {
+			if containsStr(id, "prstatus") && containsStr(id, env) {
+				n := n
+				return &n
+			}
 		}
+		return nil
 	}
+
+	// PRStatus Watch node for "test" env must exist
+	prStatusTestNode := prStatusNode("test")
 	require.NotNil(t, prStatusTestNode, "PRStatus Watch node for 'test' must be present")
 
 	// Check kind is PRStatus
 	kind, _ := prStatusTestNode.Template["kind"].(string)
 	assert.Equal(t, "PRStatus", kind, "Watch node kind must be PRStatus")
 
-	// Check PropagateWhen is EMPTY to avoid circular dependency:
-	// PromotionStep references ${prstatus.metadata.name} creating a dep edge;
-	// if PRStatus also had propagateWhen=merged, the PromotionStep could never start
-	// because PRStatus can't be merged before the PR is opened.
-	assert.Empty(t, prStatusTestNode.PropagateWhen,
-		"PropagateWhen must be empty — PRStatus must not block PromotionStep (circular dep)")
+	// The PRStatus template carries no spec: the SCM step fills it in later
+	// and kro's SSA must not own (and revert) those fields.
+	assert.NotContains(t, prStatusTestNode.Template, "spec",
+		"PRStatus template must not carry a spec")
 
 	// Check ReadyWhen references status.merged (health signal for UI only)
 	require.NotEmpty(t, prStatusTestNode.ReadyWhen)
 	assert.Contains(t, prStatusTestNode.ReadyWhen[0], "status.merged == true",
 		"ReadyWhen must gate on status.merged for UI health display")
+
+	// An auto environment never opens a PR, so a merged readyWhen would keep
+	// the Graph from ever reaching Ready.
+	prStatusProdNode := prStatusNode("prod")
+	require.NotNil(t, prStatusProdNode, "PRStatus Watch node for 'prod' must be present")
+	assert.Empty(t, prStatusProdNode.ReadyWhen, "auto environments must not carry a PRStatus readyWhen")
 
 	// Check PromotionStep node has prStatusRef referencing the Watch node
 	testStepNode, ok := nodeMap["test"]
@@ -505,24 +533,30 @@ func nodeByID(nodes []graph.GraphNode) map[string]graph.GraphNode {
 
 // containsCELRef returns true if the template map contains a CEL expression
 // referencing the given node ID.
+// containsCELRef reports whether any ${...} expression in template references
+// a node whose ID starts with nodeID — the reference is what creates the
+// Graph dependency edge, wherever it sits inside the expression.
 func containsCELRef(template map[string]interface{}, nodeID string) bool {
-	return containsInMap(template, "${"+nodeID)
+	re := regexp.MustCompile(`(?:\$\{|[\s(\[,!&|])` + regexp.QuoteMeta(nodeID) + `[A-Za-z0-9]*\.`)
+	return containsInMapFunc(template, func(s string) bool {
+		return strings.Contains(s, "${") && re.MatchString(s)
+	})
 }
 
-func containsInMap(m map[string]interface{}, substr string) bool {
+func containsInMapFunc(m map[string]interface{}, match func(string) bool) bool {
 	for _, v := range m {
 		switch vt := v.(type) {
 		case string:
-			if containsStr(vt, substr) {
+			if match(vt) {
 				return true
 			}
 		case map[string]interface{}:
-			if containsInMap(vt, substr) {
+			if containsInMapFunc(vt, match) {
 				return true
 			}
 		case []interface{}:
 			for _, item := range vt {
-				if s, ok := item.(string); ok && containsStr(s, substr) {
+				if s, ok := item.(string); ok && match(s) {
 					return true
 				}
 			}
@@ -817,50 +851,42 @@ func TestBuilder_WaveTopology_NoWave_BackwardCompat(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Node ID invariant tests — krocodile e082fe9+ embeds node IDs in DNS subdomain
-// label key prefixes. These must satisfy BOTH:
-//   - CEL identifier: [a-zA-Z_][a-zA-Z0-9_]* (no hyphens)
-//   - DNS label after strings.ToLower(): [a-z0-9]+ (no underscores or hyphens)
-//
-// i.e., all generated node IDs must be camelCase [a-zA-Z][a-zA-Z0-9]*.
+// Node ID invariant tests — kro validates every node ID against
+// ^[A-Za-z][A-Za-z0-9]*$ and rejects a reserved vocabulary
+// (pkg/graphengine/compiler/validation.go). IDs have no length limit.
 // ---------------------------------------------------------------------------
 
-// reCELIdent matches a valid CEL identifier.
-var reCELIdent = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+// reKroNodeID is kro's node ID grammar.
+var reKroNodeID = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*$`)
 
-// reDNSLabel matches a valid RFC 1123 DNS label after strings.ToLower.
-var reDNSLabel = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$`)
+// kroReservedNodeIDs mirrors kro's reservedNodeIDs set.
+var kroReservedNodeIDs = map[string]bool{
+	"apiVersion": true, "kind": true, "metadata": true, "namespace": true, "spec": true, "status": true,
+	"graph": true, "graphengine": true, "kro": true,
+	"each": true, "item": true, "items": true, "object": true, "self": true, "this": true, "context": true,
+	"true": true, "false": true, "null": true, "in": true, "as": true, "break": true, "const": true,
+	"continue": true, "else": true, "for": true, "function": true, "if": true, "import": true, "let": true,
+	"loop": true, "package": true, "return": true, "var": true, "void": true, "while": true,
+}
 
-// assertNodeIDsValid checks that every node ID in a built Graph satisfies the
-// CEL and DNS label constraints required by krocodile e082fe9+ / PR #109.
+// assertNodeIDsValid checks that every node ID in a built Graph passes kro's
+// node ID validation and is unique.
 func assertNodeIDsValid(t *testing.T, nodes []graph.GraphNode) {
 	t.Helper()
+	seen := map[string]bool{}
 	for _, n := range nodes {
 		id := n.ID
-		// CEL identifier check.
-		assert.True(t, reCELIdent.MatchString(id),
-			"node ID %q is not a valid CEL identifier (must match [a-zA-Z_][a-zA-Z0-9_]*)", id)
-		// DNS label check (after toLower, as krocodile does in nodeLabelPrefix).
-		lowered := strings.ToLower(id)
-		assert.True(t, reDNSLabel.MatchString(lowered),
-			"node ID %q lowercased to %q which is not a valid RFC 1123 DNS label "+
-				"(must match [a-z0-9][a-z0-9-]*[a-z0-9] or [a-z0-9]): "+
-				"krocodile embeds node IDs in DNS subdomain label key prefixes", id, lowered)
-		// No underscores (would be invalid in DNS label key prefix).
-		assert.NotContains(t, lowered, "_",
-			"node ID %q contains an underscore after lowercasing — invalid in krocodile label key prefix", id)
-		// No hyphens (would be invalid in CEL identifier).
-		assert.NotContains(t, id, "-",
-			"node ID %q contains a hyphen — invalid as a CEL identifier", id)
-		// 63-char limit per DNS label segment (PR #109: IsDNS1123Label enforced in parseNodeList).
-		assert.LessOrEqual(t, len(lowered), 63,
-			"node ID %q lowercases to %d chars — exceeds the 63-char DNS label segment limit", id, len(lowered))
+		assert.True(t, reKroNodeID.MatchString(id),
+			"node ID %q does not match kro's node ID grammar ^[A-Za-z][A-Za-z0-9]*$", id)
+		assert.False(t, kroReservedNodeIDs[id], "node ID %q is reserved by kro", id)
+		assert.False(t, seen[id], "duplicate node ID %q", id)
+		seen[id] = true
 	}
 }
 
-// TestNodeIDs_CELAndDNSSafe verifies that all node IDs emitted by the builder
-// for typical real-world env names satisfy the CEL + DNS label constraints.
-func TestNodeIDs_CELAndDNSSafe(t *testing.T) {
+// TestNodeIDs_KroValid verifies that all node IDs emitted by the builder for
+// typical real-world env names pass kro's node ID validation.
+func TestNodeIDs_KroValid(t *testing.T) {
 	cases := []struct {
 		name string
 		envs []string
@@ -884,13 +910,11 @@ func TestNodeIDs_CELAndDNSSafe(t *testing.T) {
 	}
 }
 
-// TestNodeIDs_LongGateNodeTruncation verifies that gate node IDs exceeding
-// the 63-char DNS label limit are truncated to exactly 63 chars via the
-// truncateNodeID function (PR #109 compliance).
-func TestNodeIDs_LongGateNodeTruncation(t *testing.T) {
-	// This pipeline has long names in all components: gate name, namespace,
-	// env name, and bundle name — which would produce a composite gate node ID
-	// well over 63 chars without truncation.
+// TestNodeIDs_LongGateNodeIDsKept verifies that long composite gate node IDs
+// are emitted in full: kro imposes no length limit on node IDs, so the IDs
+// stay readable and collision-free.
+func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
+	// Long names in all components: gate name, namespace, env name, bundle.
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-application", Namespace: "default"},
 		Spec: kardinalv1alpha1.PipelineSpec{
@@ -905,10 +929,27 @@ func TestNodeIDs_LongGateNodeTruncation(t *testing.T) {
 		},
 	}
 	bundle := makeBundle("my-application-abc123456", "my-application")
+	gates := []kardinalv1alpha1.PolicyGate{
+		makePolicyGate("no-weekend-deploys", "platform-policies", "kardinal-test-app-prod", "true"),
+		makePolicyGate("require-uat-soak-30m", "platform-policies", "kardinal-test-app-prod", "true"),
+	}
 	b := graph.NewBuilder()
-	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
+	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle, PolicyGates: gates})
 	require.NoError(t, err)
 	assertNodeIDsValid(t, result.Graph.Spec.Nodes)
+
+	nodeMap := nodeByID(result.Graph.Spec.Nodes)
+	var gateIDs []string
+	for id := range nodeMap {
+		if strings.HasPrefix(id, "noWeekendDeploys0") || strings.HasPrefix(id, "requireUatSoak30m0") {
+			gateIDs = append(gateIDs, id)
+		}
+	}
+	require.Len(t, gateIDs, 2, "both gates must be emitted")
+	for _, id := range gateIDs {
+		assert.Greater(t, len(id), 63, "gate node ID %q must not be truncated", id)
+		assert.Contains(t, id, "0platformPolicies0kardinalTestAppProd00")
+	}
 }
 
 // TestBuilder_PromotionTemplate_InlinedSteps verifies that when the translator
@@ -994,8 +1035,8 @@ func TestBuilder_PromotionTemplate_LocalOverride(t *testing.T) {
 }
 
 // TestBuilder_MultiRegionFanOut verifies that when an environment declares ≥2 regions,
-// the translator emits a forEach node with the regions as a CEL array literal and
-// includes spec.region = "${item}" in the PromotionStep template (issue #612).
+// the builder emits a kro forEach node with a "region" iterator over a CEL array
+// literal and spec.region = "${region}" in the PromotionStep template (issue #612).
 func TestBuilder_MultiRegionFanOut(t *testing.T) {
 	b := graph.NewBuilder()
 
@@ -1029,18 +1070,21 @@ func TestBuilder_MultiRegionFanOut(t *testing.T) {
 	testNode := nodeMap["test"]
 	assert.Empty(t, testNode.ForEach, "single-region test node must not have ForEach")
 
-	// prod node MUST have ForEach set to a CEL array of the two regions
+	// prod node MUST have one forEach dimension iterating the two regions
 	prodNode := nodeMap["prod"]
-	require.NotEmpty(t, prodNode.ForEach, "multi-region prod node must have ForEach set")
-	assert.Contains(t, prodNode.ForEach, "us-east-1", "ForEach must contain us-east-1")
-	assert.Contains(t, prodNode.ForEach, "eu-west-1", "ForEach must contain eu-west-1")
+	require.Len(t, prodNode.ForEach, 1, "multi-region prod node must have one forEach dimension")
+	assert.Equal(t, `${["us-east-1","eu-west-1"]}`, prodNode.ForEach[0]["region"])
 
-	// The prod PromotionStep template must include spec.region = "${item}"
+	// Each stamped PromotionStep needs a distinct name and its region.
 	prodSpec, ok := prodNode.Template["spec"].(map[string]interface{})
 	require.True(t, ok, "prod node template must have spec")
-	regionVal, ok := prodSpec["region"]
-	require.True(t, ok, "prod template spec must have region field")
-	assert.Equal(t, "${item}", regionVal, "prod template spec.region must be ${item}")
+	assert.Equal(t, "${region}", prodSpec["region"], "prod template spec.region must be ${region}")
+	prodMeta, _ := prodNode.Template["metadata"].(map[string]interface{})
+	assert.True(t, strings.HasSuffix(prodMeta["name"].(string), "-${region}"),
+		"prod name must be suffixed with the region")
+
+	// Collection readyWhen is evaluated per element.
+	assert.Equal(t, []string{`${each.status.state == "Verified"}`}, prodNode.ReadyWhen)
 
 	// The test node template must NOT include spec.region
 	testSpec, ok := testNode.Template["spec"].(map[string]interface{})

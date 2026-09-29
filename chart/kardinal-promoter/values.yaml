@@ -132,57 +132,21 @@ github:
     namespace: ""
     key: "token"
 
-# -- krocodile Graph controller.
-# kardinal-promoter builds and vendors the krocodile Graph controller as part
-# of its own release. A single `helm install` installs both controllers —
-# no separate install script required.
-#
-# The krocodile image is built from a pinned commit of github.com/ellistarn/kro
-# (krocodile branch) and published to ghcr.io/pnz1990/kardinal-promoter/krocodile
-# at release time. The image is co-versioned with each kardinal-promoter release.
-#
-# Set enabled: false if you already run krocodile independently in your cluster.
-krocodile:
-  # -- Install krocodile Graph controller alongside kardinal-promoter.
-  # Set to false if krocodile is already installed in the cluster.
-  enabled: true
-
-  # -- Number of krocodile controller replicas.
-  replicaCount: 1
-
-  # Pinned source commit from github.com/ellistarn/kro (krocodile branch).
-  # This is the commit the release pipeline built the image from.
-  # Used as the default image tag when image.tag is not set.
-  # Update via the krocodile upgrade protocol in AGENTS.md.
-  pinnedCommit: "d6cbc54"
-
-  # -- API group for Graph CRDs.
-  apiGroup: "experimental.kro.run"
-
-  # -- Namespace where the krocodile Graph controller runs.
-  namespace: "kro-system"
-
-  image:
-    # -- krocodile controller image repository.
-    # Built and published by the kardinal-promoter release pipeline.
-    repository: ghcr.io/pnz1990/kardinal-promoter/krocodile
-    # -- Image tag. Defaults to krocodile.pinnedCommit when empty.
-    tag: ""
-    # -- Image pull policy.
-    pullPolicy: IfNotPresent
-
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      memory: 512Mi
-
-  # -- Node selector for the krocodile Pod.
-  nodeSelector: {}
-
-  # -- Tolerations for the krocodile Pod.
-  tolerations: []
+# -- kro Graph integration.
+# kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro >= v0.10.0
+# with the GraphKind feature gate must be installed separately:
+#   bash hack/install-kro.sh
+# kro applies each Graph's children by impersonating graph.serviceAccountName
+# in the Graph's namespace; the controller creates that ServiceAccount and binds
+# it to the ClusterRoles below with RoleBindings.
+graph:
+  # -- ServiceAccount kro impersonates for each Graph.
+  serviceAccountName: kardinal-graph
+  # -- Namespace kro runs in (NetworkPolicy egress).
+  kroNamespace: kro-system
+  # -- Ship a ClusterRole aggregated into kro's controller role, for kro
+  # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
+  aggregateToKro: true
 
 # -- ValidatingAdmissionPolicy for PolicyGate validation.
 # Requires Kubernetes 1.28+. When enabled, validates PolicyGate spec.expression

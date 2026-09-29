@@ -8,7 +8,7 @@
 
 - **Design doc**: `docs/design/02-pipeline-to-graph-translator.md`
 - **Section**: `§ Step 5: Build Graph nodes`
-- **Implements**: Multi-region PromotionStep fan-out using krocodile `forEach` primitive (🔲 → ✅)
+- **Implements**: Multi-region PromotionStep fan-out using the Graph `forEach` primitive (🔲 → ✅)
 
 ---
 
@@ -19,7 +19,7 @@ field with JSON tag `regions,omitempty`. A pipeline with `regions: [us-east-1, e
 on an environment is valid YAML.
 
 **O2.** `PromotionStepSpec` in `api/v1alpha1/promotionstep_types.go` MUST include a `Region string`
-field with JSON tag `region,omitempty`. This field is set by the krocodile forEach `${item}`
+field with JSON tag `region,omitempty`. This field is set by the Graph forEach `${item}`
 template expression — it is NOT set manually.
 
 **O3.** When `len(env.Regions) > 1`, `buildNodes` in `pkg/graph/builder.go` MUST emit a Graph
@@ -51,9 +51,9 @@ and `spec.region = "${item}"` in the template.
 
 - The exact CEL expression for `ForEach` field: use a Go slice literal in the template
   spec that references regions statically, OR use the forEach primitive that iterates over
-  the PromotionStep spec.regions list. Evaluate which krocodile forEach syntax works with
+  the PromotionStep spec.regions list. Evaluate which Graph forEach syntax works with
   our pinned commit (d6cbc54).
-- Whether `propageWhen` aggregate uses `all()` or another approach: use what krocodile supports.
+- Whether `propageWhen` aggregate uses `all()` or another approach: use what the Graph controller supports.
 - Whether to include `regions` in the PromotionStep inputs map vs. as a dedicated field.
 
 ---

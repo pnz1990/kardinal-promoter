@@ -76,7 +76,7 @@ func TestRequiredTemplatesExist(t *testing.T) {
 		"clusterrole.yaml",
 		"clusterrolebinding.yaml",
 		"service.yaml",
-		"krocodile.yaml",
+		"graph-rbac.yaml",
 		"_helpers.tpl",
 	}
 	for _, tmpl := range templates {
@@ -114,28 +114,38 @@ func TestHelmTemplate(t *testing.T) {
 	assert.Contains(t, rendered, "kind: ClusterRole", "must render a ClusterRole")
 	assert.Contains(t, rendered, "kind: ClusterRoleBinding", "must render a ClusterRoleBinding")
 	assert.Contains(t, rendered, "kind: Service", "must render a Service")
-	// krocodile resources must be present when enabled (default)
-	assert.Contains(t, rendered, "graph-controller", "must render krocodile Deployment")
-	assert.Contains(t, rendered, "graphs.experimental.kro.run", "must render Graph CRD")
-	assert.Contains(t, rendered, "graphrevisions.experimental.kro.run", "must render GraphRevision CRD")
+	// kro is a prerequisite, not bundled: no Graph controller or CRDs.
+	assert.NotContains(t, rendered, "kind: CustomResourceDefinition", "kro CRDs must not be bundled")
+	// The controller manages kro.run Graphs and the Graph identity.
+	assert.Contains(t, rendered, `apiGroups: ["kro.run"]`, "controller must manage kro.run graphs")
+	assert.Contains(t, rendered, "--graph-service-account=kardinal-graph")
+	assert.Contains(t, rendered, "--graph-applier-clusterrole=kardinal-promoter-graph-applier")
+	assert.Contains(t, rendered, "--graph-reader-clusterrole=kardinal-promoter-graph-reader")
 }
 
-func TestHelmTemplateKrocodileDisabled(t *testing.T) {
+// TestHelmTemplateGraphRBAC verifies the Graph ServiceAccount's ClusterRoles,
+// the kro aggregation role, and that the controller's bind grant is limited to
+// the two Graph ClusterRoles.
+func TestHelmTemplateGraphRBAC(t *testing.T) {
 	helm := helmBin(t)
 	root := repoRoot(t)
 	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
 
-	// When krocodile.enabled=false, no krocodile resources should be rendered
-	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir,
-		"--set", "krocodile.enabled=false")
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "helm template with krocodile disabled must succeed:\n%s", string(out))
-
+	out, err := exec.Command(helm, "template", "kardinal-promoter", chartDir).CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
 	rendered := string(out)
-	assert.NotContains(t, rendered, "graph-controller",
-		"krocodile Deployment must NOT be rendered when disabled")
-	assert.NotContains(t, rendered, "graphs.experimental.kro.run",
-		"Graph CRD must NOT be rendered when disabled")
+	assert.Contains(t, rendered, "name: kardinal-promoter-graph-applier")
+	assert.Contains(t, rendered, "name: kardinal-promoter-graph-reader")
+	assert.Contains(t, rendered, `rbac.kro.run/aggregate-to-controller: "true"`)
+	assert.Contains(t, rendered, `verbs: ["bind"]
+    resourceNames:
+      - kardinal-promoter-graph-applier
+      - kardinal-promoter-graph-reader`)
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "graph.aggregateToKro=false").CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.NotContains(t, string(out), "rbac.kro.run/aggregate-to-controller")
 }
 
 func TestHelmTemplateContainerImage(t *testing.T) {

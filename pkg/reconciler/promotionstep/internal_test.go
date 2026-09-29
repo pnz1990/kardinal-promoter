@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -311,4 +312,55 @@ func TestPolicyGateMapper(t *testing.T) {
 	assert.True(t, names["step-1"])
 	assert.True(t, names["step-2"])
 	assert.False(t, names["step-3"], "steps in other namespaces must not be enqueued")
+}
+
+// TestCollectGateResults verifies the PR body gets one row per required gate,
+// named after the template, with Pass/Fail from status.ready, and that an
+// unreadable gate is skipped rather than failing the step.
+func TestCollectGateResults(t *testing.T) {
+	scheme := newTestScheme(t)
+	evaluated := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+	pass := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "require-uat-soak-platform-policies-prod--app-abc", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/gate-name": "require-uat-soak"},
+		},
+		Status: v1alpha1.PolicyGateStatus{Ready: true, Reason: "soak >= 30 = true", LastEvaluatedAt: &evaluated},
+	}
+	fail := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend--app-abc", Namespace: "default"},
+		Status:     v1alpha1.PolicyGateStatus{Ready: false, Reason: "isWeekend"},
+	}
+	c := fakeclient.NewClientBuilder().WithScheme(scheme).WithObjects(pass, fail).Build()
+	r := &Reconciler{Client: c}
+
+	ps := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-abc-prod", Namespace: "default"},
+		Spec: v1alpha1.PromotionStepSpec{RequiredGates: []string{
+			pass.Name, fail.Name, "missing-gate",
+		}},
+	}
+	got := r.collectGateResults(context.Background(), zerolog.Nop(), ps)
+	require.Len(t, got, 2)
+	assert.Equal(t, "require-uat-soak", got[0].GateName)
+	assert.Equal(t, "Pass", got[0].Result)
+	assert.True(t, evaluated.Time.Equal(got[0].EvaluatedAt.Time), "evaluatedAt must come from the gate")
+	assert.Equal(t, "no-weekend--app-abc", got[1].GateName)
+	assert.Equal(t, "Fail", got[1].Result)
+	assert.Equal(t, "isWeekend", got[1].Reason)
+	assert.False(t, got[1].EvaluatedAt.IsZero())
+
+	assert.Nil(t, r.collectGateResults(context.Background(), zerolog.Nop(),
+		&v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Namespace: "default"}}))
+}
+
+func TestUpstreamEnvironments(t *testing.T) {
+	b := &v1alpha1.Bundle{Status: v1alpha1.BundleStatus{Environments: []v1alpha1.EnvironmentStatus{
+		{Name: "test", Phase: "Verified"}, {Name: "uat", Phase: "Verified"}, {Name: "prod", Phase: "Pending"},
+	}}}
+	got := upstreamEnvironments(b, "prod")
+	require.Len(t, got, 2)
+	assert.Equal(t, "test", got[0].Name)
+	assert.Equal(t, "uat", got[1].Name)
+	assert.Nil(t, upstreamEnvironments(nil, "prod"))
 }

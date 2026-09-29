@@ -21,7 +21,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -45,9 +47,6 @@ func makeTestGraph(envNames ...string) *graph.Graph {
 			ReadyWhen: []string{
 				`${` + celSafeSlug(name) + `.status.state == "Verified"}`,
 			},
-			PropagateWhen: []string{
-				`${` + celSafeSlug(name) + `.status.state == "Verified"}`,
-			},
 		})
 	}
 	return g
@@ -62,7 +61,7 @@ func makePipeline(name string, envs []kardinalv1alpha1.EnvironmentSpec) *kardina
 }
 
 // TestInjectHealthWatchNodes_NoHealthType verifies that environments without
-// health.type do not produce Watch nodes.
+// health.type do not produce ref nodes.
 func TestInjectHealthWatchNodes_NoHealthType(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "test"},
@@ -73,12 +72,12 @@ func TestInjectHealthWatchNodes_NoHealthType(t *testing.T) {
 
 	injected, err := injectHealthWatchNodes(pipeline, g)
 	require.NoError(t, err)
-	assert.Equal(t, 0, injected, "no Watch nodes should be injected when health.type is empty")
+	assert.Equal(t, 0, injected, "no ref nodes should be injected when health.type is empty")
 	assert.Len(t, g.Spec.Nodes, originalCount, "node count must not change")
 }
 
 // TestInjectHealthWatchNodes_Resource verifies that health.type=resource injects
-// a ShapeWatch node for apps/v1 Deployment.
+// a kro ref node for apps/v1 Deployment.
 func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
@@ -89,9 +88,9 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	injected, err := injectHealthWatchNodes(pipeline, g)
 	require.NoError(t, err)
 	assert.Equal(t, 1, injected)
-	assert.Len(t, g.Spec.Nodes, originalStepCount+1, "one Watch node added")
+	assert.Len(t, g.Spec.Nodes, originalStepCount+1, "one ref node added")
 
-	// Find the health Watch node
+	// Find the health ref node
 	var watchNode *graph.GraphNode
 	for i := range g.Spec.Nodes {
 		if strings.HasPrefix(g.Spec.Nodes[i].ID, "health") {
@@ -99,12 +98,12 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, watchNode, "health Watch node must exist")
+	require.NotNil(t, watchNode, "health ref node must exist")
 
 	// Node ID follows "health<TitleCaseEnvSlug>" camelCase pattern
 	assert.Equal(t, "healthProd", watchNode.ID)
 
-	// Template must be identity-only (Watch-reference auto-detection):
+	// Template must be identity-only (kro NodeRef shape):
 	// Only apiVersion, kind, metadata.name/namespace
 	tmpl := watchNode.Ref
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
@@ -113,7 +112,7 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	assert.Equal(t, "nginx", md["name"], "deployment name = pipeline name")
 	assert.Equal(t, "prod", md["namespace"], "deployment namespace = env name")
 
-	// Template must NOT have spec or other fields (would make it Own/Contribute reference)
+	// Template must NOT have spec or other fields (a ref reads, it does not render)
 	_, hasSpec := tmpl["spec"]
 	assert.False(t, hasSpec, "identity-only template must not have spec field")
 	for k := range tmpl {
@@ -122,7 +121,7 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	}
 	for k := range md {
 		assert.Contains(t, []string{"name", "namespace"}, k,
-			"metadata must only have name/namespace for Watch-reference detection")
+			"metadata must only have name/namespace for a named ref")
 	}
 
 	// ReadyWhen must reference the actual node ID (not the placeholder "healthNode")
@@ -132,7 +131,7 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	assert.Contains(t, watchNode.ReadyWhen[0], "Available", "readyWhen checks Available condition")
 }
 
-// TestInjectHealthWatchNodes_ArgoCD verifies health.type=argocd Watch node.
+// TestInjectHealthWatchNodes_ArgoCD verifies health.type=argocd ref node.
 func TestInjectHealthWatchNodes_ArgoCD(t *testing.T) {
 	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},
@@ -158,7 +157,7 @@ func TestInjectHealthWatchNodes_ArgoCD(t *testing.T) {
 	assert.Contains(t, watchNode.ReadyWhen[0], "Synced")
 }
 
-// TestInjectHealthWatchNodes_Flux verifies health.type=flux Watch node.
+// TestInjectHealthWatchNodes_Flux verifies health.type=flux ref node.
 func TestInjectHealthWatchNodes_Flux(t *testing.T) {
 	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "staging", Health: kardinalv1alpha1.HealthConfig{Type: "flux"}},
@@ -183,7 +182,7 @@ func TestInjectHealthWatchNodes_Flux(t *testing.T) {
 	assert.Contains(t, watchNode.ReadyWhen[0], "Ready")
 }
 
-// TestInjectHealthWatchNodes_ArgoRollouts verifies health.type=argoRollouts Watch node.
+// TestInjectHealthWatchNodes_ArgoRollouts verifies health.type=argoRollouts ref node.
 func TestInjectHealthWatchNodes_ArgoRollouts(t *testing.T) {
 	pipeline := makePipeline("rollouts-demo", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod-eu", Health: kardinalv1alpha1.HealthConfig{Type: "argoRollouts"}},
@@ -206,7 +205,7 @@ func TestInjectHealthWatchNodes_ArgoRollouts(t *testing.T) {
 	assert.Equal(t, "prod-eu", md["namespace"])
 }
 
-// TestInjectHealthWatchNodes_Flagger verifies health.type=flagger Watch node.
+// TestInjectHealthWatchNodes_Flagger verifies health.type=flagger ref node.
 func TestInjectHealthWatchNodes_Flagger(t *testing.T) {
 	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "flagger"}},
@@ -227,7 +226,7 @@ func TestInjectHealthWatchNodes_Flagger(t *testing.T) {
 }
 
 // TestInjectHealthWatchNodes_MultipleEnvs verifies multiple environments each get
-// their own Watch node.
+// their own ref node.
 func TestInjectHealthWatchNodes_MultipleEnvs(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "test"}, // no health
@@ -251,28 +250,21 @@ func TestInjectHealthWatchNodes_MultipleEnvs(t *testing.T) {
 	assert.Equal(t, "healthProd", prodNode.ID)
 }
 
-// TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated verifies that the
-// companion PromotionStep node's readyWhen gains the health Watch condition.
-func TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated(t *testing.T) {
+// TestInjectHealthWatchNodes_PromotionStepReadyWhenUnchanged verifies that the
+// companion PromotionStep node's readyWhen is left alone: kro readyWhen may
+// only reference the node itself (ledger gap G3). The health ref node carries
+// its own readyWhen, and the PromotionStep reconciler reads health directly.
+func TestInjectHealthWatchNodes_PromotionStepReadyWhenUnchanged(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
 	})
 	g := makeTestGraph("prod")
-
-	// Capture original readyWhen
-	var origReadyWhen []string
-	for _, node := range g.Spec.Nodes {
-		if node.ID == "prod" {
-			origReadyWhen = append(origReadyWhen, node.ReadyWhen...)
-			break
-		}
-	}
+	orig := append([]string{}, g.Spec.Nodes[0].ReadyWhen...)
 
 	injected, err := injectHealthWatchNodes(pipeline, g)
 	require.NoError(t, err)
 	assert.Equal(t, 1, injected)
 
-	// Find the PromotionStep node
 	var stepNode *graph.GraphNode
 	for i := range g.Spec.Nodes {
 		if g.Spec.Nodes[i].ID == "prod" {
@@ -281,47 +273,8 @@ func TestInjectHealthWatchNodes_PromotionStepReadyWhenUpdated(t *testing.T) {
 		}
 	}
 	require.NotNil(t, stepNode)
-
-	// readyWhen must have grown by 1 (health condition appended)
-	assert.Len(t, stepNode.ReadyWhen, len(origReadyWhen)+1,
-		"PromotionStep readyWhen should gain one health condition")
-
-	// The new condition must reference the health Watch node ID
-	newCond := stepNode.ReadyWhen[len(stepNode.ReadyWhen)-1]
-	assert.Contains(t, newCond, "healthProd", "new readyWhen condition must reference health node ID")
-	assert.Contains(t, newCond, "Available", "resource readyWhen checks Available condition")
-}
-
-// TestInjectHealthWatchNodes_PropagateWhenUnchanged verifies that propagateWhen
-// is NOT modified — the PromotionStep reconciler still gates downstream.
-func TestInjectHealthWatchNodes_PropagateWhenUnchanged(t *testing.T) {
-	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
-		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
-	})
-	g := makeTestGraph("prod")
-
-	var origPropagateWhen []string
-	for _, node := range g.Spec.Nodes {
-		if node.ID == "prod" {
-			origPropagateWhen = append(origPropagateWhen, node.PropagateWhen...)
-			break
-		}
-	}
-
-	_, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
-
-	var stepNode *graph.GraphNode
-	for i := range g.Spec.Nodes {
-		if g.Spec.Nodes[i].ID == "prod" {
-			stepNode = &g.Spec.Nodes[i]
-			break
-		}
-	}
-	require.NotNil(t, stepNode)
-
-	assert.Equal(t, origPropagateWhen, stepNode.PropagateWhen,
-		"propagateWhen must NOT be modified — reconciler still gates downstream")
+	assert.Equal(t, orig, stepNode.ReadyWhen,
+		"PromotionStep readyWhen must not reference the health node")
 }
 
 // TestInjectHealthWatchNodes_NilGraph handles nil input gracefully.
@@ -356,9 +309,9 @@ func TestInjectHealthWatchNodes_UnknownHealthType(t *testing.T) {
 	assert.Len(t, g.Spec.Nodes, originalCount, "node count unchanged for unknown type")
 }
 
-// TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly verifies that the emitted Watch
-// node template conforms to krocodile's ShapeWatch detection requirement:
-// only apiVersion, kind, metadata.name/namespace — no spec or other fields.
+// TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly verifies that the emitted
+// kro ref node carries only apiVersion, kind, metadata.name/namespace — the
+// shape of a kro NodeRef.
 func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -382,14 +335,14 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 			require.NoError(t, err)
 
 			watchNode := findHealthNode(g, "prod")
-			require.NotNil(t, watchNode, "health Watch node must exist for type %s", tc.healthType)
+			require.NotNil(t, watchNode, "health ref node must exist for type %s", tc.healthType)
 
 			tmpl := watchNode.Ref
 
 			// Only allowed top-level keys: apiVersion, kind, metadata
 			for k := range tmpl {
 				assert.Contains(t, []string{"apiVersion", "kind", "metadata"}, k,
-					"ShapeWatch template must only have apiVersion/kind/metadata, got: %s", k)
+					"ref must only have apiVersion/kind/metadata, got: %s", k)
 			}
 
 			// metadata must only have name/namespace
@@ -397,7 +350,7 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 			require.True(t, ok, "metadata must be a map")
 			for k := range md {
 				assert.Contains(t, []string{"name", "namespace"}, k,
-					"metadata must only have name/namespace for ShapeWatch, got: %s", k)
+					"ref metadata must only have name/namespace, got: %s", k)
 			}
 
 			// apiVersion and kind must be present
@@ -409,9 +362,8 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 	}
 }
 
-// TestCelSafeSlug verifies celSafeSlug produces identifiers valid as both
-// CEL variable names AND DNS labels (after strings.ToLower), as required by
-// krocodile e082fe9+ which embeds node IDs in DNS subdomain label key prefixes.
+// TestCelSafeSlug verifies celSafeSlug produces identifiers that pass kro's
+// node ID grammar ^[A-Za-z][A-Za-z0-9]*$ (pkg/graphengine/compiler/validation.go).
 func TestCelSafeSlug(t *testing.T) {
 	tests := []struct {
 		input string
@@ -424,7 +376,7 @@ func TestCelSafeSlug(t *testing.T) {
 		{"prod-eu-2", "prodEu2"},
 		// All-uppercase: first char lowercased, rest preserved (valid camelCase)
 		{"PROD", "pROD"},
-		// Leading digit: guarded with "x" prefix (not "_" — underscores invalid in DNS label)
+		// Leading digit: guarded with "x" prefix (kro IDs must start with a letter)
 		{"0prod", "x0prod"},
 		// Dot-separated: camelCase (dots become word boundaries)
 		{"my.env", "myEnv"},
@@ -433,15 +385,13 @@ func TestCelSafeSlug(t *testing.T) {
 		t.Run(tc.input, func(t *testing.T) {
 			got := celSafeSlug(tc.input)
 			assert.Equal(t, tc.want, got)
-			// Invariant: result must be a valid CEL identifier
-			assert.Regexp(t, `^[a-zA-Z_][a-zA-Z0-9_]*$`, got, "must be valid CEL identifier")
-			// Invariant: lowercase result must be a valid DNS label
-			assert.Regexp(t, `^[a-z0-9][a-z0-9]*$`, strings.ToLower(got), "toLower must be valid DNS label")
+			// Invariant: result must be a valid kro node ID
+			assert.Regexp(t, `^[A-Za-z][A-Za-z0-9]*$`, got, "must be a valid kro node ID")
 		})
 	}
 }
 
-// findHealthNode finds the health Watch node for a given environment in the graph.
+// findHealthNode finds the health ref node for a given environment in the graph.
 func findHealthNode(g *graph.Graph, envName string) *graph.GraphNode {
 	target := "health" + strings.ToUpper(celSafeSlug(envName)[:1]) + celSafeSlug(envName)[1:]
 	for i := range g.Spec.Nodes {
@@ -453,8 +403,8 @@ func findHealthNode(g *graph.Graph, envName string) *graph.GraphNode {
 }
 
 // TestInjectHealthWatchNodes_ResourceWatchKind verifies that health.type=resource with
-// health.labelSelector emits a WatchKind node (no metadata.name, spec.labelSelector present)
-// and uses list.all() in the readyWhen CEL expression.
+// health.labelSelector emits a collection ref node (metadata.selector, no metadata.name)
+// with a per-element readyWhen on each.
 func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{
@@ -477,41 +427,35 @@ func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	watchNode := findHealthNode(g, "prod")
 	require.NotNil(t, watchNode, "health node for prod must be present")
 
-	// krocodile ≥ 05db829: WatchKind nodes use watch: keyword, not ref: or template:
-	tmpl := watchNode.Watch
+	// Collection ref: metadata.selector instead of metadata.name.
+	tmpl := watchNode.Ref
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
 	assert.Equal(t, "Deployment", tmpl["kind"])
 
-	// WatchKind: metadata IS present (with namespace for scoping) but must NOT have metadata.name.
-	// krocodile ≥ 81c5a03 changed WatchKind namespace from graph.GetNamespace() to
-	// tmpl["metadata"]["namespace"] (absent = cluster-wide list). We include namespace to scope
-	// the watch to the environment namespace. The absence of metadata.name is what krocodile uses
-	// to classify as ReferenceWatchKind (types.go:DetectReference checks !hasName).
 	md, hasMd := tmpl["metadata"].(map[string]interface{})
-	require.True(t, hasMd, "WatchKind node template must have metadata block (for namespace scoping)")
+	require.True(t, hasMd, "collection ref must have metadata")
 	_, hasName := md["name"]
-	assert.False(t, hasName, "WatchKind node template must NOT have metadata.name")
-	assert.Equal(t, "prod", md["namespace"], "WatchKind must have metadata.namespace = env name")
+	assert.False(t, hasName, "collection ref must NOT have metadata.name")
+	assert.Equal(t, "prod", md["namespace"], "collection ref must scope to the env namespace")
 
-	// WatchKind: must have top-level "selector" field (krocodile node.go:reconcileWatchKind
-	// extracts selector from tmpl["selector"] or tmpl["metadata"]["selector"]).
-	labelSelector, ok := tmpl["selector"].(map[string]string)
-	require.True(t, ok, "WatchKind node template must have top-level 'selector' of type map[string]string")
-	assert.Equal(t, "nginx", labelSelector["app"])
-	assert.Equal(t, "nginx", labelSelector["kardinal.io/pipeline"])
+	sel, ok := md["selector"].(map[string]interface{})
+	require.True(t, ok, "collection ref must have metadata.selector")
+	matchLabels, ok := sel["matchLabels"].(map[string]interface{})
+	require.True(t, ok, "selector must be a LabelSelector with matchLabels")
+	assert.Equal(t, "nginx", matchLabels["app"])
+	assert.Equal(t, "nginx", matchLabels["kardinal.io/pipeline"])
 
-	// ReadyWhen must use list.all() form.
-	require.NotEmpty(t, watchNode.ReadyWhen)
-	assert.Contains(t, watchNode.ReadyWhen[0], ".all(",
-		"WatchKind readyWhen must use .all() to check all items")
-	assert.NotContains(t, watchNode.ReadyWhen[0], "healthProd.status",
-		"WatchKind readyWhen must not use single-object path")
+	// kro evaluates collection readyWhen per element bound to "each".
+	require.Len(t, watchNode.ReadyWhen, 1)
+	assert.True(t, strings.HasPrefix(watchNode.ReadyWhen[0], "${each.status.conditions.exists("),
+		"collection readyWhen must be a per-element expression on each: %s", watchNode.ReadyWhen[0])
+	assert.NotContains(t, watchNode.ReadyWhen[0], "healthNode", "placeholder must be substituted")
 }
 
 // TestInjectHealthWatchNodes_ResourceWatchKindVsWatch verifies that adding a LabelSelector
-// switches from Watch to WatchKind without affecting the Watch case for the same health type.
+// switches from a named ref to a collection ref without affecting the named case.
 func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
-	// Watch case: no LabelSelector
+	// Named case: no LabelSelector
 	watchPipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "uat", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
 	})
@@ -521,14 +465,13 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 
 	watchNode := findHealthNode(gWatch, "uat")
 	require.NotNil(t, watchNode)
-	// krocodile ≥ 05db829: single-named Watch nodes use ref: keyword
+	// Named ref: must have metadata.name
 	tmplWatch := watchNode.Ref
-	// Watch: must have metadata.name
 	md := tmplWatch["metadata"].(map[string]interface{})
 	assert.Equal(t, "myapp", md["name"])
 	assert.Contains(t, watchNode.ReadyWhen[0], "healthUat.status.conditions.exists(")
 
-	// WatchKind case: with LabelSelector
+	// Collection case: with LabelSelector
 	watchKindPipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
 		{
 			Name: "uat",
@@ -544,19 +487,16 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 
 	watchKindNode := findHealthNode(gWatchKind, "uat")
 	require.NotNil(t, watchKindNode)
-	// krocodile ≥ 05db829: WatchKind nodes use watch: keyword
-	tmplWatchKind := watchKindNode.Watch
-	// WatchKind: metadata IS present (with namespace) but must NOT have metadata.name.
-	wkMd, hasMd := tmplWatchKind["metadata"].(map[string]interface{})
-	require.True(t, hasMd, "WatchKind node must have metadata block for namespace scoping")
+	// Collection ref: metadata.selector, no metadata.name.
+	wkMd, hasMd := watchKindNode.Ref["metadata"].(map[string]interface{})
+	require.True(t, hasMd, "collection ref must have metadata")
 	_, hasName := wkMd["name"]
-	assert.False(t, hasName, "WatchKind node must not have metadata.name")
-	assert.Equal(t, "uat", wkMd["namespace"], "WatchKind must scope to env namespace")
-	// WatchKind: must have top-level selector
-	_, hasSelector := tmplWatchKind["selector"]
-	assert.True(t, hasSelector, "WatchKind node must have top-level selector")
-	assert.Contains(t, watchKindNode.ReadyWhen[0], ".all(",
-		"WatchKind readyWhen must use .all() predicate")
+	assert.False(t, hasName, "collection ref must not have metadata.name")
+	assert.Equal(t, "uat", wkMd["namespace"], "collection ref must scope to env namespace")
+	_, hasSelector := wkMd["selector"]
+	assert.True(t, hasSelector, "collection ref must have metadata.selector")
+	assert.Contains(t, watchKindNode.ReadyWhen[0], "each.status.conditions.exists(",
+		"collection readyWhen must be per element")
 }
 
 // TestInjectHealthWatchNodes_ResourceRef verifies that health.type=resource with
@@ -590,7 +530,7 @@ func TestInjectHealthWatchNodes_ResourceRef(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, watchNode, "health Watch node must exist")
+	require.NotNil(t, watchNode, "health ref node must exist")
 
 	tmpl := watchNode.Ref
 	assert.Equal(t, "apps/v1", tmpl["apiVersion"])
@@ -637,4 +577,25 @@ func TestInjectHealthWatchNodes_ResourceRef_Defaults(t *testing.T) {
 	assert.Equal(t, "my-pipeline", md["name"], "empty ResourceRef.Name falls back to pipeline name")
 	// Namespace from ResourceRef.Namespace
 	assert.Equal(t, "staging-infra", md["namespace"], "ResourceRef.Namespace overrides env name")
+}
+
+// TestInjectHealthNodes_SkipsUnservedKinds verifies that a health ref whose
+// kind the cluster does not serve is dropped: kro fails the whole Graph
+// compile on a ref to a missing CRD (ledger gap G4).
+func TestInjectHealthNodes_SkipsUnservedKinds(t *testing.T) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}, meta.RESTScopeNamespace)
+	tr := (&Translator{}).WithRESTMapper(mapper)
+
+	pipeline := makePipeline("myapp", []kardinalv1alpha1.EnvironmentSpec{
+		{Name: "uat", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
+		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd"}},
+	})
+	g := makeTestGraph("uat", "prod")
+
+	injected, err := injectHealthNodes(pipeline, g, tr.servedKind)
+	require.NoError(t, err)
+	assert.Equal(t, 1, injected, "argocd Application is not served and must be skipped")
+	assert.NotNil(t, findHealthNode(g, "uat"))
+	assert.Nil(t, findHealthNode(g, "prod"))
 }

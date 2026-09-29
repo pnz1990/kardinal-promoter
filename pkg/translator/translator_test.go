@@ -111,6 +111,35 @@ func TestCollectGates_PipelineNamespace(t *testing.T) {
 	assert.Equal(t, "team-gate", gates[0].Name)
 }
 
+// TestCollectGates_SkipsGateInstances verifies that PolicyGate instances a
+// Graph stamped into the pipeline namespace are not collected as templates.
+func TestCollectGates_SkipsGateInstances(t *testing.T) {
+	s := translatorTestScheme()
+	template := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-gate", Namespace: "my-team"},
+		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "bundle.type == 'image'"},
+	}
+	instance := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-gate-my-team-prod--my-app-v1",
+			Namespace: "my-team",
+			Labels:    map[string]string{"kardinal.io/gate-template": "team-gate"},
+		},
+		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "bundle.type == 'image'"},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(template, instance).Build()
+
+	tr := New(nil, nil, c, []string{"platform-policies"}, zerolog.Nop())
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "my-team"},
+	}
+
+	gates, err := tr.collectGates(context.Background(), pipeline)
+	require.NoError(t, err)
+	require.Len(t, gates, 1)
+	assert.Equal(t, "team-gate", gates[0].Name)
+}
+
 // TestCollectGates_DeduplicatesOrgGates verifies that gates in policyNS that happen
 // to equal the pipeline namespace are not duplicated.
 func TestCollectGates_DeduplicatesOrgGates(t *testing.T) {

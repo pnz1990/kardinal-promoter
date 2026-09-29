@@ -22,7 +22,7 @@ KIND_CLUSTER="${KIND_CLUSTER:-kardinal-e2e}"
 # EKS cluster name — read from Terraform output if available, otherwise use env var or default
 EKS_CLUSTER_NAME="${EKS_CLUSTER_NAME:-$(cd terraform/eks-e2e && terraform output -raw cluster_name 2>/dev/null || echo "kardinal-e2e-prod")}"
 EKS_REGION="${EKS_REGION:-$(cd terraform/eks-e2e && terraform output -raw cluster_region 2>/dev/null || echo "us-east-2")}"
-KROCODILE_COMMIT="${KROCODILE_COMMIT:-501ea75f}"
+KRO_VERSION="${KRO_VERSION:-0.10.0-rc.0}"
 ARGOCD_VERSION="${ARGOCD_VERSION:-v2.10.3}"
 TEST_APP_IMAGE="${TEST_APP_IMAGE:-ghcr.io/pnz1990/kardinal-test-app:latest}"
 
@@ -49,10 +49,10 @@ if ! kind get clusters 2>/dev/null | grep -q "^${KIND_CLUSTER}$"; then
 fi
 kubectl config use-context "kind-${KIND_CLUSTER}"
 
-# ── Step 2: Install krocodile on kind ────────────────────────────────────────
+# ── Step 2: Install kro on kind ──────────────────────────────────────────────
 echo ""
-echo "[2/6] Installing krocodile on kind cluster..."
-KROCODILE_COMMIT=$KROCODILE_COMMIT KIND_CLUSTER=$KIND_CLUSTER bash hack/install-krocodile.sh
+echo "[2/6] Installing kro on kind cluster..."
+KRO_VERSION=$KRO_VERSION KUBE_CONTEXT="kind-${KIND_CLUSTER}" bash hack/install-kro.sh
 
 # ── Step 3: Install ArgoCD on kind ───────────────────────────────────────────
 echo ""

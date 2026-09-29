@@ -8,8 +8,8 @@ Run pre-flight checks for kardinal-promoter:
 
   ✅ Controller reachable      version ConfigMap found
   ✅ CRDs installed            kardinal.io resource groups registered
-  ✅ krocodile running         graph-controller pod in kro-system
-  ✅ krocodile CRDs installed  experimental.kro.run groups registered
+  ✅ kro running               kro controller pod in kro-system
+  ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
   ✅ GitHub token              github-token secret present
 
 Use 'kardinal doctor' as the first troubleshooting step.

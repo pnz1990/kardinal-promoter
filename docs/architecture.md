@@ -67,15 +67,15 @@ Converts a `Pipeline` CRD + a `Bundle` CRD into a [kro](https://github.com/kuber
 ### kro Graph Controller (`kro-system`)
 
 kardinal-promoter does **not** implement graph coordination itself. It delegates to the
-krocodile Graph controller (an experimental fork of [kro](https://github.com/kubernetes-sigs/kro))
-which manages the DAG lifecycle:
+[kro](https://github.com/kubernetes-sigs/kro) Graph controller (`kro.run/v1alpha1` `Graph`,
+`GraphKind` feature gate), which manages the DAG lifecycle:
 
 - Creates owned resources (PromotionStep CRs, PolicyGate CRs) in topological order
 - Advances to the next node when `readyWhen` is satisfied
 - Stops the DAG on failure, preventing downstream promotions
 
-> **Dependency note**: kardinal-promoter requires krocodile to be installed in the cluster.
-> See [Installation](installation.md#install-krocodile) for setup.
+> **Dependency note**: kardinal-promoter requires kro v0.10.0-rc.0+ with the Graph controller enabled.
+> See [Installation](installation.md#install-kro) for setup.
 
 ### Steps Engine (`pkg/steps`)
 
@@ -143,7 +143,7 @@ sequenceDiagram
     participant API as kardinal API
     participant K8s as Kubernetes API Server
     participant Bundle as BundleReconciler
-    participant kro as krocodile Graph
+    participant kro as kro Graph
     participant PS as PromotionStepReconciler
     participant PG as PolicyGateReconciler
 
@@ -205,6 +205,7 @@ state is recovered by re-reading CRDs.
 
 ## Further Reading
 
+- [Graph Coverage](graph-coverage.md) — what runs on the kro Graph today and what does not yet
 - [Concepts](concepts.md) — Bundles, Pipelines, PolicyGates explained
 - [Policy Gates](policy-gates.md) — CEL expression reference
 - [CEL Context Reference](reference/cel-context.md) — variables available in gate expressions

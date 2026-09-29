@@ -83,7 +83,7 @@ type PolicyGateOverride struct {
 // PolicyGateStatus defines the observed state of a PolicyGate.
 type PolicyGateStatus struct {
 	// Ready indicates whether the gate is currently allowing promotion.
-	// The Graph propagateWhen expression evaluates status.ready == true.
+	// The kro Graph gates downstream nodes on status.ready == true.
 	// +kubebuilder:default=false
 	Ready bool `json:"ready"`
 

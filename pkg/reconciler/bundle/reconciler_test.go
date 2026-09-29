@@ -797,6 +797,140 @@ func TestBundleReconciler_SyncEvidenceFromPromotionStep(t *testing.T) {
 	require.NotNil(t, env.HealthCheckedAt, "HealthCheckedAt must be set when state is Verified")
 }
 
+// TestBundleReconciler_SyncEvidence_RequeuesWhileSoaking verifies that a
+// Promoting Bundle with a Verified environment is requeued, so soakMinutes
+// keeps advancing after the PromotionSteps stop changing.
+func TestBundleReconciler_SyncEvidence_RequeuesWhileSoaking(t *testing.T) {
+	s := newScheme()
+
+	verifiedAt := metav1.NewTime(time.Now().UTC().Add(-5 * time.Minute))
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase: "Promoting",
+			Environments: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", HealthCheckedAt: &verifiedAt},
+			},
+		},
+	}
+	ps := &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-test",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/bundle": "nginx-demo-v1"},
+		},
+		Spec: kardinalv1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "nginx-demo-v1",
+			Environment:  "test",
+			StepType:     "auto",
+		},
+		Status: kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+	}
+	prod := &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "step-prod",
+			Namespace: "default",
+			Labels:    map[string]string{"kardinal.io/bundle": "nginx-demo-v1"},
+		},
+		Spec: kardinalv1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "nginx-demo-v1",
+			Environment:  "prod",
+			StepType:     "pr-review",
+		},
+		Status: kardinalv1alpha1.PromotionStepStatus{State: "WaitingForMerge"},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&kardinalv1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+			Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"}, {Name: "prod"},
+			}},
+		}, b, ps, prod).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}}
+
+	for i := 0; i < 2; i++ { // first pass patches soakMinutes, second is a no-op
+		res, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, time.Minute, res.RequeueAfter, "pass %d must requeue while soaking", i)
+	}
+
+	var updated kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &updated))
+	for _, env := range updated.Status.Environments {
+		if env.Name == "test" {
+			assert.GreaterOrEqual(t, env.SoakMinutes, int64(5))
+		}
+	}
+}
+
+// TestBundleReconciler_MetricsPersistedWhenLastStepVerifies covers the path
+// where PromotionSteps exist and the final one has just reached Verified. The
+// metrics must survive the status patch (they were once assigned after the
+// patch base was taken, so the merge patch dropped them).
+func TestBundleReconciler_MetricsPersistedWhenLastStepVerifies(t *testing.T) {
+	s := newScheme()
+
+	createdAt := metav1.NewTime(time.Now().UTC().Add(-2 * time.Hour))
+	verifiedAt := metav1.NewTime(time.Now().UTC().Add(-40 * time.Minute))
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default", CreationTimestamp: createdAt},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase: "Promoting",
+			Environments: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", HealthCheckedAt: &verifiedAt},
+				{Name: "prod", Phase: "WaitingForMerge"},
+			},
+		},
+	}
+	step := func(env, state string) *kardinalv1alpha1.PromotionStep {
+		return &kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "step-" + env,
+				Namespace: "default",
+				Labels:    map[string]string{"kardinal.io/bundle": "nginx-demo-v1"},
+			},
+			Spec: kardinalv1alpha1.PromotionStepSpec{
+				PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: env, StepType: "auto",
+			},
+			Status: kardinalv1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&kardinalv1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+			Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"}, {Name: "prod"},
+			}},
+		}, b, step("test", "Verified"), step("prod", "Verified")).
+		WithStatusSubresource(b).
+		Build()
+
+	r := &bundle.Reconciler{Client: c}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	require.NotNil(t, got.Status.Metrics, "metrics must be persisted once every step is Verified")
+	assert.GreaterOrEqual(t, got.Status.Metrics.CommitToProductionMinutes, int64(100))
+	for _, env := range got.Status.Environments {
+		assert.NotNil(t, env.HealthCheckedAt, "env %s must be stamped", env.Name)
+	}
+}
+
 // TestBundleReconciler_SyncEvidence_Idempotent verifies that syncing evidence twice
 // does not change the HealthCheckedAt timestamp (idempotent).
 func TestBundleReconciler_SyncEvidence_Idempotent(t *testing.T) {
@@ -1337,8 +1471,8 @@ func TestBundleReconciler_GraphCheckerErrorIsNonFatal(t *testing.T) {
 
 // --- Pipeline spec change detection tests (#626) ---
 
-// mockGraphCheckerV2 extends the GraphChecker interface with DeleteGraph support.
-// Used to test pipeline spec change detection.
+// mockGraphCheckerV2 is a GraphChecker that also counts deletions, so tests can
+// assert that a pipeline spec change never deletes the Graph.
 type mockGraphCheckerV2 struct {
 	exists      bool
 	existsErr   error
@@ -1357,10 +1491,10 @@ func (m *mockGraphCheckerV2) DeleteGraph(_ context.Context, _, _ string) error {
 	return m.deleteErr
 }
 
-// TestBundleReconciler_PipelineSpecChange_DeletesGraph verifies that when a Pipeline
-// spec changes (different from the stored PipelineSpecHash), the reconciler deletes
-// the existing Graph so it is regenerated with the updated spec (#626).
-func TestBundleReconciler_PipelineSpecChange_DeletesGraph(t *testing.T) {
+// TestBundleReconciler_PipelineSpecChange_UpdatesGraphInPlace verifies that when a Pipeline
+// spec changes (different from the stored PipelineSpecHash), the reconciler
+// re-translates the Graph in place instead of deleting it (#626, ledger G6).
+func TestBundleReconciler_PipelineSpecChange_UpdatesGraphInPlace(t *testing.T) {
 	scheme := newScheme()
 
 	// Pipeline with NEW spec (two environments)
@@ -1408,9 +1542,9 @@ func TestBundleReconciler_PipelineSpecChange_DeletesGraph(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Graph must have been deleted
-	assert.Equal(t, 1, checker.deleteCount,
-		"Graph must be deleted when Pipeline spec hash changes")
+	assert.True(t, translator.called, "Graph must be re-translated when Pipeline spec hash changes")
+	assert.Equal(t, 0, checker.deleteCount,
+		"Graph must not be deleted: kro would delete every PromotionStep with it")
 
 	// Bundle status must have updated hash
 	var updated kardinalv1alpha1.Bundle
@@ -1453,6 +1587,7 @@ func TestBundleReconciler_PipelineSpecUnchanged_NoDelete(t *testing.T) {
 	}
 
 	checker := &mockGraphCheckerV2{exists: true}
+	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(pipeline, bndl).
@@ -1462,7 +1597,7 @@ func TestBundleReconciler_PipelineSpecUnchanged_NoDelete(t *testing.T) {
 	r := &bundle.Reconciler{
 		Client:       c,
 		GraphChecker: checker,
-		Translator:   &mockTranslator{graphName: "my-app-my-app-v1"},
+		Translator:   translator,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -1472,6 +1607,7 @@ func TestBundleReconciler_PipelineSpecUnchanged_NoDelete(t *testing.T) {
 
 	assert.Equal(t, 0, checker.deleteCount,
 		"Graph must NOT be deleted when Pipeline spec is unchanged")
+	assert.False(t, translator.called, "Graph must not be re-translated when Pipeline spec is unchanged")
 }
 
 // TestBundleReconciler_PipelineSpecHashStoredOnPromotion verifies that when a Bundle
@@ -2340,4 +2476,58 @@ func TestBundleReconciler_NoRecorderNoPanic(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
 	})
 	require.NoError(t, err)
+}
+
+// TestBundleReconciler_NoMetricsUntilEveryPipelineEnvVerified: a Pipeline with
+// test/uat/prod where only test and uat have steps (prod is still gated) must not
+// be marked finished. Metrics stay nil and the soak requeue keeps running so the
+// prod gate can open.
+func TestBundleReconciler_NoMetricsUntilEveryPipelineEnvVerified(t *testing.T) {
+	s := newScheme()
+
+	verifiedAt := metav1.NewTime(time.Now().UTC().Add(-3 * time.Minute))
+	b := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default",
+			CreationTimestamp: metav1.NewTime(time.Now().UTC().Add(-time.Hour))},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+		Status: kardinalv1alpha1.BundleStatus{
+			Phase: "Promoting",
+			Environments: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", HealthCheckedAt: &verifiedAt},
+				{Name: "uat", Phase: "Verified", HealthCheckedAt: &verifiedAt},
+			},
+		},
+	}
+	step := func(env string) *kardinalv1alpha1.PromotionStep {
+		return &kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: "step-" + env, Namespace: "default",
+				Labels: map[string]string{"kardinal.io/bundle": "nginx-demo-v1"}},
+			Spec: kardinalv1alpha1.PromotionStepSpec{
+				PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: env, StepType: "auto"},
+			Status: kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(&kardinalv1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+			Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"}, {Name: "uat"}, {Name: "prod"},
+			}},
+		}, b, step("test"), step("uat")).
+		WithStatusSubresource(b).Build()
+
+	r := &bundle.Reconciler{Client: c}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}}
+	res, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, time.Minute, res.RequeueAfter, "soak clock must keep running while prod is pending")
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Nil(t, got.Status.Metrics, "prod has no step yet, so the bundle is not finished")
+	for _, cond := range got.Status.Conditions {
+		if cond.Type == "Ready" {
+			assert.NotEqual(t, metav1.ConditionTrue, cond.Status, "Ready must not be True before prod")
+		}
+	}
 }

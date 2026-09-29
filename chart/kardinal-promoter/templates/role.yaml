@@ -72,10 +72,28 @@ rules:
     resources:
       - auditevents
     verbs: ["get", "list", "watch", "create"]
-  # kro Graph CRDs (generated promotion DAGs) — experimental.kro.run API group
-  - apiGroups: ["experimental.kro.run"]
-    resources: ["graphs", "graphs/status", "graphrevisions", "graphrevisions/status"]
+  # kro Graphs (generated promotion DAGs, kro.run/v1alpha1).
+  - apiGroups: ["kro.run"]
+    resources: ["graphs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kro.run"]
+    resources: ["graphs/status"]
+    verbs: ["get"]
+  # Graph identity: the ServiceAccount kro impersonates and its RoleBindings.
+  # bind is limited to the two Graph ClusterRoles, so the controller cannot
+  # grant anything else.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames:
+      - {{ include "kardinal-promoter.graphApplierRole" . }}
+      - {{ include "kardinal-promoter.graphReaderRole" . }}
   # Deployments — required by the Deployment health adapter to check rollout status.
   - apiGroups: ["apps"]
     resources: ["deployments"]

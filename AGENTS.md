@@ -50,9 +50,9 @@ from humans, from prior agent sessions, and from their own previous reasoning.
 ### The concrete failure this rule exists to prevent
 
 The flat DAG compilation idea (#496) was embedded in the graph-purity tech debt doc, roadmap,
-and vision as "the correct implementation" for months. No one verified it against krocodile's
+and vision as "the correct implementation" for months. No one verified it against the Graph controller's
 actual execution model until a human explicitly challenged it. The evaluation took 10 minutes.
-krocodile nodes communicate through etcd-backed CRD fields — they cannot share an ephemeral
+Graph nodes communicate through etcd-backed CRD fields — they cannot share an ephemeral
 git working directory. The approach was immediately and obviously unworkable once examined.
 
 The failure was not an implementation error. It was a process error: the idea was accepted
@@ -66,8 +66,8 @@ Before writing any design claim into a spec, issue, roadmap, or doc:
    `status.commitSHA` to CRD `GitCloneTask`; node B reads `${gitClone.status.commitSHA}`
    in its template." If you cannot specify the exact mechanism, the claim is not ready.
 
-2. **Read the source.** For krocodile claims: read `experimental/docs/design/`,
-   `experimental/controller/types.go`, `experimental/controller/dag.go`. For reconciler
+2. **Read the source.** For Graph claims: read kro's Graph docs and
+   `pkg/graphengine/` (compiler, executor) in kubernetes-sigs/kro. For reconciler
    claims: read the actual reconciler file. "It should work" without source verification
    is not acceptable.
 
@@ -309,17 +309,17 @@ changewindow.<name>   → bool   (true when window is active/blocking)
 ```
 
 **IMPORTANT:** `schedule.*` variables are **PolicyGate reconciler context only**. They are
-NOT available in krocodile Graph `readyWhen`/`propagateWhen` expressions. Do NOT use
-`!schedule.isWeekend` in a Graph node template — it will fail krocodile CEL compilation.
+NOT available in kro Graph `readyWhen` or template expressions. Do NOT use
+`!schedule.isWeekend` in a Graph node template — it will fail kro CEL compilation.
 In a Graph node, use a ScheduleClock Watch node and reference `clock.status.tick` to
 trigger re-evaluation; schedule logic stays in the PolicyGate reconciler.
 
 See issue #616 for the planned path to making `schedule.*` available in Graph CEL.
 (Issue #616 is closed; if this work is desired, open a new tracking issue.)
 
-### Context 2: krocodile Graph CEL (readyWhen / propagateWhen / includeWhen)
+### Context 2: kro Graph CEL (template / readyWhen / includeWhen / forEach)
 
-krocodile Graph expressions use the kro library functions via the Graph controller's
+kro Graph expressions use the kro library functions via the Graph controller's
 built-in DefaultEnvironment. The same json/maps/lists/random functions are available.
 Context variables are the node IDs in scope (the Kubernetes objects each node manages).
 
@@ -349,7 +349,7 @@ See `docs/aide/vision.md §PDCA Architecture` for the full validation loop.
 
 **Single-cluster setup** (kind, all environments):
 ```bash
-make setup-e2e-env       # kind + krocodile + ArgoCD + test/uat/prod
+make setup-e2e-env       # kind + kro + ArgoCD + test/uat/prod
 ```
 
 **Multi-cluster setup** (kind pre-prod + EKS prod):
@@ -436,117 +436,105 @@ transitional workaround in `docs/design/10-graph-first-architecture.md`. It must
 
 ---
 
-## krocodile Upgrade Cadence
+## kro Upgrade Cadence
 
-krocodile evolves autonomously and continuously. Breaking changes arrive without
-deprecation windows. New primitives eliminate existing workarounds.
+kardinal targets upstream [kro](https://github.com/kubernetes-sigs/kro)'s Graph kind
+(`kro.run/v1alpha1`, `GraphKind` feature gate). Graph is alpha: breaking changes can land
+between releases, and new primitives can eliminate existing workarounds.
 
-**We now build and vendor krocodile as part of our releases.** The pinned commit
-in `hack/install-krocodile.sh` is the single source of truth for which krocodile
-version kardinal targets. The release CI (`release.yml`) builds the krocodile image
-from this commit and pushes to `ghcr.io/pnz1990/kardinal-promoter/krocodile:<commit>`.
-The Helm chart bundles this image under `krocodile.image.repository`.
+kro is installed separately — the kardinal chart does not bundle it. `KRO_VERSION` in
+`hack/install-kro.sh` is the single source of truth for which kro version kardinal targets.
 
-**Agents must actively manage krocodile upgrades.** An upgrade is:
-1. Update the `KROCODILE_COMMIT` in `hack/install-krocodile.sh`
-2. Update `krocodile.pinnedCommit` in `chart/kardinal-promoter/values.yaml`
-3. Update `krocodile.commit` annotation in `chart/kardinal-promoter/Chart.yaml`
-4. Run compat checks (see upgrade protocol)
-5. Open a PR — CI will build and push the new krocodile image on release
+**Agents must actively manage kro upgrades.** An upgrade is:
+1. Update `KRO_VERSION` in `hack/install-kro.sh`
+2. Update the `kro.version` annotation in `chart/kardinal-promoter/Chart.yaml`
+3. Run compat checks (see upgrade protocol)
+4. Open a PR
 
-### Every batch: check for new commits
+### Every batch: check for new releases
 
 Before generating any work queue, the coordinator runs:
 
 ```bash
-PINNED=$(grep 'KROCODILE_COMMIT:-' hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,40\}')
-AHEAD=$(cd /tmp/kro-review 2>/dev/null && git fetch -q origin krocodile && \
-  git log ${PINNED}..origin/krocodile --oneline 2>/dev/null | wc -l || echo "?")
-
-echo "We are $AHEAD commits behind HEAD krocodile"
+PINNED=$(grep 'KRO_VERSION:-' hack/install-kro.sh | grep -o '[0-9][0-9a-z.-]*' | head -1)
+LATEST=$(gh api 'repos/kubernetes-sigs/kro/releases?per_page=1' --jq '.[0].tag_name')
+echo "Pinned v$PINNED, latest $LATEST"
 ```
 
-**If $AHEAD ≥ 5**: add a `chore(graph): review and upgrade krocodile` item to the
-queue. This is mandatory, not optional. See the upgrade protocol below.
-
-**If $AHEAD = 0**: no action needed.
+**If `$LATEST` is newer than the pin**: add a `chore(graph): review and upgrade kro` item to
+the queue. This is mandatory, not optional. See the upgrade protocol below.
 
 ### Upgrade protocol (when assigned)
 
 ```bash
-# 1. Clone at HEAD and read the log since our pin
-PINNED=$(grep 'KROCODILE_COMMIT:-' hack/install-krocodile.sh | grep -o '[a-f0-9]\{7,40\}')
-git clone -q --depth=200 https://github.com/ellistarn/kro.git /tmp/kro-review -b krocodile
-cd /tmp/kro-review && git checkout -q $(git rev-parse origin/krocodile)
+# 1. Clone kro and read the log since our pin
+PINNED=$(grep 'KRO_VERSION:-' hack/install-kro.sh | grep -o '[0-9][0-9a-z.-]*' | head -1)
+git clone -q https://github.com/kubernetes-sigs/kro.git /tmp/kro-review
+cd /tmp/kro-review && git log v${PINNED}..<new-tag> --oneline -- pkg/graphengine/ api/v1alpha1/
 
-NEW_COMMITS=$(git log ${PINNED}..HEAD --oneline)
-echo "$NEW_COMMITS"
-
-# 2. Read diffs for the three change surfaces most likely to break kardinal
-git diff ${PINNED}..HEAD -- experimental/controller/types.go
-git diff ${PINNED}..HEAD -- experimental/controller/labels.go
-git diff ${PINNED}..HEAD -- experimental/controller/dag.go
-git diff ${PINNED}..HEAD -- experimental/controller/controller.go | head -200
+# 2. Read diffs for the change surfaces most likely to break kardinal
+git diff v${PINNED}..<new-tag> -- api/v1alpha1/
+git diff v${PINNED}..<new-tag> -- pkg/graphengine/compiler/
+git diff v${PINNED}..<new-tag> -- pkg/graphengine/executor/ | head -200
 
 # 3. For each breaking change found, identify the kardinal file and line that needs updating.
 #    Common breakage vectors:
-#    - Node ID format requirements (labels.go, types.go)
-#    - Graph condition type renames (types.go)
-#    - Label key scheme changes (labels.go, apply.go)
-#    - readyWhen/propagateWhen semantic changes (controller.go, design docs)
-#    - New node reference types replacing old shape names (types.go, node.go)
+#    - Node ID format requirements (compiler/validation.go)
+#    - Graph condition type renames (api/v1alpha1)
+#    - readyWhen / includeWhen / forEach semantic changes (compiler, executor, Graph docs)
+#    - ref node shape and impersonation (spec.serviceAccountName) changes
 ```
 
 After analysis, either:
-- **Open a kardinal PR** with the compat fixes (update `hack/install-krocodile.sh` commit,
-  `chart/kardinal-promoter/values.yaml` pinnedCommit, `Chart.yaml` annotation,
-  celSafeSlug, label guards, node ID invariants, comment updates, test fixture updates)
-- **Open a krocodile issue** if the change is a krocodile bug (see §Upstream Issues below)
-- **Both** if the change is a krocodile design evolution that requires coordination
+- **Open a kardinal PR** with the compat fixes (update `hack/install-kro.sh`, the `Chart.yaml`
+  annotation, node ID invariants, comment updates, test fixture updates)
+- **Open a kro issue** if the change is a kro bug (see §Upstream issues below)
+- **Both** if the change is a kro design evolution that requires coordination
 
-### Primitive rethink (every 5th upgrade or on major krocodile releases)
+### Primitive rethink (every 5th upgrade or on major kro releases)
 
-When a krocodile upgrade introduces a substantial new capability (Definition nodes,
-new Watch semantics, new CEL functions, new propagation model), the upgrading engineer
-must also answer — in the PR description or as a follow-up issue:
+When a kro upgrade introduces a substantial new capability (new node kinds, new `ref`
+semantics, new CEL functions, new gating model), the upgrading engineer must also answer —
+in the PR description or as a follow-up issue:
 
-> **Does this new krocodile capability let us delete or simplify something in kardinal?**
+> **Does this new kro capability let us delete or simplify something in kardinal?**
 
 Specifically check:
-- Can any `pkg/reconciler/*` reconciler be deleted because krocodile now handles
+- Can any `pkg/reconciler/*` reconciler be deleted because kro now handles
   the pattern natively?
-- Can `pkg/translator/translator.go` be simplified because krocodile now expresses
+- Can `pkg/translator/translator.go` be simplified because kro now expresses
   something that required hand-built Graph specs?
-- Do any `blocked-on-krocodile` GitHub issues now have a solution?
+- Do any open gaps in `docs/design/16-graph-capability-ledger.md` or `blocked-on-upstream`
+  GitHub issues now have a solution?
   ```bash
-  gh issue list --repo pnz1990/kardinal-promoter --label blocked-on-krocodile --state open
+  gh issue list --repo pnz1990/kardinal-promoter --label blocked-on-upstream --state open
   ```
-- Are our `celSafeSlug`, `propagateWhen` patterns, and node ID conventions still
-  idiomatic, or does the new krocodile suggest a cleaner approach?
+- Are our resolvability-gating patterns and node ID conventions still idiomatic, or does the
+  new kro suggest a cleaner approach?
 
 If a simplification is found: open a `kind/enhancement,area/graph` issue describing
 it. Do not gold-plate the upgrade PR itself — file the simplification separately.
 
 ### Upstream issues and PRs
 
-When kardinal hits a krocodile bug or missing primitive, engage upstream directly.
-krocodile is autonomous development — new features and fixes land fast when motivated
-by real usage. Do not silently work around krocodile limitations.
+When kardinal hits a kro bug or missing primitive, engage upstream directly. Record the gap
+in `docs/design/16-graph-capability-ledger.md` first. Do not silently work around kro
+limitations.
 
-**Open a krocodile issue when:**
-- A krocodile bug causes a kardinal feature to fail
-- A krocodile API change breaks our integration in a way that seems unintentional
-- krocodile's runtime behavior diverges from its own design docs in `experimental/docs/design/`
+**Open a kro issue when:**
+- A kro bug causes a kardinal feature to fail
+- A kro API change breaks our integration in a way that seems unintentional
+- kro's runtime behavior diverges from its own Graph docs
 
-**Open a krocodile PR when:**
+**Open a kro PR when:**
 - A missing primitive forces a workaround that violates Graph-first architecture
-- A validation is wrong for real-world use (we've already done this: PR #109)
+- A validation is wrong for real-world use
 - The fix is small, well-scoped, and has a test case
 
 ```bash
 # Issue template
-gh issue create --repo ellistarn/kro \
-  --title "fix: <specific symptom in terms of krocodile internals>" \
+gh issue create --repo kubernetes-sigs/kro \
+  --title "fix: <specific symptom in terms of kro Graph internals>" \
   --body "## What kardinal-promoter observed
 <concrete behaviour, ideally with a minimal Graph spec that reproduces it>
 
@@ -557,16 +545,16 @@ gh issue create --repo ellistarn/kro \
 <if known — a diff is ideal>"
 
 # PR: fork, branch, fix, test, open
-gh repo fork ellistarn/kro --clone
+gh repo fork kubernetes-sigs/kro --clone
 cd kro && git checkout -b fix/<name>
 # ... fix ...
-gh pr create --repo ellistarn/kro --title "fix: ..." --body "..."
+gh pr create --repo kubernetes-sigs/kro --title "fix: ..." --body "..."
 ```
 
-After opening: cross-link the krocodile issue/PR in the kardinal issue that motivated
-it. Label the kardinal issue `blocked-on-krocodile` if we must wait for upstream.
+After opening: cross-link the kro issue/PR in the kardinal issue that motivated it and in the
+ledger entry. Label the kardinal issue `blocked-on-upstream` if we must wait for upstream.
 When the upstream change lands: upgrade our pin, remove the workaround, close the
-kardinal issue, update the history table in `docs/aide/vision.md §Upstream Issue
+kardinal issue, update the ledger and the history table in `docs/aide/vision.md §Upstream Issue
 and PR Protocol`.
 
 ## Branch Policy — What May Go Directly to main

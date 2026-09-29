@@ -38,7 +38,7 @@ type ScheduleClockStatus struct {
 	// the Graph controller watches all nodes in scope for watch events.
 	// This is the sole purpose of this field: to generate Kubernetes watch events
 	// on a regular interval so that time-based PolicyGate expressions are
-	// re-evaluated without a dedicated recheckAfter primitive in krocodile.
+	// re-evaluated without a dedicated recheckAfter primitive in kro.
 	// +optional
 	Tick string `json:"tick,omitempty"`
 }

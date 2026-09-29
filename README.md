@@ -15,7 +15,7 @@
 
 ---
 
-Kubernetes-native promotion controller built on [kro's Graph primitive](https://github.com/ellistarn/kro/tree/krocodile/experimental). Moves versioned artifact bundles through environment pipelines using Git pull requests as the approval mechanism, with policy gates expressed as CEL and represented as visible nodes in the promotion DAG.
+Kubernetes-native promotion controller built on [kro's Graph primitive](https://kro.run/next/docs/concepts/graph/overview/). Moves versioned artifact bundles through environment pipelines using Git pull requests as the approval mechanism, with policy gates expressed as CEL and represented as visible nodes in the promotion DAG.
 
 ## How it works
 
