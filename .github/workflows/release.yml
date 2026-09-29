@@ -203,6 +203,14 @@ jobs:
               --set github.secretRef.name=github-token
             ```
 
+            The chart installs the kardinal CRDs on first install. `helm upgrade` does not
+            update CRDs, so apply them before upgrading:
+
+            ```bash
+            helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version ${{ env.VERSION }} \
+              | kubectl apply --server-side -f -
+            ```
+
             ### CLI
 
             ```bash

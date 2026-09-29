@@ -76,6 +76,20 @@ spec:
 
 ### spec.environments[]
 
+A Pipeline has 1 to 100 environments. The CRD rejects, at `kubectl apply` time:
+
+- a name that is not a DNS label: lowercase letters, digits and `-`, starting and ending
+  with a letter or digit, at most 63 characters. The name is used as a namespace
+  (`resource.namespace` default, below) and in object names;
+- two environments with the same name;
+- a name that is reserved in kro Graph node IDs or CEL: `bundle`, `api-version`, `kind`,
+  `metadata`, `namespace`, `spec`, `status`, `graph`, `graphengine`, `kro`, `each`,
+  `item`, `items`, `object`, `self`, `this`, `context`, and CEL keywords such as `true`,
+  `false`, `null`, `in`, `if`, `for`, `let`, `var`, `while`.
+
+Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations such as
+`30s`, `10m` or `1h30m`; a value like `15 minutes` is rejected.
+
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
@@ -240,6 +254,7 @@ The step reads its config from `PromotionStep.spec.inputs`:
 3. **Timeout**: if `integration_test.timeout` elapses, the Job is deleted and the step returns `Failed`.
 4. **Idempotent**: multiple reconcile iterations never create duplicate Jobs (deterministic Job name from bundle+env).
 5. **Cleanup**: Jobs use `ttlSecondsAfterFinished: 3600` so they self-delete after 1 hour.
+6. **RBAC**: the controller needs `create` and `delete` on `batch` Jobs in the environment namespace. The Helm chart grants this with `--set rbac.integrationTestJobs=true`.
 
 ### Outputs
 

@@ -89,7 +89,9 @@ generate: $(CONTROLLER_GEN)
 
 manifests: $(CONTROLLER_GEN)
 	$(CONTROLLER_GEN) crd:allowDangerousTypes=true paths="./api/..." output:crd:artifacts:config=config/crd/bases
-	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./api/..." output:rbac:artifacts:config=config/rbac
+	rm -f chart/kardinal-promoter/crds/*.yaml
+	mkdir -p chart/kardinal-promoter/crds
+	cp config/crd/bases/*.yaml chart/kardinal-promoter/crds/
 
 ## Install CRDs and chart into current cluster
 install: manifests ## Install CRDs and chart into current cluster

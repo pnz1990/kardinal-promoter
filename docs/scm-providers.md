@@ -273,8 +273,10 @@ When `--scm-token-secret-name` is **not set**, the controller uses the token pas
 `--github-token` / `GITHUB_TOKEN` at startup (static mode). Rotating requires a controller
 restart in static mode.
 
-When `github.secretRef.name` is set in the Helm chart, these three environment variables are
-injected into the controller Deployment automatically.
+When `github.secretRef.name` or `github.token` is set in the Helm chart, these three environment
+variables are injected into the controller Deployment automatically. With `github.token` the
+Secret is the chart-managed `<release>-github-token`; rotate it with
+`helm upgrade --reuse-values --set github.token=<NEW_TOKEN>`.
 
 ### Rotating a PAT (zero-downtime procedure)
 
@@ -297,11 +299,12 @@ injected into the controller Deployment automatically.
 
 ### Static mode (development / CI)
 
-If you install with `--set github.token=<token>` (Helm) or `--github-token` (controller flag),
-no Secret watching is configured. To rotate the token you must restart the controller:
+If you run the controller with `--github-token` (or only the `GITHUB_TOKEN` env var) and no
+`--scm-token-secret-name`, no Secret watching is configured. To rotate the token you must
+restart the controller:
 
 ```bash
-kubectl rollout restart deployment/kardinal-promoter-controller -n kardinal-system
+kubectl rollout restart deployment/kardinal-promoter -n kardinal-system
 ```
 
 ---

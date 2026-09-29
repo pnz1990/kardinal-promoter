@@ -93,16 +93,24 @@ this strategy.
 ## Required RBAC
 
 The kardinal controller's ServiceAccount must have permission to `get` and `patch`
-`applications.argoproj.io` in the namespace where your ArgoCD Applications live.
+`applications.argoproj.io` in the namespace where your ArgoCD Applications live. The chart
+grants read access by default; enable `patch` with:
 
-Add to your Helm values or RBAC manifest:
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  --namespace kardinal-system --reuse-values \
+  --set rbac.argocdApplicationsWrite=true
+```
+
+In namespace-scoped mode (`controller.watchNamespace`) the chart's rules apply only to the
+watched namespace. If your Applications live elsewhere (for example `argocd`), create a Role
+there and bind it to the controller's ServiceAccount:
 
 ```yaml
-# Example: ClusterRole extension or Role in the argocd namespace
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
-    verbs: ["get", "patch"]
+    verbs: ["get", "list", "watch", "patch"]
 ```
 
 ---
