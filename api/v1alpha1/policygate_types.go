@@ -24,8 +24,14 @@ type PolicyGateSpec struct {
 	// +optional
 	RecheckInterval string `json:"recheckInterval,omitempty"`
 
-	// SkipPermission controls whether bundles with intent.skipEnvironments can
-	// bypass this gate. When false, skip requests are denied.
+	// SkipPermission marks a skip-permission gate as granting skips. A Bundle
+	// may skip (intent.skipEnvironments) an environment an org gate applies to
+	// only when a gate labelled kardinal.io/type=skip-permission, with
+	// skipPermission true, in an org policy namespace, applies to that
+	// environment. Gates in other namespaces never grant a skip. The permission
+	// gate's expression is evaluated like any gate, in front of the next
+	// environment the Bundle promotes, so that environment waits until it is true.
+	// On any other gate this field has no effect.
 	// +kubebuilder:default=false
 	// +optional
 	SkipPermission bool `json:"skipPermission,omitempty"`
