@@ -7,7 +7,7 @@ toolchain go1.26.6
 require (
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/cel-go v0.31.0
-	github.com/mattn/go-isatty v0.0.22
+	github.com/mattn/go-isatty v0.0.24
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
