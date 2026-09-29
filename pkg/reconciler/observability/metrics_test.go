@@ -16,13 +16,13 @@
 package observability_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
@@ -88,23 +88,37 @@ func TestPRDurationSeconds(t *testing.T) {
 	})
 }
 
-// TestMetricNames verifies the registered metric names follow the kardinal namespace.
+// TestMetricNames verifies that every kardinal collector is registered with
+// the controller-runtime registry, so /metrics serves it, under a kardinal_
+// name (C04-gates-38: this used to check a local list of strings). It also
+// checks that the kardinal_bundles_total help lists the phases it is
+// incremented with (C04-gates-33).
 func TestMetricNames(t *testing.T) {
 	t.Parallel()
 
-	names := []string{
-		"kardinal_bundles_total",
-		"kardinal_steps_total",
-		"kardinal_gate_evaluations_total",
-		"kardinal_pr_duration_seconds",
-		"kardinal_step_duration_seconds",
-		"kardinal_gate_blocking_duration_seconds",
-		"kardinal_promotionstep_age_seconds",
+	collectors := map[string]prometheus.Collector{
+		"kardinal_bundles_total":                  observability.BundlesTotal,
+		"kardinal_steps_total":                    observability.StepsTotal,
+		"kardinal_gate_evaluations_total":         observability.GateEvaluationsTotal,
+		"kardinal_pr_duration_seconds":            observability.PRDurationSeconds,
+		"kardinal_step_duration_seconds":          observability.StepDurationSeconds,
+		"kardinal_gate_blocking_duration_seconds": observability.GateBlockingDurationSeconds,
+		"kardinal_promotionstep_age_seconds":      observability.PromotionStepAgeSeconds,
 	}
+	for name, c := range collectors {
+		descs := make(chan *prometheus.Desc, 1)
+		c.Describe(descs)
+		desc := (<-descs).String()
+		assert.Contains(t, desc, `fqName: "`+name+`"`)
 
-	for _, name := range names {
-		assert.True(t, strings.HasPrefix(name, "kardinal_"),
-			"metric %s must be prefixed with kardinal_", name)
+		var already prometheus.AlreadyRegisteredError
+		assert.ErrorAs(t, ctrlmetrics.Registry.Register(c), &already, "%s must be registered", name)
+		if name == "kardinal_bundles_total" {
+			for _, phase := range []string{"Promoting", "Verified", "Failed", "Superseded"} {
+				assert.Contains(t, desc, phase, "help text lists the phase label values")
+			}
+			assert.NotContains(t, desc, "terminal phase (")
+		}
 	}
 }
 
