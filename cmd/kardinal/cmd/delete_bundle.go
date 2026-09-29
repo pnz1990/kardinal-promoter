@@ -21,7 +21,7 @@ import (
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -60,14 +60,7 @@ use this command to explicitly remove a Bundle before that occurs.`,
 
 // deleteBundleFn is the testable implementation of delete bundle.
 func deleteBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, name string) error {
-	bundle := &v1alpha1.Bundle{}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, bundle); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("bundle %q not found in namespace %s", name, ns)
-		}
-		return fmt.Errorf("delete bundle: get %s: %w", name, err)
-	}
-
+	bundle := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
 	if err := c.Delete(context.Background(), bundle); err != nil {
 		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("bundle %q not found in namespace %s", name, ns)

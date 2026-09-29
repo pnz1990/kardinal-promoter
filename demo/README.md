@@ -115,14 +115,15 @@ kardinal policy simulate \
   --pipeline kardinal-test-app \
   --env prod \
   --time "Saturday 3pm"
-# → RESULT: BLOCKED (no-weekend-deploys)
+# → RESULT: BLOCKED
+#   Blocked by: no-weekend-deploys
 
 # Simulate weekday
 kardinal policy simulate \
   --pipeline kardinal-test-app \
   --env prod \
   --time "Tuesday 10am"
-# → RESULT: ALLOWED
+# → RESULT: PASS
 ```
 
 ### Scenario C: Pause mid-promotion
@@ -186,7 +187,7 @@ The `validate.sh` script is the canonical definition of "kardinal works":
 | 2 | Pipeline list | `kardinal get pipelines` |
 | 3 | UI reachable | HTTP 200 from `/api/v1/ui/pipelines` |
 | 4 | Happy path promotion | test → uat auto, prod PR |
-| 5 | Weekend gate | `policy simulate` → BLOCKED / ALLOWED |
+| 5 | Weekend gate | `policy simulate` → BLOCKED / PASS |
 | 6 | Soak gate | gate visible in `kardinal explain` |
 | 7 | Pause / resume | `kardinal pause` + `resume` |
 | 8 | Rollback | `kardinal rollback` opens PR |

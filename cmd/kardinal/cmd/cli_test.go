@@ -18,8 +18,10 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"os"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +29,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -232,86 +236,6 @@ func TestResume_Idempotent(t *testing.T) {
 	require.NoError(t, resumeFn(&buf, c, "default", "nginx-demo"), "resumeFn must succeed even if freeze gate is absent")
 }
 
-// TestPolicyList_ShowsGates verifies that policyListFn shows PolicyGate rows.
-func TestPolicyList_ShowsGates(t *testing.T) {
-	s := cliTestScheme(t)
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-weekend-deploys",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/scope":      "org",
-				"kardinal.io/applies-to": "prod",
-			},
-		},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression:      "!schedule.isWeekend",
-			RecheckInterval: "5m",
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
-
-	var buf bytes.Buffer
-	err := policyListFn(&buf, c, "default", "")
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "no-weekend-deploys")
-	assert.Contains(t, out, "org")
-	assert.Contains(t, out, "prod")
-	assert.Contains(t, out, "5m")
-}
-
-// TestPolicySimulate_BlockedOnWeekend verifies simulation returns BLOCKED on Saturday,
-// and that the "Next window" field is shown (issue #318 regression test).
-func TestPolicySimulate_BlockedOnWeekend(t *testing.T) {
-	s := cliTestScheme(t)
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-weekend-deploys",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/applies-to": "prod"},
-		},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "!schedule.isWeekend",
-			Message:    "Production deployments are blocked on weekends",
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
-
-	var buf bytes.Buffer
-	err := policySimulateFn(&buf, c, "default", "nginx-demo", "prod", "Saturday 3pm", 0)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "BLOCKED")
-	assert.Contains(t, out, "no-weekend-deploys")
-	// #318: Next window must appear when gate blocks on a weekend simulation
-	assert.Contains(t, out, "Next window: Monday", "BLOCKED weekend gate must show Next window field")
-	assert.Contains(t, out, "UTC", "Next window must include UTC timezone")
-}
-
-// TestPolicySimulate_PassOnWeekday verifies simulation returns PASS on Tuesday.
-func TestPolicySimulate_PassOnWeekday(t *testing.T) {
-	s := cliTestScheme(t)
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-weekend-deploys",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/applies-to": "prod"},
-		},
-		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
-
-	var buf bytes.Buffer
-	err := policySimulateFn(&buf, c, "default", "nginx-demo", "prod", "Tuesday 10am", 0)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "PASS")
-}
-
 // TestHistory_ListsPromotionSteps verifies that historyFn lists promotion steps for a pipeline.
 func TestHistory_ListsPromotionSteps(t *testing.T) {
 	s := cliTestScheme(t)
@@ -380,119 +304,94 @@ func TestHistory_EnvFilter(t *testing.T) {
 	assert.NotContains(t, out, "dev", "should not contain dev when filtered to prod")
 }
 
-// TestHistory_RollbackAction verifies that rollback steps show action=rollback.
+// TestHistory_RollbackAction (C09b-cli-13): a step of a rollback Bundle shows
+// action=rollback. The builder labels PromotionSteps with pipeline, bundle and
+// environment only, so the action comes from the Bundle's provenance.
 func TestHistory_RollbackAction(t *testing.T) {
 	s := cliTestScheme(t)
-	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-v1-rollback-prod",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/pipeline": "nginx-demo",
-				"kardinal.io/rollback": "true",
+	stepFor := func(bundle string) *v1alpha1.PromotionStep {
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      bundle + "-prod",
+				Namespace: "default",
+				Labels: map[string]string{
+					"kardinal.io/pipeline": "nginx-demo", "kardinal.io/bundle": bundle, "kardinal.io/environment": "prod",
+				},
 			},
-		},
-		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: "nginx-demo-v1", Environment: "prod", StepType: "open-pr"},
-		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+			Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", BundleName: bundle, Environment: "prod", StepType: "open-pr"},
+			Status: v1alpha1.PromotionStepStatus{State: "Verified"},
+		}
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(step).WithStatusSubresource(step).Build()
+	rollback := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-rollback-x1", Namespace: "default"},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo",
+			Provenance: &v1alpha1.BundleProvenance{RollbackOf: "nginx-demo-v1"}},
+	}
+	labelled := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-rollback-x2", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/rollback": "true"}},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+	promote := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+	}
+	objs := []sigs_client.Object{rollback, labelled, promote,
+		stepFor("nginx-demo-rollback-x1"), stepFor("nginx-demo-rollback-x2"), stepFor("nginx-demo-v1")}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
 
 	var buf bytes.Buffer
-	err := historyFn(&buf, c, "default", "nginx-demo", "", 20)
-	require.NoError(t, err)
+	require.NoError(t, historyFn(&buf, c, "default", "nginx-demo", "", 20))
 
-	assert.Contains(t, buf.String(), "rollback", "rollback step should show action=rollback")
+	actions := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n")[1:] {
+		f := strings.Fields(line)
+		actions[f[0]] = f[1]
+	}
+	assert.Equal(t, map[string]string{
+		"nginx-demo-rollback-x1": "rollback",
+		"nginx-demo-rollback-x2": "rollback",
+		"nginx-demo-v1":          "promote",
+	}, actions)
 }
 
-// TestPolicySimulate_GlobalGateAppliedToAllEnvs verifies that gates without applies-to
-// are included in simulation regardless of environment (CLI-3 fix).
-func TestPolicySimulate_GlobalGateAppliedToAllEnvs(t *testing.T) {
-	s := cliTestScheme(t)
-	// Gate with NO applies-to label — should apply to every env.
-	globalGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "global-freeze",
-			Namespace: "default",
-			Labels:    map[string]string{},
-		},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "!schedule.isWeekend",
-			Message:    "Global freeze on weekends",
-		},
+// TestHistory_Duration (E2E-13 / C09b-cli-13): DURATION is creation to
+// Verified (or to the last completed step), not the step's age.
+func TestHistory_Duration(t *testing.T) {
+	created := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *metav1.Time { t := metav1.NewTime(created.Add(d)); return &t }
+	verified := func(d time.Duration) []metav1.Condition {
+		return []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue, LastTransitionTime: *at(d)}}
 	}
-	// Gate with applies-to=prod — should NOT apply when env=staging.
-	prodGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "prod-only",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/applies-to": "prod"},
-		},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "!schedule.isWeekend",
-			Message:    "Prod-only gate",
-		},
+	steps := []v1alpha1.StepStatus{
+		{Name: "git-clone", CompletedAt: at(10 * time.Second)},
+		{Name: "health-check", CompletedAt: at(4 * time.Minute)},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(globalGate, prodGate).Build()
-
-	// Simulate for staging on a Saturday — global gate should block, prod gate should be excluded.
-	var buf bytes.Buffer
-	err := policySimulateFn(&buf, c, "default", "nginx-demo", "staging", "Saturday 3pm", 0)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "global-freeze", "global gate (no applies-to) must be evaluated")
-	assert.NotContains(t, out, "prod-only", "prod-only gate must not appear for staging env")
-	assert.Contains(t, out, "BLOCKED")
-}
-
-// TestPolicySimulate_EnvSpecificGateExcluded verifies that applies-to gates are
-// excluded when the env does not match (CLI-3: applies-to label check in simulate loop).
-func TestPolicySimulate_EnvSpecificGateExcluded(t *testing.T) {
-	s := cliTestScheme(t)
-	stagingGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "staging-gate",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/applies-to": "staging"},
-		},
-		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+	cases := []struct {
+		name   string
+		status v1alpha1.PromotionStepStatus
+		want   string
+	}{
+		{"verified condition", v1alpha1.PromotionStepStatus{State: "Verified", Conditions: verified(30 * time.Second), Steps: steps}, "30s"},
+		{"verified, steps only", v1alpha1.PromotionStepStatus{State: "Verified", Steps: steps}, "4m"},
+		{"failed", v1alpha1.PromotionStepStatus{State: "Failed", Steps: steps[:1]}, "10s"},
+		{"verified, no times", v1alpha1.PromotionStepStatus{State: "Verified"}, "--"},
+		{"running", v1alpha1.PromotionStepStatus{State: "WaitingForMerge", Steps: steps[:1]}, "..."},
+		{"rolling back", v1alpha1.PromotionStepStatus{State: "RollingBack"}, "..."},
+		{"pending", v1alpha1.PromotionStepStatus{}, "..."},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(stagingGate).Build()
-
-	// Simulate for prod — staging gate must not appear.
-	var buf bytes.Buffer
-	err := policySimulateFn(&buf, c, "default", "nginx-demo", "prod", "Saturday 3pm", 0)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.NotContains(t, out, "staging-gate", "staging gate must be excluded for prod env")
-	assert.Contains(t, out, "PASS", "no applicable gates means PASS")
-}
-
-// TestPolicySimulate_KroCELFunctionsAvailable verifies that kro CEL library functions
-// (json.*, maps.*, lists.*) are available in policy simulate (#243).
-func TestPolicySimulate_KroCELFunctionsAvailable(t *testing.T) {
-	s := cliTestScheme(t)
-	jsonGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "json-gate",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/applies-to": "prod"},
-		},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: `json.unmarshal("{\"ready\": true}").ready == true`,
-		},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			step := v1alpha1.PromotionStep{
+				ObjectMeta: metav1.ObjectMeta{Name: "s", CreationTimestamp: metav1.NewTime(created)},
+				Spec:       v1alpha1.PromotionStepSpec{BundleName: "b", Environment: "prod"},
+				Status:     tc.status,
+			}
+			rows := buildHistoryRows([]v1alpha1.PromotionStep{step}, nil, "", 0)
+			require.Len(t, rows, 1)
+			assert.Equal(t, tc.want, rows[0].Duration)
+		})
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(jsonGate).Build()
-
-	var buf bytes.Buffer
-	err := policySimulateFn(&buf, c, "default", "nginx-demo", "prod", "Tuesday 10am", 0)
-	require.NoError(t, err, "policy simulate with json.unmarshal must not error")
-
-	out := buf.String()
-	assert.Contains(t, out, "PASS", "json.unmarshal expression evaluating true must PASS")
-	assert.NotContains(t, out, "compile error",
-		"kro library functions must be registered; no compile error expected")
 }
 
 // TestRollback_CopiesTypeFromOriginalBundle verifies that the rollback bundle
@@ -638,64 +537,6 @@ func TestSplitImageRef(t *testing.T) {
 	}
 }
 
-// TestPolicyList_ShowsPendingState verifies that unevaluated gates show "Pending".
-func TestPolicyList_ShowsPendingState(t *testing.T) {
-	s := cliTestScheme(t)
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "unevaluated-gate",
-			Namespace: "default",
-		},
-		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
-		// Status zero-value: no LastEvaluatedAt
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(gate).Build()
-
-	var buf bytes.Buffer
-	err := policyListFn(&buf, c, "default", "")
-	require.NoError(t, err)
-
-	assert.Contains(t, buf.String(), "Pending", "unevaluated gate must show Pending")
-}
-
-// TestPolicyList_FiltersGraphInstances verifies that Graph-managed per-bundle
-// PolicyGate instances are excluded from policy list (#285).
-func TestPolicyList_FiltersGraphInstances(t *testing.T) {
-	s := cliTestScheme(t)
-	// Template gate — should be shown.
-	templateGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-weekend-deploys",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/scope":      "org",
-				"kardinal.io/applies-to": "prod",
-			},
-		},
-		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
-	}
-	// Graph instance with kardinal.io/bundle label — must be filtered out.
-	instanceGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-weekend-deploys--nginx-demo-v1",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/bundle": "nginx-demo-v1",
-			},
-		},
-		Spec: v1alpha1.PolicyGateSpec{Expression: "true"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(templateGate, instanceGate).Build()
-
-	var buf bytes.Buffer
-	err := policyListFn(&buf, c, "default", "")
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "no-weekend-deploys", "template gate must be shown")
-	assert.NotContains(t, out, "nginx-demo-v1", "Graph instance must be filtered out")
-}
-
 // TestVersionOutput_ThreeLines verifies that versionFn outputs CLI, Controller, and Graph lines.
 func TestVersionOutput_ThreeLines(t *testing.T) {
 	tests := []struct {
@@ -737,98 +578,12 @@ func TestVersionOutput_ThreeLines(t *testing.T) {
 	}
 }
 
-// TestPolicyTest_ValidExpression verifies that a gate with valid CEL is reported PASS.
-func TestPolicyTest_ValidExpression(t *testing.T) {
-	// Write a temp YAML file with a valid PolicyGate.
-	content := `apiVersion: promotions.kardinal.io/v1alpha1
-kind: PolicyGate
-metadata:
-  name: allow-all
-spec:
-  expression: "true"
-`
-	tmpFile := t.TempDir() + "/gate.yaml"
-	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
-
-	var buf bytes.Buffer
-	err := policyTestFn(&buf, tmpFile)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "allow-all")
-	assert.Contains(t, out, "Syntax: valid")
-	assert.Contains(t, out, "PASS")
-}
-
-// TestPolicyTest_InvalidExpression verifies that a gate with invalid CEL
-// returns a non-nil error (for CI gating) and shows INVALID in output.
-func TestPolicyTest_InvalidExpression(t *testing.T) {
-	content := `apiVersion: promotions.kardinal.io/v1alpha1
-kind: PolicyGate
-metadata:
-  name: bad-gate
-spec:
-  expression: "schedule.notExistingFn()"
-`
-	tmpFile := t.TempDir() + "/bad.yaml"
-	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
-
-	var buf bytes.Buffer
-	// Syntax errors return non-nil error for CI gating.
-	err := policyTestFn(&buf, tmpFile)
-	require.Error(t, err, "CEL syntax error must return non-nil error")
-
-	out := buf.String()
-	assert.Contains(t, out, "bad-gate")
-	assert.True(t,
-		contains(out, "INVALID") || contains(out, "ERROR") || contains(out, "FAIL"),
-		"output should show validation failure: %s", out)
-}
-
-// TestPolicyTest_WeekendExpression verifies schedule.isWeekend expression evaluates.
-func TestPolicyTest_WeekendExpression(t *testing.T) {
-	content := `apiVersion: promotions.kardinal.io/v1alpha1
-kind: PolicyGate
-metadata:
-  name: no-weekend
-spec:
-  expression: "!schedule.isWeekend"
-`
-	tmpFile := t.TempDir() + "/weekend.yaml"
-	require.NoError(t, os.WriteFile(tmpFile, []byte(content), 0600))
-
-	var buf bytes.Buffer
-	err := policyTestFn(&buf, tmpFile)
-	require.NoError(t, err)
-
-	out := buf.String()
-	assert.Contains(t, out, "no-weekend")
-	assert.Contains(t, out, "Syntax: valid")
-	// Result is either PASS or FAIL depending on current day — either is valid.
-	assert.True(t,
-		contains(out, "PASS") || contains(out, "FAIL"),
-		"output should show PASS or FAIL: %s", out)
-}
-
 // TestPolicyTest_MissingFile verifies error on missing file.
 func TestPolicyTest_MissingFile(t *testing.T) {
 	var buf bytes.Buffer
-	err := policyTestFn(&buf, "/nonexistent/path/gate.yaml")
+	err := policyTestFn(&buf, "/nonexistent/path/gate.yaml", time.Now())
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "nonexistent")
-}
-
-// contains is a helper for multi-assertion checks.
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
 }
 
 // TestApprove_PatchesBundleWithLabel verifies that approveFn adds kardinal.io/approved label.
@@ -963,4 +718,76 @@ func TestResume_PipelineNotFound(t *testing.T) {
 	err := resumeFn(&buf, c, "default", "nonexistent-pipeline")
 	assert.Error(t, err, "resume must fail when pipeline does not exist")
 	assert.Contains(t, err.Error(), "nonexistent-pipeline")
+}
+
+// TestGetBundles_FallbackReturnsItsOwnError (C09b-cli-23): when the
+// field-selector list and the unfiltered fallback both fail, the error is the
+// fallback's, with the first failure as context.
+func TestGetBundles_FallbackReturnsItsOwnError(t *testing.T) {
+	calls := 0
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(context.Context, sigs_client.WithWatch, sigs_client.ObjectList, ...sigs_client.ListOption) error {
+			calls++
+			if calls == 1 {
+				return errors.New("field label not supported: spec.pipeline")
+			}
+			return errors.New("bundles.kardinal.io is forbidden")
+		},
+	}).Build()
+
+	err := getBundlesFn(&bytes.Buffer{}, c, "default", []string{"demo"}, false)
+	require.Error(t, err)
+	assert.Equal(t, "list bundles: bundles.kardinal.io is forbidden (field-selector list: field label not supported: spec.pipeline)",
+		err.Error())
+}
+
+// TestImageRepoPattern (C09a-cli-04): repositories with a registry port are
+// valid. (repo:tag@digest also needs the C09a-cli-02 split, lifecycle area.)
+func TestImageRepoPattern(t *testing.T) {
+	cases := []struct {
+		repo string
+		want bool
+	}{
+		{"nginx", true},
+		{"docker.io/library/nginx", true},
+		{"ghcr.io/pnz1990/kardinal-test-app", true},
+		{"localhost:5000/kardinal-test-app", true},
+		{"registry.internal:8443/org/app", true},
+		{"my-registry.example.com/team__a/app.v2", true},
+		{"not valid @@@", false},
+		{"ghcr.io/org/app:v1", false},
+		{"ghcr.io/Org/App", false},
+		{"-bad", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.repo, func(t *testing.T) {
+			assert.Equal(t, tc.want, imageRepoPattern.MatchString(tc.repo))
+		})
+	}
+
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).Build()
+	var buf bytes.Buffer
+	require.NoError(t, createBundleFn(&buf, c, "default", "demo", []string{"localhost:5000/kardinal-test-app:sha-abc1234"}, "image"))
+	var bundles v1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &bundles))
+	require.Len(t, bundles.Items, 1)
+	assert.Equal(t, v1alpha1.ImageRef{Repository: "localhost:5000/kardinal-test-app", Tag: "sha-abc1234"}, bundles.Items[0].Spec.Images[0])
+}
+
+// TestCreateBundle_DryRun_ListsEnvironmentsAndGates (C09a-cli-05): the preview
+// lists the Pipeline's environments in order with the gates the controller
+// would attach, including org gates from platform-policies.
+func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
+	c := policyClient(t,
+		policyPipeline("demo", "test", "uat", "prod"),
+		policyGate("no-weekend-deploys", "platform-policies", "prod", "!schedule.isWeekend", "kardinal.io/scope", "org"),
+		policyGate("team-soak", "default", "uat", "upstream.test.soakMinutes >= 5"),
+	)
+	var buf bytes.Buffer
+	require.NoError(t, createBundleDryRun(&buf, c, "default", "demo", []string{"ghcr.io/org/app:sha-abc1234"}, "image"))
+	assert.Contains(t, buf.String(), "Environments in promotion order:\n"+
+		"  • test\n"+
+		"  • uat (gates: team-soak)\n"+
+		"  • prod (gates: no-weekend-deploys)\n", buf.String())
 }

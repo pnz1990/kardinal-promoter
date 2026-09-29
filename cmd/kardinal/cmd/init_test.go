@@ -255,7 +255,7 @@ func TestBuildKustomization_ContainsRequiredFields(t *testing.T) {
 			name:     "digest ref",
 			imageRef: "myrepo/myapp@sha256:abc123",
 			wantName: "myrepo/myapp",
-			wantTag:  "sha256:abc123",
+			wantTag:  "",
 		},
 		{
 			name:     "placeholder",
@@ -277,4 +277,83 @@ func TestBuildKustomization_ContainsRequiredFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+// C09b-cli-15: a registry port stays in the image name, and a digest is
+// written as Kustomize's digest field, not as newTag.
+func TestBuildKustomization_ImageBlock(t *testing.T) {
+	cases := []struct {
+		imageRef string
+		want     string
+	}{
+		{"localhost:5000/app:v1", "  - name: localhost:5000/app\n    newTag: v1\n"},
+		{"localhost:5000/app", "  - name: localhost:5000/app\n"},
+		{"ghcr.io/org/app@sha256:abc", "  - name: ghcr.io/org/app\n    digest: sha256:abc\n"},
+		{"localhost:5000/app:v1@sha256:abc", "  - name: localhost:5000/app\n    newTag: v1\n    digest: sha256:abc\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.imageRef, func(t *testing.T) {
+			out := buildKustomization(tc.imageRef)
+			_, images, ok := strings.Cut(out, "images:\n")
+			require.True(t, ok, out)
+			assert.Equal(t, tc.want, images)
+		})
+	}
+}
+
+// C09b-cli-15: the wizard requires an https:// Git URL and a valid strategy,
+// re-prompting on a bad answer and failing at end of input.
+func TestRunInitWizard_Validation(t *testing.T) {
+	t.Run("defaults only: the URL is required", func(t *testing.T) {
+		_, err := runInitWizard(strings.NewReader("\n\n\n\n"), &bytes.Buffer{})
+		require.Error(t, err)
+		assert.Equal(t, "Git repository URL: an https:// repository URL is required", err.Error())
+	})
+	t.Run("bad answers are re-prompted", func(t *testing.T) {
+		var out bytes.Buffer
+		cfg, err := runInitWizard(strings.NewReader(
+			"web\nteam-a\ntest,prod\n\ngit@github.com:o/r.git\nhttps://github.com/o/r\n\nargocd\nhelm\n"), &out)
+		require.NoError(t, err)
+		assert.Equal(t, &InitConfig{
+			AppName: "web", Namespace: "team-a", Environments: []string{"test", "prod"},
+			GitURL: "https://github.com/o/r", Branch: "main", UpdateStrategy: "helm",
+		}, cfg)
+		assert.Equal(t, 2, strings.Count(out.String(), "an https:// repository URL is required"))
+		assert.Contains(t, out.String(), `update strategy must be kustomize or helm, got "argocd"`)
+	})
+}
+
+// C09b-cli-15: --file names the output file, -o is the global format flag,
+// and the Kustomize scaffold is skipped for helm.
+func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Cleanup(func() { globalOutput = "" })
+	answers := "web\ndefault\ntest,prod\nhttps://github.com/o/r\nmain\nhelm\n"
+	run := func(args ...string) (string, error) {
+		root := NewRootCmd()
+		var buf bytes.Buffer
+		root.SetOut(&buf)
+		root.SetErr(&bytes.Buffer{})
+		root.SetIn(strings.NewReader(answers))
+		root.SetArgs(append([]string{"init"}, args...))
+		err := root.Execute()
+		return buf.String(), err
+	}
+
+	out, err := run("--file", "deploy.yaml", "--scaffold-gitops", "--gitops-dir", "gitops")
+	require.NoError(t, err)
+	content, err := os.ReadFile(filepath.Join(dir, "deploy.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "url: https://github.com/o/r\n")
+	assert.Contains(t, string(content), "strategy: helm\n")
+	assert.Contains(t, out, "GitOps scaffold skipped: it writes Kustomize overlays, and the update strategy is helm\n")
+	_, err = os.Stat(filepath.Join(dir, "gitops"))
+	assert.True(t, os.IsNotExist(err), "no kustomization.yaml for helm")
+
+	_, err = run("-o", "json")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `-o json is not supported by "kardinal init"`)
+	_, err = os.Stat(filepath.Join(dir, "json"))
+	assert.True(t, os.IsNotExist(err), "-o is not a file path")
 }

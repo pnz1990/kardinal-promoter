@@ -18,7 +18,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,7 +127,6 @@ func TestCreateBundle_DryRun_InvalidImage(t *testing.T) {
 	err := createBundleDryRun(&buf, c, "default", "nginx-demo",
 		[]string{"not valid @@@"}, "image")
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "invalid image") ||
-		strings.Contains(err.Error(), "dry-run"),
-		"error must describe the failure: got %q", err.Error())
+	assert.Equal(t, `invalid image repository "not valid ": want [host[:port]/]path (e.g. ghcr.io/org/image)`,
+		err.Error())
 }

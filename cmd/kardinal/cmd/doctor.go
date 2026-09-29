@@ -14,11 +14,11 @@
 // doctor.go — pre-flight cluster health check for kardinal-promoter. (#578)
 //
 // Checks:
-//   1. Controller reachable  — reads kardinal-version ConfigMap
-//   2. CRDs installed        — uses discovery API to list kardinal.io resources
+//   1. Controller reachable  — reads the kardinal-version ConfigMap in the controller namespace
+//   2. CRDs installed        — uses discovery to find every kardinal.io/v1alpha1 resource
 //   3. kro running           — looks for the kro controller pod in kro-system
 //   4. kro Graph CRD         — uses discovery API to find kro.run/v1alpha1 graphs
-//   5. GitHub token          — checks github-token secret in kardinal-system
+//   5. GitHub token          — reads GITHUB_TOKEN from the controller Deployment
 //   6. Pipeline health       — optional via --pipeline flag
 
 package cmd
@@ -30,14 +30,32 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/tools/clientcmd"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
+
+// defaultControllerNamespace is the Helm release namespace the docs install
+// into. The controller writes its ConfigMap to its own namespace
+// (POD_NAMESPACE), so any other release namespace needs --controller-namespace.
+const defaultControllerNamespace = "kardinal-system"
+
+// kroMinVersion is the kro release kardinal targets (hack/install-kro.sh
+// KRO_VERSION; TestKroMinVersion_MatchesInstallScript keeps them equal).
+const kroMinVersion = "0.10.0-rc.0"
+
+// kardinalResources are the kardinal.io/v1alpha1 resources the controller
+// needs (config/crd/bases; TestKardinalResources_MatchCRDs keeps them equal).
+var kardinalResources = []string{
+	"auditevents", "bundles", "changewindows", "metricchecks", "notificationhooks",
+	"pipelines", "policygates", "promotionsteps", "promotiontemplates", "prstatuses",
+	"rollbackpolicies", "scheduleclocks", "subscriptions",
+}
 
 const doctorColWidth = 32
 
@@ -52,50 +70,45 @@ type doctorResult struct {
 }
 
 func newDoctorCmd() *cobra.Command {
-	var pipeline string
+	var pipeline, controllerNS string
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Run pre-flight checks to verify the cluster is correctly configured",
 		Long: `Run pre-flight checks for kardinal-promoter:
 
-  ✅ Controller reachable      version ConfigMap found
-  ✅ CRDs installed            kardinal.io resource groups registered
+  ✅ Controller reachable      kardinal-version ConfigMap in the controller namespace
+  ✅ CRDs installed            every kardinal.io/v1alpha1 resource served
   ✅ kro running               kro controller pod in kro-system
   ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
-  ✅ GitHub token              github-token secret present
+  ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
+
+Use --controller-namespace when kardinal-promoter is installed in a namespace
+other than kardinal-system. --pipeline checks a Pipeline in the current
+namespace (-n, else the kubeconfig context's namespace).
 
 Use 'kardinal doctor' as the first troubleshooting step.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDoctor(cmd.OutOrStdout(), pipeline)
+			return runDoctor(cmd.OutOrStdout(), pipeline, controllerNS)
 		},
 	}
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Also check health of this Pipeline (optional)")
+	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
+		"Namespace kardinal-promoter is installed in")
 	return cmd
 }
 
-func runDoctor(w io.Writer, pipeline string) error {
-	// Build kubernetes client
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if globalKubeconfig != "" {
-		loadingRules.ExplicitPath = globalKubeconfig
-	}
-	overrides := &clientcmd.ConfigOverrides{}
-	if globalContext != "" {
-		overrides.CurrentContext = globalContext
-	}
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
+func runDoctor(w io.Writer, pipeline, controllerNS string) error {
+	cfg, ns, err := buildRestConfig()
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "\n%s Could not build kubeconfig: %v\n", doctorFail, err)
 		_, _ = fmt.Fprintf(w, "Hint: ensure kubectl is configured and pointing at the correct cluster.\n")
 		return fmt.Errorf("build kubeconfig: %w", err)
 	}
-
-	client, _, err := buildClient()
+	client, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "\n%s Could not connect to cluster: %v\n", doctorFail, err)
 		return fmt.Errorf("could not connect to cluster: %w", err)
 	}
-
 	disco, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "\n%s Could not build discovery client: %v\n", doctorFail, err)
@@ -103,28 +116,20 @@ func runDoctor(w io.Writer, pipeline string) error {
 	}
 
 	ctx := context.Background()
-	var results []doctorResult
-
-	// 1. Controller reachable
-	results = append(results, checkController(ctx, client))
-
-	// 2. CRDs installed (kardinal.io)
-	results = append(results, checkKardinalCRDs(disco))
-
-	// 3. kro running
-	results = append(results, checkKroController(ctx, client))
-
-	// 4. kro Graph CRD (kro.run/v1alpha1 graphs)
-	results = append(results, checkKroCRDs(disco))
-
-	// 5. GitHub token
-	results = append(results, checkGitHubToken(ctx, client))
-
-	// 6. Pipeline health (optional)
-	if pipeline != "" {
-		results = append(results, checkPipelineHealth(ctx, client, pipeline))
+	results := []doctorResult{
+		checkController(ctx, client, controllerNS),
+		checkKardinalCRDs(disco),
+		checkKroController(ctx, client),
+		checkKroCRDs(disco),
+		checkGitHubToken(ctx, client, controllerNS),
 	}
+	if pipeline != "" {
+		results = append(results, checkPipelineHealth(ctx, client, ns, pipeline))
+	}
+	return printDoctorResults(w, results)
+}
 
+func printDoctorResults(w io.Writer, results []doctorResult) error {
 	// Print header
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "kardinal-promoter pre-flight check")
@@ -165,21 +170,26 @@ func runDoctor(w io.Writer, pipeline string) error {
 
 const (
 	doctorPass = "✅"
-	doctorWarn = "⚠️ "
+	doctorWarn = "⚠️"
 	doctorFail = "❌"
 )
 
-func checkController(ctx context.Context, client sigs_client.Client) doctorResult {
+func checkController(ctx context.Context, client sigs_client.Client, controllerNS string) doctorResult {
 	r := doctorResult{label: "Controller reachable"}
 	var cm corev1.ConfigMap
-	if err := client.Get(ctx, types.NamespacedName{
-		Namespace: "kardinal-system",
-		Name:      "kardinal-version",
-	}, &cm); err != nil {
+	err := client.Get(ctx, types.NamespacedName{Namespace: controllerNS, Name: "kardinal-version"}, &cm)
+	switch {
+	case apierrors.IsNotFound(err):
 		r.icon = doctorFail
-		r.detail = "kardinal-version ConfigMap not found in kardinal-system"
-		r.hint = "Install: helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --namespace kardinal-system --create-namespace"
+		r.detail = fmt.Sprintf("kardinal-version ConfigMap not found in %s", controllerNS)
+		r.hint = "Installed elsewhere? Use --controller-namespace. Install: helm upgrade --install kardinal-promoter " +
+			"oci://ghcr.io/pnz1990/charts/kardinal-promoter --namespace " + controllerNS + " --create-namespace"
 		r.failed = true
+		return r
+	case err != nil:
+		r.icon = doctorWarn
+		r.detail = fmt.Sprintf("could not read kardinal-version ConfigMap in %s: %v", controllerNS, err)
+		r.warned = true
 		return r
 	}
 	ver := cm.Data["version"]
@@ -187,78 +197,115 @@ func checkController(ctx context.Context, client sigs_client.Client) doctorResul
 		ver = "unknown version"
 	}
 	r.icon = doctorPass
-	r.detail = fmt.Sprintf("kardinal-promoter %s in kardinal-system", ver)
+	r.detail = fmt.Sprintf("kardinal-promoter %s in %s", ver, controllerNS)
 	return r
 }
 
-func checkKardinalCRDs(disco *discovery.DiscoveryClient) doctorResult {
+func checkKardinalCRDs(disco discovery.DiscoveryInterface) doctorResult {
 	r := doctorResult{label: "CRDs installed"}
-	groups, err := disco.ServerGroups()
+	resources, err := disco.ServerResourcesForGroupVersion(v1alpha1.GroupVersion.String())
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			r.icon = doctorFail
+			r.detail = "kardinal.io/v1alpha1 API group not registered"
+			r.hint = "Apply CRDs: kubectl apply -f config/crd/bases/"
+			r.failed = true
+			return r
+		}
 		r.icon = doctorWarn
-		r.detail = "could not query API groups (insufficient RBAC?)"
+		r.detail = fmt.Sprintf("could not query kardinal.io/v1alpha1: %v", err)
 		r.warned = true
 		return r
 	}
-	found := make(map[string]bool)
-	for _, g := range groups.Groups {
-		if g.Name == "kardinal.io" {
-			for _, v := range g.Versions {
-				_ = v
-				found["kardinal.io"] = true
-			}
+	served := make(map[string]bool, len(resources.APIResources))
+	for _, res := range resources.APIResources {
+		served[res.Name] = true
+	}
+	var missing []string
+	for _, name := range kardinalResources {
+		if !served[name] {
+			missing = append(missing, name)
 		}
 	}
-	if !found["kardinal.io"] {
+	if len(missing) > 0 {
 		r.icon = doctorFail
-		r.detail = "kardinal.io API group not registered"
+		r.detail = "missing: " + strings.Join(missing, ", ")
 		r.hint = "Apply CRDs: kubectl apply -f config/crd/bases/"
 		r.failed = true
 		return r
 	}
 	r.icon = doctorPass
-	r.detail = "pipelines, bundles, promotionsteps, policygates, prstatuses"
+	r.detail = fmt.Sprintf("all %d kardinal.io/v1alpha1 resources served", len(kardinalResources))
 	return r
 }
 
-const kroInstallHint = "Install kro v0.10.0-rc.0 with the Graph feature gate: bash hack/install-kro.sh"
+const kroInstallHint = "Install kro v" + kroMinVersion + " with the Graph feature gate: bash hack/install-kro.sh"
+
+// kroVersion finds the running kro controller in kro-system and returns its
+// image tag ("" when the image has no tag). found is false when no kro
+// controller pod is running.
+func kroVersion(ctx context.Context, client sigs_client.Reader) (version string, found bool, err error) {
+	var pods corev1.PodList
+	if err := client.List(ctx, &pods, sigs_client.InNamespace("kro-system")); err != nil {
+		return "", false, fmt.Errorf("list pods in kro-system: %w", err)
+	}
+	for _, pod := range pods.Items {
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		for _, c := range pod.Spec.Containers {
+			if repo, tag := splitImageTag(c.Image); imageName(repo) == "kro" {
+				return tag, true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+// splitImageTag splits an image reference into repository and tag. The tag
+// is "" for a digest-only or untagged reference; a registry port is part of
+// the repository.
+func splitImageTag(image string) (repo, tag string) {
+	if at := strings.Index(image, "@"); at >= 0 {
+		image = image[:at]
+	}
+	slash := strings.LastIndex(image, "/")
+	if colon := strings.LastIndex(image, ":"); colon > slash {
+		return image[:colon], image[colon+1:]
+	}
+	return image, ""
+}
+
+// imageName is the last path segment of an image repository.
+func imageName(repo string) string {
+	return repo[strings.LastIndex(repo, "/")+1:]
+}
 
 func checkKroController(ctx context.Context, client sigs_client.Client) doctorResult {
 	r := doctorResult{label: "kro running"}
-	var podList corev1.PodList
-	if err := client.List(ctx, &podList, sigs_client.InNamespace("kro-system")); err != nil {
+	ver, found, err := kroVersion(ctx, client)
+	switch {
+	case err != nil:
 		r.icon = doctorWarn
 		r.detail = "could not list pods in kro-system (no namespace or insufficient RBAC)"
 		r.hint = kroInstallHint
 		r.warned = true
-		return r
-	}
-	for _, pod := range podList.Items {
-		if !strings.Contains(pod.Name, "kro") || pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		ver := ""
-		for _, c := range pod.Spec.Containers {
-			if idx := strings.LastIndex(c.Image, ":"); idx >= 0 {
-				ver = c.Image[idx+1:]
-			}
-		}
-		if ver != "" {
-			r.detail = fmt.Sprintf("kro %s in kro-system", ver)
-		} else {
-			r.detail = "kro in kro-system"
-		}
+	case !found:
+		r.icon = doctorFail
+		r.detail = "kro controller pod not running in kro-system"
+		r.hint = kroInstallHint
+		r.failed = true
+	case ver == "":
 		r.icon = doctorPass
-		return r
+		r.detail = "kro in kro-system"
+	default:
+		r.icon = doctorPass
+		r.detail = fmt.Sprintf("kro %s in kro-system", ver)
 	}
-	r.icon = doctorFail
-	r.detail = "kro controller pod not running in kro-system"
-	r.hint = kroInstallHint
-	r.failed = true
 	return r
 }
 
-func checkKroCRDs(disco *discovery.DiscoveryClient) doctorResult {
+func checkKroCRDs(disco discovery.DiscoveryInterface) doctorResult {
 	r := doctorResult{label: "kro Graph CRD installed"}
 	resources, err := disco.ServerResourcesForGroupVersion("kro.run/v1alpha1")
 	if err != nil {
@@ -282,58 +329,91 @@ func checkKroCRDs(disco *discovery.DiscoveryClient) doctorResult {
 	return r
 }
 
-func checkGitHubToken(ctx context.Context, client sigs_client.Client) doctorResult {
+// checkGitHubToken reads where the controller Deployment gets GITHUB_TOKEN:
+// an inline value (helm github.token) or a Secret key (github.secretRef).
+// The token value is never printed.
+func checkGitHubToken(ctx context.Context, client sigs_client.Client, controllerNS string) doctorResult {
 	r := doctorResult{label: "GitHub token"}
-	var secret corev1.Secret
-	if err := client.Get(ctx, types.NamespacedName{
-		Namespace: "kardinal-system",
-		Name:      "github-token",
-	}, &secret); err != nil {
-		r.icon = doctorWarn
-		r.detail = "secret github-token not found in kardinal-system"
-		r.hint = "Create: kubectl create secret generic github-token --namespace kardinal-system --from-literal=token=<PAT>"
-		r.warned = true
+	warn := func(detail, hint string) doctorResult {
+		r.icon, r.detail, r.hint, r.warned = doctorWarn, detail, hint, true
 		return r
 	}
-	if len(secret.Data["token"]) == 0 {
-		r.icon = doctorWarn
-		r.detail = "secret exists but 'token' key is empty"
-		r.hint = "Recreate: kubectl create secret generic github-token -n kardinal-system --from-literal=token=<PAT> --dry-run=client -o yaml | kubectl apply -f -"
-		r.warned = true
-		return r
+	const setHint = "Set it: helm upgrade kardinal-promoter ... --set github.secretRef.name=<secret> (key 'token')"
+
+	var deps appsv1.DeploymentList
+	if err := client.List(ctx, &deps, sigs_client.InNamespace(controllerNS),
+		sigs_client.MatchingLabels{"app.kubernetes.io/name": "kardinal-promoter"}); err != nil {
+		return warn(fmt.Sprintf("could not list Deployments in %s: %v", controllerNS, err), "")
 	}
-	r.icon = doctorPass
-	r.detail = "secret github-token present in kardinal-system"
-	return r
+	if len(deps.Items) == 0 {
+		return warn(fmt.Sprintf("no kardinal-promoter Deployment in %s", controllerNS),
+			"Installed elsewhere? Use --controller-namespace.")
+	}
+	dep := deps.Items[0]
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		for _, env := range c.Env {
+			if env.Name != "GITHUB_TOKEN" {
+				continue
+			}
+			if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+				if env.Value == "" {
+					return warn("GITHUB_TOKEN is empty on Deployment "+dep.Name, setHint)
+				}
+				r.icon = doctorPass
+				r.detail = "GITHUB_TOKEN set inline on Deployment " + dep.Name
+				return r
+			}
+			ref := env.ValueFrom.SecretKeyRef
+			var secret corev1.Secret
+			err := client.Get(ctx, types.NamespacedName{Namespace: controllerNS, Name: ref.Name}, &secret)
+			switch {
+			case apierrors.IsNotFound(err):
+				return warn(fmt.Sprintf("secret %s not found in %s", ref.Name, controllerNS),
+					fmt.Sprintf("Create: kubectl create secret generic %s --namespace %s --from-literal=%s=<PAT>",
+						ref.Name, controllerNS, ref.Key))
+			case err != nil:
+				return warn(fmt.Sprintf("could not read secret %s in %s: %v", ref.Name, controllerNS, err), "")
+			case len(secret.Data[ref.Key]) == 0:
+				return warn(fmt.Sprintf("secret %s has no %q key or it is empty", ref.Name, ref.Key), "")
+			}
+			r.icon = doctorPass
+			r.detail = fmt.Sprintf("secret %s (key %s) present in %s", ref.Name, ref.Key, controllerNS)
+			return r
+		}
+	}
+	return warn("GITHUB_TOKEN is not set on Deployment "+dep.Name, setHint)
 }
 
-func checkPipelineHealth(ctx context.Context, client sigs_client.Client, name string) doctorResult {
+func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, name string) doctorResult {
 	r := doctorResult{label: fmt.Sprintf("Pipeline %q", name)}
-	ns := globalNamespace
-	if ns == "" {
-		ns = "default"
-	}
 	var p v1alpha1.Pipeline
-	if err := client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p); err != nil {
+	err := client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &p)
+	switch {
+	case apierrors.IsNotFound(err):
 		r.icon = doctorFail
 		r.detail = fmt.Sprintf("Pipeline %q not found in namespace %q", name, ns)
 		r.hint = "Apply: kubectl apply -f <your-pipeline.yaml>"
 		r.failed = true
 		return r
+	case err != nil:
+		r.icon = doctorFail
+		r.detail = fmt.Sprintf("get Pipeline %q in namespace %q failed: %v", name, ns, err)
+		r.failed = true
+		return r
 	}
-	phase := p.Status.Phase
-	if phase == "" {
-		phase = "Pending"
-	}
+	// Pipeline phases: Ready, Degraded, Unknown (api/v1alpha1/pipeline_types.go).
 	switch p.Status.Phase {
-	case "Healthy", "Verified":
+	case "Ready":
 		r.icon = doctorPass
-	case "Degraded", "Failed":
+		r.detail = "status: Ready"
+	case "Degraded":
 		r.icon = doctorWarn
 		r.warned = true
+		r.detail = "status: Degraded"
 	default:
-		r.icon = doctorPass
+		r.icon = doctorWarn
+		r.warned = true
+		r.detail = "status: Unknown (not yet reconciled)"
 	}
-	r.detail = fmt.Sprintf("status: %s", phase)
 	return r
 }

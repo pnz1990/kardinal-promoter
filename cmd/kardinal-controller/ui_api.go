@@ -669,10 +669,12 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 // invalid topology (admission rejects cycles) falls back to a chain in list
 // order so the UI still renders.
 func pipelineEnvDeps(pl *v1alpha1.Pipeline) ([]string, map[string][]string) {
-	if order, deps, err := graphpkg.EnvironmentDependencies(pl); err == nil {
+	order, orderErr := graphpkg.EnvironmentOrder(pl)
+	deps, depsErr := graphpkg.EnvironmentDependencies(pl)
+	if orderErr == nil && depsErr == nil {
 		return order, deps
 	}
-	order := make([]string, 0, len(pl.Spec.Environments))
+	order = make([]string, 0, len(pl.Spec.Environments))
 	for _, e := range pl.Spec.Environments {
 		order = append(order, e.Name)
 	}

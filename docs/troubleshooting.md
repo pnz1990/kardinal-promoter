@@ -32,10 +32,14 @@ configuration problems:
 kardinal doctor
 ```
 
-This checks: controller reachability, CRDs, the kro Graph controller, and the GitHub token secret.
+This checks: controller reachability (the `kardinal-version` ConfigMap), CRDs, the kro
+controller and Graph CRD, and that `GITHUB_TOKEN` is set on the controller Deployment.
 If any check fails, the output includes a remediation hint.
 
-For a specific pipeline: `kardinal doctor --pipeline my-app`
+If kardinal-promoter is installed in a namespace other than `kardinal-system`, pass it:
+`kardinal doctor --controller-namespace <namespace>`.
+
+For a specific pipeline: `kardinal doctor --pipeline my-app` (in the current namespace, or `-n`).
 
 ---
 
