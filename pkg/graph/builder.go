@@ -167,41 +167,130 @@ func resolveOrdering(pipeline *kardinalv1alpha1.Pipeline) ([]string, map[string]
 	waves := indexWaves(envs)
 
 	deps := make(map[string][]string, len(envs)) // env → []dependsOn
+	// why records where each edge came from, so a cycle error can say which
+	// part of the spec made it.
+	why := make(map[string]map[string]edgeSource, len(envs))
 	for i, e := range envs {
+		why[e.Name] = map[string]edgeSource{}
+		var merged []string
+		add := func(dep string, src edgeSource) {
+			if !containsStr(merged, dep) {
+				merged = append(merged, dep)
+				why[e.Name][dep] = src
+			}
+		}
 		// Start with the edges to the previous wave, if there is one.
-		merged := waves.waveDeps(e)
+		for _, dep := range waves.waveDeps(e) {
+			add(dep, fromWave)
+		}
 		// Union with explicit DependsOn.
 		for _, dep := range e.DependsOn {
 			if !nameSet[dep] {
 				return nil, nil, fmt.Errorf("build: environment %q dependsOn unknown environment %q",
 					e.Name, dep)
 			}
-			if !containsStr(merged, dep) {
-				merged = append(merged, dep)
-			}
+			add(dep, fromDependsOn)
 		}
 		if len(e.DependsOn) == 0 {
 			for _, dep := range waves.defaultDeps(envs, i) {
-				if !containsStr(merged, dep) {
-					merged = append(merged, dep)
-				}
+				add(dep, fromListOrder)
 			}
 		}
 		deps[e.Name] = merged
 	}
 
 	// Topological sort (Kahn's algorithm) to detect cycles
-	sorted, err := topoSort(nameSet, deps)
-	if err != nil {
-		return nil, nil, err
+	sorted, cycle := topoSort(nameSet, deps)
+	if cycle != nil {
+		return nil, nil, cycleError(cycle, why, envs)
 	}
 
 	return sorted, deps, nil
 }
 
-// topoSort performs Kahn's topological sort on the dependency graph.
-// Returns an error with the cycle path if a cycle is detected.
-func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error) {
+// edgeSource is the part of a Pipeline spec an ordering edge comes from.
+type edgeSource int
+
+const (
+	// fromDependsOn: the environment lists the upstream in dependsOn.
+	fromDependsOn edgeSource = iota
+	// fromWave: the environment's wave waits for the whole previous wave.
+	fromWave
+	// fromListOrder: the environment has no dependsOn and follows the
+	// environment listed before it (see waveIndex.defaultDeps).
+	fromListOrder
+)
+
+// cycleError describes a dependency cycle edge by edge. The fix hint names
+// the wave ordering when no dependsOn entry is part of the cycle: then there
+// is no dependsOn reference to remove.
+func cycleError(cycle []string, why map[string]map[string]edgeSource,
+	envs []kardinalv1alpha1.EnvironmentSpec) error {
+	wave := make(map[string]int, len(envs))
+	for _, e := range envs {
+		wave[e.Name] = e.Wave
+	}
+	var reasons []string
+	var reorder []string // environments that follow list order in the cycle
+	hasDependsOn, hasWave := false, false
+	for i := 0; i+1 < len(cycle); i++ {
+		env, dep := cycle[i], cycle[i+1]
+		switch why[env][dep] {
+		case fromDependsOn:
+			hasDependsOn = true
+			reasons = append(reasons, fmt.Sprintf("%s dependsOn %s", env, dep))
+		case fromWave:
+			hasWave = true
+			reasons = append(reasons, fmt.Sprintf("%s (wave %d) waits for all of wave %d, which includes %s",
+				env, wave[env], wave[dep], dep))
+		case fromListOrder:
+			reorder = append(reorder, env)
+			if wave[env] > 0 {
+				reasons = append(reasons, fmt.Sprintf("wave %d starts after %s, the environment listed before it",
+					wave[env], dep))
+			} else {
+				reasons = append(reasons, fmt.Sprintf("%s has no dependsOn, so it follows %s, listed before it",
+					env, dep))
+			}
+		}
+	}
+	var fix string
+	switch {
+	case hasDependsOn:
+		fix = "remove one of the dependsOn references to break the cycle"
+	case hasWave:
+		fix = fmt.Sprintf("list the waves in ascending order (%s), or set dependsOn on %s instead of relying on list order",
+			waveOrder(cycle, wave), strings.Join(reorder, " or "))
+	default:
+		fix = fmt.Sprintf("set dependsOn on %s", strings.Join(reorder, " or "))
+	}
+	return fmt.Errorf("build: circular dependency in pipeline environments: %s (cycle!)\n  %s\n  Fix: %s",
+		strings.Join(cycle, " → "), strings.Join(reasons, "; "), fix)
+}
+
+// waveOrder renders the waves on a cycle in ascending order, as in
+// "wave 1 before wave 2".
+func waveOrder(cycle []string, wave map[string]int) string {
+	seen := map[int]bool{}
+	var ns []int
+	for _, env := range cycle {
+		if n := wave[env]; n > 0 && !seen[n] {
+			seen[n] = true
+			ns = append(ns, n)
+		}
+	}
+	sort.Ints(ns)
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = fmt.Sprintf("wave %d", n)
+	}
+	return strings.Join(parts, " before ")
+}
+
+// topoSort performs Kahn's topological sort on the dependency graph. When
+// the graph has a cycle it returns nil and the cycle as a path that starts
+// and ends at the same environment.
+func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, []string) {
 	// Compute in-degree
 	inDegree := make(map[string]int, len(nodes))
 	for n := range nodes {
@@ -241,68 +330,55 @@ func topoSort(nodes map[string]bool, deps map[string][]string) ([]string, error)
 	}
 
 	if len(sorted) != len(nodes) {
-		// Find a cycle and report the path for better diagnostics.
-		cycle := findCycle(nodes, deps, sorted)
-		return nil, fmt.Errorf("build: circular dependency in pipeline environments: %s\n  Fix: remove one of the dependsOn references to break the cycle", cycle)
+		return nil, findCycle(nodes, deps, sorted)
 	}
 	return sorted, nil
 }
 
-// findCycle finds a cycle in the dependency graph and returns a human-readable
-// path string like "prod → uat → prod (cycle!)". Uses the set of nodes that
-// were NOT sorted (i.e., those still in the cycle) to start the search.
-func findCycle(nodes map[string]bool, deps map[string][]string, sorted []string) string {
+// findCycle finds a cycle in the dependency graph and returns it as a path
+// such as [prod uat prod]. Uses the set of nodes that were NOT sorted (i.e.,
+// those still in the cycle or downstream of it) to start the search.
+func findCycle(nodes map[string]bool, deps map[string][]string, sorted []string) []string {
 	// Identify nodes that are part of a cycle (not in sorted output).
 	sortedSet := make(map[string]bool, len(sorted))
 	for _, n := range sorted {
 		sortedSet[n] = true
 	}
 
-	// Pick any node not in sorted — it's part of a cycle.
-	var start string
+	// Start from the first unsorted node by name, for a stable message.
+	// Every unsorted node has an unsorted upstream, so following upstreams
+	// from it must come back to a node already on the path.
+	var unsorted []string
 	for n := range nodes {
 		if !sortedSet[n] {
-			start = n
-			break
+			unsorted = append(unsorted, n)
 		}
 	}
-	if start == "" {
-		return "(unknown cycle)"
+	if len(unsorted) == 0 {
+		return nil
 	}
+	sort.Strings(unsorted)
 
-	// Follow dependencies from start until we revisit a node.
-	visited := make(map[string]bool)
-	path := []string{start}
-	current := start
-
+	pos := map[string]int{}
+	path := []string{unsorted[0]}
 	for {
-		visited[current] = true
-		// Find a dep of current that is also in the cycle (not sorted).
-		moved := false
+		current := path[len(path)-1]
+		pos[current] = len(path) - 1
+		next := ""
 		for _, dep := range deps[current] {
 			if !sortedSet[dep] {
-				if visited[dep] {
-					// Found the cycle start — trim path to show just the cycle.
-					for i, n := range path {
-						if n == dep {
-							cycle := path[i:]
-							// path[i:] ends just before dep is repeated, so add "(cycle!)"
-							return strings.Join(cycle, " → ") + " → " + dep + " (cycle!)"
-						}
-					}
-					break
-				}
-				path = append(path, dep)
-				current = dep
-				moved = true
+				next = dep
 				break
 			}
 		}
-		if !moved {
-			break
+		if next == "" {
+			return append(path, path[0]) // unreachable: see above
 		}
+		if at, seen := pos[next]; seen {
+			return append(path[at:], next)
+		}
+		path = append(path, next)
 	}
-	return strings.Join(path, " → ") + " (cycle!)"
 }
 
 // --- Step 2: filter environments by Bundle intent ---

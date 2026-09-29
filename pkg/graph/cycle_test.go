@@ -98,3 +98,81 @@ func TestDetectCycle_SelfLoop(t *testing.T) {
 	err := graph.DetectCycle(pipeline)
 	require.Error(t, err, "self-loop should be detected")
 }
+
+// TestDetectCycle_MessageNamesTheCause checks that a cycle error names the
+// part of the spec that made each edge, and that the fix hint does not ask to
+// remove a dependsOn reference when the cycle has none.
+func TestDetectCycle_MessageNamesTheCause(t *testing.T) {
+	cases := []struct {
+		name     string
+		envs     []kardinalv1alpha1.EnvironmentSpec
+		contains []string
+		absent   []string
+	}{
+		{
+			// b (wave 1) follows staging by list order, staging follows a
+			// (wave 2) by list order, and wave 2 waits for wave 1.
+			name: "waves listed out of order around a sequential env",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "a", Wave: 2},
+				{Name: "staging"},
+				{Name: "b", Wave: 1},
+			},
+			contains: []string{
+				"circular dependency",
+				"a → b → staging → a (cycle!)",
+				"a (wave 2) waits for all of wave 1, which includes b",
+				"wave 1 starts after staging, the environment listed before it",
+				"staging has no dependsOn, so it follows a, listed before it",
+				"Fix: list the waves in ascending order (wave 1 before wave 2), or set dependsOn on b or staging",
+			},
+			absent: []string{"remove one of the dependsOn"},
+		},
+		{
+			name: "explicit dependsOn cycle",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "uat", DependsOn: []string{"prod"}},
+				{Name: "prod", DependsOn: []string{"uat"}},
+			},
+			contains: []string{
+				"prod → uat → prod (cycle!)",
+				"prod dependsOn uat; uat dependsOn prod",
+				"Fix: remove one of the dependsOn references",
+			},
+			absent: []string{"wave"},
+		},
+		{
+			name: "dependsOn against a wave",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "a", Wave: 1, DependsOn: []string{"b"}},
+				{Name: "b", Wave: 2},
+			},
+			contains: []string{
+				"a dependsOn b",
+				"b (wave 2) waits for all of wave 1, which includes a",
+				"Fix: remove one of the dependsOn references",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "p"},
+				Spec: kardinalv1alpha1.PipelineSpec{
+					Git:          kardinalv1alpha1.PipelineGit{URL: "https://github.com/org/repo"},
+					Environments: tc.envs,
+				},
+			}
+			err := graph.DetectCycle(pipeline)
+			require.Error(t, err)
+			for _, s := range tc.contains {
+				assert.Contains(t, err.Error(), s)
+			}
+			for _, s := range tc.absent {
+				assert.NotContains(t, err.Error(), s)
+			}
+		})
+	}
+}

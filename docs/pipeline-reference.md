@@ -216,6 +216,8 @@ The rules, in full:
 
 Only the first environment in the list is a root, unless `dependsOn` says otherwise.
 
+List the waves in ascending order. If a higher wave comes before a lower one with an environment without a wave between them (`test`, `a` in wave 2, `staging`, `b` in wave 1), the list-order edges and the wave edges form a cycle. The Pipeline is then rejected, and the error names each edge in the cycle.
+
 See `examples/wave-topology/pipeline.yaml` for a complete example.
 
 ## Git Layout: Directory vs Branch
