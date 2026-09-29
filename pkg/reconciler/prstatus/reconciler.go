@@ -16,16 +16,27 @@
 // Package prstatus implements the PRStatus reconciler.
 //
 // Architecture:
-//   - PRStatus CRs are created by the open-pr step (or by the webhook on
-//     the first merged-PR event) with spec.prURL, spec.prNumber, spec.repo.
-//   - This reconciler polls GitHub via SCM.GetPRStatus and SCM.GetPRReviewStatus
-//     and writes status.merged, status.open, status.approved, status.approvalCount,
-//     status.lastCheckedAt.
-//   - The Graph Watch node reads status.merged to advance the Graph DAG,
-//     replacing the old polling loop in handleWaitingForMerge.
-//   - PolicyGate CEL expressions can use bundle.pr("stage").isApproved() which
-//     reads status.approved from the PRStatus CRD (K-08).
-//   - Idempotent: reconciling a PRStatus with status.merged=true is a no-op.
+//   - The Graph creates each PRStatus as a placeholder with an empty spec,
+//     next to the PromotionStep it belongs to. Once the open-pr step has
+//     opened the PR, the PromotionStep reconciler fills in spec.prURL,
+//     spec.prNumber and spec.repo (patchPRStatusSpec), and retries that until
+//     it lands.
+//   - This reconciler polls the SCM provider (GetPRStatus, GetPRReviewStatus)
+//     and writes status.merged, status.open, status.approved,
+//     status.approvalCount and status.lastCheckedAt. When the PR is merged it
+//     also records status.mergeCommitSHA, which the health check requires the
+//     GitOps tool to have deployed.
+//   - The PromotionStep reconciler watches PRStatus and advances from
+//     WaitingForMerge when status.merged is true. The SCM webhook may set
+//     status.merged first; this reconciler then only fills in the merge commit.
+//   - PolicyGate CEL reads the approval state as bundle.pr["<env>"].isApproved
+//     and bundle.pr["<env>"].approvalCount (K-08).
+//   - Polling is throttled: at most one poll per requeuePollInterval, and the
+//     status is patched only when a polled value changed or lastCheckedAt is
+//     older than lastCheckedRefresh. Each patch re-enqueues the object, so
+//     patching every poll made it poll in a tight loop (C03-promotionstep-20).
+//   - Idempotent: a merged PR whose merge commit is known is a no-op, and so
+//     is a PR closed without merging.
 //
 // Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1.
 package prstatus
@@ -46,8 +57,15 @@ import (
 )
 
 const (
-	// requeuePollInterval is how often to re-check an open PR.
+	// requeuePollInterval is how often to re-check an open PR. It is also the
+	// minimum time between two polls of the same PR.
 	requeuePollInterval = 30 * time.Second
+	// lastCheckedRefresh is how stale status.lastCheckedAt may get before an
+	// unchanged poll still patches it, so readers can tell polling is alive.
+	lastCheckedRefresh = 5 * time.Minute
+	// mergeCommitWindow bounds how long after the merge was recorded the
+	// reconciler keeps asking the SCM for the merge commit.
+	mergeCommitWindow = 10 * time.Minute
 )
 
 // Reconciler watches PRStatus objects and polls the SCM provider to update
@@ -77,14 +95,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get prstatus %s: %w", req.Name, err)
 	}
 
-	// Terminal: already merged — nothing to poll.
+	// Merged: only the merge commit may still be missing, for example when
+	// the webhook recorded the merge.
 	if prs.Status.Merged {
-		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")
-		return ctrl.Result{}, nil
+		return r.recordMergeCommit(ctx, log, &prs)
 	}
 
 	// Terminal: PR is closed (not open, not merged) — nothing to poll.
-	if prs.Status.LastCheckedAt != nil && !prs.Status.Open && !prs.Status.Merged {
+	if prs.Status.LastCheckedAt != nil && !prs.Status.Open {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR is closed without merge, no-op")
 		return ctrl.Result{}, nil
 	}
@@ -102,6 +120,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 
+	// Throttle: a reconcile triggered by our own status patch (or any other
+	// event) within the poll interval waits for the rest of it.
+	if last := prs.Status.LastCheckedAt; last != nil {
+		if wait := requeuePollInterval - time.Since(last.Time); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+	}
+
 	merged, open, err := r.SCM.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err != nil {
 		log.Error().Err(err).
@@ -113,40 +139,53 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Poll review approval state (K-08: PR review gate).
-	// Non-fatal on error — approval state defaults to false.
+	// Non-fatal on error — keep the previous values.
 	approved, approvalCount, reviewErr := r.SCM.GetPRReviewStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if reviewErr != nil {
 		log.Warn().Err(reviewErr).
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
-			Msg("GetPRReviewStatus failed (non-fatal), defaulting approved=false")
-		// Keep previous approved/approvalCount values if available.
+			Msg("GetPRReviewStatus failed (non-fatal), keeping the previous approval state")
 		approved = prs.Status.Approved
 		approvalCount = prs.Status.ApprovalCount
 	}
 
-	// Write results to status — this is the only CRD status this reconciler writes.
-	now := metav1.NewTime(time.Now().UTC())
-	patch := client.MergeFrom(prs.DeepCopy())
-	prs.Status.Merged = merged
-	prs.Status.Open = open
-	prs.Status.Approved = approved
-	prs.Status.ApprovalCount = approvalCount
-	prs.Status.LastCheckedAt = &now
-
-	if err := r.Status().Patch(ctx, &prs, patch); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch prstatus %s: %w", req.Name, err)
+	mergeSHA := prs.Status.MergeCommitSHA
+	if merged && mergeSHA == "" {
+		mergeSHA = r.fetchMergeCommit(ctx, log, &prs)
 	}
 
-	if merged {
+	now := metav1.NewTime(time.Now().UTC())
+	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
+		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
+		mergeSHA != prs.Status.MergeCommitSHA
+	stale := prs.Status.LastCheckedAt == nil || now.Sub(prs.Status.LastCheckedAt.Time) >= lastCheckedRefresh
+	if changed || stale {
+		// This is the only CRD status this reconciler writes.
+		patch := client.MergeFrom(prs.DeepCopy())
+		prs.Status.Merged = merged
+		prs.Status.Open = open
+		prs.Status.Approved = approved
+		prs.Status.ApprovalCount = approvalCount
+		prs.Status.MergeCommitSHA = mergeSHA
+		prs.Status.LastCheckedAt = &now
+		if err := r.Status().Patch(ctx, &prs, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch prstatus %s: %w", req.Name, err)
+		}
+	}
+
+	switch {
+	case merged:
 		log.Info().
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
+			Str("mergeCommit", mergeSHA).
 			Msg("PR merged — status updated")
+		if mergeSHA == "" && r.canGetMergeCommit() {
+			return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+		}
 		return ctrl.Result{}, nil
-	}
-
-	if !open {
+	case !open:
 		log.Info().
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
@@ -161,6 +200,52 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Dur("requeue", requeuePollInterval).
 		Msg("PR still open, requeueing")
 	return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+}
+
+// recordMergeCommit fills in status.mergeCommitSHA of a merged PR. It retries
+// for mergeCommitWindow after the merge was recorded; after that, or when the
+// SCM provider cannot report merge commits, the health check falls back to
+// checking the Bundle images.
+func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
+	if prs.Status.MergeCommitSHA != "" || prs.Spec.PRNumber == 0 || !r.canGetMergeCommit() {
+		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")
+		return ctrl.Result{}, nil
+	}
+	if last := prs.Status.LastCheckedAt; last != nil && time.Since(last.Time) > mergeCommitWindow {
+		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("merge commit not reported by the SCM, giving up")
+		return ctrl.Result{}, nil
+	}
+	sha := r.fetchMergeCommit(ctx, log, prs)
+	if sha == "" {
+		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+	}
+	patch := client.MergeFrom(prs.DeepCopy())
+	prs.Status.MergeCommitSHA = sha
+	if err := r.Status().Patch(ctx, prs, patch); err != nil {
+		return ctrl.Result{}, fmt.Errorf("patch prstatus %s merge commit: %w", prs.Name, err)
+	}
+	return ctrl.Result{}, nil
+}
+
+// canGetMergeCommit reports whether the SCM provider can report merge commits.
+func (r *Reconciler) canGetMergeCommit() bool {
+	_, ok := r.SCM.(scm.MergeCommitGetter)
+	return ok
+}
+
+// fetchMergeCommit asks the SCM provider for the merge commit of prs, or
+// returns "" when it cannot tell.
+func (r *Reconciler) fetchMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) string {
+	getter, ok := r.SCM.(scm.MergeCommitGetter)
+	if !ok {
+		return ""
+	}
+	sha, err := getter.GetPRMergeCommit(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
+	if err != nil {
+		log.Warn().Err(err).Int("prNumber", prs.Spec.PRNumber).Msg("could not read the merge commit, will retry")
+		return ""
+	}
+	return sha
 }
 
 // SetupWithManager registers the PRStatus reconciler with controller-runtime.

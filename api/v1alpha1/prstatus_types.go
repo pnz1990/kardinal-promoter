@@ -63,9 +63,18 @@ type PRStatusStatus struct {
 	// +optional
 	ApprovalCount int `json:"approvalCount,omitempty"`
 
-	// LastCheckedAt records the timestamp of the most recent SCM API poll.
+	// LastCheckedAt records when the status was last written from an SCM API
+	// poll. Polls that change nothing refresh it at most every 5 minutes, so it
+	// can lag the most recent poll by up to that much.
 	// +optional
 	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
+
+	// MergeCommitSHA is the commit the PR was merged as (the merge, squash or
+	// rebase commit on the base branch). Written once the PR is merged, when the
+	// SCM provider reports it. Health adapters use it to confirm that the GitOps
+	// tool deployed this exact revision.
+	// +optional
+	MergeCommitSHA string `json:"mergeCommitSHA,omitempty"`
 }
 
 // +kubebuilder:object:root=true

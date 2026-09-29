@@ -15,6 +15,7 @@ package promotionstep
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -276,42 +278,54 @@ func TestPRStatusMapper_UnmatchedPRStatus(t *testing.T) {
 	assert.Empty(t, reqs, "no PromotionStep owns this PRStatus")
 }
 
-// TestPolicyGateMapper verifies that policyGateMapper re-enqueues all
-// PromotionSteps in the same namespace as the changed PolicyGate.
+// TestPolicyGateMapper verifies C03-promotionstep-26: a PolicyGate change
+// wakes only the steps that list the gate in spec.requiredGates, are still in
+// a state the gate can affect, and belong to this reconciler's shard. It used
+// to enqueue every PromotionStep in the namespace.
 func TestPolicyGateMapper(t *testing.T) {
-	scheme := newTestScheme(t)
-	ctx := context.Background()
+	step := func(name, ns, state, shard string, gates ...string) *v1alpha1.PromotionStep {
+		ps := &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec:       v1alpha1.PromotionStepSpec{RequiredGates: gates},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+		if shard != "" {
+			ps.Labels = map[string]string{"kardinal.io/shard": shard}
+		}
+		return ps
+	}
+	objs := []client.Object{
+		step("waiting", "default", "Pending", "", "gate-1"),
+		step("new", "default", "", "", "gate-1", "gate-2"),
+		step("other-gate", "default", "Pending", "", "gate-2"),
+		step("verified", "default", "Verified", "", "gate-1"),
+		step("failed", "default", "Failed", "", "gate-1"),
+		step("sharded", "default", "Pending", "eu", "gate-1"),
+		step("other-ns", "other-ns", "Pending", "", "gate-1"),
+		&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "gate-1", Namespace: "default"}},
+	}
+	c := fakeclient.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(objs...).Build()
+	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "gate-1", Namespace: "default"}}
 
-	step1 := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-1", Namespace: "default"},
+	tests := []struct {
+		shard string
+		want  []string
+	}{
+		{shard: "", want: []string{"new", "waiting"}},
+		{shard: "eu", want: []string{"sharded"}},
 	}
-	step2 := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-2", Namespace: "default"},
+	for _, tt := range tests {
+		t.Run("shard="+tt.shard, func(t *testing.T) {
+			r := &Reconciler{Client: c, Shard: tt.shard}
+			var got []string
+			for _, req := range r.policyGateMapper(context.Background(), gate) {
+				assert.Equal(t, "default", req.Namespace)
+				got = append(got, req.Name)
+			}
+			sort.Strings(got)
+			assert.Equal(t, tt.want, got)
+		})
 	}
-	otherNSStep := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-3", Namespace: "other-ns"},
-	}
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "gate-1", Namespace: "default"},
-	}
-
-	fakeClient := fakeclient.NewClientBuilder().WithScheme(scheme).
-		WithObjects(step1, step2, otherNSStep, gate).
-		Build()
-
-	r := &Reconciler{Client: fakeClient}
-	reqs := r.policyGateMapper(ctx, gate)
-
-	// Must enqueue only steps in the same namespace
-	require.Len(t, reqs, 2, "must enqueue all PromotionSteps in the same namespace")
-	names := map[string]bool{}
-	for _, req := range reqs {
-		assert.Equal(t, "default", req.Namespace)
-		names[req.Name] = true
-	}
-	assert.True(t, names["step-1"])
-	assert.True(t, names["step-2"])
-	assert.False(t, names["step-3"], "steps in other namespaces must not be enqueued")
 }
 
 // TestCollectGateResults verifies the PR body gets one row per required gate,

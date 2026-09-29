@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rs/zerolog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -31,7 +32,6 @@ const (
 	AuditActionPromotionSucceeded  = "PromotionSucceeded"
 	AuditActionPromotionFailed     = "PromotionFailed"
 	AuditActionPromotionSuperseded = "PromotionSuperseded"
-	AuditActionGateEvaluated       = "GateEvaluated"
 	AuditActionRollbackStarted     = "RollbackStarted"
 )
 
@@ -43,12 +43,12 @@ const (
 )
 
 // writeAuditEvent creates an immutable AuditEvent CRD recording a promotion
-// lifecycle transition. It is fire-and-forget: errors are logged but never
-// returned — audit logging must not block promotion.
+// lifecycle transition. Errors are logged and never returned: audit logging
+// must not block promotion.
 //
-// The AuditEvent name includes the PromotionStep name and action to ensure
-// uniqueness within a namespace. A timestamp suffix prevents collisions if
-// the same action is re-attempted.
+// The AuditEvent name is {ps.Name}-{action}, with no timestamp: one event per
+// step and action is intended, so a re-run reconcile that repeats the
+// transition hits AlreadyExists and writes nothing new.
 func writeAuditEvent(
 	ctx context.Context,
 	c client.Client,
@@ -99,13 +99,11 @@ func writeAuditEvent(
 	}
 
 	// Idempotent: if the event already exists (re-reconcile), ignore the conflict.
-	if err := c.Create(ctx, ae); err != nil {
-		// Log at debug — audit write failures must never block promotion.
-		// client.IgnoreAlreadyExists would swallow duplicates silently.
-		if client.IgnoreAlreadyExists(err) != nil {
-			// Non-conflict error — log but proceed.
-			_ = err // zerolog not imported in this file; caller logs via reconciler
-		}
+	if err := c.Create(ctx, ae); client.IgnoreAlreadyExists(err) != nil {
+		// RBAC or quota failures must be visible, but never block promotion.
+		zerolog.Ctx(ctx).Error().Err(err).
+			Str("auditEvent", name).Str("action", action).
+			Msg("failed to write AuditEvent")
 	}
 }
 
@@ -120,8 +118,6 @@ func slugifyAction(action string) string {
 		return "failed"
 	case AuditActionPromotionSuperseded:
 		return "superseded"
-	case AuditActionGateEvaluated:
-		return "gate-evaluated"
 	case AuditActionRollbackStarted:
 		return "rollback-started"
 	default:
