@@ -98,7 +98,7 @@ jobs:
 
       # ── SBOM generation ─────────────────────────────────────────────────────
       - name: Generate SBOM with Syft
-        uses: anchore/sbom-action@v0.18.0
+        uses: anchore/sbom-action@v0.24.2
         with:
           image: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
           artifact-name: sbom-controller.spdx.json
