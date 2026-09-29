@@ -214,9 +214,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.2.0
         with:
-          # Use go1.25.9+ to ensure stdlib vulns GO-2026-4947, GO-2026-4946,
-          # GO-2026-4870 (crypto/x509, crypto/tls — fixed in go1.25.9) are patched.
-          go-version: '1.25.9'
+          # Scan with the toolchain pinned in go.mod so stdlib fixes stay in sync.
+          go-version-file: go.mod
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
