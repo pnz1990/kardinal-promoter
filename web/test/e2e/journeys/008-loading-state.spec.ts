@@ -23,16 +23,9 @@ test.describe('Journey 008 — Loading state clears (#522 regression guard)', ()
 
   test('Step 3: No dual "Loading..." + "just now" simultaneous render', async ({ page }) => {
     await page.goto('/')
-    await page.waitForTimeout(1000) // let data load
-
-    // Should never see both "Loading..." AND a timestamp at the same time
-    const loadingCount = await page.getByText('Loading...').count()
-    const freshnessCount = await page.getByText(/just now|ago/i).count()
-
-    // If freshness is showing, loading should be gone
-    if (freshnessCount > 0) {
-      expect(loadingCount).toBe(0)
-    }
+    // Once the freshness indicator shows, the loading indicator is gone.
+    await expect(page.getByText(/just now|ago/i).first()).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Loading...')).toHaveCount(0)
   })
 
   test('Step 4: After pipeline selection, DAG loads without persistent spinner', async ({ page }) => {

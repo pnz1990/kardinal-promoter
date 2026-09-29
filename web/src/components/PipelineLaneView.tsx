@@ -1,3 +1,6 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/PipelineLaneView.tsx — Horizontal pipeline stage lane view.
 // Shows environments as cards in a horizontal strip: env name, state chip,
 // bundle info, and promote/rollback quick actions.
@@ -5,27 +8,38 @@
 //
 // #532: State-driven visual properties use CSS classes (stage-card--{state}).
 //
+// Promote shows only where it can do something: every upstream environment is
+// Verified and this one is not reached yet, failed, or stopped by an alarm.
+// Rollback shows on Verified environments. The rule lives in pipelineActions.ts
+// so NodeDetail offers the same actions. Both ask first (PipelineActionDialog),
+// show the result in the lane, and ask the parent to refresh.
+//
 // Adapted from Kargo's horizontal stage cards pattern.
 // Each card represents a PromotionStep DAG node.
-import type { GraphNode } from '../types'
+import { useState, type CSSProperties } from 'react'
+import type { GraphEdge, GraphNode } from '../types'
 import { HealthChip, kardinalStateToHealth } from './HealthChip'
+import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
+import { canPromote, canRollback } from '../pipelineActions'
 import '../styles/PipelineLaneView.css'
 
 interface Props {
   /** DAG nodes — only PromotionStep nodes are rendered as stage cards. */
   nodes: GraphNode[]
+  /** DAG edges — used to find each environment's upstream environments. */
+  edges?: GraphEdge[]
   /** Currently selected node (highlighted card). */
   selectedNode?: GraphNode | null
   /** Called when a stage card is clicked. */
   onSelectNode?: (node: GraphNode | null) => void
   /** Active bundle name for display. */
   activeBundleName?: string
-  /** Pipeline name for action buttons. */
+  /** Pipeline the actions apply to. Without it the lane shows no actions. */
   pipelineName?: string
-  /** Called when Promote button is clicked for an environment. */
-  onPromote?: (environment: string) => void
-  /** Called when Rollback button is clicked for an environment. */
-  onRollback?: (environment: string) => void
+  /** Namespace of the pipeline. */
+  namespace?: string
+  /** Called after a promote or rollback request succeeds, so the parent can refresh. */
+  onActionDone?: () => void
   loading?: boolean
 }
 
@@ -40,22 +54,36 @@ function stageAccentColor(state: string): string {
   const health = kardinalStateToHealth(state)
   switch (health) {
     case 'Ready':       return 'var(--color-success)'
-    case 'Error':
-    case 'Degraded':    return '#ef4444'
-    case 'Reconciling': return 'var(--color-accent)'
+    case 'Error':       return 'var(--color-error)'
+    case 'Degraded':    return 'var(--color-degraded)'
+    case 'Reconciling': return 'var(--color-warning)'
     default:            return 'var(--color-text-muted)'
   }
 }
 
+const ACTION_BUTTON: CSSProperties = {
+  fontSize: '0.65rem',
+  background: 'var(--color-surface-2)',
+  border: '1px solid var(--color-border)',
+  borderRadius: '3px',
+  padding: '1px 5px',
+  cursor: 'pointer',
+}
+
 export function PipelineLaneView({
   nodes,
+  edges = [],
   selectedNode,
   onSelectNode,
   activeBundleName,
-  onPromote,
-  onRollback,
+  pipelineName,
+  namespace = 'default',
+  onActionDone,
   loading,
 }: Props) {
+  const [pending, setPending] = useState<{ kind: PipelineActionKind; environment: string } | null>(null)
+  const [result, setResult] = useState<string | null>(null)
+
   // Only show PromotionStep nodes (not PolicyGates) in the lane view.
   const stageNodes = nodes.filter(n => n.type === 'PromotionStep')
 
@@ -64,6 +92,7 @@ export function PipelineLaneView({
   }
 
   return (
+    <>
     <div
       role="group"
       aria-label="Pipeline stages"
@@ -72,16 +101,16 @@ export function PipelineLaneView({
       gap: '0.5rem',
       padding: '0.75rem 1.5rem',
       overflowX: 'auto',
-      background: '#070f1b',
-      borderBottom: '1px solid #1e293b',
+      background: 'var(--color-bg-deep)',
+      borderBottom: '1px solid var(--color-border-muted)',
       alignItems: 'stretch',
       minHeight: '100px',
     }}>
       {stageNodes.map((node, idx) => {
         const isSelected = selectedNode?.id === node.id
         const accent = stageAccentColor(node.state)
-        const isPending = node.state === 'Pending' || node.state === 'Unknown'
-        const hasAction = !isPending && onPromote
+        const showPromote = !!pipelineName && canPromote(node, nodes, edges)
+        const showRollback = !!pipelineName && canRollback(node)
         const showPRLink = node.prURL && node.state === 'WaitingForMerge'
         const cardClass = [
           'stage-card',
@@ -141,10 +170,7 @@ export function PipelineLaneView({
                 <span style={{
                   fontSize: '0.78rem',
                   fontWeight: 700,
-                  // Stage cards always have dark backgrounds — var(--color-text) flips to
-                  // dark (#1e293b) in light mode causing contrast failure. Use hardcoded
-                  // light color. #e2e8f0 matches the CSS .stage-card base rule.
-                  color: '#e2e8f0',
+                  color: 'var(--color-text)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -159,9 +185,7 @@ export function PipelineLaneView({
                 <div style={{
                   fontSize: '0.65rem',
                   fontFamily: 'monospace',
-                  // Stage card backgrounds are always dark — #64748b (slate-500) fails
-                  // on #052e16 (ready bg). Use #94a3b8 (slate-400, 7.1:1 on dark bg) ✓
-                  color: '#94a3b8',
+                  color: 'var(--color-text-muted)',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
@@ -180,10 +204,7 @@ export function PipelineLaneView({
                   onClick={e => e.stopPropagation()}
                   style={{
                     fontSize: '0.65rem',
-                    // Stage card backgrounds are always dark — var(--color-accent) flips to
-                    // #4f46e5 (indigo-600) in light mode which fails on dark card bg.
-                    // Use hardcoded #a5b4fc (indigo-300, 9.5:1 on #1e1b4b) ✓
-                    color: '#a5b4fc',
+                    color: 'var(--color-accent)',
                     textDecoration: 'none',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -209,38 +230,28 @@ export function PipelineLaneView({
               )}
 
               {/* Action buttons row */}
-              {hasAction && (
+              {(showPromote || showRollback) && (
                 <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.1rem' }}>
-                  <button
-                    title={`Promote ${node.environment}`}
-                    onClick={e => { e.stopPropagation(); onPromote?.(node.environment) }}
-                    style={{
-                      fontSize: '0.6rem',
-                      background: 'var(--color-surface)',
-                      color: 'var(--color-accent)',
-                      border: '1px solid #334155',
-                      borderRadius: '3px',
-                      padding: '1px 5px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    ▶ Promote
-                  </button>
-                  {onRollback && node.state === 'Verified' && (
+                  {showPromote && (
                     <button
-                      title={`Rollback ${node.environment}`}
-                      onClick={e => { e.stopPropagation(); onRollback?.(node.environment) }}
-                      style={{
-                        fontSize: '0.6rem',
-                        background: 'var(--color-surface)',
-                        color: 'var(--color-text-muted)',
-                        border: '1px solid #334155',
-                        borderRadius: '3px',
-                        padding: '1px 5px',
-                        cursor: 'pointer',
-                      }}
+                      type="button"
+                      title={`Promote ${pipelineName} to ${node.environment}`}
+                      aria-label={`Promote to ${node.environment}`}
+                      onClick={e => { e.stopPropagation(); setResult(null); setPending({ kind: 'promote', environment: node.environment }) }}
+                      style={{ ...ACTION_BUTTON, color: 'var(--color-accent)' }}
                     >
-                      ↩ Rollback
+                      <span aria-hidden="true">▶</span> Promote
+                    </button>
+                  )}
+                  {showRollback && (
+                    <button
+                      type="button"
+                      title={`Roll back ${node.environment} to the previous verified version`}
+                      aria-label={`Roll back ${node.environment}`}
+                      onClick={e => { e.stopPropagation(); setResult(null); setPending({ kind: 'rollback', environment: node.environment }) }}
+                      style={{ ...ACTION_BUTTON, color: 'var(--color-error)' }}
+                    >
+                      <span aria-hidden="true">↩</span> Roll back
                     </button>
                   )}
                 </div>
@@ -251,5 +262,25 @@ export function PipelineLaneView({
          )
       })}
     </div>
+    {result && (
+      <div role="status" style={{ padding: '0.35rem 1.5rem', fontSize: '0.75rem', color: 'var(--color-success)' }}>
+        {result}
+      </div>
+    )}
+    {pending && pipelineName && (
+      <PipelineActionDialog
+        kind={pending.kind}
+        pipelineName={pipelineName}
+        environment={pending.environment}
+        namespace={namespace}
+        onDone={message => {
+          setPending(null)
+          setResult(message)
+          onActionDone?.()
+        }}
+        onCancel={() => setPending(null)}
+      />
+    )}
+    </>
   )
 }

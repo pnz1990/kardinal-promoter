@@ -20,8 +20,10 @@ const QUICKSTART_COMMAND = 'kubectl apply -f https://raw.githubusercontent.com/p
 const DOCS_URL = 'https://pnz1990.github.io/kardinal-promoter/'
 
 /** Expected output shown after applying the quickstart pipeline. */
-const EXPECTED_OUTPUT = `NAME               PHASE      BUNDLE   AGE
-kardinal-test-app  Promoting  —        5s`
+// Matches the Pipeline printer columns (Phase, Paused, Age) in api/v1alpha1/pipeline_types.go.
+// A pipeline with no bundle yet has phase Unknown (DerivePhase in pkg/reconciler/pipeline).
+export const EXPECTED_OUTPUT = `NAME                PHASE     PAUSED   AGE
+kardinal-test-app   Unknown   false    5s`
 
 /**
  * EmptyState — shown when no pipelines are found.
@@ -45,7 +47,7 @@ export default function EmptyState() {
 
       {/* One-sentence explanation */}
       <p style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)', marginBottom: '1.5rem', lineHeight: 1.5 }}>
-        A <strong style={{ color: '#cbd5e1' }}>Pipeline</strong> defines your promotion environments
+        A <strong style={{ color: 'var(--color-text)' }}>Pipeline</strong> defines your promotion environments
         (test → uat → prod) and the policy gates between them.{' '}
         <a
           href={DOCS_URL}
@@ -60,7 +62,7 @@ export default function EmptyState() {
 
       {/* Quickstart command */}
       <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', fontWeight: 600 }}>
+        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
           Apply the quickstart example:
         </div>
         <div style={{
@@ -68,7 +70,7 @@ export default function EmptyState() {
           alignItems: 'center',
           gap: '8px',
           background: 'var(--color-bg)',
-          border: '1px solid #1e293b',
+          border: '1px solid var(--color-border)',
           borderRadius: '6px',
           padding: '8px 12px',
         }}>
@@ -91,16 +93,16 @@ export default function EmptyState() {
 
       {/* Expected output */}
       <div style={{ marginBottom: '1.5rem' }}>
-        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.4rem', fontWeight: 600 }}>
+        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
           Then run <code style={{ color: 'var(--color-code)', fontFamily: 'monospace' }}>kubectl get pipelines</code>:
         </div>
         <pre style={{
           background: 'var(--color-bg)',
-          border: '1px solid #1e293b',
+          border: '1px solid var(--color-border)',
           borderRadius: '6px',
           padding: '8px 12px',
           fontSize: '0.75rem',
-          color: '#64748b',
+          color: 'var(--color-text-muted)',
           fontFamily: 'monospace',
           margin: 0,
           lineHeight: 1.5,

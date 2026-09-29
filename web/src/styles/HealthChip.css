@@ -30,51 +30,53 @@
 
 /* ── State variants ──────────────────────────────────────────────────────── */
 
+/* Colors are theme tokens (theme.css) so the chips follow dark and light mode. */
+
 /* Ready — green */
 .health-chip--ready {
-  background: #14532d;
-  color: #4ade80;
-  border-color: #22c55e;
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border-color: var(--color-success);
 }
 
 /* Reconciling — amber */
 .health-chip--reconciling {
-  background: #78350f;
-  color: #fbbf24;
-  border-color: #f59e0b;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-color: var(--color-warning);
 }
 
 /* Error — red */
 .health-chip--error {
-  background: #7f1d1d;
-  color: #fca5a5;  /* red-300: 5.1:1 on #7f1d1d ✓ (was #f87171 = 3.5:1 fail) */
-  border-color: #ef4444;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-color: var(--color-error);
 }
 
 /* Pending — slate */
 .health-chip--pending {
-  background: #1e293b;
-  color: #94a3b8;
-  border-color: #475569;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  border-color: var(--color-text-faint);
 }
 
 /* Degraded — orange */
 .health-chip--degraded {
-  background: #7c2d12;
-  color: #fb923c;
-  border-color: #f97316;
+  background: var(--color-degraded-bg);
+  color: var(--color-degraded);
+  border-color: var(--color-degraded);
 }
 
 /* Paused — indigo */
 .health-chip--paused {
-  background: #1e1b4b;
-  color: #a5b4fc;
-  border-color: #6366f1;
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 /* Unknown — gray (default) */
 .health-chip--unknown {
   background: var(--color-surface);
-  color: var(--color-text-faint);       /* #7c8da4 dark / #4b5563 light — WCAG AA ✓ */
+  color: var(--color-text-faint);       /* #8594a8 dark / #4b5563 light (see theme.css) */
   border-color: var(--color-border);
 }

@@ -1,9 +1,16 @@
-/* theme.css — CSS custom properties for kardinal UI dark/light mode.
+/*
+ * Copyright 2026 The kardinal-promoter Authors.
+ * Licensed under the Apache License, Version 2.0
+ *
+ * theme.css — CSS custom properties for kardinal UI dark/light mode.
  *
  * Applied to :root for dark (default) and [data-theme="light"] for light mode.
- * All components reference these variables; no hardcoded color values permitted.
+ * New component colors should use these variables. Some older components and
+ * stylesheets still hard-code dark-mode colors; move them here when touched.
  *
- * Color contrast audit (#757): all colors below meet WCAG 2.1 AA (4.5:1 for normal text).
+ * Color contrast (#757): the text tokens below are checked against WCAG 2.1 AA
+ * (4.5:1) on --color-bg and --color-surface of their own theme. Ratios are noted
+ * next to each value where they were measured.
  */
 
 :root {
@@ -29,7 +36,9 @@
   --color-warning:     #fbbf24;
   --color-warning-bg:  #78350f;
   --color-error:       #f87171;
-  --color-error-bg:    #7f1d1d;
+  --color-error-bg:    #450a0a;   /* red-950: error text 5.8:1 on it ✓ (was #7f1d1d = 3.6:1 ✗) */
+  --color-degraded:    #fdba74;   /* orange-300: 5.5:1 on --color-degraded-bg ✓ */
+  --color-degraded-bg: #7c2d12;
   --color-info:        #67e8f9;
 
   /* Code/monospace inline text — sky-300 in dark mode (visible on dark bg) */
@@ -59,16 +68,50 @@
 
   --color-success:     #166534;  /* green-800: 6.5:1 on #f1f5f9 ✓ (was #15803d = 4.58:1) */
   --color-success-bg:  #dcfce7;
-  --color-warning:     #d97706;
+  --color-warning:     #b45309;  /* amber-700: 5.0:1 on #ffffff, 4.6:1 on #f1f5f9 ✓ (was #d97706 = 3.2:1 / 2.9:1 ✗) */
   --color-warning-bg:  #fef3c7;
   --color-error:       #b91c1c;  /* red-700: 6.3:1 on #f1f5f9 ✓ (was #dc2626 = 4.4:1 fail) */
   --color-error-bg:    #fee2e2;
+  --color-degraded:    #9a3412;  /* orange-800: 6.4:1 on --color-degraded-bg ✓ */
+  --color-degraded-bg: #ffedd5;
   --color-info:        #0369a1;  /* sky-700: 5.5:1 on #f1f5f9 ✓ (was #0891b2 = 3.4:1 fail) */
 
   /* Code/monospace inline text — sky-700 in light mode (10.7:1 on #f1f5f9) */
   --color-code:        #0369a1;  /* sky-700: 10.7:1 on #f1f5f9 ✓ */
 
   color-scheme: light;
+}
+
+/* ── Keyboard focus ──────────────────────────────────────────────────────────
+ * Many controls set an inline `outline: none`; !important keeps the keyboard
+ * focus ring visible on all of them. :focus-visible leaves mouse clicks alone.
+ */
+:focus-visible {
+  outline: 2px solid var(--color-accent) !important;
+  outline-offset: 2px;
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Screen-reader-only text ─────────────────────────────────────────────── */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ── Staleness pulse animation (#766) ──────────────────────────────────────── */

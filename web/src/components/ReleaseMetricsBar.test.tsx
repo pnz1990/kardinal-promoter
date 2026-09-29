@@ -11,118 +11,107 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// components/ReleaseMetricsBar.test.tsx — Tests for #465 release efficiency metrics.
+// components/ReleaseMetricsBar.test.tsx — release efficiency metrics (#465, C10b-web-10).
+// Bundles use the shape the Go API returns: provenance.rollbackOf for rollbacks
+// and status.environments[].healthCheckedAt for when an environment was verified.
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import {
-  computeReleaseMetrics,
-  ReleaseMetricsBar,
-} from './ReleaseMetricsBar'
+import { computeReleaseMetrics, formatHours, ReleaseMetricsBar } from './ReleaseMetricsBar'
 import type { Bundle } from '../types'
 
-// ─── Test helpers ──────────────────────────────────────────────────────────────
+const HOUR = 3_600_000
+const created = Date.parse('2026-03-01T00:00:00Z')
 
-function makeBundle(overrides: Partial<Bundle> = {}): Bundle {
+/** A bundle created `ageDays` before the reference time that reached prod `ttpHours` after creation. */
+function bundle(name: string, opts: { ageDays?: number; ttpHours?: number; rollbackOf?: string } = {}): Bundle {
+  const c = created - (opts.ageDays ?? 0) * 24 * HOUR
   return {
-    name: 'bundle-v1',
+    name,
     namespace: 'default',
-    phase: 'Verified',
+    phase: 'Promoting', // Bundle phase does not reach Verified; the metrics must not depend on it.
     type: 'image',
     pipeline: 'my-app',
-    createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // 1h ago
-    ...overrides,
+    createdAt: new Date(c).toISOString(),
+    provenance: opts.rollbackOf ? { rollbackOf: opts.rollbackOf } : undefined,
+    environments: [
+      { name: 'test', phase: 'Verified', healthCheckedAt: new Date(c + 0.1 * HOUR).toISOString() },
+      ...(opts.ttpHours !== undefined
+        ? [{ name: 'prod', phase: 'Verified', healthCheckedAt: new Date(c + opts.ttpHours * HOUR).toISOString() }]
+        : []),
+    ],
   }
 }
 
-// ─── computeReleaseMetrics ────────────────────────────────────────────────────
-
 describe('computeReleaseMetrics', () => {
-  it('returns null when fewer than 5 bundles', () => {
-    const bundles = [makeBundle(), makeBundle({ name: 'v2' })]
-    expect(computeReleaseMetrics(bundles)).toBeNull()
+  it.each([
+    { name: 'no final environment known', bundles: [bundle('a', { ttpHours: 1 })], env: undefined },
+    { name: 'no bundle reached the final environment', bundles: [bundle('a'), bundle('b')], env: 'prod' },
+    { name: 'no bundles', bundles: [], env: 'prod' },
+  ])('returns null when $name', ({ bundles, env }) => {
+    expect(computeReleaseMetrics(bundles, env)).toBeNull()
   })
 
-  it('returns metrics when 5+ bundles provided', () => {
-    const bundles = Array.from({ length: 5 }, (_, i) =>
-      makeBundle({ name: `bundle-v${i}` })
-    )
-    const metrics = computeReleaseMetrics(bundles)
-    expect(metrics).not.toBeNull()
-    expect(metrics!.rollbackRatePct).toBeGreaterThanOrEqual(0)
-    expect(metrics!.rollbackRatePct).toBeLessThanOrEqual(100)
+  it('measures time to prod from healthCheckedAt, not from bundle age', () => {
+    // 30-day-old bundles that reached prod 1h and 3h after creation.
+    const m = computeReleaseMetrics([bundle('a', { ageDays: 30, ttpHours: 1 }), bundle('b', { ageDays: 31, ttpHours: 3 })], 'prod')
+    expect(m?.meanTtpHours).toBe(2)
   })
 
-  it('rollback rate is 0 when no rollbacks', () => {
-    const bundles = Array.from({ length: 5 }, (_, i) =>
-      makeBundle({ name: `bundle-v${i}`, isRollback: false })
-    )
-    const metrics = computeReleaseMetrics(bundles)
-    expect(metrics!.rollbackRatePct).toBe(0)
+  it('counts rollbacks from provenance.rollbackOf', () => {
+    const m = computeReleaseMetrics([
+      bundle('v1', { ttpHours: 1 }),
+      bundle('v2', { ttpHours: 1 }),
+      bundle('v3'),
+      bundle('v4', { rollbackOf: 'v3', ttpHours: 1 }),
+      bundle('v5', { rollbackOf: 'v2' }),
+    ], 'prod')
+    expect(m).toMatchObject({ totalBundles: 5, rollbackCount: 2, rollbackRatePct: 40 })
   })
 
-  it('rollback rate is 40% when 2 of 5 are rollbacks', () => {
-    const bundles = [
-      makeBundle({ name: 'v1', isRollback: false }),
-      makeBundle({ name: 'v2', isRollback: false }),
-      makeBundle({ name: 'v3', isRollback: false }),
-      makeBundle({ name: 'v4', isRollback: true }),
-      makeBundle({ name: 'v5', isRollback: true }),
-    ]
-    const metrics = computeReleaseMetrics(bundles)
-    expect(metrics!.rollbackRatePct).toBe(40)
+  it('counts deploys that reached the final environment, not the window size', () => {
+    const m = computeReleaseMetrics([bundle('a', { ttpHours: 1 }), bundle('b'), bundle('c'), bundle('d', { ttpHours: 2 })], 'prod')
+    expect(m).toMatchObject({ totalBundles: 4, deployCount: 2 })
   })
 
-  it('rollback rate is 100% when all bundles are rollbacks', () => {
-    const bundles = Array.from({ length: 5 }, (_, i) =>
-      makeBundle({ name: `bundle-v${i}`, isRollback: true })
-    )
-    const metrics = computeReleaseMetrics(bundles)
-    expect(metrics!.rollbackRatePct).toBe(100)
+  it('covers the 10 newest bundles only', () => {
+    const bundles = Array.from({ length: 12 }, (_, i) => bundle(`b${i}`, { ageDays: i, ttpHours: i < 10 ? 1 : 100 }))
+    const m = computeReleaseMetrics(bundles, 'prod')
+    expect(m).toMatchObject({ totalBundles: 10, deployCount: 10, meanTtpHours: 1 })
   })
 
-  it('does not mutate the original array', () => {
-    const bundles = Array.from({ length: 5 }, (_, i) =>
-      makeBundle({ name: `bundle-v${i}` })
-    )
-    const original = bundles.map(b => b.name)
-    computeReleaseMetrics(bundles)
-    expect(bundles.map(b => b.name)).toEqual(original)
+  it('does not mutate the input array', () => {
+    const bundles = [bundle('old', { ageDays: 2, ttpHours: 1 }), bundle('new', { ageDays: 1, ttpHours: 1 })]
+    computeReleaseMetrics(bundles, 'prod')
+    expect(bundles.map(b => b.name)).toEqual(['old', 'new'])
   })
 })
 
-// ─── ReleaseMetricsBar component ─────────────────────────────────────────────
+describe('formatHours', () => {
+  it.each([
+    { hours: 0.4, want: '< 1h' },
+    { hours: 2.4, want: '2h' },
+    { hours: 72, want: '3d' },
+  ])('$hours → $want', ({ hours, want }) => {
+    expect(formatHours(hours)).toBe(want)
+  })
+})
 
 describe('ReleaseMetricsBar', () => {
-  it('shows "Not enough data" when fewer than 5 bundles', () => {
-    const bundles = [makeBundle(), makeBundle({ name: 'v2' })]
-    render(<ReleaseMetricsBar bundles={bundles} />)
-    expect(screen.getByText(/not enough data/i)).toBeInTheDocument()
+  it('renders nothing until a bundle has reached the final environment', () => {
+    const { container } = render(<ReleaseMetricsBar bundles={[bundle('a')]} finalEnvironment="prod" />)
+    expect(container).toBeEmptyDOMElement()
   })
 
-  it('shows rollback rate when 5+ bundles', () => {
-    const bundles = Array.from({ length: 5 }, (_, i) =>
-      makeBundle({ name: `bundle-v${i}`, isRollback: i === 0 })
+  it('shows the three metrics named after the final environment', () => {
+    render(
+      <ReleaseMetricsBar
+        bundles={[bundle('a', { ttpHours: 2 }), bundle('b', { rollbackOf: 'a', ttpHours: 4 }), bundle('c')]}
+        finalEnvironment="prod"
+      />,
     )
-    render(<ReleaseMetricsBar bundles={bundles} />)
-    // "Rollback Rate" label and "1 rollbacks" sub-label both match /rollback/i — use getAllByText
-    expect(screen.getAllByText(/rollback/i).length).toBeGreaterThan(0)
-    expect(screen.getByText(/20%/)).toBeInTheDocument()
-  })
-
-  it('renders all three metric labels', () => {
-    const bundles = Array.from({ length: 5 }, (_, i) =>
-      makeBundle({ name: `bundle-v${i}` })
-    )
-    render(<ReleaseMetricsBar bundles={bundles} />)
-    expect(screen.getByText(/time to prod/i)).toBeInTheDocument()
-    // "Rollback Rate" label and "X rollbacks" sub-text both match — use getAllByText
-    expect(screen.getAllByText(/rollback/i).length).toBeGreaterThan(0)
-    expect(screen.getByText(/deploys/i)).toBeInTheDocument()
-  })
-
-  it('shows empty state with guidance text', () => {
-    render(<ReleaseMetricsBar bundles={[]} />)
-    expect(screen.getByText(/not enough data/i)).toBeInTheDocument()
-    expect(screen.getByText(/5\+/)).toBeInTheDocument()
+    const bar = screen.getByRole('region', { name: 'Release metrics' })
+    expect(bar).toHaveTextContent('Time to prod3h')
+    expect(bar).toHaveTextContent('Rollback rate33%1 rollback')
+    expect(bar).toHaveTextContent('Deploys to prod2last 3 bundles')
   })
 })

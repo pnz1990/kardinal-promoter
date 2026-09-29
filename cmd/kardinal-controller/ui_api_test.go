@@ -637,7 +637,8 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	assert.Equal(t, 1, got.FailedStepCount, "1 Failed PromotionStep")
 	assert.Equal(t, "mostly-cd", got.CDLevel, "2 pipeline-level gates → mostly-cd")
 	// InventoryAgeDays should be 0 (bundle just created)
-	assert.Equal(t, 0, got.InventoryAgeDays, "just-created bundle → 0 days inventory age")
+	require.NotNil(t, got.InventoryAgeDays, "just-created bundle → inventoryAgeDays is sent")
+	assert.Equal(t, 0, *got.InventoryAgeDays, "just-created bundle → 0 days inventory age")
 }
 
 // TestUIAPI_GetSteps_BakeFields verifies that bake countdown fields are populated

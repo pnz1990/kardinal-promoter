@@ -1,6 +1,10 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/PipelineList.tsx — Sidebar list of Pipelines with health chips,
 // bundle name, environment count, and namespace indicator.
-// Includes an onboarding empty state (Kargo parity).
+// With no pipelines it shows one line; the onboarding card with the setup
+// commands is the main panel's EmptyState, so there is one set of instructions.
 // #345: debounced search/filter input at the top.
 // #800: searchInputRef prop exposes the filter input for the / keyboard shortcut.
 // #815: virtual scrolling for flat lists with >50 entries (@tanstack/react-virtual).
@@ -15,12 +19,14 @@ const VIRTUAL_THRESHOLD = 50
 
 interface Props {
   pipelines: Pipeline[]
+  /** Name of the selected pipeline. */
   selected?: string
-  onSelect: (name: string) => void
+  /** Namespace of the selected pipeline. Pipelines are identified by
+   *  namespace + name, so two same-named pipelines are never both selected. */
+  selectedNamespace?: string
+  onSelect: (name: string, namespace: string) => void
   loading?: boolean
   error?: string
-  /** Current namespace derived from loaded pipelines. Shown in header when set. */
-  namespace?: string
   /**
    * #800: Ref forwarded to the filter <input> so App can call
    * searchInputRef.current?.focus() when the / shortcut fires.
@@ -28,63 +34,34 @@ interface Props {
   searchInputRef?: RefObject<HTMLInputElement | null>
 }
 
-/** Truncate a bundle name to a readable short form for the sidebar. */
+/** Shorten a long bundle name for the sidebar: names over 14 characters keep
+ *  their first 12 and end in an ellipsis; the full name is in the row's title. */
 function shortBundleName(name: string | undefined): string | null {
   if (!name) return null
-  // Take last segment after last dash that looks like a version
-  // e.g. "nginx-demo-v1-29-0-1712567890" → "nginx:v1.29"
-  // Fallback: truncate to 14 chars
   if (name.length <= 14) return name
   return name.slice(0, 12) + '…'
 }
 
-/** Onboarding empty state shown when no pipelines have been created yet. */
-function EmptyState() {
+/** Sidebar note for an empty cluster. */
+function NoPipelines() {
   return (
-    <div style={{ padding: '1rem', color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-      <p style={{ marginBottom: '0.75rem', fontStyle: 'italic' }}>No pipelines found.</p>
-      <p style={{ marginBottom: '0.5rem', color: 'var(--color-text-muted)' }}>Get started:</p>
-      <code style={{
-        display: 'block',
-        background: 'var(--color-bg)',
-        border: '1px solid #1e293b',
-        borderRadius: '4px',
-        padding: '0.4rem 0.5rem',
-        fontSize: '0.72rem',
-        color: 'var(--color-code)',
-        marginBottom: '0.5rem',
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-all',
-      }}>
-        kubectl apply -f examples/quickstart/pipeline.yaml
-      </code>
-      <p style={{ marginBottom: '0.4rem', color: 'var(--color-text-muted)' }}>Or use the wizard:</p>
-      <code style={{
-        display: 'block',
-        background: 'var(--color-bg)',
-        border: '1px solid #1e293b',
-        borderRadius: '4px',
-        padding: '0.4rem 0.5rem',
-        fontSize: '0.72rem',
-        color: 'var(--color-code)',
-        marginBottom: '0.75rem',
-      }}>
-        kardinal init
-      </code>
-      <a
-        href="https://github.com/pnz1990/kardinal-promoter/blob/main/docs/quickstart.md"
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ color: 'var(--color-accent)', fontSize: '0.75rem', textDecoration: 'none' }}
-        aria-label="View quickstart documentation"
-      >
-        View quickstart docs ↗
-      </a>
-    </div>
+    <p style={{ padding: '1rem', margin: 0, color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+      No pipelines found.
+    </p>
   )
 }
 
-export function PipelineList({ pipelines, selected, onSelect, loading, error, searchInputRef }: Props) {
+/** True when p matches the query by name, namespace, or namespace/name. */
+function matchesQuery(p: Pipeline, query: string): boolean {
+  return p.name.toLowerCase().includes(query) ||
+    p.namespace.toLowerCase().includes(query) ||
+    `${p.namespace}/${p.name}`.toLowerCase().includes(query)
+}
+
+export function PipelineList({ pipelines, selected, selectedNamespace, onSelect, loading, error, searchInputRef }: Props) {
+  const isSelected = (p: Pipeline) =>
+    selected === p.name && (selectedNamespace === undefined || selectedNamespace === p.namespace)
+
   // #345: search/filter state with debounce
   const [searchQuery, setSearchQuery] = useState('')
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -101,24 +78,21 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
     }, 150)
   }, [])
 
-  // #815: Compute filtered count BEFORE early returns so useVirtualizer
-  // is always called with the same hook order (Rules of Hooks).
-  // When loading/error/empty, these will be empty/0 which is harmless.
-  const filteredForVirtualCount = debouncedQuery
-    ? pipelines.filter(p =>
-        p.name.toLowerCase().includes(debouncedQuery) ||
-        p.namespace.toLowerCase().includes(debouncedQuery) ||
-        `${p.namespace}/${p.name}`.toLowerCase().includes(debouncedQuery)
-      ).length
-    : pipelines.length
+  // #345: filter pipelines by search query (includes namespace prefix search).
+  // #815: computed BEFORE early returns so useVirtualizer is always called
+  // with the same hook order (Rules of Hooks).
+  const filteredPipelines = debouncedQuery
+    ? pipelines.filter(p => matchesQuery(p, debouncedQuery))
+    : pipelines
 
-  const uniqueNamespacesEarly = new Set(pipelines.map(p => p.namespace))
-  const isMultiNamespaceEarly = uniqueNamespacesEarly.size > 1
-  const useVirtual = !isMultiNamespaceEarly && filteredForVirtualCount > VIRTUAL_THRESHOLD
+  // #358: detect multi-namespace setup — group by namespace when needed.
+  const uniqueNamespaces = new Set(pipelines.map(p => p.namespace))
+  const isMultiNamespace = uniqueNamespaces.size > 1
+  const useVirtual = !isMultiNamespace && filteredPipelines.length > VIRTUAL_THRESHOLD
 
   // #815: Hook must be called unconditionally — before any early returns.
   const virtualizer = useVirtualizer({
-    count: filteredForVirtualCount,
+    count: filteredPipelines.length,
     getScrollElement: () => listContainerRef.current,
     estimateSize: () => 52,
     overscan: 5,
@@ -140,7 +114,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
             style={{
               height: '42px',
               borderRadius: '4px',
-              background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+              background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
               backgroundSize: '200% 100%',
               animation: 'shimmer-pl 1.5s infinite',
               margin: '0.3rem 1rem',
@@ -153,28 +127,14 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
   }
   if (error) {
     return (
-      <div style={{ padding: '1rem', color: '#ef4444', fontSize: '0.82rem' }}>
+      <div style={{ padding: '1rem', color: 'var(--color-error)', fontSize: '0.82rem' }}>
         Error: {error}
       </div>
     )
   }
   if (pipelines.length === 0) {
-    return <EmptyState />
+    return <NoPipelines />
   }
-
-  // #345: filter pipelines by search query (includes namespace prefix search)
-  const filteredPipelines = debouncedQuery
-    ? pipelines.filter(p =>
-        p.name.toLowerCase().includes(debouncedQuery) ||
-        p.namespace.toLowerCase().includes(debouncedQuery) ||
-        `${p.namespace}/${p.name}`.toLowerCase().includes(debouncedQuery)
-      )
-    : pipelines
-
-  // #358: detect multi-namespace setup — show namespace prefix when needed
-  // (useVirtual and virtualizer already computed above, before early returns)
-  const uniqueNamespaces = uniqueNamespacesEarly
-  const isMultiNamespace = isMultiNamespaceEarly
 
   // Group by namespace for multi-namespace display
   const pipelinesByNamespace: Record<string, typeof filteredPipelines> = {}
@@ -208,7 +168,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
             width: '100%',
             boxSizing: 'border-box',
             background: 'var(--color-surface)',
-            border: '1px solid #334155',
+            border: '1px solid var(--color-border)',
             borderRadius: '4px',
             padding: '0.3rem 1.75rem 0.3rem 0.5rem',
             fontSize: '0.78rem',
@@ -228,7 +188,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
               background: 'none',
               border: 'none',
               cursor: 'pointer',
-              color: '#64748b',
+              color: 'var(--color-text-muted)',
               fontSize: '0.9rem',
               padding: '0 2px',
               lineHeight: 1,
@@ -261,9 +221,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
                     color: 'var(--color-text-faint)',
                     textTransform: 'uppercase',
                     letterSpacing: '0.05em',
-                    borderTop: '1px solid #1e293b',
+                    borderTop: '1px solid var(--color-border-muted)',
                     fontFamily: 'monospace',
-                    background: '#070f1b',
+                    background: 'var(--color-bg-deep)',
                   }}>
                     {ns}
                   </div>
@@ -327,22 +287,23 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
   function renderPipelineItemContent(p: Pipeline) {
         const bundle = shortBundleName(p.activeBundleName)
         const envCount = p.environmentCount
+        const selectedRow = isSelected(p)
 
         return (
           // #762: Outer flex container. Selection <button> + CopyButton are siblings
           // (not nested) to satisfy the axe nested-interactive rule.
           <>
+          {/* A native button already turns Enter and Space into one click (#C10b-web-22). */}
           <button
-            onClick={() => onSelect(p.name)}
-            aria-pressed={selected === p.name}
-            onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
+            onClick={() => onSelect(p.name, p.namespace)}
+            aria-pressed={selectedRow}
             style={{
               flex: 1,
               textAlign: 'left',
               padding: '0.6rem 1rem',
               cursor: 'pointer',
-              background: selected === p.name ? 'var(--color-surface)' : 'transparent',
-              borderLeft: selected === p.name ? '3px solid #6366f1' : '3px solid transparent',
+              background: selectedRow ? 'var(--color-surface)' : 'transparent',
+              borderLeft: selectedRow ? '3px solid var(--color-accent)' : '3px solid transparent',
               borderTop: 'none',
               borderRight: 'none',
               borderBottom: 'none',
@@ -358,7 +319,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
             }}>
               <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
                 <span style={{
-                  fontWeight: selected === p.name ? 600 : 400,
+                  fontWeight: selectedRow ? 600 : 400,
                   fontSize: '0.85rem',
                   color: 'var(--color-text)',
                   overflow: 'hidden',
@@ -376,9 +337,9 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
                     title="Pipeline is paused — no new promotions will start"
                     style={{
                       fontSize: '0.6rem',
-                      background: '#1e1b4b',
+                      background: 'var(--color-accent-bg)',
                       color: 'var(--color-accent)',
-                      border: '1px solid #4338ca',
+                      border: '1px solid var(--color-accent)',
                       borderRadius: '3px',
                       padding: '0px 4px',
                       fontWeight: 700,
@@ -416,7 +377,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
                       }
                       const phaseColor: Record<string, string> = {
                         Verified: 'var(--color-success)', Promoting: 'var(--color-accent)', WaitingForMerge: 'var(--color-accent)',
-                        HealthChecking: '#a78bfa', Failed: 'var(--color-error)', Pending: 'var(--color-text-faint)',
+                        HealthChecking: 'var(--color-info)', Failed: 'var(--color-error)', Pending: 'var(--color-text-faint)',
                       }
                       return Object.entries(counts).map(([phase, count]) => (
                         <span key={phase} style={{
@@ -463,7 +424,7 @@ export function PipelineList({ pipelines, selected, onSelect, loading, error, se
             alignItems: 'flex-start',
             paddingTop: '0.55rem',
             paddingRight: '0.4rem',
-            background: selected === p.name ? 'var(--color-surface)' : 'transparent',
+            background: selectedRow ? 'var(--color-surface)' : 'transparent',
           }}>
             <CopyButton text={p.name} title={`Copy pipeline name "${p.name}"`} />
           </div>

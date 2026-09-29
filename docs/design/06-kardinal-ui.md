@@ -228,10 +228,11 @@ The UI provides both read and write operations:
 
 **Read operations** — DAG view, pipeline list, bundle timeline, policy gate expressions, health status.
 
-**Write operations** (via ActionBar, added in PR #482):
-- Pause/resume a pipeline
-- Rollback a pipeline to a previous bundle
-- Override a policy gate (with mandatory reason, creates an AuditEvent)
+**Write operations**:
+- Pause/resume a pipeline (ActionBar, PR #482)
+- Promote an environment, or roll it back to its previous verified version (stage lane and node detail panel, one shared confirmation dialog)
+
+Policy gate overrides are not in the UI; use `kardinal override` (CLI).
 
 All mutations go through the backend API proxy which calls the Kubernetes API server.
 Direct CRD mutation via CLI (`kardinal pause`, `kardinal rollback`) and kubectl also remain available.
@@ -295,11 +296,11 @@ The following capabilities are implemented and shipped as of v0.8.x:
 - ✅ Virtualization for pipeline list with 50+ entries: @tanstack/react-virtual flat-list mode; falls back to normal for multi-namespace grouped display — PR #815, 2026-04-19
 - ✅ Fleet-wide health dashboard: FleetHealthBar — blocked pipelines, CI red, interventions scannable in one table — PR #480 (2026-04-14)
 - ✅ Per-pipeline operations view: PipelineOpsTable — sortable health columns: inventory age, last merge, blockage time — PR #475 (2026-04-14)
-- ✅ Per-stage detail: StageDetailPanel — step list, bake countdown, override history — PR #476 (2026-04-14)
-- ✅ In-UI actions: ActionBar — pause, resume, rollback, override gate (with mandatory reason) — PR #482 (2026-04-14)
-- ✅ Bundle promotion timeline with rollback records and override audit trail: BundleTimeline + AuditEvents — PR #478, PR #681 (2026-04-14)
-- ✅ Policy gate detail panel: GateDetailPanel — CEL highlighting, current variable values, blocking duration, override history — PR #477 (2026-04-14)
-- ✅ Release efficiency metrics bar: ReleaseMetricsBar — inline P50/P90 metrics on pipeline detail — PR #481 (2026-04-14)
+- 🔲 Per-stage bake countdown and override history — the StageDetailPanel from PR #476 was never mounted and was removed; NodeDetail shows the step list
+- ✅ In-UI actions: pause and resume (ActionBar), promote and roll back one environment (stage lane, node detail) — PR #482 (2026-04-14). Gate override is CLI-only (`kardinal override`)
+- ✅ Bundle promotion timeline: BundleTimeline — the 10 newest bundles colored by phase, plus the selected one; shift-click two bundles to compare them — PR #478, PR #681 (2026-04-14)
+- 🔲 Policy gate detail panel with blocking duration and override history — the GateDetailPanel from PR #477 was never mounted and was removed; gate nodes show the highlighted CEL expression in NodeDetail
+- ✅ Release efficiency metrics bar: ReleaseMetricsBar — mean time to the last environment, rollback rate and deploy count over the last 10 bundles; hidden until a bundle reaches the last environment — PR #481 (2026-04-14)
 
 ---
 
@@ -316,7 +317,7 @@ The embedded UI (`cmd/kardinal-controller/ui_api.go`) currently serves all endpo
 - ✅ **UI API authentication** — `--ui-auth-token` flag (env: `KARDINAL_UI_TOKEN`) added to `main.go`. When set, all `/api/v1/ui/*` routes require `Authorization: Bearer <token>`. Static `/ui/*` assets bypass auth. Constant-time comparison via `crypto/subtle`. Default is open (no token) for backwards compatibility. Implemented in PR #909.
 - ✅ **TLS for UI and webhook HTTP servers** — `--tls-cert-file` / `--tls-key-file` flags (env: `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`) added to `main.go`. When both are set, `http.ListenAndServeTLS` is used for both the UI server (`:8082`) and webhook server (`:8083`). Falls back to plain HTTP when neither is set (backwards compatible). Helm values `controller.tlsCertFile` and `controller.tlsKeyFile` support cert-manager volume mount pattern. Implemented in PR #911. **Update (audit remediation, 2026-09-29):** `listenAndServeWithTLS()` is replaced by `httpServer` (`cmd/kardinal-controller/http_server.go`), a manager Runnable: both servers start after the informer caches sync, have read/write/idle timeouts, drain in-flight requests on shutdown, and a bind or serve error stops the controller instead of only being logged. Setting only one of the two TLS flags is now a startup error instead of a silent fallback to plain HTTP.
 - ✅ **CORS lockdown for UI API** — `--cors-allowed-origins` flag (env: `KARDINAL_CORS_ORIGINS`) added to `main.go`. Default (empty): same-origin only — cross-origin requests to `/api/v1/ui/*` are rejected with 403. Set to an explicit comma-separated list to allow specific origins. Set to `*` to allow all origins (development opt-out). CORS headers are only applied to `/api/v1/ui/*`; static `/ui/*` assets and webhook routes are unaffected. Implemented in PR #912.
-- ✅ **In-cluster `kubectl port-forward` UX** — `InsecureConnectionBanner` component renders a dismissible amber warning when the UI is accessed over plain HTTP from a non-localhost address. Localhost (`localhost`, `127.0.0.1`) is exempt since port-forward to localhost is the documented access method. `docs/installation.md` now has an "Accessing the UI" section documenting `kubectl port-forward svc/kardinal-controller 8082`. Implemented in PR #913.
+- ✅ **In-cluster `kubectl port-forward` UX** — `InsecureConnectionBanner` component renders a dismissible amber warning when the UI is accessed over plain HTTP from a non-localhost address. Loopback (`localhost`, `127.0.0.1`, `[::1]`) is exempt since port-forward to localhost is the documented access method. `docs/installation.md` now has an "Accessing the UI" section documenting `kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082` (the chart Service exposes the UI port as `ui`). Implemented in PR #913.
 - ✅ **Kubernetes TokenReview-based auth for UI API** (PR #tbd, 2026-04-21) — `--ui-tokenreview-auth` flag (env: `KARDINAL_UI_TOKENREVIEW_AUTH=true`) added. When enabled and `--ui-auth-token` is not set, the UI API authenticates bearer tokens via `authenticationv1.TokenReview`. Cluster-native authentication: users authenticate with their kubeconfig tokens. Static `--ui-auth-token` takes precedence when both are set. Fail-closed: TokenReview API failure → 503. Implementation in `pkg/uiauth/tokenreview.go` with testable `TokenReviewer` interface. **Update (audit remediation, 2026-09-29):** TokenReview mode now also authorizes: every object the UI API reads or writes for the caller is checked with a `SubjectAccessReview` (`pkg/uiauth/access.go`, `AuthorizingClient`), so a user cannot see or change more through the UI than through `kubectl`. Denied → 403, review API failure → 503, and the controller exits at startup if the review clients cannot be built (previously it logged and served an open UI). Results are cached for 30s per token and action. The web client now sends the token (kept in `sessionStorage`) and shows a sign-in dialog on 401; before this, enabling either auth mode made the UI unusable. User RBAC is documented in `docs/guides/security.md` §UI API Access Control.
 ---
 

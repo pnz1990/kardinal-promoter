@@ -26,7 +26,7 @@ function makeStep(overrides: Partial<PromotionStep> = {}): PromotionStep {
     pipeline: 'my-pipeline',
     bundle: 'my-bundle',
     environment: 'test',
-    stepType: 'promotion',
+    stepType: 'kustomize-set-image',
     state: 'Failed',
     message: 'git-push: authentication failed: 401 Unauthorized',
     ...overrides,
@@ -70,10 +70,73 @@ describe('groupStepErrors', () => {
     expect(groups[0].stepType).toBe('git-push')
   })
 
-  it('falls back to spec stepType when no known sub-step in message', () => {
-    const step = makeStep({ message: 'unknown error occurred', stepType: 'rollback' })
+  it('falls back to "promotion", never to spec stepType (the update strategy)', () => {
+    const step = makeStep({ message: 'unknown error occurred', stepType: 'kustomize-set-image' })
     const groups = groupStepErrors([step])
-    expect(groups[0].stepType).toBe('rollback')
+    expect(groups[0].stepType).toBe('promotion')
+  })
+
+  // C10b-web-17: reconciler messages do not name the step; status.steps[] does.
+  it.each([
+    {
+      name: 'health-check timeout (step left InProgress)',
+      step: makeStep({
+        stepType: 'kustomize-set-image',
+        message: 'health check timeout after 10m0s',
+        currentStepIndex: 4,
+        steps: [
+          { name: 'git-clone', state: 'Completed' as const },
+          { name: 'kustomize-set-image', state: 'Completed' as const },
+          { name: 'git-commit', state: 'Completed' as const },
+          { name: 'git-push', state: 'Completed' as const },
+          { name: 'health-check', state: 'InProgress' as const },
+        ],
+      }),
+      want: 'health-check',
+    },
+    {
+      name: 'PR closed without merging',
+      step: makeStep({
+        stepType: 'kustomize-set-image',
+        message: 'PR #5 was closed without merging',
+        currentStepIndex: 5,
+        steps: [
+          { name: 'git-clone', state: 'Completed' as const },
+          { name: 'kustomize-set-image', state: 'Completed' as const },
+          { name: 'git-commit', state: 'Completed' as const },
+          { name: 'git-push', state: 'Completed' as const },
+          { name: 'open-pr', state: 'Completed' as const },
+          { name: 'wait-for-merge', state: 'InProgress' as const },
+          { name: 'health-check', state: 'Pending' as const },
+        ],
+      }),
+      want: 'wait-for-merge',
+    },
+    {
+      name: 'engine failure marks the step Failed',
+      step: makeStep({
+        stepType: 'config-merge',
+        message: 'step git-push: remote rejected',
+        steps: [
+          { name: 'git-clone', state: 'Completed' as const },
+          { name: 'git-push', state: 'Failed' as const, message: 'remote rejected' },
+        ],
+      }),
+      want: 'git-push',
+    },
+    {
+      name: 'engine message without steps[]',
+      step: makeStep({ stepType: 'config-merge', message: 'step git-clone: auth failed' }),
+      want: 'git-clone',
+    },
+  ])('labels $name as $want', ({ step, want }) => {
+    expect(groupStepErrors([step])[0].stepType).toBe(want)
+  })
+
+  it('counts AbortedByAlarm as a failure', () => {
+    const groups = groupStepErrors([makeStep({ state: 'AbortedByAlarm', message: 'alarm error-rate fired' })])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].count).toBe(1)
   })
 
   it('filters out non-Failed steps', () => {

@@ -3,11 +3,10 @@
 
 // useKeyboardShortcuts.test.ts — unit tests for the global keyboard shortcut hook (#746, #800).
 import { renderHook } from '@testing-library/react'
-import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyMock = MockInstance<any>
+type HandlerMock = Mock<() => void>
 
 function pressKey(key: string) {
   const event = new KeyboardEvent('keydown', { key, bubbles: true })
@@ -15,10 +14,10 @@ function pressKey(key: string) {
 }
 
 describe('useKeyboardShortcuts', () => {
-  let onHelp: AnyMock
-  let onRefresh: AnyMock
-  let onEscape: AnyMock
-  let onSearch: AnyMock
+  let onHelp: HandlerMock
+  let onRefresh: HandlerMock
+  let onEscape: HandlerMock
+  let onSearch: HandlerMock
 
   beforeEach(() => {
     onHelp = vi.fn()
@@ -29,10 +28,10 @@ describe('useKeyboardShortcuts', () => {
 
   function makeHandlers() {
     return {
-      onHelp: onHelp as unknown as () => void,
-      onRefresh: onRefresh as unknown as () => void,
-      onEscape: onEscape as unknown as () => void,
-      onSearch: onSearch as unknown as () => void,
+      onHelp,
+      onRefresh,
+      onEscape,
+      onSearch,
     }
   }
 
@@ -69,9 +68,9 @@ describe('useKeyboardShortcuts', () => {
 
   it('does not call any handler for / when onSearch is not provided', () => {
     const handlersNoSearch = {
-      onHelp: onHelp as unknown as () => void,
-      onRefresh: onRefresh as unknown as () => void,
-      onEscape: onEscape as unknown as () => void,
+      onHelp,
+      onRefresh,
+      onEscape,
       // onSearch omitted
     }
     renderHook(() => useKeyboardShortcuts(handlersNoSearch))
@@ -115,6 +114,44 @@ describe('useKeyboardShortcuts', () => {
     textarea.dispatchEvent(event)
     expect(onRefresh).not.toHaveBeenCalled()
     document.body.removeChild(textarea)
+  })
+
+  it.each([
+    { name: 'Ctrl+R (browser reload)', init: { key: 'r', ctrlKey: true } },
+    { name: 'Cmd+R (browser reload)', init: { key: 'r', metaKey: true } },
+    { name: 'Alt+R', init: { key: 'r', altKey: true } },
+  ])('leaves $name to the browser', ({ init }) => {
+    renderHook(() => useKeyboardShortcuts(makeHandlers()))
+    const event = new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+    expect(onRefresh).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it.each([
+    { tag: 'select', key: 'r', handler: () => onRefresh },
+    { tag: 'input', key: 'Escape', handler: () => onEscape },
+  ])('suppresses $key when a $tag has focus', ({ tag, key, handler }) => {
+    renderHook(() => useKeyboardShortcuts(makeHandlers()))
+    const el = document.createElement(tag)
+    document.body.appendChild(el)
+    el.focus()
+    el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+    expect(handler()).not.toHaveBeenCalled()
+    document.body.removeChild(el)
+  })
+
+  it.each(['/', 'r', '?', 'Escape'])('suppresses %s while a modal dialog is open', key => {
+    renderHook(() => useKeyboardShortcuts(makeHandlers()))
+    const dialog = document.createElement('div')
+    dialog.setAttribute('aria-modal', 'true')
+    document.body.appendChild(dialog)
+    pressKey(key)
+    expect(onSearch).not.toHaveBeenCalled()
+    expect(onRefresh).not.toHaveBeenCalled()
+    expect(onHelp).not.toHaveBeenCalled()
+    expect(onEscape).not.toHaveBeenCalled()
+    document.body.removeChild(dialog)
   })
 
   it('removes the keydown listener on unmount', () => {

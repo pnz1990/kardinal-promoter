@@ -1,5 +1,8 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/EventsPanel.tsx — Kubernetes events stream for a PromotionStep.
-// Adapted from kro-ui EventsPanel.tsx — simplified for kardinal's dark theme.
+// Adapted from kro-ui EventsPanel.tsx; colors come from the theme tokens.
 // Displays events newest-first, with Warning type styled differently from Normal.
 // #527
 
@@ -44,8 +47,8 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
 
   return (
     <div data-testid="events-panel" style={{ marginBottom: '0.75rem' }}>
-      <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.4rem' }}>
-        Events {items.length > 0 && <span style={{ color: '#64748b', fontWeight: 400 }}>({items.length})</span>}
+      <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.4rem' }}>
+        Events {items.length > 0 && <span style={{ color: 'var(--color-text-muted)', fontWeight: 400 }}>({items.length})</span>}
       </h4>
       {items.length === 0 ? (
         <div
@@ -54,19 +57,19 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
             fontSize: '0.75rem',
             color: 'var(--color-text-faint)',
             background: 'var(--color-bg)',
-            border: '1px solid #1e293b',
+            border: '1px solid var(--color-border-muted)',
             borderRadius: '4px',
             padding: '0.5rem 0.75rem',
             fontStyle: 'italic',
           }}
         >
           No events recorded yet.{' '}
-          <code style={{ fontStyle: 'normal', color: '#64748b', fontFamily: 'monospace' }}>{kubectlCmd}</code>
+          <code style={{ fontStyle: 'normal', color: 'var(--color-text-muted)', fontFamily: 'monospace' }}>{kubectlCmd}</code>
         </div>
       ) : (
         <div style={{
           background: 'var(--color-bg)',
-          border: '1px solid #1e293b',
+          border: '1px solid var(--color-border-muted)',
           borderRadius: '4px',
           overflow: 'hidden',
         }}>
@@ -76,8 +79,8 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
               data-testid="event-row"
               style={{
                 padding: '8px 12px',
-                borderBottom: i < items.length - 1 ? '1px solid #1e293b' : undefined,
-                borderLeft: ev.type === 'Warning' ? '2px solid #f59e0b' : '2px solid transparent',
+                borderBottom: i < items.length - 1 ? '1px solid var(--color-border-muted)' : undefined,
+                borderLeft: ev.type === 'Warning' ? '2px solid var(--color-warning)' : '2px solid transparent',
               }}
             >
               {/* Header row: type badge + reason + count + timestamp */}
@@ -90,8 +93,8 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
                     padding: '1px 5px',
                     borderRadius: '3px',
                     border: '1px solid',
-                    background: ev.type === 'Warning' ? '#451a03' : '#0c2a1a',
-                    borderColor: ev.type === 'Warning' ? '#92400e' : '#166534',
+                    background: ev.type === 'Warning' ? 'var(--color-warning-bg)' : 'var(--color-success-bg)',
+                    borderColor: ev.type === 'Warning' ? 'var(--color-warning)' : 'var(--color-success)',
                     color: ev.type === 'Warning' ? 'var(--color-warning)' : 'var(--color-success)',
                   }}
                 >
@@ -101,7 +104,7 @@ export default function EventsPanel({ events, stepName, namespace }: EventsPanel
                   {ev.reason}
                 </span>
                 {ev.count > 1 && (
-                  <span style={{ fontSize: '11px', color: '#64748b' }}>×{ev.count}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-muted)' }}>×{ev.count}</span>
                 )}
                 <span style={{ fontSize: '11px', color: 'var(--color-text-faint)', fontFamily: 'monospace', marginLeft: 'auto' }}>
                   {relativeTime(ev.lastTimestamp)}

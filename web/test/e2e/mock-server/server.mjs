@@ -3,21 +3,24 @@
 //
 // mock-server/server.mjs — Lightweight HTTP mock server for E2E tests.
 //
-// Serves deterministic fixture data for the 8 baseline journeys.
-// No real Kubernetes cluster required.
+// Serves deterministic fixture data for the journeys in ../journeys/ (001-011).
+// No real Kubernetes cluster required. Responses use the same shapes as
+// cmd/kardinal-controller/ui_api.go, and only /ui/* is served as static files,
+// like the real controller (so a UI asset loaded from the wrong path fails here too).
 //
-// Routes:
-//   GET  /api/v1/ui/pipelines           → pipeline list fixture
-//   GET  /api/v1/ui/pipelines/:name/bundles → bundles fixture
-//   GET  /api/v1/ui/bundles/:name/graph  → graph fixture
-//   GET  /api/v1/ui/bundles/:name/steps  → steps fixture
-//   GET  /api/v1/ui/gates               → gates fixture
-//   POST /api/v1/ui/pause               → { message: "paused" }
-//   POST /api/v1/ui/resume              → { message: "resumed" }
-//   POST /api/v1/ui/promote             → { bundle: "...", message: "ok" }
-//   POST /api/v1/ui/validate-cel        → { valid: true }
-//   GET  /ui/*                          → serves built static assets (Vite build)
-//   GET  /logo.png                      → placeholder 1x1 PNG
+// Routes (query strings are parsed, not matched):
+//   GET  /api/v1/ui/pipelines                         → pipeline list fixture
+//   GET  /api/v1/ui/pipelines/:name/bundles[?namespace=] → bundles fixture, filtered by namespace
+//   GET  /api/v1/ui/bundles/:name/graph               → graph fixture
+//   GET  /api/v1/ui/bundles/:name/steps               → steps fixture
+//   GET  /api/v1/ui/gates                             → gate instances + one template
+//   POST /api/v1/ui/pause                             → { message: "paused" }
+//   POST /api/v1/ui/resume                            → { message: "resumed" }
+//   POST /api/v1/ui/promote                           → { bundle: "new-bundle", message }
+//   POST /api/v1/ui/rollback                          → { bundle: "rollback-bundle", message }
+//   POST /api/v1/ui/validate-cel                      → { valid: true }
+//   GET  /                                            → 302 to /ui/
+//   GET  /ui/*                                        → built static assets (web/dist), SPA fallback
 
 import http from 'node:http'
 import fs from 'node:fs'
@@ -92,7 +95,7 @@ const GRAPHS = {
     nodes: [
       { id: 'step-test', type: 'PromotionStep', label: 'test', environment: 'test', state: 'Verified', startedAt: new Date(Date.now() - 580_000).toISOString() },
       { id: 'step-uat', type: 'PromotionStep', label: 'uat', environment: 'uat', state: 'Verified', startedAt: new Date(Date.now() - 400_000).toISOString() },
-      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'no-weekend-deploys', state: 'Block', expression: '!schedule.isWeekend()', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
+      { id: 'gate-no-weekend', type: 'PolicyGate', label: 'no-weekend-deploys', environment: 'no-weekend-deploys', state: 'Block', expression: '!schedule.isWeekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
       { id: 'step-prod', type: 'PromotionStep', label: 'prod', environment: 'prod', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', startedAt: new Date(Date.now() - 200_000).toISOString() },
     ],
     edges: [
@@ -112,20 +115,32 @@ const GRAPHS = {
 
 const STEPS = {
   'kardinal-test-app-abc123': [
-    { name: 'step-test-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'test', stepType: 'standard', state: 'Verified', currentStepIndex: 7, conditions: [{ type: 'Ready', status: 'True', message: 'All steps complete' }] },
-    { name: 'step-prod-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', stepType: 'standard', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', currentStepIndex: 5 },
+    { name: 'step-test-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'test', stepType: 'kustomize-set-image', state: 'Verified', currentStepIndex: 7, conditions: [{ type: 'Ready', status: 'True', message: 'All steps complete' }] },
+    { name: 'step-prod-abc', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', stepType: 'kustomize-set-image', state: 'WaitingForMerge', prURL: 'https://github.com/org/repo/pull/42', currentStepIndex: 5 },
   ],
 }
 
+// Gate instances belong to one bundle (ui_api.go uiGateResponse: pipeline, bundle,
+// environment). The template is what the user wrote; the UI must not count it.
 const GATES = [
-  { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend()', ready: false, reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
-  { name: 'business-hours', namespace: 'default', expression: 'schedule.isBusinessHours()', ready: true, lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
+  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
+  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
+  { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// The headers the controller's UI server sends (cmd/kardinal-controller/
+// ui_security_headers.go), so every journey runs under the same CSP.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+}
+
 function json(res, data, status = 200) {
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', ...SECURITY_HEADERS })
   res.end(JSON.stringify(data))
 }
 
@@ -147,7 +162,7 @@ function serveFile(res, filePath) {
       '.html': 'text/html', '.js': 'application/javascript',
       '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml',
     }[ext] ?? 'application/octet-stream'
-    res.writeHead(200, { 'Content-Type': mime })
+    res.writeHead(200, { 'Content-Type': mime, ...SECURITY_HEADERS })
     res.end(content)
   } catch {
     res.writeHead(404)
@@ -155,13 +170,11 @@ function serveFile(res, filePath) {
   }
 }
 
-// Minimal 1×1 transparent PNG for /logo.png
-const LOGO_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
-
 // ── Server ────────────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
-  const url = req.url ?? '/'
+  const parsed = new URL(req.url ?? '/', 'http://localhost')
+  const url = parsed.pathname
   const method = req.method ?? 'GET'
 
   // CORS preflight
@@ -171,54 +184,41 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── API routes ──────────────────────────────────────────────────────────────
-  if (url === '/api/v1/ui/pipelines' && method === 'GET') {
-    return json(res, PIPELINES)
+  const parts = url.split('/').map(p => decodeURIComponent(p)) // ['', 'api', 'v1', 'ui', ...]
+  const api = url.startsWith('/api/v1/ui/') ? parts.slice(4) : null
+
+  if (api && method === 'GET') {
+    if (api.length === 1 && api[0] === 'pipelines') return json(res, PIPELINES)
+    if (api.length === 1 && api[0] === 'gates') return json(res, GATES)
+    if (api.length === 3 && api[0] === 'pipelines' && api[2] === 'bundles') {
+      const ns = parsed.searchParams.get('namespace')
+      const bundles = (BUNDLES[api[1]] ?? []).filter(b => !ns || b.namespace === ns)
+      return json(res, bundles)
+    }
+    if (api.length === 3 && api[0] === 'bundles' && api[2] === 'graph') {
+      return json(res, GRAPHS[api[1]] ?? { nodes: [], edges: [] })
+    }
+    if (api.length === 3 && api[0] === 'bundles' && api[2] === 'steps') {
+      return json(res, STEPS[api[1]] ?? [])
+    }
   }
-  if (url === '/api/v1/ui/gates' && method === 'GET') {
-    return json(res, GATES)
-  }
-  if (url.startsWith('/api/v1/ui/pipelines/') && url.endsWith('/bundles') && method === 'GET') {
-    const name = url.replace('/api/v1/ui/pipelines/', '').replace('/bundles', '')
-    return json(res, BUNDLES[name] ?? [])
-  }
-  if (url.startsWith('/api/v1/ui/bundles/') && url.endsWith('/graph') && method === 'GET') {
-    const name = url.replace('/api/v1/ui/bundles/', '').replace('/graph', '')
-    return json(res, GRAPHS[name] ?? { nodes: [], edges: [] })
-  }
-  if (url.startsWith('/api/v1/ui/bundles/') && url.endsWith('/steps') && method === 'GET') {
-    const name = url.replace('/api/v1/ui/bundles/', '').replace('/steps', '')
-    return json(res, STEPS[name] ?? [])
-  }
-  if (url === '/api/v1/ui/pause' && method === 'POST') {
-    await readBody(req)
-    return json(res, { message: 'paused' })
-  }
-  if (url === '/api/v1/ui/resume' && method === 'POST') {
-    await readBody(req)
-    return json(res, { message: 'resumed' })
-  }
-  if (url === '/api/v1/ui/promote' && method === 'POST') {
-    await readBody(req)
-    return json(res, { bundle: 'new-bundle', message: 'promotion started' })
-  }
-  if (url === '/api/v1/ui/rollback' && method === 'POST') {
-    await readBody(req)
-    return json(res, { bundle: 'rollback-bundle', message: 'rollback started' })
-  }
-  if (url === '/api/v1/ui/validate-cel' && method === 'POST') {
+  if (api && method === 'POST' && api.length === 1) {
     const body = await readBody(req)
-    return json(res, { valid: true, expression: body.expression })
+    switch (api[0]) {
+      case 'pause': return json(res, { message: 'paused' })
+      case 'resume': return json(res, { message: 'resumed' })
+      case 'promote': return json(res, { bundle: 'new-bundle', message: 'promotion started' })
+      case 'rollback': return json(res, { bundle: 'rollback-bundle', message: 'rollback started' })
+      case 'validate-cel': return json(res, { valid: true, expression: body.expression })
+    }
   }
+  if (api) return json(res, { error: `no mock for ${method} ${url}` }, 404)
 
   // ── Static assets ───────────────────────────────────────────────────────────
   // Redirect root to the UI so tests can use page.goto('/') with baseURL set to the origin.
   if (url === '/' || url === '') {
     res.writeHead(302, { Location: '/ui/' })
     res.end(); return
-  }
-  if (url === '/logo.png') {
-    res.writeHead(200, { 'Content-Type': 'image/png' })
-    res.end(LOGO_PNG); return
   }
   if (url.startsWith('/ui/')) {
     const assetPath = url.replace('/ui/', '')
