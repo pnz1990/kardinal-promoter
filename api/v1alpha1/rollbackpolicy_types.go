@@ -19,8 +19,9 @@ type RollbackPolicySpec struct {
 	Environment string `json:"environment"`
 
 	// BundleRef is the name of the Bundle being monitored. Only the PromotionSteps
-	// of this Bundle in Environment are read (labels kardinal.io/pipeline,
-	// kardinal.io/environment and kardinal.io/bundle). When the highest
+	// of this Bundle in Environment are read: the steps labelled
+	// kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName
+	// (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest
 	// ConsecutiveHealthFailures among them (one step per region) reaches
 	// FailureThreshold, a rollback Bundle is created.
 	// +kubebuilder:validation:MinLength=1

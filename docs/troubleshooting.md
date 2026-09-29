@@ -323,14 +323,18 @@ kubectl get promotionstep -l kardinal.io/bundle=my-app-v1 -o jsonpath='{range .i
 ### Symptom: PolicyGate stays FAIL even when condition should pass
 
 ```bash
-# Force re-evaluation by annotating the gate
-kubectl annotate policygate no-weekend-deploys \
+# Force re-evaluation by annotating the gate instances. The controller evaluates
+# the per-Bundle instances, which are labelled with their template's name.
+kubectl annotate policygate -A -l kardinal.io/gate-template=no-weekend-deploys \
   kardinal.io/force-recheck=$(date +%s) --overwrite
 
-# Or trigger a ScheduleClock tick
+# Or trigger a ScheduleClock tick, which re-evaluates every gate
 kubectl annotate scheduleclock kardinal-clock \
   kardinal.io/manual-tick=$(date +%s) -n kardinal-system --overwrite
 ```
+
+Any annotation change on a PolicyGate or ScheduleClock triggers a reconcile; the two keys
+above are conventions. A status-only write does not.
 
 ---
 

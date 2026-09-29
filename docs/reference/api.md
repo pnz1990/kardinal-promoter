@@ -117,11 +117,18 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 | `spec.schedule` | object |  | Schedule configures a recurring allowed-hours window (for type: recurring). |
 | `spec.schedule.allowedDays` | []string |  | AllowedDays lists the days of the week when promotions are allowed. Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun (full names such as Monday are accepted too). Empty means every day. |
 | `spec.schedule.allowedHours` | string |  | AllowedHours is a time range in "HH:MM-HH:MM" format (24h, in Timezone). The start is inclusive and the end exclusive; "24:00" is allowed as the end. An end before the start is an overnight range that belongs to the start day (for example "22:00-02:00" on Fri allows Friday 22:00 to Saturday 02:00). Empty means the whole day. |
-| `spec.schedule.timezone` | string |  | Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). Default: UTC. |
+| `spec.schedule.timezone` | string |  | Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). Default: UTC. "Local" is rejected: it would be the controller's own timezone. An unknown name makes the window invalid: status condition Valid is False with the error, and the window is active (blocking). |
 | `spec.start` | string (date-time) |  | Start is when a blackout window begins (required for type: blackout). |
 | `spec.type` | string | yes | Type is the ChangeWindow type. "blackout": the window is active (blocking) from Start (inclusive) to End (exclusive). "recurring": Schedule describes when promotions are allowed; the window is active (blocking) at every other time. An invalid spec (for example End not after Start, an unknown timezone or a malformed allowedHours) makes the window active, so gates that reference it block. One of: `blackout`, `recurring`. |
 | `status` | object |  | ChangeWindowStatus defines the observed state of a ChangeWindow. |
 | `status.active` | boolean |  | Active is true when the ChangeWindow is currently blocking promotions. Written by the ChangeWindow reconciler, which requeues at the next window boundary. PolicyGates evaluate the spec at their own evaluation time with the same logic, so they never depend on this field being fresh. |
+| `status.conditions` | []object |  | Conditions holds status conditions. Valid is True when the spec can be evaluated. It is False (reason InvalidSpec, the error in the message) when it cannot, for example for an unknown timezone; the window is then active, so every gate that references it blocks until the spec is fixed. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
 
 ## MetricCheck
@@ -296,7 +303,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.overrides[].expiresAt` | string (date-time) | yes | ExpiresAt is when this override stops being effective. After this time the gate evaluates CEL normally. |
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
-| `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
+| `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). The minimum is 10s: a smaller value is raised to 10s, and "0" or an invalid value means the default. Default: `5m`. |
 | `spec.selector` | object |  | Selector is a label selector for org-level auto-injection: this gate is automatically applied to any Pipeline whose labels match the selector. |
 | `spec.selector.matchExpressions` | []object |  | matchExpressions is a list of label selector requirements. The requirements are ANDed. |
 | `spec.selector.matchExpressions[].key` | string | yes | key is the label key that the selector applies to. |
@@ -399,7 +406,7 @@ RollbackPolicy monitors consecutive health-check failures on a PromotionStep and
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | RollbackPolicySpec defines the desired state of a RollbackPolicy. Nothing creates RollbackPolicy objects automatically: the controller only reconciles the ones that exist. Automatic rollback on health failure is configured with Pipeline spec.environments[].onHealthFailure: rollback. |
-| `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. Only the PromotionSteps of this Bundle in Environment are read (labels kardinal.io/pipeline, kardinal.io/environment and kardinal.io/bundle). When the highest ConsecutiveHealthFailures among them (one step per region) reaches FailureThreshold, a rollback Bundle is created. |
+| `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. Only the PromotionSteps of this Bundle in Environment are read: the steps labelled kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest ConsecutiveHealthFailures among them (one step per region) reaches FailureThreshold, a rollback Bundle is created. |
 | `spec.environment` | string | yes | Environment is the environment this policy monitors. |
 | `spec.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures required to trigger a rollback. Defaults to 3 if &lt;= 0. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this policy monitors. |

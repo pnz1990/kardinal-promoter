@@ -25,7 +25,7 @@ metadata:
 spec:
   expression: <string>                  # CEL expression
   message: <string>                     # human-readable explanation shown when gate blocks
-  recheckInterval: <duration>           # how often to re-evaluate (default: "5m")
+  recheckInterval: <duration>           # how often to re-evaluate (default: "5m", minimum: "10s")
   when: <string>                        # "pre-deploy" or "post-deploy" (default: "post-deploy")
 ```
 
@@ -231,8 +231,11 @@ spec:
 For `recurring`, `schedule` lists when promotions are **allowed**; the window is active
 (blocking) at every other time. An overnight range such as `"22:00-02:00"` belongs to the
 day it starts on. A ChangeWindow with an invalid spec (end not after start, an unknown
-timezone, an unknown day name) is treated as active, so gates that reference it block;
-`kubectl get changewindows` shows the reason.
+timezone, `timezone: Local`, an unknown day name) is treated as active, so gates that
+reference it block. Its `Valid` condition is `False` with reason `InvalidSpec` and a message
+that names the problem; `kubectl get changewindows` shows `VALID`, and `-o wide` adds the reason. The
+timezone database is compiled into the controller, so any IANA name works without tzdata in
+the image.
 
 The controller writes `status.active` and `status.reason` at every window boundary, and that
 write re-evaluates the gates that reference a window. Gates evaluate the window spec at their
@@ -379,7 +382,7 @@ PolicyGates are re-evaluated when any of the following occurs:
 
 2. **`recheckInterval`** — Each gate is also re-evaluated every `recheckInterval`, whether or not
    a `ScheduleClock` is installed. Without a `ScheduleClock` this is the only periodic
-   re-evaluation.
+   re-evaluation. The minimum is `10s`: a smaller value is raised to `10s`.
 
 3. **MetricCheck result change** — When a `MetricCheck`'s result or value changes, the gates in
    the same namespace whose expression reads `metrics` are re-evaluated at once.
