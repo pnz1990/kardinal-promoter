@@ -40,6 +40,9 @@ type ChangeWindowSpec struct {
 // ChangeWindowSchedule configures a recurring allowed-hours window.
 type ChangeWindowSchedule struct {
 	// Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). Default: UTC.
+	// "Local" is rejected: it would be the controller's own timezone. An unknown
+	// name makes the window invalid: status condition Valid is False with the
+	// error, and the window is active (blocking).
 	// +optional
 	Timezone string `json:"timezone,omitempty"`
 
@@ -71,6 +74,15 @@ type ChangeWindowStatus struct {
 	// Reason explains the current active/inactive state.
 	// +optional
 	Reason string `json:"reason,omitempty"`
+
+	// Conditions holds status conditions. Valid is True when the spec can be
+	// evaluated. It is False (reason InvalidSpec, the error in the message) when
+	// it cannot, for example for an unknown timezone; the window is then active,
+	// so every gate that references it blocks until the spec is fixed.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -78,6 +90,7 @@ type ChangeWindowStatus struct {
 // +kubebuilder:resource:scope=Cluster,shortName=cw
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Active",type=boolean,JSONPath=`.status.active`
+// +kubebuilder:printcolumn:name="Valid",type=string,JSONPath=`.status.conditions[?(@.type=="Valid")].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

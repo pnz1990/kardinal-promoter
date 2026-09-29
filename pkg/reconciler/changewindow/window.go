@@ -90,9 +90,9 @@ func parseSchedule(s *kardinalv1alpha1.ChangeWindowSchedule) (*schedule, error) 
 	}
 	out := &schedule{loc: time.UTC, days: map[time.Weekday]bool{}, start: 0, end: 24 * 60}
 	if s.Timezone != "" {
-		loc, err := time.LoadLocation(s.Timezone)
+		loc, err := loadTimezone(s.Timezone)
 		if err != nil {
-			return nil, fmt.Errorf("spec.schedule.timezone %q: %w", s.Timezone, err)
+			return nil, err
 		}
 		out.loc = loc
 	}
@@ -134,6 +134,21 @@ func parseSchedule(s *kardinalv1alpha1.ChangeWindowSchedule) (*schedule, error) 
 	}
 	out.desc = fmt.Sprintf("%s %s %s", days, hours, out.loc.String())
 	return out, nil
+}
+
+// loadTimezone loads an IANA timezone. The controller binary embeds the
+// timezone database (time/tzdata), so a valid name works in any image.
+// "Local" is rejected: it is the controller's own timezone, not a property of
+// the window.
+func loadTimezone(name string) (*time.Location, error) {
+	if name == "Local" {
+		return nil, fmt.Errorf("spec.schedule.timezone %q is the controller's local time; use an IANA name such as \"America/Los_Angeles\" or \"UTC\"", name)
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("spec.schedule.timezone %q is not a known IANA timezone name, such as \"America/Los_Angeles\" or \"UTC\": %w", name, err)
+	}
+	return loc, nil
 }
 
 // parseDay accepts "Mon" or "Monday", case-insensitively.

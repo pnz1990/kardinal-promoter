@@ -5,7 +5,8 @@
 // Evaluate function that decides whether a window is active.
 //
 // Architecture context (Graph-first question 2, Owned node):
-//   - The reconciler writes only its own CRD status (status.active, status.reason).
+//   - The reconciler writes only its own CRD status (status.active, status.reason
+//     and the Valid condition).
 //   - It calls time.Now() only to compute that status write.
 //   - It requeues at the next boundary (blackout start/end, or the start/end of
 //     a recurring window's allowed hours), so the status change is a watch event
@@ -22,12 +23,14 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
 // maxRequeue bounds the wait between evaluations, as a safety net for clock
@@ -63,10 +66,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		log.Warn().Err(res.Err).Msg("invalid ChangeWindow; reported as active (blocking)")
 	}
 
-	if cw.Status.Active != res.Active || cw.Status.Reason != res.Reason {
-		patch := client.MergeFrom(cw.DeepCopy())
-		cw.Status.Active = res.Active
-		cw.Status.Reason = res.Reason
+	patch := client.MergeFrom(cw.DeepCopy())
+	changed := cw.Status.Active != res.Active || cw.Status.Reason != res.Reason
+	cw.Status.Active = res.Active
+	cw.Status.Reason = res.Reason
+	if meta.SetStatusCondition(&cw.Status.Conditions, validCondition(res, cw.Generation, now)) {
+		changed = true
+	}
+	if changed {
 		if err := r.Status().Patch(ctx, &cw, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch changewindow status: %w", err)
 		}
@@ -83,13 +90,37 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: wait}, nil
 }
 
-// SetupWithManager registers the reconciler with the manager. Only spec changes
-// (generation bumps) trigger a reconcile; the reconciler's own status write does
+// SetupWithManager registers the reconciler with the manager. Only spec or
+// annotation changes trigger a reconcile; the reconciler's own status write does
 // not, and boundaries are driven by RequeueAfter.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.ChangeWindow{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&kardinalv1alpha1.ChangeWindow{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Complete(r)
+}
+
+// ConditionValid is the ChangeWindow condition that reports whether the spec
+// can be evaluated.
+const ConditionValid = "Valid"
+
+// validCondition is Valid=True, or Valid=False with the spec error, for
+// example an unknown timezone. An invalid window is active (blocking), so the
+// condition is what tells the operator why every gate that uses it blocks.
+func validCondition(res Result, generation int64, now time.Time) metav1.Condition {
+	cond := metav1.Condition{
+		Type:               ConditionValid,
+		Status:             metav1.ConditionTrue,
+		Reason:             "SpecValid",
+		Message:            "the spec is valid",
+		ObservedGeneration: generation,
+		LastTransitionTime: metav1.NewTime(now),
+	}
+	if res.Err != nil {
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = "InvalidSpec"
+		cond.Message = res.Err.Error() + "; the window is active (blocking) until the spec is fixed"
+	}
+	return cond
 }
 
 func (r *Reconciler) now() time.Time {

@@ -93,6 +93,8 @@ func TestEvaluate(t *testing.T) {
 			now: "2026-10-02T10:00:00Z", wantActive: true, wantErr: true},
 		{name: "bad timezone is invalid", spec: recurring("Mars/Olympus", weekdays, "09:00-17:00"),
 			now: "2026-10-02T10:00:00Z", wantActive: true, wantErr: true},
+		{name: "Local timezone is invalid", spec: recurring("Local", weekdays, "09:00-17:00"),
+			now: "2026-10-02T10:00:00Z", wantActive: true, wantErr: true},
 		{name: "bad day is invalid", spec: recurring("", []string{"Funday"}, "09:00-17:00"),
 			now: "2026-10-02T10:00:00Z", wantActive: true, wantErr: true},
 		{name: "bad hours are invalid", spec: recurring("", weekdays, "9-17"),

@@ -66,6 +66,12 @@ import (
 
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+
+	// Embed the IANA timezone database. The runtime image has no tzdata, and
+	// ChangeWindow spec.schedule.timezone ("America/Los_Angeles") needs it:
+	// without it every named timezone is invalid and the window always blocks.
+	// TestControllerEmbedsTZData guards this import.
+	_ "time/tzdata"
 )
 
 // ControllerVersion is the controller version string, overridable at build time via ldflags.
