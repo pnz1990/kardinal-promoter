@@ -42,9 +42,10 @@ var manifestDirs = []string{"examples", "demo", "test/pdca"}
 
 // doc is one YAML document from a manifest file or a rendered chart.
 type doc struct {
-	source string // repo-relative file, or "helm template <chart> -f <values>"
-	index  int
-	obj    map[string]interface{}
+	source  string // repo-relative file, or "helm template <chart> -f <values>"
+	index   int
+	obj     map[string]interface{}
+	release string // the --namespace of a rendered chart; "" for files
 }
 
 func (d doc) String() string {
@@ -189,7 +190,10 @@ func renderedDocs(t *testing.T) []doc {
 		cmd.Stderr = &stderr
 		rendered, err := cmd.Output()
 		require.NoError(t, err, "%s: %s", source, stderr.String())
-		out = append(out, splitDocs(t, source, rendered)...)
+		for _, d := range splitDocs(t, source, rendered) {
+			d.release = r.namespace
+			out = append(out, d)
+		}
 	}
 	return out
 }
