@@ -40,11 +40,9 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	admissionpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/admission"
@@ -268,36 +266,17 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
-	// Build cache options: when watchNamespace is set, limit the informer cache to
-	// that namespace only. This is the mechanism for namespace-scoped install mode.
-	// In namespace-scoped mode the Helm chart renders a Role/RoleBinding instead of
-	// a ClusterRole/ClusterRoleBinding. (docs/design/15-production-readiness.md §Lens 6)
-	cacheOpts := cache.Options{}
 	if watchNamespace != "" {
-		cacheOpts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
 		logger.Info().Str("watchNamespace", watchNamespace).
 			Msg("namespace-scoped mode: controller cache limited to single namespace")
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
-		Metrics: metricsserver.Options{
-			BindAddress: metricsBindAddress,
-		},
-		HealthProbeBindAddress: healthProbeBindAddress,
-		LeaderElection:         leaderElect,
-		LeaderElectionID:       "kardinal-promoter-leader",
-		// GracefulShutdownTimeout allows in-flight reconcile loops to complete
-		// before the controller exits. Set to 30s — half the pod's
-		// terminationGracePeriodSeconds (60s) to leave room for cleanup. (#574)
-		GracefulShutdownTimeout: ptr(30 * time.Second),
-		// RecoverPanic is intentionally NOT set here. controller-runtime v0.23+ defaults
-		// RecoverPanic to true: a panic in any reconciler's Reconcile() method is caught
-		// by the framework, increments the ReconcilePanics metric, and returns a wrapped
-		// error for exponential backoff. DO NOT set RecoverPanic to false — that would
-		// revert to crash-loop-on-panic behaviour. (spec #920, docs/design/15-production-readiness.md)
-		Cache: cacheOpts,
-	})
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
+		metricsBindAddress:     metricsBindAddress,
+		healthProbeBindAddress: healthProbeBindAddress,
+		leaderElect:            leaderElect,
+		watchNamespace:         watchNamespace,
+	}))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
 	}
@@ -465,41 +444,45 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 
-	// Start webhook server in a goroutine.
-	go func() {
-		webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
-		if webhookSecret == "" {
-			logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
+	// Webhook server: SCM webhooks, bundle API, Pipeline admission.
+	webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
+	if webhookSecret == "" {
+		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
+	}
+	bundleAPIToken := bundleToken
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
+	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Bundle API endpoint — only mounted if a token is configured.
+	if bundleAPIToken != "" {
+		// Default to the watched namespace; in namespace-scoped mode it is
+		// also the only namespace Bundles may be created in.
+		bundleNS := "default"
+		if watchNamespace != "" {
+			bundleNS = watchNamespace
 		}
-		bundleAPIToken := bundleToken
-		mux := http.NewServeMux()
-		mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
-		mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
-		// Bundle API endpoint — only mounted if a token is configured.
-		if bundleAPIToken != "" {
-			// Default to the watched namespace; in namespace-scoped mode it is
-			// also the only namespace Bundles may be created in.
-			bundleNS := "default"
-			if watchNamespace != "" {
-				bundleNS = watchNamespace
-			}
-			bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
-			bundleAPI.onlyNamespace = watchNamespace
-			mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
-			logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
-		}
-		// Pipeline admission webhook — only mounted when explicitly enabled.
-		// Requires a ValidatingWebhookConfiguration installed separately by the operator.
-		// Design ref: docs/design/15-production-readiness.md §Lens 4
-		if pipelineAdmissionWebhook {
-			mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
-			logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
-		}
-		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
-		if err := listenAndServeWithTLS(webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger); err != nil {
-			logger.Error().Err(err).Msg("webhook server error")
-		}
-	}()
+		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
+		bundleAPI.onlyNamespace = watchNamespace
+		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
+		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
+	}
+	// Pipeline admission webhook — only mounted when explicitly enabled.
+	// Requires a ValidatingWebhookConfiguration installed separately by the operator.
+	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	if pipelineAdmissionWebhook {
+		mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
+		logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
+	}
+	// The webhook and UI servers are manager Runnables: they start after the
+	// caches sync, a bind failure stops the controller, and shutdown drains
+	// in-flight requests.
+	webhookServer, err := newHTTPServer("webhook", webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to configure webhook server")
+	}
+	if err := mgr.Add(webhookServer); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add webhook server")
+	}
 
 	// UI API authentication. TokenReview mode fails closed: the controller does
 	// not start when the review clients cannot be built, instead of serving an
@@ -525,21 +508,21 @@ func main() {
 		logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
 	}
 
-	// Start embedded UI server in a goroutine.
-	go func() {
-		// Serve the embedded React app at /ui/.
-		distFS, err := fs.Sub(web.Assets, "dist")
-		if err != nil {
-			logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
-			distFS = nil
-		}
-		handler := newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, logger)
-
-		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
-		if err := listenAndServeWithTLS(uiListenAddress, handler, tlsCertFile, tlsKeyFile, logger); err != nil {
-			logger.Error().Err(err).Msg("UI server error")
-		}
-	}()
+	// Embedded UI server: the React app at /ui/ and its API.
+	distFS, err := fs.Sub(web.Assets, "dist")
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
+		distFS = nil
+	}
+	uiServer, err := newHTTPServer("ui", uiListenAddress,
+		newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, logger),
+		tlsCertFile, tlsKeyFile, logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to configure UI server")
+	}
+	if err := mgr.Add(uiServer); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add UI server")
+	}
 
 	logger.Info().Msg("starting kardinal-controller")
 
@@ -821,27 +804,4 @@ func isSameOrigin(origin, host string) bool {
 		return false
 	}
 	return strings.EqualFold(u.Host, host)
-}
-
-// listenAndServeWithTLS starts an HTTP or HTTPS server depending on whether
-// both certFile and keyFile are non-empty.
-//   - Both set: use http.ListenAndServeTLS (HTTPS).
-//   - Neither set: use http.ListenAndServe (plain HTTP — backwards compatible).
-//   - Exactly one set: log a warning and fall back to plain HTTP.
-func listenAndServeWithTLS(addr string, handler http.Handler, certFile, keyFile string, log zerolog.Logger) error {
-	tlsEnabled := certFile != "" && keyFile != ""
-	partialTLS := (certFile == "") != (keyFile == "") // exactly one is set
-
-	if partialTLS {
-		log.Warn().
-			Str("tls-cert-file", certFile).
-			Str("tls-key-file", keyFile).
-			Msg("TLS: both --tls-cert-file and --tls-key-file must be set; falling back to plain HTTP")
-	}
-
-	if tlsEnabled {
-		log.Info().Str("addr", addr).Msg("TLS enabled for server")
-		return http.ListenAndServeTLS(addr, certFile, keyFile, handler)
-	}
-	return http.ListenAndServe(addr, handler)
 }
