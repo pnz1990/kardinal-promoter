@@ -75,12 +75,14 @@ A Prometheus-backed health check gate.
 
 | Field | Type | Description |
 |---|---|---|
-| `spec.prometheusURL` | `string` | Prometheus server URL |
-| `spec.query` | `string` | PromQL query |
-| `spec.threshold` | `float64` | Comparison threshold |
-| `spec.operator` | `string` | `lt`, `gt`, `lte`, `gte`, or `eq` |
-| `status.lastValue` | `string` | Last queried metric value |
-| `status.result` | `string` | `Pass` or `Fail` |
+| `spec.prometheusURL` | `string` | Prometheus base URL (http or https); a path is kept as a prefix, so the query goes to `<prometheusURL>/api/v1/query` |
+| `spec.query` | `string` | PromQL query; must return a scalar or a single-element vector |
+| `spec.threshold.value` | `float64` | Comparison threshold |
+| `spec.threshold.operator` | `string` | `lt`, `gt`, `lte`, `gte`, or `eq` |
+| `spec.interval` | `string` | Re-evaluation interval (default `1m`, minimum `10s`) |
+| `status.lastValue` | `string` | Last queried metric value (`""` after a query error) |
+| `status.result` | `string` | `Pass` or `Fail` (a query error is `Fail`) |
+| `status.reason` | `string` | Explanation of the result; on a query error, the HTTP status and the Prometheus error text, never the response body |
 
 ### PRStatus
 

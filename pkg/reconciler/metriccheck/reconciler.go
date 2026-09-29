@@ -17,13 +17,24 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// defaultInterval is used when spec.interval is empty or invalid.
-const defaultInterval = 1 * time.Minute
+const (
+	// defaultInterval is used when spec.interval is empty or invalid.
+	defaultInterval = 1 * time.Minute
+	// minInterval is the shortest re-evaluation interval: a smaller
+	// spec.interval would poll Prometheus in a hot loop (C04-gates-17).
+	minInterval = 10 * time.Second
+	// maxConcurrentReconciles lets one slow or unreachable Prometheus endpoint
+	// stall only its own MetricChecks, not every MetricCheck in the cluster.
+	maxConcurrentReconciles = 4
+)
 
 // MetricsProvider queries a metrics backend and returns a scalar value for the given query.
 type MetricsProvider interface {
@@ -49,7 +60,7 @@ type Reconciler struct {
 //  2. Query Prometheus → get scalar value.
 //  3. Evaluate threshold → Pass or Fail.
 //  4. Patch status.lastValue, status.result, status.lastEvaluatedAt, status.reason.
-//  5. Requeue after spec.interval (default 1m).
+//  5. Requeue after spec.interval (default 1m, minimum 10s).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("metriccheck", req.Name).
@@ -117,9 +128,13 @@ func (r *Reconciler) now() time.Time {
 }
 
 // SetupWithManager registers the MetricCheckReconciler with the controller-runtime Manager.
+// Only spec changes trigger a reconcile: the reconciler's own status patch
+// would otherwise cause a second Prometheus query right after each one.
+// Re-evaluation is driven by RequeueAfter.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.MetricCheck{}).
+		For(&kardinalv1alpha1.MetricCheck{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrentReconciles}).
 		Complete(r)
 }
 
@@ -147,7 +162,8 @@ func evaluateThreshold(value float64, t kardinalv1alpha1.MetricThreshold) (strin
 	return "Fail", fmt.Sprintf("%g %s %g = false", value, t.Operator, t.Value)
 }
 
-// parseInterval parses a Go duration string, returning defaultInterval on error.
+// parseInterval parses a Go duration string, returning defaultInterval on
+// error and raising values below minInterval to minInterval.
 func parseInterval(s string) time.Duration {
 	if s == "" {
 		return defaultInterval
@@ -155,6 +171,9 @@ func parseInterval(s string) time.Duration {
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
 		return defaultInterval
+	}
+	if d < minInterval {
+		return minInterval
 	}
 	return d
 }

@@ -27,7 +27,8 @@ type MetricCheckSpec struct {
 	// +kubebuilder:default=prometheus
 	Provider string `json:"provider"`
 
-	// PrometheusURL is the base URL of the Prometheus server.
+	// PrometheusURL is the base URL of the Prometheus HTTP API (http or https).
+	// A path is kept as a prefix: the query goes to <prometheusURL>/api/v1/query.
 	// Example: http://prometheus.monitoring.svc:9090
 	// +kubebuilder:validation:MinLength=1
 	PrometheusURL string `json:"prometheusURL"`
@@ -42,7 +43,7 @@ type MetricCheckSpec struct {
 	Threshold MetricThreshold `json:"threshold"`
 
 	// Interval is how often to re-evaluate the metric (e.g. "1m", "5m").
-	// Defaults to "1m" if empty.
+	// Defaults to "1m" if empty. Values below "10s" are raised to "10s".
 	// +optional
 	Interval string `json:"interval,omitempty"`
 }
@@ -76,7 +77,9 @@ type MetricCheckStatus struct {
 	// +optional
 	Result string `json:"result,omitempty"`
 
-	// Reason is a human-readable explanation of the current result.
+	// Reason is a human-readable explanation of the current result. On a query
+	// error it holds the HTTP status and, for a Prometheus API error, its error
+	// text; the response body is never copied here.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 }
