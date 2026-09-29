@@ -2,18 +2,19 @@
 <a id=__codelineno-0-2 name=__codelineno-0-2 href=#__codelineno-0-2></a>bash<span class=w> </span>hack/install-kro.sh
 <a id=__codelineno-0-3 name=__codelineno-0-3 href=#__codelineno-0-3></a>
 <a id=__codelineno-0-4 name=__codelineno-0-4 href=#__codelineno-0-4></a><span class=c1># 1. Create GitHub token secret</span>
-<a id=__codelineno-0-5 name=__codelineno-0-5 href=#__codelineno-0-5></a>kubectl<span class=w> </span>create<span class=w> </span>secret<span class=w> </span>generic<span class=w> </span>github-token<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-6 name=__codelineno-0-6 href=#__codelineno-0-6></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-7 name=__codelineno-0-7 href=#__codelineno-0-7></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span><span class=nv>$GITHUB_PAT</span>
-<a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a>
-<a id=__codelineno-0-9 name=__codelineno-0-9 href=#__codelineno-0-9></a><span class=c1># 2. Install kardinal-promoter</span>
-<a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a><span class=w>  </span>--create-namespace<span class=w> </span><span class=se>\</span>
-<a id=__codelineno-0-13 name=__codelineno-0-13 href=#__codelineno-0-13></a><span class=w>  </span>--set<span class=w> </span>github.secretRef.name<span class=o>=</span>github-token
-<a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a>
-<a id=__codelineno-0-15 name=__codelineno-0-15 href=#__codelineno-0-15></a><span class=c1># 3. Verify</span>
-<a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a>kardinal<span class=w> </span>version
+<a id=__codelineno-0-5 name=__codelineno-0-5 href=#__codelineno-0-5></a>kubectl<span class=w> </span>create<span class=w> </span>namespace<span class=w> </span>kardinal-system
+<a id=__codelineno-0-6 name=__codelineno-0-6 href=#__codelineno-0-6></a>kubectl<span class=w> </span>create<span class=w> </span>secret<span class=w> </span>generic<span class=w> </span>github-token<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-7 name=__codelineno-0-7 href=#__codelineno-0-7></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span><span class=nv>$GITHUB_PAT</span>
+<a id=__codelineno-0-9 name=__codelineno-0-9 href=#__codelineno-0-9></a>
+<a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a><span class=c1># 2. Install kardinal-promoter</span>
+<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-13 name=__codelineno-0-13 href=#__codelineno-0-13></a><span class=w>  </span>--create-namespace<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a><span class=w>  </span>--set<span class=w> </span>github.secretRef.name<span class=o>=</span>github-token
+<a id=__codelineno-0-15 name=__codelineno-0-15 href=#__codelineno-0-15></a>
+<a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a><span class=c1># 3. Verify</span>
+<a id=__codelineno-0-17 name=__codelineno-0-17 href=#__codelineno-0-17></a>kardinal<span class=w> </span>version
 </code></pre></div> <p>See <a href=installation/ >Installation</a> for full prerequisites and configuration.</p> <h2 id=how-it-works>How it works<a class=headerlink href=#how-it-works title="Permanent link">&para;</a></h2> <pre class=mermaid><code>graph LR
     CI["CI pushes image"] --&gt; Bundle["Bundle CRD created"]
     Bundle --&gt; Graph["kro Graph\n(promotion DAG)"]
