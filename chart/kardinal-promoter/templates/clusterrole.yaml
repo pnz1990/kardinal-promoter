@@ -2,110 +2,26 @@
 Copyright 2026 The kardinal-promoter Authors.
 Licensed under the Apache License, Version 2.0
 */}}
-{{- if not .Values.controller.watchNamespace -}}
-# ClusterRole for kardinal-promoter controller.
-# Grants the minimum permissions required to reconcile Pipelines, Bundles,
-# PolicyGates, PromotionSteps, and all supporting kardinal.io CRD types.
-# Audit note: "resources: *" replaced with explicit resource list per
-# enterprise least-privilege requirements (issue #516).
-# Rendered only when controller.watchNamespace is empty (cluster-wide mode).
-# When controller.watchNamespace is set, a Role is rendered instead.
+{{- /*
+Controller ClusterRole. Rules are defined in _rbac.tpl.
+  Cluster mode (controller.watchNamespace empty): <fullname>-manager-role
+    holds every namespaced rule plus the cluster-scoped rules.
+  Namespace mode: the namespaced rules are a Role (role.yaml); this
+    ClusterRole, <fullname>-cluster-scoped, holds only the cluster-scoped
+    rules (ChangeWindows, and TokenReview when ui.auth.tokenReview).
+*/}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
+  {{- if .Values.controller.watchNamespace }}
+  name: {{ include "kardinal-promoter.fullname" . }}-cluster-scoped
+  {{- else }}
   name: {{ include "kardinal-promoter.fullname" . }}-manager-role
+  {{- end }}
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 rules:
-  # Core Kubernetes resources the controller reads/writes
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get", "list", "watch", "create", "patch"]
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["configmaps", "namespaces"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  # Coordination for leader election
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # kardinal.io CRDs — user-created resources (read/write)
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - pipelines
-      - bundles
-      - policygates
-      - changewindows
-      - rollbackpolicies
-      - subscriptions
-      - promotiontemplates
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # kardinal.io CRDs — status subresources (write-back from reconcilers)
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - pipelines/status
-      - bundles/status
-      - policygates/status
-      - changewindows/status
-      - rollbackpolicies/status
-      - subscriptions/status
-    verbs: ["get", "update", "patch"]
-  # kardinal.io CRDs — controller-internal resources (owned by controller)
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - promotionsteps
-      - prstatuses
-      - metricchecks
-      - scheduleclocks
-      - notificationhooks
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - promotionsteps/status
-      - prstatuses/status
-      - metricchecks/status
-      - scheduleclocks/status
-      - notificationhooks/status
-    verbs: ["get", "update", "patch"]
-  # kardinal.io CRDs — immutable audit records (write-only by controller)
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - auditevents
-    verbs: ["get", "list", "watch", "create"]
-  # kro Graphs (generated promotion DAGs, kro.run/v1alpha1).
-  - apiGroups: ["kro.run"]
-    resources: ["graphs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["kro.run"]
-    resources: ["graphs/status"]
-    verbs: ["get"]
-  # Graph identity: the ServiceAccount kro impersonates and its RoleBindings.
-  # bind is limited to the two Graph ClusterRoles, so the controller cannot
-  # grant anything else.
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["get", "create"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["rolebindings"]
-    verbs: ["get", "create", "update"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles"]
-    verbs: ["bind"]
-    resourceNames:
-      - {{ include "kardinal-promoter.graphApplierRole" . }}
-      - {{ include "kardinal-promoter.graphReaderRole" . }}
-  # Deployments — required by the Deployment health adapter to check rollout status.
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch"]
-  # ArgoCDApplications — required by the ArgoCD health adapter (optional).
-  - apiGroups: ["argoproj.io"]
-    resources: ["applications"]
-    verbs: ["get", "list", "watch"]
-  # Flux Kustomizations — required by the Flux health adapter (optional).
-  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
-    resources: ["kustomizations"]
-    verbs: ["get", "list", "watch"]
-{{- end }}
+  {{- if not .Values.controller.watchNamespace }}
+  {{- include "kardinal-promoter.rules.namespaced" . | nindent 2 }}
+  {{- end }}
+  {{- include "kardinal-promoter.rules.cluster" . | nindent 2 }}

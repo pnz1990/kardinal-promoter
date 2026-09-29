@@ -51,28 +51,48 @@ securityContext:
     drop:
       - ALL
 
-# -- Controller log level (debug, info, warn, error)
+# -- Controller log level: debug, info, warn or error. Sets both the
+# reconciler logger (--log-level) and controller-runtime's logger
+# (--zap-log-level; warn maps to error there, which has no warn level).
 logLevel: info
 
 # -- Enable leader election for controller manager
 leaderElect: true
 
-# -- TLS configuration for the UI and webhook HTTP servers.
-# When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS.
-# Typically used with cert-manager: mount the certificate Secret as a volume,
-# then set the paths to the mounted cert and key files.
-# See docs/guides/security.md for the recommended cert-manager setup.
 controller:
+  # TLS for the UI (:8082) and webhook/Bundle API (:8083) servers.
+  # When both tlsCertFile and tlsKeyFile are set, both servers use HTTPS.
+  # Typically used with cert-manager: mount the certificate Secret with
+  # extraVolumes/extraVolumeMounts, then set the paths to the mounted files.
+  # See docs/guides/security.md for the recommended cert-manager setup.
+  #
   # -- Path to the TLS certificate file (PEM). Set together with tlsKeyFile to enable TLS.
   tlsCertFile: ""
   # -- Path to the TLS private key file (PEM). Set together with tlsCertFile to enable TLS.
   tlsKeyFile: ""
-  # -- Namespace to watch (default: "" = cluster-wide).
-  # When set, the controller only reconciles resources in this namespace and
-  # a Role/RoleBinding is created instead of a ClusterRole/ClusterRoleBinding.
-  # Enables namespace-scoped install mode for multi-tenant clusters.
-  # See: docs/design/15-production-readiness.md §Lens 6
+  # -- Namespace-scoped install mode (--watch-namespace). Empty = cluster-wide.
+  # When set, the controller caches and reconciles only this namespace, its
+  # namespaced permissions are a Role/RoleBinding there, and a small
+  # ClusterRole (<fullname>-cluster-scoped) covers the cluster-scoped
+  # ChangeWindow kind. It must equal the release namespace (install the chart
+  # into the namespace it watches); org-level PolicyGates are read from this
+  # namespace too.
   watchNamespace: ""
+  # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
+  # Empty keeps the controller default, platform-policies. Ignored in
+  # namespace mode, which always uses watchNamespace.
+  policyNamespaces: []
+  # -- Shard name (--shard). Empty = this controller reconciles every Pipeline.
+  # See docs/distributed-mode.md.
+  shard: ""
+  # -- Extra controller args, e.g. ["--pipeline-admission-webhook=true"].
+  extraArgs: []
+  # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
+  extraEnv: []
+  # -- Extra volumes for the controller Pod (e.g. a TLS Secret).
+  extraVolumes: []
+  # -- Extra volume mounts for the controller container.
+  extraVolumeMounts: []
 
 # -- Address the metrics endpoint binds to
 metricsBindAddress: ":8080"
@@ -80,11 +100,17 @@ metricsBindAddress: ":8080"
 # -- Address the health probe endpoint binds to
 healthProbeBindAddress: ":8081"
 
+# Service <fullname> and the matching container ports.
 service:
   # -- Metrics port (Prometheus)
   metricsPort: 8080
   # -- Health/readiness probe port
   healthPort: 8081
+  # -- Embedded UI and UI API port (--ui-listen-address)
+  uiPort: 8082
+  # -- Webhook and Bundle API port (--webhook-bind-address): /webhook/scm
+  # and /api/v1/bundles
+  webhookPort: 8083
 
 resources:
   limits:
@@ -103,34 +129,70 @@ tolerations: []
 # -- Affinity rules for the controller Pod
 affinity: {}
 
-# -- GitHub token for SCM operations (opening PRs, detecting merges).
-# Provide either a direct value (not recommended for production) or a secretRef.
-# The secretRef.key defaults to "token".
+# -- SCM token (GitHub, GitLab or Forgejo) for opening PRs and detecting
+# merges. Set one of:
+#   github.secretRef.name  an existing Secret in the release namespace
+#                          (recommended; the token stays out of Helm values)
+#   github.token           the chart creates Secret <fullname>-github-token
+#                          (the token is kept in the Helm release history)
+# Either way the controller reads GITHUB_TOKEN from the Secret and watches it,
+# reloading the SCM provider when the token changes (no restart).
 #
-# Zero-downtime credential rotation: when secretRef is set, the controller
-# automatically watches the Secret and reloads the SCM provider on token
-# change — no restart required. This enables teams that rotate PATs on a
-# schedule to do so without a promotion gap.
-#
-# Example:
-#   github:
-#     token: "ghp_..."
-#   OR (recommended for production, enables zero-downtime rotation)
-#   github:
-#     secretRef:
-#       name: github-token
-#       namespace: ""  # defaults to Release.Namespace
-#       key: token
+#   kubectl create secret generic github-token -n kardinal-system \
+#     --from-literal=token=$GITHUB_PAT
+#   helm install ... --set github.secretRef.name=github-token
 github:
-  # -- Direct token value (use secretRef in production)
+  # -- Token value; the chart stores it in a Secret. Prefer secretRef.
   token: ""
-  # -- Reference to an existing Secret containing the GitHub token.
-  # When set, the controller watches this Secret and reloads the SCM provider
-  # on token change without a restart (zero-downtime credential rotation).
+  # -- Existing Secret holding the token.
   secretRef:
     name: ""
+    # -- Must be empty or the release namespace: GITHUB_TOKEN is read with a
+    # secretKeyRef, which only reads the Pod's namespace.
     namespace: ""
     key: "token"
+
+# -- SCM provider (--scm-provider): github (default when empty), gitlab,
+# forgejo, gitea, bitbucket or azuredevops, and its API base URL
+# (--scm-api-url) for self-hosted instances. See docs/scm-providers.md.
+scm:
+  provider: ""
+  apiURL: ""
+
+# -- HMAC secret for SCM webhooks on :8083/webhook/scm (KARDINAL_WEBHOOK_SECRET).
+webhook:
+  secretRef:
+    name: ""
+    key: "secret"
+
+# -- Bearer token for the Bundle API, POST :8083/api/v1/bundles
+# (KARDINAL_BUNDLE_TOKEN). The Bundle API is off until this is set.
+bundleAPI:
+  tokenSecretRef:
+    name: ""
+    key: "token"
+
+# -- Embedded UI (:8082).
+ui:
+  # -- Origins allowed by CORS on the UI API (--cors-allowed-origins).
+  corsAllowedOrigins: []
+  auth:
+    # -- Static bearer token for /api/v1/ui/* (KARDINAL_UI_TOKEN).
+    tokenSecretRef:
+      name: ""
+      key: "token"
+    # -- Validate UI bearer tokens as Kubernetes ServiceAccount/user tokens
+    # (--ui-tokenreview-auth). Adds tokenreviews and subjectaccessreviews
+    # create to the controller's ClusterRole.
+    tokenReview: false
+
+# -- Optional controller permissions, off by default.
+rbac:
+  # -- patch on argoproj.io Applications, for the argocd update strategy
+  # (update.strategy: argocd).
+  argocdApplicationsWrite: false
+  # -- batch Jobs create/delete, for the integration-test step.
+  integrationTestJobs: false
 
 # -- kro Graph integration.
 # kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro >= v0.10.0
@@ -142,25 +204,35 @@ github:
 graph:
   # -- ServiceAccount kro impersonates for each Graph.
   serviceAccountName: kardinal-graph
-  # -- Namespace kro runs in (NetworkPolicy egress).
+  # -- Namespace kro runs in. Only used for a NetworkPolicy egress rule;
+  # "" drops that rule.
   kroNamespace: kro-system
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
 
-# -- ValidatingAdmissionPolicy for PolicyGate validation.
-# Requires Kubernetes 1.28+. When enabled, validates PolicyGate spec.expression
-# (non-empty) and spec.recheckInterval (Go duration format) at admission time.
-# Disable for kind/k8s < 1.28 or when using --validate=false.
+# -- Deprecated, no effect. The chart no longer ships ValidatingAdmissionPolicies;
+# the CRD schemas validate these fields instead. Kept so existing
+# --set validatingAdmissionPolicy.enabled=... keeps working.
 validatingAdmissionPolicy:
   enabled: true
 
-# -- NetworkPolicy for the controller namespace.
-# When enabled, restricts controller ingress (Kubernetes API server only)
-# and egress (Kubernetes API server + HTTPS for SCM providers + DNS).
-# Disable if your CNI does not support NetworkPolicy.
+# -- NetworkPolicy for the controller Pod. Needs a CNI that enforces
+# NetworkPolicy. Egress: DNS, :443/:6443 (API server, SCM, git, registries),
+# graph.kroNamespace and extraEgress. Ingress: the four Service ports.
 networkPolicy:
   enabled: false
+  # -- Peers allowed per ingress port (NetworkPolicyPeer list). Empty admits
+  # any source on that port. Example:
+  #   metrics: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}}]
+  ingressFrom:
+    metrics: []
+    health: []
+    ui: []
+    webhook: []
+  # -- Extra egress rules (NetworkPolicyEgressRule list), e.g. Prometheus on
+  # :9090 for MetricChecks or a webhook receiver for NotificationHooks.
+  extraEgress: []
 
 # -- ScheduleClock configuration.
 # One ScheduleClock is deployed per cluster. Each tick re-evaluates every
@@ -197,7 +269,7 @@ topologySpread:
 #   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
 #     --namespace kardinal-system --create-namespace \
 #     --set demo.enabled=true \
-#     --set github.token=$GITHUB_PAT
+#     --set github.secretRef.name=github-token
 demo:
   # -- Enable the demo Pipeline. When true, a Pipeline named "demo" is created.
   enabled: false
@@ -205,8 +277,9 @@ demo:
   # This is informational only (shown in the demo Pipeline annotations).
   # Run `kardinal create bundle demo --image <real-image>` to start a promotion.
   image: "ghcr.io/pnz1990/kardinal-test-app:sha-DEMO"
-  # -- Reference to the Secret containing the GitHub token.
-  # Defaults to the github.secretRef.name value (or "github-token" if both are empty).
+  # -- Secret the demo Pipeline uses for git (spec.git.secretRef).
+  # Defaults to the chart's SCM token Secret (github.secretRef.name, or
+  # <fullname>-github-token when github.token is set), else "github-token".
   secretRef:
     name: ""
 

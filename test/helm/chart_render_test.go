@@ -1,0 +1,927 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package helm
+
+// Offline render tests for the Helm chart. Each test runs `helm template`
+// and decodes the output into typed Kubernetes objects, so a regression in
+// RBAC, ports, flags, values or CRDs fails `go test ./test/helm/...` without
+// a cluster.
+
+import (
+	"bytes"
+	"encoding/json"
+	"flag"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/yaml"
+)
+
+const releaseNS = "kardinal-system"
+
+// renderedDoc is one manifest from `helm template`.
+type renderedDoc struct {
+	APIVersion string
+	Kind       string
+	Name       string
+	Namespace  string
+	raw        []byte // JSON
+}
+
+func chartPath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
+}
+
+// helmTemplate runs `helm template <release> <chart> --namespace kardinal-system <args>`.
+func helmTemplate(t *testing.T, release string, args ...string) (string, error) {
+	t.Helper()
+	cmdArgs := append([]string{"template", release, chartPath(t), "--namespace", releaseNS}, args...)
+	out, err := exec.Command(helmBin(t), cmdArgs...).CombinedOutput()
+	return string(out), err
+}
+
+// render runs helm template and fails the test when rendering fails.
+func render(t *testing.T, release string, args ...string) []renderedDoc {
+	t.Helper()
+	out, err := helmTemplate(t, release, args...)
+	require.NoError(t, err, "helm template %v:\n%s", args, out)
+	return parseDocs(t, out)
+}
+
+var docSeparator = regexp.MustCompile(`(?m)^---\s*$`)
+
+func parseDocs(t *testing.T, out string) []renderedDoc {
+	t.Helper()
+	var docs []renderedDoc
+	for _, part := range docSeparator.Split(out, -1) {
+		j, err := yaml.YAMLToJSON([]byte(part))
+		require.NoError(t, err, "rendered manifest is not valid YAML:\n%s", part)
+		var head struct {
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Metadata   struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+		}
+		if len(bytes.TrimSpace(j)) == 0 || string(j) == "null" {
+			continue
+		}
+		require.NoError(t, json.Unmarshal(j, &head))
+		if head.Kind == "" {
+			continue
+		}
+		docs = append(docs, renderedDoc{
+			APIVersion: head.APIVersion, Kind: head.Kind,
+			Name: head.Metadata.Name, Namespace: head.Metadata.Namespace, raw: j,
+		})
+	}
+	return docs
+}
+
+func docsOfKind(docs []renderedDoc, kind string) []renderedDoc {
+	var out []renderedDoc
+	for _, d := range docs {
+		if d.Kind == kind {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// decodeStrict decodes a rendered manifest into a typed object and fails on
+// any field the type does not have (what the API server's strict field
+// validation rejects on `helm install`).
+func decodeStrict(t *testing.T, d renderedDoc, into interface{}) {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(d.raw))
+	dec.DisallowUnknownFields()
+	require.NoError(t, dec.Decode(into), "%s %s does not match its schema:\n%s", d.Kind, d.Name, d.raw)
+}
+
+func controllerContainer(t *testing.T, docs []renderedDoc) corev1.Container {
+	t.Helper()
+	deps := docsOfKind(docs, "Deployment")
+	require.Len(t, deps, 1, "chart must render exactly one Deployment")
+	var dep appsv1.Deployment
+	decodeStrict(t, deps[0], &dep)
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if c.Name == "controller" {
+			return c
+		}
+	}
+	t.Fatal("Deployment has no controller container")
+	return corev1.Container{}
+}
+
+// argValues maps --flag to its value for every --flag=value arg.
+func argValues(c corev1.Container) map[string]string {
+	m := map[string]string{}
+	for _, a := range c.Args {
+		if !strings.HasPrefix(a, "--") {
+			continue
+		}
+		k, v, _ := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		m[k] = v
+	}
+	return m
+}
+
+func envByName(c corev1.Container) map[string]corev1.EnvVar {
+	m := map[string]corev1.EnvVar{}
+	for _, e := range c.Env {
+		m[e.Name] = e
+	}
+	return m
+}
+
+// allFeatures turns on every optional template so a test sees every object.
+var allFeatures = []string{
+	"--set", "networkPolicy.enabled=true",
+	"--set", "demo.enabled=true",
+	"--set", "prometheusRule.enabled=true",
+	"--set", "grafanaDashboard.enabled=true",
+	"--set", "replicaCount=2",
+	"--set", "ui.auth.tokenReview=true",
+	"--set", "rbac.argocdApplicationsWrite=true",
+	"--set", "rbac.integrationTestJobs=true",
+}
+
+// ── C08-api-config-04, -16, -21: no ValidatingAdmissionPolicy ─────────────────
+
+// TestChartRendersNoValidatingAdmissionPolicy: the chart's VAPs denied every
+// Pipeline (spec.gitRepo does not exist), denied promote/rollback Bundles and
+// valid durations, needed Kubernetes 1.30, and collided across releases.
+// Validation lives in the CRD schema (api/v1alpha1/crd_schema_test.go);
+// validatingAdmissionPolicy.enabled is kept as a deprecated no-op so existing
+// `--set validatingAdmissionPolicy.enabled=false` installs keep working.
+func TestChartRendersNoValidatingAdmissionPolicy(t *testing.T) {
+	for _, args := range [][]string{
+		nil,
+		{"--set", "validatingAdmissionPolicy.enabled=true"},
+		{"--set", "validatingAdmissionPolicy.enabled=false"},
+	} {
+		docs := render(t, "kardinal-promoter", args...)
+		for _, d := range docs {
+			assert.NotContains(t, d.APIVersion, "admissionregistration.k8s.io",
+				"args %v: chart must not render %s %s", args, d.Kind, d.Name)
+		}
+	}
+}
+
+// TestChartClusterScopedNamesUniquePerRelease: two releases (the documented
+// one-install-per-team recipe) must not own the same cluster-scoped object.
+func TestChartClusterScopedNamesUniquePerRelease(t *testing.T) {
+	clusterScoped := map[string]bool{
+		"ClusterRole": true, "ClusterRoleBinding": true,
+		"ValidatingAdmissionPolicy": true, "ValidatingAdmissionPolicyBinding": true,
+		"ValidatingWebhookConfiguration": true, "MutatingWebhookConfiguration": true,
+	}
+	names := func(release string, args ...string) map[string]bool {
+		out := map[string]bool{}
+		for _, d := range render(t, release, append(append([]string{}, allFeatures...), args...)...) {
+			if clusterScoped[d.Kind] {
+				out[d.Kind+"/"+d.Name] = true
+			}
+		}
+		return out
+	}
+	for _, mode := range [][]string{nil, {"--set", "controller.watchNamespace=" + releaseNS}} {
+		a := names("team-a", mode...)
+		b := names("team-b", mode...)
+		require.NotEmpty(t, a)
+		for n := range a {
+			assert.False(t, b[n], "mode %v: releases team-a and team-b both render %s", mode, n)
+		}
+	}
+}
+
+// ── C08-api-config-07: CRDs ship with the chart ───────────────────────────────
+
+// TestChartShipsGeneratedCRDs: a fresh `helm install` must create the CRDs
+// (Helm installs crds/ before templates), crds/ must match the generated
+// config/crd/bases byte for byte, and every kardinal.io object the chart
+// renders must have its CRD in crds/.
+func TestChartShipsGeneratedCRDs(t *testing.T) {
+	root := repoRoot(t)
+	generated, err := filepath.Glob(filepath.Join(root, "config", "crd", "bases", "*.yaml"))
+	require.NoError(t, err)
+	require.NotEmpty(t, generated)
+	shipped, err := filepath.Glob(filepath.Join(chartPath(t), "crds", "*.yaml"))
+	require.NoError(t, err)
+
+	base := func(paths []string) []string {
+		var out []string
+		for _, p := range paths {
+			out = append(out, filepath.Base(p))
+		}
+		sort.Strings(out)
+		return out
+	}
+	require.Equal(t, base(generated), base(shipped),
+		"chart/kardinal-promoter/crds must hold exactly the generated CRDs (run `make manifests`)")
+
+	kinds := map[string]bool{}
+	for _, g := range generated {
+		want, err := os.ReadFile(g)
+		require.NoError(t, err)
+		got, err := os.ReadFile(filepath.Join(chartPath(t), "crds", filepath.Base(g)))
+		require.NoError(t, err)
+		assert.Equal(t, string(want), string(got),
+			"%s is stale in chart/kardinal-promoter/crds (run `make manifests`)", filepath.Base(g))
+		var crd struct {
+			Spec struct {
+				Names struct {
+					Kind string `json:"kind"`
+				} `json:"names"`
+			} `json:"spec"`
+		}
+		require.NoError(t, yaml.Unmarshal(want, &crd))
+		kinds[crd.Spec.Names.Kind] = true
+	}
+
+	out, err := helmTemplate(t, "kardinal-promoter", append([]string{"--include-crds"}, allFeatures...)...)
+	require.NoError(t, err, out)
+	docs := parseDocs(t, out)
+	assert.Len(t, docsOfKind(docs, "CustomResourceDefinition"), len(generated),
+		"helm install must create every kardinal CRD")
+	for _, d := range docs {
+		if strings.HasPrefix(d.APIVersion, "kardinal.io/") {
+			assert.True(t, kinds[d.Kind], "chart renders %s %s but ships no CRD for it", d.Kind, d.Name)
+		}
+	}
+}
+
+// ── C08-api-config-08, -09, -15: RBAC ─────────────────────────────────────────
+
+type rbacView struct {
+	roles        map[string]rbacv1.Role // namespace/name
+	clusterRoles map[string]rbacv1.ClusterRole
+	crbs         []rbacv1.ClusterRoleBinding
+	rbs          []rbacv1.RoleBinding
+}
+
+func newRBACView(t *testing.T, docs []renderedDoc) rbacView {
+	t.Helper()
+	v := rbacView{roles: map[string]rbacv1.Role{}, clusterRoles: map[string]rbacv1.ClusterRole{}}
+	for _, d := range docs {
+		switch d.Kind {
+		case "Role":
+			var r rbacv1.Role
+			decodeStrict(t, d, &r)
+			v.roles[r.Namespace+"/"+r.Name] = r
+		case "ClusterRole":
+			var r rbacv1.ClusterRole
+			decodeStrict(t, d, &r)
+			v.clusterRoles[r.Name] = r
+		case "ClusterRoleBinding":
+			var b rbacv1.ClusterRoleBinding
+			decodeStrict(t, d, &b)
+			v.crbs = append(v.crbs, b)
+		case "RoleBinding":
+			var b rbacv1.RoleBinding
+			decodeStrict(t, d, &b)
+			v.rbs = append(v.rbs, b)
+		}
+	}
+	return v
+}
+
+func has(list []string, s string) bool {
+	for _, x := range list {
+		if x == s || x == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func ruleAllows(rules []rbacv1.PolicyRule, group, resource, verb, name string) bool {
+	for _, r := range rules {
+		if !has(r.APIGroups, group) || !has(r.Resources, resource) || !has(r.Verbs, verb) {
+			continue
+		}
+		if len(r.ResourceNames) > 0 && (name == "" || !has(r.ResourceNames, name)) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func boundTo(subjects []rbacv1.Subject, saNS, sa string) bool {
+	for _, s := range subjects {
+		if s.Kind == rbacv1.ServiceAccountKind && s.Name == sa && s.Namespace == saNS {
+			return true
+		}
+	}
+	return false
+}
+
+// allowed evaluates Kubernetes RBAC for the ServiceAccount saNS/sa. ns is ""
+// for a cluster-scoped resource. name is "" for create and list.
+func (v rbacView) allowed(saNS, sa, ns, group, resource, verb, name string) bool {
+	for _, b := range v.crbs {
+		if b.RoleRef.Kind == "ClusterRole" && boundTo(b.Subjects, saNS, sa) &&
+			ruleAllows(v.clusterRoles[b.RoleRef.Name].Rules, group, resource, verb, name) {
+			return true
+		}
+	}
+	if ns == "" {
+		return false
+	}
+	for _, b := range v.rbs {
+		if b.Namespace != ns || !boundTo(b.Subjects, saNS, sa) {
+			continue
+		}
+		var rules []rbacv1.PolicyRule
+		switch b.RoleRef.Kind {
+		case "Role":
+			rules = v.roles[ns+"/"+b.RoleRef.Name].Rules
+		case "ClusterRole":
+			rules = v.clusterRoles[b.RoleRef.Name].Rules
+		}
+		if ruleAllows(rules, group, resource, verb, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// accessScope says where the controller makes a call.
+type accessScope int
+
+const (
+	inWatched accessScope = iota // every namespace the controller reconciles
+	inRelease                    // the controller's own namespace
+	inCluster                    // cluster-scoped resource
+)
+
+type apiAccess struct {
+	group, resource string
+	verbs           []string
+	scope           accessScope
+	name            string // resourceName for get/update/patch; create is never named
+	source          string
+}
+
+var kardinalNamespacedKinds = []string{
+	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
+	"promotiontemplates", "promotionsteps", "prstatuses", "metricchecks",
+	"scheduleclocks", "notificationhooks",
+}
+
+var rwVerbs = []string{"get", "list", "watch", "create", "update", "patch", "delete"}
+var readVerbs = []string{"get", "list", "watch"}
+
+// controllerAccess is the API access the controller makes with default values.
+// Keep it in step with the code: a new client call needs a row here and a
+// rule in templates/_rbac.tpl.
+func controllerAccess() []apiAccess {
+	acc := []apiAccess{
+		{"", "events", []string{"create", "patch"}, inWatched, "", "GetEventRecorderFor (main.go)"},
+		{"", "secrets", readVerbs, inWatched, "", "Pipeline git secret (promotionstep), SCM SecretWatcher (cached client)"},
+		{"", "configmaps", readVerbs, inWatched, "", "ensureVersionConfigMap cached Get (main.go)"},
+		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},
+		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client"},
+		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
+		{"", "serviceaccounts", []string{"get", "create"}, inWatched, "", "graph identity.go"},
+		{"rbac.authorization.k8s.io", "rolebindings", []string{"get", "create", "update", "delete"}, inWatched, "", "graph identity.go; delete prunes reader bindings (fix/audit-graph)"},
+		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-applier", "graph identity.go"},
+		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-reader", "graph identity.go"},
+		{"apps", "deployments", readVerbs, inWatched, "", "health adapter resource"},
+		{"argoproj.io", "applications", readVerbs, inWatched, "", "health adapter argocd, argocd update strategy"},
+		{"argoproj.io", "rollouts", readVerbs, inWatched, "", "health adapter argoRollouts"},
+		{"kustomize.toolkit.fluxcd.io", "kustomizations", readVerbs, inWatched, "", "health adapter flux"},
+		{"flagger.app", "canaries", readVerbs, inWatched, "", "health adapter flagger"},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "patch", "delete"}, inRelease, "", "leader election"},
+		{"", "configmaps", []string{"create"}, inRelease, "", "ensureVersionConfigMap"},
+		{"", "configmaps", []string{"get", "update", "patch"}, inRelease, "kardinal-version", "ensureVersionConfigMap"},
+		{"kardinal.io", "changewindows", readVerbs, inCluster, "", "policygate buildChangeWindowContext (cluster-scoped kind)"},
+		{"kardinal.io", "changewindows/status", []string{"get", "update", "patch"}, inCluster, "", "changewindow reconciler status writer (fix/audit-gates)"},
+	}
+	for _, k := range kardinalNamespacedKinds {
+		acc = append(acc,
+			apiAccess{"kardinal.io", k, rwVerbs, inWatched, "", "reconcilers"},
+			apiAccess{"kardinal.io", k + "/status", []string{"get", "update", "patch"}, inWatched, "", "reconcilers"})
+	}
+	return acc
+}
+
+// optionalAccess is access granted only when its value is set.
+var optionalAccess = []struct {
+	set string
+	acc []apiAccess
+}{
+	{"ui.auth.tokenReview=true", []apiAccess{
+		{"authentication.k8s.io", "tokenreviews", []string{"create"}, inCluster, "", "pkg/uiauth TokenReview"},
+		{"authorization.k8s.io", "subjectaccessreviews", []string{"create"}, inCluster, "", "pkg/uiauth SubjectAccessReview"},
+	}},
+	{"rbac.argocdApplicationsWrite=true", []apiAccess{
+		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
+	}},
+	{"rbac.integrationTestJobs=true", []apiAccess{
+		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "steps integration_test_step.go"},
+	}},
+}
+
+func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc apiAccess, want bool) {
+	t.Helper()
+	var namespaces []string
+	switch acc.scope {
+	case inWatched:
+		namespaces = watched
+	case inRelease:
+		namespaces = []string{releaseNS}
+	case inCluster:
+		namespaces = []string{""}
+	}
+	for _, ns := range namespaces {
+		for _, verb := range acc.verbs {
+			got := v.allowed(releaseNS, "kardinal-promoter", ns, acc.group, acc.resource, verb, acc.name)
+			assert.Equal(t, want, got, "%s: %s %s/%s %q in namespace %q (%s)",
+				mode, verb, acc.group, acc.resource, acc.name, ns, acc.source)
+		}
+	}
+}
+
+// TestChartRBACGrantsControllerAccess checks every API call the controller
+// makes against the rendered RBAC, in cluster mode and namespace mode, with
+// the optional grants off and on.
+func TestChartRBACGrantsControllerAccess(t *testing.T) {
+	modes := []struct {
+		name    string
+		args    []string
+		watched []string
+	}{
+		{"cluster mode", nil, []string{"team-a", "argocd", releaseNS}},
+		{"namespace mode", []string{"--set", "controller.watchNamespace=" + releaseNS}, []string{releaseNS}},
+	}
+	for _, m := range modes {
+		t.Run(m.name, func(t *testing.T) {
+			v := newRBACView(t, render(t, "kardinal-promoter", m.args...))
+			for _, acc := range controllerAccess() {
+				checkAccess(t, v, m.name, m.watched, acc, true)
+			}
+			for _, opt := range optionalAccess {
+				for _, acc := range opt.acc {
+					checkAccess(t, v, m.name+" default (no "+opt.set+")", m.watched, acc, false)
+				}
+				on := newRBACView(t, render(t, "kardinal-promoter", append(m.args, "--set", opt.set)...))
+				for _, acc := range opt.acc {
+					checkAccess(t, on, m.name+" --set "+opt.set, m.watched, acc, true)
+				}
+			}
+		})
+	}
+}
+
+// TestChartRBACLeastPrivilege: grants the code does not use are gone.
+func TestChartRBACLeastPrivilege(t *testing.T) {
+	v := newRBACView(t, render(t, "kardinal-promoter", allFeatures...))
+	sa := "kardinal-promoter"
+	denied := []struct {
+		ns, group, resource, verb, name string
+	}{
+		{"", "", "namespaces", "get", ""},
+		{"", "", "namespaces", "patch", "team-a"},
+		{"team-a", "", "configmaps", "create", ""},
+		{"team-a", "", "configmaps", "patch", "some-app-config"},
+		{releaseNS, "", "configmaps", "patch", "some-app-config"},
+		{"team-a", "coordination.k8s.io", "leases", "update", "kardinal-promoter-leader"},
+		{"", "kardinal.io", "changewindows", "create", ""},
+		{"", "kardinal.io", "changewindows", "delete", "freeze"},
+		{"team-a", "", "secrets", "create", ""},
+		{"team-a", "rbac.authorization.k8s.io", "clusterroles", "bind", "cluster-admin"},
+	}
+	for _, d := range denied {
+		assert.False(t, v.allowed(releaseNS, sa, d.ns, d.group, d.resource, d.verb, d.name),
+			"controller must not be allowed to %s %s/%s %q in %q", d.verb, d.group, d.resource, d.name, d.ns)
+	}
+}
+
+// TestChartNamespaceModeWiring: in namespace mode the controller's cache
+// holds only the watch namespace, so the chart must point --policy-namespaces
+// there (the default, platform-policies, is outside the cache and failed every
+// translation), set POD_NAMESPACE, and reject values it cannot serve.
+func TestChartNamespaceModeWiring(t *testing.T) {
+	docs := render(t, "kardinal-promoter", "--set", "controller.watchNamespace="+releaseNS)
+	c := controllerContainer(t, docs)
+	args := argValues(c)
+	assert.Equal(t, releaseNS, args["policy-namespaces"])
+	assert.Equal(t, releaseNS, args["watch-namespace"])
+	env := envByName(c)
+	require.Contains(t, env, "POD_NAMESPACE")
+	require.NotNil(t, env["POD_NAMESPACE"].ValueFrom)
+	assert.Equal(t, "metadata.namespace", env["POD_NAMESPACE"].ValueFrom.FieldRef.FieldPath)
+
+	// Cluster mode keeps the controller default unless policyNamespaces is set.
+	c = controllerContainer(t, render(t, "kardinal-promoter"))
+	assert.NotContains(t, argValues(c), "policy-namespaces")
+	assert.Contains(t, envByName(c), "POD_NAMESPACE")
+	c = controllerContainer(t, render(t, "kardinal-promoter",
+		"--set", "controller.policyNamespaces={platform-policies,org-gates}"))
+	assert.Equal(t, "platform-policies,org-gates", argValues(c)["policy-namespaces"])
+
+	for _, bad := range [][]string{
+		{"--set", "controller.watchNamespace=team-a"}, // release namespace differs
+		{"--set", "controller.watchNamespace=" + releaseNS, "--set", "controller.policyNamespaces={platform-policies}"},
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", bad...)
+		assert.Error(t, err, "helm template %v must fail:\n%s", bad, out)
+	}
+}
+
+// ── C08-api-config-10: UI and webhook ports ───────────────────────────────────
+
+func TestChartExposesUIAndWebhookPorts(t *testing.T) {
+	docs := render(t, "kardinal-promoter", "--set", "networkPolicy.enabled=true")
+	c := controllerContainer(t, docs)
+	ports := map[string]int32{}
+	for _, p := range c.Ports {
+		ports[p.Name] = p.ContainerPort
+	}
+	assert.Equal(t, map[string]int32{"metrics": 8080, "health": 8081, "ui": 8082, "webhook": 8083}, ports)
+	args := argValues(c)
+	assert.Equal(t, ":8082", args["ui-listen-address"])
+	assert.Equal(t, ":8083", args["webhook-bind-address"])
+
+	svcs := docsOfKind(docs, "Service")
+	require.Len(t, svcs, 1)
+	var svc corev1.Service
+	decodeStrict(t, svcs[0], &svc)
+	assert.Equal(t, "kardinal-promoter", svc.Name, "docs port-forward svc/kardinal-promoter")
+	svcPorts := map[string]string{}
+	for _, p := range svc.Spec.Ports {
+		svcPorts[p.Name] = p.TargetPort.String()
+	}
+	assert.Equal(t, map[string]string{"metrics": "metrics", "health": "health", "ui": "ui", "webhook": "webhook"}, svcPorts)
+
+	nps := docsOfKind(docs, "NetworkPolicy")
+	require.Len(t, nps, 1)
+	var np networkingv1.NetworkPolicy
+	decodeStrict(t, nps[0], &np)
+	ingress := map[int32]bool{}
+	for _, r := range np.Spec.Ingress {
+		for _, p := range r.Ports {
+			ingress[p.Port.IntVal] = true
+		}
+	}
+	for _, p := range []int32{8080, 8081, 8082, 8083} {
+		assert.True(t, ingress[p], "NetworkPolicy must admit port %d", p)
+	}
+
+	c = controllerContainer(t, render(t, "kardinal-promoter",
+		"--set", "service.uiPort=9082", "--set", "service.webhookPort=9083"))
+	args = argValues(c)
+	assert.Equal(t, ":9082", args["ui-listen-address"])
+	assert.Equal(t, ":9083", args["webhook-bind-address"])
+}
+
+// ── C08-api-config-11: values wired to real controller flags ─────────────────
+
+var flagDef = regexp.MustCompile(`flag\.\w+Var\(\s*&[\w.]+,\s*"([a-z0-9-]+)"`)
+var envRead = regexp.MustCompile(`os\.Getenv\("([A-Z0-9_]+)"\)`)
+
+// controllerFlags returns every flag cmd/kardinal-controller defines,
+// including controller-runtime's zap flags.
+func controllerFlags(t *testing.T) map[string]bool {
+	t.Helper()
+	flags := map[string]bool{}
+	files, err := filepath.Glob(filepath.Join(repoRoot(t), "cmd", "kardinal-controller", "*.go"))
+	require.NoError(t, err)
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+		for _, m := range flagDef.FindAllSubmatch(src, -1) {
+			flags[string(m[1])] = true
+		}
+	}
+	fs := flag.NewFlagSet("zap", flag.ContinueOnError)
+	(&czap.Options{}).BindFlags(fs)
+	fs.VisitAll(func(f *flag.Flag) { flags[f.Name] = true })
+	require.Contains(t, flags, "leader-elect", "flag scan found nothing — regexp out of date?")
+	return flags
+}
+
+func controllerEnvReads(t *testing.T) map[string]bool {
+	t.Helper()
+	env := map[string]bool{}
+	files, err := filepath.Glob(filepath.Join(repoRoot(t), "cmd", "kardinal-controller", "*.go"))
+	require.NoError(t, err)
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+		for _, m := range envRead.FindAllSubmatch(src, -1) {
+			env[string(m[1])] = true
+		}
+	}
+	require.Contains(t, env, "GITHUB_TOKEN", "env scan found nothing — regexp out of date?")
+	return env
+}
+
+// everyValue sets every value that renders a flag or env var.
+var everyValue = []string{
+	"--set", "controller.shard=eu",
+	"--set", "controller.tlsCertFile=/tls/tls.crt",
+	"--set", "controller.tlsKeyFile=/tls/tls.key",
+	"--set", "controller.policyNamespaces={platform-policies}",
+	"--set", "scm.provider=gitlab",
+	"--set", "scm.apiURL=https://gitlab.example.com",
+	"--set", "github.secretRef.name=scm-token",
+	"--set", "webhook.secretRef.name=webhook-secret",
+	"--set", "bundleAPI.tokenSecretRef.name=bundle-token",
+	"--set", "ui.auth.tokenSecretRef.name=ui-token",
+	"--set", "ui.auth.tokenReview=true",
+	"--set", "ui.corsAllowedOrigins={https://a.example.com,https://b.example.com}",
+}
+
+// TestChartFlagsAndEnvExistInController: every rendered --flag is defined by
+// the controller (an unknown flag makes it exit), and every env var is read.
+func TestChartFlagsAndEnvExistInController(t *testing.T) {
+	flags := controllerFlags(t)
+	env := controllerEnvReads(t)
+	for _, args := range [][]string{nil, everyValue, {"--set", "controller.watchNamespace=" + releaseNS}} {
+		c := controllerContainer(t, render(t, "kardinal-promoter", args...))
+		for f := range argValues(c) {
+			assert.True(t, flags[f], "args %v: chart renders --%s, which the controller does not define", args, f)
+		}
+		for _, e := range c.Env {
+			assert.True(t, env[e.Name], "args %v: chart sets %s, which the controller never reads", args, e.Name)
+		}
+	}
+}
+
+// TestChartValuesWireControllerFlags maps each documented value to the flag or
+// env var the controller reads.
+func TestChartValuesWireControllerFlags(t *testing.T) {
+	c := controllerContainer(t, render(t, "kardinal-promoter", everyValue...))
+	args := argValues(c)
+	env := envByName(c)
+
+	wantArgs := map[string]string{
+		"shard":                "eu",
+		"policy-namespaces":    "platform-policies",
+		"scm-provider":         "gitlab",
+		"scm-api-url":          "https://gitlab.example.com",
+		"ui-tokenreview-auth":  "true",
+		"cors-allowed-origins": "https://a.example.com,https://b.example.com",
+	}
+	for k, v := range wantArgs {
+		assert.Equal(t, v, args[k], "--%s", k)
+	}
+	wantSecretEnv := map[string][2]string{
+		"GITHUB_TOKEN":            {"scm-token", "token"},
+		"KARDINAL_WEBHOOK_SECRET": {"webhook-secret", "secret"},
+		"KARDINAL_BUNDLE_TOKEN":   {"bundle-token", "token"},
+		"KARDINAL_UI_TOKEN":       {"ui-token", "token"},
+	}
+	for name, ref := range wantSecretEnv {
+		e, ok := env[name]
+		require.True(t, ok, "%s must be set", name)
+		require.NotNil(t, e.ValueFrom, "%s must come from a Secret", name)
+		require.NotNil(t, e.ValueFrom.SecretKeyRef, "%s must come from a Secret", name)
+		assert.Equal(t, ref[0], e.ValueFrom.SecretKeyRef.Name, name)
+		assert.Equal(t, ref[1], e.ValueFrom.SecretKeyRef.Key, name)
+	}
+	assert.Equal(t, "/tls/tls.crt", env["KARDINAL_TLS_CERT_FILE"].Value)
+	assert.Equal(t, "/tls/tls.key", env["KARDINAL_TLS_KEY_FILE"].Value)
+	assert.Equal(t, "scm-token", env["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value)
+
+	// extraArgs, extraEnv, extraVolumes and extraVolumeMounts pass through.
+	docs := render(t, "kardinal-promoter",
+		"--set", "controller.extraArgs={--pipeline-admission-webhook=true}",
+		"--set", "controller.extraEnv[0].name=HTTPS_PROXY",
+		"--set", "controller.extraEnv[0].value=http://proxy:3128",
+		"--set", "controller.extraVolumes[0].name=tls",
+		"--set", "controller.extraVolumes[0].secret.secretName=kardinal-tls",
+		"--set", "controller.extraVolumeMounts[0].name=tls",
+		"--set", "controller.extraVolumeMounts[0].mountPath=/tls")
+	c = controllerContainer(t, docs)
+	assert.Contains(t, c.Args, "--pipeline-admission-webhook=true")
+	assert.Equal(t, "http://proxy:3128", envByName(c)["HTTPS_PROXY"].Value)
+	mounts := map[string]string{}
+	for _, m := range c.VolumeMounts {
+		mounts[m.Name] = m.MountPath
+	}
+	assert.Equal(t, "/tls", mounts["tls"])
+}
+
+// TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
+// value names the docs used to give can no longer be silently ignored.
+func TestChartRejectsUnknownValues(t *testing.T) {
+	for _, set := range []string{
+		"controller.shardd=eu",
+		"controller.github.token.secretName=github-token",
+		"controller.remoteKubeconfig.secretRef.name=kubeconfig",
+		"controller.uiAuthToken=abc",
+		"logLevel=verbose",
+		"githubToken=x",
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", set)
+		assert.Error(t, err, "--set %s must be rejected:\n%s", set, out)
+	}
+}
+
+// TestChartAcceptsRepoSetKeys: every --set this repo passes to this chart
+// (Makefile, hack/, workflows, demo/, docs) still renders.
+func TestChartAcceptsRepoSetKeys(t *testing.T) {
+	for _, set := range []string{
+		"image.repository=ghcr.io/pnz1990/kardinal-promoter",
+		"image.tag=dev",
+		"image.pullPolicy=Never",
+		"github.secretRef.name=github-token",
+		"validatingAdmissionPolicy.enabled=false",
+		"networkPolicy.enabled=true",
+		"demo.enabled=true",
+		"controller.watchNamespace=" + releaseNS,
+		"controller.tlsCertFile=/tls/tls.crt",
+		"controller.tlsKeyFile=/tls/tls.key",
+		"controller.shard=eu",
+		"prometheusRule.enabled=true",
+		"prometheusRule.additionalLabels.release=kube-prometheus-stack",
+		"grafanaDashboard.enabled=true",
+		"grafanaDashboard.sidecarLabel.grafana_dashboard=1",
+		"replicaCount=2",
+		"pdb.enabled=true",
+		"topologySpread.enabled=true",
+		"graph.aggregateToKro=false",
+		"scheduleClock.enabled=false",
+	} {
+		out, err := helmTemplate(t, "kardinal-promoter", "--set", set)
+		assert.NoError(t, err, "--set %s:\n%s", set, out)
+	}
+	out, err := exec.Command(helmBin(t), "lint", chartPath(t), "--strict").CombinedOutput()
+	assert.NoError(t, err, "helm lint --strict:\n%s", out)
+}
+
+// ── C08-api-config-17: NetworkPolicy ──────────────────────────────────────────
+
+// TestChartNetworkPolicyIsValid: the policy must decode strictly (the kro rule
+// was a bare namespaceSelector, not a field of an egress rule) and every rule
+// must be restrictive (an empty rule allows everything).
+func TestChartNetworkPolicyIsValid(t *testing.T) {
+	docs := render(t, "kardinal-promoter",
+		"--set", "networkPolicy.enabled=true",
+		"--set", "networkPolicy.ingressFrom.metrics[0].namespaceSelector.matchLabels.name=monitoring",
+		"--set", "networkPolicy.extraEgress[0].ports[0].port=9090")
+	nps := docsOfKind(docs, "NetworkPolicy")
+	require.Len(t, nps, 1)
+	var np networkingv1.NetworkPolicy
+	decodeStrict(t, nps[0], &np)
+
+	for i, r := range np.Spec.Egress {
+		assert.False(t, len(r.To) == 0 && len(r.Ports) == 0, "egress rule %d allows all egress", i)
+	}
+	kro := false
+	for _, r := range np.Spec.Egress {
+		for _, to := range r.To {
+			if to.NamespaceSelector != nil &&
+				to.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] == "kro-system" {
+				kro = true
+			}
+		}
+	}
+	assert.True(t, kro, "egress must admit the kro namespace through a `to` peer")
+	seen443 := 0
+	for _, r := range np.Spec.Egress {
+		if len(r.To) > 0 {
+			continue
+		}
+		for _, p := range r.Ports {
+			if p.Port != nil && p.Port.IntVal == 443 {
+				seen443++
+			}
+		}
+	}
+	assert.Equal(t, 1, seen443, "port 443 egress must appear once")
+	extra := false
+	for _, r := range np.Spec.Egress {
+		for _, p := range r.Ports {
+			if p.Port != nil && p.Port.IntVal == 9090 {
+				extra = true
+			}
+		}
+	}
+	assert.True(t, extra, "networkPolicy.extraEgress must be rendered")
+	restricted := false
+	for _, r := range np.Spec.Ingress {
+		for _, p := range r.Ports {
+			if p.Port.IntVal == 8080 && len(r.From) == 1 && r.From[0].NamespaceSelector != nil {
+				restricted = true
+			}
+		}
+	}
+	assert.True(t, restricted, "networkPolicy.ingressFrom.metrics must restrict the metrics port")
+}
+
+// ── C08-api-config-18: GitHub token never in the Deployment ──────────────────
+
+func TestChartGitHubTokenNotPlaintext(t *testing.T) {
+	const dummy = "dummy-not-a-real-token-c08-18"
+	docs := render(t, "kardinal-promoter", "--set", "github.token="+dummy, "--set", "demo.enabled=true")
+	for _, d := range docs {
+		if d.Kind == "Secret" {
+			continue
+		}
+		assert.NotContains(t, string(d.raw), dummy, "%s %s must not contain the token", d.Kind, d.Name)
+	}
+	var secret corev1.Secret
+	found := false
+	for _, d := range docsOfKind(docs, "Secret") {
+		if d.Name == "kardinal-promoter-github-token" {
+			decodeStrict(t, d, &secret)
+			found = true
+		}
+	}
+	require.True(t, found, "github.token must render the Secret kardinal-promoter-github-token")
+	assert.Contains(t, secret.StringData, "token")
+
+	c := controllerContainer(t, docs)
+	env := envByName(c)
+	require.NotNil(t, env["GITHUB_TOKEN"].ValueFrom)
+	assert.Equal(t, "kardinal-promoter-github-token", env["GITHUB_TOKEN"].ValueFrom.SecretKeyRef.Name)
+	assert.Equal(t, "kardinal-promoter-github-token", env["KARDINAL_SCM_TOKEN_SECRET_NAME"].Value,
+		"the chart Secret gets the same rotation watcher as github.secretRef")
+
+	// The demo Pipeline uses the chart Secret for git.
+	for _, d := range docsOfKind(docs, "Pipeline") {
+		assert.Contains(t, string(d.raw), `"name":"kardinal-promoter-github-token"`)
+	}
+
+	out, err := helmTemplate(t, "kardinal-promoter",
+		"--set", "github.token="+dummy, "--set", "github.secretRef.name=github-token")
+	assert.Error(t, err, "github.token and github.secretRef.name together must fail")
+	assert.NotContains(t, out, dummy)
+
+	// GITHUB_TOKEN uses a secretKeyRef, which reads only the Pod's namespace,
+	// so a Secret in another namespace would split the startup token from
+	// the rotation watcher.
+	render(t, "kardinal-promoter", "--set", "github.secretRef.name=github-token", "--set", "github.secretRef.namespace="+releaseNS)
+	out, err = helmTemplate(t, "kardinal-promoter", "--set", "github.secretRef.name=github-token", "--set", "github.secretRef.namespace=team-a")
+	assert.Error(t, err, "github.secretRef.namespace outside the release namespace must fail:\n%s", out)
+}
+
+// ── C08-api-config-31: logLevel sets both loggers ─────────────────────────────
+
+func TestChartLogLevelSetsBothLoggers(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		c := controllerContainer(t, render(t, "kardinal-promoter", "--set", "logLevel="+level))
+		args := argValues(c)
+		assert.Equal(t, level, args["log-level"], "zerolog --log-level")
+		_, err := zerolog.ParseLevel(args["log-level"])
+		assert.NoError(t, err)
+
+		fs := flag.NewFlagSet("zap", flag.ContinueOnError)
+		(&czap.Options{}).BindFlags(fs)
+		assert.NoError(t, fs.Set("zap-log-level", args["zap-log-level"]),
+			"logLevel=%s renders --zap-log-level=%s, which controller-runtime rejects", level, args["zap-log-level"])
+	}
+}
+
+// ── C08-api-config-29: dashboard copies in sync ───────────────────────────────
+
+func TestChartDashboardInSync(t *testing.T) {
+	root := repoRoot(t)
+	chartCopy, err := os.ReadFile(filepath.Join(chartPath(t), "dashboards", "kardinal-promoter-dashboard.json"))
+	require.NoError(t, err)
+	docsCopy, err := os.ReadFile(filepath.Join(root, "config", "monitoring", "kardinal-promoter-dashboard.json"))
+	require.NoError(t, err)
+	assert.Equal(t, string(docsCopy), string(chartCopy),
+		"config/monitoring and chart/kardinal-promoter/dashboards hold the same dashboard; keep them identical")
+	assert.True(t, json.Valid(chartCopy), "dashboard must be valid JSON")
+}
+
+// ── C08-api-config-20: PrometheusRule uses metrics that exist ────────────────
+
+func TestChartPrometheusRuleAlertsCanFire(t *testing.T) {
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "prometheusRule.enabled=true")
+	require.NoError(t, err, out)
+	// controller_runtime_webhook_requests_total is only emitted by the
+	// controller-runtime webhook server; kardinal serves webhooks from a
+	// plain net/http mux, so an alert on it can never fire.
+	assert.NotContains(t, out, "controller_runtime_webhook_requests_total")
+	// up == 0 never fires once the target is gone; absent() does.
+	assert.Contains(t, out, "absent(up{")
+}
