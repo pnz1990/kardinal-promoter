@@ -117,13 +117,13 @@ jobs:
           fetch-depth: 0
 
       - name: Download generated CLI docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: generated-cli-docs
           path: docs/reference/cli/
 
       - name: Download generated API docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: generated-api-docs
           path: docs/reference/
@@ -213,13 +213,13 @@ jobs:
           fetch-depth: 0
 
       - name: Download generated CLI docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: generated-cli-docs
           path: docs/reference/cli/
 
       - name: Download generated API docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: generated-api-docs
           path: docs/reference/
