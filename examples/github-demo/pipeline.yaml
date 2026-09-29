@@ -42,7 +42,7 @@ spec:
     # - Requires at least 1 approving review (pr-review)
     # - PolicyGate no-weekend: blocks Saturday/Sunday
     # - 60-minute contiguous healthy bake after merge
-    # - Emergency override available via: kardinal override kardinal-test-app --env prod --reason "hotfix"
+    # - Emergency override available via: kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys --reason "hotfix"
     # - Rollback opens a new PR with kardinal/rollback label
     - name: prod
       path: environments/prod

@@ -161,9 +161,10 @@ kardinal rollback kardinal-test-app --env prod
 ### Scenario E: Override a gate (break-glass)
 
 ```bash
-# Override the weekend gate (requires reason)
-kardinal override kardinal-test-app \
-  --stage prod \
+# Override the weekend gate for the Bundle waiting on it in prod (requires reason).
+# --gate is the name of the org gate in platform-policies; the command finds the
+# Bundle's instance of it in the Pipeline's namespace.
+kardinal override kardinal-test-app --stage prod \
   --gate no-weekend-deploys \
   --reason "P0 hotfix: payment service down"
 ```

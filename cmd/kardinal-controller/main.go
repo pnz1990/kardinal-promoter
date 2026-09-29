@@ -248,11 +248,19 @@ func main() {
 	flag.StringVar(&graphIdentity.ReaderClusterRole, "graph-reader-clusterrole",
 		graphpkg.DefaultReaderClusterRole,
 		"ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read.")
+	var graphReaderNamespaces string
+	flag.StringVar(&graphReaderNamespaces, "graph-reader-namespaces",
+		strings.Join(graphpkg.DefaultReaderNamespaces, ","),
+		"Comma-separated namespaces, besides a Graph's own namespace, where the Graph ServiceAccount "+
+			"may be bound to the reader ClusterRole for health checks. \"*\" allows every namespace "+
+			"except kube-system, kube-public and kube-node-lease. Health checks in other namespaces "+
+			"get no Graph ref.")
 
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+	graphIdentity.ReaderNamespaces = splitCSV(graphReaderNamespaces)
 
 	// Configure zerolog level
 	level, err := zerolog.ParseLevel(zerologLevel)

@@ -54,7 +54,7 @@ var defaultPolicyNamespaces = []string{"platform-policies"}
 func addPolicyNamespacesFlag(cmd *cobra.Command, target *[]string) {
 	cmd.Flags().StringSliceVar(target, "policy-namespaces", defaultPolicyNamespaces,
 		"Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); "+
-			"a Pipeline's spec.policyNamespaces takes precedence")
+			"a Pipeline's spec.policyNamespaces and its own namespace are read as well")
 }
 
 // ─── policy list ────────────────────────────────────────────────────────────
@@ -117,7 +117,7 @@ func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, 
 	}
 	attached := map[string]bool{}
 	for _, env := range pipe.Spec.Environments {
-		instances, _, err := gatesForEnv(pipe, simulatedBundle(pipe, time.Time{}), templates, env.Name)
+		instances, _, err := gatesForEnv(pipe, simulatedBundle(pipe, time.Time{}), templates, policyNS, env.Name)
 		if err != nil {
 			return err
 		}
@@ -322,7 +322,7 @@ func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulat
 		return fmt.Errorf("collect policy gates: %w", err)
 	}
 	bundle := simulatedBundle(pipe, simTime)
-	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.Env)
+	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.PolicyNamespaces, opts.Env)
 	if err != nil {
 		return err
 	}

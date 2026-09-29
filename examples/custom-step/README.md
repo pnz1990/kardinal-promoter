@@ -31,9 +31,16 @@ calls it at `http://custom-step-server.custom-steps.svc.cluster.local/step`
 
 ## Use in a Pipeline
 
-`examples/custom-step/pipeline.yaml` adds the version gate to the prod environment. Change
-`spec.git.url` from the placeholder `myorg/gitops-repo` to your repo, then apply it:
+> **Not runnable yet.** A custom step runs only when it is listed in
+> `spec.environments[].steps`, and `steps` is not implemented yet. The
+> controller rejects a Pipeline that sets it, so the `steps` block in
+> `pipeline.yaml` is commented out. Applied as is, the Pipeline promotes with
+> the default steps and does not call this server. See
+> [docs/custom-steps.md](../../docs/custom-steps.md).
+
+`examples/custom-step/pipeline.yaml` shows where the version gate will go in the prod environment.
+Change `spec.git.url` from the placeholder `myorg/gitops-repo` to your repo, then apply it:
 
 ```bash
-kubectl apply -f examples/custom-step/pipeline.yaml
+kubectl apply -f examples/custom-step/pipeline.yaml   # default steps only, for now
 ```

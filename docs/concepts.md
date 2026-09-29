@@ -103,7 +103,7 @@ spec:
 ```yaml
 spec:
   intent:
-    skipEnvironments: [staging]  # skip staging (requires SkipPermission PolicyGate, see PolicyGates)
+    skipEnvironments: [staging]  # skip staging (if an org gate applies to staging, a skip-permission gate in an org policy namespace must allow it; see Skip permissions)
 ```
 
 ## Pipeline
@@ -149,29 +149,9 @@ Both prod regions promote in parallel after staging is verified.
 
 ### Promotion steps
 
-By default, each environment uses a standard promotion sequence (clone, update image, commit, push/PR, health check). For custom workflows, you can define explicit steps:
+Each environment runs the default promotion sequence (clone, update image, commit, push/PR, health check). The sequence is inferred from `update.strategy` and `approval`.
 
-```yaml
-  environments:
-    - name: prod
-      approval: pr-review
-      steps:
-        - uses: git-clone
-        - uses: kustomize-set-image
-        - uses: run-tests                  # custom step (HTTP webhook)
-          config:
-            url: https://test-runner.internal/validate
-            timeout: 5m
-        - uses: git-commit
-        - uses: git-push
-        - uses: open-pr
-        - uses: wait-for-merge
-        - uses: health-check
-```
-
-Built-in steps: `git-clone`, `kustomize-set-image`, `helm-set-image`, `kustomize-build`, `config-merge`, `git-commit`, `git-push`, `open-pr`, `wait-for-merge`, `health-check`. Custom steps call an HTTP endpoint that returns pass/fail.
-
-When `steps` is omitted, the default sequence is inferred from `update.strategy` and `approval`.
+> **Not implemented yet.** `spec.environments[].steps` is reserved for custom step sequences, but the controller cannot run them yet: a Pipeline that sets `steps` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`. See [Custom Promotion Steps](custom-steps.md).
 
 ### Distributed mode and sharding
 
@@ -213,64 +193,7 @@ Use `kardinal get steps <pipeline>` to see all active PromotionSteps.
 
 ## PromotionTemplate
 
-A `PromotionTemplate` is a reusable named step sequence that multiple Pipeline environments can reference. It solves the repetition problem: without templates, every environment in every Pipeline must repeat the full step list (git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check). For organizations with many pipelines, a step change (for example, adding a webhook notification after `git-commit`) requires editing every Pipeline YAML.
-
-**Create a template:**
-
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: PromotionTemplate
-metadata:
-  name: standard-with-notify
-  namespace: kardinal-system
-spec:
-  description: "Standard promotion with post-commit Slack notification"
-  steps:
-    - uses: git-clone
-    - uses: kustomize-set-image
-    - uses: git-commit
-    - uses: notify-slack
-      webhook:
-        url: https://hooks.slack.com/services/T00/B00/XXX
-    - uses: open-pr
-    - uses: wait-for-merge
-    - uses: health-check
-```
-
-**Reference from a Pipeline environment:**
-
-```yaml
-spec:
-  environments:
-    - name: test
-      promotionTemplate:
-        name: standard-with-notify
-        namespace: kardinal-system   # optional — defaults to Pipeline namespace
-    - name: uat
-      promotionTemplate:
-        name: standard-with-notify
-    - name: prod
-      approval: pr-review
-      promotionTemplate:
-        name: standard-with-notify
-```
-
-**Resolution rules:**
-
-1. When `promotionTemplate` is set and `steps` is **empty**: the template's steps are inlined into the environment at translation time.
-2. When `promotionTemplate` is set and `steps` is **also set**: the local `steps` take precedence (local override wins). The template is validated (must exist) but its steps are not used.
-3. When `promotionTemplate` is **not set**: existing behavior — `steps` or the default sequence.
-
-**Important:** Template inlining happens at Graph build time (inside the translator), before the promotion DAG is created. The `PromotionTemplate` CR is read once per Bundle creation; there is no runtime dependency. Modifying a `PromotionTemplate` after a Graph is created does not affect in-flight promotions.
-
-**When to use templates:**
-- Shared notification or audit steps across many Pipelines
-- Organization-mandated steps (security scans, compliance webhooks) applied uniformly
-- Platform teams offering pre-tested step sequences that application teams reference
-
-**When NOT to use templates:**
-- When a single Pipeline has a custom step list that no other Pipeline will use — prefer `steps` directly.
-- When the step list is trivial (2–3 steps) — templates add indirection without benefit.
+> **Not implemented yet.** The `PromotionTemplate` CRD is installed, and `spec.environments[].promotionTemplate` is reserved for referencing one, but the controller cannot run a template's steps yet. A Pipeline that sets `promotionTemplate` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`. Every environment runs the default promotion sequence. See [Custom Promotion Steps](custom-steps.md).
 
 ## PolicyGate
 
@@ -336,7 +259,7 @@ kardinal explain my-app --env prod
 
 ### Skip permissions
 
-If a Bundle's `intent.skip` lists an environment that has org-level gates, the skip is denied unless a SkipPermission PolicyGate exists and permits it:
+If a Bundle's `intent.skipEnvironments` lists an environment that an org gate applies to, the skip is denied unless a skip-permission PolicyGate allows it. Only a gate in an org policy namespace (the controller's `--policy-namespaces`, default `platform-policies`) can grant a skip; gates in the Pipeline's namespace or in `spec.policyNamespaces` never can.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -348,9 +271,12 @@ metadata:
     kardinal.io/type: skip-permission
     kardinal.io/applies-to: staging
 spec:
-  expression: "bundle.labels.hotfix == true"
+  skipPermission: true
+  expression: 'bundle.version.startsWith("hotfix-")'
   message: "Hotfix bundles may skip staging"
 ```
+
+When the skip is allowed, the permission's expression is evaluated in front of the next environment: that environment waits until the expression is true. When no such gate exists, the Bundle goes to phase `Failed` and its status conditions say `skip denied for environment "staging": ...`. See [Skip Permissions](policy-gates.md#skip-permissions).
 
 ## Health Verification
 
