@@ -13,7 +13,7 @@
 <a id=__codelineno-1-6 name=__codelineno-1-6 href=#__codelineno-1-6></a><span class=c1>// 4. Emit structured log event: bundle name, type, target Pipeline</span>
 <a id=__codelineno-1-7 name=__codelineno-1-7 href=#__codelineno-1-7></a><span class=c1>// 5. Return reconcile.Result{}</span>
 <a id=__codelineno-1-8 name=__codelineno-1-8 href=#__codelineno-1-8></a><span class=c1>//</span>
-<a id=__codelineno-1-9 name=__codelineno-1-9 href=#__codelineno-1-9></a><span class=c1>// Error handling: wrap all errors with fmt.Errorf(&quot;context: %w&quot;, err)</span>
+<a id=__codelineno-1-9 name=__codelineno-1-9 href=#__codelineno-1-9></a><span class=c1>// Error handling: wrap all errors with fmt.Errorf("context: %w", err)</span>
 <a id=__codelineno-1-10 name=__codelineno-1-10 href=#__codelineno-1-10></a><span class=c1>// Idempotency: if phase is already set, skip patching (no-op)</span>
 </code></pre></div> <p>Create: <code>pkg/reconciler/bundle/reconciler.go</code></p> <h3 id=3-pkgreconcilerpipelinereconcilergo-pipelinereconciler>3. <code>pkg/reconciler/pipeline/reconciler.go</code> — PipelineReconciler<a class=headerlink href=#3-pkgreconcilerpipelinereconcilergo-pipelinereconciler title="Permanent link">&para;</a></h3> <div class=highlight><pre><span></span><code><a id=__codelineno-2-1 name=__codelineno-2-1 href=#__codelineno-2-1></a><span class=c1>// PipelineReconciler watches Pipeline objects.</span>
 <a id=__codelineno-2-2 name=__codelineno-2-2 href=#__codelineno-2-2></a><span class=c1>// On each reconcile:</span>
@@ -23,7 +23,7 @@
 <a id=__codelineno-2-6 name=__codelineno-2-6 href=#__codelineno-2-6></a><span class=c1>// 3. If validation fails: set status.conditions = [{type: Ready, status: False,</span>
 <a id=__codelineno-2-7 name=__codelineno-2-7 href=#__codelineno-2-7></a><span class=c1>//    reason: ValidationFailed, message: &lt;error&gt;}]</span>
 <a id=__codelineno-2-8 name=__codelineno-2-8 href=#__codelineno-2-8></a><span class=c1>// 4. If validation passes: set status.conditions = [{type: Ready, status: False,</span>
-<a id=__codelineno-2-9 name=__codelineno-2-9 href=#__codelineno-2-9></a><span class=c1>//    reason: Initializing, message: &quot;Pipeline initialized, awaiting first Bundle&quot;}]</span>
+<a id=__codelineno-2-9 name=__codelineno-2-9 href=#__codelineno-2-9></a><span class=c1>//    reason: Initializing, message: "Pipeline initialized, awaiting first Bundle"}]</span>
 <a id=__codelineno-2-10 name=__codelineno-2-10 href=#__codelineno-2-10></a><span class=c1>// 5. Patch status via status subresource</span>
 <a id=__codelineno-2-11 name=__codelineno-2-11 href=#__codelineno-2-11></a><span class=c1>// 6. Emit structured log event: pipeline name, environment count</span>
 <a id=__codelineno-2-12 name=__codelineno-2-12 href=#__codelineno-2-12></a><span class=c1>// 7. Return reconcile.Result{}</span>

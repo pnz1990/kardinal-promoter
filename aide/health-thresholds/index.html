@@ -4,11 +4,11 @@
 <a id=__codelineno-0-4 name=__codelineno-0-4 href=#__codelineno-0-4></a><span class=w>  </span><span class=no>AND the last CI run on main branch did not fail.</span>
 <a id=__codelineno-0-5 name=__codelineno-0-5 href=#__codelineno-0-5></a><span class=nt>checkable_command</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">|</span>
 <a id=__codelineno-0-6 name=__codelineno-0-6 href=#__codelineno-0-6></a><span class=w>  </span><span class=no>MEANINGFUL=$(gh pr list --repo $REPO --state merged \</span>
-<a id=__codelineno-0-7 name=__codelineno-0-7 href=#__codelineno-0-7></a><span class=w>    </span><span class=no>--search &quot;merged:&gt;$(date -u -d &#39;2 hours ago&#39; +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null)&quot; \</span>
-<a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a><span class=w>    </span><span class=no>--json title --jq &#39;[.[] | select(.title | test(&quot;^(feat|fix|test|docs)\\b&quot;))] | length&#39; 2&gt;/dev/null || echo &quot;0&quot;)</span>
+<a id=__codelineno-0-7 name=__codelineno-0-7 href=#__codelineno-0-7></a><span class=w>    </span><span class=no>--search "merged:&gt;$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null)" \</span>
+<a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a><span class=w>    </span><span class=no>--json title --jq '[.[] | select(.title | test("^(feat|fix|test|docs)\\b"))] | length' 2&gt;/dev/null || echo "0")</span>
 <a id=__codelineno-0-9 name=__codelineno-0-9 href=#__codelineno-0-9></a><span class=w>  </span><span class=no>CI_RED=$(gh run list --repo $REPO --branch main --limit 1 \</span>
-<a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a><span class=w>    </span><span class=no>--json conclusion --jq &#39;if .[0].conclusion == &quot;failure&quot; then &quot;YES&quot; else &quot;NO&quot; end&#39; 2&gt;/dev/null || echo &quot;NO&quot;)</span>
-<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a><span class=w>  </span><span class=no>[ &quot;$MEANINGFUL&quot; -gt &quot;0&quot; ] &amp;&amp; [ &quot;$CI_RED&quot; = &quot;NO&quot; ]</span>
+<a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a><span class=w>    </span><span class=no>--json conclusion --jq 'if .[0].conclusion == "failure" then "YES" else "NO" end' 2&gt;/dev/null || echo "NO")</span>
+<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a><span class=w>  </span><span class=no>[ "$MEANINGFUL" -gt "0" ] &amp;&amp; [ "$CI_RED" = "NO" ]</span>
 <a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a><span class=nt>consequence</span><span class=p>:</span><span class=w> </span><span class="l l-Scalar l-Scalar-Plain">No action required. Log GREEN in batch report.</span>
 </code></pre></div> <h3 id=amber-loop-running-but-not-productive>AMBER — Loop running but not productive<a class=headerlink href=#amber-loop-running-but-not-productive title="Permanent link">&para;</a></h3> <div class=highlight><pre><span></span><code><a id=__codelineno-1-1 name=__codelineno-1-1 href=#__codelineno-1-1></a><span class=nt>state</span><span class=p>:</span><span class=w> </span><span class="l l-Scalar l-Scalar-Plain">AMBER</span>
 <a id=__codelineno-1-2 name=__codelineno-1-2 href=#__codelineno-1-2></a><span class=nt>condition</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">&gt;</span>
@@ -18,11 +18,11 @@
 <a id=__codelineno-1-6 name=__codelineno-1-6 href=#__codelineno-1-6></a><span class=w>  </span><span class=no>- needs-human issues exist but no agent-blocking CI failure</span>
 <a id=__codelineno-1-7 name=__codelineno-1-7 href=#__codelineno-1-7></a><span class=nt>checkable_command</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">|</span>
 <a id=__codelineno-1-8 name=__codelineno-1-8 href=#__codelineno-1-8></a><span class=w>  </span><span class=no>MEANINGFUL=$(gh pr list --repo $REPO --state merged \</span>
-<a id=__codelineno-1-9 name=__codelineno-1-9 href=#__codelineno-1-9></a><span class=w>    </span><span class=no>--search &quot;merged:&gt;$(date -u -d &#39;2 hours ago&#39; +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null)&quot; \</span>
-<a id=__codelineno-1-10 name=__codelineno-1-10 href=#__codelineno-1-10></a><span class=w>    </span><span class=no>--json title --jq &#39;[.[] | select(.title | test(&quot;^(feat|fix|test|docs)\\b&quot;))] | length&#39; 2&gt;/dev/null || echo &quot;0&quot;)</span>
+<a id=__codelineno-1-9 name=__codelineno-1-9 href=#__codelineno-1-9></a><span class=w>    </span><span class=no>--search "merged:&gt;$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ 2&gt;/dev/null)" \</span>
+<a id=__codelineno-1-10 name=__codelineno-1-10 href=#__codelineno-1-10></a><span class=w>    </span><span class=no>--json title --jq '[.[] | select(.title | test("^(feat|fix|test|docs)\\b"))] | length' 2&gt;/dev/null || echo "0")</span>
 <a id=__codelineno-1-11 name=__codelineno-1-11 href=#__codelineno-1-11></a><span class=w>  </span><span class=no>NEEDS_HUMAN=$(gh issue list --repo $REPO --state open --label needs-human \</span>
-<a id=__codelineno-1-12 name=__codelineno-1-12 href=#__codelineno-1-12></a><span class=w>    </span><span class=no>--json number --jq &#39;length&#39; 2&gt;/dev/null || echo &quot;0&quot;)</span>
-<a id=__codelineno-1-13 name=__codelineno-1-13 href=#__codelineno-1-13></a><span class=w>  </span><span class=no>[ &quot;$MEANINGFUL&quot; -eq &quot;0&quot; ] || [ &quot;$NEEDS_HUMAN&quot; -gt &quot;0&quot; ]</span>
+<a id=__codelineno-1-12 name=__codelineno-1-12 href=#__codelineno-1-12></a><span class=w>    </span><span class=no>--json number --jq 'length' 2&gt;/dev/null || echo "0")</span>
+<a id=__codelineno-1-13 name=__codelineno-1-13 href=#__codelineno-1-13></a><span class=w>  </span><span class=no>[ "$MEANINGFUL" -eq "0" ] || [ "$NEEDS_HUMAN" -gt "0" ]</span>
 <a id=__codelineno-1-14 name=__codelineno-1-14 href=#__codelineno-1-14></a><span class=nt>consequence</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">&gt;</span>
 <a id=__codelineno-1-15 name=__codelineno-1-15 href=#__codelineno-1-15></a><span class=w>  </span><span class=no>SM posts AMBER signal. COORDINATOR queues at least one feat item next batch.</span>
 <a id=__codelineno-1-16 name=__codelineno-1-16 href=#__codelineno-1-16></a><span class=w>  </span><span class=no>If needs-human count &gt; 3, post escalation comment.</span>
@@ -33,18 +33,18 @@
 <a id=__codelineno-2-5 name=__codelineno-2-5 href=#__codelineno-2-5></a><span class=w>  </span><span class=no>- The scheduled workflow itself failed to run (no run in &gt;12h)</span>
 <a id=__codelineno-2-6 name=__codelineno-2-6 href=#__codelineno-2-6></a><span class=nt>checkable_command</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">|</span>
 <a id=__codelineno-2-7 name=__codelineno-2-7 href=#__codelineno-2-7></a><span class=w>  </span><span class=no>CI_RED=$(gh run list --repo $REPO --branch main --limit 1 \</span>
-<a id=__codelineno-2-8 name=__codelineno-2-8 href=#__codelineno-2-8></a><span class=w>    </span><span class=no>--json conclusion --jq &#39;if .[0].conclusion == &quot;failure&quot; then &quot;YES&quot; else &quot;NO&quot; end&#39; 2&gt;/dev/null || echo &quot;NO&quot;)</span>
+<a id=__codelineno-2-8 name=__codelineno-2-8 href=#__codelineno-2-8></a><span class=w>    </span><span class=no>--json conclusion --jq 'if .[0].conclusion == "failure" then "YES" else "NO" end' 2&gt;/dev/null || echo "NO")</span>
 <a id=__codelineno-2-9 name=__codelineno-2-9 href=#__codelineno-2-9></a><span class=w>  </span><span class=no>LAST_SCHEDULED=$(gh run list --repo $REPO \</span>
 <a id=__codelineno-2-10 name=__codelineno-2-10 href=#__codelineno-2-10></a><span class=w>    </span><span class=no>--workflow otherness-scheduled.yml --limit 1 \</span>
-<a id=__codelineno-2-11 name=__codelineno-2-11 href=#__codelineno-2-11></a><span class=w>    </span><span class=no>--json createdAt --jq &#39;.[0].createdAt&#39; 2&gt;/dev/null || echo &quot;&quot;)</span>
-<a id=__codelineno-2-12 name=__codelineno-2-12 href=#__codelineno-2-12></a><span class=w>  </span><span class=no>HOURS_SINCE=$(python3 -c &quot;</span>
+<a id=__codelineno-2-11 name=__codelineno-2-11 href=#__codelineno-2-11></a><span class=w>    </span><span class=no>--json createdAt --jq '.[0].createdAt' 2&gt;/dev/null || echo "")</span>
+<a id=__codelineno-2-12 name=__codelineno-2-12 href=#__codelineno-2-12></a><span class=w>  </span><span class=no>HOURS_SINCE=$(python3 -c "</span>
 <a id=__codelineno-2-13 name=__codelineno-2-13 href=#__codelineno-2-13></a><span class=w>  </span><span class=no>import datetime, sys</span>
-<a id=__codelineno-2-14 name=__codelineno-2-14 href=#__codelineno-2-14></a><span class=w>  </span><span class=no>t = &#39;$LAST_SCHEDULED&#39;.strip()</span>
-<a id=__codelineno-2-15 name=__codelineno-2-15 href=#__codelineno-2-15></a><span class=w>  </span><span class=no>if not t or t == &#39;null&#39;: print(999); exit()</span>
-<a id=__codelineno-2-16 name=__codelineno-2-16 href=#__codelineno-2-16></a><span class=w>  </span><span class=no>dt = datetime.datetime.fromisoformat(t.replace(&#39;Z&#39;, &#39;+00:00&#39;))</span>
+<a id=__codelineno-2-14 name=__codelineno-2-14 href=#__codelineno-2-14></a><span class=w>  </span><span class=no>t = '$LAST_SCHEDULED'.strip()</span>
+<a id=__codelineno-2-15 name=__codelineno-2-15 href=#__codelineno-2-15></a><span class=w>  </span><span class=no>if not t or t == 'null': print(999); exit()</span>
+<a id=__codelineno-2-16 name=__codelineno-2-16 href=#__codelineno-2-16></a><span class=w>  </span><span class=no>dt = datetime.datetime.fromisoformat(t.replace('Z', '+00:00'))</span>
 <a id=__codelineno-2-17 name=__codelineno-2-17 href=#__codelineno-2-17></a><span class=w>  </span><span class=no>print(int((datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 3600))</span>
-<a id=__codelineno-2-18 name=__codelineno-2-18 href=#__codelineno-2-18></a><span class=w>  </span><span class=no>&quot; 2&gt;/dev/null || echo &quot;0&quot;)</span>
-<a id=__codelineno-2-19 name=__codelineno-2-19 href=#__codelineno-2-19></a><span class=w>  </span><span class=no>[ &quot;$CI_RED&quot; = &quot;YES&quot; ] || [ &quot;${HOURS_SINCE:-0}&quot; -gt 12 ]</span>
+<a id=__codelineno-2-18 name=__codelineno-2-18 href=#__codelineno-2-18></a><span class=w>  </span><span class=no>" 2&gt;/dev/null || echo "0")</span>
+<a id=__codelineno-2-19 name=__codelineno-2-19 href=#__codelineno-2-19></a><span class=w>  </span><span class=no>[ "$CI_RED" = "YES" ] || [ "${HOURS_SINCE:-0}" -gt 12 ]</span>
 <a id=__codelineno-2-20 name=__codelineno-2-20 href=#__codelineno-2-20></a><span class=nt>consequence</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">&gt;</span>
 <a id=__codelineno-2-21 name=__codelineno-2-21 href=#__codelineno-2-21></a><span class=w>  </span><span class=no>SM posts RED signal and opens/updates [NEEDS HUMAN] issue.</span>
 <a id=__codelineno-2-22 name=__codelineno-2-22 href=#__codelineno-2-22></a><span class=w>  </span><span class=no>COORDINATOR does NOT generate new queue items until RED is resolved.</span>
@@ -59,14 +59,14 @@
 <a id=__codelineno-3-8 name=__codelineno-3-8 href=#__codelineno-3-8></a><span class=w>  </span><span class=no>(i.e., no feat/fix/test/docs PRs that touch pkg/, cmd/, web/src/, chart/, scripts/, docs/ outside docs/aide/)</span>
 <a id=__codelineno-3-9 name=__codelineno-3-9 href=#__codelineno-3-9></a><span class=nt>checkable_command</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">|</span>
 <a id=__codelineno-3-10 name=__codelineno-3-10 href=#__codelineno-3-10></a><span class=w>  </span><span class=no># Check state.json chore_only_guard_count</span>
-<a id=__codelineno-3-11 name=__codelineno-3-11 href=#__codelineno-3-11></a><span class=w>  </span><span class=no>STALL_COUNT=$(python3 -c &quot;</span>
+<a id=__codelineno-3-11 name=__codelineno-3-11 href=#__codelineno-3-11></a><span class=w>  </span><span class=no>STALL_COUNT=$(python3 -c "</span>
 <a id=__codelineno-3-12 name=__codelineno-3-12 href=#__codelineno-3-12></a><span class=w>  </span><span class=no>import json</span>
 <a id=__codelineno-3-13 name=__codelineno-3-13 href=#__codelineno-3-13></a><span class=w>  </span><span class=no>try:</span>
-<a id=__codelineno-3-14 name=__codelineno-3-14 href=#__codelineno-3-14></a><span class=w>      </span><span class=no>s = json.load(open(&#39;.otherness/state.json&#39;))</span>
-<a id=__codelineno-3-15 name=__codelineno-3-15 href=#__codelineno-3-15></a><span class=w>      </span><span class=no>print(s.get(&#39;chore_only_guard_count&#39;, 0))</span>
+<a id=__codelineno-3-14 name=__codelineno-3-14 href=#__codelineno-3-14></a><span class=w>      </span><span class=no>s = json.load(open('.otherness/state.json'))</span>
+<a id=__codelineno-3-15 name=__codelineno-3-15 href=#__codelineno-3-15></a><span class=w>      </span><span class=no>print(s.get('chore_only_guard_count', 0))</span>
 <a id=__codelineno-3-16 name=__codelineno-3-16 href=#__codelineno-3-16></a><span class=w>  </span><span class=no>except: print(0)</span>
-<a id=__codelineno-3-17 name=__codelineno-3-17 href=#__codelineno-3-17></a><span class=w>  </span><span class=no>&quot; 2&gt;/dev/null || echo &quot;0&quot;)</span>
-<a id=__codelineno-3-18 name=__codelineno-3-18 href=#__codelineno-3-18></a><span class=w>  </span><span class=no>[ &quot;${STALL_COUNT:-0}&quot; -ge 3 ]</span>
+<a id=__codelineno-3-17 name=__codelineno-3-17 href=#__codelineno-3-17></a><span class=w>  </span><span class=no>" 2&gt;/dev/null || echo "0")</span>
+<a id=__codelineno-3-18 name=__codelineno-3-18 href=#__codelineno-3-18></a><span class=w>  </span><span class=no>[ "${STALL_COUNT:-0}" -ge 3 ]</span>
 <a id=__codelineno-3-19 name=__codelineno-3-19 href=#__codelineno-3-19></a><span class=nt>consequence</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">&gt;</span>
 <a id=__codelineno-3-20 name=__codelineno-3-20 href=#__codelineno-3-20></a><span class=w>  </span><span class=no>SM detects STALL and posts [STALL DETECTED — N consecutive housekeeping-only sessions].</span>
 <a id=__codelineno-3-21 name=__codelineno-3-21 href=#__codelineno-3-21></a><span class=w>  </span><span class=no>COORDINATOR must queue a feat item from docs/design/15-production-readiness.md</span>
