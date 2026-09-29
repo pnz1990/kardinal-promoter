@@ -167,11 +167,13 @@ func TestReconciler_BelowThreshold_NoRollback(t *testing.T) {
 func TestReconciler_AtThreshold_TriggersRollback(t *testing.T) {
 	rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
 	step := makePromotionStep("step-1", "nginx-demo", "prod", 3) // 3 failures >= 3 threshold
-	bundle := makeBundle("bundle-1", "nginx-demo")
+	bundle := rtBundle("bundle-1", "1.25.0", 30)
+	// bundle-0 was Verified in prod before bundle-1: the rollback target.
+	good, goodStep := rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5)
 
 	s := buildScheme(t)
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(rp, step, bundle).
+		WithObjects(rp, step, bundle, rtPipeline(), good, goodStep).
 		WithStatusSubresource(rp, step, bundle).
 		Build()
 
@@ -198,8 +200,10 @@ func TestReconciler_AtThreshold_TriggersRollback(t *testing.T) {
 	for _, b := range bundleList.Items {
 		if b.Labels["kardinal.io/rollback"] == "true" {
 			rollbackFound = true
-			assert.Equal(t, "bundle-1", b.Spec.Provenance.RollbackOf,
-				"rollback bundle must reference original bundle")
+			assert.Equal(t, "bundle-0", b.Spec.Provenance.RollbackOf,
+				"rollback bundle must reference the bundle it restores")
+			assert.Equal(t, "bundle-1", b.Annotations["kardinal.io/rollback-from"],
+				"rollback bundle must reference the failing bundle")
 		}
 	}
 	assert.True(t, rollbackFound, "rollback Bundle must be created")

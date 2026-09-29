@@ -11,7 +11,6 @@ import (
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -62,19 +61,17 @@ func (r *Reconciler) holdIfPaused(ctx context.Context, log zerolog.Logger, ps *v
 	return true, ctrl.Result{RequeueAfter: requeuePaused}, nil
 }
 
-// autoRollbackName is the name of the onHealthFailure=rollback Bundle of a
-// failing Bundle. It is fixed so a retried reconcile, or a second region of
-// the same environment, reuses the Bundle instead of creating another.
-func autoRollbackName(bundle string) string {
-	return bundle + "-rollback-alarm"
-}
-
 // createAutoRollback creates the onHealthFailure=rollback Bundle for a step
 // whose health check failed. It uses lifecycle.PlanRollback, the same planner
 // as `kardinal rollback` and the UI: the target is the most recent Bundle,
 // other than the failing one, that was Verified in the environment, and the
 // rollback Bundle copies its artifacts. The failing image is never
 // re-promoted.
+//
+// The name is fixed (lifecycle.AutoRollbackName), and an existing rollback of
+// the failing Bundle in the environment, from this path or a RollbackPolicy,
+// is reused (lifecycle.FindRollback), so a retried reconcile or a second
+// region of the environment does not create another.
 //
 // It returns the rollback Bundle name. refusal is set, and nothing is
 // created, when there is nothing safe to roll back to (no earlier Verified
@@ -83,15 +80,15 @@ func autoRollbackName(bundle string) string {
 //
 // Graph-first: it creates a new Bundle and writes no other object's status.
 func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.PromotionStep) (name string, refusal, err error) {
-	name = autoRollbackName(ps.Spec.BundleName)
-	var existing v1alpha1.Bundle
-	getErr := r.Get(ctx, types.NamespacedName{Namespace: ps.Namespace, Name: name}, &existing)
-	if getErr == nil {
-		return name, nil, nil
+	existing, findErr := lifecycle.FindRollback(ctx, r.Client, ps.Namespace,
+		ps.Spec.PipelineName, ps.Spec.Environment, ps.Spec.BundleName)
+	if findErr != nil {
+		return "", nil, fmt.Errorf("find rollback of bundle %s: %w", ps.Spec.BundleName, findErr)
 	}
-	if !apierrors.IsNotFound(getErr) {
-		return "", nil, fmt.Errorf("get rollback bundle %s: %w", name, getErr)
+	if existing != "" {
+		return existing, nil, nil
 	}
+	name = lifecycle.AutoRollbackName(ps.Spec.BundleName, "alarm")
 
 	plan, planErr := lifecycle.PlanRollback(ctx, r.Client, lifecycle.RollbackRequest{
 		Namespace:   ps.Namespace,
