@@ -78,6 +78,7 @@ spec:
                     description: |-
                       Interval is how often to poll the repository.
                       Uses Go duration format (e.g. "5m", "1h").
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                   pathGlob:
                     description: |-
@@ -101,6 +102,7 @@ spec:
                     description: |-
                       Interval is how often to poll the registry.
                       Uses Go duration format (e.g. "5m", "1h").
+                    pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                   registry:
                     description: Registry is the OCI registry URL (e.g. "ghcr.io/myorg/myapp").

@@ -61,6 +61,8 @@ spec:
                   has no upstream dependency. This sequential default means a list of N environments
                   without dependsOn fields produces a linear chain. Override with dependsOn to
                   express parallel fan-out or explicit DAG structure.
+                  Environment names must be unique; at most 100 environments (a bound
+                  the API server needs to cost the CEL rules on each entry).
                 items:
                   description: EnvironmentSpec defines one environment in a Pipeline.
                   properties:
@@ -180,6 +182,7 @@ spec:
                           description: |-
                             Timeout is the maximum time to wait for health checks to pass.
                             Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+                          pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                           type: string
                         type:
                           description: |-
@@ -206,9 +209,14 @@ spec:
                       - branch
                       type: string
                     name:
-                      description: Name is the environment identifier (e.g. "test",
-                        "uat", "prod").
+                      description: |-
+                        Name is the environment identifier (e.g. "test", "uat", "prod").
+                        It must be a DNS label (lower-case letters, digits and '-', at most 63
+                        characters): it names a Graph node, derived objects and, for the
+                        resource, argoRollouts and flagger health checks, a namespace.
+                      maxLength: 63
                       minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     onHealthFailure:
                       default: none
@@ -392,6 +400,7 @@ spec:
                         in the WaitingForMerge state before transitioning to Failed. When not set
                         or zero, the step waits indefinitely (no timeout). Accepts Go duration
                         strings: "24h", "72h", "168h", etc.
+                      pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                       type: string
                     wave:
                       description: |-
@@ -408,8 +417,17 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: 'reserved environment name: the name becomes a kro Graph
+                      node ID; bundle, kro reserved IDs (spec, status, metadata, graph,
+                      self, each, item, ...) and CEL keywords are not allowed'
+                    rule: '!(self.name in [''api-version'',''kind'',''metadata'',''namespace'',''spec'',''status'',''graph'',''graphengine'',''kro'',''each'',''item'',''items'',''object'',''self'',''this'',''context'',''true'',''false'',''null'',''in'',''as'',''break'',''const'',''continue'',''else'',''for'',''function'',''if'',''import'',''let'',''loop'',''package'',''return'',''var'',''void'',''while'',''bundle''])'
+                maxItems: 100
                 minItems: 1
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               git:
                 description: |-
                   Git holds the shared GitOps repository configuration for all

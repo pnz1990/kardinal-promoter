@@ -68,6 +68,7 @@ spec:
                 description: |-
                   Interval is how often to re-evaluate the metric (e.g. "1m", "5m").
                   Defaults to "1m" if empty.
+                pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                 type: string
               prometheusURL:
                 description: |-

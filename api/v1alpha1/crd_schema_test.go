@@ -1,0 +1,439 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package v1alpha1_test
+
+// Offline CRD admission checks. validateCR does what the API server does to a
+// custom resource on create, using the generated CRDs in config/crd/bases:
+// prune unknown fields, validate types/enums/patterns/lengths (kube-openapi),
+// check list-map keys for duplicates, and evaluate x-kubernetes-validations
+// rules with cel-go. A pruned field is reported as an error so that tests catch
+// fields the API server would silently drop.
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/google/cel-go/cel"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	apiextensionsinternal "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/kube-openapi/pkg/validation/strfmt"
+	"k8s.io/kube-openapi/pkg/validation/validate"
+	"sigs.k8s.io/yaml"
+)
+
+func repoRootDir(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	return filepath.Join(filepath.Dir(thisFile), "..", "..")
+}
+
+type loadedCRD struct {
+	crd        apiextensionsv1.CustomResourceDefinition
+	structural *structuralschema.Structural
+}
+
+// loadCRDs returns the generated CRDs keyed by kind.
+func loadCRDs(t *testing.T) map[string]loadedCRD {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(repoRootDir(t), "config", "crd", "bases", "*.yaml"))
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	out := map[string]loadedCRD{}
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		require.NoError(t, err)
+		var crd apiextensionsv1.CustomResourceDefinition
+		require.NoError(t, yaml.Unmarshal(raw, &crd), f)
+		require.Len(t, crd.Spec.Versions, 1, "%s: validateCR assumes one version", f)
+		var internal apiextensionsinternal.JSONSchemaProps
+		require.NoError(t, apiextensionsv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(
+			crd.Spec.Versions[0].Schema.OpenAPIV3Schema, &internal, nil))
+		s, err := structuralschema.NewStructural(&internal)
+		require.NoError(t, err, f)
+		out[crd.Spec.Names.Kind] = loadedCRD{crd: crd, structural: s}
+	}
+	return out
+}
+
+// toUnstructured decodes YAML the way the API server decodes JSON: whole
+// numbers become int64, not float64.
+func toUnstructured(t *testing.T, doc []byte) map[string]interface{} {
+	t.Helper()
+	j, err := yaml.YAMLToJSON(doc)
+	require.NoError(t, err)
+	var obj map[string]interface{}
+	require.NoError(t, utiljson.Unmarshal(j, &obj))
+	return obj
+}
+
+// validateCR returns every reason the API server would reject obj (or drop
+// part of it).
+func validateCR(t *testing.T, crds map[string]loadedCRD, obj map[string]interface{}) []string {
+	t.Helper()
+	kind, _ := obj["kind"].(string)
+	c, ok := crds[kind]
+	require.True(t, ok, "no CRD for kind %q", kind)
+	s := c.structural
+
+	var errs []string
+	for _, p := range pruning.PruneWithOptions(obj, s, true, structuralschema.UnknownFieldPathOptions{TrackUnknownFieldPaths: true}) {
+		errs = append(errs, "unknown field "+p)
+	}
+	res := validate.NewSchemaValidator(s.ToKubeOpenAPI(), nil, "", strfmt.Default).Validate(obj)
+	for _, e := range res.Errors {
+		errs = append(errs, e.Error())
+	}
+	for _, e := range listtype.ValidateListSetsAndMaps(field.NewPath(""), s, obj) {
+		errs = append(errs, e.Error())
+	}
+	errs = append(errs, celRuleErrors(t, s, obj, "")...)
+	return errs
+}
+
+// celRuleErrors evaluates every x-kubernetes-validations rule in s against the
+// matching node of obj. It covers what our rules use (self, has, in); the API
+// server's environment adds more library functions and a cost check.
+func celRuleErrors(t *testing.T, s *structuralschema.Structural, obj interface{}, path string) []string {
+	t.Helper()
+	if s == nil || obj == nil {
+		return nil
+	}
+	var errs []string
+	for _, r := range s.XValidations {
+		env, err := cel.NewEnv(cel.Variable("self", cel.DynType))
+		require.NoError(t, err)
+		ast, iss := env.Compile(r.Rule)
+		require.NoError(t, iss.Err(), "rule at %q does not compile: %s", path, r.Rule)
+		prg, err := env.Program(ast)
+		require.NoError(t, err)
+		out, _, err := prg.Eval(map[string]interface{}{"self": obj})
+		if err != nil || out.Value() != true {
+			errs = append(errs, fmt.Sprintf("%s: %s", path, r.Message))
+		}
+	}
+	switch v := obj.(type) {
+	case map[string]interface{}:
+		for k, val := range v {
+			if p, ok := s.Properties[k]; ok {
+				errs = append(errs, celRuleErrors(t, &p, val, path+"."+k)...)
+			} else if s.AdditionalProperties != nil && s.AdditionalProperties.Structural != nil {
+				errs = append(errs, celRuleErrors(t, s.AdditionalProperties.Structural, val, path+"."+k)...)
+			}
+		}
+	case []interface{}:
+		for i, it := range v {
+			errs = append(errs, celRuleErrors(t, s.Items, it, fmt.Sprintf("%s[%d]", path, i))...)
+		}
+	}
+	return errs
+}
+
+// yamlDocuments splits a multi-document YAML file.
+func yamlDocuments(t *testing.T, file string) [][]byte {
+	t.Helper()
+	raw, err := os.ReadFile(file)
+	require.NoError(t, err)
+	var out [][]byte
+	for _, d := range bytes.Split(raw, []byte("\n---")) {
+		if len(bytes.TrimSpace(d)) > 0 {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// ── C08-api-config-22: samples pass the CRD schema ────────────────────────────
+
+// TestCRDSchemaAcceptsSamples: every kardinal.io object in config/samples must
+// be accepted by its CRD with nothing pruned.
+func TestCRDSchemaAcceptsSamples(t *testing.T) {
+	crds := loadCRDs(t)
+	var files []string
+	require.NoError(t, filepath.Walk(filepath.Join(repoRootDir(t), "config", "samples"), func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(p, ".yaml") {
+			files = append(files, p)
+		}
+		return err
+	}))
+	require.NotEmpty(t, files)
+	checked := 0
+	for _, f := range files {
+		for _, doc := range yamlDocuments(t, f) {
+			obj := toUnstructured(t, doc)
+			if obj == nil || !strings.HasPrefix(fmt.Sprint(obj["apiVersion"]), "kardinal.io/") {
+				continue
+			}
+			checked++
+			assert.Empty(t, validateCR(t, crds, obj), "%s: %s %v", filepath.Base(f), obj["kind"], obj["metadata"])
+		}
+	}
+	assert.Greater(t, checked, 5)
+}
+
+// ── C08-api-config-33: environment names ──────────────────────────────────────
+
+func pipelineWithEnvs(names ...string) map[string]interface{} {
+	envs := make([]interface{}, 0, len(names))
+	for _, n := range names {
+		envs = append(envs, map[string]interface{}{"name": n})
+	}
+	return map[string]interface{}{
+		"apiVersion": "kardinal.io/v1alpha1",
+		"kind":       "Pipeline",
+		"metadata":   map[string]interface{}{"name": "p", "namespace": "default"},
+		"spec": map[string]interface{}{
+			"git":          map[string]interface{}{"url": "https://github.com/example/gitops"},
+			"environments": envs,
+		},
+	}
+}
+
+// TestCRDSchemaEnvironmentNames: an environment name becomes a kro node ID
+// (camelCase), a Kubernetes name part and a Job namespace, so the CRD must
+// reject names kro reserves, names that are not DNS labels, and duplicates.
+func TestCRDSchemaEnvironmentNames(t *testing.T) {
+	crds := loadCRDs(t)
+	accepted := [][]string{
+		{"test", "uat", "prod"},
+		{"prod-eu", "prod-us"},
+		{"x1", "stage-2"},
+		{strings.Repeat("a", 63)},
+	}
+	for _, names := range accepted {
+		assert.Empty(t, validateCR(t, crds, pipelineWithEnvs(names...)), "%v must be accepted", names)
+	}
+	rejected := [][]string{
+		{"Prod"},
+		{"prod_eu"},
+		{"prod.eu"},
+		{"-prod"},
+		{"prod-"},
+		{strings.Repeat("a", 64)},
+		{"test", "test"},
+		// kro reserved node IDs (compiler/validation.go) and kardinal's own "bundle" node.
+		{"bundle"}, {"status"}, {"spec"}, {"metadata"}, {"kind"}, {"api-version"},
+		{"graph"}, {"kro"}, {"self"}, {"each"}, {"item"}, {"items"}, {"object"},
+		{"this"}, {"context"}, {"namespace"}, {"in"}, {"true"}, {"null"}, {"if"}, {"while"},
+	}
+	for _, names := range rejected {
+		assert.NotEmpty(t, validateCR(t, crds, pipelineWithEnvs(names...)), "%v must be rejected", names)
+	}
+}
+
+// ── C08-api-config-30, -21: duration fields ───────────────────────────────────
+
+func setPath(obj map[string]interface{}, path []string, value interface{}) {
+	m := obj
+	for i, p := range path {
+		if i == len(path)-1 {
+			m[p] = value
+			return
+		}
+		if list, ok := m[p].([]interface{}); ok {
+			m = list[0].(map[string]interface{})
+			continue
+		}
+		next, ok := m[p].(map[string]interface{})
+		if !ok {
+			next = map[string]interface{}{}
+			m[p] = next
+		}
+		m = next
+	}
+}
+
+func baseObject(kind string) map[string]interface{} {
+	meta := map[string]interface{}{"name": "x", "namespace": "default"}
+	obj := map[string]interface{}{"apiVersion": "kardinal.io/v1alpha1", "kind": kind, "metadata": meta}
+	switch kind {
+	case "Pipeline":
+		return pipelineWithEnvs("test")
+	case "PolicyGate":
+		obj["spec"] = map[string]interface{}{"expression": "true"}
+	case "ScheduleClock":
+		obj["spec"] = map[string]interface{}{}
+	case "MetricCheck":
+		obj["spec"] = map[string]interface{}{
+			"provider": "prometheus", "prometheusURL": "http://prometheus:9090", "query": "up",
+			"threshold": map[string]interface{}{"value": int64(1), "operator": "gte"},
+		}
+	case "Subscription":
+		obj["spec"] = map[string]interface{}{
+			"type": "image", "pipeline": "p",
+			"image": map[string]interface{}{"registry": "ghcr.io/example/app"},
+			"git":   map[string]interface{}{"repoURL": "https://github.com/example/app"},
+		}
+	}
+	return obj
+}
+
+// TestCRDSchemaDurationFields: every Go-duration string field rejects values
+// time.ParseDuration rejects (the reconcilers silently fell back to a default)
+// and accepts every value it accepts, including "1h30m" and "1.5h" (the old
+// PolicyGate VAP regex rejected those).
+func TestCRDSchemaDurationFields(t *testing.T) {
+	crds := loadCRDs(t)
+	fields := []struct {
+		kind string
+		path []string
+	}{
+		{"Pipeline", []string{"spec", "environments", "health", "timeout"}},
+		{"Pipeline", []string{"spec", "environments", "waitForMergeTimeout"}},
+		{"PolicyGate", []string{"spec", "recheckInterval"}},
+		{"ScheduleClock", []string{"spec", "interval"}},
+		{"MetricCheck", []string{"spec", "interval"}},
+		{"Subscription", []string{"spec", "image", "interval"}},
+		{"Subscription", []string{"spec", "git", "interval"}},
+	}
+	good := []string{"", "0", "30s", "5m", "1h", "1h30m", "1.5h", "500ms", "2h45m30s", "10us", "10µs"}
+	bad := []string{"15 minutes", "2 days", "5", "1d", "-5m", "5M", "1h 30m", "m"}
+	for _, f := range fields {
+		base := baseObject(f.kind)
+		require.Empty(t, validateCR(t, crds, base), "%s base object must be valid", f.kind)
+		for _, v := range good {
+			obj := baseObject(f.kind)
+			setPath(obj, f.path, v)
+			assert.Empty(t, validateCR(t, crds, obj), "%s %s=%q must be accepted", f.kind, strings.Join(f.path, "."), v)
+		}
+		for _, v := range bad {
+			obj := baseObject(f.kind)
+			setPath(obj, f.path, v)
+			assert.NotEmpty(t, validateCR(t, crds, obj), "%s %s=%q must be rejected", f.kind, strings.Join(f.path, "."), v)
+		}
+	}
+}
+
+// ── C08-api-config-04: the schema covers the removed VAP's valid rules ───────
+
+// TestCRDSchemaCoversRemovedVAPRules: the chart's ValidatingAdmissionPolicies
+// were removed (they denied every Pipeline). Each rule that was correct is
+// enforced by the CRD schema; the wrong ones (per-environment gitRepo; images
+// required on every image Bundle) are not.
+func TestCRDSchemaCoversRemovedVAPRules(t *testing.T) {
+	crds := loadCRDs(t)
+	bundle := func(spec map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"apiVersion": "kardinal.io/v1alpha1", "kind": "Bundle",
+			"metadata": map[string]interface{}{"name": "b", "namespace": "default"},
+			"spec":     spec,
+		}
+	}
+	gate := func(spec map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"apiVersion": "kardinal.io/v1alpha1", "kind": "PolicyGate",
+			"metadata": map[string]interface{}{"name": "g", "namespace": "default"},
+			"spec":     spec,
+		}
+	}
+	env := func(e map[string]interface{}) map[string]interface{} {
+		p := pipelineWithEnvs("test")
+		p["spec"].(map[string]interface{})["environments"] = []interface{}{e}
+		return p
+	}
+	rejected := map[string]map[string]interface{}{
+		"policygate empty expression":   gate(map[string]interface{}{"expression": ""}),
+		"policygate bad recheckInterval": gate(map[string]interface{}{"expression": "true", "recheckInterval": "5 minutes"}),
+		"pipeline no environments":      pipelineWithEnvs(),
+		"pipeline env empty name":       pipelineWithEnvs(""),
+		"pipeline bad update strategy":  env(map[string]interface{}{"name": "test", "update": map[string]interface{}{"strategy": "custom"}}),
+		"pipeline bad approval":         env(map[string]interface{}{"name": "test", "approval": "manual"}),
+		"bundle empty pipeline":         bundle(map[string]interface{}{"type": "image", "pipeline": ""}),
+		"bundle bad type":               bundle(map[string]interface{}{"type": "tarball", "pipeline": "p"}),
+	}
+	for name, obj := range rejected {
+		assert.NotEmpty(t, validateCR(t, crds, obj), "%s must be rejected by the CRD schema", name)
+	}
+	accepted := map[string]map[string]interface{}{
+		"quickstart-style pipeline": env(map[string]interface{}{
+			"name": "test", "approval": "auto", "path": "environments/test",
+			"update": map[string]interface{}{"strategy": "kustomize"},
+		}),
+		"rollback bundle without images": bundle(map[string]interface{}{"type": "image", "pipeline": "p"}),
+		"gate with compound interval":    gate(map[string]interface{}{"expression": "true", "recheckInterval": "1h30m"}),
+	}
+	for name, obj := range accepted {
+		assert.Empty(t, validateCR(t, crds, obj), "%s must be accepted", name)
+	}
+}
+
+// ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
+
+// TestCRDPrinterColumnsResolve: every printer column's JSONPath must name a
+// field in the schema whose type matches the column type.
+func TestCRDPrinterColumnsResolve(t *testing.T) {
+	for kind, c := range loadCRDs(t) {
+		for _, col := range c.crd.Spec.Versions[0].AdditionalPrinterColumns {
+			if strings.HasPrefix(col.JSONPath, ".metadata.") {
+				continue
+			}
+			s := c.structural
+			for _, part := range strings.Split(strings.TrimPrefix(col.JSONPath, "."), ".") {
+				next, ok := s.Properties[part]
+				if !assert.True(t, ok, "%s column %q: %s does not resolve at %q", kind, col.Name, col.JSONPath, part) {
+					s = nil
+					break
+				}
+				s = &next
+			}
+			if s == nil {
+				continue
+			}
+			want := map[string][]string{
+				"string": {"string"}, "date": {"string"}, "integer": {"integer"},
+				"number": {"number", "integer"}, "boolean": {"boolean"},
+			}[col.Type]
+			assert.Contains(t, want, s.Type, "%s column %q is type %s over a %s field", kind, col.Name, col.Type, s.Type)
+		}
+	}
+}
+
+// TestPromotionStepStateEnum: the documented PromotionStep states must equal
+// the CRD enum (a state the reconciler writes that the enum lacks is rejected
+// by the API server on the status update).
+func TestPromotionStepStateEnum(t *testing.T) {
+	s := loadCRDs(t)["PromotionStep"].structural.Properties["status"].Properties["state"]
+	require.NotNil(t, s.ValueValidation)
+	var got []string
+	for _, e := range s.ValueValidation.Enum {
+		got = append(got, fmt.Sprint(e.Object))
+	}
+	want := []string{
+		"Pending", "Promoting", "WaitingForMerge", "HealthChecking", "Verified",
+		"Failed", "AbortedByAlarm", "RollingBack",
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	assert.Equal(t, want, got)
+}
+
+// TestCRDShortNamesDoNotShadowBuiltins: kubectl resolves a short name to the
+// built-in resource first, so a colliding short name is unusable.
+func TestCRDShortNamesDoNotShadowBuiltins(t *testing.T) {
+	builtin := map[string]bool{
+		"cm": true, "cs": true, "csr": true, "crd": true, "crds": true, "deploy": true,
+		"ds": true, "ep": true, "ev": true, "hpa": true, "ing": true, "limits": true,
+		"netpol": true, "no": true, "ns": true, "pc": true, "pdb": true, "po": true,
+		"pv": true, "pvc": true, "quota": true, "rc": true, "rs": true, "sa": true,
+		"sc": true, "sts": true, "svc": true,
+	}
+	for kind, c := range loadCRDs(t) {
+		for _, sn := range c.crd.Spec.Names.ShortNames {
+			assert.False(t, builtin[sn], "%s shortName %q is a built-in kubectl short name", kind, sn)
+		}
+	}
+}

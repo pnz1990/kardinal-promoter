@@ -115,6 +115,7 @@ spec:
                 description: |-
                   RecheckInterval is how often to re-evaluate time-based gates.
                   Uses Go duration format (e.g. "5m", "1h").
+                pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                 type: string
               selector:
                 description: |-

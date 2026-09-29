@@ -20,9 +20,6 @@ spec:
     - jsonPath: .spec.webhook.url
       name: URL
       type: string
-    - jsonPath: .spec.events
-      name: Events
-      type: string
     - jsonPath: .status.lastSentAt
       name: Last-Sent
       type: string
