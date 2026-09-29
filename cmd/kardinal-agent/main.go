@@ -30,11 +30,14 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -109,7 +112,7 @@ func main() {
 
 	// O3: shard is required. An agent without a shard would compete with the controller.
 	if err := validateShard(shard); err != nil {
-		logger.Fatal().Err(err).Msg("[kardinal-agent] --shard is required for distributed mode")
+		logger.Fatal().Err(err).Msg("[kardinal-agent] invalid --shard")
 	}
 
 	logger.Info().
@@ -185,18 +188,18 @@ func newAgentLogger(levelName string) zerolog.Logger {
 	return logger
 }
 
-// validateShard returns an error if shard is empty or whitespace-only.
+// validateShard returns an error if shard is empty, whitespace-only, or not a
+// valid label value. The agent selects steps by the kardinal.io/shard label,
+// so a value that cannot be a label value would never match any step.
 // This is a separate function so it can be unit-tested without starting the manager.
 func validateShard(shard string) error {
-	if len(shard) == 0 {
+	if strings.TrimSpace(shard) == "" {
 		return errShardRequired
 	}
-	for _, r := range shard {
-		if r != ' ' && r != '\t' {
-			return nil
-		}
+	if errs := validation.IsValidLabelValue(shard); len(errs) > 0 {
+		return fmt.Errorf("--shard %q is not a valid label value: %s", shard, strings.Join(errs, "; "))
 	}
-	return errShardRequired
+	return nil
 }
 
 // errShardRequired is returned when --shard is not provided.
