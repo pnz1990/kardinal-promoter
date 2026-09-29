@@ -42,7 +42,6 @@ env:
   CONTROL_CLUSTER: kardinal-control
   DEV_CLUSTER: kardinal-dev
   PROD_CLUSTER: kardinal-prod
-  CHART_IMAGE_TAG: v0.8.0   # last known-good published image
 
 jobs:
   demo-validate:
@@ -85,8 +84,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
         run: |
-          # Use the published image tag (set in env.CHART_IMAGE_TAG = v0.8.0)
-          # The setup.sh script will create clusters and install everything.
+          # setup.sh creates the clusters, builds the controller image from this
+          # checkout, loads it into kind, and installs this checkout's chart.
           bash demo/scripts/setup.sh
 
       - name: Run validation
