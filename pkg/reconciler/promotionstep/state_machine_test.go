@@ -282,8 +282,9 @@ func TestSupersession(t *testing.T) {
 	}
 }
 
-// TestWaitForMerge proves C03-promotionstep-07, -22 and -30, and records the
-// merge commit for E2E-01.
+// TestWaitForMerge proves C03-promotionstep-07, -22 and -30, records the
+// merge commit for E2E-01, and fails the step when its PRStatus reports an SCM
+// error that polling cannot fix (status.pollError).
 func TestWaitForMerge(t *testing.T) {
 	past := metav1.NewTime(time.Now().Add(-time.Minute))
 	merged := openPRStatus("prs", "org/repo", 42)
@@ -318,6 +319,12 @@ func TestWaitForMerge(t *testing.T) {
 			}},
 		{name: "empty prStatusRef fails (C03-30)", noRef: true,
 			wantState: "Failed", wantMsg: "spec.prStatusRef is empty"},
+		{name: "a PR that cannot be polled fails the step", prStatus: func() *v1alpha1.PRStatus {
+			p := openPRStatus("prs", "org/repo", 42)
+			p.Status.PollError = "get PR status: GitHub API GET /repos/org/repo/pulls/42: status 401: Bad credentials"
+			return p
+		}(),
+			wantState: "Failed", wantMsg: "PR #42 cannot be polled: get PR status: GitHub API GET /repos/org/repo/pulls/42: status 401"},
 		{name: "merge commit is recorded (E2E-01)", prStatus: merged,
 			wantState: "HealthChecking", wantMsg: "PR #42 merged",
 			check: func(t *testing.T, _ client.Client, ps v1alpha1.PromotionStep) {

@@ -759,6 +759,21 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber))
 	}
 
+	// The PRStatusReconciler got an SCM error that polling again cannot fix
+	// (401, 403 that is not a rate limit, 404, 410). Fail now, as the
+	// wait-for-merge step does, instead of waiting for a merge that will never
+	// be seen. The PR is not closed: the same token or repository would fail.
+	if prs.Status.PollError != "" {
+		log.Warn().
+			Str("prStatusRef", prStatusName).
+			Int("prNumber", prs.Spec.PRNumber).
+			Str("pollError", prs.Status.PollError).
+			Msg("PRStatus cannot poll the PR — failing")
+		ps.Status.WaitForMergeExpiry = nil
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
+			fmt.Sprintf("PR #%d cannot be polled: %s", prs.Spec.PRNumber, prs.Status.PollError))
+	}
+
 	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.
 	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 }

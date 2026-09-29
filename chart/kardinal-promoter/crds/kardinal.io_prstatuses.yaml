@@ -131,6 +131,13 @@ spec:
                   Open is true when the pull request is still open (not merged, not closed).
                   Set to false when the PR is closed or merged.
                 type: boolean
+              pollError:
+                description: |-
+                  PollError is the SCM API error of the last poll when a retry cannot fix
+                  it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep
+                  waiting for this PR fails with it. Cleared by the next successful poll.
+                  Transient errors (429, 5xx, network) are only logged and retried.
+                type: string
             type: object
         type: object
     served: true

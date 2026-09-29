@@ -63,6 +63,13 @@ type PRStatusStatus struct {
 	// tool deployed this exact revision.
 	// +optional
 	MergeCommitSHA string `json:"mergeCommitSHA,omitempty"`
+
+	// PollError is the SCM API error of the last poll when a retry cannot fix
+	// it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep
+	// waiting for this PR fails with it. Cleared by the next successful poll.
+	// Transient errors (429, 5xx, network) are only logged and retried.
+	// +optional
+	PollError string `json:"pollError,omitempty"`
 }
 
 // +kubebuilder:object:root=true

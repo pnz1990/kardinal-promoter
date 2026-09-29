@@ -26,6 +26,10 @@
 //     status.approvalCount and status.lastCheckedAt. When the PR is merged it
 //     also records status.mergeCommitSHA, which the health check requires the
 //     GitOps tool to have deployed.
+//   - A poll error that a retry cannot fix (401, 403 that is not a rate limit,
+//     404, 410) is written to status.pollError and the PR is polled again
+//     every 5 minutes; the PromotionStep waiting for the PR fails with it.
+//     Transient errors (429, 5xx, network) are retried every 30 seconds.
 //   - The PromotionStep reconciler watches PRStatus and advances from
 //     WaitingForMerge when status.merged is true. The SCM webhook may set
 //     status.merged first; this reconciler then only fills in the merge commit.
@@ -66,6 +70,11 @@ const (
 	// mergeCommitWindow bounds how long after the merge was recorded the
 	// reconciler keeps asking the SCM for the merge commit.
 	mergeCommitWindow = 10 * time.Minute
+	// permanentErrorInterval is how often a PR whose last poll failed with a
+	// permanent SCM error (status.pollError) is polled again.
+	permanentErrorInterval = 5 * time.Minute
+	// maxPollErrorLen bounds status.pollError; SCM error bodies can be pages long.
+	maxPollErrorLen = 512
 )
 
 // Reconciler watches PRStatus objects and polls the SCM provider to update
@@ -130,11 +139,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	merged, open, err := r.SCM.GetPRStatus(ctx, prs.Spec.Repo, prs.Spec.PRNumber)
 	if err != nil {
+		if scm.IsPermanentError(err) {
+			return r.recordPollError(ctx, log, &prs, err)
+		}
 		log.Error().Err(err).
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("GetPRStatus failed, will retry")
-		// Non-fatal: requeue to retry.
+		// Transient (429, 5xx, network): requeue to retry.
 		return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 	}
 
@@ -158,7 +170,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	now := metav1.NewTime(time.Now().UTC())
 	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
 		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
-		mergeSHA != prs.Status.MergeCommitSHA
+		mergeSHA != prs.Status.MergeCommitSHA || prs.Status.PollError != ""
 	stale := prs.Status.LastCheckedAt == nil || now.Sub(prs.Status.LastCheckedAt.Time) >= lastCheckedRefresh
 	if changed || stale {
 		// This is the only CRD status this reconciler writes.
@@ -168,6 +180,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		prs.Status.Approved = approved
 		prs.Status.ApprovalCount = approvalCount
 		prs.Status.MergeCommitSHA = mergeSHA
+		prs.Status.PollError = ""
 		prs.Status.LastCheckedAt = &now
 		if err := r.Status().Patch(ctx, &prs, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch prstatus %s: %w", req.Name, err)
@@ -200,6 +213,34 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Dur("requeue", requeuePollInterval).
 		Msg("PR still open, requeueing")
 	return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+}
+
+// recordPollError records a GetPRStatus error that polling again cannot fix
+// (scm.IsPermanentError: 401, 403 that is not a rate limit, 404, 410) in
+// status.pollError, where the PromotionStep waiting for the PR reads it and
+// fails. The PR is polled again every permanentErrorInterval, not every
+// requeuePollInterval, so a rotated token is still picked up. Only the error
+// is written: lastCheckedAt stays the time of the last successful poll, since
+// a set lastCheckedAt with open=false means "closed without merging".
+func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus, pollErr error) (ctrl.Result, error) {
+	msg := pollErr.Error()
+	if len(msg) > maxPollErrorLen {
+		msg = msg[:maxPollErrorLen] + "..."
+	}
+	log.Error().Err(pollErr).
+		Str("prURL", prs.Spec.PRURL).
+		Int("prNumber", prs.Spec.PRNumber).
+		Dur("retry", permanentErrorInterval).
+		Msg("GetPRStatus failed and a retry will not fix it; recorded in status.pollError")
+	if prs.Status.PollError != msg {
+		// Written only when it changes: each patch re-enqueues the object.
+		patch := client.MergeFrom(prs.DeepCopy())
+		prs.Status.PollError = msg
+		if err := r.Status().Patch(ctx, prs, patch); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch prstatus %s poll error: %w", prs.Name, err)
+		}
+	}
+	return ctrl.Result{RequeueAfter: permanentErrorInterval}, nil
 }
 
 // recordMergeCommit fills in status.mergeCommitSHA of a merged PR. It retries

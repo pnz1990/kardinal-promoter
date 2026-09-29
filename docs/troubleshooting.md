@@ -371,6 +371,17 @@ A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2
 Polling again cannot fix these, so the step is marked as a permanent failure. A 403 rate limit,
 429, 5xx or network error keeps the step waiting and it is retried every 30 seconds.
 
+A step already in `WaitingForMerge` learns about the merge from its PRStatus. When the PRStatus
+poll gets one of these errors, it writes it to `status.pollError` and the step fails with
+`PR #<n> cannot be polled: <error>`:
+
+```bash
+kubectl get prstatus -o custom-columns=NAME:.metadata.name,PR:.spec.prNumber,ERROR:.status.pollError
+```
+
+The PRStatus keeps polling every 5 minutes and clears `pollError` once a poll succeeds, but the
+failed step does not resume. Fix the token or the repository, then create a new Bundle.
+
 ### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 
 GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rate limit has been hit. The **SCM circuit breaker** (shipped in v0.7.0) handles this automatically.
