@@ -16,9 +16,10 @@
 // Package scheduleclock implements the ScheduleClockReconciler.
 //
 // The ScheduleClock CRD exists solely to generate Kubernetes watch events on a
-// configurable interval by updating status.tick. PolicyGate reconcilers that
-// Watch ScheduleClock objects re-evaluate their expressions on every tick without
-// needing a separate RequeueAfter timer loop.
+// configurable interval by updating status.tick. The PolicyGate reconciler
+// watches ScheduleClock objects and re-evaluates every gate instance on each
+// tick. It also keeps its per-gate RequeueAfter: recheckInterval, which is the
+// only periodic re-evaluation when no ScheduleClock exists.
 //
 // Architecture context:
 //
@@ -27,9 +28,8 @@
 //	  - It calls time.Now() only inside a CRD status write — no logic leak.
 //	  - It has no external HTTP calls, no cross-CRD mutations, no exec.Command.
 //
-// This eliminates PG-4 from docs/design/11-graph-purity-tech-debt.md:
-// the PolicyGate reconciler no longer needs ctrl.Result{RequeueAfter: recheckInterval}
-// for time-based gates — instead it Watches ScheduleClock and re-evaluates on tick.
+// No Graph node references a ScheduleClock today: the tick reaches gates only
+// through the PolicyGate reconciler's watch.
 package scheduleclock
 
 import (
@@ -40,7 +40,9 @@ import (
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -103,9 +105,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // SetupWithManager registers the ScheduleClockReconciler with the controller-runtime Manager.
+// The tick write does not re-trigger the clock (GenerationChangedPredicate): it
+// used to cause a second write whenever the reconcile crossed a second
+// boundary, and each write re-evaluates every gate (C04-gates-36). Ticks come
+// from RequeueAfter; a spec edit still reconciles at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.ScheduleClock{}).
+		For(&kardinalv1alpha1.ScheduleClock{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 

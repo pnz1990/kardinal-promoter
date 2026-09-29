@@ -20,8 +20,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -118,7 +121,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
-		return ctrl.Result{RequeueAfter: recheckInterval}, nil
+		// Re-evaluate just after the override expires, so the gate does not stay
+		// force-passed for up to a whole recheck interval (C04-gates-21).
+		return ctrl.Result{RequeueAfter: min(recheckInterval, activeOverride.ExpiresAt.Sub(now)+time.Second)}, nil
 	}
 
 	// Build CEL context. bundleVersion is returned separately so it can be
@@ -649,13 +654,13 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("status patch: %w", err)
 	}
-	// Audit: write on state change only (ready flip), not every evaluation.
-	if ready != prevReady {
+	// Audit the first evaluation and every ready flip, not every recheck.
+	if ready != prevReady || isFirstEval {
 		outcome := "Success"
 		if !ready {
 			outcome = "Failure"
 		}
-		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason)
+		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason, now)
 	}
 	// Emit Kubernetes Event on gate state change OR on first evaluation that blocks.
 	// First block: isFirstEval && !ready (gate immediately blocks on creation).
@@ -715,6 +720,31 @@ func (r *Reconciler) now() time.Time {
 	return time.Now().UTC()
 }
 
+// metricCheckRequests enqueues the PolicyGate instances in the MetricCheck's
+// namespace whose expression reads metrics, so they are re-evaluated as soon
+// as a MetricCheck result changes.
+func (r *Reconciler) metricCheckRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.instanceGateRequests(ctx, "MetricCheck", "metrics", client.InNamespace(obj.GetNamespace()))
+}
+
+// metricCheckResultChanged passes MetricCheck updates that change what a gate
+// can read (metrics.<name>.value and metrics.<name>.result) or the spec. The
+// MetricCheck reconciler writes lastEvaluatedAt on every query; re-evaluating
+// every gate in the namespace on each of those writes was wasted work
+// (C04-gates-36). Create and delete events pass.
+var metricCheckResultChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldMC, okOld := e.ObjectOld.(*kardinalv1alpha1.MetricCheck)
+		newMC, okNew := e.ObjectNew.(*kardinalv1alpha1.MetricCheck)
+		if !okOld || !okNew {
+			return true
+		}
+		return oldMC.Generation != newMC.Generation ||
+			oldMC.Status.Result != newMC.Status.Result ||
+			oldMC.Status.LastValue != newMC.Status.LastValue
+	},
+}
+
 // SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
 // It adds a Watch on MetricCheck objects so that when any MetricCheck in a namespace
 // changes (status updated by the MetricCheckReconciler), all PolicyGates in that
@@ -724,25 +754,22 @@ func (r *Reconciler) now() time.Time {
 //
 // It also adds a Watch on ScheduleClock objects: when a ScheduleClock's status.tick
 // changes (updated on each interval by the ScheduleClockReconciler), all PolicyGate
-// instances in ALL namespaces are re-evaluated. This replaces the per-gate
-// ctrl.Result{RequeueAfter: recheckInterval} timer loop for schedule.* expressions.
-// (PG-4 from docs/design/11-graph-purity-tech-debt.md)
+// instances in ALL namespaces are re-evaluated, so schedule.* expressions follow
+// the clock interval. The per-gate RequeueAfter: recheckInterval still runs as
+// well; it is the only periodic re-evaluation when no ScheduleClock exists.
+//
+// The gate's own status writes do not re-trigger it (GenerationChangedPredicate):
+// every evaluation writes lastEvaluatedAt, and re-evaluating on that write
+// doubled the evaluations and the status writes (C04-gates-36).
 //
 // It also watches ChangeWindow objects: the ChangeWindow reconciler writes
 // status.active at every window boundary, and that write re-evaluates every
 // PolicyGate instance whose expression references changewindow, so a freeze
 // starts blocking at its boundary rather than at the next recheckInterval.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// metricCheckMapper enqueues all PolicyGates in the same namespace as the
-	// changed MetricCheck. This ensures PolicyGates with metrics.* expressions
-	// are re-evaluated immediately when a MetricCheck result changes.
-	metricCheckMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
-		return r.instanceGateRequests(ctx, "MetricCheck", "", client.InNamespace(obj.GetNamespace()))
-	}
-
 	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
-	// when any ScheduleClock ticks. This ensures schedule.* expressions are
-	// re-evaluated on every clock interval without a per-gate RequeueAfter timer.
+	// when any ScheduleClock ticks, so schedule.* expressions are re-evaluated
+	// on every clock interval rather than only at their recheckInterval.
 	scheduleClockMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
 		return r.instanceGateRequests(ctx, "ScheduleClock", "")
 	}
@@ -755,15 +782,14 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.PolicyGate{}).
-		// Watch MetricCheck objects: when a MetricCheck status changes (Pass/Fail),
-		// all PolicyGates in the same namespace are re-evaluated immediately.
-		// This replaces the polling-only model with an event-driven one,
-		// moving toward the Graph-first Watch node architecture.
-		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(metricCheckMapper)).
+		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
+		// the gates in the same namespace that read metrics are re-evaluated
+		// immediately.
+		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(r.metricCheckRequests),
+			builder.WithPredicates(metricCheckResultChanged)).
 		// Watch ScheduleClock objects: when status.tick changes, all PolicyGate instances
-		// are re-evaluated cluster-wide. This replaces RequeueAfter for schedule.* gates.
-		// (PG-4 elimination — see docs/design/11-graph-purity-tech-debt.md)
+		// are re-evaluated cluster-wide.
 		Watches(&kardinalv1alpha1.ScheduleClock{}, handler.EnqueueRequestsFromMapFunc(scheduleClockMapper)).
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.

@@ -41,7 +41,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
@@ -402,8 +404,11 @@ func sanitizeLabelValue(s string) string {
 }
 
 // SetupWithManager registers the SubscriptionReconciler with the controller-runtime Manager.
+// Its own status writes do not re-trigger it (GenerationChangedPredicate):
+// every poll writes lastCheckedAt, and each re-trigger was an extra registry
+// or git poll (C04-gates-36). Polling is driven by RequeueAfter.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.Subscription{}).
+		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }

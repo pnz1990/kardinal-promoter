@@ -367,13 +367,25 @@ PolicyGates are re-evaluated when any of the following occurs:
    objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide.
    This is the recommended pattern for time-based gates (`schedule.isWeekend`, `schedule.hour`, etc.).
 
-2. **`recheckInterval`** (fallback) — When no `ScheduleClock` is installed, the controller
-   re-evaluates gates at the configured `recheckInterval`. This is a polling fallback.
+2. **`recheckInterval`** — Each gate is also re-evaluated every `recheckInterval`, whether or not
+   a `ScheduleClock` is installed. Without a `ScheduleClock` this is the only periodic
+   re-evaluation.
 
-The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph's `readyWhen`
-includes a freshness check. If the controller restarts and has not yet re-evaluated a gate,
-`lastEvaluatedAt` will be stale and Graph treats the gate as not-ready until the controller
-catches up.
+3. **MetricCheck result change** — When a `MetricCheck`'s result or value changes, the gates in
+   the same namespace whose expression reads `metrics` are re-evaluated at once.
+
+4. **ChangeWindow change** — When a `ChangeWindow` opens, closes or is edited, the gates whose
+   expression reads `changewindow` are re-evaluated at once.
+
+5. **Gate spec change** — Editing a gate's `spec` re-evaluates it. The controller's own status
+   writes do not.
+
+The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph only checks
+`status.ready == true`: it does not check how recent the evaluation is. While the controller is
+down, every gate keeps its last result, so a gate that was ready before the outage stays ready
+until the controller re-evaluates it. The controller re-evaluates every gate when it starts.
+`kardinal policy list`, `kardinal status` and the UI show when each gate was last evaluated, so a
+stale result is visible.
 
 ### ScheduleClock setup
 
@@ -428,7 +440,7 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
   --reason "P0 hotfix — incident #4521" --expires-in 2h
 ```
 
-The override adds a `PolicyGateOverride` entry to `PolicyGate.spec.overrides[]`. The gate passes immediately until the override expires. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
+The override adds a `PolicyGateOverride` entry to `PolicyGate.spec.overrides[]`. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
 - `kubectl get policygate <name> -o yaml`
 - PR evidence body (OVERRIDDEN badge in policy compliance table)
 - `kardinal explain` output

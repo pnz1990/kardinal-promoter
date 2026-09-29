@@ -303,7 +303,7 @@ ISO 27001, and FedRAMP audit trail requirements.
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed state |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
-| `GateEvaluated` | PolicyGate changed readiness state (blocked or unblocked) |
+| `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 
 ### Fields on every event
