@@ -114,10 +114,15 @@ type mockSCMProvider struct {
 	open           bool
 	openPRErr      error
 	getPRErr       error
+	labelsErr      error
+	// repos records the repository argument of every OpenPR, GetPRStatus
+	// and AddLabelsToPR call.
+	repos []string
 }
 
-func (m *mockSCMProvider) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
+func (m *mockSCMProvider) OpenPR(_ context.Context, repo, _, _, _, _ string) (string, int, error) {
 	m.openPRCalls++
+	m.repos = append(m.repos, repo)
 	return m.prURL, m.prNumber, m.openPRErr
 }
 
@@ -127,7 +132,8 @@ func (m *mockSCMProvider) CommentOnPR(_ context.Context, _ string, _ int, _ stri
 	return nil
 }
 
-func (m *mockSCMProvider) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
+func (m *mockSCMProvider) GetPRStatus(_ context.Context, repo string, _ int) (bool, bool, error) {
+	m.repos = append(m.repos, repo)
 	return m.merged, m.open, m.getPRErr
 }
 
@@ -139,10 +145,11 @@ func (m *mockSCMProvider) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEven
 	return scm.WebhookEvent{}, nil
 }
 
-func (m *mockSCMProvider) AddLabelsToPR(_ context.Context, _ string, _ int, labels []string) error {
+func (m *mockSCMProvider) AddLabelsToPR(_ context.Context, repo string, _ int, labels []string) error {
 	m.addLabelsCalls++
+	m.repos = append(m.repos, repo)
 	m.addedLabels = append(m.addedLabels, labels...)
-	return nil
+	return m.labelsErr
 }
 
 func makeState(t *testing.T, git *mockGitClient, scmProvider *mockSCMProvider) *parentsteps.StepState {

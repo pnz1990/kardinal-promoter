@@ -16,6 +16,7 @@ package steps_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -123,4 +124,78 @@ func TestEngineStepTimeoutContext(t *testing.T) {
 	_, _, err := eng.ExecuteFrom(ctx, state, 0)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "expected DeadlineExceeded, got: %v", err)
+}
+
+// countingStep counts its calls and returns the statuses in order, then the
+// last one forever.
+type countingStep struct {
+	name     string
+	calls    int
+	statuses []steps.StepStatus
+}
+
+func (s *countingStep) Name() string { return s.name }
+
+func (s *countingStep) Execute(_ context.Context, _ *steps.StepState) (steps.StepResult, error) {
+	st := s.statuses[min(s.calls, len(s.statuses)-1)]
+	s.calls++
+	return steps.StepResult{Status: st, Message: string(st)}, nil
+}
+
+// TestEngine_StepRestart proves a StepRestart re-runs the sequence from the
+// first step (a fresh clone after a non-fast-forward push) and that restarts
+// are bounded (C05-steps-12).
+func TestEngine_StepRestart(t *testing.T) {
+	tests := []struct {
+		name          string
+		second        []steps.StepStatus
+		wantNext      int
+		wantStatus    steps.StepStatus
+		wantErr       string
+		wantFirstRuns int
+	}{
+		{
+			name:          "restart once then succeed",
+			second:        []steps.StepStatus{steps.StepRestart, steps.StepSuccess},
+			wantNext:      2,
+			wantStatus:    steps.StepSuccess,
+			wantFirstRuns: 2,
+		},
+		{
+			name:          "restart forever gives up",
+			second:        []steps.StepStatus{steps.StepRestart},
+			wantNext:      1,
+			wantStatus:    steps.StepFailed,
+			wantErr:       "gave up after 3 restarts",
+			wantFirstRuns: steps.MaxSequenceRestarts + 1,
+		},
+		{
+			name:          "unknown status is an error",
+			second:        []steps.StepStatus{"Bogus"},
+			wantNext:      1,
+			wantStatus:    "Bogus",
+			wantErr:       "unknown status",
+			wantFirstRuns: 1,
+		},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			first := &countingStep{name: fmt.Sprintf("test-restart-first-%d", i), statuses: []steps.StepStatus{steps.StepSuccess}}
+			second := &countingStep{name: fmt.Sprintf("test-restart-second-%d", i), statuses: tc.second}
+			steps.Register(first)
+			steps.Register(second)
+
+			engine := steps.NewEngine([]string{first.name, second.name})
+			next, result, err := engine.ExecuteFrom(context.Background(), &steps.StepState{Outputs: map[string]string{}}, 0)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantNext, next)
+			assert.Equal(t, tc.wantStatus, result.Status)
+			assert.Equal(t, tc.wantFirstRuns, first.calls)
+		})
+	}
 }

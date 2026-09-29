@@ -14,10 +14,8 @@ spec:
   git:                                  # Git repository configuration
     url: <string>                       # GitOps repo URL (HTTPS)
     branch: <string>                    # Base branch (default: "main")
-    layout: <string>                    # "directory" (default) or "branch"
-    sourceBranch: <string>              # Source branch for DRY templates (layout: branch only; default: spec.git.branch)
-    branchPrefix: <string>              # Branch prefix for rendered envs (layout: branch only; default: "env/")
-     provider: <string>                  # "github", "gitlab", "forgejo", "bitbucket", or "azuredevops"
+    layout: <string>                    # "directory" (default); "branch" is not implemented (promotions fail)
+    provider: <string>                  # "github", "gitlab", "forgejo", "bitbucket", or "azuredevops"
     secretRef:
       name: <string>                    # Secret containing the Git token
     webhookMode: <string>               # "webhook" (default) or "polling"
@@ -31,7 +29,6 @@ spec:
         strategy: <string>              # "kustomize" (default), "helm", "replace" (future)
       approval: <string>               # "auto" (default) or "pr-review"
         # pr: <bool>                    # For approval: auto, set pr: true to create audit PRs
-      renderManifests: <bool>           # When true, runs kustomize-build and commits rendered YAML to env branch (requires layout: branch)
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
         resource:                       # When type: resource
@@ -71,9 +68,7 @@ spec:
 |---|---|---|---|
 | `url` | Yes | | HTTPS URL of the GitOps repository |
 | `branch` | No | `main` | Base branch for manifest reads |
-| `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch`: environments as separate branches (use with `sourceBranch` and `branchPrefix` for rendered manifests). |
-| `sourceBranch` | No | `spec.git.branch` | Only used with `layout: branch`. The branch containing DRY source templates. Promotions read from this branch before rendering. |
-| `branchPrefix` | No | `env/` | Only used with `layout: branch`. Prefix for rendered environment branches. For `branchPrefix: env/`, the `prod` environment writes to `env/prod`. |
+| `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
 | `provider` | Yes | | SCM provider: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, or `azuredevops`. Selects the SCM provider for PR creation. For Bitbucket Cloud, use `bitbucket`. For Azure DevOps, use `azuredevops` with a PAT token and repo in `org/project/repo` format. |
 | `secretRef.name` | Yes | | Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. |
 | `webhookMode` | No | `webhook` | `webhook`: react to GitHub webhook events for fast PR merge detection. `polling`: fall back to periodic polling (use in environments where inbound webhooks are not reachable). |
@@ -84,19 +79,18 @@ spec:
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
-| `path` | No | `environments/<name>` | Directory (layout: directory) or branch (layout: branch) in the GitOps repo containing the environment's manifests. |
+| `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. Wave N automatically depends on all wave N-1 environments. Composable with `dependsOn`. |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: runs `kustomize edit set-image`. `helm`: patches a configurable path in `values.yaml`. |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
-| `renderManifests` | No | `false` | When `true`, runs `kustomize-build` after `kustomize-set-image` and commits rendered plain YAML to the environment branch. Requires `layout: branch`. Enables the rendered manifests pattern. |
 | `health.type` | No | auto-detected | Health verification adapter. Auto-detected on startup if omitted: checks for Argo CD Application CRD, then Flux Kustomization CRD, then falls back to Deployment condition. |
 | `health.timeout` | No | `10m` | How long to wait for health verification before marking the step as Failed. |
 | `health.cluster` | No | (local cluster) | Name of a Kubernetes Secret containing a kubeconfig for a remote cluster. Used for multi-cluster health verification. |
 | `health.labelSelector` | No | (none) | Label selector for collection mode (`health.type=resource` only). When set, the Graph gets a kro `ref` node with `metadata.selector.matchLabels` that reads **all** Deployments in the environment namespace matching these labels. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is watched (named `ref` node). Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
 | `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` will reconcile this environment's PromotionSteps. When omitted, the control plane controller handles the step. |
-| `steps` | No | (inferred) | Custom promotion step sequence. When omitted, the default sequence is inferred from `update.strategy`, `approval`, and `renderManifests`. When specified, overrides the default entirely. See [Promotion Steps](#promotion-steps). |
+| `steps` | No | (inferred) | Custom promotion step sequence. When omitted, the default sequence is inferred from `update.strategy` and `approval`. When specified, overrides the default entirely. See [Promotion Steps](#promotion-steps). |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A health alarm resets the timer. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
 | `onHealthFailure` | No | `none` | What to do when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle at the previous image version; step → RollingBack. |
@@ -212,51 +206,13 @@ main branch:
 
 Promotion updates the image tag in the target directory and pushes (auto) or opens a PR (pr-review) against the base branch.
 
-**Branch layout**: each environment is a separate branch. Used for the rendered manifests pattern where DRY Kustomize source lives on one branch and rendered plain YAML lives on environment-specific branches.
+**Branch layout** (`layout: branch`) is **not implemented**. It is meant for the rendered
+manifests pattern, where DRY Kustomize source lives on one branch and rendered plain YAML
+lives on per-environment branches (`env/<name>`). Today the `git-clone` step fails every
+promotion whose Pipeline or environment sets `layout: branch`, before it changes anything.
+`sourceBranch`, `branchPrefix` and `renderManifests` are not Pipeline fields.
 
-```
-main branch (DRY source):
-  environments/
-    dev/kustomization.yaml
-    staging/kustomization.yaml
-    prod/kustomization.yaml
-
-env/dev branch (rendered):
-  deployment.yaml   (plain YAML — no Kustomize)
-  service.yaml
-
-env/staging branch (rendered):
-  deployment.yaml
-  service.yaml
-
-env/prod branch (rendered):
-  deployment.yaml
-  service.yaml
-```
-
-With branch layout and `renderManifests: true`, the promotion sequence is:
-1. Clone source branch (`main`)
-2. Run `kustomize-set-image` against the overlay
-3. Run `kustomize-build` to render plain YAML
-4. Commit rendered output to `env/<name>-incoming` branch
-5. Open PR from `env/<name>-incoming` to `env/<name>`
-6. Wait for merge (or push directly for `approval: auto`)
-7. Health check
-
-Argo CD Applications must track the rendered branch (`env/prod`), not the source branch (`main`).
-
-See [Rendered Manifests](rendered-manifests.md) for a complete setup guide.
-
-## Rendered Manifests: Inferred Step Sequence
-
-When `renderManifests: true` is set on an environment, the default step sequence is:
-
-| `approval` | Step sequence |
-|---|---|
-| `auto` | `git-clone` → `kustomize-set-image` → `kustomize-build` → `git-commit` → `git-push` → `health-check` |
-| `pr-review` | `git-clone` → `kustomize-set-image` → `kustomize-build` → `git-commit` → `git-push` → `open-pr` → `wait-for-merge` → `health-check` |
-
-Without `renderManifests: true`, the standard sequence omits `kustomize-build`.
+See [Rendered Manifests](rendered-manifests.md) for the planned design.
 
 ## Integration Test Step (K-07)
 
@@ -401,55 +357,5 @@ spec:
 
 ### Rendered manifests (branch layout with kustomize-build)
 
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: Pipeline
-metadata:
-  name: my-app
-spec:
-  git:
-    url: https://github.com/myorg/gitops-repo
-    provider: github
-    secretRef: { name: github-token }
-    layout: branch
-    sourceBranch: main         # DRY templates (Kustomize overlays)
-    branchPrefix: env/         # rendered branches: env/dev, env/staging, env/prod
-  environments:
-    - name: dev
-      approval: auto
-      renderManifests: true
-      health:
-        type: argocd
-        argocd: { name: my-app-dev }
-    - name: staging
-      approval: auto
-      renderManifests: true
-      health:
-        type: argocd
-        argocd: { name: my-app-staging }
-    - name: prod
-      approval: pr-review
-      renderManifests: true    # PR diff shows rendered YAML, not template source
-      health:
-        type: argocd
-        argocd: { name: my-app-prod }
-```
-
-Argo CD Applications for the rendered-manifests pattern must track the env branch, not main:
-
-```yaml
-# Argo CD ApplicationSet for rendered branches
-spec:
-  generators:
-    - list:
-        elements:
-          - env: dev
-          - env: staging
-          - env: prod
-  template:
-    spec:
-      source:
-        repoURL: https://github.com/myorg/gitops-repo
-        targetRevision: env/{{env}}    # rendered branch, not main
-        path: .                        # root of env branch (plain YAML files)
-```
+Not implemented yet: `layout: branch` fails the promotion. See
+[Rendered Manifests](rendered-manifests.md) for the planned design.

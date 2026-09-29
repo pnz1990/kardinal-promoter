@@ -15,6 +15,8 @@ package promotionstep
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -126,6 +128,40 @@ func TestExtractPRNumber(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, extractPRNumber(tc.input), tc.input)
 	}
+}
+
+// TestWorkDir_PerPromotionStep proves sibling environments of one Bundle and
+// same-named Pipelines in two namespaces get distinct checkouts
+// (C05-steps-01, C05-steps-02).
+func TestWorkDir_PerPromotionStep(t *testing.T) {
+	r := &Reconciler{}
+	mk := func(ns, env string) *v1alpha1.PromotionStep {
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "app-v2-" + env},
+			Spec:       v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "app-v2", Environment: env},
+		}
+	}
+	base := r.workDir(mk("team-a", "prod-eu"))
+	assert.NotEqual(t, base, r.workDir(mk("team-a", "prod-us")), "sibling environment")
+	assert.NotEqual(t, base, r.workDir(mk("team-b", "prod-eu")), "other namespace")
+	assert.Equal(t, base, r.workDir(mk("team-a", "prod-eu")), "stable across reconciles")
+}
+
+// TestCleanWorkDir_IgnoresStatusWorkDir proves cleanWorkDir removes the
+// computed checkout, not whatever path status.workDir holds.
+func TestCleanWorkDir_IgnoresStatusWorkDir(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(root, "victim")
+	require.NoError(t, os.MkdirAll(victim, 0o755))
+	own := filepath.Join(root, "own")
+	require.NoError(t, os.MkdirAll(own, 0o755))
+
+	r := &Reconciler{WorkDirFn: func(_, _ string) string { return own }}
+	ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{WorkDir: victim}}
+	r.cleanWorkDir(zerolog.Nop(), ps)
+
+	assert.DirExists(t, victim, "a tampered status.workDir must not be deleted")
+	assert.NoDirExists(t, own)
 }
 
 // TestAppendCondition_NewCondition verifies that a new condition is appended.
