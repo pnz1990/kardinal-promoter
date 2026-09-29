@@ -22,7 +22,7 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 |---|---|---|---|
 | `bundle.type` | string | `"image"` | Always |
 | `bundle.version` | string | `"1.29.0"` | Always; derived from image tag or configRef |
-| `bundle.upstreamSoakMinutes` | int | `45` | After any upstream environment is Verified; max across all envs |
+| `bundle.upstreamSoakMinutes` | int | `45` | Soak of the direct upstream environment(s) of the gated environment; minimum across them on fan-in; 0 for a root environment or an upstream that is not Verified |
 | `bundle.provenance.author` | string | `"engineer@co.com"` | When Bundle was created with `provenance.author` |
 | `bundle.provenance.commitSHA` | string | `"abc123def"` | When Bundle was created with `provenance.commitSHA` |
 | `bundle.provenance.ciRunURL` | string | `"https://github.com/..."` | When Bundle was created with `provenance.ciRunURL` |
@@ -35,7 +35,7 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 # Block bots from promoting to prod
 bundle.provenance.author != "dependabot[bot]"
 
-# Require upstream soak (convenience shorthand — max across all upstream envs)
+# Require upstream soak (shorthand for the direct upstream; minimum on fan-in)
 bundle.upstreamSoakMinutes >= 30
 
 # Block hotfix bundles from skipping gates
@@ -107,7 +107,7 @@ upstream.uat.soakMinutes >= 30
 # Require soak in both staging regions
 upstream["staging-us"].soakMinutes >= 15 && upstream["staging-eu"].soakMinutes >= 15
 
-# Convenience: use bundle.upstreamSoakMinutes for max across all upstream envs
+# Shorthand: bundle.upstreamSoakMinutes is the soak of the direct upstream(s), minimum on fan-in
 bundle.upstreamSoakMinutes >= 30
 ```
 

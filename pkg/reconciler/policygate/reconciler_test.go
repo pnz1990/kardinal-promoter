@@ -496,74 +496,145 @@ func makeBundleWithImage(name, ns, repo, tag string) *kardinalv1alpha1.Bundle {
 	return b
 }
 
-// TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes verifies that
-// bundle.upstreamSoakMinutes is the max SoakMinutes across all upstream envs.
-// This is the convenience shorthand documented in docs/policy-gates.md and used
-// in examples/quickstart/policy-gates.yaml.
-func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes(t *testing.T) {
-	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	healthCheckedAt := metav1.NewTime(now.Add(-50 * time.Minute))
-
-	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
-		{Name: "test", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 50},
-		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 45},
-	})
-	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
-		`bundle.upstreamSoakMinutes >= 30`, "1m")
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
-		Build()
-
-	r, err := policygate.NewReconciler(c)
-	require.NoError(t, err)
-	r.NowFn = func() time.Time { return now }
-
-	_, err = r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
-	})
-	require.NoError(t, err)
-
-	var got kardinalv1alpha1.PolicyGate
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
-	assert.True(t, got.Status.Ready,
-		"gate must pass: bundle.upstreamSoakMinutes = max(50,45) = 50 >= 30")
+func makePipeline(name, ns string, envs ...kardinalv1alpha1.EnvironmentSpec) *kardinalv1alpha1.Pipeline {
+	return &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: envs},
+	}
 }
 
-// TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks verifies that
-// bundle.upstreamSoakMinutes blocks when all upstream envs have soak < threshold.
-func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
-	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	healthCheckedAt := metav1.NewTime(now.Add(-10 * time.Minute))
+// TestPolicyGateReconciler_BundleUpstreamSoakMinutes verifies that
+// bundle.upstreamSoakMinutes is the soak of the environment(s) directly upstream
+// of the gated environment in the Pipeline DAG (C04-gates-01, C12-examples-demo-04),
+// not the maximum over every environment. With fan-in it is the minimum across
+// the direct upstreams; an upstream that is not Verified counts as 0.
+func TestPolicyGateReconciler_BundleUpstreamSoakMinutes(t *testing.T) {
+	sequential := makePipeline("nginx-demo", "default",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "uat"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod"},
+	)
+	fanIn := makePipeline("nginx-demo", "default",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod-eu", DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod-us", DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"prod-eu", "prod-us"}},
+	)
 
-	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
-		{Name: "test", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 5},
-		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 10},
-	})
-	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
-		`bundle.upstreamSoakMinutes >= 30`, "1m")
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
-		Build()
+	tests := []struct {
+		name       string
+		pipeline   *kardinalv1alpha1.Pipeline
+		envs       []kardinalv1alpha1.EnvironmentStatus
+		intent     *kardinalv1alpha1.BundleIntent
+		wantReady  bool
+		wantReason string
+	}{
+		{
+			name:     "passes when direct upstream uat soaked long enough",
+			pipeline: sequential,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 50},
+				{Name: "uat", Phase: "Verified", SoakMinutes: 45},
+			},
+			wantReady: true,
+		},
+		{
+			name:     "blocks when direct upstream uat soaked 1m even though test soaked 120m",
+			pipeline: sequential,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 120},
+				{Name: "uat", Phase: "Verified", SoakMinutes: 1},
+			},
+			wantReady: false,
+		},
+		{
+			name:     "blocks when direct upstream is not Verified",
+			pipeline: sequential,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 120},
+				{Name: "uat", Phase: "HealthChecking", SoakMinutes: 90},
+			},
+			wantReady: false,
+		},
+		{
+			name:     "skipped uat is bridged to test",
+			pipeline: sequential,
+			intent:   &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"uat"}},
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 40},
+			},
+			wantReady: true,
+		},
+		{
+			name:     "fan-in uses the minimum of the direct upstreams",
+			pipeline: fanIn,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 300},
+				{Name: "prod-eu", Phase: "Verified", SoakMinutes: 60},
+				{Name: "prod-us", Phase: "Verified", SoakMinutes: 5},
+			},
+			wantReady: false,
+		},
+		{
+			name:       "missing pipeline fails closed",
+			pipeline:   nil,
+			envs:       []kardinalv1alpha1.EnvironmentStatus{{Name: "uat", Phase: "Verified", SoakMinutes: 90}},
+			wantReady:  false,
+			wantReason: "context error: bundle.upstreamSoakMinutes: load pipeline nginx-demo",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+			bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", tt.envs)
+			bundle.Spec.Intent = tt.intent
+			gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+				`bundle.upstreamSoakMinutes >= 30`, "1m")
+			objs := []client.Object{gate, bundle}
+			if tt.pipeline != nil {
+				objs = append(objs, tt.pipeline.DeepCopy())
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(newScheme()).
+				WithObjects(objs...).
+				WithStatusSubresource(gate, bundle).
+				Build()
 
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			r.NowFn = func() time.Time { return now }
+
+			_, err = r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+			})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+			assert.Equal(t, tt.wantReady, got.Status.Ready, "reason: %s", got.Status.Reason)
+			if tt.wantReason != "" {
+				assert.Contains(t, got.Status.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestPolicyGateReconciler_NoSoakReference_NoPipelineNeeded verifies that a gate
+// that does not use bundle.upstreamSoakMinutes is not affected by a missing Pipeline.
+func TestPolicyGateReconciler_NoSoakReference_NoPipelineNeeded(t *testing.T) {
+	gate := makeGateInstance("plain", "default", "nginx-demo-v1", `bundle.type == "image"`, "1m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).
+		WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
-	r.NowFn = func() time.Time { return now }
-
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: "plain", Namespace: "default"},
 	})
 	require.NoError(t, err)
-
 	var got kardinalv1alpha1.PolicyGate
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
-	assert.False(t, got.Status.Ready,
-		"gate must block: bundle.upstreamSoakMinutes = max(5,10) = 10 < 30")
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "plain", Namespace: "default"}, &got))
+	assert.True(t, got.Status.Ready, "reason: %s", got.Status.Reason)
 }
 
 // TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus verifies that a PolicyGate

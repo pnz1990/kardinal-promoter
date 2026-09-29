@@ -8,6 +8,7 @@ package policygate
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -22,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -272,18 +274,19 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		upstreamCtx = buildUpstreamContext(&bundle)
 	}
 
-	// bundle.upstreamSoakMinutes is the maximum soak minutes across all verified
-	// upstream environments. It is a convenience shorthand so expressions can write
+	// bundle.upstreamSoakMinutes is the soak time of the environment(s) directly
+	// upstream of the gated environment in the Pipeline DAG, so expressions can write
 	//   bundle.upstreamSoakMinutes >= 30
-	// instead of requiring knowledge of the specific upstream environment name.
-	// Documented in docs/policy-gates.md §CEL context variables.
-	var maxSoakMinutes int64
-	for _, env := range bundle.Status.Environments {
-		if env.SoakMinutes > maxSoakMinutes {
-			maxSoakMinutes = env.SoakMinutes
+	// without naming the upstream. It is only computed when the expression uses it,
+	// because it needs the Pipeline; a lookup failure fails the gate closed.
+	// Documented in docs/policy-gates.md and docs/reference/cel-context.md.
+	if strings.Contains(gate.Spec.Expression, "upstreamSoakMinutes") {
+		soak, soakErr := r.directUpstreamSoakMinutes(ctx, gate, &bundle)
+		if soakErr != nil {
+			return nil, version, fmt.Errorf("bundle.upstreamSoakMinutes: %w", soakErr)
 		}
+		bundleCtx["upstreamSoakMinutes"] = soak
 	}
-	bundleCtx["upstreamSoakMinutes"] = maxSoakMinutes
 
 	// Build PR review context (K-08): bundle.pr["<envName>"].isApproved / .approvalCount
 	// Reads PRStatus CRDs labelled with this bundle. Non-fatal on error.
@@ -308,6 +311,53 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		"upstream":     upstreamCtx,
 		"changewindow": r.buildChangeWindowContext(ctx, now),
 	}, version, nil
+}
+
+// directUpstreamSoakMinutes returns the soak minutes of the environments that
+// the gate's environment directly depends on for this bundle (Pipeline dependsOn
+// or list order, with skipped environments bridged, exactly as the Graph is
+// built). With several upstreams (fan-in) it returns the minimum, so every
+// upstream must have soaked long enough. An upstream that is not Verified counts
+// as 0. A root environment (no upstream) returns 0.
+//
+// It reads only CRD state: the Pipeline spec and Bundle.status.environments[].soakMinutes,
+// which the BundleReconciler writes.
+func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	bundle *kardinalv1alpha1.Bundle) (int64, error) {
+	envName := gate.Labels[labelEnvironment]
+	if envName == "" {
+		return 0, fmt.Errorf("gate has no %s label", labelEnvironment)
+	}
+	pipelineName := bundle.Spec.Pipeline
+	if pipelineName == "" {
+		pipelineName = gate.Labels[labelPipeline]
+	}
+	var pipeline kardinalv1alpha1.Pipeline
+	if err := r.Get(ctx, types.NamespacedName{Name: pipelineName, Namespace: gate.Namespace}, &pipeline); err != nil {
+		return 0, fmt.Errorf("load pipeline %s: %w", pipelineName, err)
+	}
+	upstreams, err := graph.DirectUpstreams(&pipeline, bundle, envName)
+	if err != nil {
+		return 0, err
+	}
+	if len(upstreams) == 0 {
+		return 0, nil
+	}
+	byName := make(map[string]kardinalv1alpha1.EnvironmentStatus, len(bundle.Status.Environments))
+	for _, env := range bundle.Status.Environments {
+		byName[env.Name] = env
+	}
+	var minSoak int64 = -1
+	for _, up := range upstreams {
+		var soak int64
+		if env, ok := byName[up]; ok && env.Phase == "Verified" {
+			soak = env.SoakMinutes
+		}
+		if minSoak < 0 || soak < minSoak {
+			minSoak = soak
+		}
+	}
+	return minSoak, nil
 }
 
 // buildMetricsContext lists all MetricCheck objects in the given namespace and

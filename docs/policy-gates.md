@@ -134,7 +134,7 @@ All PolicyGate expressions are evaluated against the following context. All attr
 | Attribute | Type | Description |
 |---|---|---|
 | `metrics.*` | float64 | MetricCheck results injected by name (requires a `MetricCheck` CRD targeting this environment) |
-| `bundle.upstreamSoakMinutes` | int | Minutes since upstream environment was verified |
+| `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
 | `previousBundle.version` | string | Previously deployed version in this environment |
 
 ### Cross-stage history attributes (K-10)
