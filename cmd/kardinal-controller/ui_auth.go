@@ -5,11 +5,13 @@ package main
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
 
 	"github.com/rs/zerolog"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
@@ -33,6 +35,28 @@ type uiAuthConfig struct {
 	// scopeNamespace is --watch-namespace: all-namespace reads are checked
 	// against it because the controller cache only holds that namespace.
 	scopeNamespace string
+}
+
+// buildUIAuth picks the UI API auth mode from the flags. The static token
+// takes precedence (spec issue-975 O4). In TokenReview mode an error building
+// either review client is returned, so the caller can refuse to start rather
+// than serve an open UI (C13b-design-09).
+func buildUIAuth(cfg *rest.Config, staticToken string, tokenReview bool, scopeNamespace string) (uiAuthConfig, error) {
+	auth := uiAuthConfig{staticToken: staticToken, scopeNamespace: scopeNamespace}
+	if staticToken != "" || !tokenReview {
+		return auth, nil
+	}
+	tokens, err := uiauth.NewKubeTokenReviewer(cfg)
+	if err != nil {
+		return uiAuthConfig{}, fmt.Errorf("token reviewer: %w", err)
+	}
+	access, err := uiauth.NewKubeAccessReviewer(cfg)
+	if err != nil {
+		return uiAuthConfig{}, fmt.Errorf("access reviewer: %w", err)
+	}
+	auth.tokens = uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL)
+	auth.access = uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL)
+	return auth, nil
 }
 
 // newUIHandler builds the UI server handler: the /api/v1/ui/* API, the

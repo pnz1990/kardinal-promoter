@@ -61,7 +61,6 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
@@ -487,22 +486,15 @@ func main() {
 	// UI API authentication. TokenReview mode fails closed: the controller does
 	// not start when the review clients cannot be built, instead of serving an
 	// open UI.
-	uiAuth := uiAuthConfig{staticToken: uiAuthToken, scopeNamespace: watchNamespace}
+	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthToken, uiTokenReviewAuth, watchNamespace)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("UI API TokenReview: unable to create the review clients")
+	}
 	switch {
-	case uiAuthToken != "":
+	case uiAuth.staticToken != "":
 		// O4 (spec issue-975): the static token takes precedence over TokenReview.
 		logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
-	case uiTokenReviewAuth:
-		tokens, trErr := uiauth.NewKubeTokenReviewer(mgr.GetConfig())
-		if trErr != nil {
-			logger.Fatal().Err(trErr).Msg("UI API TokenReview: unable to create TokenReview client")
-		}
-		access, sarErr := uiauth.NewKubeAccessReviewer(mgr.GetConfig())
-		if sarErr != nil {
-			logger.Fatal().Err(sarErr).Msg("UI API TokenReview: unable to create SubjectAccessReview client")
-		}
-		uiAuth.tokens = uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL)
-		uiAuth.access = uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL)
+	case uiAuth.tokens != nil:
 		logger.Info().Msg("UI API TokenReview authentication enabled; every read and write is authorized with a SubjectAccessReview for the caller")
 	default:
 		logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")

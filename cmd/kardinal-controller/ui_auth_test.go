@@ -33,6 +33,7 @@ import (
 	authv1 "k8s.io/api/authentication/v1"
 	authzv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -231,6 +232,42 @@ func TestUIHandler_TokenReviewScopeNamespace(t *testing.T) {
 	require.NotEmpty(t, access.calls)
 	for _, a := range access.calls {
 		assert.Equal(t, "team-a", a.Namespace)
+	}
+}
+
+// TestBuildUIAuth covers C13b-design-09: when the TokenReview client could
+// not be built, the controller logged "UI API will be open (no auth)" and
+// served the UI without auth although the operator asked for it.
+func TestBuildUIAuth(t *testing.T) {
+	good := &rest.Config{Host: "https://127.0.0.1:6443"}
+	// client-go refuses a QPS limit without a burst.
+	bad := &rest.Config{Host: "https://127.0.0.1:6443", QPS: 5, Burst: 0}
+	tests := []struct {
+		name        string
+		cfg         *rest.Config
+		static      string
+		tokenReview bool
+		wantErr     bool
+		wantReview  bool
+	}{
+		{name: "open", cfg: bad},
+		{name: "static token wins over TokenReview", cfg: bad, static: "s3cret", tokenReview: true},
+		{name: "TokenReview", cfg: good, tokenReview: true, wantReview: true},
+		{name: "TokenReview client cannot be built", cfg: bad, tokenReview: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth, err := buildUIAuth(tt.cfg, tt.static, tt.tokenReview, "team-a")
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.static, auth.staticToken)
+			assert.Equal(t, tt.wantReview, auth.tokens != nil)
+			assert.Equal(t, tt.wantReview, auth.access != nil)
+			assert.Equal(t, "team-a", auth.scopeNamespace)
+		})
 	}
 }
 
