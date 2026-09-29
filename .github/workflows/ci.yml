@@ -143,6 +143,8 @@ jobs:
           controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
           git diff --exit-code config/crd/bases/ api/v1alpha1/zz_generated.deepcopy.go || \
             (echo "CRD schemas are stale — run 'make manifests generate' and commit" && exit 1)
+          diff -r --exclude=.gitkeep config/crd/bases/ chart/kardinal-promoter/crds/ || \
+            (echo "chart/kardinal-promoter/crds is stale — run 'make manifests' and commit" && exit 1)
 
       - name: Validate demo and example manifests against CRD schema
         run: |
@@ -330,6 +332,16 @@ jobs:
       - name: Template chart
         if: steps.chart_check.outputs.has_chart == 'true'
         run: helm template kardinal-promoter chart/kardinal-promoter
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+        if: steps.chart_check.outputs.has_chart == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Chart render tests
+        if: steps.chart_check.outputs.has_chart == 'true'
+        env:
+          KARDINAL_REQUIRE_HELM: "1"
+        run: go test ./test/helm/... -count=1
 
   # ── Pre-Stage-0 status check (always passes, explains state) ─────────────────
   pre-stage0-notice:

@@ -1,0 +1,121 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: changewindows.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: ChangeWindow
+    listKind: ChangeWindowList
+    plural: changewindows
+    shortNames:
+    - cw
+    singular: changewindow
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.active
+      name: Active
+      type: boolean
+    - jsonPath: .status.reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ChangeWindow defines a time window during which promotions are blocked (K-04).
+          When active, all pipeline promotions in the cluster are blocked by PolicyGates
+          using the changewindow.isBlocked() CEL function.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ChangeWindowSpec defines the desired state of a ChangeWindow.
+            properties:
+              end:
+                description: 'End is when a blackout window ends (required for type:
+                  blackout).'
+                format: date-time
+                type: string
+              reason:
+                description: Reason is a human-readable explanation for this window.
+                type: string
+              schedule:
+                description: 'Schedule configures a recurring allowed-hours window
+                  (for type: recurring).'
+                properties:
+                  allowedDays:
+                    description: |-
+                      AllowedDays lists the days of the week when promotions are allowed.
+                      Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun.
+                    items:
+                      type: string
+                    type: array
+                  allowedHours:
+                    description: AllowedHours is a time range in "HH:MM-HH:MM" format
+                      (24h, local time).
+                    type: string
+                  timezone:
+                    description: Timezone is the IANA timezone name (e.g. "America/Los_Angeles").
+                    type: string
+                type: object
+              start:
+                description: 'Start is when a blackout window begins (required for
+                  type: blackout).'
+                format: date-time
+                type: string
+              type:
+                description: |-
+                  Type is the ChangeWindow type.
+                  "blackout": no promotions allowed between Start and End.
+                  "recurring": promotions allowed only during AllowedDays/AllowedHours windows.
+                enum:
+                - blackout
+                - recurring
+                type: string
+            required:
+            - type
+            type: object
+          status:
+            description: ChangeWindowStatus defines the observed state of a ChangeWindow.
+            properties:
+              active:
+                description: |-
+                  Active is true when the ChangeWindow is currently in effect.
+                  Updated by the controller on each reconcile cycle.
+                type: boolean
+              reason:
+                description: Reason explains the current active/inactive state.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

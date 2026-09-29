@@ -9,8 +9,6 @@ spec:
   git:
     url: https://github.com/myorg/gitops.git
     branch: main
-    layout: directory
-    provider: github
     secretRef:
       name: gitops-creds
   environments:
@@ -20,7 +18,7 @@ spec:
       update:
         strategy: kustomize
       health:
-        type: deployment
+        type: resource
         timeout: 30m
     - name: uat
       path: environments/uat
@@ -28,7 +26,7 @@ spec:
       update:
         strategy: kustomize
       health:
-        type: deployment
+        type: resource
         timeout: 30m
       dependsOn:
         - test
@@ -45,8 +43,5 @@ spec:
       dependsOn:
         - uat
       shard: prod-cluster
-  policyGates:
-    - name: no-weekend-deploys
-      namespace: platform-policies
   paused: false
   historyLimit: 20
