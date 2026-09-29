@@ -30,11 +30,14 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -105,17 +108,11 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Configure zerolog level.
-	level, err := zerolog.ParseLevel(zerologLevel)
-	if err != nil {
-		level = zerolog.InfoLevel
-	}
-	zerolog.SetGlobalLevel(level)
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logger := newAgentLogger(zerologLevel)
 
 	// O3: shard is required. An agent without a shard would compete with the controller.
 	if err := validateShard(shard); err != nil {
-		logger.Fatal().Err(err).Msg("[kardinal-agent] --shard is required for distributed mode")
+		logger.Fatal().Err(err).Msg("[kardinal-agent] invalid --shard")
 	}
 
 	logger.Info().
@@ -152,6 +149,7 @@ func main() {
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		Shard:          shard,
+		Recorder:       mgr.GetEventRecorderFor("kardinal-agent"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("[kardinal-agent] unable to set up PromotionStepReconciler")
 	}
@@ -174,18 +172,34 @@ func main() {
 	}
 }
 
-// validateShard returns an error if shard is empty or whitespace-only.
+// newAgentLogger sets the global zerolog level and returns the agent logger.
+// It is also the default context logger: reconcilers log through
+// zerolog.Ctx(ctx), and controller-runtime puts no zerolog logger in the
+// reconcile context, so without it every reconciler line, errors included,
+// goes to a disabled logger.
+func newAgentLogger(levelName string) zerolog.Logger {
+	level, err := zerolog.ParseLevel(levelName)
+	if err != nil {
+		level = zerolog.InfoLevel
+	}
+	zerolog.SetGlobalLevel(level)
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	zerolog.DefaultContextLogger = &logger
+	return logger
+}
+
+// validateShard returns an error if shard is empty, whitespace-only, or not a
+// valid label value. The agent selects steps by the kardinal.io/shard label,
+// so a value that cannot be a label value would never match any step.
 // This is a separate function so it can be unit-tested without starting the manager.
 func validateShard(shard string) error {
-	if len(shard) == 0 {
+	if strings.TrimSpace(shard) == "" {
 		return errShardRequired
 	}
-	for _, r := range shard {
-		if r != ' ' && r != '\t' {
-			return nil
-		}
+	if errs := validation.IsValidLabelValue(shard); len(errs) > 0 {
+		return fmt.Errorf("--shard %q is not a valid label value: %s", shard, strings.Join(errs, "; "))
 	}
-	return errShardRequired
+	return nil
 }
 
 // errShardRequired is returned when --shard is not provided.

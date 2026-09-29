@@ -110,6 +110,7 @@ kubectl get pods -n kro-system
 | `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
+| `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
 | `service.uiPort` | `8082` | UI and UI API port (container and Service) |
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
@@ -166,6 +167,13 @@ release name other than `kardinal-promoter`, the Service is named
     If you expose port 8082 directly (e.g. via `NodePort`) without TLS, the UI will
     display a security warning. Use port-forward from localhost instead, or configure
     TLS with `--tls-cert-file` / `--tls-key-file`.
+
+!!! note "Browsing to a name other than localhost"
+    The UI API only accepts its own host names: localhost and the controller Service's
+    DNS names. If you browse to an Ingress host or a node IP, add it to
+    `ui.allowedHosts` (`--ui-allowed-hosts`). Otherwise, while UI auth is off, every
+    UI API call fails with `403 host not allowed`. See
+    [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
 
 ### With TLS (production)
 

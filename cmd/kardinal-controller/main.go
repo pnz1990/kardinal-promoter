@@ -20,11 +20,11 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"flag"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -40,11 +40,9 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	admissionpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/admission"
@@ -63,7 +61,6 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 	"github.com/kardinal-promoter/kardinal-promoter/web"
 
 	// Import built-in steps to register them via init().
@@ -139,6 +136,15 @@ func main() {
 			"Default (empty): same-origin only — cross-origin requests are rejected with 403. "+
 			"Set to '*' to allow all origins (development only). "+
 			"Also readable from KARDINAL_CORS_ORIGINS environment variable.")
+
+	var uiAllowedHosts string
+	flag.StringVar(&uiAllowedHosts, "ui-allowed-hosts", os.Getenv("KARDINAL_UI_ALLOWED_HOSTS"),
+		"Comma-separated host names (no scheme; a port is ignored) the UI server answers to, "+
+			"on top of localhost, 127.0.0.1 and ::1: the controller Service DNS names and any Ingress host. "+
+			"A request counts as same-origin only when its Host header is one of these, and while UI auth is "+
+			"off, every /api/ request with any other Host is rejected with 403, reads included (DNS rebinding "+
+			"protection). Static /ui/ assets are not checked. Chart value: ui.allowedHosts. "+
+			"Also readable from KARDINAL_UI_ALLOWED_HOSTS environment variable.")
 
 	// --ui-tokenreview-auth enables Kubernetes TokenReview-based authentication for
 	// the UI API. When set to true (and --ui-auth-token is NOT set), the UI API server
@@ -268,36 +274,22 @@ func main() {
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
 
-	// Build cache options: when watchNamespace is set, limit the informer cache to
-	// that namespace only. This is the mechanism for namespace-scoped install mode.
-	// In namespace-scoped mode the Helm chart renders a Role/RoleBinding instead of
-	// a ClusterRole/ClusterRoleBinding. (docs/design/15-production-readiness.md §Lens 6)
-	cacheOpts := cache.Options{}
+	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
+	}
+
 	if watchNamespace != "" {
-		cacheOpts.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
 		logger.Info().Str("watchNamespace", watchNamespace).
 			Msg("namespace-scoped mode: controller cache limited to single namespace")
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: scheme,
-		Metrics: metricsserver.Options{
-			BindAddress: metricsBindAddress,
-		},
-		HealthProbeBindAddress: healthProbeBindAddress,
-		LeaderElection:         leaderElect,
-		LeaderElectionID:       "kardinal-promoter-leader",
-		// GracefulShutdownTimeout allows in-flight reconcile loops to complete
-		// before the controller exits. Set to 30s — half the pod's
-		// terminationGracePeriodSeconds (60s) to leave room for cleanup. (#574)
-		GracefulShutdownTimeout: ptr(30 * time.Second),
-		// RecoverPanic is intentionally NOT set here. controller-runtime v0.23+ defaults
-		// RecoverPanic to true: a panic in any reconciler's Reconcile() method is caught
-		// by the framework, increments the ReconcilePanics metric, and returns a wrapped
-		// error for exponential backoff. DO NOT set RecoverPanic to false — that would
-		// revert to crash-loop-on-panic behaviour. (spec #920, docs/design/15-production-readiness.md)
-		Cache: cacheOpts,
-	})
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), buildManagerOptions(managerConfig{
+		metricsBindAddress:     metricsBindAddress,
+		healthProbeBindAddress: healthProbeBindAddress,
+		leaderElect:            leaderElect,
+		watchNamespace:         watchNamespace,
+	}))
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
 	}
@@ -465,100 +457,78 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 
-	// Start webhook server in a goroutine.
-	go func() {
-		webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
-		bundleAPIToken := bundleToken
-		mux := http.NewServeMux()
-		mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
-		mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
-		// Bundle API endpoint — only mounted if a token is configured.
-		if bundleAPIToken != "" {
-			bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, "default", logger)
-			mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
-			logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
+	// Webhook server: SCM webhooks, bundle API, Pipeline admission.
+	webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
+	if webhookSecret == "" {
+		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
+	}
+	bundleAPIToken := bundleToken
+	mux := http.NewServeMux()
+	mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
+	mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
+	// Bundle API endpoint — only mounted if a token is configured.
+	if bundleAPIToken != "" {
+		// Default to the watched namespace; in namespace-scoped mode it is
+		// also the only namespace Bundles may be created in.
+		bundleNS := "default"
+		if watchNamespace != "" {
+			bundleNS = watchNamespace
 		}
-		// Pipeline admission webhook — only mounted when explicitly enabled.
-		// Requires a ValidatingWebhookConfiguration installed separately by the operator.
-		// Design ref: docs/design/15-production-readiness.md §Lens 4
-		if pipelineAdmissionWebhook {
-			mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
-			logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
-		}
-		logger.Info().Str("addr", webhookBindAddress).Msg("starting webhook server")
-		if err := listenAndServeWithTLS(webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger); err != nil {
-			logger.Error().Err(err).Msg("webhook server error")
-		}
-	}()
+		bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
+		bundleAPI.onlyNamespace = watchNamespace
+		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
+		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
+	}
+	// Pipeline admission webhook — only mounted when explicitly enabled.
+	// Requires a ValidatingWebhookConfiguration installed separately by the operator.
+	// Design ref: docs/design/15-production-readiness.md §Lens 4
+	if pipelineAdmissionWebhook {
+		mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
+		logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
+	}
+	// The webhook and UI servers are manager Runnables: they start after the
+	// caches sync, a bind failure stops the controller, and shutdown drains
+	// in-flight requests.
+	webhookServer, err := newHTTPServer("webhook", webhookBindAddress, mux, tlsCertFile, tlsKeyFile, logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to configure webhook server")
+	}
+	if err := mgr.Add(webhookServer); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add webhook server")
+	}
 
-	// Start embedded UI server in a goroutine.
-	go func() {
-		uiMux := http.NewServeMux()
-		// Register read-only UI API routes.
-		uiAPI := newUIAPIServer(mgr.GetClient(), logger)
-		uiAPI.RegisterRoutes(uiMux)
-		// Serve the embedded React app at /ui/.
-		distFS, err := fs.Sub(web.Assets, "dist")
-		if err != nil {
-			logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
-		} else {
-			uiMux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(distFS))))
-		}
+	// UI API authentication. TokenReview mode fails closed: the controller does
+	// not start when the review clients cannot be built, instead of serving an
+	// open UI.
+	uiAuth, err := buildUIAuth(mgr.GetConfig(), uiAuthToken, uiTokenReviewAuth, watchNamespace)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("UI API TokenReview: unable to create the review clients")
+	}
+	switch {
+	case uiAuth.staticToken != "":
+		// O4 (spec issue-975): the static token takes precedence over TokenReview.
+		logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
+	case uiAuth.tokens != nil:
+		logger.Info().Msg("UI API TokenReview authentication enabled; every read and write is authorized with a SubjectAccessReview for the caller")
+	default:
+		logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
+	}
 
-		// Apply Bearer token authentication to all /api/v1/ui/* routes when
-		// --ui-auth-token is set. Static /ui/* assets bypass auth (no sensitive data).
-		var handler http.Handler = uiMux
-		switch {
-		case uiAuthToken != "":
-			// O4 (spec issue-975): Static token takes precedence over TokenReview.
-			logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
-			tokenBytes := []byte(uiAuthToken)
-			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Only guard /api/v1/ui/* — static assets at /ui/* are public.
-				if strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
-					authHeader := r.Header.Get("Authorization")
-					provided := strings.TrimPrefix(authHeader, "Bearer ")
-					// Use constant-time comparison to prevent timing attacks.
-					if !strings.HasPrefix(authHeader, "Bearer ") ||
-						subtle.ConstantTimeCompare([]byte(provided), tokenBytes) != 1 {
-						w.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
-						http.Error(w, "unauthorized", http.StatusUnauthorized)
-						return
-					}
-				}
-				uiMux.ServeHTTP(w, r)
-			})
-		case uiTokenReviewAuth:
-			// O1–O3, O6–O8 (spec issue-975): Kubernetes TokenReview auth mode.
-			// Only activated when --ui-auth-token is not set (O4).
-			logger.Info().Msg("UI API TokenReview authentication enabled")
-			reviewer, reviewerErr := uiauth.NewKubeTokenReviewer(mgr.GetConfig())
-			if reviewerErr != nil {
-				// Non-fatal: fall through to open mode with a warning. The controller
-				// must still start — TokenReview unavailability should not block the
-				// controller itself from serving other APIs.
-				logger.Warn().Err(reviewerErr).
-					Msg("UI API TokenReview: failed to create reviewer — UI API will be open (no auth)")
-			} else {
-				handler = uiauth.Middleware(uiMux, reviewer)
-			}
-		default:
-			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
-		}
-
-		// Apply CORS lockdown to /api/v1/ui/* routes.
-		// Default (empty corsAllowedOrigins): same-origin only — cross-origin requests rejected.
-		// Explicit list: only listed origins are allowed.
-		// Wildcard "*": all origins allowed (development / opt-out).
-		handler = applyCORSMiddleware(handler, corsAllowedOrigins, logger)
-		// Anti-framing, CSP and nosniff on every UI response (C10b-web-09).
-		handler = withUISecurityHeaders(handler)
-
-		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
-		if err := listenAndServeWithTLS(uiListenAddress, handler, tlsCertFile, tlsKeyFile, logger); err != nil {
-			logger.Error().Err(err).Msg("UI server error")
-		}
-	}()
+	// Embedded UI server: the React app at /ui/ and its API.
+	distFS, err := fs.Sub(web.Assets, "dist")
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
+		distFS = nil
+	}
+	uiServer, err := newHTTPServer("ui", uiListenAddress,
+		newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger),
+		tlsCertFile, tlsKeyFile, logger)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("unable to configure UI server")
+	}
+	if err := mgr.Add(uiServer); err != nil {
+		logger.Fatal().Err(err).Msg("unable to add UI server")
+	}
 
 	logger.Info().Msg("starting kardinal-controller")
 
@@ -754,9 +724,17 @@ func ptr[T any](v T) *T { return &v }
 //   - allowedOriginsCSV == "*": all origins allowed (development / opt-out).
 //   - otherwise: comma-separated list. Only listed origins receive CORS headers.
 //
-// CORS headers are only written for /api/v1/ui/* paths. Static /ui/* assets and
-// webhook routes are not affected.
-func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolog.Logger) http.Handler {
+// A request is same-origin only when its Host is in hosts (loopback plus
+// --ui-allowed-hosts) and its Origin names that Host: under DNS rebinding a
+// hostile page sends matching Origin and Host headers for its own name. While
+// UI auth is off (authEnabled false), every /api/ request with a Host outside
+// hosts is rejected, with or without an Origin and reads included: a rebound
+// page's same-origin GET or form post carries no Origin, and no credential
+// stands in its way. With auth on, the credential protects such requests.
+//
+// CORS headers are only written for /api/v1/ui/* paths. Static /ui/* assets
+// (the same for everyone) and webhook routes are not affected.
+func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, hosts uiHostAllowlist, authEnabled bool, log zerolog.Logger) http.Handler {
 	// Parse allow-list once at startup.
 	allowAll := allowedOriginsCSV == "*"
 	allowedSet := make(map[string]struct{})
@@ -781,8 +759,17 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 	default:
 		log.Info().Msg("CORS: same-origin only for /api/v1/ui/* (no --cors-allowed-origins set)")
 	}
+	log.Info().Strs("hosts", hosts.names()).
+		Msg("UI API: Host names accepted as same-origin, on top of localhost, 127.0.0.1 and ::1 (--ui-allowed-hosts)")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hostAllowed := hosts.allows(r.Host)
+		if !authEnabled && !hostAllowed && strings.HasPrefix(r.URL.Path, "/api/") {
+			// No credential stands between a rebound page and this request.
+			http.Error(w, uiHostNotAllowedMsg, http.StatusForbidden)
+			return
+		}
+
 		// Only apply CORS logic to UI API routes.
 		if !strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
 			next.ServeHTTP(w, r)
@@ -791,7 +778,16 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 
 		origin := r.Header.Get("Origin")
 		if origin == "" {
-			// Same-origin request (no Origin header) — pass through unconditionally.
+			// Not a cross-origin browser request — pass through.
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Same-origin request: browsers send Origin on every POST, including
+		// the embedded UI's own. Origin host:port equal to the Host header is the
+		// same origin (a single port cannot serve two schemes), but only for a
+		// Host this server knows as its own name (DNS rebinding).
+		if hostAllowed && isSameOrigin(origin, r.Host) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -824,25 +820,12 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 	})
 }
 
-// listenAndServeWithTLS starts an HTTP or HTTPS server depending on whether
-// both certFile and keyFile are non-empty.
-//   - Both set: use http.ListenAndServeTLS (HTTPS).
-//   - Neither set: use http.ListenAndServe (plain HTTP — backwards compatible).
-//   - Exactly one set: log a warning and fall back to plain HTTP.
-func listenAndServeWithTLS(addr string, handler http.Handler, certFile, keyFile string, log zerolog.Logger) error {
-	tlsEnabled := certFile != "" && keyFile != ""
-	partialTLS := (certFile == "") != (keyFile == "") // exactly one is set
-
-	if partialTLS {
-		log.Warn().
-			Str("tls-cert-file", certFile).
-			Str("tls-key-file", keyFile).
-			Msg("TLS: both --tls-cert-file and --tls-key-file must be set; falling back to plain HTTP")
+// isSameOrigin reports whether the Origin header names the host:port the
+// request was sent to.
+func isSameOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
 	}
-
-	if tlsEnabled {
-		log.Info().Str("addr", addr).Msg("TLS enabled for server")
-		return http.ListenAndServeTLS(addr, certFile, keyFile, handler)
-	}
-	return http.ListenAndServe(addr, handler)
+	return strings.EqualFold(u.Host, host)
 }

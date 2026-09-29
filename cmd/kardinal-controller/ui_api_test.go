@@ -889,7 +889,7 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 	events := []corev1.Event{
 		{
 			ObjectMeta:     metav1.ObjectMeta{Name: "ev-1", Namespace: "default"},
-			InvolvedObject: corev1.ObjectReference{Name: stepName, Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PromotionStep", Name: stepName, Namespace: "default"},
 			Type:           "Warning",
 			Reason:         "StepFailed",
 			Message:        "git push failed: 403 forbidden",
@@ -899,7 +899,7 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 		},
 		{
 			ObjectMeta:     metav1.ObjectMeta{Name: "ev-2", Namespace: "default"},
-			InvolvedObject: corev1.ObjectReference{Name: stepName, Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PromotionStep", Name: stepName, Namespace: "default"},
 			Type:           "Normal",
 			Reason:         "StepStarted",
 			Message:        "git-clone completed",
@@ -909,7 +909,7 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 		},
 		{
 			ObjectMeta:     metav1.ObjectMeta{Name: "ev-3", Namespace: "default"},
-			InvolvedObject: corev1.ObjectReference{Name: stepName, Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PromotionStep", Name: stepName, Namespace: "default"},
 			Type:           "Normal",
 			Reason:         "StepProgressing",
 			Message:        "kustomize-set-image completed",
@@ -920,7 +920,7 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 		// Different step — must NOT appear in results.
 		{
 			ObjectMeta:     metav1.ObjectMeta{Name: "ev-other", Namespace: "default"},
-			InvolvedObject: corev1.ObjectReference{Name: "other-step", Namespace: "default"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PromotionStep", Name: "other-step", Namespace: "default"},
 			Type:           "Normal",
 			Reason:         "OtherStep",
 			Message:        "should be filtered out",
@@ -930,10 +930,11 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 		},
 	}
 
-	objs := make([]client.Object, len(events))
+	objs := make([]client.Object, len(events), len(events)+1)
 	for i := range events {
 		objs[i] = &events[i]
 	}
+	objs = append(objs, &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: stepName, Namespace: "default"}})
 
 	s := uiScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
@@ -968,22 +969,24 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 	assert.NotContains(t, reasons, "OtherStep")
 }
 
-// TestUIAPI_StepEvents_EmptyWhenNoEvents returns an empty array (not 404) when no events exist (#527).
+// TestUIAPI_StepEvents_EmptyWhenNoEvents returns an empty array (not 404) when the step has no events (#527).
 func TestUIAPI_StepEvents_EmptyWhenNoEvents(t *testing.T) {
 	s := uiScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		&v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "quiet-step", Namespace: "default"}},
+	).Build()
 	srv := newUIAPIServer(c, zerolog.Nop())
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/steps/default/no-such-step/events", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/steps/default/quiet-step/events", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
 	var resp []uiEventResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Empty(t, resp, "no events for unknown step must return empty array")
+	assert.Empty(t, resp, "a step without events must return an empty array")
 }
 
 // TestUIAPI_StepEvents_InvalidPath returns 404 for malformed paths (#527).
