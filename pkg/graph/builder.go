@@ -86,7 +86,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if input.Bundle == nil {
 		return nil, fmt.Errorf("build: bundle is nil")
 	}
-	if err := validateInput(input.Pipeline, input.Bundle, input.PolicyGates); err != nil {
+	if err := validateInput(input.Pipeline, input.Bundle); err != nil {
 		return nil, err
 	}
 
@@ -119,6 +119,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	// Step 4: collect and match PolicyGates by environment
 	gatesByEnv := matchGatesByEnv(filteredEnvs, input.PolicyGates)
 	skipGates := skipPermissionGates(filteredEnvs, deps, input.Bundle, input.PolicyGates, input.PolicyNamespaces)
+	if err := validateGateNames(filteredEnvs, gatesByEnv, skipGates); err != nil {
+		return nil, err
+	}
 
 	// Step 5 & 6: build nodes and wire edges
 	nodes, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)

@@ -114,9 +114,16 @@ type PolicyGateStatus struct {
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.reason`,priority=1
 // +kubebuilder:printcolumn:name="Last-Evaluated",type=date,JSONPath=`.status.lastEvaluatedAt`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:validation:XValidation:rule="size(self.metadata.name) <= 63 || self.metadata.name.contains('--') || self.metadata.name.startsWith('freeze-')",message="PolicyGate names are at most 63 characters: the name is copied into the kardinal.io/gate-template label of every gate instance"
 
 // PolicyGate is a CEL-powered policy check represented as a node in the
 // promotion Graph. Platform teams define org-level gates; teams add their own.
+//
+// A gate's name must be at most 63 characters, because the Graph copies it
+// into a label of each instance. The rule exempts the two kinds of PolicyGate
+// kardinal names itself: gate instances ("<gate>-<namespace>-<env>--<bundle>",
+// see pkg/graph gateNodeK8sName, which can be longer) and pause freeze gates
+// ("freeze-<pipeline>"). Neither is ever used as a template.
 type PolicyGate struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

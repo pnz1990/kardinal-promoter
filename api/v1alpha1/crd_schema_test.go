@@ -478,3 +478,67 @@ func TestCRDShortNamesDoNotShadowBuiltins(t *testing.T) {
 		}
 	}
 }
+
+// ── PolicyGate names fit the gate-template label ─────────────────────────────
+
+// TestCRDSchemaPolicyGateName: a PolicyGate name longer than 63 characters is
+// refused at creation, because the Graph copies it into the
+// kardinal.io/gate-template label of each instance. Gate instances (which
+// contain "--") and pause freeze gates ("freeze-<pipeline>") may be longer.
+// Dots are allowed: a dotted name of at most 63 characters is a valid label
+// value.
+func TestCRDSchemaPolicyGateName(t *testing.T) {
+	crds := loadCRDs(t)
+	cases := []struct {
+		name  string
+		allow bool
+	}{
+		{"no-weekend-deploys", true},
+		{strings.Repeat("g", 63), true},
+		{"release.v1.2-window", true},
+		{strings.Repeat("g", 64), false},
+		{"no-weekend-deploys-for-the-payments-platform-team-in-every-region", false},
+		// Gate instance: <gate>-<namespace>-<env>--<bundle>.
+		{"no-weekend-deploys-platform-policies-prod--kardinal-test-app-sha-abc1234", true},
+		// Freeze gate of a pipeline with a 63-character name.
+		{"freeze-" + strings.Repeat("p", 63), true},
+	}
+	for _, c := range cases {
+		obj := baseObject("PolicyGate")
+		obj["metadata"].(map[string]interface{})["name"] = c.name
+		errs := validateCR(t, crds, obj)
+		if c.allow {
+			assert.Empty(t, errs, c.name)
+		} else {
+			require.Len(t, errs, 1, c.name)
+			assert.Contains(t, errs[0], "at most 63 characters", c.name)
+		}
+	}
+}
+
+// TestCRDSchemaAcceptsShippedPolicyGates: every PolicyGate in examples/, demo/
+// and config/samples passes the PolicyGate CRD, name rule included.
+func TestCRDSchemaAcceptsShippedPolicyGates(t *testing.T) {
+	crds := loadCRDs(t)
+	checked := 0
+	for _, dir := range []string{"examples", "demo", filepath.Join("config", "samples")} {
+		require.NoError(t, filepath.Walk(filepath.Join(repoRootDir(t), dir), func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !(strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml")) {
+				return err
+			}
+			for _, doc := range yamlDocuments(t, p) {
+				if !bytes.Contains(doc, []byte("kind: PolicyGate")) {
+					continue
+				}
+				obj := toUnstructured(t, doc)
+				if obj == nil || obj["kind"] != "PolicyGate" {
+					continue
+				}
+				checked++
+				assert.Empty(t, validateCR(t, crds, obj), "%s: %v", p, obj["metadata"])
+			}
+			return nil
+		}))
+	}
+	assert.Greater(t, checked, 10)
+}

@@ -127,11 +127,11 @@ func describeNode(n GraphNode) string {
 	return fmt.Sprintf("node %q", n.ID)
 }
 
-// validateInput rejects Pipelines, Bundles and gates whose names the Graph
-// cannot carry: every name ends up in a label value, and environment and
-// region names end up in object names.
-func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
-	gates []kardinalv1alpha1.PolicyGate) error {
+// validateInput rejects Pipelines and Bundles whose names the Graph cannot
+// carry: every name ends up in a label value, and environment and region
+// names end up in object names. Gate names are checked by validateGateNames,
+// only for the gates this Graph uses.
+func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) error {
 	if errs := validation.IsValidLabelValue(pipeline.Name); len(errs) > 0 {
 		return fmt.Errorf("build: pipeline name %q cannot be used as a label value (%s); "+
 			"use at most %d characters so rollback Bundle names fit too",
@@ -141,13 +141,39 @@ func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 		return fmt.Errorf("build: bundle name %q cannot be used as a label value: %s",
 			bundle.Name, strings.Join(errs, "; "))
 	}
-	for _, g := range gates {
+	return validateEnvironments(pipeline.Spec.Environments)
+}
+
+// validateGateNames rejects a gate this Graph instantiates whose name cannot
+// be copied into the kardinal.io/gate-template label of its instance. The
+// PolicyGate CRD already refuses such names at creation; this is the backstop
+// for gates created before that rule. Only the gates placed in this Graph are
+// checked, so one bad gate fails only the Pipelines it applies to, not every
+// Pipeline that reads its namespace.
+func validateGateNames(envs []string, gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
+	skipGates map[string][]skipPermissionGate) error {
+	check := func(g kardinalv1alpha1.PolicyGate, env string) error {
 		if errs := validation.IsValidLabelValue(g.Name); len(errs) > 0 {
-			return fmt.Errorf("build: PolicyGate %s/%s: name cannot be used as a label value: %s",
-				g.Namespace, g.Name, strings.Join(errs, "; "))
+			return fmt.Errorf("build: PolicyGate %q in namespace %q applies to environment %q, but its name "+
+				"cannot be copied into the kardinal.io/gate-template label of the gate instance (%s); "+
+				"recreate the gate with a name of at most %d characters",
+				g.Name, g.Namespace, env, strings.Join(errs, "; "), validation.LabelValueMaxLength)
+		}
+		return nil
+	}
+	for _, env := range envs {
+		for _, g := range gatesByEnv[env] {
+			if err := check(g, env); err != nil {
+				return err
+			}
+		}
+		for _, sg := range skipGates[env] {
+			if err := check(sg.gate, env); err != nil {
+				return err
+			}
 		}
 	}
-	return validateEnvironments(pipeline.Spec.Environments)
+	return nil
 }
 
 // validateEnvironments checks the environment names, regions, shards and steps.

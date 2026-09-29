@@ -238,15 +238,67 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 		})
 	}
 
-	t.Run("gate name", func(t *testing.T) {
-		gate := makePolicyGate(strings.Repeat("g", 64), "platform-policies", "prod", "true")
-		_, err := graph.NewBuilder().Build(graph.BuildInput{
-			Pipeline: makeLinearPipeline("app", "test", "prod"), Bundle: makeBundle("app-x7k2m", "app"),
-			PolicyGates: []kardinalv1alpha1.PolicyGate{gate},
+}
+
+// TestBuild_GateNameBackstop verifies that a gate whose name cannot go into
+// the instance's kardinal.io/gate-template label fails only the Graphs that
+// place it, and that the error names the gate, its namespace and the
+// environment. The PolicyGate CRD refuses such names at creation
+// (TestCRDSchemaPolicyGateName); this covers gates created before that rule.
+func TestBuild_GateNameBackstop(t *testing.T) {
+	long := strings.Repeat("g", 64)
+	withoutAppliesTo := makePolicyGate("freeze-"+strings.Repeat("p", 60), "team-a", "", "false")
+	delete(withoutAppliesTo.Labels, "kardinal.io/applies-to")
+	tests := []struct {
+		name    string
+		gates   []kardinalv1alpha1.PolicyGate
+		bundle  *kardinalv1alpha1.Bundle
+		wantErr string
+	}{
+		{
+			name:    "placed gate",
+			gates:   []kardinalv1alpha1.PolicyGate{makePolicyGate(long, "platform-policies", "prod", "true")},
+			wantErr: `PolicyGate "` + long + `" in namespace "platform-policies" applies to environment "prod"`,
+		},
+		{
+			name: "placed skip-permission gate",
+			gates: []kardinalv1alpha1.PolicyGate{
+				orgGate("staging-soak", "staging"),
+				skipPermission(long, "platform-policies", "staging", "true", true),
+			},
+			bundle:  skipBundle("staging"),
+			wantErr: `PolicyGate "` + long + `" in namespace "platform-policies" applies to environment "prod"`,
+		},
+		{
+			name:  "gate for an environment this Pipeline does not have",
+			gates: []kardinalv1alpha1.PolicyGate{makePolicyGate(long, "platform-policies", "qa", "true")},
+		},
+		{
+			name:  "gate without applies-to, such as a long freeze gate",
+			gates: []kardinalv1alpha1.PolicyGate{withoutAppliesTo},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := tt.bundle
+			if b == nil {
+				b = makeBundle("app-x7k2m", "app")
+			}
+			_, err := graph.NewBuilder().Build(graph.BuildInput{
+				Pipeline:    makeLinearPipeline("app", "test", "staging", "prod"),
+				Bundle:      b,
+				PolicyGates: tt.gates,
+			})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Contains(t, err.Error(), "at most 63 characters")
+			assert.ErrorIs(t, err, graph.ErrInvalid)
 		})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "PolicyGate platform-policies/")
-	})
+	}
 }
 
 // TestBuild_LabelValuesValid verifies that the longest accepted Pipeline and
