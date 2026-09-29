@@ -523,7 +523,7 @@ func TestCRDSchemaAcceptsShippedPolicyGates(t *testing.T) {
 	checked := 0
 	for _, dir := range []string{"examples", "demo", filepath.Join("config", "samples")} {
 		require.NoError(t, filepath.Walk(filepath.Join(repoRootDir(t), dir), func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !(strings.HasSuffix(p, ".yaml") || strings.HasSuffix(p, ".yml")) {
+			if err != nil || info.IsDir() || (!strings.HasSuffix(p, ".yaml") && !strings.HasSuffix(p, ".yml")) {
 				return err
 			}
 			for _, doc := range yamlDocuments(t, p) {
