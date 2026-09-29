@@ -244,44 +244,6 @@ func TestGitHubProvider_AddLabelsToPR_Empty(t *testing.T) {
 	assert.False(t, called, "no HTTP call for empty labels")
 }
 
-func TestGitHubProvider_EnsureLabels_CreatesIfMissing(t *testing.T) {
-	var createdNames []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/repos/owner/repo/labels", r.URL.Path)
-		assert.Equal(t, http.MethodPost, r.Method)
-		var payload map[string]string
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		createdNames = append(createdNames, payload["name"])
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	labels := scm.DefaultKardinalLabels()
-	p := scm.NewGitHubProvider("test-token", server.URL, "")
-	err := p.EnsureLabels(context.Background(), "owner/repo", labels)
-	require.NoError(t, err)
-	assert.Len(t, createdNames, len(labels))
-	assert.Contains(t, createdNames, "kardinal")
-	assert.Contains(t, createdNames, "kardinal/promotion")
-	assert.Contains(t, createdNames, "kardinal/rollback")
-	assert.Contains(t, createdNames, "kardinal/emergency")
-}
-
-func TestGitHubProvider_EnsureLabels_AlreadyExists(t *testing.T) {
-	// When GitHub returns 422 with already_exists, EnsureLabels should not return an error.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_, _ = w.Write([]byte(`{"message":"Validation Failed","errors":[{"code":"already_exists"}]}`))
-	}))
-	defer server.Close()
-
-	labels := []scm.Label{{Name: "kardinal", Color: "0075ca"}}
-	p := scm.NewGitHubProvider("test-token", server.URL, "")
-	err := p.EnsureLabels(context.Background(), "owner/repo", labels)
-	require.NoError(t, err, "422 already_exists should not be an error")
-}
-
 func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 	evalTime := metav1.NewTime(time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC))
 	data := scm.PRBody{
@@ -316,7 +278,9 @@ func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 	assert.Contains(t, body, "sha256:abc123", "digest must appear in provenance table")
 }
 
-func TestInjectToken(t *testing.T) {
+// TestGoGitClient_PushNotARepo verifies Push fails before any network call
+// when the directory is not a git repository.
+func TestGoGitClient_PushNotARepo(t *testing.T) {
 	// go-git hangs on macOS when PlainInit or PlainOpen are called on certain filesystem paths.
 	// Skip on non-Linux platforms; the real behavior is validated in CI (Linux) and PDCA workflow.
 	if testing.Short() {
@@ -324,29 +288,24 @@ func TestInjectToken(t *testing.T) {
 	}
 	// Push against a non-git directory should fail at PlainOpen (before any network call).
 	c := scm.NewGoGitClient()
-	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok")
+	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open repo")
 }
 
-// TestGoGitClient_CheckoutCommitErrors verifies error propagation for repository
+// TestGoGitClient_CommitErrors verifies error propagation for repository
 // operations against non-git directories.
 // Note: go-git PlainInit/PlainOpen can hang on macOS in certain filesystem configurations.
 // These tests are skipped in short mode and run in CI (Linux only).
-func TestGoGitClient_CheckoutCommitErrors(t *testing.T) {
+func TestGoGitClient_CommitErrors(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go-git filesystem tests in short mode (may hang on macOS)")
 	}
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 
-	// Checkout: non-git directory → error, not panic.
-	err := c.Checkout(ctx, t.TempDir(), "feat/test")
-	require.Error(t, err, "Checkout of non-repo must fail")
-	assert.NotPanics(t, func() { _ = err.Error() })
-
 	// CommitAll: non-git directory → error.
-	err = c.CommitAll(ctx, t.TempDir(), "msg", "Author", "a@b.com")
+	err := c.CommitAll(ctx, t.TempDir(), "msg", "Author", "a@b.com")
 	require.Error(t, err, "CommitAll on non-repo must fail")
 }
 
@@ -499,11 +458,12 @@ func TestGitLabProvider_ParseWebhookEvent_ValidToken(t *testing.T) {
 	p := scm.NewGitLabProvider("token", "", secret)
 	event, err := p.ParseWebhookEvent(payload, secret)
 	require.NoError(t, err)
-	assert.Equal(t, "merge_request", event.EventType)
+	// A merged MR is normalised to the merged pull_request event.
+	assert.Equal(t, "pull_request", event.EventType)
 	assert.Equal(t, 42, event.PRNumber)
 	assert.True(t, event.Merged)
 	assert.Equal(t, "owner/repo", event.RepoFullName)
-	assert.Equal(t, "merge", event.Action)
+	assert.Equal(t, "closed", event.Action)
 }
 
 func TestGitLabProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {
@@ -534,7 +494,8 @@ func TestGitLabProvider_AddLabelsToPR(t *testing.T) {
 		assert.Contains(t, r.URL.Path, "merge_requests/42")
 		var payload map[string]string
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		capturedLabels = payload["labels"]
+		capturedLabels = payload["add_labels"]
+		assert.NotContains(t, payload, "labels", "labels replaces the MR's label set")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -543,7 +504,7 @@ func TestGitLabProvider_AddLabelsToPR(t *testing.T) {
 	p := scm.NewGitLabProvider("glpat-test-token", server.URL, "")
 	err := p.AddLabelsToPR(context.Background(), "owner/repo", 42, []string{"kardinal", "kardinal/promotion"})
 	require.NoError(t, err)
-	assert.Contains(t, capturedLabels, "kardinal")
+	assert.Equal(t, "kardinal,kardinal/promotion", capturedLabels)
 }
 
 func TestGitLabProvider_AddLabelsToPR_Empty(t *testing.T) {
@@ -871,7 +832,6 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 		PipelineName: "my-app",
 		Environment:  "prod",
 		BundleName:   "my-app-v1-29-0",
-		RepoURL:      "https://github.com/pnz1990/kardinal-demo",
 		Bundle: v1alpha1.BundleSpec{
 			Type: "image",
 			Images: []v1alpha1.ImageRef{
@@ -917,7 +877,6 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 				Elapsed:         "45m",
 			},
 		},
-		PreviousCommitSHA: "prevcommit1234",
 	}
 
 	body, err := scm.RenderPRBody(data)
@@ -954,10 +913,6 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 		{"upstream env uat", "uat"},
 		{"upstream elapsed uat", "45m"},
 		{"upstream elapsed test", "2h45m"},
-		// Source diff link (PreviousCommitSHA provided)
-		{"source diff section", "Source Diff"},
-		{"diff link contains prev sha", "prevcommit1234"},
-		{"diff link contains new sha", "abc1234def5678"},
 		// Template identifier
 		{"kardinal-promoter footer", "kardinal-promoter"},
 	}
@@ -1140,7 +1095,7 @@ func TestAzureDevOpsProvider_OpenPR(t *testing.T) {
 	url, num, err := p.OpenPR(context.Background(), "myorg/myproject/myrepo", "Test PR", "body", "feature", "main")
 	require.NoError(t, err)
 	assert.Equal(t, 99, num)
-	assert.Contains(t, url, "pullrequest/99")
+	assert.Equal(t, "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/99", url)
 }
 
 func TestAzureDevOpsProvider_ClosePR(t *testing.T) {
@@ -1209,8 +1164,9 @@ func TestAzureDevOpsProvider_ParseWebhookEvent_ValidToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 99, evt.PRNumber)
 	assert.True(t, evt.Merged)
-	assert.Equal(t, "myproject/myrepo", evt.RepoFullName)
-	assert.Equal(t, "git.pullrequest.merged", evt.EventType)
+	assert.Equal(t, "myorg/myproject/myrepo", evt.RepoFullName)
+	assert.Equal(t, "pull_request", evt.EventType)
+	assert.Equal(t, "closed", evt.Action)
 }
 
 func TestAzureDevOpsProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {

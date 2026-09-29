@@ -15,6 +15,8 @@ package scm_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -43,16 +45,31 @@ func TestDynamicProvider_NewDynamicProvider(t *testing.T) {
 // TestDynamicProvider_Reload verifies that Reload swaps the inner provider and
 // that subsequent calls use the new token.
 func TestDynamicProvider_Reload(t *testing.T) {
-	dp, err := scm.NewDynamicProvider("github", "token-v1", "", "")
+	var mu sync.Mutex
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"state":"open","merged":false}`))
+	}))
+	defer srv.Close()
+
+	dp, err := scm.NewDynamicProvider("github", "token-v1", srv.URL, "")
+	require.NoError(t, err)
+	_, _, err = dp.GetPRStatus(context.Background(), "o/r", 1)
 	require.NoError(t, err)
 
-	// Reload with a new token.
 	require.NoError(t, dp.Reload("token-v2"))
+	_, _, err = dp.GetPRStatus(context.Background(), "o/r", 1)
+	require.NoError(t, err)
 
-	// The GitHubProvider stores the token in the Token field; we can verify
-	// the swap happened by calling GetPRStatus on a fake server (or simply
-	// confirm Reload does not error, which proves a new provider was built).
-	require.NoError(t, dp.Reload("token-v3"))
+	require.NoError(t, dp.Reload(""))
+	_, _, err = dp.GetPRStatus(context.Background(), "o/r", 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"Bearer token-v1", "Bearer token-v2", "Bearer token-v2"}, auth,
+		"calls after Reload use the new token; an empty token keeps the old one")
 }
 
 // TestDynamicProvider_ReloadEmptyToken verifies that Reload with an empty token
@@ -196,4 +213,77 @@ func TestSecretWatcher_MissingSecret(t *testing.T) {
 
 	// Should log an error but not panic.
 	watcher.CheckAndReloadForTest(context.Background())
+}
+
+// TestSCMToken_TrailingNewlineTrimmed proves a token ending in a newline (a
+// Secret made with --from-file or echo) still authenticates: net/http rejects
+// such an Authorization header before sending it (C06-scm-health-27).
+func TestSCMToken_TrailingNewlineTrimmed(t *testing.T) {
+	var mu sync.Mutex
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(auth)
+	}
+	last := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(auth) == 0 {
+			return ""
+		}
+		return auth[len(auth)-1]
+	}
+
+	for _, tc := range []struct{ provider, repo string }{
+		{"github", "o/r"}, {"gitlab", "g/p"}, {"forgejo", "o/r"}, {"bitbucket", "w/r"}, {"azuredevops", "org/proj/repo"},
+	} {
+		t.Run("NewProvider "+tc.provider, func(t *testing.T) {
+			p, err := scm.NewProvider(tc.provider, "tok\n", srv.URL, "")
+			require.NoError(t, err)
+			before := count()
+			_, _, err = p.GetPRStatus(context.Background(), tc.repo, 1)
+			if err != nil {
+				assert.NotContains(t, err.Error(), "invalid header field value")
+			}
+			assert.Equal(t, before+1, count(), "the request must reach the server")
+			assert.NotContains(t, last(), "\n")
+		})
+	}
+
+	t.Run("DynamicProvider.Reload", func(t *testing.T) {
+		dp, err := scm.NewDynamicProvider("github", "token-v1\n", srv.URL, "")
+		require.NoError(t, err)
+		_, _, _ = dp.GetPRStatus(context.Background(), "o/r", 1)
+		assert.Equal(t, "Bearer token-v1", last())
+		require.NoError(t, dp.Reload("token-v2\n"))
+		_, _, _ = dp.GetPRStatus(context.Background(), "o/r", 1)
+		assert.Equal(t, "Bearer token-v2", last())
+		require.NoError(t, dp.Reload(" \n"))
+		_, _, _ = dp.GetPRStatus(context.Background(), "o/r", 1)
+		assert.Equal(t, "Bearer token-v2", last(), "a blank token keeps the old one")
+	})
+
+	t.Run("SecretWatcher", func(t *testing.T) {
+		scheme := runtime.NewScheme()
+		require.NoError(t, corev1.AddToScheme(scheme))
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "scm-token", Namespace: "kardinal-system"},
+			Data:       map[string][]byte{"token": []byte("token-v2\n")},
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+		dp, err := scm.NewDynamicProvider("github", "token-v1", srv.URL, "")
+		require.NoError(t, err)
+		scm.NewSecretWatcher(c, dp, "scm-token", "kardinal-system", "token", zerolog.Nop()).
+			CheckAndReloadForTest(context.Background())
+		_, _, _ = dp.GetPRStatus(context.Background(), "o/r", 1)
+		assert.Equal(t, "Bearer token-v2", last())
+	})
 }

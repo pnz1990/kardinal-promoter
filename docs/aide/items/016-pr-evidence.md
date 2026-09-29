@@ -91,7 +91,7 @@ In `cmd/kardinal-controller/webhook.go`:
 - [ ] PR body contains artifact provenance table (image | tag | digest | CI run | commit SHA | author)
 - [ ] PR body contains upstream verification table (env | health-checked-at | elapsed)
 - [ ] Labels `kardinal` and `kardinal/promotion` applied to every promotion PR
-- [ ] `EnsureLabels` creates labels on controller startup if missing
+- [ ] ~~`EnsureLabels` creates labels on controller startup if missing~~ — never wired in; removed. GitHub creates missing labels when `AddLabelsToPR` applies them.
 - [ ] `AddLabelsToPR` method added to SCMProvider interface and GitHubProvider
 - [ ] `go build ./...` passes
 - [ ] `go test ./... -race` passes

@@ -73,7 +73,7 @@ All of the following are implemented and shipped:
 
 **K-07: Integration test step**
 - Built-in `integration-test` step runs a Kubernetes Job as part of the promotion
-- Watches completion; triggers `onFailure: abort | rollback` policy on failure
+- Watches completion; a failed or timed-out Job fails the promotion (there is no per-step `onFailure` policy)
 
 **K-08: PR review gate**
 - `bundle.pr["staging"].isApproved` and `bundle.pr["staging"].approvalCount` in CEL context

@@ -76,10 +76,10 @@ type mockGit struct {
 	cloneErr error
 }
 
-func (m *mockGit) Clone(_ context.Context, _, _, _ string) error        { return m.cloneErr }
-func (m *mockGit) Checkout(_ context.Context, _, _ string) error        { return nil }
-func (m *mockGit) CommitAll(_ context.Context, _, _, _, _ string) error { return nil }
-func (m *mockGit) Push(_ context.Context, _, _, _, _ string) error      { return nil }
+func (m *mockGit) Clone(_ context.Context, _, _, _, _ string) error        { return m.cloneErr }
+func (m *mockGit) CloneAt(_ context.Context, _, _, _, _ string) error      { return nil }
+func (m *mockGit) CommitAll(_ context.Context, _, _, _, _ string) error    { return nil }
+func (m *mockGit) Push(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
 
 // ---------- helpers ----------
 
@@ -741,7 +741,7 @@ func TestIdempotency_PendingToPromotingTwice(t *testing.T) {
 
 // TestStepIndex_OutputsAccumulated verifies step outputs accumulate across reconcile cycles.
 func TestStepIndex_OutputsAccumulated(t *testing.T) {
-	_ = steps.DefaultSequence // ensure package import is used
+	_ = steps.DefaultSequenceForBundle // ensure package import is used
 	// This test verifies that Outputs in status persist across reconcile calls.
 	scheme := buildScheme(t)
 	step := makeStep("step-out", "nginx-demo", "bundle-1", "test")

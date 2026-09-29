@@ -323,7 +323,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	// Persist workDir to status (ST-7/ST-8/ST-9 short-term mitigation):
 	// a restarted controller reads this field instead of recomputing the path,
 	// enabling crash-recovery without re-cloning.
-	ps.Status.WorkDir = r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
+	ps.Status.WorkDir = r.workDir(ps)
 	if err := r.Status().Patch(ctx, ps, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch pending→promoting: %w", err)
 	}
@@ -368,12 +368,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
 	eng := steps.NewEngine(seq)
 
-	// Use persisted workDir if available (crash recovery — ST-7/ST-8 mitigation).
-	// On a fresh run status.WorkDir will be empty; use the computed default.
-	workDir := ps.Status.WorkDir
-	if workDir == "" {
-		workDir = r.workDir(ps.Spec.PipelineName, ps.Spec.BundleName)
-	}
+	// The working directory is always recomputed from the PromotionStep's
+	// identity, never read back from status, so a status write cannot point
+	// the step engine (or cleanWorkDir) at another checkout.
+	workDir := r.workDir(ps)
 
 	token := ""
 	// Resolve git token from Pipeline.spec.git.secretRef if configured.
@@ -386,8 +384,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: ns}, &secret); err != nil {
 			log.Warn().Err(err).Str("secret", secretRef.Name).Msg("failed to read git secret — git operations may fail")
 		} else {
-			if t, ok := secret.Data["token"]; ok && len(t) > 0 {
-				token = string(t)
+			// A token pasted with a trailing newline breaks every git and
+			// SCM call (C06-scm-health-27).
+			if t := strings.TrimSpace(string(secret.Data["token"])); t != "" {
+				token = t
 			}
 		}
 	}
@@ -1323,27 +1323,36 @@ func (r *Reconciler) loadBundle(ctx context.Context, ps *v1alpha1.PromotionStep)
 	return &bundle, nil
 }
 
-func (r *Reconciler) workDir(pipelineName, bundleName string) string {
+// workDir returns the git working directory of one PromotionStep. It is keyed
+// by namespace, pipeline, bundle and environment, so sibling environments of
+// a Bundle and same-named Pipelines in two namespaces never share a checkout
+// (C05-steps-01, C05-steps-02).
+func (r *Reconciler) workDir(ps *v1alpha1.PromotionStep) string {
 	if r.WorkDirFn != nil {
-		return r.WorkDirFn(pipelineName, bundleName)
+		return r.WorkDirFn(ps.Spec.PipelineName, ps.Spec.BundleName)
 	}
-	// Default: use a temp directory per pipeline+bundle combination.
-	return "/tmp/kardinal/" + pipelineName + "/" + bundleName
+	return steps.WorkDirFor(steps.DefaultWorkDirRoot,
+		ps.Namespace, ps.Spec.PipelineName, ps.Spec.BundleName, ps.Spec.Environment)
 }
 
 // cleanWorkDir removes the working directory on disk when a PromotionStep reaches
 // a terminal state (Verified or Failed). This ensures host-local git state does not
 // accumulate across promotions (ST-7/ST-8 short-term mitigation).
+// The directory is recomputed rather than read from status.workDir, so a
+// status write can never make the controller delete an arbitrary path.
 // The cleanup is best-effort — failure to remove the directory is logged but not fatal.
 func (r *Reconciler) cleanWorkDir(log zerolog.Logger, ps *v1alpha1.PromotionStep) {
-	dir := ps.Status.WorkDir
-	if dir == "" {
+	if ps.Status.WorkDir == "" {
+		// The step never started promoting, so nothing was cloned.
 		return
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		log.Warn().Err(err).Str("workDir", dir).Msg("cleanWorkDir: failed to remove working directory")
-	} else {
-		log.Debug().Str("workDir", dir).Msg("cleanWorkDir: removed working directory")
+	dir := r.workDir(ps)
+	for _, d := range []string{dir, steps.ConfigSourceDir(dir)} {
+		if err := os.RemoveAll(d); err != nil {
+			log.Warn().Err(err).Str("workDir", d).Msg("cleanWorkDir: failed to remove working directory")
+		} else {
+			log.Debug().Str("workDir", d).Msg("cleanWorkDir: removed working directory")
+		}
 	}
 }
 
@@ -1369,43 +1378,29 @@ func cloneMap(m map[string]string) map[string]string {
 	return out
 }
 
-// extractPRNumber extracts the PR number from a GitHub PR URL.
-// e.g. "https://github.com/owner/repo/pull/42" → 42
+// extractPRNumber extracts the PR number from a PR URL of any supported
+// provider (see scm.ParsePRURL). It returns 0 when none is found.
 func extractPRNumber(prURL string) int {
-	idx := strings.LastIndex(prURL, "/pull/")
-	if idx < 0 {
-		return 0
-	}
-	numStr := prURL[idx+len("/pull/"):]
-	// Trim any trailing path segments
-	if end := strings.Index(numStr, "/"); end >= 0 {
-		numStr = numStr[:end]
-	}
-	var n int
-	if _, err := fmt.Sscanf(numStr, "%d", &n); err != nil {
+	_, n, err := scm.ParsePRURL(prURL)
+	if err != nil {
 		return 0
 	}
 	return n
 }
 
-// extractRepo extracts "owner/repo" from a GitHub PR URL.
-// e.g. "https://github.com/owner/repo/pull/42" → "owner/repo"
-func extractRepo(prURL string) string {
-	// Remove scheme
-	s := strings.TrimPrefix(prURL, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	// Remove host
-	idx := strings.Index(s, "/")
-	if idx < 0 {
+// extractRepo returns the SCM repository identifier of a PR URL or a git
+// remote URL, for any supported provider: "owner/repo", a GitLab project path
+// with subgroups, or an Azure DevOps "org/project/repo" (C06-scm-health-03).
+// It returns "" when the URL has no repository path.
+func extractRepo(rawURL string) string {
+	if repo, _, err := scm.ParsePRURL(rawURL); err == nil {
+		return repo
+	}
+	repo, err := scm.RepoFromURL(rawURL)
+	if err != nil {
 		return ""
 	}
-	s = s[idx+1:]
-	// Take first two path segments: owner/repo
-	parts := strings.SplitN(s, "/", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[0] + "/" + parts[1]
+	return repo
 }
 
 // appendCondition appends or updates a metav1.Condition.
