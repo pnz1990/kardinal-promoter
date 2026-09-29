@@ -13,6 +13,10 @@ controller at startup.
 | Forgejo / Codeberg | `forgejo` | Pull Requests | HMAC-SHA256 (`X-Gitea-Signature`) |
 | Gitea | `gitea` | Pull Requests | HMAC-SHA256 (`X-Gitea-Signature`) |
 
+SCM webhooks are delivered to `POST /webhook/scm` on the webhook port (`8083`). Without
+`--webhook-secret` the endpoint rejects every event with `401`, and merges are detected by
+PR status polling instead.
+
 ---
 
 ## GitHub
@@ -44,7 +48,7 @@ export KARDINAL_SCM_PROVIDER=github
 ### Webhook configuration
 
 1. In your GitHub repository, go to **Settings → Webhooks → Add webhook**.
-2. Set **Payload URL** to `http://<controller-host>:8083/webhook`.
+2. Set **Payload URL** to `http://<controller-host>:8083/webhook/scm`.
 3. Set **Content type** to `application/json`.
 4. Set **Secret** to the same value as `--webhook-secret`.
 5. Select **Pull request** events.
@@ -97,7 +101,7 @@ for production deployments.
 ### Webhook configuration
 
 1. In your GitLab project, go to **Settings → Webhooks**.
-2. Set **URL** to `http://<controller-host>:8083/webhook`.
+2. Set **URL** to `http://<controller-host>:8083/webhook/scm`.
 3. Set **Secret token** to the same value as `--webhook-secret`.
 4. Enable **Merge request events**.
 5. Click **Add webhook**.
@@ -155,7 +159,7 @@ Create an API token in your Forgejo/Gitea instance under **Settings → Applicat
 ### Webhook configuration
 
 1. In your Forgejo/Gitea repository, go to **Settings → Webhooks → Add Webhook → Gitea**.
-2. Set **Target URL** to `http://<controller-host>:8083/webhook`.
+2. Set **Target URL** to `http://<controller-host>:8083/webhook/scm`.
 3. Set **Secret** to the same value as `--webhook-secret`.
 4. Select **Pull Request** events.
 5. Click **Add Webhook**.

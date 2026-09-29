@@ -4,27 +4,22 @@ Common problems and how to diagnose them.
 
 ## Admission validation errors
 
-kardinal-promoter ships with `ValidatingAdmissionPolicy` rules (Kubernetes 1.28+) that catch configuration errors at `kubectl apply` time. If you see an admission error, check the table below.
+The kardinal CRDs validate their fields with OpenAPI schema rules, so `kubectl apply`
+rejects a bad value before it is stored. The error names the field and the rule it broke.
+Common cases:
 
-| Error message | Fix |
+| Field | Fix |
 |---|---|
-| `spec.environments must contain at least one environment` | Add at least one environment to your Pipeline spec |
-| `each environment must have a non-empty gitRepo` | Add `gitRepo: https://github.com/org/repo` to each environment |
-| `each environment's updateStrategy must be one of: kustomize, helm, custom` | Fix the `updateStrategy` field — only `kustomize`, `helm`, `custom` are valid |
-| `spec.pipeline must not be empty` | Add `pipeline: <name>` to your Bundle spec |
-| `spec.images must contain at least one image when spec.type is 'image'` | Add at least one entry to `spec.images` |
-| `spec.expression must not be empty` | Add a CEL expression to your PolicyGate spec |
-| `spec.recheckInterval must be a valid Go duration` | Use Go format: `5m`, `30s`, `1h` (not `5 minutes`) |
+| `spec.environments` | Add at least one environment to your Pipeline spec |
+| `spec.environments[].name` | Use a non-empty, valid environment name; the error names the rule it broke |
+| `spec.environments[].update.strategy` | Only `kustomize`, `helm`, `argocd` are valid |
+| Bundle `spec.type` | Only `image`, `config`, `mixed` are valid |
+| Bundle `spec.pipeline` | Add `pipeline: <name>` to your Bundle spec |
+| PolicyGate `spec.expression` | Add a CEL expression to your PolicyGate spec |
+| PolicyGate `spec.recheckInterval` | Use Go duration format: `5m`, `30s`, `1h` (not `5 minutes`) |
 
-**Disabling admission validation:**
-
-Admission validation is enabled by default and requires Kubernetes 1.28+. To disable (e.g., for kind clusters with older Kubernetes, or when using `--validate=false`):
-
-```yaml
-# values.yaml
-validatingAdmissionPolicy:
-  enabled: false
-```
+These checks are part of the CRDs and cannot be turned off. The chart no longer installs a
+`ValidatingAdmissionPolicy`, and the `validatingAdmissionPolicy.enabled` value has no effect.
 
 ---
 
@@ -94,7 +89,12 @@ curl http://kardinal-controller:8083/webhook/scm/health
 # Returns: {"status":"ok","webhookConfigured":true,"eventsProcessed":N}
 ```
 
-`webhookConfigured: false` means the `--webhook-secret` flag is not set — GitHub will reject signature validation. Set `KARDINAL_WEBHOOK_SECRET` in your controller deployment.
+`webhookConfigured: false` means the `--webhook-secret` flag is not set. The controller
+then answers every `POST /webhook/scm` with `401` (it does not accept unsigned events)
+and logs `SCM webhooks disabled` once at startup. Promotions still complete: merges are
+detected by PR status polling, just more slowly than with webhooks. To enable webhooks, set
+`KARDINAL_WEBHOOK_SECRET` in your controller deployment and use the same value as the
+webhook secret in your SCM.
 
 ### Symptom: PromotionStep stays in "HealthChecking"
 
@@ -425,7 +425,7 @@ kubectl logs -n kardinal-system deploy/kardinal-controller | grep -i "forbidden\
 
 The Helm chart installs a ClusterRole with all required permissions. If you customized RBAC or installed in a restricted namespace, re-apply the Helm chart:
 ```bash
-helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --reuse-values
 ```
 
@@ -531,7 +531,7 @@ controller:
 **5. Monitor controller performance:**
 ```bash
 # Check reconcile queue depth (via Prometheus if PrometheusRule is installed)
-kubectl port-forward svc/kardinal-metrics -n kardinal-system 8080:8080
+kubectl port-forward svc/kardinal-promoter -n kardinal-system 8080:8080
 curl http://localhost:8080/metrics | grep controller_runtime_reconcile_queue_length
 
 # Or use the built-in Prometheus alerts

@@ -13,10 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package uiauth provides Kubernetes TokenReview-based authentication middleware
-// for the kardinal UI API server. It validates caller tokens against the Kubernetes
-// API server using the authenticationv1.TokenReview API, allowing cluster users to
-// access the UI with their existing kubeconfig credentials.
+// Package uiauth provides Kubernetes TokenReview authentication and
+// SubjectAccessReview authorization for the kardinal UI API server. Middleware
+// validates caller tokens with the authenticationv1.TokenReview API, so cluster
+// users reach the UI with their existing credentials, and AuthorizingClient
+// checks every object the UI API reads or writes against the caller's RBAC.
+// Both reviews are cached briefly (NewCachedTokenReviewer,
+// NewCachedAccessReviewer).
 //
 // Design reference: docs/design/15-production-readiness.md §Lens 4
 package uiauth
@@ -85,6 +88,12 @@ func (r *KubeTokenReviewer) Review(ctx context.Context, token string) (*authv1.T
 //   - TokenReview API failure → 503 (fail-closed, not 200)
 //   - Requests to /ui/* (static assets) → pass through unchanged (O5)
 //
+// The authenticated user is stored in the request context (see UserFrom) for
+// AuthorizingClient, which authorizes each read and write with a
+// SubjectAccessReview. If any of those checks is denied while the request is
+// served, the response is replaced with 403 (or 503 when the review API
+// failed), whatever the handler tried to write.
+//
 // Only applied when --ui-tokenreview-auth=true AND --ui-auth-token is not set.
 // When both flags are set, the static token middleware takes precedence (O4).
 func Middleware(next http.Handler, reviewer TokenReviewer) http.Handler {
@@ -118,6 +127,52 @@ func Middleware(next http.Handler, reviewer TokenReviewer) http.Handler {
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		ctx := WithUser(r.Context(), status.User)
+		ctx, state := withRequestAuth(ctx)
+		gw := &guardedWriter{ResponseWriter: w, state: state}
+		next.ServeHTTP(gw, r.WithContext(ctx))
+		gw.finish()
 	})
 }
+
+// guardedWriter replaces the handler's response with the recorded
+// authorization failure, if there is one, the first time the handler writes.
+type guardedWriter struct {
+	http.ResponseWriter
+	state    *requestAuth
+	wrote    bool
+	replaced bool
+}
+
+func (g *guardedWriter) check() {
+	if g.wrote {
+		return
+	}
+	g.wrote = true
+	if d := g.state.get(); d != nil {
+		g.replaced = true
+		if d.code == http.StatusUnauthorized {
+			g.ResponseWriter.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
+		}
+		http.Error(g.ResponseWriter, d.msg, d.code)
+	}
+}
+
+func (g *guardedWriter) WriteHeader(code int) {
+	g.check()
+	if !g.replaced {
+		g.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (g *guardedWriter) Write(b []byte) (int, error) {
+	g.check()
+	if g.replaced {
+		return len(b), nil
+	}
+	return g.ResponseWriter.Write(b)
+}
+
+// finish writes the recorded failure when the handler returned without
+// writing anything.
+func (g *guardedWriter) finish() { g.check() }

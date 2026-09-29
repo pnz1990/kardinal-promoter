@@ -30,7 +30,9 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
   }'
 ```
 
-The endpoint creates a Bundle CRD in the cluster. Authentication is via Bearer token validated against a Kubernetes Secret. The token is scoped per Pipeline.
+The endpoint creates a Bundle CRD in the cluster. Authentication is a Bearer token compared
+with the controller's `--bundle-api-token` (one token for the whole controller, not one per
+Pipeline). The Pipeline named in the request must exist in the target namespace.
 
 ### GitHub Action
 
@@ -188,17 +190,30 @@ This requires the CI runner to have kubectl access to the cluster and RBAC permi
 
 ### Webhook token
 
-The `/api/v1/bundles` endpoint requires a Bearer token. The token is stored in a Kubernetes Secret and validated by the controller.
+The `/api/v1/bundles` endpoint requires a Bearer token. The controller compares it, in
+constant time, with the value of the `--bundle-api-token` flag or the `KARDINAL_BUNDLE_TOKEN`
+environment variable. The endpoint is only mounted when the token is set; without it
+`/api/v1/bundles` returns `404`.
+
+Keep the token in a Kubernetes Secret and expose it to the controller as
+`KARDINAL_BUNDLE_TOKEN`. With the Helm chart, point `bundleAPI.tokenSecretRef.name` at the
+Secret (the key defaults to `token`):
 
 ```bash
 kubectl create secret generic kardinal-ci-token \
   --namespace=kardinal-system \
   --from-literal=token=$(openssl rand -hex 32)
+
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  -n kardinal-system --reuse-values \
+  --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```
 
-The token is passed to the controller via the `--bundle-api-token` flag or the `KARDINAL_BUNDLE_TOKEN` environment variable. The endpoint is only activated when this flag is set.
+There is one token per controller. Anyone holding it can create a Bundle for any Pipeline
+in any namespace the controller watches, so treat it like a deploy credential. With
+`--watch-namespace` set, Bundles can only be created in that namespace (`403` otherwise).
 
-Rate limiting: 60 requests per minute per token.
+Rate limiting: 60 requests per minute. There is one token, so all callers share the limit.
 
 ### kubectl access
 
@@ -310,9 +325,12 @@ When creating a Bundle from CI, you can specify the promotion intent:
 }
 ```
 
-- `targetEnvironment: prod` (default): promote through all environments up to and including prod
+- `targetEnvironment` unset (default): promote through every environment in the Pipeline
 - `targetEnvironment: staging`: stop after staging (useful for testing)
 - `skipEnvironments: ["staging"]`: skip staging (requires SkipPermission PolicyGate)
+
+`intent` and `configRef` are copied to the Bundle spec as sent. Unknown fields are
+rejected with `400`, so a misspelt key fails the request instead of being ignored.
 
 ## Webhook Endpoint Reference
 
@@ -323,14 +341,29 @@ When creating a Bundle from CI, you can specify the promotion intent:
 |---|---|---|
 | `Authorization` | Yes | `Bearer <token>` |
 | `Content-Type` | Yes | `application/json` |
-| `X-Kardinal-Signature` | No | HMAC-SHA256 signature for request body verification |
+
+**Body fields:**
+| Field | Required | Description |
+|---|---|---|
+| `pipeline` | Yes | Pipeline name (a valid Kubernetes name, at most 63 characters) |
+| `type` | No | `image` (default), `config` or `mixed` |
+| `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
+| `images` | For `image` and `mixed` | At least one image |
+| `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required) |
+| `provenance` | No | `commitSHA`, `ciRunURL`, `author`, `timestamp` (set to now if empty) |
+| `intent` | No | `targetEnvironment`, `skipEnvironments` |
+
+The body is limited to 1 MiB.
 
 **Response codes:**
 | Code | Meaning |
 |---|---|
-| 201 | Bundle created successfully |
-| 400 | Invalid request body |
+| 201 | Bundle created. The body is `{"name": "...", "namespace": "..."}` |
+| 400 | Invalid request body, unknown field, or rejected by Bundle validation |
 | 401 | Invalid or missing token |
-| 404 | Pipeline not found |
-| 409 | Bundle with same version already exists (idempotent) |
+| 403 | Namespace is not the one set by `--watch-namespace` |
+| 404 | Pipeline not found in the target namespace, or the endpoint is not enabled |
+| 405 | Method other than `POST` |
+| 409 | A Bundle with the generated name already exists |
 | 429 | Rate limit exceeded |
+| 500 | The controller could not read the Pipeline or create the Bundle |
