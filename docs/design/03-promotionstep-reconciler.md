@@ -191,11 +191,12 @@ func (r *PromotionStepReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 ### handleHealthChecking
 
-1. Resolve the health adapter from the environment config (auto-detect or explicit).
-2. Call `adapter.Check(ctx, opts)`.
-3. If Healthy: set `status.state = "Verified"`, record evidence, copy to Bundle.
-4. If not healthy and timeout not expired: requeue after 10 seconds.
-5. If timeout expired: set `status.state = "Failed"` with reason "Health check timeout."
+1. Resolve the health adapter from the environment config (`delivery.delegate`, then `health.type`, then `resource`; no auto-detection) and the target from the `health.*` overrides (`pkg/health/options.go`).
+2. Skip the check if the last one (`status.lastHealthCheckAt`) is less than 10 seconds old.
+3. Call `adapter.Check(ctx, opts)` with `opts.ExpectedRevision` (the pushed or merged commit) and the Bundle images, so a healthy environment still on the previous revision is not Verified.
+4. If Healthy: set `status.state = "Verified"` (or start/advance the bake window), record evidence, copy to Bundle.
+5. If progressing: requeue after 10 seconds. If unhealthy: increment `status.consecutiveHealthFailures` and requeue. If terminal (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`): apply `onHealthFailure` at once.
+6. If `health.timeout` expired before the first healthy check: set `status.state = "Failed"` with reason "health check timeout after <timeout>; last result: ...". The timeout does not apply once the bake window has started.
 
 ## Evidence Collection
 

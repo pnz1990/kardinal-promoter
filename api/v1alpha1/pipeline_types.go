@@ -393,8 +393,8 @@ type HealthConfig struct {
 	// Cluster is reserved for remote-cluster health checks and is NOT implemented.
 	// A non-empty value fails the PromotionStep with "health.cluster is not
 	// supported" instead of silently checking the local cluster. To verify a
-	// workload in another cluster, run a kardinal-agent there and set
-	// environments[].shard, or use the argocd adapter against the Argo CD hub.
+	// workload in another cluster, use the argocd adapter against its Application
+	// in the Argo CD hub.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
 

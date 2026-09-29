@@ -60,7 +60,7 @@ kardinal-promoter demo-validate: health adapter coverage check
 
 **Kubernetes resource:** `apps/v1 Deployment`
 
-**Healthy when:** The `Available` condition (or configured condition) is `True`.
+**Healthy when:** the Deployment runs the Bundle images, `observedGeneration` is current, every replica is updated and available, and the `Available` condition (or configured condition) is `True`. `ProgressDeadlineExceeded` fails the step at once. See [Health Adapters](health-adapters.md#adapter-resource-default) for the exact rules.
 
 **Configuration:**
 
@@ -89,15 +89,17 @@ environments:
 
 | Deployment state | Adapter result | Reason |
 |---|---|---|
-| `Available=True` | Healthy | `Available=True: MinimumReplicasAvailable` |
-| `Available=False` | Wait | `Available=False: pods not ready` |
-| `Available` condition absent | Wait | `condition "Available" not found` |
-| Deployment not found | Wait | `Deployment prod/my-app not found` |
+| Rolled out on the Bundle images, `Available=True` | Healthy | `Available=True: MinimumReplicasAvailable, 1/1 replicas updated and available` |
+| Pod template still on the previous image | Wait | `Deployment prod/my-app not updated yet: runs ...:v1, Bundle has ...:v2` |
+| New generation not observed, or replicas still rolling | Wait | `waiting for the Deployment controller to observe generation 2` / `rolling out: 1 of 3 replicas updated` |
+| `Progressing` reason `ProgressDeadlineExceeded` | **Failed** (applies `onHealthFailure`) | `rollout failed: ProgressDeadlineExceeded` |
+| Rollout finished, `Available=False` or condition absent | Unhealthy (counts as a failure) | `Available=False: ...` |
+| Deployment not found | Unhealthy (counts as a failure) | `Deployment prod/my-app not found` |
 
 **Known limitations:**
 
-- Does not check `readyReplicas` count — only the `Available` condition. A Deployment with `spec.replicas: 0` and `status.availableReplicas: 0` reports as `Available=True` (Kubernetes behavior).
-- Label-selector mode (WatchKind): when `resource.labelSelector` is set, the translator emits a `WatchKind` node rather than calling `Check()` directly. The WatchKind node reconciles all matching Deployments and writes a synthesized readiness summary to its CRD status.
+- Only `kind: Deployment` is supported; any other `resource.kind` fails the step.
+- Label-selector mode: when `health.labelSelector` is set, every matching Deployment in the namespace must pass the checks above; no match is unhealthy.
 
 **Unit tests:** `TestDeploymentAdapter_Healthy`, `TestDeploymentAdapter_Degraded`, `TestDeploymentAdapter_NotFound`
 
@@ -107,11 +109,11 @@ environments:
 
 ## Adapter 2: `argocd` — Argo CD Application
 
-**What it checks:** `Application.status.health.status == "Healthy" AND Application.status.sync.status == "Synced" AND (operationState.phase == "Succeeded" OR "")`
+**What it checks:** `Application.status.health.status == "Healthy" AND Application.status.sync.status == "Synced" AND (operationState.phase == "Succeeded" OR "")` AND the Application synced the promoted commit (`status.sync.revision(s)`, `operationState.syncResult.revision(s)` or `status.history`)
 
 **Kubernetes resource:** `argoproj.io/v1alpha1 Application`
 
-**Healthy when:** All three conditions are true simultaneously.
+**Healthy when:** All four conditions are true simultaneously.
 
 **Configuration:**
 
@@ -119,7 +121,7 @@ environments:
 health:
   type: argocd
   argocd:
-    name: my-app-prod   # Application name (required)
+    name: my-app-prod   # Application name (default: <pipeline>-<environment>)
     namespace: argocd   # default: "argocd"
   timeout: 15m
 ```
@@ -141,14 +143,14 @@ environments:
 
 | health | sync | opPhase | Adapter result |
 |---|---|---|---|
-| `Healthy` | `Synced` | `Succeeded` or `""` | **Healthy** |
+| `Healthy` | `Synced` to the promoted commit | `Succeeded` or `""` | **Healthy** |
+| `Healthy` | `Synced` to an older commit | any | Wait (`revision=<old>, waiting for <new>`) |
 | `Healthy` | `Synced` | `Running` | Wait (sync in progress) |
-| `Progressing` | any | any | Wait |
-| `Degraded` | any | any | Wait → fails after timeout |
-| `Missing` | any | any | Wait → fails after timeout |
-| `Suspended` | any | any | Wait → fails after timeout |
+| `Progressing`, `Missing` or `Suspended` | any | any | Wait → fails after timeout |
 | any | `OutOfSync` | any | Wait (mid-sync) |
-| not found | — | — | Wait |
+| `Degraded` | any | any | Unhealthy (counts as a failure) → fails after timeout |
+| any | any | `Failed` or `Error` | Unhealthy (counts as a failure) → fails after timeout |
+| not found | — | — | Unhealthy (counts as a failure) |
 
 **Known limitations:**
 
@@ -163,7 +165,7 @@ environments:
 
 ## Adapter 3: `flux` — Flux Kustomization
 
-**What it checks:** `Kustomization.status.conditions[type=Ready].status == "True"` AND `observedGeneration == metadata.generation`
+**What it checks:** `Kustomization.status.conditions[type=Ready].status == "True"` AND `observedGeneration == metadata.generation` AND `status.lastAppliedRevision` is the promoted commit
 
 **Kubernetes resource:** `kustomize.toolkit.fluxcd.io/v1 Kustomization`
 
@@ -175,7 +177,7 @@ environments:
 health:
   type: flux
   flux:
-    name: my-app-prod      # Kustomization name (required)
+    name: my-app-prod      # Kustomization name (default: <pipeline>-<environment>)
     namespace: flux-system  # default: "flux-system"
   timeout: 20m
 ```
@@ -195,20 +197,21 @@ environments:
 
 **State table:**
 
-| Ready | observedGen == gen | Adapter result |
-|---|---|---|
-| `True` | Yes | **Healthy** |
-| `True` | No (stale) | Wait (Flux reconciling new spec) |
-| `False` | any | Wait |
-| Ready absent | any | Wait |
-| Not found | — | Wait |
+| Ready | observedGen == gen | lastAppliedRevision | Adapter result |
+|---|---|---|---|
+| `True` | Yes | promoted commit | **Healthy** |
+| `True` | Yes | older commit | Wait (Flux has not applied the new commit) |
+| `True` | No (stale) | any | Wait (Flux reconciling new spec) |
+| `Unknown` or Ready absent | any | any | Wait |
+| `False` | any | any | Unhealthy (counts as a failure) |
+| Not found | — | — | Unhealthy (counts as a failure) |
 
-**The generation check is critical:** Without it, a `Ready=True` result from the previous reconciliation would be a false positive — kardinal would advance the promotion before Flux has applied the new commit.
+**The revision check is critical:** `Ready=True` with a matching generation only says Flux applied *some* revision. Without comparing `lastAppliedRevision` with the promoted commit, kardinal would advance the promotion before Flux has applied the new commit.
 
 **Known limitations:**
 
 - Requires Flux v2 (`kustomize.toolkit.fluxcd.io/v1`). Flux v1 (deprecated) uses a different GVR.
-- Multi-cluster: Flux runs in each cluster. For remote clusters, use `health.cluster` to specify the kubeconfig Secret.
+- Multi-cluster: Flux runs in each cluster. `health.cluster` is not supported (a non-empty value fails the step), so a Kustomization in another cluster cannot be checked; see [Remote Clusters](health-adapters.md#remote-clusters).
 - The interval between Flux reconciliations (default `1m`) adds latency. For faster iteration, set `interval: 30s` on the Kustomization.
 
 **Unit tests:** `TestFluxAdapter_Healthy`, `TestFluxAdapter_Progressing`, `TestFluxAdapter_NotFound`
@@ -256,14 +259,16 @@ environments:
 | `Progressing` | Wait | Canary steps running |
 | `Paused` | Wait | Waiting at a manual pause step |
 | `Healthy` | **Healthy** | All replicas on new image, analysis passed |
-| `Degraded` | Wait → timeout → fail | Rollout failed / analysis failed |
-| Not found | Wait | Rollout CR not yet created |
+| `Degraded` | Unhealthy → timeout → fail | Rollout failed / analysis failed |
+| Not found | Unhealthy → timeout → fail | Rollout CR not yet created |
 
-**Degraded handling:** `Degraded` causes the adapter to return Unhealthy (wait), which means the PromotionStep will eventually time out and mark the promotion failed. If `onHealthFailure: rollback` is set on the environment, kardinal opens a rollback PR.
+**Degraded handling:** `Degraded` counts as a health failure (`status.consecutiveHealthFailures`, which a `RollbackPolicy` can act on) and the PromotionStep fails when `health.timeout` expires. The timeout sets `Failed`; `onHealthFailure` applies only to a terminal result or, with `bake.policy: fail-on-alarm`, to an alarm during the bake window.
+
+The adapter checks the Rollout phase, not its revision: a Rollout still `Healthy` on the previous version can report Verified before the change reaches it. Use a `bake` window when that matters.
 
 **Known limitations:**
 
-- Does not distinguish between `Paused` (normal canary step) and `Paused` (manual operator pause). Both return Unhealthy/wait.
+- Does not distinguish between `Paused` (normal canary step) and `Paused` (manual operator pause). Both return Wait.
 - Argo Rollouts must be installed before the Rollout CR is applied.
 
 **Unit tests:** `TestArgoRolloutsAdapter_Healthy`, `TestArgoRolloutsAdapter_Progressing`, `TestArgoRolloutsAdapter_Degraded`, `TestArgoRolloutsAdapter_NotFound`, `TestAutoDetector_ArgoRolloutsType`
@@ -315,10 +320,10 @@ environments:
 | `Promoting` | Wait | Copying canary spec to primary |
 | `Finalising` | Wait | Scaling down canary |
 | `Succeeded` | **Healthy** | Canary promoted — promotion Verified |
-| `Failed` | Wait → timeout → fail | Canary analysis failed, Flagger rolled back |
-| Not found | Wait | Canary CR not found |
+| `Failed` | **Failed at once** | Canary analysis failed, Flagger rolled back |
+| Not found | Unhealthy → timeout → fail | Canary CR not found |
 
-**Failed handling:** Like `argoRollouts`, a `Failed` phase causes the health check to wait, then time out. If `onHealthFailure: rollback` is configured, kardinal opens a rollback PR.
+**Failed handling:** a `Failed` phase is terminal, so `onHealthFailure` applies at once: `none` fails the step, `abort` sets AbortedByAlarm, and `rollback` creates a rollback Bundle for the previous version.
 
 **Known limitations:**
 
@@ -372,7 +377,7 @@ kardinal get pipelines
 | Argo Rollouts canary | `argoRollouts` | `rollouts.argoproj.io` |
 | Flagger progressive delivery | `flagger` | `canaries.flagger.app` |
 
-**health.type is required** — there is no silent auto-detection. Omitting `health.type` returns an error. See `pkg/health/adapter.go:AutoDetector.Select()`.
+**health.type defaults to `resource`** when omitted (`delivery.delegate`, when set, takes precedence). There is no auto-detection by probing for CRDs. See `pkg/health/options.go:EffectiveType()`.
 
 ---
 
@@ -434,4 +439,4 @@ gh workflow run demo-validate.yml --repo pnz1990/kardinal-promoter
 gh workflow run demo-validate.yml --repo pnz1990/kardinal-promoter \
   -f scenario=11
 ```
-**health.type is required** — there is no silent auto-detection. Omitting `health.type` returns an error. See `pkg/health/adapter.go:AutoDetector.Select()`.
+**health.type defaults to `resource`** when omitted (`delivery.delegate`, when set, takes precedence). There is no auto-detection by probing for CRDs. See `pkg/health/options.go:EffectiveType()`.

@@ -137,10 +137,64 @@ spec:
                       description: Health holds the health check configuration for
                         this environment.
                       properties:
+                        argoRollouts:
+                          description: |-
+                            ArgoRollouts overrides the Rollout checked by health.type=argoRollouts
+                            (or delivery.delegate=argoRollouts).
+                            Defaults: name "<pipeline>", namespace "<environment>".
+                          properties:
+                            name:
+                              description: Name is the object name.
+                              type: string
+                            namespace:
+                              description: Namespace is the object namespace.
+                              type: string
+                          type: object
+                        argocd:
+                          description: |-
+                            ArgoCD overrides the Argo CD Application checked by health.type=argocd.
+                            Defaults: name "<pipeline>-<environment>", namespace "argocd".
+                          properties:
+                            name:
+                              description: Name is the object name.
+                              type: string
+                            namespace:
+                              description: Namespace is the object namespace.
+                              type: string
+                          type: object
                         cluster:
-                          description: Cluster is the kubeconfig Secret name for remote
-                            cluster health checks.
+                          description: |-
+                            Cluster is reserved for remote-cluster health checks and is NOT implemented.
+                            A non-empty value fails the PromotionStep with "health.cluster is not
+                            supported" instead of silently checking the local cluster. To verify a
+                            workload in another cluster, use the argocd adapter against its Application
+                            in the Argo CD hub.
                           type: string
+                        flagger:
+                          description: |-
+                            Flagger overrides the Canary checked by health.type=flagger
+                            (or delivery.delegate=flagger).
+                            Defaults: name "<pipeline>", namespace "<environment>".
+                          properties:
+                            name:
+                              description: Name is the object name.
+                              type: string
+                            namespace:
+                              description: Namespace is the object namespace.
+                              type: string
+                          type: object
+                        flux:
+                          description: |-
+                            Flux overrides the Flux Kustomization checked by health.type=flux.
+                            Defaults: name "<pipeline>-<environment>", namespace "flux-system".
+                          properties:
+                            name:
+                              description: Name is the object name.
+                              type: string
+                            namespace:
+                              description: Namespace is the object namespace.
+                              type: string
+                          type: object
                         labelSelector:
                           additionalProperties:
                             type: string
@@ -164,9 +218,15 @@ spec:
 
                             Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger.
                           properties:
+                            condition:
+                              description: |-
+                                Condition is the Deployment condition type that must be True.
+                                Defaults to "Available".
+                              type: string
                             kind:
                               description: |-
-                                Kind is the Kubernetes resource kind (e.g. "Deployment", "StatefulSet").
+                                Kind is the Kubernetes resource kind. Only "Deployment" is supported;
+                                any other value fails the PromotionStep with a clear message.
                                 Defaults to "Deployment" when unset.
                               type: string
                             name:
@@ -188,6 +248,9 @@ spec:
                           description: |-
                             Type selects the health check backend.
                             Supported values: resource, argocd, flux, argoRollouts, flagger.
+                            When empty the PromotionStep reconciler uses "resource" (a Deployment named
+                            after the Pipeline in the environment namespace, unless health.resource
+                            overrides it). delivery.delegate, when set, takes precedence.
                           enum:
                           - resource
                           - argocd
@@ -257,14 +320,13 @@ spec:
                       type: object
                     regions:
                       description: |-
-                        Regions enables multi-region fan-out for this environment (issue #612).
-                        When two or more region names are listed, the translator emits a single
-                        forEach Graph node that stamps out one PromotionStep per region. Each
-                        stamped PromotionStep receives spec.region = the region name, which the
-                        reconciler uses when constructing Git paths and PR labels.
-                        All regions must be Verified before downstream environments proceed.
-                        When empty or only one region is listed, the environment uses the default
-                        single-node behaviour (no forEach).
+                        Regions is reserved for multi-region fan-out (issue #612) and is NOT
+                        implemented. With two or more regions the translator stamps out one
+                        PromotionStep per region (spec.region), but every region would edit the
+                        same path and push the same branch, so the PromotionStep reconciler fails
+                        such steps with "environments[].regions fan-out is not implemented".
+                        Declare one environment per region instead (for example prod-us, prod-eu).
+                        When empty or only one region is listed, the field has no effect.
                       items:
                         type: string
                       type: array
@@ -316,8 +378,12 @@ spec:
                                     minLength: 1
                                     type: string
                                   namespace:
-                                    description: Namespace is the Secret namespace.
-                                      If empty, the Pipeline's namespace is used.
+                                    description: |-
+                                      Namespace is the Secret namespace. If empty, the Pipeline's namespace is used.
+                                      For spec.git.secretRef it must be empty or equal to the Pipeline's namespace:
+                                      the controller refuses to read a Secret from another namespace and fails the
+                                      PromotionStep with a clear message, so a Pipeline author cannot borrow another
+                                      team's credentials.
                                     type: string
                                 required:
                                 - name
@@ -462,8 +528,12 @@ spec:
                         minLength: 1
                         type: string
                       namespace:
-                        description: Namespace is the Secret namespace. If empty,
-                          the Pipeline's namespace is used.
+                        description: |-
+                          Namespace is the Secret namespace. If empty, the Pipeline's namespace is used.
+                          For spec.git.secretRef it must be empty or equal to the Pipeline's namespace:
+                          the controller refuses to read a Secret from another namespace and fails the
+                          PromotionStep with a clear message, so a Pipeline author cannot borrow another
+                          team's credentials.
                         type: string
                     required:
                     - name

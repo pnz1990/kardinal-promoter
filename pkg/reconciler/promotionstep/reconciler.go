@@ -112,8 +112,11 @@ const (
 // Every transition goes through transition(), which also closes status.steps
 // entries and writes the audit record, metrics and Event.
 //
-// The reconciler persists currentStepIndex to etcd on every step completion so that
-// a crash-restart resumes from the correct step (idempotent re-execution).
+// In Promoting, one reconcile runs the remaining steps in a single
+// Engine.ExecuteFrom call and then writes currentStepIndex, outputs and the
+// PR URL in one status patch. A crash before that patch re-runs the steps from
+// the last persisted index, so every step must be safe to repeat (the git and
+// open-pr steps are).
 type Reconciler struct {
 	client.Client
 

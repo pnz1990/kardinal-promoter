@@ -177,7 +177,8 @@ func TestStepErrorAfterOpenPR(t *testing.T) {
 	ps := labelled(makeStep("step", "p", "b1", "prod"))
 	ps.Status.State = "Promoting"
 	ps.Status.CurrentStepIndex = 4 // open-pr, then wait-for-merge
-	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	ps.Spec.PRStatusRef = "prs"    // the Graph creates the PRStatus before the PR exists
+	c := newClient(t, ps, openPRStatus("prs", "", 0), makePipeline("p"), makeBundle("b1", "p"))
 	m := &mockSCM{prURL: "https://github.com/org/repo/pull/7", prNumber: 7,
 		getPRErr: errors.New("connection reset by peer")}
 	r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{},

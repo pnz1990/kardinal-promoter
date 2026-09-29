@@ -98,7 +98,7 @@ All of the following are implemented and shipped:
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Bundle.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster via kubeconfig Secrets
+- Multi-cluster through an Argo CD hub (remote-cluster health checks via `health.cluster` kubeconfig Secrets are not implemented)
 
 **CLI** — full command set: `get`, `explain`, `create`, `rollback`, `approve`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 

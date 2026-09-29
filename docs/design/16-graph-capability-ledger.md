@@ -131,11 +131,16 @@ the node itself").
   `injectHealthNodes`). They feed Graph readiness, not the PromotionStep's own `readyWhen`.
 - The PromotionStep reconciler still runs the Go health adapter to move the step from
   HealthChecking to Verified (`pkg/health/adapter.go`).
-- **Not solved:** neither path checks the revision. The Argo CD check is
-  `Healthy && Synced && operation phase Succeeded` (`pkg/health/adapter.go:206-236`), so
-  right after a push it can report Verified for the previous revision. A revision-aware
-  check needs `app.status.sync.revision == step.status.outputs.commitSHA`, which is a
-  cross-node `readyWhen`.
+- **Solved in the reconciler (2026-09 audit, E2E-01):** the PromotionStep reconciler's
+  Go adapter now checks the revision. It records the pushed commit
+  (`status.outputs.commitSHA`) or the merge commit (`status.outputs.mergeCommitSHA`, or
+  the PRStatus `status.mergeCommitSHA`) and requires Argo CD's synced revision or Flux's
+  `lastAppliedRevision` to match it, and a Deployment to run the Bundle images
+  (`pkg/health/adapter.go`, `pkg/reconciler/promotionstep/reconciler.go` `expectedRevision`).
+- **Still not solved in the Graph:** the ref health nodes keep the self-only
+  `Healthy && Synced` `readyWhen`, so Graph readiness alone can see the previous revision.
+  Doing it in the Graph needs `app.status.sync.revision == step.status.outputs.commitSHA`,
+  which is a cross-node `readyWhen`.
 
 **Upstream contribution.** Allow `readyWhen` to reference nodes the node already depends
 on (its existing DAG edges), which keeps the ordering unambiguous. Alternatively, add

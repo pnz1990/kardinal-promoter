@@ -26,7 +26,7 @@ func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec
 	}
 	if env.Health.Cluster != "" {
 		return "health.cluster is not supported: remote-cluster health checks are not implemented; " +
-			"run a kardinal-agent in the workload cluster and set environments[].shard"
+			"for a workload in another cluster, check its Argo CD Application in this cluster (health.type: argocd)"
 	}
 	if ps.Spec.Region != "" {
 		return "environments[].regions fan-out is not implemented: every region would push the same change " +

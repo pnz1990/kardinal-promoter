@@ -35,23 +35,23 @@ spec:
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
         resource:                       # When type: resource
-          kind: <string>                # Default: "Deployment"
+          kind: <string>                # Only "Deployment" is supported
           name: <string>                # Default: Pipeline metadata.name
           namespace: <string>           # Default: environment name
           condition: <string>           # Default: "Available"
         argocd:                         # When type: argocd
-          name: <string>                # Argo CD Application name
+          name: <string>                # Default: "<pipeline>-<environment>"
           namespace: <string>           # Default: "argocd"
         flux:                           # When type: flux
-          name: <string>                # Flux Kustomization name
+          name: <string>                # Default: "<pipeline>-<environment>"
           namespace: <string>           # Default: "flux-system"
         argoRollouts:                   # When type: argoRollouts
-          name: <string>                # Rollout name
-          namespace: <string>           # Rollout namespace
+          name: <string>                # Default: Pipeline metadata.name
+          namespace: <string>           # Default: environment name
         flagger:                        # When type: flagger
-          name: <string>                # Canary name
-          namespace: <string>           # Canary namespace
-        cluster: <string>              # kubeconfig Secret name for remote clusters
+          name: <string>                # Default: Pipeline metadata.name
+          namespace: <string>           # Default: environment name
+        cluster: <string>              # Not supported: must be empty (see Health Adapters)
         timeout: <duration>             # Health check timeout (default: "10m")
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
@@ -76,6 +76,7 @@ spec:
 | `branchPrefix` | No | `env/` | Only used with `layout: branch`. Prefix for rendered environment branches. For `branchPrefix: env/`, the `prod` environment writes to `env/prod`. |
 | `provider` | Yes | | SCM provider: `github`, `gitlab`, `forgejo`, `gitea`, `bitbucket`, or `azuredevops`. Selects the SCM provider for PR creation. For Bitbucket Cloud, use `bitbucket`. For Azure DevOps, use `azuredevops` with a PAT token and repo in `org/project/repo` format. |
 | `secretRef.name` | Yes | | Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. |
+| `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. |
 | `webhookMode` | No | `webhook` | `webhook`: react to GitHub webhook events for fast PR merge detection. `polling`: fall back to periodic polling (use in environments where inbound webhooks are not reachable). |
 | `pollInterval` | No | `30s` | Polling interval when `webhookMode: polling`. Has no effect in webhook mode. |
 
@@ -104,17 +105,18 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: runs `kustomize edit set-image`. `helm`: patches a configurable path in `values.yaml`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `renderManifests` | No | `false` | When `true`, runs `kustomize-build` after `kustomize-set-image` and commits rendered plain YAML to the environment branch. Requires `layout: branch`. Enables the rendered manifests pattern. |
-| `health.type` | No | auto-detected | Health verification adapter. Auto-detected on startup if omitted: checks for Argo CD Application CRD, then Flux Kustomization CRD, then falls back to Deployment condition. |
-| `health.timeout` | No | `10m` | How long to wait for health verification before marking the step as Failed. |
-| `health.cluster` | No | (local cluster) | Name of a Kubernetes Secret containing a kubeconfig for a remote cluster. Used for multi-cluster health verification. |
-| `health.labelSelector` | No | (none) | Label selector for collection mode (`health.type=resource` only). When set, the Graph gets a kro `ref` node with `metadata.selector.matchLabels` that reads **all** Deployments in the environment namespace matching these labels. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is watched (named `ref` node). Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
+| `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
+| `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
+| `health.timeout` | No | `10m` | Maximum time from the start of health checking to the first healthy check before the step is marked Failed. It does not cut a running `bake` window short. |
+| `health.cluster` | No | (must be empty) | **Not supported.** Remote-cluster health checks are not implemented, and a non-empty value fails the PromotionStep. For a workload in another cluster, check its Argo CD Application in the controller's cluster (`type: argocd`). |
+| `health.labelSelector` | No | (none) | `health.type=resource` only. When set, **every** Deployment in the namespace that matches these labels must pass the health check. No match is unhealthy. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is checked. Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
-| `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` will reconcile this environment's PromotionSteps. When omitted, the control plane controller handles the step. |
+| `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` reconciles this environment's PromotionSteps, and the control plane controller skips them. When omitted, the control plane controller handles the step. |
 | `steps` | No | (inferred) | Custom promotion step sequence. When omitted, the default sequence is inferred from `update.strategy`, `approval`, and `renderManifests`. When specified, overrides the default entirely. See [Promotion Steps](#promotion-steps). |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A health alarm resets the timer. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
 | `onHealthFailure` | No | `none` | What to do when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle at the previous image version; step → RollingBack. |
-| `regions` | No | (none) | Multi-region fan-out (#612). When two or more region names are listed (e.g. `["us-east-1", "eu-west-1"]`), the translator emits a single kro `forEach` Graph node (`forEach: [{region: "${[...]}"}]`) that stamps out one PromotionStep per region. Each PromotionStep receives `spec.region` set to its region name. **All regions must be Verified before downstream environments proceed.** When empty or only one region is listed, the environment uses single-node behaviour (no fan-out). |
+| `regions` | No | (none) | **Not implemented** (#612). With two or more regions the translator stamps out one PromotionStep per region, but every region would edit the same path and push the same branch, so those PromotionSteps fail with `environments[].regions fan-out is not implemented`. Declare one environment per region instead (for example `prod-us` and `prod-eu`, with `dependsOn` or `wave`). With zero or one region the field has no effect. |
 
 ### spec.historyLimit
 
@@ -128,11 +130,15 @@ When the `health` field is omitted or partially specified, the controller applie
 
 | Field | Default |
 |---|---|
-| `type` | Auto-detected (argocd if Application CRD exists, flux if Kustomization CRD exists, resource otherwise) |
-| `resource.kind` | `Deployment` |
+| `type` | `resource` (or `delivery.delegate` when set) |
+| `resource.kind` | `Deployment` (the only supported kind) |
 | `resource.name` | `Pipeline.metadata.name` |
 | `resource.namespace` | Environment name |
 | `resource.condition` | `Available` |
+| `argocd.name` / `argocd.namespace` | `<pipeline>-<environment>` / `argocd` |
+| `flux.name` / `flux.namespace` | `<pipeline>-<environment>` / `flux-system` |
+| `argoRollouts.name` / `argoRollouts.namespace` | `Pipeline.metadata.name` / environment name |
+| `flagger.name` / `flagger.namespace` | `Pipeline.metadata.name` / environment name |
 | `timeout` | `10m` |
 
 This means a minimal environment definition with no `health` field works for the common case where the Deployment name matches the Pipeline name and the namespace matches the environment name.
@@ -350,6 +356,8 @@ spec:
 
 ### Multi-cluster with Argo Rollouts
 
+The `argocd` checks work for any destination cluster because the Applications live in the controller's cluster. The `argoRollouts` checks read the Rollout in the controller's cluster, so this layout suits Rollouts that the controller's cluster runs (see [Remote Clusters](health-adapters.md#remote-clusters)).
+
 ```yaml
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
@@ -389,7 +397,9 @@ spec:
         delegate: argoRollouts
 ```
 
-### Flux-based with remote clusters
+### Remote prod cluster through an Argo CD hub
+
+Health adapters read objects in the controller's own cluster, and `health.cluster` is not supported. To verify a workload in another cluster, let an Argo CD instance in the controller's cluster manage it and check its Application there: the adapter confirms the Application synced the promoted commit and is Healthy. A Flux Kustomization, Rollout, Canary or Deployment in another cluster cannot be checked. See [Health Adapters](health-adapters.md#remote-clusters).
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -409,9 +419,8 @@ spec:
     - name: prod
       approval: pr-review
       health:
-        type: flux
-        flux: { name: my-app-prod, namespace: flux-system }
-        cluster: prod-cluster
+        type: argocd
+        argocd: { name: my-app-prod, namespace: argocd }   # Application in the hub, destination: the prod cluster
 ```
 
 ### Rendered manifests (branch layout with kustomize-build)

@@ -34,7 +34,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Image signature verification** | Yes — `verify-image` step calls cosign to verify OCI signatures before promoting | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, PolicyGate.Blocked, PromotionStep.Failed; optional auth header; pipeline selector | Yes (Kargo via Argo Notifications) | No |
-| **Multi-cluster** | Yes (Pipeline CRD, kubeconfig Secrets) | Yes | Yes |
+| **Multi-cluster** | Argo CD hub-spoke (health read from hub Applications); `health.cluster` kubeconfig Secrets not implemented | Yes | Yes |
 | **Upstream soak time in gates** | Yes — `bundle.upstreamSoakMinutes >= 30` (contiguous healthy) | No | Elapsed time only |
 | **Cross-stage history in gates** | Yes — `upstream.<env>.recentSuccessCount`, `lastPromotedAt` | No | No |
 | **Artifact discovery** | Bundle created by CI/CLI; Subscription CRD with OCI + Git watchers | Warehouse (automatic OCI/git scanning) | Git commit-based |
