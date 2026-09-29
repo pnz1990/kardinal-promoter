@@ -35,7 +35,6 @@ const (
 	ansiRed    = "\033[31m"
 	ansiGreen  = "\033[32m"
 	ansiYellow = "\033[33m"
-	ansiBold   = "\033[1m"
 )
 
 // colorizer wraps a writer and provides state-aware coloring.
@@ -56,38 +55,33 @@ func newColorizer(w io.Writer, force bool) colorizer {
 	if force {
 		return colorizer{enabled: true}
 	}
-	f, ok := w.(*os.File)
-	if !ok {
-		return colorizer{enabled: false}
-	}
-	return colorizer{enabled: isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())}
+	return colorizer{enabled: isTerminal(w)}
 }
 
-// colorState wraps a promotion state string with an appropriate ANSI color:
-//   - Pass / Succeeded / Verified → green
-//   - Block / Failed              → red
-//   - Pending / Running           → yellow
-//   - anything else (Superseded)  → no color
+// isTerminal reports whether w is a terminal.
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && (isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd()))
+}
+
+// colorState wraps a PromotionStep state or a PolicyGate phase with an ANSI
+// color:
+//   - Verified / Pass                                               → green
+//   - Failed / AbortedByAlarm / Block                               → red
+//   - Pending / Promoting / WaitingForMerge / HealthChecking / RollingBack → yellow
+//   - anything else                                                 → no color
 func (c colorizer) colorState(state string) string {
 	if !c.enabled {
 		return state
 	}
 	switch state {
-	case "Pass", "PASS", "Succeeded", "Verified":
+	case "Pass", "Verified":
 		return ansiGreen + state + ansiReset
-	case "Block", "FAIL", "Failed":
+	case "Block", "Failed", "AbortedByAlarm":
 		return ansiRed + state + ansiReset
-	case "Pending", "PENDING", "Running":
+	case "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
 		return ansiYellow + state + ansiReset
 	default:
 		return state
 	}
-}
-
-// bold wraps text in bold ANSI if colors are enabled.
-func (c colorizer) bold(s string) string {
-	if !c.enabled {
-		return s
-	}
-	return ansiBold + s + ansiReset
 }

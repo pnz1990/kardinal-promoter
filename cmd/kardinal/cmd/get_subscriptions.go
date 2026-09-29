@@ -32,9 +32,10 @@ func newGetSubscriptionsCmd() *cobra.Command {
 	var allNamespaces bool
 
 	cmd := &cobra.Command{
-		Use:     "subscriptions [name]",
-		Aliases: []string{"subscription", "sub"},
-		Short:   "List Subscriptions (passive artifact watchers)",
+		Use:         "subscriptions [name]",
+		Annotations: map[string]string{outputAnnotation: "true"},
+		Aliases:     []string{"subscription", "sub"},
+		Short:       "List Subscriptions (passive artifact watchers)",
 		Long: `List Subscriptions and their watching status.
 
 Subscriptions passively watch OCI registries or Git repositories and

@@ -62,7 +62,7 @@ func approvalModeFunc(idx, total int) string {
 func newInitCmd() *cobra.Command {
 	var (
 		stdoutFlag     bool
-		outputFlag     string
+		fileFlag       string
 		scaffoldGitOps bool
 		gitopsDirFlag  string
 		demoFlag       bool
@@ -73,16 +73,19 @@ func newInitCmd() *cobra.Command {
 		Short: "Interactive wizard to generate a Pipeline YAML and scaffold the GitOps repo",
 		Long: `kardinal init guides you through creating a Pipeline CRD YAML.
 
-It prompts for application name, namespace, environments, Git repo, and
-update strategy, then writes a ready-to-apply pipeline.yaml.
+It prompts for application name, namespace, environments, Git repo (an
+https:// URL, required), and update strategy (kustomize or helm), then writes
+a ready-to-apply pipeline.yaml (or --file).
 
-Use --scaffold-gitops to also create the GitOps repository branch structure:
+Use --scaffold-gitops to also create the GitOps repository structure:
   environments/<env>/kustomization.yaml for each environment.
+The scaffold is Kustomize-only; it is skipped for the helm strategy.
 
 Use --demo to scaffold with the kardinal-test-app placeholder image.
 
 Example:
   kardinal init
+  kardinal init --file deploy/pipeline.yaml
   kardinal init --scaffold-gitops --gitops-dir ./my-gitops
   kardinal init --demo --scaffold-gitops
   kubectl apply -f pipeline.yaml`,
@@ -102,10 +105,7 @@ Example:
 				return err
 			}
 
-			outFile := outputFlag
-			if outFile == "" {
-				outFile = "pipeline.yaml"
-			}
+			outFile := fileFlag
 			if err := os.WriteFile(outFile, buf.Bytes(), 0o644); err != nil {
 				return fmt.Errorf("write %s: %w", outFile, err)
 			}
@@ -114,7 +114,11 @@ Example:
 				outFile, outFile,
 			)
 
-			if scaffoldGitOps || demoFlag {
+			if (scaffoldGitOps || demoFlag) && cfg.UpdateStrategy != "kustomize" {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+					"GitOps scaffold skipped: it writes Kustomize overlays, and the update strategy is %s\n",
+					cfg.UpdateStrategy)
+			} else if scaffoldGitOps || demoFlag {
 				dir := gitopsDirFlag
 				if dir == "" {
 					dir = ".gitops"
@@ -133,9 +137,9 @@ Example:
 	}
 
 	cmd.Flags().BoolVar(&stdoutFlag, "stdout", false, "Print to stdout instead of writing a file")
-	cmd.Flags().StringVarP(&outputFlag, "output", "o", "", "Output file (default: pipeline.yaml)")
+	cmd.Flags().StringVar(&fileFlag, "file", "pipeline.yaml", "File to write the Pipeline YAML to")
 	cmd.Flags().BoolVar(&scaffoldGitOps, "scaffold-gitops", false, "Create GitOps repo structure (environments/<env>/kustomization.yaml)")
-	cmd.Flags().StringVar(&gitopsDirFlag, "gitops-dir", ".gitops", "Directory for the GitOps scaffold (default: .gitops)")
+	cmd.Flags().StringVar(&gitopsDirFlag, "gitops-dir", ".gitops", "Directory for the GitOps scaffold")
 	cmd.Flags().BoolVar(&demoFlag, "demo", false, "Scaffold with kardinal-test-app placeholder image (implies --scaffold-gitops)")
 
 	return cmd
@@ -171,20 +175,13 @@ func scaffoldGitOpsFn(out io.Writer, environments []string, gitopsDir string, im
 // buildKustomization returns a minimal Kustomize overlay for an environment.
 // The images block uses imageRef as a placeholder for the application image.
 func buildKustomization(imageRef string) string {
-	// Parse imageRef into name and newTag for the Kustomize images block.
-	// Cases:
-	//   "repo:tag"           → name="repo",        newTag="tag"
-	//   "repo@sha256:digest" → name="repo",        newTag="sha256:digest"
-	//   "REPLACE_ME:latest"  → name="REPLACE_ME",  newTag="latest"
-	name := imageRef
+	// The tag is after the last ":" that follows the last "/", so a registry
+	// port (localhost:5000/app:v1) stays in the name. A digest is written as
+	// Kustomize's digest field.
+	name, digest, _ := strings.Cut(imageRef, "@")
 	tag := ""
-	if atIdx := strings.Index(imageRef, "@"); atIdx >= 0 {
-		// Digest ref: everything after "@" is the tag (including "sha256:...")
-		name = imageRef[:atIdx]
-		tag = imageRef[atIdx+1:]
-	} else if n, t, ok := strings.Cut(imageRef, ":"); ok {
-		name = n
-		tag = t
+	if colon := strings.LastIndex(name, ":"); colon > strings.LastIndex(name, "/") {
+		name, tag = name[:colon], name[colon+1:]
 	}
 
 	var sb strings.Builder
@@ -200,54 +197,80 @@ func buildKustomization(imageRef string) string {
 	if tag != "" {
 		sb.WriteString("    newTag: " + tag + "\n")
 	}
+	if digest != "" {
+		sb.WriteString("    digest: " + digest + "\n")
+	}
 	return sb.String()
 }
 
 // runInitWizard prompts the user interactively and returns an InitConfig.
+// An invalid answer is re-prompted; at end of input it is an error.
 func runInitWizard(in io.Reader, out io.Writer) (*InitConfig, error) {
 	r := bufio.NewReader(in)
-	prompt := func(label, defaultVal string) (string, error) {
-		if defaultVal != "" {
-			if _, err := fmt.Fprintf(out, "%s [%s]: ", label, defaultVal); err != nil {
+	prompt := func(label, defaultVal string, valid func(string) error) (string, error) {
+		for {
+			text := label + ": "
+			if defaultVal != "" {
+				text = fmt.Sprintf("%s [%s]: ", label, defaultVal)
+			}
+			if _, err := fmt.Fprint(out, text); err != nil {
 				return "", fmt.Errorf("prompt write: %w", err)
 			}
-		} else {
-			if _, err := fmt.Fprintf(out, "%s: ", label); err != nil {
+			line, err := r.ReadString('\n')
+			if err != nil && err != io.EOF {
+				return "", fmt.Errorf("read input: %w", err)
+			}
+			answer := strings.TrimSpace(line)
+			if answer == "" {
+				answer = defaultVal
+			}
+			if valid == nil {
+				return answer, nil
+			}
+			verr := valid(answer)
+			if verr == nil {
+				return answer, nil
+			}
+			if err == io.EOF {
+				return "", fmt.Errorf("%s: %w", label, verr)
+			}
+			if _, err := fmt.Fprintf(out, "  %v\n", verr); err != nil {
 				return "", fmt.Errorf("prompt write: %w", err)
 			}
 		}
-		line, err := r.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return "", fmt.Errorf("read input: %w", err)
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			return defaultVal, nil
-		}
-		return line, nil
 	}
 
-	appName, err := prompt("Application name", "my-app")
+	appName, err := prompt("Application name", "my-app", nil)
 	if err != nil {
 		return nil, err
 	}
-	namespace, err := prompt("Namespace", "default")
+	namespace, err := prompt("Namespace", "default", nil)
 	if err != nil {
 		return nil, err
 	}
-	envsStr, err := prompt("Environments (comma-separated)", "test,uat,prod")
+	envsStr, err := prompt("Environments (comma-separated)", "test,uat,prod", nil)
 	if err != nil {
 		return nil, err
 	}
-	gitURL, err := prompt("Git repository URL", "")
+	gitURL, err := prompt("Git repository URL", "", func(v string) error {
+		if !strings.HasPrefix(v, "https://") || len(v) == len("https://") {
+			return fmt.Errorf("an https:// repository URL is required")
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	branch, err := prompt("Base branch", "main")
+	branch, err := prompt("Base branch", "main", nil)
 	if err != nil {
 		return nil, err
 	}
-	strategy, err := prompt("Update strategy (kustomize/helm)", "kustomize")
+	strategy, err := prompt("Update strategy (kustomize/helm)", "kustomize", func(v string) error {
+		if v != "kustomize" && v != "helm" {
+			return fmt.Errorf("update strategy must be kustomize or helm, got %q", v)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}

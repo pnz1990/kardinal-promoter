@@ -318,23 +318,22 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE              BUNDLE          TEST       UAT        PROD           AGE
-# kardinal-test-app     sha-abc1234     Verified   Promoting  Waiting        2m
+# PIPELINE            BUNDLE                          TEST       UAT              PROD   AGE
+# kardinal-test-app   kardinal-test-app-sha-abc1234   Verified   HealthChecking   -      2m
 
-# See individual steps
+# See the steps of the active Bundle
 kardinal get steps kardinal-test-app
-# STEP                                     TYPE            STATE           ENV
-# kardinal-test-app-sha-abc1234-test       PromotionStep   Verified        test
-# kardinal-test-app-sha-abc1234-uat        PromotionStep   HealthChecking  uat
-# kardinal-test-app-sha-abc1234-prod       PromotionStep   Pending         prod
+# ENVIRONMENT   STEP           STATE        DURATION   MESSAGE
+# test          git-clone      Completed    812ms      -
+#               ...
+# uat           git-clone      Completed    790ms      -
+#               ...
+#               health-check   InProgress   -          -
 
-# Check why prod hasn't started
+# Check why prod hasn't started: prod gets a PromotionStep only after uat is
+# Verified (and, with gates, after every gate passes)
 kardinal explain kardinal-test-app --env prod
-# PROMOTION: kardinal-test-app / prod
-#   Bundle: sha-abc1234
-#
-# RESULT: WAITING
-#   Upstream environment "uat" has not been verified yet.
+# No promotion for "prod" in pipeline "kardinal-test-app" yet
 ```
 
 !!! tip "Troubleshooting: Test stuck in HealthChecking"
@@ -349,10 +348,11 @@ Once uat is verified, the prod PromotionStep is created. Since prod uses `approv
 
 ```bash
 kardinal get steps kardinal-test-app
-# STEP                                     TYPE            STATE             ENV
-# kardinal-test-app-sha-abc1234-test       PromotionStep   Verified          test
-# kardinal-test-app-sha-abc1234-uat        PromotionStep   Verified          uat
-# kardinal-test-app-sha-abc1234-prod       PromotionStep   WaitingForMerge   prod
+# ENVIRONMENT   STEP             STATE        DURATION   MESSAGE
+# ...
+# prod          git-clone        Completed    790ms      -
+#               ...
+#               wait-for-merge   InProgress   -          -
 ```
 
 Go to your GitHub repo ([pnz1990/kardinal-demo](https://github.com/pnz1990/kardinal-demo)). You will see a PR titled:
@@ -399,7 +399,13 @@ spec:
 EOF
 ```
 
-The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and `kardinal explain` shows why.
+The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and `kardinal explain` shows the gate with the controller's latest evaluation:
+
+```bash
+kardinal explain kardinal-test-app --env prod
+# ENVIRONMENT   TYPE         NAME                 STATE   EXPRESSION            REASON
+# prod          PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   bundle.version=sha-abc1234: !schedule.isWeekend = false
+```
 
 ## Verify your setup
 
