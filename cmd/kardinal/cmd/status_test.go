@@ -82,8 +82,8 @@ func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
 		gate,
 	)
 
-	require.Contains(t, out, "Blocking Policy Gates")
-	gateSection := out[strings.Index(out, "Blocking Policy Gates"):]
+	_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
+	require.True(t, found, out)
 	assert.Contains(t, gateSection, "no-weekend-deploys")
 	assert.NotContains(t, gateSection, "bundle-abc-prod-no-weekend-deploys", "rows use the gate name")
 	assert.Contains(t, gateSection, "prod")
@@ -163,12 +163,21 @@ func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
 }
 
 func TestStatusPipelineWriter_TerminalSteps(t *testing.T) {
+	for _, state := range []string{"Verified", "Failed", "AbortedByAlarm", "RollingBack"} {
+		t.Run(state, func(t *testing.T) {
+			out := runStatusPipeline(t,
+				policyPipeline("demo", "test", "prod"),
+				explainStep("demo", "b1", "prod", state, "", time.Now().Add(-time.Hour)),
+			)
+			assert.Contains(t, out, state)
+			assert.Contains(t, out, "terminal state")
+		})
+	}
 	out := runStatusPipeline(t,
 		policyPipeline("demo", "test", "prod"),
-		explainStep("demo", "b1", "prod", "Verified", "", time.Now().Add(-time.Hour)),
+		explainStep("demo", "b1", "prod", "HealthChecking", "", time.Now().Add(-time.Hour)),
 	)
-	assert.Contains(t, out, "Verified")
-	assert.Contains(t, out, "terminal state")
+	assert.NotContains(t, out, "terminal state")
 }
 
 // C09b-cli-19: the summary reads the version from --controller-namespace,

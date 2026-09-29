@@ -242,7 +242,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		// Mark in-progress states with a pointer.
 		marker := "  "
 		switch r.state {
-		case "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
+		case "Promoting", "WaitingForMerge", "HealthChecking":
 			marker = "▶ "
 		}
 		prDisplay := r.prURL
@@ -276,10 +276,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	// Show a hint if everything is terminal.
 	allTerminal := len(blockingGates) == 0
 	for _, r := range rows {
-		switch r.state {
-		case "Verified", "Failed", "AbortedByAlarm":
-			// terminal
-		default:
+		if !terminalStates[r.state] {
 			allTerminal = false
 		}
 	}

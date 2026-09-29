@@ -196,6 +196,16 @@ func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out.String(), "[demo/prod] → Promoting"), out.String())
 }
 
+// RollingBack is terminal: the reconciler stops there, so --follow exits.
+func TestLogsFollow_RollingBackIsTerminal(t *testing.T) {
+	step := explainStep("demo", "b1", "prod", "RollingBack", "health check failed", policyTestNow.Add(-time.Hour))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, step), "default", "demo", "", ""))
+	assert.True(t, strings.HasSuffix(out.String(), "[demo/prod] → RollingBack\nAll steps reached terminal state.\n"), out.String())
+}
+
 // C09b-cli-25: truncation counts runes, so it never splits a UTF-8 character.
 func TestTruncateRunes(t *testing.T) {
 	cases := []struct {

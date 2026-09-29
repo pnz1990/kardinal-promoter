@@ -20,12 +20,15 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// terminalStates are PromotionStep states that indicate the step will not
-// progress further. The follow loop exits when all filtered steps are terminal.
+// terminalStates are PromotionStep states the reconciler takes no further
+// action in (pkg/reconciler/promotionstep). RollingBack is one: the rollback
+// Bundle, not the step, carries the promotion on. logs --follow exits and
+// status prints its idle hint when every step is terminal.
 var terminalStates = map[string]bool{
 	"Verified":       true,
 	"Failed":         true,
 	"AbortedByAlarm": true,
+	"RollingBack":    true,
 }
 
 func newLogsCmd() *cobra.Command {

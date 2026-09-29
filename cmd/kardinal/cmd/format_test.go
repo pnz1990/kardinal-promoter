@@ -786,6 +786,44 @@ func TestFormatBundleErrors_MostRecentPerNamespacedPipeline(t *testing.T) {
 	assert.Equal(t, "ERROR: pipeline web: NEW error\n", buf.String())
 }
 
+// Only cause conditions (InvalidSpec, Failed) give the message; a True
+// GraphSynced condition listed first does not hide the failure.
+func TestFormatBundleErrors_OnlyCauseConditions(t *testing.T) {
+	cond := func(typ, reason, msg string) metav1.Condition {
+		return metav1.Condition{Type: typ, Status: metav1.ConditionTrue, Reason: reason, Message: msg}
+	}
+	cases := []struct {
+		name  string
+		conds []metav1.Condition
+		want  string
+	}{
+		{"step failed", []metav1.Condition{
+			cond("GraphSynced", "Synced", "graph is current"),
+			cond("Failed", "StepFailed", "prod: health check failed"),
+		}, "prod: health check failed"},
+		{"invalid spec before failed", []metav1.Condition{
+			cond("GraphSynced", "Synced", "graph is current"),
+			cond("Failed", "GraphRejected", "graph rejected"),
+			cond("InvalidSpec", "PipelineNotFound", `pipeline "web" not found`),
+		}, `pipeline "web" not found`},
+		{"no cause condition", []metav1.Condition{
+			cond("GraphSynced", "Synced", "graph is current"),
+		}, "promotion failed — run `kubectl describe bundle web-1` for details"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := v1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default"},
+				Spec:       v1alpha1.BundleSpec{Pipeline: "web"},
+				Status:     v1alpha1.BundleStatus{Phase: "Failed", Conditions: tc.conds},
+			}
+			var buf bytes.Buffer
+			require.NoError(t, cmd.FormatBundleErrors(&buf, []v1alpha1.Bundle{b}, false))
+			assert.Equal(t, "ERROR: pipeline web: "+tc.want+"\n", buf.String())
+		})
+	}
+}
+
 // C09a-cli-07: with -A, same-named pipelines in different namespaces keep their
 // own bundle, environment state and subscription count.
 func TestFormatPipelineTableFull_AllNamespacesNoCrossTalk(t *testing.T) {

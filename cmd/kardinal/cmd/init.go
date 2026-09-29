@@ -178,10 +178,8 @@ func buildKustomization(imageRef string) string {
 	// The tag is after the last ":" that follows the last "/", so a registry
 	// port (localhost:5000/app:v1) stays in the name. A digest is written as
 	// Kustomize's digest field.
-	name, tag, digest := imageRef, "", ""
-	if at := strings.Index(name, "@"); at >= 0 {
-		name, digest = name[:at], name[at+1:]
-	}
+	name, digest, _ := strings.Cut(imageRef, "@")
+	tag := ""
 	if colon := strings.LastIndex(name, ":"); colon > strings.LastIndex(name, "/") {
 		name, tag = name[:colon], name[colon+1:]
 	}

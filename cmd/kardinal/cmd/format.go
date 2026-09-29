@@ -278,8 +278,10 @@ func PolicyGatePhase(g v1alpha1.PolicyGate) string {
 //
 //	ERROR: pipeline [<namespace>/]<pipeline>: <condition-message>
 //
-// The message is the True condition with reason CircularDependency, else
-// TranslationError, else the first True condition, else a describe hint.
+// The message comes from a True cause condition: InvalidSpec before Failed,
+// and within a type CircularDependency, then TranslationError, then the first
+// one. Other True conditions (GraphSynced) are not the cause and are skipped.
+// With no cause condition the message is a describe hint.
 // showNamespace prefixes the pipeline with its namespace (--all-namespaces).
 // When no Failed bundles are present, nothing is written.
 func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bool) error {
@@ -294,6 +296,7 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp.Time)
 	})
 
+	typeRank := map[string]int{"InvalidSpec": 20, "Failed": 10}
 	reasonRank := map[string]int{"CircularDependency": 2, "TranslationError": 1}
 	type pipelineError struct{ pipeline, message string }
 	seen := make(map[string]bool)
@@ -314,10 +317,11 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 
 		msg, rank := "", -1
 		for _, cond := range b.Status.Conditions {
-			if cond.Status != metav1.ConditionTrue {
+			t, cause := typeRank[cond.Type]
+			if cond.Status != metav1.ConditionTrue || !cause {
 				continue
 			}
-			if r := reasonRank[cond.Reason]; r > rank {
+			if r := t + reasonRank[cond.Reason]; r > rank {
 				msg, rank = cond.Message, r
 			}
 		}
