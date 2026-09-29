@@ -207,9 +207,9 @@ Teams have no access to `platform-policies` namespace by default.
 A common requirement is promoting a feature branch to a temporary environment for
 integration testing before merging to main.
 
-### Pattern: Short-lived Bundle with intent.target
+### Pattern: Short-lived Bundle with intent.targetEnvironment
 
-The simplest approach is to create a Bundle with `intent.target: staging` from a
+The simplest approach is to create a Bundle with `intent.targetEnvironment: staging` from a
 feature branch CI workflow. The Bundle promotes only up to staging, not to prod.
 
 ```yaml

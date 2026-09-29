@@ -2,6 +2,8 @@
 
 This page documents every variable available in `PolicyGate` CEL expressions. The context is built fresh on every evaluation using live CRD data.
 
+Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). A test (`TestDocumentedCELContext` in `pkg/reconciler/policygate`) evaluates every attribute and example on this page against the controller's real context.
+
 ---
 
 ## Root Variables
@@ -13,6 +15,7 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 | `environment` | map | The target environment |
 | `upstream` | map | Per-environment soak data from upstream |
 | `metrics` | map | MetricCheck results from the same namespace |
+| `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes-k-04) |
 
 ---
 
@@ -22,12 +25,14 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 |---|---|---|---|
 | `bundle.type` | string | `"image"` | Always |
 | `bundle.version` | string | `"1.29.0"` | Always; derived from image tag or configRef |
-| `bundle.upstreamSoakMinutes` | int | `45` | After any upstream environment is Verified; max across all envs |
+| `bundle.upstreamSoakMinutes` | int | `45` | Soak of the direct upstream environment(s) of the gated environment; minimum across them on fan-in; 0 for a root environment or an upstream that is not Verified |
 | `bundle.provenance.author` | string | `"engineer@co.com"` | When Bundle was created with `provenance.author` |
 | `bundle.provenance.commitSHA` | string | `"abc123def"` | When Bundle was created with `provenance.commitSHA` |
 | `bundle.provenance.ciRunURL` | string | `"https://github.com/..."` | When Bundle was created with `provenance.ciRunURL` |
-| `bundle.intent.targetEnvironment` | string | `"prod"` | When Bundle has `spec.intent.targetEnvironment` set |
-| `bundle.metadata.annotations` | map | `{"team": "platform"}` | Available via `bundle.metadata.annotations["key"]` |
+| `bundle.intent.targetEnvironment` | string | `"prod"` | Always; empty unless the Bundle sets `spec.intent.targetEnvironment` |
+| `bundle.labels` | map | `{"hotfix": "true"}` | Always; the Bundle's `metadata.labels` (values are strings), empty map when none |
+| `bundle.pr["<envName>"].isApproved` | bool | `true` | When a PRStatus exists for this Bundle and environment |
+| `bundle.pr["<envName>"].approvalCount` | int | `2` | When a PRStatus exists for this Bundle and environment |
 
 ### Bundle examples
 
@@ -35,11 +40,11 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 # Block bots from promoting to prod
 bundle.provenance.author != "dependabot[bot]"
 
-# Require upstream soak (convenience shorthand — max across all upstream envs)
+# Require upstream soak (shorthand for the direct upstream; minimum on fan-in)
 bundle.upstreamSoakMinutes >= 30
 
-# Block hotfix bundles from skipping gates
-bundle.metadata.annotations["release-type"] != "hotfix"
+# Block bundles labelled release-type=hotfix (bundles without the label pass)
+!("release-type" in bundle.labels) || bundle.labels["release-type"] != "hotfix"
 
 # Check intent
 bundle.intent.targetEnvironment == "prod"
@@ -90,13 +95,14 @@ environment.name != "prod" || bundle.provenance.author != "dependabot[bot]"
 
 ## `upstream.*`
 
-The `upstream` map contains per-environment data for all environments that have been promoted **upstream** of the current gate's environment. Keys are environment names.
+The `upstream` map contains per-environment data keyed by environment name. It is not limited to environments upstream of the gate: it has an entry for every environment in the Bundle's `status.environments` and in the history of the pipeline's last 10 Bundles. An environment with neither is absent, so referencing it is an evaluation error and the gate blocks.
 
 | Field | Type | Example | Notes |
 |---|---|---|---|
-| `upstream.<envName>.soakMinutes` | int | `42` | Minutes since the Bundle was Verified in that environment |
-
-**Only populated** for environments that have status `Verified` in `Bundle.status.environments`.
+| `upstream.<envName>.soakMinutes` | int | `42` | This Bundle's soak minutes in that environment (from `Bundle.status.environments[].soakMinutes`; 0 when absent) |
+| `upstream.<envName>.recentSuccessCount` | int | `3` | Verified promotions of that environment among the pipeline's last 10 Bundles |
+| `upstream.<envName>.recentFailureCount` | int | `0` | Failed promotions of that environment among the pipeline's last 10 Bundles |
+| `upstream.<envName>.lastPromotedAt` | string | `"2026-04-14T12:00:00Z"` | RFC3339 time of the last Verified promotion, `""` if none |
 
 ### Upstream examples
 
@@ -107,7 +113,7 @@ upstream.uat.soakMinutes >= 30
 # Require soak in both staging regions
 upstream["staging-us"].soakMinutes >= 15 && upstream["staging-eu"].soakMinutes >= 15
 
-# Convenience: use bundle.upstreamSoakMinutes for max across all upstream envs
+# Shorthand: bundle.upstreamSoakMinutes is the soak of the direct upstream(s), minimum on fan-in
 bundle.upstreamSoakMinutes >= 30
 ```
 
@@ -119,22 +125,22 @@ The `metrics` map contains one entry per `MetricCheck` CRD in the same namespace
 
 | Field | Type | Example | Notes |
 |---|---|---|---|
-| `metrics.<name>.value` | string | `"0.005"` | Last queried metric value (as string) |
-| `metrics.<name>.result` | string | `"pass"` | `"pass"` or `"fail"` — result of the MetricCheck threshold |
+| `metrics.<name>.value` | string | `"0.005"` | Last queried metric value, as a string; `""` before the first evaluation or after a query error |
+| `metrics.<name>.result` | string | `"Pass"` | `"Pass"` or `"Fail"` — result of the MetricCheck threshold; `""` before the first evaluation |
 
-**Populated** when a `MetricCheck` CRD with the given name exists in the gate's namespace and has been evaluated by the MetricCheckReconciler.
+**Populated** when a `MetricCheck` CRD with the given name exists in the gate's namespace. `double("")` is an evaluation error, so a value-based gate blocks until the MetricCheck has a value.
 
 ### Metrics examples
 
 ```cel
 # Block if error rate MetricCheck is failing
-metrics["error-rate"].result == "pass"
+metrics["error-rate"].result == "Pass"
 
-# Check raw value (convert string → float via standard CEL)
+# Check raw value (convert string → double via standard CEL)
 double(metrics["p99-latency"].value) < 500.0
 
 # Allow if no MetricCheck exists (graceful degradation)
-!has(metrics.error_rate) || metrics["error-rate"].result == "pass"
+!("error-rate" in metrics) || metrics["error-rate"].result == "Pass"
 ```
 
 ---
@@ -148,13 +154,13 @@ kardinal uses the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/
 | Function | Signature | Example |
 |---|---|---|
 | `json.marshal` | `(dyn) → string` | `json.marshal(bundle.provenance)` |
-| `json.unmarshal` | `(string) → dyn` | `json.unmarshal(bundle.metadata.annotations["config"]).featureFlags.darkMode` |
+| `json.unmarshal` | `(string) → dyn` | `json.unmarshal('{"darkMode": true}').darkMode` |
 
 ### Maps
 
 | Function | Signature | Example |
 |---|---|---|
-| `.merge()` | `map.merge(map) → map` | `environment.labels.merge({"region": "us-east-1"})` |
+| `.merge()` | `map.merge(map) → map` | `bundle.labels.merge({"region": "us-east-1"})` |
 
 > **Note**: `merge` is a **member function** called on a map: `map1.merge(map2)`.
 > The namespace-style `maps.merge(map1, map2)` is incorrect and produces "undeclared reference" errors.
@@ -163,15 +169,26 @@ kardinal uses the [kro CEL library](https://github.com/kubernetes-sigs/kro/tree/
 
 | Function | Signature | Example |
 |---|---|---|
-| `lists.setAtIndex` | `(list, int, dyn) → list` | `lists.setAtIndex(myList, 0, "new-value")` |
-| `lists.insertAtIndex` | `(list, int, dyn) → list` | `lists.insertAtIndex(myList, 0, "prepend")` |
-| `lists.removeAtIndex` | `(list, int) → list` | `lists.removeAtIndex(myList, 0)` |
+| `lists.setAtIndex` | `(list, int, dyn) → list` | `lists.setAtIndex(["a", "b"], 0, "new-value")` |
+| `lists.insertAtIndex` | `(list, int, dyn) → list` | `lists.insertAtIndex(["a", "b"], 0, "prepend")` |
+| `lists.removeAtIndex` | `(list, int) → list` | `lists.removeAtIndex(["a", "b"], 0)` |
 
 ### Random (deterministic)
 
 | Function | Signature | Example |
 |---|---|---|
-| `random.seededInt` | `(int, int, int) → int` | `random.seededInt(0, 100, bundle.version.hashCode()) < 10` |
+| `random.seededInt` | `(int, int, string) → int` | `random.seededInt(0, 100, bundle.version) < 10` |
+| `random.seededString` | `(int, string) → string` | `random.seededString(8, bundle.version)` |
+
+`random.seededString` returns lowercase letters and digits. The length must be
+between 1 and 1024. The same seed always gives the same string.
+
+### Evaluation limits
+
+Each evaluation of a gate expression has a runtime cost limit of 1,000,000 (the
+per-expression limit Kubernetes uses for CRD validation rules) and a time limit
+of 1 second. An expression that goes over either limit fails to evaluate, and
+the gate blocks with a `CEL evaluation error` reason.
 
 ### String extensions
 
@@ -200,16 +217,16 @@ upstream.uat.soakMinutes >= 30
 bundle.provenance.author != "dependabot[bot]"
 
 # Require low error rate from Prometheus MetricCheck
-metrics["error-rate"].result == "pass"
+metrics["error-rate"].result == "Pass"
 
 # Hotfix bypass: hotfix bundles skip soak requirement
-bundle.metadata.annotations["release-type"] == "hotfix" || bundle.upstreamSoakMinutes >= 30
+("release-type" in bundle.labels && bundle.labels["release-type"] == "hotfix") || bundle.upstreamSoakMinutes >= 30
 
 # Multi-condition prod gate
 !schedule.isWeekend &&
 schedule.hour >= 9 && schedule.hour < 17 &&
 upstream.uat.soakMinutes >= 30 &&
-metrics["error-rate"].result == "pass"
+metrics["error-rate"].result == "Pass"
 ```
 
 ---

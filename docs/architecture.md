@@ -52,8 +52,9 @@ The controller manager runs these reconcilers:
 | `PolicyGateReconciler` | `PolicyGate` (instances) | Evaluates CEL expression; writes `status.ready` |
 | `MetricCheckReconciler` | `MetricCheck` | Queries Prometheus; writes result to status |
 | `PRStatusReconciler` | `PRStatus` | Polls SCM for PR merge/close signal; writes `status.merged` |
-| `RollbackPolicyReconciler` | `RollbackPolicy` | Evaluates auto-rollback threshold; creates rollback Bundle |
+| `RollbackPolicyReconciler` | `RollbackPolicy` | Reads one Bundle's PromotionSteps in one environment; creates a rollback Bundle at the failure threshold |
 | `ScheduleClockReconciler` | `ScheduleClock` | Writes `status.tick` on a configurable interval for time-based gates |
+| `ChangeWindowReconciler` | `ChangeWindow` | Writes `status.active` and requeues at the next window boundary |
 | `SubscriptionReconciler` | `Subscription` | Polls OCI/Git sources; creates Bundles on new artifacts |
 
 ### Translator (`pkg/translator`)
@@ -194,7 +195,7 @@ All state is stored in Kubernetes CRDs:
 | `PromotionStep` | Per-environment promotion progress; owned by Graph |
 | `PolicyGate` | Policy check template (cluster-scoped or namespace-scoped) |
 | `PRStatus` | Tracks GitHub/GitLab PR open/merged/closed state |
-| `RollbackPolicy` | Auto-rollback configuration for a Pipeline |
+| `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#autorollback-is-not-implemented)) |
 | `MetricCheck` | Prometheus query check, created as a DAG node |
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |

@@ -57,5 +57,7 @@ The SubscriptionReconciler is an Owned node (Q2 pattern):
 - `time.Now()` is used only inside the status write (compliant with Graph-first rules)
 
 The Bundle creation is a standard Kubernetes CREATE call — not a status mutation.
-This is explicitly permitted because creating an owned child resource is part of the
-Owned node pattern (the reconciler owns the Bundles it creates via owner references).
+This is permitted because creating a new object is not a cross-CRD status mutation.
+The Bundles are linked to the Subscription by the `kardinal.io/subscription` label, not
+by owner references: deleting a Subscription must not cascade-delete Bundles that are
+mid-promotion.
