@@ -3,8 +3,9 @@
 
 // ThemeContext.tsx — React context for dark/light mode theming.
 //
-// Reads `prefers-color-scheme` on mount and allows manual toggle via `toggleTheme()`.
-// Preference is persisted to localStorage under the key `kardinal-theme`.
+// Follows `prefers-color-scheme`, including OS changes while the tab is open, until
+// the user picks a theme with `toggleTheme()`. Only that explicit choice is saved
+// to localStorage (key `kardinal-theme`); from then on it wins over the OS.
 // Applies `data-theme="light"` to `document.documentElement` for light mode;
 // the default (no attribute) is dark.
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
@@ -23,11 +24,17 @@ export const ThemeContext = createContext<ThemeContextValue>({
   toggleTheme: () => {},
 })
 
+/** The theme the user picked explicitly, if any. */
+function storedTheme(): Theme | undefined {
+  const stored = localStorage.getItem(STORAGE_KEY)
+  return stored === 'dark' || stored === 'light' ? stored : undefined
+}
+
 /** Returns the initial theme: localStorage preference, then system preference, then dark. */
 function resolveInitialTheme(): Theme {
   if (typeof window === 'undefined') return 'dark'
-  const stored = localStorage.getItem(STORAGE_KEY) as Theme | null
-  if (stored === 'dark' || stored === 'light') return stored
+  const stored = storedTheme()
+  if (stored) return stored
   if (window.matchMedia('(prefers-color-scheme: light)').matches) return 'light'
   return 'dark'
 }
@@ -43,8 +50,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } else {
       root.removeAttribute('data-theme')
     }
-    // Persist to localStorage.
-    localStorage.setItem(STORAGE_KEY, theme)
   }, [theme])
 
   // Listen for system preference changes (e.g., user changes OS theme while tab is open).
@@ -52,8 +57,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const mq = window.matchMedia('(prefers-color-scheme: light)')
     const handler = (e: MediaQueryListEvent) => {
       // Only follow system if user hasn't set an explicit preference.
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (!stored) {
+      if (!storedTheme()) {
         setTheme(e.matches ? 'light' : 'dark')
       }
     }
@@ -61,7 +65,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener('change', handler)
   }, [])
 
-  const toggleTheme = () => setTheme(t => (t === 'dark' ? 'light' : 'dark'))
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark'
+    localStorage.setItem(STORAGE_KEY, next)
+    setTheme(next)
+  }
 
   return <ThemeContext.Provider value={{ theme, toggleTheme }}>{children}</ThemeContext.Provider>
 }

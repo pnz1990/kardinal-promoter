@@ -13,7 +13,7 @@
 
 // components/CopyButton.tsx — Reusable copy-to-clipboard button.
 // Extracted from NodeDetail.tsx for use in EmptyState and other components (#530).
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 
 interface Props {
   text: string
@@ -27,51 +27,80 @@ interface Props {
   tabIndex?: number
 }
 
+/** Copy with a hidden textarea; returns false when the browser refuses. */
+function execCommandCopy(text: string): boolean {
+  const el = document.createElement('textarea')
+  el.value = text
+  el.setAttribute('readonly', '')
+  el.style.position = 'fixed'
+  el.style.opacity = '0'
+  document.body.appendChild(el)
+  el.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
+  document.body.removeChild(el)
+  return ok
+}
+
+type CopyState = 'idle' | 'copied' | 'failed'
+
 /**
  * CopyButton — copies `text` to clipboard on click.
  * Shows a checkmark for 2 seconds on success.
- * Falls back to execCommand for environments without Clipboard API.
+ * Uses execCommand when the Clipboard API is missing (plain-HTTP port-forward)
+ * or refuses, and says so when both fail.
  */
 export default function CopyButton({ text, title, tabIndex }: Props) {
-  const [copied, setCopied] = useState(false)
+  const [state, setState] = useState<CopyState>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  const show = useCallback((next: CopyState) => {
+    setState(next)
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setState('idle'), 2000)
+  }, [])
+
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {
-      // Fallback for environments without Clipboard API
-      const el = document.createElement('textarea')
-      el.value = text
-      el.style.position = 'fixed'
-      el.style.opacity = '0'
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand('copy')
-      document.body.removeChild(el)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [text])
+    const fallback = () => show(execCommandCopy(text) ? 'copied' : 'failed')
+    const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+    if (!clip?.writeText) {
+      fallback()
+      return
+    }
+    clip.writeText(text).then(() => show('copied'), fallback)
+  }, [text, show])
+
+  const label = state === 'copied'
+    ? 'Copied!'
+    : state === 'failed'
+      ? 'Copy failed: select the text and copy it by hand'
+      : (title ?? 'Copy to clipboard')
 
   return (
     <button
       data-testid="copy-button"
       onClick={handleCopy}
       tabIndex={tabIndex}
-      title={copied ? 'Copied!' : (title ?? 'Copy to clipboard')}
+      title={label}
+      aria-label={label}
       style={{
         background: 'none',
-        border: '1px solid #334155',
+        border: '1px solid var(--color-border)',
         borderRadius: '4px',
         padding: '1px 6px',
         cursor: 'pointer',
         fontSize: '0.7rem',
-        color: copied ? '#86efac' : 'var(--color-text-muted)',
+        color: state === 'copied' ? 'var(--color-success)' : state === 'failed' ? 'var(--color-error)' : 'var(--color-text-muted)',
         transition: 'color 0.2s',
         lineHeight: 1.4,
       }}
     >
-      {copied ? '✓' : '📋'}
+      {state === 'copied' ? '✓' : state === 'failed' ? '✕' : '📋'}
     </button>
   )
 }

@@ -34,8 +34,8 @@ Thumbs.db
 coverage.txt
 
 # Compiled binaries in repo root (standalone agent sometimes builds here)
-kardinal-controller
-kardinal
+/kardinal-controller
+/kardinal
 
 # Worktree artifacts that must not land in main repo root
 CLAIM

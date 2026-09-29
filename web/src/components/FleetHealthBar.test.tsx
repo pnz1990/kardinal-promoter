@@ -76,17 +76,31 @@ describe('computeFleetHealth', () => {
     expect(s.fullCD).toBe(1)
   })
 
-  it('counts promoting pipeline', () => {
-    const s = computeFleetHealth([makePipeline({ phase: 'Promoting' })])
-    expect(s.promoting).toBe(1)
+  // The backend never sends phase "Promoting" (DerivePhase: Ready/Degraded/Unknown);
+  // "promoting" comes from the per-environment states of the active bundle.
+  it.each<[string, Record<string, string> | undefined, number]>([
+    ['an environment Promoting', { test: 'Verified', prod: 'Promoting' }, 1],
+    ['an environment WaitingForMerge', { test: 'Verified', prod: 'WaitingForMerge' }, 1],
+    ['an environment HealthChecking', { test: 'HealthChecking' }, 1],
+    ['an environment RollingBack', { prod: 'RollingBack' }, 1],
+    ['all environments Verified', { test: 'Verified', prod: 'Verified' }, 0],
+    ['environments not started or failed', { test: 'Failed', prod: 'NotStarted' }, 0],
+    ['no environment states', undefined, 0],
+  ])('promoting count with %s', (_, environmentStates, want) => {
+    const s = computeFleetHealth([makePipeline({ phase: 'Unknown', environmentStates })])
+    expect(s.promoting).toBe(want)
+  })
+
+  it('does not count phase "Promoting" alone (the backend never sends it)', () => {
+    expect(computeFleetHealth([makePipeline({ phase: 'Promoting' })]).promoting).toBe(0)
   })
 
   it('handles mixed fleet correctly', () => {
     const pipelines = [
       makePipeline({ name: 'a', blockerCount: 0, failedStepCount: 0, phase: 'Ready', cdLevel: 'full-cd' }),
-      makePipeline({ name: 'b', blockerCount: 1, phase: 'Promoting' }),
+      makePipeline({ name: 'b', blockerCount: 1, phase: 'Unknown', environmentStates: { prod: 'WaitingForMerge' } }),
       makePipeline({ name: 'c', failedStepCount: 2 }),
-      makePipeline({ name: 'd', phase: 'Promoting', cdLevel: 'full-cd' }),
+      makePipeline({ name: 'd', phase: 'Unknown', environmentStates: { test: 'Promoting' }, cdLevel: 'full-cd' }),
     ]
     const s = computeFleetHealth(pipelines)
     expect(s.total).toBe(4)
@@ -107,7 +121,7 @@ describe('filterPipelines', () => {
     makePipeline({ name: 'blocked', blockerCount: 1 }),
     makePipeline({ name: 'ci-red', failedStepCount: 1 }),
     makePipeline({ name: 'full-cd', cdLevel: 'full-cd' }),
-    makePipeline({ name: 'promoting', phase: 'Promoting' }),
+    makePipeline({ name: 'promoting', phase: 'Unknown', environmentStates: { test: 'Verified', prod: 'HealthChecking' } }),
   ]
 
   it('filter=all returns all pipelines', () => {

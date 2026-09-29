@@ -1,42 +1,36 @@
-// components/DAGView.tsx — Promotion DAG visualization using dagre for layout.
-// Uses a simple SVG-based rendering to avoid full reactflow complexity while
-// still providing a clear visual DAG.
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// components/DAGView.tsx — Promotion DAG visualization: dagre lays the graph
+// out and plain SVG draws it (no graph-rendering library).
 //
 // #326: selectedNode is lifted to the parent (App) so NodeDetail can be rendered
 // as a proper split panel sibling rather than a position:fixed overlay.
 // #334: DAG legend strip explains node shapes and state colors.
-// #521: computeLayout is memoized — only re-runs when topology (IDs + edges) changes.
+// #521: dagre only re-runs when the topology (node IDs + edges) changes; a poll
+//       that only changes node states reuses the positions.
 // #532: DAG node state is expressed via CSS classes (dag-node--{state}).
-// #526: Portal tooltip replaces native SVG <title> tooltips.
+// #526: Portal tooltip replaces native SVG <title> tooltips. It opens on hover
+//       and on keyboard focus.
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import dagre from '@dagrejs/dagre'
 import type { GraphNode, GraphEdge } from '../types'
 import { kardinalStateToHealth, healthChipColors, healthStateClass } from './HealthChip'
 import DAGTooltip, { type DAGTooltipTarget } from './DAGTooltip'
+import { formatElapsedSince } from '../timeFormat'
+import { isHttpURL, prNumberFromURL } from '../prLink'
 import '../styles/DAGView.css'
 
 /** Active states that warrant an elapsed-time display (#330). */
 const ACTIVE_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking'])
 
-/** Elapsed time formatter: "4m 12s", "1h 23m", etc. (#330) */
-function formatElapsed(startedAt: string | undefined): string {
-  if (!startedAt) return ''
-  const startMs = new Date(startedAt).getTime()
-  if (isNaN(startMs)) return ''
-  const elapsed = Math.floor((Date.now() - startMs) / 1000)
-  if (elapsed <= 0) return ''
-  if (elapsed < 60) return `${elapsed}s`
-  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
-  return `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m`
-}
-
 /** Hook that ticks every second and returns elapsed string for an active PromotionStep node. */
 function useElapsedTick(startedAt: string | undefined, active: boolean): string {
-  const [elapsed, setElapsed] = useState(() => formatElapsed(startedAt))
+  const [elapsed, setElapsed] = useState(() => formatElapsedSince(startedAt))
   useEffect(() => {
     if (!active || !startedAt) return
-    setElapsed(formatElapsed(startedAt))
-    const id = setInterval(() => setElapsed(formatElapsed(startedAt)), 1000)
+    setElapsed(formatElapsedSince(startedAt))
+    const id = setInterval(() => setElapsed(formatElapsedSince(startedAt)), 1000)
     return () => clearInterval(id)
   }, [startedAt, active])
   return elapsed
@@ -72,12 +66,11 @@ function nodeName(node: GraphNode): string {
 }
 
 /**
- * Extract PR number from a GitHub PR URL.
- * "https://github.com/org/repo/pull/42" → "#42"
+ * PR number for the badge, from any supported SCM ("#42"), or null. Null also
+ * for a non-http(s) URL, so the badge never opens one.
  */
 function extractPRNumber(prURL: string): string | null {
-  const m = prURL.match(/\/pull\/(\d+)$/)
-  return m ? `#${m[1]}` : null
+  return prNumberFromURL(prURL)
 }
 
 interface LayoutNode extends GraphNode {
@@ -86,7 +79,8 @@ interface LayoutNode extends GraphNode {
 }
 
 
-function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
+/** Node centre positions from dagre, keyed by node ID. */
+function computePositions(nodes: GraphNode[], edges: GraphEdge[]): Map<string, { x: number; y: number }> {
   const g = new dagre.graphlib.Graph()
   g.setGraph({ rankdir: 'LR', nodesep: 20, ranksep: 60, marginx: MARGIN, marginy: MARGIN })
   g.setDefaultEdgeLabel(() => ({}))
@@ -100,10 +94,17 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
 
   dagre.layout(g)
 
-  return nodes.map(node => {
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const node of nodes) {
     const { x, y } = g.node(node.id) as { x: number; y: number }
-    return { ...node, x, y }
-  })
+    positions.set(node.id, { x, y })
+  }
+  return positions
+}
+
+/** A string that changes only when node IDs or edges change. */
+function topologyKey(nodes: GraphNode[], edges: GraphEdge[]): string {
+  return nodes.map(n => n.id).join('|') + '#' + edges.map(e => `${e.from}>${e.to}`).join('|')
 }
 
 /**
@@ -111,12 +112,13 @@ function computeLayout(nodes: GraphNode[], edges: GraphEdge[]): LayoutNode[] {
  * Shown at the bottom of the DAG view so new users understand the visualization.
  */
 function DAGLegend() {
-  const legendItems: Array<{ label: string; bg: string; border: string; text: string; desc: string }> = [
-    { label: 'Verified', bg: '#14532d', border: '#16a34a', text: '#86efac', desc: 'Passed' },
-    { label: 'Promoting', bg: '#1e1b4b', border: 'var(--color-accent)', text: 'var(--color-accent)', desc: 'Running' },
-    { label: 'Waiting', bg: '#1c2c50', border: '#3b82f6', text: '#93c5fd', desc: 'Awaiting merge' },
-    { label: 'Failed', bg: '#450a0a', border: '#dc2626', text: '#fca5a5', desc: 'Error' },
-    { label: 'Pending', bg: 'var(--color-surface)', border: 'var(--color-text-faint)', text: 'var(--color-text-muted)', desc: 'Not started' },
+  // Colors come from healthChipColors, the same function the nodes use, so the
+  // legend always matches what the graph shows.
+  const legendItems: Array<{ label: string; state: string; desc: string }> = [
+    { label: 'Verified', state: 'Verified', desc: 'Deployed and healthy' },
+    { label: 'In progress', state: 'Promoting', desc: 'Promoting, waiting for the PR to merge, or checking health' },
+    { label: 'Failed', state: 'Failed', desc: 'Failed, or stopped by an alarm' },
+    { label: 'Not started', state: 'Pending', desc: 'Not reached yet' },
   ]
 
   return (
@@ -127,39 +129,42 @@ function DAGLegend() {
       flexWrap: 'wrap',
       marginTop: '0.75rem',
       padding: '0.5rem 0.25rem',
-      borderTop: '1px solid #1e293b',
+      borderTop: '1px solid var(--color-border-muted)',
       fontSize: '0.65rem',
       color: 'var(--color-text-faint)',
     }}>
       <span style={{ fontWeight: 600, color: 'var(--color-text-faint)', marginRight: '0.25rem' }}>Legend:</span>
       {/* Node type icons */}
       <span title="PromotionStep — environment node (rounded rect)">
-        <span style={{ fontSize: '0.6rem', border: '1px solid #475569', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: '#64748b' }}>▭</span>
+        <span style={{ fontSize: '0.6rem', border: '1px solid var(--color-border)', borderRadius: '2px', padding: '0 3px', marginRight: '3px', color: 'var(--color-text-faint)' }}>▭</span>
         Environment step
       </span>
       <span title="PolicyGate — CEL policy check (🔒 prefix)">
         <span style={{ marginRight: '3px' }}>🔒</span>
         Policy gate
       </span>
-      <span style={{ color: 'var(--color-surface)' }}>│</span>
+      <span aria-hidden="true" style={{ color: 'var(--color-border)' }}>│</span>
       {/* State color chips */}
-      {legendItems.map(item => (
-        <span
-          key={item.label}
-          title={item.desc}
-          style={{
-            background: item.bg,
-            border: `1px solid ${item.border}`,
-            borderRadius: '3px',
-            padding: '1px 5px',
-            color: item.text,
-            fontSize: '0.6rem',
-            cursor: 'default',
-          }}
-        >
-          {item.label}
-        </span>
-      ))}
+      {legendItems.map(item => {
+        const { bg, border, text } = healthChipColors(kardinalStateToHealth(item.state))
+        return (
+          <span
+            key={item.label}
+            title={item.desc}
+            style={{
+              background: bg,
+              border: `1px solid ${border}`,
+              borderRadius: '3px',
+              padding: '1px 5px',
+              color: text,
+              fontSize: '0.6rem',
+              cursor: 'default',
+            }}
+          >
+            {item.label}
+          </span>
+        )
+      })}
       <span title="Highlighted nodes indicate blocked PolicyGates when filter is active" style={{ marginLeft: 'auto', color: 'var(--color-text-faint)' }}>
         <span style={{ color: 'var(--color-warning)', marginRight: '3px' }}>◆</span>highlighted = blocked gate
       </span>
@@ -232,6 +237,8 @@ function DAGNode({
           rect.setAttribute('stroke', 'var(--color-accent)')
           rect.setAttribute('stroke-width', '2.5')
         }
+        // Keyboard users get the same tooltip as mouse users.
+        onHoverStart?.(node, (e.currentTarget as SVGGElement).getBoundingClientRect())
       }}
       onBlur={e => {
         // #346: restore normal stroke on blur
@@ -240,6 +247,7 @@ function DAGNode({
           rect.setAttribute('stroke', strokeColor)
           rect.setAttribute('stroke-width', String(strokeWidth))
         }
+        onHoverEnd?.()
       }}
     >
       {/* Portal tooltip replaces native SVG <title> (#526). 
@@ -279,7 +287,7 @@ function DAGNode({
           x={NODE_WIDTH / 2}
           y={54}
           textAnchor="middle"
-          fill="#f59e0b"
+          fill="var(--color-warning)"
           fontSize="9"
           style={{ pointerEvents: 'none' }}
         >
@@ -289,16 +297,21 @@ function DAGNode({
       {/* PR badge — shown when a PR exists; clicking opens the PR in a new tab (#361)
           #748: Use text+onClick instead of <a> to avoid nested-interactive (a[href] inside g[role=button]).
           #762: role="link" removed — it made axe fire nested-interactive (interactive inside interactive).
-          The <g> carries aria-label describing the node; PR number is visible in text. */}
+          The <g> carries aria-label describing the node; PR number is visible in text.
+          Keyboard and screen-reader users reach the PR link in the node detail panel
+          (Enter on the node) and in the tooltip, which opens on focus. */}
       {showPRBadge && node.prURL && (
         <text
           x={NODE_WIDTH / 2}
           y={isActive && elapsed ? 68 : 56}
           textAnchor="middle"
-          fill="#818cf8"
+          fill="var(--color-accent)"
           fontSize="9"
           style={{ cursor: 'pointer', textDecoration: 'underline' }}
-          onClick={e => { e.stopPropagation(); window.open(node.prURL, '_blank', 'noopener,noreferrer') }}
+          onClick={e => {
+            e.stopPropagation()
+            if (isHttpURL(node.prURL)) window.open(node.prURL, '_blank', 'noopener,noreferrer')
+          }}
           aria-hidden="true"
         >
           🔗 {prNumber}
@@ -335,11 +348,14 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     }
   }, [])
 
-  // #521: memoize dagre layout so it only recomputes when nodes/edges change,
-  // not on every 5-second poll when only node states (colors) change.
+  // #521: dagre only re-runs when the topology changes. Each 5-second poll hands
+  // us fresh arrays, so the memo is keyed on the node IDs and edges, not on the
+  // arrays. The current node data (state, message, PR) is merged in on every render.
   // IMPORTANT: this useMemo must come BEFORE any early returns so that React's
   // hook call count is consistent across all render paths (Rules of Hooks).
-  const layout = useMemo(() => computeLayout(nodes, edges), [nodes, edges])
+  const topoKey = topologyKey(nodes, edges)
+  const positions = useMemo(() => computePositions(nodes, edges), [topoKey]) // keyed on topology on purpose
+  const layout: LayoutNode[] = nodes.map(node => ({ ...node, ...(positions.get(node.id) ?? { x: 0, y: 0 }) }))
 
   if (loading) {
     return (
@@ -352,7 +368,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
               style={{
                 height: '64px',
                 borderRadius: '6px',
-                background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+                background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
                 backgroundSize: '200% 100%',
                 animation: 'shimmer 1.5s infinite',
                 marginBottom: '0.75rem',
@@ -371,7 +387,7 @@ export function DAGView({ nodes, edges, loading, error, highlightNodeIds, select
     )
   }
   if (error) {
-    return <div style={{ padding: '2rem', color: '#ef4444' }}>Error: {error}</div>
+    return <div role="alert" style={{ padding: '2rem', color: 'var(--color-error)' }}>Error: {error}</div>
   }
   if (nodes.length === 0) {
     return <div style={{ padding: '2rem', color: 'var(--color-text-muted)' }}>No active promotion found.</div>

@@ -21,7 +21,7 @@ import type { PolicyGate } from '../types'
 const makeGate = (overrides: Partial<PolicyGate> = {}): PolicyGate => ({
   name: 'test-gate',
   namespace: 'default',
-  expression: '!schedule.isWeekend()',
+  expression: '!schedule.isWeekend',
   ready: true,
   ...overrides,
 })
@@ -49,7 +49,7 @@ describe('PolicyGatesPanel — collapsed by default when all pass', () => {
     const btn = screen.getByRole('button', { name: /Policy Gates/i })
     expect(btn).toHaveAttribute('aria-expanded', 'false')
     // Gate expression should not be visible
-    expect(screen.queryByText('!schedule.isWeekend()')).not.toBeInTheDocument()
+    expect(screen.queryByText('!schedule.isWeekend')).not.toBeInTheDocument()
   })
 })
 
@@ -62,9 +62,9 @@ describe('PolicyGatesPanel — auto-expand when blocked (#524)', () => {
   })
 
   it('shows gate expression when auto-expanded due to block', () => {
-    const gates = [makeGate({ ready: false, expression: '!schedule.isWeekend()' })]
+    const gates = [makeGate({ ready: false, expression: '!schedule.isWeekend' })]
     render(<PolicyGatesPanel gates={gates} />)
-    expect(screen.getByText('!schedule.isWeekend()')).toBeInTheDocument()
+    expect(screen.getByText('!schedule.isWeekend')).toBeInTheDocument()
   })
 
   it('shows block reason when gate is blocked', () => {
@@ -77,11 +77,11 @@ describe('PolicyGatesPanel — auto-expand when blocked (#524)', () => {
 describe('PolicyGatesPanel — toggle and content', () => {
   it('expands when toggle button is clicked', async () => {
     const user = userEvent.setup()
-    const gates = [makeGate({ ready: true, expression: '!schedule.isWeekend()' })]
+    const gates = [makeGate({ ready: true, expression: '!schedule.isWeekend' })]
     render(<PolicyGatesPanel gates={gates} />)
     const btn = screen.getByRole('button', { name: /Policy Gates/i })
     await user.click(btn)
-    expect(screen.getByText('!schedule.isWeekend()')).toBeInTheDocument()
+    expect(screen.getByText('!schedule.isWeekend')).toBeInTheDocument()
     expect(btn).toHaveAttribute('aria-expanded', 'true')
   })
 

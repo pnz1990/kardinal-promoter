@@ -61,7 +61,7 @@ Work through these in order. Each must have passing tests (Phase 2 infrastructur
 
 ### Hard rules for this agent
 
-- **Tests before PR.** Every issue must have tests. `npm test` and `npm run lint` must exit 0 before opening a PR. `npm run test:e2e` must exit 0 for Phase 2+ PRs.
+- **Tests before PR.** Every issue must have tests. `npm test` and `npm run typecheck` must exit 0 before opening a PR. `npm run test:e2e` must exit 0 for Phase 2+ PRs.
 - **One issue = one PR.** Do not batch multiple issues into one PR. Each issue gets its own branch, its own PR, its own CI run.
 - **kro-ui is a reference, not a copy.** Read it for patterns and adapt to kardinal's domain. Do not copy component files verbatim.
 - **Do not touch Go packages** listed in DENY_PACKAGES. The only Go exception is `cmd/kardinal-controller/ui_api.go` for issue #527 (events endpoint), and only after the frontend is ready to consume it.

@@ -1,23 +1,32 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/NodeDetail.tsx — Detail panel shown when a DAG node is clicked.
 // For PolicyGate nodes: shows CEL expression and last evaluated timestamp.
-// For PromotionStep nodes: shows step-by-step execution context (Kargo parity).
+// For PromotionStep nodes: shows the step sequence the controller resolved for
+// this promotion (status.steps[]), conditions, events, and promote/rollback.
+// Promote and Roll back follow the same rule as the pipeline lane
+// (pipelineActions.ts), so they only show where they can do something.
 //
-// #326: NodeDetail is no longer position:fixed. It is rendered as a sibling of
-// the DAGView in App.tsx's flex layout, so it shifts the DAG left rather than
-// overlapping it.
+// #326: NodeDetail is rendered as a sibling of the DAGView in App.tsx's flex
+// layout, so it shifts the DAG left rather than overlapping it.
 //
 // Steps are passed as a prop (managed by App's 5s poll) rather than fetched
 // independently, eliminating the 3s polling race condition (issue #322).
 //
-// #333: CEL expression syntax highlighting — keywords=yellow, strings=green,
-//       identifiers=blue, operators=white, functions=cyan, comments=gray.
+// #333: CEL expression syntax highlighting.
 //
-// #527: EventsPanel — K8s events stream fetched per step when node is selected.
-import { useState, useEffect, useCallback } from 'react'
-import type { GraphNode, PromotionStep, Bundle } from '../types'
-import { HealthChip, kardinalStateToHealth } from './HealthChip'
+// #527: EventsPanel — K8s events for the selected step, refreshed with each poll.
+import { useState, useEffect } from 'react'
+import type { GraphEdge, GraphNode, PromotionStep, Bundle, StepStatus } from '../types'
+import { HealthChip } from './HealthChip'
 import { api } from '../api/client'
 import EventsPanel, { type StepEvent } from './EventsPanel'
+import CopyButton from './CopyButton'
+import { PipelineActionDialog, type PipelineActionKind } from './PipelineActionDialog'
+import { formatElapsedSince } from '../timeFormat'
+import { isHttpURL } from '../prLink'
+import { canPromote, canRollback } from '../pipelineActions'
 
 interface Props {
   node: GraphNode | null
@@ -32,7 +41,17 @@ interface Props {
   steps?: PromotionStep[]
   /** Active bundle — used for the image diff preview in Promoting/WaitingForMerge state (#563). */
   activeBundle?: Bundle
+  /** Called after a promote or rollback request succeeds, so the parent can refresh. */
+  onActionDone?: () => void
+  /** Graph nodes of the active bundle: the current state of this node and its upstream
+   *  environments. Without them Promote stays hidden (the upstream state is unknown). */
+  nodes?: GraphNode[]
+  /** Graph edges of the active bundle — used to find the upstream environments. */
+  edges?: GraphEdge[]
 }
+
+/** PromotionStep states in which work is running (Go never reports "Running"). */
+const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'RollingBack'])
 
 /** Format an ISO timestamp to a human-readable string. */
 function formatTimestamp(iso: string): string {
@@ -49,104 +68,6 @@ function formatTimestamp(iso: string): string {
   } catch {
     return iso
   }
-}
-
-/** Format elapsed seconds since an ISO timestamp for elapsed duration timers (#330). */
-function formatElapsed(iso: string): string | null {
-  try {
-    const d = new Date(iso)
-    if (isNaN(d.getTime())) return null
-    const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
-    if (diffSec < 0) return null
-    if (diffSec < 60) return `${diffSec}s`
-    const mins = Math.floor(diffSec / 60)
-    const secs = diffSec % 60
-    return `${mins}m ${secs}s`
-  } catch {
-    return null
-  }
-}
-
-/** List of promotion sub-step types in execution order. */
-const STEP_SEQUENCE = [
-  'git-clone',
-  'kustomize-set-image',
-  'helm-set-image',
-  'git-commit',
-  'git-push',
-  'open-pr',
-  'wait-for-merge',
-  'health-check',
-]
-
-/**
- * Returns an icon for a sub-step given its position relative to the current step.
- * #359: Uses a clearer distinction — completed (✓), active (▶/✗/◎), pending (○).
- */
-function stepIcon(index: number, currentIndex: number, stepState: string, isActive: boolean): string {
-  if (index < currentIndex) return '✓'  // already completed
-  if (index === currentIndex) {
-    if (!isActive) return '◎'  // current but step not yet executing (Pending)
-    const health = kardinalStateToHealth(stepState)
-    if (health === 'Error') return '✗'
-    if (health === 'Reconciling') return '▶'
-    return '◎'
-  }
-  return '○'  // not yet reached
-}
-
-function stepIconColor(index: number, currentIndex: number, stepState: string, isActive: boolean): string {
-  if (index < currentIndex) return 'var(--color-success)'
-  if (index === currentIndex) {
-    if (!isActive) return 'var(--color-accent)'  // indigo for pending-current
-    const health = kardinalStateToHealth(stepState)
-    if (health === 'Error') return '#ef4444'
-    if (health === 'Reconciling') return '#f59e0b'
-    return 'var(--color-accent)'
-  }
-  return 'var(--color-border)'
-}
-
-/** #339: Copy-to-clipboard button. Shows 📋 → ✓ on success for 2s. */
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }).catch(() => {
-      // Fallback for environments without clipboard API
-      const el = document.createElement('textarea')
-      el.value = text
-      el.style.position = 'fixed'
-      el.style.opacity = '0'
-      document.body.appendChild(el)
-      el.select()
-      document.execCommand('copy')
-      document.body.removeChild(el)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [text])
-  return (
-    <button
-      onClick={handleCopy}
-      title={copied ? 'Copied!' : 'Copy to clipboard'}
-      style={{
-        background: 'none',
-        border: '1px solid #334155',
-        borderRadius: '4px',
-        padding: '1px 6px',
-        cursor: 'pointer',
-        fontSize: '0.7rem',
-        color: copied ? '#86efac' : 'var(--color-text-muted)',
-        transition: 'color 0.2s',
-        lineHeight: 1.4,
-      }}
-    >
-      {copied ? '✓' : '📋'}
-    </button>
-  )
 }
 
 // ── #333: CEL syntax highlighter ─────────────────────────────────────────────
@@ -246,14 +167,14 @@ function tokenizeCEL(expr: string): CELToken[] {
 }
 
 const CEL_TOKEN_COLORS: Record<CELTokenType, string> = {
-  keyword: 'var(--color-warning)',    // yellow — true/false/in/has etc
-  function: '#67e8f9',   // cyan — function calls
-  string: '#86efac',     // green — string literals
-  number: '#f9a8d4',     // pink — numbers
-  operator: 'var(--color-text)',   // white — operators
-  boolean: 'var(--color-warning)',    // yellow — boolean literals
-  identifier: '#93c5fd', // blue — identifiers (bundle.X, schedule.X)
-  plain: 'var(--color-code)',      // light blue — default
+  keyword: 'var(--color-warning)',     // true/false/in/has etc
+  function: 'var(--color-info)',       // function calls
+  string: 'var(--color-success)',      // string literals
+  number: 'var(--color-accent)',       // numbers
+  operator: 'var(--color-text)',       // operators
+  boolean: 'var(--color-warning)',     // boolean literals
+  identifier: 'var(--color-code)',     // identifiers (bundle.X, schedule.X)
+  plain: 'var(--color-text-muted)',    // whitespace and anything else
 }
 
 /** #333: Syntax-highlighted CEL expression block. */
@@ -280,107 +201,170 @@ function CELBlock({ expression }: { expression: string }) {
 }
 // ── end CEL syntax highlighter ────────────────────────────────────────────────
 
-/** Step progress panel for PromotionStep nodes. #359: correctly reflects step states. */
-function StepProgress({ step }: { step: PromotionStep }) {
-  const currentIndex = step.currentStepIndex ?? 0
-  const state = step.state
-  // isActive: the promotion is actively running (not pending/done/failed).
-  const isActive = ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(state)
 
+/** How one entry of status.steps[] is drawn. */
+const STEP_VIEW: Record<StepStatus['state'], { icon: string; color: string; label: string }> = {
+  Completed: { icon: '✓', color: 'var(--color-success)', label: 'done' },
+  InProgress: { icon: '▶', color: 'var(--color-warning)', label: 'running' },
+  Failed: { icon: '✗', color: 'var(--color-error)', label: 'failed' },
+  Pending: { icon: '○', color: 'var(--color-text-faint)', label: 'not started' },
+}
+
+/** "850ms", "2.0s", "3m 4s". */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const sec = ms / 1000
+  if (sec < 60) return `${sec.toFixed(1)}s`
+  return `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`
+}
+
+/**
+ * The state to draw for a step. A step the engine left InProgress is shown as
+ * failed once the promotion itself has failed (e.g. a health-check timeout is
+ * recorded on the PromotionStep, not on the step entry).
+ */
+function effectiveStepState(s: StepStatus, promotionState: string): StepStatus['state'] {
+  if (s.state === 'InProgress' && (promotionState === 'Failed' || promotionState === 'AbortedByAlarm')) return 'Failed'
+  return s.state
+}
+
+function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: PromotionStep): string | null {
+  if (shown === 'Failed') return s.message || (s.state === 'InProgress' ? promotion.message ?? null : null)
+  if (shown === 'InProgress') {
+    if (promotion.state === 'WaitingForMerge') return 'waiting for merge'
+    if (promotion.state === 'HealthChecking') return 'checking health'
+    return null
+  }
+  if (shown === 'Completed' && s.durationMs) return formatDuration(s.durationMs)
+  return null
+}
+
+/**
+ * Step progress for a PromotionStep node, from status.steps[]: the sequence
+ * the controller resolved for this promotion (it differs per update strategy,
+ * approval mode and custom steps, so it is never hard-coded here).
+ */
+function StepProgress({ step }: { step: PromotionStep }) {
+  const list = step.steps ?? []
   return (
     <div style={{ marginBottom: '0.75rem' }}>
-      <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', marginBottom: '0.5rem' }}>
+      <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', marginBottom: '0.5rem' }}>
         Promotion Steps
       </h4>
-      <div style={{
-        background: 'var(--color-bg)',
-        border: '1px solid #1e293b',
-        borderRadius: '4px',
-        padding: '0.5rem 0.75rem',
-      }}>
-        {STEP_SEQUENCE.map((stepType, i) => (
-          <div
-            key={stepType}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              marginBottom: i < STEP_SEQUENCE.length - 1 ? '0.3rem' : 0,
-              opacity: i > currentIndex ? 0.35 : 1,
-            }}
-          >
-            <span style={{
-              fontSize: '0.7rem',
-              color: stepIconColor(i, currentIndex, state, isActive),
-              width: '12px',
-              flexShrink: 0,
-            }}>
-              {stepIcon(i, currentIndex, state, isActive)}
-            </span>
-            <span style={{
-              fontSize: '0.75rem',
-              color: i === currentIndex ? 'var(--color-text)' : i < currentIndex ? '#86efac' : '#64748b',
-              fontFamily: 'monospace',
-              fontWeight: i === currentIndex ? 600 : 400,
-            }}>
-              {stepType}
-            </span>
-            {i === currentIndex && state === 'WaitingForMerge' && (
-              <span style={{ fontSize: '0.65rem', color: '#f59e0b' }}>waiting</span>
-            )}
-            {i === currentIndex && state === 'HealthChecking' && (
-              <span style={{ fontSize: '0.65rem', color: '#a78bfa' }}>checking</span>
-            )}
-          </div>
-        ))}
-      </div>
+      {list.length === 0 ? (
+        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-faint)', fontStyle: 'italic' }}>
+          Steps appear here once this promotion starts.
+        </div>
+      ) : (
+        <ol
+          aria-label="Promotion steps"
+          style={{
+            listStyle: 'none',
+            margin: 0,
+            background: 'var(--color-bg)',
+            border: '1px solid var(--color-border-muted)',
+            borderRadius: '4px',
+            padding: '0.5rem 0.75rem',
+          }}
+        >
+          {list.map((s, i) => {
+            const shown = effectiveStepState(s, step.state)
+            const view = STEP_VIEW[shown] ?? STEP_VIEW.Pending
+            const note = stepNote(s, shown, step)
+            const current = shown === 'InProgress' || shown === 'Failed'
+            return (
+              <li
+                key={`${i}-${s.name}`}
+                data-step-state={shown}
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'baseline',
+                  gap: '0.5rem',
+                  marginBottom: i < list.length - 1 ? '0.3rem' : 0,
+                }}
+              >
+                <span aria-hidden="true" style={{ fontSize: '0.7rem', color: view.color, width: '12px', flexShrink: 0 }}>
+                  {view.icon}
+                </span>
+                <span style={{
+                  fontSize: '0.75rem',
+                  color: shown === 'Pending' ? 'var(--color-text-faint)' : 'var(--color-text)',
+                  fontFamily: 'monospace',
+                  fontWeight: current ? 600 : 400,
+                }}>
+                  {s.name}
+                </span>
+                <span className="sr-only">{view.label}</span>
+                {note && (
+                  <span style={{
+                    fontSize: '0.68rem',
+                    color: shown === 'Completed' ? 'var(--color-text-faint)' : view.color,
+                    overflowWrap: 'anywhere',
+                  }}>
+                    {note}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+      )}
     </div>
   )
 }
 
-export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle }: Props) {
+const labelStyle = { color: 'var(--color-text)' } as const
+
+export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace = 'default', steps, activeBundle, onActionDone, nodes = [], edges = [] }: Props) {
   const [stepDetail, setStepDetail] = useState<PromotionStep | null>(null)
   const [stepLoading, setStepLoading] = useState(false)
-  const [promoteState, setPromoteState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [promoteMessage, setPromoteMessage] = useState<string | null>(null)
-  const [rollbackState, setRollbackState] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [rollbackMessage, setRollbackMessage] = useState<string | null>(null)
+  // Promote / rollback: the dialog being confirmed and the last result.
+  const [confirmAction, setConfirmAction] = useState<PipelineActionKind | null>(null)
+  const [actionResult, setActionResult] = useState<string | null>(null)
   const [celValid, setCelValid] = useState<boolean | null>(null)
   const [celError, setCelError] = useState<string | null>(null)
   // #330: tick counter to update elapsed timers every second while panel is open.
   const [, setTick] = useState(0)
-  // #527: Kubernetes events for the selected PromotionStep — fetched once on node selection.
+  // #527: Kubernetes events for the selected PromotionStep.
   const [stepEvents, setStepEvents] = useState<StepEvent[] | null>(null)
 
   const isPolicyGate = node?.type === 'PolicyGate'
   const isPromotionStep = node?.type === 'PromotionStep'
+  const promotionState = stepDetail?.state ?? node?.state ?? ''
+  const isActiveNode = isPromotionStep && IN_FLIGHT_STATES.has(promotionState)
+
+  // A different node starts with no dialog and no stale result.
+  useEffect(() => {
+    setConfirmAction(null)
+    setActionResult(null)
+  }, [node?.id])
 
   // #330: tick every second so elapsed timers stay current.
   useEffect(() => {
-    if (!isPromotionStep) return
-    const isActiveStep = stepDetail && ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(stepDetail.state)
-    if (!isActiveStep) return
+    if (!isActiveNode) return
     const id = setInterval(() => setTick(t => t + 1), 1000)
     return () => clearInterval(id)
-  }, [isPromotionStep, stepDetail?.state])
+  }, [isActiveNode])
 
-  /** Validate the CEL expression of a PolicyGate node when it is selected. */
+  /** Validate the CEL expression of a PolicyGate node; re-run when the expression changes. */
+  const expression = isPolicyGate ? node?.expression : undefined
   useEffect(() => {
-    if (!isPolicyGate || !node?.expression) {
-      setCelValid(null)
-      setCelError(null)
-      return
-    }
-    api.validateCEL(node.expression)
+    setCelValid(null)
+    setCelError(null)
+    if (!expression) return
+    let ignore = false
+    api.validateCEL(expression)
       .then(res => {
+        if (ignore) return
         setCelValid(res.valid)
         setCelError(res.error ?? null)
       })
       .catch(() => {
-        setCelValid(null)
-        setCelError(null)
+        // Validation is advisory: leave the chip empty when the check itself fails.
       })
-  }, [node?.id, isPolicyGate])
+    return () => { ignore = true }
+  }, [expression])
 
   // Derive step detail from parent-provided steps prop (no independent fetch/poll).
   // Falls back to a one-shot fetch if steps prop is not provided.
@@ -397,76 +381,47 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
     }
     // Fallback: one-shot fetch (no polling — parent handles refresh).
     if (!bundleName) return
+    let ignore = false
     setStepLoading(true)
     api.getSteps(bundleName)
       .then(ss => {
+        if (ignore) return
         const match = ss.find(s => s.environment === node.environment)
         setStepDetail(match ?? null)
       })
-      .catch(() => setStepDetail(null))
-      .finally(() => setStepLoading(false))
+      .catch(() => { if (!ignore) setStepDetail(null) })
+      .finally(() => { if (!ignore) setStepLoading(false) })
+    return () => { ignore = true }
   }, [node?.id, isPromotionStep, steps, bundleName])
 
-  // #527: Fetch Kubernetes events for the selected PromotionStep.
-  // Uses stepDetail.name (the CRD resource name) and stepDetail.namespace.
-  // Fetched once on node selection; stale events are acceptable (debug aid).
+  // #527: Kubernetes events for the selected PromotionStep. stepDetail is a new
+  // object after every parent poll, so events refresh on the same 5s cadence.
+  const stepName = stepDetail?.name
+  const stepNs = stepDetail?.namespace ?? namespace
   useEffect(() => {
-    if (!isPromotionStep) {
-      setStepEvents(null)
-      return
-    }
-    const stepName = stepDetail?.name
-    const stepNs = stepDetail?.namespace ?? namespace ?? 'default'
-    if (!stepName) {
-      setStepEvents(null)
-      return
-    }
+    setStepEvents(null)
+  }, [stepName, stepNs])
+  useEffect(() => {
+    if (!isPromotionStep || !stepName) return
+    let ignore = false
     api.getStepEvents(stepNs, stepName)
-      .then(evs => setStepEvents(evs))
-      .catch(() => setStepEvents([]))
-  }, [isPromotionStep, stepDetail?.name, stepDetail?.namespace, namespace])
-
-  /** Trigger a new promotion for this environment. */
-  function handlePromote() {
-    if (!pipelineName || !node?.environment) return
-    setPromoteState('loading')
-    setPromoteMessage(null)
-    api.promote(pipelineName, node.environment, namespace)
-      .then(res => {
-        setPromoteState('success')
-        setPromoteMessage(`Bundle ${res.bundle} created`)
-      })
-      .catch((err: unknown) => {
-        setPromoteState('error')
-        setPromoteMessage(err instanceof Error ? err.message : 'Promote failed')
-      })
-  }
-
-  /** Trigger a rollback for this environment (#331). */
-  function handleRollback() {
-    if (!pipelineName || !node?.environment) return
-    setRollbackState('loading')
-    setRollbackMessage(null)
-    api.rollback(pipelineName, node.environment, namespace)
-      .then(res => {
-        setRollbackState('success')
-        setRollbackMessage(`Rollback bundle ${res.bundle} created`)
-      })
-      .catch((err: unknown) => {
-        setRollbackState('error')
-        setRollbackMessage(err instanceof Error ? err.message : 'Rollback failed')
-      })
-  }
+      .then(evs => { if (!ignore) setStepEvents(evs) })
+      .catch(() => { if (!ignore) setStepEvents(prev => prev ?? []) })
+    return () => { ignore = true }
+  }, [isPromotionStep, stepName, stepNs, stepDetail])
 
   if (!node) return null
 
-  // #330: elapsed duration for active PromotionStep nodes.
-  // Uses node.lastEvaluatedAt as a proxy for step start time when available.
-  const isActiveNode = isPromotionStep && stepDetail &&
-    ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(stepDetail.state)
-  const elapsedDisplay = isActiveNode && node.lastEvaluatedAt
-    ? formatElapsed(node.lastEvaluatedAt)
-    : null
+  // #330: elapsed time since the PromotionStep started (Go sets startedAt on step nodes).
+  const elapsedDisplay = isActiveNode
+    ? formatElapsedSince(node.startedAt ?? node.lastEvaluatedAt)
+    : ''
+  const showsImages = node.state !== 'RollingBack' && IN_FLIGHT_STATES.has(node.state)
+  // The selected node is a copy taken at click time; the graph has its current state.
+  const liveNode = nodes.find(n => n.id === node.id) ?? node
+  const canAct = isPromotionStep && !!pipelineName && !!node.environment
+  const showPromote = canAct && canPromote(liveNode, nodes, edges)
+  const showRollback = canAct && canRollback(liveNode)
 
   return (
     <div data-testid="node-detail" style={{
@@ -474,7 +429,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       minWidth: '300px',
       height: '100%',
       background: 'var(--color-surface)',
-      borderLeft: '1px solid #334155',
+      borderLeft: '1px solid var(--color-border)',
       padding: '1.5rem',
       overflowY: 'auto',
       flexShrink: 0,
@@ -502,95 +457,92 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       </div>
 
       <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-        <strong style={{ color: '#cbd5e1' }}>Type:</strong> {node.type}
+        <strong style={labelStyle}>Type:</strong> {node.type}
       </div>
       <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-        <strong style={{ color: '#cbd5e1' }}>Environment:</strong> {node.environment}
+        <strong style={labelStyle}>Environment:</strong> {node.environment}
       </div>
 
       {/* #330: Elapsed duration timer for active PromotionStep nodes */}
       {isActiveNode && (
-        <div style={{ fontSize: '0.85rem', color: '#f59e0b', marginBottom: '0.5rem' }}>
-          <strong style={{ color: 'var(--color-warning)' }}>Elapsed:</strong>{' '}
-          {elapsedDisplay ?? 'running…'}
+        <div style={{ fontSize: '0.85rem', color: 'var(--color-warning)', marginBottom: '0.5rem' }}>
+          <strong>Elapsed:</strong>{' '}
+          {elapsedDisplay || 'running…'}
         </div>
       )}
 
-      {/* Promote button — shown on PromotionStep nodes when a pipeline is known */}
-      {isPromotionStep && pipelineName && node.environment && (
+      {/* Promote / rollback — only where they can do something (pipelineActions.ts).
+          The result stays visible after the step moves on and the buttons go. */}
+      {canAct && (showPromote || showRollback || actionResult) && (
         <div style={{ marginBottom: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          <button
-            onClick={handlePromote}
-            disabled={promoteState === 'loading'}
-            title={`Promote ${pipelineName} to ${node.environment}`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.35rem 0.8rem',
-              background: promoteState === 'success' ? '#166534' : promoteState === 'error' ? '#7f1d1d' : '#4f46e5',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: promoteState === 'loading' ? 'wait' : 'pointer',
-              fontSize: '0.8rem',
-              fontWeight: 500,
-              opacity: promoteState === 'loading' ? 0.7 : 1,
-            }}
-          >
-            <span>▶</span>
-            <span>
-              {promoteState === 'loading' ? 'Promoting…'
-                : promoteState === 'success' ? 'Promoted!'
-                : promoteState === 'error' ? 'Failed'
-                : `Promote to ${node.environment}`}
-            </span>
-          </button>
-          {promoteMessage && (
-            <div style={{
-              fontSize: '0.7rem',
-              color: promoteState === 'error' ? '#fca5a5' : '#86efac',
-            }}>
-              {promoteMessage}
-            </div>
+          {showPromote && (
+            <button
+              type="button"
+              onClick={() => setConfirmAction('promote')}
+              title={`Promote ${pipelineName} to ${node.environment}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.8rem',
+                background: 'var(--color-accent-bg)',
+                color: 'var(--color-accent)',
+                border: '1px solid var(--color-accent)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: 500,
+              }}
+            >
+              <span aria-hidden="true">▶</span>
+              <span>Promote to {node.environment}</span>
+            </button>
           )}
           {/* Rollback button (#331) */}
-          <button
-            onClick={handleRollback}
-            disabled={rollbackState === 'loading'}
-            title={`Roll back ${pipelineName} environment ${node.environment} to the previous verified version`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              padding: '0.35rem 0.8rem',
-              background: rollbackState === 'success' ? '#1c3a2e' : rollbackState === 'error' ? '#7f1d1d' : '#292524',
-              color: rollbackState === 'success' ? '#86efac' : '#fca5a5',
-              border: `1px solid ${rollbackState === 'error' ? '#7f1d1d' : '#44403c'}`,
-              borderRadius: '4px',
-              cursor: rollbackState === 'loading' ? 'wait' : 'pointer',
-              fontSize: '0.8rem',
-              fontWeight: 500,
-              opacity: rollbackState === 'loading' ? 0.7 : 1,
-            }}
-          >
-            <span>↩</span>
-            <span>
-              {rollbackState === 'loading' ? 'Rolling back…'
-                : rollbackState === 'success' ? 'Rollback started!'
-                : rollbackState === 'error' ? 'Failed'
-                : `Rollback ${node.environment}`}
-            </span>
-          </button>
-          {rollbackMessage && (
-            <div style={{
-              fontSize: '0.7rem',
-              color: rollbackState === 'error' ? '#fca5a5' : '#86efac',
-            }}>
-              {rollbackMessage}
+          {showRollback && (
+            <button
+              type="button"
+              onClick={() => setConfirmAction('rollback')}
+              title={`Roll back ${node.environment} to the previous verified version`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                padding: '0.35rem 0.8rem',
+                background: 'transparent',
+                color: 'var(--color-error)',
+                border: '1px solid var(--color-error)',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                fontWeight: 500,
+              }}
+            >
+              <span aria-hidden="true">↩</span>
+              <span>Roll back {node.environment}</span>
+            </button>
+          )}
+          {actionResult && (
+            <div role="status" style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>
+              {actionResult}
             </div>
           )}
         </div>
+      )}
+
+      {confirmAction && pipelineName && node.environment && (
+        <PipelineActionDialog
+          kind={confirmAction}
+          pipelineName={pipelineName}
+          environment={node.environment}
+          namespace={namespace}
+          onDone={message => {
+            setConfirmAction(null)
+            setActionResult(message)
+            onActionDone?.()
+          }}
+          onCancel={() => setConfirmAction(null)}
+        />
       )}
 
       {/* PromotionStep: step progress log */}
@@ -603,7 +555,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               100% { background-position: -200% 0; }
             }
           `}</style>
-          <span className="sr-only" role="status" style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }}>
+          <span className="sr-only" role="status">
             Loading step details
           </span>
           {[75, 55, 65, 45].map((w, i) => (
@@ -613,7 +565,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               style={{
                 height: '20px',
                 borderRadius: '4px',
-                background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+                background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
                 backgroundSize: '200% 100%',
                 animation: 'shimmer-nd 1.5s infinite',
                 marginBottom: '0.5rem',
@@ -636,34 +588,34 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       {isPolicyGate && node.expression && (
         <div style={{ marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>
+            <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', margin: 0 }}>
               CEL Expression
             </h4>
             {/* Syntax validity chip — populated by POST /api/v1/ui/validate-cel */}
             {celValid === true && (
               <span style={{
-                fontSize: '0.65rem', background: '#14532d', color: '#86efac',
+                fontSize: '0.65rem', background: 'var(--color-success-bg)', color: 'var(--color-success)',
                 borderRadius: '4px', padding: '1px 6px',
               }}>✓ valid</span>
             )}
             {celValid === false && (
               <span
                 style={{
-                  fontSize: '0.65rem', background: '#7f1d1d', color: '#fca5a5',
+                  fontSize: '0.65rem', background: 'var(--color-error-bg)', color: 'var(--color-error)',
                   borderRadius: '4px', padding: '1px 6px', cursor: 'help',
                 }}
                 title={celError ?? 'syntax error'}
               >✗ error</span>
             )}
             {/* #339: copy-to-clipboard for CEL expression */}
-            <CopyButton text={node.expression} />
+            <CopyButton text={node.expression} title="Copy expression" />
           </div>
           {/* #333: CEL expression with syntax highlighting */}
-          <div style={{ border: `1px solid ${celValid === false ? '#7f1d1d' : 'var(--color-border)'}`, borderRadius: '4px' }}>
+          <div style={{ border: `1px solid ${celValid === false ? 'var(--color-error)' : 'var(--color-border)'}`, borderRadius: '4px' }}>
             <CELBlock expression={node.expression} />
           </div>
           {celValid === false && celError && (
-            <div style={{ fontSize: '0.7rem', color: '#fca5a5', marginTop: '0.25rem' }}>
+            <div style={{ fontSize: '0.7rem', color: 'var(--color-error)', marginTop: '0.25rem' }}>
               {celError}
             </div>
           )}
@@ -673,7 +625,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       {/* PolicyGate: last evaluated timestamp */}
       {isPolicyGate && node.lastEvaluatedAt && (
         <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.5rem' }}>
-          <strong style={{ color: '#cbd5e1' }}>Last evaluated:</strong>{' '}
+          <strong style={labelStyle}>Last evaluated:</strong>{' '}
           <span title={node.lastEvaluatedAt}>
             {formatTimestamp(node.lastEvaluatedAt)}
           </span>
@@ -689,20 +641,19 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {node.message && (
         <div style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', marginBottom: '0.75rem' }}>
-          <strong style={{ color: '#cbd5e1' }}>Message:</strong> {node.message}
-         </div>
+          <strong style={labelStyle}>Message:</strong> {node.message}
+        </div>
       )}
 
       {/* #563: Image diff preview — shown when environment is actively promoting.
           Surfaces "what will change" without requiring the operator to open the PR. */}
-      {activeBundle?.images && activeBundle.images.length > 0 &&
-        ['Promoting', 'Running', 'WaitingForMerge', 'HealthChecking'].includes(node.state) && (
+      {activeBundle?.images && activeBundle.images.length > 0 && showsImages && (
         <div style={{
           marginBottom: '0.75rem',
           padding: '0.6rem 0.75rem',
           background: 'var(--color-surface)',
           borderRadius: '6px',
-          border: '1px solid #334155',
+          border: '1px solid var(--color-border)',
         }}>
           <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.4rem', fontWeight: 600 }}>
             Promoting Image{activeBundle.images.length > 1 ? 's' : ''}
@@ -718,7 +669,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
               {img.repository && <span style={{ color: 'var(--color-code)' }}>{img.repository}</span>}
               {img.tag && <><span style={{ color: 'var(--color-text-muted)' }}>:</span><span style={{ color: 'var(--color-success)' }}>{img.tag}</span></>}
               {!img.tag && img.digest && (
-                <><span style={{ color: 'var(--color-text-muted)' }}>@</span><span style={{ color: '#a78bfa' }}>{img.digest.slice(0, 16)}…</span></>
+                <><span style={{ color: 'var(--color-text-muted)' }}>@</span><span style={{ color: 'var(--color-accent)' }}>{img.digest.slice(0, 16)}…</span></>
               )}
             </div>
           ))}
@@ -727,8 +678,13 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
 
       {node.prURL && (
         <div style={{ marginBottom: '0.75rem' }}>
-          {/* Prominent merge CTA when WaitingForMerge */}
-          {node.state === 'WaitingForMerge' ? (
+          {!isHttpURL(node.prURL) ? (
+            // Only http(s) links are opened; anything else is shown as text.
+            <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', overflowWrap: 'anywhere' }}>
+              <strong style={labelStyle}>Pull request:</strong> <code>{node.prURL}</code>
+            </div>
+          ) : node.state === 'WaitingForMerge' ? (
+            /* Prominent merge CTA when WaitingForMerge */
             <a
               href={node.prURL}
               target="_blank"
@@ -738,15 +694,15 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 alignItems: 'center',
                 gap: '0.4rem',
                 padding: '0.4rem 0.9rem',
-                background: '#4f46e5',
-                color: '#fff',
+                background: 'var(--color-accent)',
+                color: 'var(--color-bg)',
                 borderRadius: '4px',
                 fontSize: '0.82rem',
                 fontWeight: 600,
                 textDecoration: 'none',
               }}
             >
-              <span>↗</span>
+              <span aria-hidden="true">↗</span>
               <span>Open Pull Request — Merge to Deploy</span>
             </a>
           ) : (
@@ -766,15 +722,15 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       {node.outputs && Object.keys(node.outputs).length > 0 && (
         <div style={{ marginBottom: '0.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
-            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>Step Outputs</h4>
+            <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', margin: 0 }}>Step Outputs</h4>
             {/* #339: copy-to-clipboard for step outputs JSON */}
-            <CopyButton text={JSON.stringify(node.outputs, null, 2)} />
+            <CopyButton text={JSON.stringify(node.outputs, null, 2)} title="Copy outputs as JSON" />
           </div>
           {Object.entries(node.outputs).map(([k, v]) => (
-            <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem' }}>
+            <div key={k} style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', marginBottom: '0.2rem', overflowWrap: 'anywhere' }}>
               <span style={{ color: 'var(--color-code)' }}>{k}</span>:{' '}
-              {k.toLowerCase().includes('url') ? (
-                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }}>
+              {isHttpURL(v) ? (
+                <a href={v} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--color-accent)' }} title={v}>
                   {v.length > 40 ? v.slice(0, 37) + '…' : v}
                 </a>
               ) : (
@@ -790,7 +746,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <div style={{ marginBottom: '0.75rem' }}>
           {/* #529: Summary header — healthy count at a glance */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
-            <h4 style={{ fontSize: '0.8rem', color: '#cbd5e1', margin: 0 }}>
+            <h4 style={{ fontSize: '0.8rem', color: 'var(--color-text)', margin: 0 }}>
               Conditions
             </h4>
             {(() => {
@@ -802,7 +758,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                   data-testid="conditions-summary"
                   style={{
                     fontSize: '0.7rem',
-                    color: allHealthy ? '#86efac' : '#fca5a5',
+                    color: allHealthy ? 'var(--color-success)' : 'var(--color-error)',
                     fontFamily: 'monospace',
                   }}
                 >
@@ -813,7 +769,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
           </div>
           <div style={{
             background: 'var(--color-bg)',
-            border: '1px solid #1e293b',
+            border: '1px solid var(--color-border-muted)',
             borderRadius: '4px',
             padding: '0.4rem 0.6rem',
           }}>
@@ -826,7 +782,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                 marginBottom: i < stepDetail.conditions!.length - 1 ? '0.3rem' : 0,
               }}>
                 <span style={{
-                  color: cond.status === 'True' ? '#86efac' : cond.status === 'False' ? '#fca5a5' : 'var(--color-text-muted)',
+                  color: cond.status === 'True' ? 'var(--color-success)' : cond.status === 'False' ? 'var(--color-error)' : 'var(--color-text-muted)',
                   flexShrink: 0,
                   fontFamily: 'monospace',
                 }}>
@@ -839,7 +795,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                     <span
                       data-testid="condition-reason"
                       style={{
-                        color: '#64748b',
+                        color: 'var(--color-text-faint)',
                         marginLeft: '0.4rem',
                         fontFamily: 'monospace',
                         fontSize: '0.7rem',
@@ -857,7 +813,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
                     </div>
                   )}
                 </div>
-               </div>
+              </div>
             ))}
           </div>
         </div>
@@ -868,7 +824,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
         <EventsPanel
           events={stepEvents}
           stepName={stepDetail?.name}
-          namespace={stepDetail?.namespace ?? namespace ?? 'default'}
+          namespace={stepNs}
         />
       )}
     </div>
