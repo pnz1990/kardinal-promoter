@@ -263,46 +263,8 @@ func (g *GitHubProvider) validateSignature(payload []byte, signature string) err
 	return nil
 }
 
-// Label represents a GitHub label with a name and color.
-type Label struct {
-	// Name is the label name.
-	Name string
-
-	// Color is the 6-digit hex color code (without #).
-	Color string
-}
-
-// DefaultKardinalLabels returns the standard set of kardinal labels.
-func DefaultKardinalLabels() []Label {
-	return []Label{
-		{Name: "kardinal", Color: "0075ca"},
-		{Name: "kardinal/promotion", Color: "2196f3"},
-		{Name: "kardinal/rollback", Color: "e91e63"},
-		{Name: "kardinal/emergency", Color: "f44336"},
-	}
-}
-
-// EnsureLabels ensures that the given labels exist in the repository, creating any
-// that are missing. It is safe to call concurrently and is idempotent.
-func (g *GitHubProvider) EnsureLabels(ctx context.Context, repo string, labels []Label) error {
-	for _, label := range labels {
-		payload := map[string]string{
-			"name":  label.Name,
-			"color": label.Color,
-		}
-		if err := g.do(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/labels", repo), payload, nil); err != nil {
-			// 422 Unprocessable Entity means the label already exists — not an error.
-			if isAlreadyExistsErr(err) {
-				continue
-			}
-			return fmt.Errorf("ensure label %q on %s: %w", label.Name, repo, err)
-		}
-	}
-	return nil
-}
-
-// AddLabelsToPR applies labels to the pull request. Labels that do not exist are
-// created on-demand via EnsureLabels before applying.
+// AddLabelsToPR applies labels to the pull request. GitHub creates labels that
+// do not exist yet in the repository.
 func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error {
 	if len(labels) == 0 {
 		return nil
@@ -313,17 +275,6 @@ func (g *GitHubProvider) AddLabelsToPR(ctx context.Context, repo string, prNumbe
 		return fmt.Errorf("add labels to PR %s#%d: %w", repo, prNumber, err)
 	}
 	return nil
-}
-
-// isAlreadyExistsErr returns true when the GitHub API rejected the request with 422
-// because the label already exists.
-func isAlreadyExistsErr(err error) bool {
-	if err == nil {
-		return false
-	}
-	// GitHub returns HTTP 422 with "already_exists" when creating a duplicate label.
-	msg := err.Error()
-	return strings.Contains(msg, "422") && strings.Contains(msg, "already_exists")
 }
 
 // do executes an authenticated GitHub API request.

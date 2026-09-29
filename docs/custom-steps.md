@@ -111,7 +111,7 @@ If `steps:` is not set, the default sequence is used (see
 | Step name | Description |
 |---|---|
 | `git-clone` | Clone the GitOps repository |
-| `kustomize-set-image` | Update image tag in `kustomization.yaml` |
+| `kustomize-set-image` | Set the image in `kustomization.yaml` the way `kustomize edit set image` does (see below) |
 | `helm-set-image` | Update image tag in `values.yaml` |
 | `kustomize-build` | Render the environment's kustomization to `rendered-<env>.yaml` (needs the `kustomize` binary) |
 | `config-merge` | Apply config-only overlay (type: config bundles) |
@@ -119,7 +119,14 @@ If `steps:` is not set, the default sequence is used (see
 | `git-push` | Push the promotion branch |
 | `open-pr` | Open a pull request |
 | `wait-for-merge` | Poll until the PR is merged |
-| `health-check` | Verify deployment health via the configured health adapter |
+| `health-check` | Marks the end of the sequence; the PromotionStep reconciler then checks health with the configured adapter |
+
+`kustomize-set-image` writes a new `images` entry with the full repository as
+`name` (for example `ghcr.io/org/app`), because kustomize matches `name` against the
+full image in the manifests. It updates an existing entry whose `name` or `newName`
+is the repository. An older entry that uses the short name (`name: app`) is still
+updated when it is the only one with that name and has no `newName`; kustomize applies
+such an entry only if the manifests also use the short image name.
 
 ## Authentication
 

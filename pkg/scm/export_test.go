@@ -14,6 +14,7 @@
 package scm
 
 import (
+	"context"
 	"time"
 
 	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -44,4 +45,13 @@ func HTTPClientTimeoutForTest(p SCMProvider) time.Duration {
 		return v.client.Timeout
 	}
 	return -1
+}
+
+// CheckAndReloadForTest runs one poll of the Secret watcher.
+func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
+	log := w.Log.With().
+		Str("secret", w.SecretNamespace+"/"+w.SecretName).
+		Str("key", w.SecretKey).
+		Logger()
+	w.checkAndReload(ctx, log)
 }

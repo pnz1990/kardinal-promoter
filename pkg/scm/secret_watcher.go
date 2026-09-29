@@ -79,16 +79,6 @@ func NewSecretWatcher(
 	}
 }
 
-// CheckAndReloadForTest exposes checkAndReload for unit testing.
-// Do not call in production code.
-func (w *SecretWatcher) CheckAndReloadForTest(ctx context.Context) {
-	log := w.Log.With().
-		Str("secret", w.SecretNamespace+"/"+w.SecretName).
-		Str("key", w.SecretKey).
-		Logger()
-	w.checkAndReload(ctx, log)
-}
-
 // Start implements manager.Runnable. It polls the Secret at secretWatchInterval
 // until the context is cancelled.
 func (w *SecretWatcher) Start(ctx context.Context) error {

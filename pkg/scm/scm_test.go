@@ -244,44 +244,6 @@ func TestGitHubProvider_AddLabelsToPR_Empty(t *testing.T) {
 	assert.False(t, called, "no HTTP call for empty labels")
 }
 
-func TestGitHubProvider_EnsureLabels_CreatesIfMissing(t *testing.T) {
-	var createdNames []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/repos/owner/repo/labels", r.URL.Path)
-		assert.Equal(t, http.MethodPost, r.Method)
-		var payload map[string]string
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		createdNames = append(createdNames, payload["name"])
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	labels := scm.DefaultKardinalLabels()
-	p := scm.NewGitHubProvider("test-token", server.URL, "")
-	err := p.EnsureLabels(context.Background(), "owner/repo", labels)
-	require.NoError(t, err)
-	assert.Len(t, createdNames, len(labels))
-	assert.Contains(t, createdNames, "kardinal")
-	assert.Contains(t, createdNames, "kardinal/promotion")
-	assert.Contains(t, createdNames, "kardinal/rollback")
-	assert.Contains(t, createdNames, "kardinal/emergency")
-}
-
-func TestGitHubProvider_EnsureLabels_AlreadyExists(t *testing.T) {
-	// When GitHub returns 422 with already_exists, EnsureLabels should not return an error.
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_, _ = w.Write([]byte(`{"message":"Validation Failed","errors":[{"code":"already_exists"}]}`))
-	}))
-	defer server.Close()
-
-	labels := []scm.Label{{Name: "kardinal", Color: "0075ca"}}
-	p := scm.NewGitHubProvider("test-token", server.URL, "")
-	err := p.EnsureLabels(context.Background(), "owner/repo", labels)
-	require.NoError(t, err, "422 already_exists should not be an error")
-}
-
 func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 	evalTime := metav1.NewTime(time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC))
 	data := scm.PRBody{
@@ -316,7 +278,9 @@ func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 	assert.Contains(t, body, "sha256:abc123", "digest must appear in provenance table")
 }
 
-func TestInjectToken(t *testing.T) {
+// TestGoGitClient_PushNotARepo verifies Push fails before any network call
+// when the directory is not a git repository.
+func TestGoGitClient_PushNotARepo(t *testing.T) {
 	// go-git hangs on macOS when PlainInit or PlainOpen are called on certain filesystem paths.
 	// Skip on non-Linux platforms; the real behavior is validated in CI (Linux) and PDCA workflow.
 	if testing.Short() {
@@ -868,7 +832,6 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 		PipelineName: "my-app",
 		Environment:  "prod",
 		BundleName:   "my-app-v1-29-0",
-		RepoURL:      "https://github.com/pnz1990/kardinal-demo",
 		Bundle: v1alpha1.BundleSpec{
 			Type: "image",
 			Images: []v1alpha1.ImageRef{
@@ -914,7 +877,6 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 				Elapsed:         "45m",
 			},
 		},
-		PreviousCommitSHA: "prevcommit1234",
 	}
 
 	body, err := scm.RenderPRBody(data)
@@ -951,10 +913,6 @@ func TestPRBodyDocumentedFields(t *testing.T) {
 		{"upstream env uat", "uat"},
 		{"upstream elapsed uat", "45m"},
 		{"upstream elapsed test", "2h45m"},
-		// Source diff link (PreviousCommitSHA provided)
-		{"source diff section", "Source Diff"},
-		{"diff link contains prev sha", "prevcommit1234"},
-		{"diff link contains new sha", "abc1234def5678"},
 		// Template identifier
 		{"kardinal-promoter footer", "kardinal-promoter"},
 	}

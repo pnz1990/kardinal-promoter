@@ -15,6 +15,8 @@ package scm_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -43,16 +45,31 @@ func TestDynamicProvider_NewDynamicProvider(t *testing.T) {
 // TestDynamicProvider_Reload verifies that Reload swaps the inner provider and
 // that subsequent calls use the new token.
 func TestDynamicProvider_Reload(t *testing.T) {
-	dp, err := scm.NewDynamicProvider("github", "token-v1", "", "")
+	var mu sync.Mutex
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth = append(auth, r.Header.Get("Authorization"))
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"state":"open","merged":false}`))
+	}))
+	defer srv.Close()
+
+	dp, err := scm.NewDynamicProvider("github", "token-v1", srv.URL, "")
+	require.NoError(t, err)
+	_, _, err = dp.GetPRStatus(context.Background(), "o/r", 1)
 	require.NoError(t, err)
 
-	// Reload with a new token.
 	require.NoError(t, dp.Reload("token-v2"))
+	_, _, err = dp.GetPRStatus(context.Background(), "o/r", 1)
+	require.NoError(t, err)
 
-	// The GitHubProvider stores the token in the Token field; we can verify
-	// the swap happened by calling GetPRStatus on a fake server (or simply
-	// confirm Reload does not error, which proves a new provider was built).
-	require.NoError(t, dp.Reload("token-v3"))
+	require.NoError(t, dp.Reload(""))
+	_, _, err = dp.GetPRStatus(context.Background(), "o/r", 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"Bearer token-v1", "Bearer token-v2", "Bearer token-v2"}, auth,
+		"calls after Reload use the new token; an empty token keeps the old one")
 }
 
 // TestDynamicProvider_ReloadEmptyToken verifies that Reload with an empty token

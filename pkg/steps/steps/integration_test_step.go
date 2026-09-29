@@ -39,7 +39,8 @@ func init() {
 //
 // Architecture note (graph-first):
 //   - The reconciler that calls this step is the graph Owned node.
-//   - The Job is created and owned by the PromotionStep (via the step engine).
+//   - The step creates the Job; it sets no owner reference, so the Job is
+//     removed by its TTL, not with the PromotionStep.
 //   - The step reads Job.status.succeeded / Job.status.failed to determine the result.
 //   - No out-of-band state. No cross-CRD mutation. Pure K8s resource creation+watch.
 //
@@ -48,7 +49,9 @@ func init() {
 //	integration_test.image         (required) — container image to run
 //	integration_test.command       (optional) — space-separated command args
 //	integration_test.timeout       (optional) — duration string, default "30m"
-//	integration_test.on_failure    (optional) — "abort" | "rollback" | "none" (default)
+//
+// A failed or timed-out Job fails the step, and so the promotion. There is no
+// per-step failure policy; rollback follows the environment's health settings.
 type integrationTestStep struct{}
 
 func (s *integrationTestStep) Name() string { return "integration-test" }

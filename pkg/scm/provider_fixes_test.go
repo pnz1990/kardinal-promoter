@@ -28,7 +28,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -460,4 +462,32 @@ func TestGitHub403RateLimit_OpensCircuit(t *testing.T) {
 		require.Error(t, err)
 	}
 	assert.LessOrEqual(t, hits, 5)
+}
+
+// TestRenderPRBody_EscapesTableCells proves a CEL reason with "||" or a
+// newline stays in its cell (C06-scm-health-25).
+func TestRenderPRBody_EscapesTableCells(t *testing.T) {
+	body, err := scm.RenderPRBody(scm.PRBody{
+		PipelineName: "p", Environment: "prod", BundleName: "b",
+		Bundle: v1alpha1.BundleSpec{
+			Images:     []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "v1"}},
+			Provenance: &v1alpha1.BundleProvenance{Author: "a | b", CommitSHA: "abc"},
+		},
+		GateResults: []v1alpha1.GateResult{{
+			GateName: "hours", Result: "pass",
+			Reason:      "!schedule.isWeekend || bundle.provenance.author == 'x'\n= true",
+			EvaluatedAt: metav1.Now(),
+		}},
+	})
+	require.NoError(t, err)
+	for _, line := range strings.Split(body, "\n") {
+		switch {
+		case strings.HasPrefix(line, "| hours "):
+			assert.Equal(t, 6, strings.Count(line, "|")-strings.Count(line, `\|`), line)
+			assert.Contains(t, line, `\|\|`)
+		case strings.HasPrefix(line, "| ghcr.io/o/app "):
+			assert.Equal(t, 7, strings.Count(line, "|")-strings.Count(line, `\|`), line)
+		}
+	}
+	assert.NotContains(t, body, "Source Diff")
 }

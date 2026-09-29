@@ -31,8 +31,8 @@ import (
 const bitbucketDefaultAPIURL = "https://api.bitbucket.org"
 
 // BitbucketProvider implements SCMProvider against the Bitbucket Cloud REST API v2.0.
-// Requests are authenticated with a Bearer token (use an app password encoded as
-// base64(username:apppassword) or a repository access token issued by Bitbucket).
+// Requests are authenticated with a Bearer token, so use a repository, project
+// or workspace access token. App passwords need Basic auth and do not work here.
 // All methods are safe for concurrent use.
 //
 // Design ref: docs/design/15-production-readiness.md §Lens 1 (Kargo parity)
