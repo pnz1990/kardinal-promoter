@@ -22,3 +22,11 @@ spec:
       port: {{ .Values.service.healthPort }}
       targetPort: health
       protocol: TCP
+    - name: ui
+      port: {{ .Values.service.uiPort }}
+      targetPort: ui
+      protocol: TCP
+    - name: webhook
+      port: {{ .Values.service.webhookPort }}
+      targetPort: webhook
+      protocol: TCP

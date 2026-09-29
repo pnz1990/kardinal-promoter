@@ -2,20 +2,25 @@
 Copyright 2026 The kardinal-promoter Authors.
 Licensed under the Apache License, Version 2.0
 */}}
-{{- if not .Values.controller.watchNamespace -}}
-# Rendered only when controller.watchNamespace is empty (cluster-wide mode).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
+  {{- if .Values.controller.watchNamespace }}
+  name: {{ include "kardinal-promoter.fullname" . }}-cluster-scoped
+  {{- else }}
   name: {{ include "kardinal-promoter.fullname" . }}-manager-rolebinding
+  {{- end }}
   labels:
     {{- include "kardinal-promoter.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
+  {{- if .Values.controller.watchNamespace }}
+  name: {{ include "kardinal-promoter.fullname" . }}-cluster-scoped
+  {{- else }}
   name: {{ include "kardinal-promoter.fullname" . }}-manager-role
+  {{- end }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "kardinal-promoter.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
-{{- end }}

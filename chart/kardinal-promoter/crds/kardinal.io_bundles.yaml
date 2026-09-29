@@ -1,0 +1,341 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: bundles.kardinal.io
+spec:
+  group: kardinal.io
+  names:
+    kind: Bundle
+    listKind: BundleList
+    plural: bundles
+    shortNames:
+    - bnd
+    singular: bundle
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.pipeline
+      name: Pipeline
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Bundle is an immutable, versioned snapshot of what to deploy.
+          It carries build provenance and travels through a Pipeline's environments.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BundleSpec defines the desired state of a Bundle.
+            properties:
+              configRef:
+                description: |-
+                  ConfigRef points to the GitOps repository commit this Bundle represents
+                  when the bundle type is "config" or "mixed".
+                properties:
+                  commitSHA:
+                    description: CommitSHA is the exact commit SHA for this config
+                      snapshot.
+                    type: string
+                  gitRepo:
+                    description: GitRepo is the GitOps repository URL.
+                    type: string
+                type: object
+              images:
+                description: Images lists the container images included in this Bundle.
+                items:
+                  description: ImageRef identifies a container image by repository,
+                    tag, and/or digest.
+                  properties:
+                    digest:
+                      description: Digest is the image digest (sha256:...).
+                      type: string
+                    repository:
+                      description: Repository is the image repository (e.g. "ghcr.io/nginx/nginx").
+                      minLength: 1
+                      type: string
+                    tag:
+                      description: Tag is the image tag.
+                      type: string
+                  required:
+                  - repository
+                  type: object
+                type: array
+              intent:
+                description: Intent declares optional targeting and skip overrides
+                  for this Bundle.
+                properties:
+                  skipEnvironments:
+                    description: |-
+                      SkipEnvironments lists environment names to exclude from this promotion,
+                      subject to the PolicyGate SkipPermission check.
+                    items:
+                      type: string
+                    type: array
+                  targetEnvironment:
+                    description: |-
+                      TargetEnvironment restricts this Bundle to promoting only up to and
+                      including this environment. Empty means promote through all environments.
+                    type: string
+                type: object
+              pipeline:
+                description: Pipeline is the name of the Pipeline this Bundle targets.
+                minLength: 1
+                type: string
+              provenance:
+                description: Provenance carries build metadata for audit and rollback.
+                properties:
+                  author:
+                    description: Author is the committer or triggering actor for this
+                      build.
+                    type: string
+                  ciRunURL:
+                    description: CIRunURL is the URL of the CI run that built this
+                      Bundle.
+                    type: string
+                  commitSHA:
+                    description: CommitSHA is the application source commit that produced
+                      this Bundle.
+                    type: string
+                  rollbackOf:
+                    description: RollbackOf is the name of the Bundle this Bundle
+                      rolls back (if any).
+                    type: string
+                  timestamp:
+                    description: Timestamp is when the bundle was built.
+                    format: date-time
+                    type: string
+                type: object
+              type:
+                description: |-
+                  Type classifies the bundle content.
+                  Supersession rule (BU-4): each bundle type supersedes only bundles of the same type.
+                  An image bundle does NOT supersede a config bundle and vice versa.
+                  This allows image and config promotions to coexist independently in the same pipeline.
+                enum:
+                - image
+                - config
+                - mixed
+                type: string
+            required:
+            - pipeline
+            - type
+            type: object
+          status:
+            description: BundleStatus defines the observed state of a Bundle.
+            properties:
+              conditions:
+                description: Conditions holds status conditions.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              environments:
+                description: Environments holds per-environment promotion evidence.
+                items:
+                  description: EnvironmentStatus captures per-environment promotion
+                    evidence for a Bundle.
+                  properties:
+                    gateResults:
+                      description: |-
+                        GateResults holds the result of each PolicyGate evaluation for this
+                        environment.
+                      items:
+                        description: GateResult records the outcome of a single PolicyGate
+                          evaluation.
+                        properties:
+                          evaluatedAt:
+                            description: EvaluatedAt is when the gate was evaluated.
+                            format: date-time
+                            type: string
+                          gateName:
+                            description: GateName is the name of the PolicyGate.
+                            type: string
+                          gateNamespace:
+                            description: GateNamespace is the namespace of the PolicyGate.
+                            type: string
+                          reason:
+                            description: Reason is the human-readable explanation
+                              for the result.
+                            type: string
+                          result:
+                            description: 'Result is the evaluation outcome: "pass"
+                              or "block".'
+                            type: string
+                        required:
+                        - evaluatedAt
+                        - gateName
+                        - result
+                        type: object
+                      type: array
+                    healthCheckedAt:
+                      description: HealthCheckedAt is when the post-merge health check
+                        completed.
+                      format: date-time
+                      type: string
+                    mergedBy:
+                      description: MergedBy is the actor who merged the promotion
+                        PR.
+                      type: string
+                    name:
+                      description: Name is the environment name.
+                      type: string
+                    phase:
+                      description: Phase is the promotion phase for this environment.
+                      type: string
+                    prMergedAt:
+                      description: PRMergedAt is when the promotion PR was merged.
+                      format: date-time
+                      type: string
+                    prURL:
+                      description: PRURL is the URL of the pull request opened for
+                        this promotion.
+                      type: string
+                    soakMinutes:
+                      description: |-
+                        SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt.
+                        Written by the BundleReconciler as part of its own CRD status write.
+                        The PolicyGate reconciler reads this field from Bundle.status.environments
+                        to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates
+                        the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix).
+                      format: int64
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              graphRef:
+                description: |-
+                  GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG.
+                  Populated by the BundleReconciler when the Graph is first created.
+                  Used to detect Graph deletion and trigger recreation.
+                type: string
+              metrics:
+                description: |-
+                  Metrics holds deployment efficiency metrics for this Bundle (K-05).
+                  Populated by the BundleReconciler when all environments reach Verified.
+                properties:
+                  autoRollbacks:
+                    description: |-
+                      AutoRollbacks is the number of environments that auto-rolled back during
+                      this Bundle's promotion.
+                    type: integer
+                  bakeResets:
+                    description: |-
+                      BakeResets is the total number of bake timer resets across all environments.
+                      High bake reset count indicates flaky health or over-sensitive bake windows.
+                    type: integer
+                  commitToProductionMinutes:
+                    description: |-
+                      CommitToProductionMinutes is the time from Bundle creation to the last
+                      environment reaching Verified. Indicates total promotion pipeline latency.
+                    format: int64
+                    type: integer
+                  operatorInterventions:
+                    description: |-
+                      OperatorInterventions is the number of PolicyGate overrides applied during
+                      this Bundle's promotion across all environments.
+                    type: integer
+                type: object
+              phase:
+                description: Phase is the bundle promotion phase.
+                enum:
+                - Available
+                - Promoting
+                - Verified
+                - Failed
+                - Superseded
+                type: string
+              pipelineSpecHash:
+                description: |-
+                  PipelineSpecHash is the SHA-256 hash of the Pipeline spec at the time the
+                  Graph was last created for this Bundle. When the Bundle reconciler is
+                  re-queued by a Pipeline watch event, it compares the current Pipeline spec
+                  hash to this field. A mismatch triggers Graph deletion so Translate
+                  recreates it with the updated spec.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
