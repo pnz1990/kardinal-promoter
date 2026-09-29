@@ -16,8 +16,11 @@ package steps
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -26,10 +29,16 @@ func init() {
 	parentsteps.Register(&configMergeStep{})
 }
 
-// configMergeStep applies configuration changes from a Bundle's configRef.
-// Strategy: overlay — copies files from a "config-source/" subdirectory in the
-// working directory (cloned by git-clone from the configRef commit) over the
-// environment directory. This is a simplified overlay that replaces changed files.
+// configMergeStep applies a config Bundle's configRef commit to the
+// environment directory.
+//
+// git-clone checks the configRef commit out into a directory next to the
+// working tree and sets Outputs["configSourceDir"]. config-merge copies only
+// the environment's own subtree (environments[].path, or
+// environments/<name>) from that commit over the same path in the working
+// tree. .git and everything outside the subtree are never copied, so the
+// config repository cannot overwrite other environments or the repo root
+// (C05-steps-03). Files deleted in the config commit are not deleted.
 //
 // Idempotent: copying the same files twice produces the same result.
 type configMergeStep struct{}
@@ -43,66 +52,85 @@ func (s *configMergeStep) Execute(_ context.Context, state *parentsteps.StepStat
 			Message: "no config ref — nothing to merge",
 		}, nil
 	}
-
-	// The git-clone step clones to WorkDir. Config source is expected at:
-	// WorkDir/config-source/<commitSHA[:8]>/
-	// If the git-clone step put the config repo at WorkDir directly, we read
-	// from there. Use the configSourceDir key from Outputs if set by a prior step.
-	configSourceDir := state.Outputs["configSourceDir"]
-	if configSourceDir == "" {
-		// Default: assume the whole WorkDir is the config source.
-		configSourceDir = state.WorkDir
+	fail := func(format string, args ...any) (parentsteps.StepResult, error) {
+		msg := fmt.Sprintf(format, args...)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
+			fmt.Errorf("config-merge: %s", msg)
 	}
 
-	envPath := filepath.Join(state.WorkDir, envSubdir(state))
-	if err := os.MkdirAll(envPath, 0o755); err != nil {
-		return parentsteps.StepResult{
-				Status:  parentsteps.StepFailed,
-				Message: fmt.Sprintf("mkdir env path %s: %v", envPath, err),
-			},
-			fmt.Errorf("config-merge: mkdir: %w", err)
+	srcDir := state.Outputs["configSourceDir"]
+	if srcDir == "" {
+		return fail("configSourceDir not set: git-clone must run before config-merge to check out the configRef commit")
+	}
+	if rel, err := filepath.Rel(filepath.Clean(state.WorkDir), filepath.Clean(srcDir)); err != nil ||
+		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		return fail("config source %s must not be the working tree or inside it", srcDir)
+	}
+	envRel, err := envSubdir(state)
+	if err != nil {
+		return fail("%v", err)
 	}
 
-	// Walk the config source directory and copy files to the env path.
-	var mergedCount int
-	err := filepath.WalkDir(configSourceDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(configSourceDir, path)
+	src, err := os.OpenRoot(srcDir)
+	if err != nil {
+		return fail("open config source: %v", err)
+	}
+	defer func() { _ = src.Close() }()
+	dst, err := openCheckout(state)
+	if err != nil {
+		return fail("%v", err)
+	}
+	defer func() { _ = dst.Close() }()
+
+	fsRel := filepath.ToSlash(envRel)
+	if info, statErr := src.Stat(envRel); statErr != nil || !info.IsDir() {
+		return fail("config commit %s has no directory %s", shortSHA(state.Bundle.ConfigRef.CommitSHA), fsRel)
+	}
+	if err := dst.MkdirAll(envRel, 0o755); err != nil {
+		return fail("mkdir %s: %v", fsRel, err)
+	}
+
+	var merged, skipped int
+	walkErr := fs.WalkDir(src.FS(), fsRel, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		destPath := filepath.Join(envPath, rel)
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", filepath.Dir(destPath), err)
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return dst.MkdirAll(filepath.FromSlash(p), 0o755)
 		}
-		data, err := os.ReadFile(path)
+		if !d.Type().IsRegular() {
+			skipped++ // symlinks and special files are never copied
+			return nil
+		}
+		data, err := src.ReadFile(filepath.FromSlash(p))
 		if err != nil {
-			return fmt.Errorf("read %s: %w", path, err)
+			return fmt.Errorf("read %s: %w", p, err)
 		}
-		if err := os.WriteFile(destPath, data, 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", destPath, err)
+		if err := dst.WriteFile(filepath.FromSlash(p), data, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", p, err)
 		}
-		mergedCount++
+		merged++
 		return nil
 	})
-	if err != nil {
-		return parentsteps.StepResult{
-				Status:  parentsteps.StepFailed,
-				Message: fmt.Sprintf("walk config source: %v", err),
-			},
-			fmt.Errorf("config-merge: %w", err)
+	if walkErr != nil {
+		return fail("copy %s: %v", path.Clean(fsRel), walkErr)
 	}
 
+	msg := fmt.Sprintf("merged %d files into %s from config commit %s", merged, fsRel, shortSHA(state.Bundle.ConfigRef.CommitSHA))
+	if skipped > 0 {
+		msg += fmt.Sprintf(" (skipped %d symlinks or special files)", skipped)
+	}
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: fmt.Sprintf("merged %d files from config commit %s", mergedCount, state.Bundle.ConfigRef.CommitSHA[:min(8, len(state.Bundle.ConfigRef.CommitSHA))]),
-		Outputs: map[string]string{
-			"mergedFiles": fmt.Sprintf("%d", mergedCount),
-		},
+		Message: msg,
+		Outputs: map[string]string{"mergedFiles": fmt.Sprintf("%d", merged)},
 	}, nil
+}
+
+// shortSHA returns the first 8 characters of a commit SHA.
+func shortSHA(sha string) string {
+	return sha[:min(8, len(sha))]
 }

@@ -324,29 +324,24 @@ func TestInjectToken(t *testing.T) {
 	}
 	// Push against a non-git directory should fail at PlainOpen (before any network call).
 	c := scm.NewGoGitClient()
-	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok")
+	err := c.Push(context.Background(), t.TempDir(), "origin", "main", "tok", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "open repo")
 }
 
-// TestGoGitClient_CheckoutCommitErrors verifies error propagation for repository
+// TestGoGitClient_CommitErrors verifies error propagation for repository
 // operations against non-git directories.
 // Note: go-git PlainInit/PlainOpen can hang on macOS in certain filesystem configurations.
 // These tests are skipped in short mode and run in CI (Linux only).
-func TestGoGitClient_CheckoutCommitErrors(t *testing.T) {
+func TestGoGitClient_CommitErrors(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping go-git filesystem tests in short mode (may hang on macOS)")
 	}
 	ctx := context.Background()
 	c := scm.NewGoGitClient()
 
-	// Checkout: non-git directory → error, not panic.
-	err := c.Checkout(ctx, t.TempDir(), "feat/test")
-	require.Error(t, err, "Checkout of non-repo must fail")
-	assert.NotPanics(t, func() { _ = err.Error() })
-
 	// CommitAll: non-git directory → error.
-	err = c.CommitAll(ctx, t.TempDir(), "msg", "Author", "a@b.com")
+	err := c.CommitAll(ctx, t.TempDir(), "msg", "Author", "a@b.com")
 	require.Error(t, err, "CommitAll on non-repo must fail")
 }
 

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,8 +89,224 @@ func TestKustomizeSetImage_AddsNewEntry(t *testing.T) {
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
 
 	yaml := readKustomization(t, envPath)
-	assert.Contains(t, yaml, "myapp", "short name must appear as image name")
-	assert.Contains(t, yaml, "v1.2.3", "tag must be written")
+	// kustomize matches name against the full image name in the manifests,
+	// as `kustomize edit set image` writes it (C05-steps-09).
+	assert.Contains(t, yaml, "- name: ghcr.io/myorg/myapp\n", "full repository must be the image name")
+	assert.NotContains(t, yaml, "newName", "a new entry needs no newName")
+	assert.Contains(t, yaml, "newTag: v1.2.3", "tag must be written")
+}
+
+// TestKustomizeSetImage_Matching covers kustomize's image matching: full-name
+// entries, short-name placeholder entries and two repositories with the same
+// short name (C05-steps-09, C05-steps-15).
+func TestKustomizeSetImage_Matching(t *testing.T) {
+	cases := []struct {
+		name    string
+		initial string
+		images  []v1alpha1.ImageRef
+		want    string
+	}{
+		{
+			name:    "full-name entry updated in place",
+			initial: "images:\n- name: ghcr.io/myorg/myapp\n  newTag: v1\n",
+			images:  []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/myapp", Tag: "v2"}},
+			want:    "images:\n- name: ghcr.io/myorg/myapp\n  newTag: v2\n",
+		},
+		{
+			name:    "short-name placeholder gets newName",
+			initial: "images:\n- name: myapp\n  newTag: v1\n",
+			images:  []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/myapp", Tag: "v2"}},
+			want:    "images:\n- name: myapp\n  newTag: v2\n  newName: ghcr.io/myorg/myapp\n",
+		},
+		{
+			name:    "same short name, two repositories",
+			initial: "resources:\n- deployment.yaml\n",
+			images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/a/app", Tag: "1"},
+				{Repository: "ghcr.io/b/app", Tag: "2"},
+			},
+			want: "resources:\n- deployment.yaml\nimages:\n- name: ghcr.io/a/app\n  newTag: \"1\"\n- name: ghcr.io/b/app\n  newTag: \"2\"\n",
+		},
+		{
+			name:    "short-name entry pointing elsewhere is left alone",
+			initial: "images:\n- name: app\n  newName: ghcr.io/other/app\n  newTag: v1\n",
+			images:  []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/app", Tag: "v2"}},
+			want:    "images:\n- name: app\n  newName: ghcr.io/other/app\n  newTag: v1\n- name: ghcr.io/myorg/app\n  newTag: v2\n",
+		},
+		{
+			name:    "digest replaces tag",
+			initial: "images:\n- name: ghcr.io/myorg/myapp\n  newTag: v1\n",
+			images:  []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/myapp", Digest: "sha256:abc"}},
+			want:    "images:\n- name: ghcr.io/myorg/myapp\n  digest: sha256:abc\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			envPath := filepath.Join(workDir, "environments", "prod")
+			writeKustomization(t, envPath, tc.initial)
+			result, err := mustLookup(t, "kustomize-set-image").Execute(context.Background(),
+				makeKustomizeState(workDir, "prod", tc.images))
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			assert.Equal(t, tc.want, readKustomization(t, envPath))
+		})
+	}
+}
+
+// TestKustomizeSetImage_KustomizationFileNames verifies every file name
+// kustomize accepts is edited in place, and a directory without one fails
+// (C05-steps-16).
+func TestKustomizeSetImage_KustomizationFileNames(t *testing.T) {
+	for _, name := range []string{"kustomization.yaml", "kustomization.yml", "Kustomization"} {
+		t.Run(name, func(t *testing.T) {
+			workDir := t.TempDir()
+			envPath := filepath.Join(workDir, "environments", "prod")
+			require.NoError(t, os.MkdirAll(envPath, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(envPath, name), []byte("kind: Kustomization\n"), 0o644))
+			result, err := mustLookup(t, "kustomize-set-image").Execute(context.Background(),
+				makeKustomizeState(workDir, "prod", []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "v1"}}))
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			entries, err := os.ReadDir(envPath)
+			require.NoError(t, err)
+			assert.Len(t, entries, 1, "no second kustomization file may be created")
+			data, err := os.ReadFile(filepath.Join(envPath, name))
+			require.NoError(t, err)
+			assert.Contains(t, string(data), "newTag: v1")
+		})
+	}
+	t.Run("none", func(t *testing.T) {
+		workDir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(workDir, "environments", "prod"), 0o755))
+		result, err := mustLookup(t, "kustomize-set-image").Execute(context.Background(),
+			makeKustomizeState(workDir, "prod", []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "v1"}}))
+		assert.Error(t, err)
+		assert.Equal(t, parentsteps.StepFailed, result.Status)
+		assert.Contains(t, result.Message, "no kustomization file")
+	})
+}
+
+// TestKustomizeSetImage_KeepsComments verifies comments and key order survive
+// the edit (C05-steps-31).
+func TestKustomizeSetImage_KeepsComments(t *testing.T) {
+	workDir := t.TempDir()
+	envPath := filepath.Join(workDir, "environments", "prod")
+	initial := "# prod overlay\nnamespace: prod # keep me\nresources:\n- ../../base\nimages:\n- name: ghcr.io/o/app # the app\n  newTag: v1\npatches:\n- path: patch.yaml\n"
+	writeKustomization(t, envPath, initial)
+	_, err := mustLookup(t, "kustomize-set-image").Execute(context.Background(),
+		makeKustomizeState(workDir, "prod", []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "v2"}}))
+	require.NoError(t, err)
+	assert.Equal(t, strings.Replace(initial, "newTag: v1", "newTag: v2", 1), readKustomization(t, envPath))
+}
+
+// TestEnvPathConfinement verifies environments[].path and a symlinked env dir
+// cannot make a step write outside the checkout (C05-steps-13).
+func TestEnvPathConfinement(t *testing.T) {
+	images := []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "v1"}}
+	cases := []struct {
+		name  string
+		path  string
+		setup func(t *testing.T, workDir, outside string)
+	}{
+		{name: "dot-dot", path: "../victim"},
+		{name: "nested dot-dot", path: "environments/../../victim"},
+		{name: "absolute", path: "/tmp/victim"},
+		{name: "symlink escape", path: "environments/prod", setup: func(t *testing.T, workDir, outside string) {
+			require.NoError(t, os.MkdirAll(filepath.Join(workDir, "environments"), 0o755))
+			require.NoError(t, os.Symlink(outside, filepath.Join(workDir, "environments", "prod")))
+		}},
+	}
+	for _, step := range []string{"kustomize-set-image", "helm-set-image", "kustomize-build"} {
+		for _, tc := range cases {
+			t.Run(step+"/"+tc.name, func(t *testing.T) {
+				base := t.TempDir()
+				workDir := filepath.Join(base, "work")
+				outside := filepath.Join(base, "victim")
+				require.NoError(t, os.MkdirAll(workDir, 0o755))
+				writeKustomization(t, outside, "kind: Kustomization\n")
+				require.NoError(t, os.WriteFile(filepath.Join(outside, "values.yaml"), []byte("image:\n  tag: old\n"), 0o644))
+				if tc.setup != nil {
+					tc.setup(t, workDir, outside)
+				}
+				state := makeKustomizeState(workDir, "prod", images)
+				state.Environment.Path = tc.path
+
+				var s parentsteps.Step
+				if step == "kustomize-build" {
+					s = steps.NewKustomizeBuildStep(&stubKustomizeBuilder{output: []byte("x")})
+				} else {
+					s = mustLookup(t, step)
+				}
+				result, err := s.Execute(context.Background(), state)
+				assert.Error(t, err)
+				assert.Equal(t, parentsteps.StepFailed, result.Status)
+				assert.Equal(t, "kind: Kustomization\n", readKustomization(t, outside), "outside kustomization must be untouched")
+				values, readErr := os.ReadFile(filepath.Join(outside, "values.yaml"))
+				require.NoError(t, readErr)
+				assert.Equal(t, "image:\n  tag: old\n", string(values), "outside values must be untouched")
+			})
+		}
+	}
+	t.Run("helm valuesFile dot-dot", func(t *testing.T) {
+		base := t.TempDir()
+		workDir := filepath.Join(base, "work")
+		require.NoError(t, os.MkdirAll(filepath.Join(workDir, "environments", "prod"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(base, "values.yaml"), []byte("image:\n  tag: old\n"), 0o644))
+		state := makeKustomizeState(workDir, "prod", images)
+		state.Environment.Update.Helm = &v1alpha1.HelmUpdateConfig{ValuesFile: "../../../values.yaml"}
+		result, err := mustLookup(t, "helm-set-image").Execute(context.Background(), state)
+		assert.Error(t, err)
+		assert.Equal(t, parentsteps.StepFailed, result.Status)
+		values, readErr := os.ReadFile(filepath.Join(base, "values.yaml"))
+		require.NoError(t, readErr)
+		assert.Equal(t, "image:\n  tag: old\n", string(values))
+	})
+}
+
+// TestHelmSetImage_ImageShapes verifies digests are pinned and Bundles the
+// single-value path template cannot express fail loudly (C05-steps-17).
+func TestHelmSetImage_ImageShapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		images  []v1alpha1.ImageRef
+		values  string
+		want    string
+		wantMsg string
+	}{
+		{name: "tag", images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "v2"}},
+			values: "image:\n  repository: r/app # repo\n  tag: v1\n", want: "image:\n  repository: r/app # repo\n  tag: v2\n"},
+		{name: "tag and digest", images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "v2", Digest: "sha256:abc"}},
+			values: "image:\n  tag: v1\n", want: "image:\n  tag: v2@sha256:abc\n"},
+		{name: "digest only", images: []v1alpha1.ImageRef{{Repository: "r/app", Digest: "sha256:abc"}},
+			values: "image:\n  tag: v1\n", wantMsg: "digest but no tag"},
+		{name: "two images", images: []v1alpha1.ImageRef{{Repository: "r/a", Tag: "1"}, {Repository: "r/b", Tag: "2"}},
+			values: "image:\n  tag: v1\n", wantMsg: "has 2 images"},
+		{name: "path through a scalar", images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "v2"}},
+			values: "image: r/app:v1\n", wantMsg: "image is not a mapping"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			envPath := filepath.Join(workDir, "environments", "prod")
+			require.NoError(t, os.MkdirAll(envPath, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(envPath, "values.yaml"), []byte(tc.values), 0o644))
+			result, err := mustLookup(t, "helm-set-image").Execute(context.Background(),
+				makeKustomizeState(workDir, "prod", tc.images))
+			got, readErr := os.ReadFile(filepath.Join(envPath, "values.yaml"))
+			require.NoError(t, readErr)
+			if tc.wantMsg != "" {
+				assert.Error(t, err)
+				assert.Equal(t, parentsteps.StepFailed, result.Status)
+				assert.Contains(t, result.Message, tc.wantMsg)
+				assert.Equal(t, tc.values, string(got), "values must be untouched on failure")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			assert.Equal(t, tc.want, string(got))
+		})
+	}
 }
 
 // TestKustomizeSetImage_UpdatesExistingEntry verifies that an existing image entry
@@ -253,6 +470,7 @@ func TestKustomizeBuild_WritesRenderedManifest(t *testing.T) {
 
 func TestKustomizeBuild_BuilderErrorPropagates(t *testing.T) {
 	workDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "environments", "prod"), 0o755))
 	stub := &stubKustomizeBuilder{
 		err: fmt.Errorf("kustomize build failed: bad overlay"),
 	}
@@ -266,6 +484,8 @@ func TestKustomizeBuild_BuilderErrorPropagates(t *testing.T) {
 	result, err := step.Execute(context.Background(), state)
 	assert.Error(t, err)
 	assert.Equal(t, parentsteps.StepFailed, result.Status)
+	assert.True(t, stub.called, "the builder must have run")
+	assert.Contains(t, result.Message, "bad overlay")
 }
 
 // --- helpers ---

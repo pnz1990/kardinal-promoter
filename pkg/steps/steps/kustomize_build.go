@@ -15,10 +15,12 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -59,34 +61,66 @@ type kustomizeBuildStep struct {
 func (s *kustomizeBuildStep) Name() string { return "kustomize-build" }
 
 func (s *kustomizeBuildStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
-	envPath := filepath.Join(state.WorkDir, envSubdir(state))
-	outputFile := filepath.Join(state.WorkDir, fmt.Sprintf("rendered-%s.yaml", state.Environment.Name))
+	fail := func(msg string, err error) (parentsteps.StepResult, error) {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
+			fmt.Errorf("kustomize-build: %w", err)
+	}
+	envRel, err := envSubdir(state)
+	if err != nil {
+		return fail(err.Error(), err)
+	}
+	root, err := openCheckout(state)
+	if err != nil {
+		return fail(err.Error(), err)
+	}
+	defer func() { _ = root.Close() }()
+	// The kustomize binary follows symlinks, so resolve the env path and make
+	// sure it is still inside the checkout before handing it over (C05-steps-13).
+	envPath, err := confinedRealPath(state.WorkDir, envRel)
+	if err != nil {
+		return fail(err.Error(), err)
+	}
+	outputName := fmt.Sprintf("rendered-%s.yaml", state.Environment.Name)
+	if _, err := confinedRel(outputName); err != nil || strings.ContainsAny(state.Environment.Name, `/\`) {
+		err = fmt.Errorf("environment name %q is not a valid file name", state.Environment.Name)
+		return fail(err.Error(), err)
+	}
 
 	out, err := s.builder.Build(ctx, envPath)
 	if err != nil {
-		return parentsteps.StepResult{
-				Status:  parentsteps.StepFailed,
-				Message: fmt.Sprintf("kustomize build failed: %v", err),
-			},
-			fmt.Errorf("kustomize-build: %w", err)
+		return fail(fmt.Sprintf("kustomize build failed: %v", err), err)
 	}
 
-	if writeErr := os.WriteFile(outputFile, out, 0o644); writeErr != nil { //nolint:gosec
-		return parentsteps.StepResult{
-				Status:  parentsteps.StepFailed,
-				Message: fmt.Sprintf("write rendered manifest: %v", writeErr),
-			},
-			fmt.Errorf("kustomize-build: write output: %w", writeErr)
+	if writeErr := root.WriteFile(outputName, out, 0o644); writeErr != nil {
+		return fail(fmt.Sprintf("write rendered manifest: %v", writeErr), fmt.Errorf("write output: %w", writeErr))
 	}
 
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: fmt.Sprintf("rendered %d bytes from %s", len(out), envPath),
+		Message: fmt.Sprintf("rendered %d bytes from %s", len(out), filepath.ToSlash(envRel)),
 		Outputs: map[string]string{
-			"renderedManifestPath": outputFile,
+			"renderedManifestPath": filepath.Join(state.WorkDir, outputName),
 			"renderedManifestSize": fmt.Sprintf("%d", len(out)),
 		},
 	}, nil
+}
+
+// confinedRealPath resolves symlinks in root/rel and returns the real path,
+// failing when it is outside the real root.
+func confinedRealPath(root, rel string) (string, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve work dir: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(realRoot, rel))
+	if err != nil {
+		return "", fmt.Errorf("resolve environment path %s: %w", filepath.ToSlash(rel), err)
+	}
+	r, err := filepath.Rel(realRoot, real)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("environment path %s resolves outside the repository", filepath.ToSlash(rel))
+	}
+	return real, nil
 }
 
 // --- Production implementation ---
@@ -101,21 +135,19 @@ func (b *execKustomizeBuilder) Build(ctx context.Context, dir string) ([]byte, e
 	out, err := cmd.Output()
 	if err != nil {
 		if isBinaryNotFound(err) {
-			return nil, fmt.Errorf("kustomize binary not found in PATH — install kustomize to use layout: branch")
+			return nil, fmt.Errorf("kustomize binary not found in PATH — install kustomize to use the kustomize-build step: %w", err)
 		}
-		if ee, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("kustomize build: %s", string(ee.Stderr))
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return nil, fmt.Errorf("kustomize build: %s: %w", strings.TrimSpace(string(ee.Stderr)), err)
 		}
 		return nil, fmt.Errorf("kustomize build: %w", err)
 	}
 	return out, nil
 }
 
-// isBinaryNotFound returns true if err indicates a binary was not found.
+// isBinaryNotFound reports whether err means the kustomize binary is missing
+// (C05-steps-33).
 func isBinaryNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	return os.IsNotExist(err) ||
-		err.Error() == "exec: \"kustomize\": executable file not found in $PATH"
+	return errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist)
 }

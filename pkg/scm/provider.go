@@ -65,15 +65,18 @@ type SCMProvider interface {
 // GitClient abstracts Git operations needed by the promotion steps engine.
 // All implementations must be safe for sequential use within a single step sequence.
 type GitClient interface {
-	// Clone performs a shallow (depth=1) clone of the repository into dir.
-	Clone(ctx context.Context, url, branch, dir string) error
+	// Clone performs a shallow (depth=1) clone of branch into dir, using token
+	// (when non-empty) for HTTP(S) authentication.
+	Clone(ctx context.Context, url, branch, dir, token string) error
 
-	// Checkout creates or switches to the given branch in dir.
-	Checkout(ctx context.Context, dir, branch string) error
+	// CloneAt clones the repository into dir and checks out commitSHA.
+	CloneAt(ctx context.Context, url, commitSHA, dir, token string) error
 
-	// CommitAll stages all changes in dir and creates a commit with the given message.
+	// CommitAll stages all changes in dir and creates a commit with the given
+	// message. It returns ErrNothingToCommit when there is nothing to commit.
 	CommitAll(ctx context.Context, dir, message, authorName, authorEmail string) error
 
-	// Push pushes the given branch to the remote using the provided token for auth.
-	Push(ctx context.Context, dir, remote, branch, token string) error
+	// Push pushes HEAD to branch on the remote using token for auth. With
+	// force=false it returns ErrNonFastForward when the remote branch moved.
+	Push(ctx context.Context, dir, remote, branch, token string, force bool) error
 }

@@ -35,6 +35,11 @@ const (
 
 	// StepPending indicates the step is still in progress and the reconciler should requeue.
 	StepPending StepStatus = "Pending"
+
+	// StepRestart asks the engine to run the sequence again from the first
+	// step, for example after a push was rejected because the base branch
+	// moved. The engine bounds restarts and never returns this status.
+	StepRestart StepStatus = "Restart"
 )
 
 // StepResult is the outcome of a step execution.

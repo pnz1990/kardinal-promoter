@@ -15,8 +15,10 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -24,12 +26,17 @@ func init() {
 	parentsteps.Register(&gitPushStep{})
 }
 
-// gitPushStep pushes the promotion commit to the remote.
+// gitPushStep pushes the promotion commit.
 //
-// A pr-review environment pushes a promotion branch (kardinal/<bundle>/<env>)
-// for open-pr. An auto environment with the directory layout pushes straight
-// to the base branch, so the change reaches what the GitOps tool syncs.
-// It is idempotent: pushing an already-pushed commit is a no-op.
+//   - approval: pr-review pushes to the kardinal-owned branch
+//     kardinal/<bundle>/<env> with force, so a re-run after a controller
+//     restart (which re-clones and re-commits) replaces the earlier push
+//     instead of failing non-fast-forward.
+//   - approval: auto pushes to the base branch without force. If the base
+//     branch moved since the clone (another environment pushed first), the
+//     step returns StepRestart and the engine re-runs the sequence from a
+//     fresh clone.
+//   - When git-commit found nothing to commit, nothing is pushed.
 type gitPushStep struct{}
 
 func (s *gitPushStep) Name() string { return "git-push" }
@@ -38,24 +45,40 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	if state.GitClient == nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "GitClient not configured"}, nil
 	}
+	if layoutBranch(state) {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: layoutBranchNotImplemented}, nil
+	}
+	if noChanges(state) {
+		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "nothing to push: " + noChangesMessage}, nil
+	}
 
 	// Promotion branch name: kardinal/<bundle>/<env>
 	branch := fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
-	if state.Environment.Approval != "pr-review" && state.Environment.Layout != "branch" {
+	force := true
+	if state.Environment.Approval != "pr-review" {
 		branch = state.Git.Branch
 		if branch == "" {
 			branch = "main"
 		}
+		force = false
 	}
 
-	if err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token); err != nil {
+	err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token, force)
+	if !force && errors.Is(err, scm.ErrNonFastForward) {
+		return parentsteps.StepResult{
+			Status:  parentsteps.StepRestart,
+			Message: fmt.Sprintf("base branch %s moved while promoting; retrying from a fresh clone", branch),
+		}, nil
+	}
+	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("push failed: %v", err)},
 			fmt.Errorf("git-push: %w", err)
 	}
 
+	outputs := map[string]string{"branch": branch}
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
 		Message: "pushed " + branch,
-		Outputs: map[string]string{"branch": branch},
+		Outputs: outputs,
 	}, nil
 }

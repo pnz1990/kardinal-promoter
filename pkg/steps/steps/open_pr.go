@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -36,6 +38,10 @@ func (s *openPRStep) Name() string { return "open-pr" }
 func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
 	if state.SCM == nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "SCM provider not configured"}, nil
+	}
+
+	if noChanges(state) {
+		return parentsteps.StepResult{Status: parentsteps.StepSuccess, Message: "no PR opened: " + noChangesMessage}, nil
 	}
 
 	// Idempotency: skip if PR already opened.
@@ -78,8 +84,11 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 			fmt.Errorf("open-pr render body: %w", err)
 	}
 
-	// Repo is derived from Pipeline.Git.URL: strip protocol and .git suffix.
-	repo := extractRepo(state.Pipeline.Git.URL)
+	repo, err := scm.RepoFromURL(state.Pipeline.Git.URL)
+	if err != nil {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("open PR: %v", err)},
+			fmt.Errorf("open-pr: %w", err)
+	}
 
 	prURL, prNum, err := state.SCM.OpenPR(ctx, repo, title, body, branch, state.Git.Branch)
 	if err != nil {
@@ -95,36 +104,21 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
 		baseLabels = append(baseLabels, "kardinal/rollback")
 	}
+	message := fmt.Sprintf("PR #%d: %s", prNum, prURL)
 	if labelsErr := state.SCM.AddLabelsToPR(ctx, repo, prNum, baseLabels); labelsErr != nil {
-		// Non-fatal: log but do not fail the step.
-		_ = labelsErr
+		// Non-fatal: the PR exists; report the missing labels.
+		zerolog.Ctx(ctx).Warn().Err(labelsErr).Int("pr", prNum).Strs("labels", baseLabels).Msg("add PR labels failed")
+		message += fmt.Sprintf(" (adding labels failed: %v)", labelsErr)
 	}
 
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
-		Message: fmt.Sprintf("PR #%d: %s", prNum, prURL),
+		Message: message,
 		Outputs: map[string]string{
 			"prURL":    prURL,
 			"prNumber": fmt.Sprintf("%d", prNum),
 		},
 	}, nil
-}
-
-// extractRepo extracts "owner/repo" from a GitHub HTTPS URL.
-// e.g., "https://github.com/owner/repo" → "owner/repo"
-// e.g., "https://github.com/owner/repo.git" → "owner/repo"
-func extractRepo(url string) string {
-	for _, prefix := range []string{"https://github.com/", "http://github.com/"} {
-		if len(url) > len(prefix) && url[:len(prefix)] == prefix {
-			repo := url[len(prefix):]
-			// Strip .git suffix.
-			if len(repo) > 4 && repo[len(repo)-4:] == ".git" {
-				repo = repo[:len(repo)-4]
-			}
-			return repo
-		}
-	}
-	return url
 }
 
 // buildPRBodyUpstreamEnvs converts []v1alpha1.EnvironmentStatus to []scm.PRBodyUpstreamEnv,

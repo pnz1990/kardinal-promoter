@@ -13,6 +13,8 @@
 
 package steps
 
+import "fmt"
+
 // registry maps step names to their Step implementations.
 var registry = map[string]Step{}
 
@@ -26,24 +28,14 @@ func Register(s Step) {
 // For any other name a CustomWebhookStep is returned — unknown step names are
 // treated as custom HTTP webhook steps whose URL is provided at runtime via
 // PromotionStep.Spec.Inputs["webhook.url"].
+//
+// An empty name is an error.
 func Lookup(name string) (Step, error) {
+	if name == "" {
+		return nil, fmt.Errorf("empty step name")
+	}
 	if s, ok := registry[name]; ok {
 		return s, nil
 	}
 	return NewCustomWebhookStep(name), nil
-}
-
-// IsBuiltin reports whether the given step name is a registered built-in step.
-func IsBuiltin(name string) bool {
-	_, ok := registry[name]
-	return ok
-}
-
-// Registered returns the names of all registered built-in steps.
-func Registered() []string {
-	names := make([]string, 0, len(registry))
-	for n := range registry {
-		names = append(names, n)
-	}
-	return names
 }

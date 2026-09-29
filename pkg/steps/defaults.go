@@ -13,24 +13,8 @@
 
 package steps
 
-// DefaultSequence returns the default step sequence for a given approval mode.
-// It uses the kustomize strategy, which is the default update strategy.
-//
-// For "auto" approval mode (no PR review required):
-//
-//	git-clone → kustomize-set-image → git-commit → git-push → health-check
-//
-// For "pr-review" approval mode:
-//
-//	git-clone → kustomize-set-image → git-commit → git-push → open-pr → wait-for-merge → health-check
-//
-// Use DefaultSequenceForBundle for type-aware routing.
-func DefaultSequence(approvalMode string) []string {
-	return DefaultSequenceForBundle(approvalMode, "", "", "")
-}
-
 // DefaultSequenceForBundle returns the default step sequence based on approval mode,
-// bundle type, update strategy, and layout. Callers should prefer this over DefaultSequence.
+// bundle type, update strategy, and layout.
 //
 // bundleType: "image" | "config" | "mixed" | "" (defaults to image behaviour)
 // updateStrategy: "kustomize" | "helm" | "argocd" | "" (defaults to kustomize)
@@ -41,10 +25,13 @@ func DefaultSequence(approvalMode string) []string {
 //   - image + argocd → argocd-set-image, health-check (no git operations)
 //   - image + helm  → git-clone, helm-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 //   - layout:branch → git-clone, kustomize-set-image, kustomize-build, git-commit, git-push, [open-pr, wait-for-merge,] health-check
+//     (layout: branch is not implemented yet: git-clone fails the promotion, C05-steps-10)
 //   - image + kustomize (default) → git-clone, kustomize-set-image, git-commit, git-push, [open-pr, wait-for-merge,] health-check
 func DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, layout string) []string {
 	// ArgoCD-native path: no git operations, no PR — direct Kubernetes API patch.
 	// health-check runs after the patch to verify the ArgoCD Application synced.
+	// There is nothing to review, so argocd-set-image fails the promotion when
+	// approvalMode is pr-review instead of skipping the review (C05-steps-11).
 	if updateStrategy == "argocd" {
 		return []string{"argocd-set-image", "health-check"}
 	}
