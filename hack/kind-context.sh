@@ -18,7 +18,7 @@
 # unless it exists. CONFIG sets the node image (test/e2e/kind-config.yaml).
 ensure_kind_cluster() {
   local name="$1" config="$2"
-  if kind get clusters 2>/dev/null | grep -qx "$name"; then
+  if kind get clusters 2>/dev/null | grep -x "$name" >/dev/null; then
     echo "kind cluster '$name' already exists — reusing it"
     return 0
   fi

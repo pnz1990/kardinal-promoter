@@ -38,6 +38,8 @@
 # Licensed under the Apache License, Version 2.0
 
 set -uo pipefail
+# Checks end in grep ... >/dev/null, not grep -q: grep -q exits at the first
+# match, the writer then dies of SIGPIPE, and pipefail fails the check.
 
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${DEMO_DIR}/.." && pwd)"
@@ -124,9 +126,9 @@ trap cleanup EXIT
 
 if scenario 1 "Controller health"; then
   # doctor exits non-zero when any check fails.
-  if DOCTOR=$($KARDINAL doctor 2>&1) && echo "$DOCTOR" | grep -q "check(s) passed"; then
+  if DOCTOR=$($KARDINAL doctor 2>&1) && echo "$DOCTOR" | grep "check(s) passed" >/dev/null; then
     pass "kardinal doctor reports healthy"
-  elif kubectl get pods -n kardinal-system 2>/dev/null | grep -q "Running"; then
+  elif kubectl get pods -n kardinal-system 2>/dev/null | grep "Running" >/dev/null; then
     pass "controller pod is Running (kardinal doctor partial)"
   else
     fail "Controller is not healthy"
@@ -137,7 +139,7 @@ fi
 
 if scenario 2 "Pipeline list"; then
   OUTPUT=$($KARDINAL get pipelines 2>&1)
-  if echo "$OUTPUT" | grep -q "kardinal-test-app"; then
+  if echo "$OUTPUT" | grep "kardinal-test-app" >/dev/null; then
     pass "kardinal get pipelines shows kardinal-test-app"
   else
     fail "kardinal get pipelines: pipeline not found. Output: $OUTPUT"
@@ -171,7 +173,7 @@ if scenario 3 "UI reachable"; then
 
     # Check React app is served
     HTML=$(curl -sf http://localhost:8082/ui/ 2>/dev/null || echo "")
-    if echo "$HTML" | grep -q "kardinal\|react\|<div id"; then
+    if echo "$HTML" | grep "kardinal\|react\|<div id" >/dev/null; then
       pass "UI HTML is served at /ui/"
     else
       fail "UI HTML not found at /ui/"
@@ -190,7 +192,7 @@ if scenario 4 "Happy path promotion (test→uat→prod PR)"; then
     skip "Scenario 4 skipped — GITHUB_TOKEN not set (required for GitOps push)"
   else
     OUTPUT=$(timeout 30 $KARDINAL create bundle kardinal-test-app --image "$TEST_APP_IMAGE" 2>&1)
-    if echo "$OUTPUT" | grep -q "created for pipeline kardinal-test-app"; then
+    if echo "$OUTPUT" | grep "created for pipeline kardinal-test-app" >/dev/null; then
       pass "Bundle created: $TEST_APP_IMAGE"
     else
       fail "Bundle creation failed: $OUTPUT"
@@ -210,7 +212,7 @@ for b in json.load(sys.stdin):
         print(e.get('name'), e.get('phase'))
 " 2>/dev/null || true)
 
-    if echo "$STATUS" | grep -qi "Verified\|Promoting\|WaitingForMerge"; then
+    if echo "$STATUS" | grep -i "Verified\|Promoting\|WaitingForMerge" >/dev/null; then
       pass "Pipeline is progressing (test/uat Verified or Promoting)"
     elif [[ "$FAST" == "true" ]]; then
       skip "Fast mode — not enough time to verify promotion progress"
@@ -227,7 +229,7 @@ if scenario 5 "PolicyGate: weekend blocks prod"; then
   # cmd/kardinal/cmd/policy.go), not any PASS elsewhere in the output.
   OUTPUT=$($KARDINAL policy simulate --pipeline kardinal-test-app --env prod \
     --time "Saturday 3pm" 2>&1)
-  if echo "$OUTPUT" | grep -q "^RESULT: BLOCKED" && echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+BLOCK[[:space:]]"; then
+  if echo "$OUTPUT" | grep "^RESULT: BLOCKED" >/dev/null && echo "$OUTPUT" | grep -E "^no-weekend-deploys:[[:space:]]+BLOCK[[:space:]]" >/dev/null; then
     pass "Weekend gate blocks prod on Saturday"
   else
     fail "Weekend gate did not block. Output: $OUTPUT"
@@ -235,7 +237,7 @@ if scenario 5 "PolicyGate: weekend blocks prod"; then
 
   OUTPUT=$($KARDINAL policy simulate --pipeline kardinal-test-app --env prod \
     --time "Tuesday 10am" 2>&1)
-  if echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+PASS[[:space:]]"; then
+  if echo "$OUTPUT" | grep -E "^no-weekend-deploys:[[:space:]]+PASS[[:space:]]" >/dev/null; then
     pass "Weekend gate allows prod on Tuesday"
   else
     fail "Weekend gate did not allow on Tuesday. Output: $OUTPUT"
@@ -246,7 +248,7 @@ fi
 
 if scenario 6 "PolicyGate: soak blocks prod before 30m"; then
   OUTPUT=$($KARDINAL explain kardinal-test-app --env prod 2>&1)
-  if echo "$OUTPUT" | grep -qi "soak\|upstreamSoak"; then
+  if echo "$OUTPUT" | grep -i "soak\|upstreamSoak" >/dev/null; then
     pass "kardinal explain shows soak gate for prod"
   else
     skip "Soak gate not visible in explain (may require active bundle)"
@@ -256,7 +258,7 @@ fi
 # ── Scenario 7: Pause / resume ────────────────────────────────────────────────
 
 if scenario 7 "Pause / resume pipeline"; then
-  if $KARDINAL pause kardinal-test-app 2>&1 | grep -q "Pipeline kardinal-test-app paused"; then
+  if $KARDINAL pause kardinal-test-app 2>&1 | grep "Pipeline kardinal-test-app paused" >/dev/null; then
     pass "kardinal pause accepted"
   else
     fail "kardinal pause failed"
@@ -275,7 +277,7 @@ for p in json.load(sys.stdin):
     fail "Pipeline spec.paused is not true after kardinal pause"
   fi
 
-  if $KARDINAL resume kardinal-test-app 2>&1 | grep -q "Pipeline kardinal-test-app resumed"; then
+  if $KARDINAL resume kardinal-test-app 2>&1 | grep "Pipeline kardinal-test-app resumed" >/dev/null; then
     pass "kardinal resume accepted"
   else
     fail "kardinal resume failed"
@@ -289,7 +291,7 @@ if scenario 8 "Rollback opens a PR"; then
     skip "Scenario 8 skipped — GITHUB_TOKEN not set (required for GitOps push)"
   else
     OUTPUT=$(timeout 30 $KARDINAL rollback kardinal-test-app --env prod 2>&1)
-    if echo "$OUTPUT" | grep -q "created (rollbackOf="; then
+    if echo "$OUTPUT" | grep "created (rollbackOf=" >/dev/null; then
       pass "kardinal rollback created a rollback Bundle"
     else
       skip "Rollback skipped (requires a promoted bundle in prod). Output: $(echo "$OUTPUT" | head -2)"
@@ -303,7 +305,7 @@ if scenario 9 "CLI completeness"; then
   check_cmd() {
     local cmd="$1"; local expected="$2"
     OUTPUT=$(eval "$KARDINAL $cmd" 2>&1 || true)
-    if echo "$OUTPUT" | grep -qi "$expected"; then
+    if echo "$OUTPUT" | grep -i "$expected" >/dev/null; then
       pass "$KARDINAL $cmd: OK"
     else
       fail "$KARDINAL $cmd: unexpected output. Got: $(echo "$OUTPUT" | head -2)"
@@ -323,7 +325,7 @@ $KARDINAL completion bash &>/dev/null && pass "kardinal completion bash works" |
   # --dry-run flag exists
 $KARDINAL create bundle kardinal-test-app \
     --image ghcr.io/pnz1990/kardinal-test-app:sha-dryrun \
-    --dry-run 2>&1 | grep -qi "dry.run\|DRY.RUN\|preview\|would\|simulate" && \
+    --dry-run 2>&1 | grep -i "dry.run\|DRY.RUN\|preview\|would\|simulate" >/dev/null && \
     pass "kardinal create bundle --dry-run works" || \
     fail "kardinal create bundle --dry-run: unexpected output"
 fi

@@ -173,7 +173,7 @@ info "[1/10] Creating kind clusters..."
 create_kind_cluster() {
   local name="$1"
   local config="$2"
-  if kind get clusters 2>/dev/null | grep -q "^${name}$"; then
+  if kind get clusters 2>/dev/null | grep "^${name}$" >/dev/null; then
     warn "  Cluster '${name}' already exists — skipping create"
   else
     info "  Creating cluster '${name}'..."
@@ -189,7 +189,7 @@ create_kind_cluster "$DEV_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
 if [[ "$USE_EKS" == "true" ]]; then
   info "  EKS prod cluster — using --eks mode..."
   if ! aws eks describe-cluster --name kardinal-e2e-prod --region us-east-2 \
-      --query 'cluster.status' --output text 2>/dev/null | grep -q "ACTIVE"; then
+      --query 'cluster.status' --output text 2>/dev/null | grep "ACTIVE" >/dev/null; then
     info "  Creating EKS cluster via Terraform (this takes ~15 min)..."
     cd "${REPO_ROOT}/terraform/eks-e2e"
     terraform init -input=false

@@ -22,7 +22,7 @@ done
 echo "[teardown] Removing demo clusters..."
 
 for cluster in "$CONTROL_CLUSTER" "$DEV_CLUSTER" "$PROD_CLUSTER"; do
-  if kind get clusters 2>/dev/null | grep -q "^${cluster}$"; then
+  if kind get clusters 2>/dev/null | grep "^${cluster}$" >/dev/null; then
     kind delete cluster --name "$cluster" && echo "  deleted $cluster"
   else
     echo "  $cluster not found — skipping"

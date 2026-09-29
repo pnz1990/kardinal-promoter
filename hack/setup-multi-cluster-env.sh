@@ -53,7 +53,7 @@ echo ""
 
 # Verify EKS cluster is reachable before proceeding
 if ! aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$EKS_REGION" \
-    --query 'cluster.status' --output text 2>/dev/null | grep -q "ACTIVE"; then
+    --query 'cluster.status' --output text 2>/dev/null | grep "ACTIVE" >/dev/null; then
   echo "ERROR: EKS cluster '$EKS_CLUSTER_NAME' not found or not ACTIVE in $EKS_REGION."
   echo "Create it first:"
   echo "  cd terraform/eks-e2e && terraform init && terraform apply"
