@@ -65,12 +65,13 @@ kind: PolicyGate
 metadata:
   name: no-weekend-deploys
   namespace: default
+  labels:
+    kardinal.io/scope: team
+    kardinal.io/applies-to: prod
+    kardinal.io/type: gate
 spec:
-  pipelineRef:
-    name: kardinal-test-app
-  environment: prod
   expression: "!schedule.isWeekend"
-  description: "Block deployments on Saturday and Sunday UTC"
+  message: "Block deployments on Saturday and Sunday UTC"
 ---
 # PolicyGate: require upstream UAT soak of 30 minutes
 apiVersion: kardinal.io/v1alpha1
@@ -78,12 +79,13 @@ kind: PolicyGate
 metadata:
   name: uat-soak-gate
   namespace: default
+  labels:
+    kardinal.io/scope: team
+    kardinal.io/applies-to: prod
+    kardinal.io/type: gate
 spec:
-  pipelineRef:
-    name: kardinal-test-app
-  environment: prod
   expression: "upstream.uat.soakMinutes >= 30"
-  description: "UAT must have been healthy for at least 30 contiguous minutes"
+  message: "UAT must have been healthy for at least 30 contiguous minutes"
 ---
 # PolicyGate: block deployments by dependabot (bundle metadata check)
 apiVersion: kardinal.io/v1alpha1
@@ -91,9 +93,10 @@ kind: PolicyGate
 metadata:
   name: no-bot-deploys
   namespace: default
+  labels:
+    kardinal.io/scope: team
+    kardinal.io/applies-to: prod
+    kardinal.io/type: gate
 spec:
-  pipelineRef:
-    name: kardinal-test-app
-  environment: prod
   expression: 'bundle.provenance.author != "dependabot[bot]"'
-  description: "Do not auto-deploy dependabot bundles to production"
+  message: "Do not auto-deploy dependabot bundles to production"

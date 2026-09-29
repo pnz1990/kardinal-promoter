@@ -16,6 +16,7 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
@@ -232,4 +234,32 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 			}
 		})
 	}
+}
+
+// C09b-cli-06: an override that lands between our read and our write is kept.
+func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
+	calls := 0
+	c := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).
+		WithObjects(makeTestGate("g", "default")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, cl sigs_client.WithWatch, obj sigs_client.Object,
+				patch sigs_client.Patch, opts ...sigs_client.PatchOption) error {
+				calls++
+				if calls == 1 {
+					require.NoError(t, cmd.ExportedOverrideFn(io.Discard, cl, "default", "demo", "", "g",
+						"second operator", "2h"))
+				}
+				return cl.Patch(ctx, obj, patch, opts...)
+			},
+		}).Build()
+
+	require.NoError(t, cmd.ExportedOverrideFn(io.Discard, c, "default", "demo", "prod", "g", "first operator", "1h"))
+
+	var g v1alpha1.PolicyGate
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "g", Namespace: "default"}, &g))
+	var reasons []string
+	for _, o := range g.Spec.Overrides {
+		reasons = append(reasons, o.Reason)
+	}
+	assert.Equal(t, []string{"second operator", "first operator"}, reasons)
 }

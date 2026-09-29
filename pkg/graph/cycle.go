@@ -21,3 +21,12 @@ func DetectCycle(pipeline *kardinalv1alpha1.Pipeline) error {
 	_, _, err := resolveOrdering(pipeline)
 	return err
 }
+
+// EnvironmentDependencies returns each environment's upstream environments
+// as the builder wires them: explicit dependsOn and wave edges, otherwise the
+// previous environment in the list. The CLI uses it to tell a Bundle that is
+// waiting at an environment's gates from one that has not reached it.
+func EnvironmentDependencies(pipeline *kardinalv1alpha1.Pipeline) (map[string][]string, error) {
+	_, deps, err := resolveOrdering(pipeline)
+	return deps, err
+}

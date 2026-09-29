@@ -422,3 +422,12 @@ func (t *Translator) collectGates(ctx context.Context,
 	})
 	return gates, nil
 }
+
+// CollectGates returns the PolicyGate templates Translate passes to the Graph
+// builder for pipeline. policyNS is the controller's --policy-namespaces list
+// (nil means the controller default). The CLI uses it so `kardinal policy
+// simulate` selects exactly the gates the controller would.
+func CollectGates(ctx context.Context, k8s client.Reader, policyNS []string,
+	pipeline *kardinalv1alpha1.Pipeline) ([]kardinalv1alpha1.PolicyGate, error) {
+	return New(nil, nil, k8s, policyNS, zerolog.Nop()).collectGates(ctx, pipeline)
+}

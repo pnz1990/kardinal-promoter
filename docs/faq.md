@@ -138,7 +138,7 @@ upstream gate requirements:
 kardinal approve <bundle-name> --env prod
 ```
 
-See [CLI Reference](cli-reference.md#kardinal-approve) for full options.
+See [kardinal approve](reference/cli/kardinal-approve.md) for full options.
 
 ### How do I pause a promotion mid-flight?
 
@@ -163,10 +163,11 @@ same pipeline, same gates, same audit trail.
 ### How do I see what changed between two promotions?
 
 ```bash
-kardinal diff <pipeline> --env prod
+kardinal diff <bundle-a> <bundle-b>
 ```
 
-Shows the diff between the current prod image and the pending promotion.
+Compares the images (matched by repository) and provenance of two Bundles.
+`kardinal get bundles <pipeline>` lists the Bundle names.
 
 ---
 
@@ -196,10 +197,19 @@ transitions from blocked to allowed, the Graph controller immediately advances.
 ```bash
 kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 # RESULT: BLOCKED
-# no-weekend-deploys: !schedule.isWeekend() evaluated to false
+# Blocked by: no-weekend-deploys
+# Message: "Blocked by no-weekend-deploys"
+# Next window: Monday 00:00 UTC
+#
+# no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
 
-kardinal policy test --file my-gate.yaml
-# PASS: expression is valid CEL
+kardinal policy test my-gate.yaml
+# PolicyGate "no-weekend-deploys" (my-gate.yaml):
+#   Expression: !schedule.isWeekend
+#   Syntax: valid
+#   Result: PASS (!schedule.isWeekend = true)
+#
+# All gates valid and pass current context (1 gate(s))
 ```
 
 ---

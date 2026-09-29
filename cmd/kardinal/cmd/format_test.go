@@ -75,7 +75,7 @@ func TestFormatPipelineTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, steps))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, steps, nil, false))
 	out := buf.String()
 
 	// Header must have per-environment columns.
@@ -118,15 +118,35 @@ func TestFormatPipelineTable_NoSteps(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
 	out := buf.String()
 
-	assert.Contains(t, out, "DEV")
-	assert.Contains(t, out, "PROD")
-	assert.Contains(t, out, "my-pipeline")
-	// Without steps both env columns and bundle should show "-".
-	// Count occurrences of "-" — at least 3 (bundle + 2 envs).
-	assert.GreaterOrEqual(t, strings.Count(out, "-"), 3)
+	row := tableRow(t, out, "my-pipeline")
+	assert.Equal(t, map[string]string{
+		"PIPELINE": "my-pipeline", "BUNDLE": "-", "DEV": "-", "PROD": "-", "AGE": "5m",
+	}, row)
+}
+
+// tableRow returns the cells of the row whose first cell is first, keyed by
+// the header. Cells must not contain spaces.
+func tableRow(t *testing.T, out, first string) map[string]string {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	header := strings.Fields(lines[0])
+	for _, l := range lines[1:] {
+		cells := strings.Fields(l)
+		if len(cells) == 0 || cells[0] != first {
+			continue
+		}
+		require.Len(t, cells, len(header), "row %q vs header %q", l, lines[0])
+		row := map[string]string{}
+		for i, h := range header {
+			row[h] = cells[i]
+		}
+		return row
+	}
+	t.Fatalf("no row %q in:\n%s", first, out)
+	return nil
 }
 
 // TestFormatPipelineTable_MultiPipeline verifies that multiple pipelines with different
@@ -182,7 +202,7 @@ func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, steps))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, steps, nil, false))
 	out := buf.String()
 
 	// Union columns: TEST, PROD from app-a, STAGING from app-b.
@@ -190,15 +210,14 @@ func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
 	assert.Contains(t, out, "STAGING")
 	assert.Contains(t, out, "PROD")
 
-	// app-a has no staging column — its staging cell should be "-".
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	require.GreaterOrEqual(t, len(lines), 3, "need header + 2 data rows")
-	// Find the app-a row.
-	for _, line := range lines[1:] { // skip header
-		if strings.HasPrefix(strings.TrimSpace(line), "app-a") {
-			assert.Contains(t, line, "-", "app-a row must have '-' for missing staging column")
-		}
-	}
+	// app-a has no staging environment: its STAGING cell is "-".
+	a := tableRow(t, out, "app-a")
+	assert.Equal(t, "Verified", a["TEST"])
+	assert.Equal(t, "-", a["STAGING"])
+	assert.Equal(t, "-", a["PROD"])
+	b := tableRow(t, out, "app-b")
+	assert.Equal(t, "-", b["TEST"])
+	assert.Equal(t, "Verified", b["STAGING"])
 }
 
 func TestFormatBundleTable(t *testing.T) {
@@ -399,7 +418,7 @@ func TestFormatPipelineTable_PausedBadge(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "my-pipeline [PAUSED]", "paused pipeline must show [PAUSED] badge in name")
@@ -424,7 +443,7 @@ func TestFormatPipelineTable_NonPausedNoBadge(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
 	out := buf.String()
 
 	assert.NotContains(t, out, "[PAUSED]", "non-paused pipeline must not show [PAUSED] badge")
@@ -493,7 +512,7 @@ func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, steps))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, steps, nil, false))
 	out := buf.String()
 
 	// The table MUST show the new (Promoting) bundle, not the old (Verified) bundle.
@@ -548,9 +567,9 @@ func TestFormatStepsTable_OnePerEnvWhenMultipleBundles(t *testing.T) {
 	}
 }
 
-// TestFormatPipelineTableWithOptions_ShowNamespace verifies that --all-namespaces
+// TestFormatPipelineTableFull_ShowNamespace verifies that --all-namespaces
 // adds a NAMESPACE column to the output.
-func TestFormatPipelineTableWithOptions_ShowNamespace(t *testing.T) {
+func TestFormatPipelineTableFull_ShowNamespace(t *testing.T) {
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -580,7 +599,7 @@ func TestFormatPipelineTableWithOptions_ShowNamespace(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableWithOptions(&buf, pipelines, nil, true))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, true))
 	out := buf.String()
 
 	assert.Contains(t, out, "NAMESPACE", "header must include NAMESPACE column when showNamespace=true")
@@ -588,9 +607,9 @@ func TestFormatPipelineTableWithOptions_ShowNamespace(t *testing.T) {
 	assert.Contains(t, out, "team-beta", "row must include pipeline's namespace")
 }
 
-// TestFormatPipelineTableWithOptions_NoNamespaceByDefault verifies that the
-// default FormatPipelineTable does NOT include a NAMESPACE column.
-func TestFormatPipelineTableWithOptions_NoNamespaceByDefault(t *testing.T) {
+// TestFormatPipelineTableFull_NoNamespaceByDefault verifies that the
+// pipeline table does NOT include a NAMESPACE column.
+func TestFormatPipelineTableFull_NoNamespaceByDefault(t *testing.T) {
 	now := time.Now()
 	pipelines := []v1alpha1.Pipeline{
 		{
@@ -606,7 +625,7 @@ func TestFormatPipelineTableWithOptions_NoNamespaceByDefault(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTable(&buf, pipelines, nil))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
 	out := buf.String()
 
 	assert.NotContains(t, out, "NAMESPACE", "default table must not include NAMESPACE column")
@@ -638,7 +657,7 @@ func TestFormatBundleErrors_FailedBundle_ShowsError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "ERROR:", "output must contain ERROR: prefix")
@@ -658,7 +677,7 @@ func TestFormatBundleErrors_NoFailedBundles_NoOutput(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles, false))
 	assert.Empty(t, buf.String(), "no output expected when no bundles are Failed")
 }
 
@@ -666,7 +685,7 @@ func TestFormatBundleErrors_NoFailedBundles_NoOutput(t *testing.T) {
 // produces no output.
 func TestFormatBundleErrors_EmptyList_NoOutput(t *testing.T) {
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatBundleErrors(&buf, nil))
+	require.NoError(t, cmd.FormatBundleErrors(&buf, nil, false))
 	assert.Empty(t, buf.String(), "no output expected for empty bundle list")
 }
 
@@ -692,7 +711,7 @@ func TestFormatBundleErrors_CircularDependency(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "ERROR:", "output must contain ERROR: prefix")
@@ -727,10 +746,157 @@ func TestFormatBundleErrors_DuplicatePipeline_Deduplicates(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles))
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles, false))
 	out := buf.String()
 
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	assert.Len(t, lines, 1, "only one error line per pipeline (deduplication)")
 	assert.Contains(t, out, "my-app", "pipeline name must appear in deduplicated output")
+}
+
+// C09a-cli-16: the most recent Failed bundle per namespace/pipeline wins, and
+// -A shows the namespace.
+func TestFormatBundleErrors_MostRecentPerNamespacedPipeline(t *testing.T) {
+	now := time.Now()
+	failed := func(ns, name string, age time.Duration, reason, msg string) v1alpha1.Bundle {
+		return v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(now.Add(-age))},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "web"},
+			Status: v1alpha1.BundleStatus{Phase: "Failed", Conditions: []metav1.Condition{
+				{Type: "Failed", Status: metav1.ConditionTrue, Reason: reason, Message: msg},
+			}},
+		}
+	}
+	bundles := []v1alpha1.Bundle{
+		failed("team-a", "web-aaaaa", 2*time.Hour, "TranslationError", "OLD error (already fixed)"),
+		failed("team-a", "web-zzzzz", time.Minute, "TranslationError", "NEW error"),
+		failed("team-b", "web-bbbbb", time.Hour, "TranslationError", "team-b error"),
+	}
+	bundles[2].Status.Conditions = append(bundles[2].Status.Conditions, metav1.Condition{
+		Type: "Failed", Status: metav1.ConditionTrue, Reason: "CircularDependency", Message: "cycle uat -> prod -> uat",
+	})
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles, true))
+	assert.Equal(t, "ERROR: pipeline team-a/web: NEW error\n"+
+		"ERROR: pipeline team-b/web: cycle uat -> prod -> uat\n", buf.String())
+
+	buf.Reset()
+	require.NoError(t, cmd.FormatBundleErrors(&buf, bundles[:2], false))
+	assert.Equal(t, "ERROR: pipeline web: NEW error\n", buf.String())
+}
+
+// Only cause conditions (InvalidSpec, Failed) give the message; a True
+// GraphSynced condition listed first does not hide the failure.
+func TestFormatBundleErrors_OnlyCauseConditions(t *testing.T) {
+	cond := func(typ, reason, msg string) metav1.Condition {
+		return metav1.Condition{Type: typ, Status: metav1.ConditionTrue, Reason: reason, Message: msg}
+	}
+	cases := []struct {
+		name  string
+		conds []metav1.Condition
+		want  string
+	}{
+		{"step failed", []metav1.Condition{
+			cond("GraphSynced", "Synced", "graph is current"),
+			cond("Failed", "StepFailed", "prod: health check failed"),
+		}, "prod: health check failed"},
+		{"invalid spec before failed", []metav1.Condition{
+			cond("GraphSynced", "Synced", "graph is current"),
+			cond("Failed", "GraphRejected", "graph rejected"),
+			cond("InvalidSpec", "PipelineNotFound", `pipeline "web" not found`),
+		}, `pipeline "web" not found`},
+		{"no cause condition", []metav1.Condition{
+			cond("GraphSynced", "Synced", "graph is current"),
+		}, "promotion failed — run `kubectl describe bundle web-1` for details"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := v1alpha1.Bundle{
+				ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default"},
+				Spec:       v1alpha1.BundleSpec{Pipeline: "web"},
+				Status:     v1alpha1.BundleStatus{Phase: "Failed", Conditions: tc.conds},
+			}
+			var buf bytes.Buffer
+			require.NoError(t, cmd.FormatBundleErrors(&buf, []v1alpha1.Bundle{b}, false))
+			assert.Equal(t, "ERROR: pipeline web: "+tc.want+"\n", buf.String())
+		})
+	}
+}
+
+// C09a-cli-07: with -A, same-named pipelines in different namespaces keep their
+// own bundle, environment state and subscription count.
+func TestFormatPipelineTableFull_AllNamespacesNoCrossTalk(t *testing.T) {
+	now := time.Now()
+	pipe := func(ns string) v1alpha1.Pipeline {
+		return v1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: ns, CreationTimestamp: metav1.NewTime(now)},
+			Spec:       v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "prod"}}},
+		}
+	}
+	step := func(ns, bundle, state string) v1alpha1.PromotionStep {
+		return v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundle + "-prod", Namespace: ns, CreationTimestamp: metav1.NewTime(now)},
+			Spec:       v1alpha1.PromotionStepSpec{PipelineName: "web", BundleName: bundle, Environment: "prod"},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	sub := v1alpha1.Subscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "team-a"},
+		Spec:       v1alpha1.SubscriptionSpec{Pipeline: "web"},
+		Status:     v1alpha1.SubscriptionStatus{Phase: "Watching"},
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf,
+		[]v1alpha1.Pipeline{pipe("team-a"), pipe("team-b")},
+		[]v1alpha1.PromotionStep{step("team-a", "web-a1", "Verified"), step("team-b", "web-b1", "Failed")},
+		[]v1alpha1.Subscription{sub}, true))
+
+	rows := map[string][]string{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n")[1:] {
+		f := strings.Fields(line)
+		rows[f[0]] = f[1:5]
+	}
+	assert.Equal(t, []string{"web", "web-a1", "Verified", "1"}, rows["team-a"])
+	assert.Equal(t, []string{"web", "web-b1", "Failed", "0"}, rows["team-b"])
+}
+
+// C09a-cli-12: every PromotionStep state has a priority; in-flight states
+// (including RollingBack) beat Pending, which beats Verified. A newer
+// AbortedByAlarm (post-merge) step beats an older Verified one; Failed does not.
+func TestStepStatePriority_AllStates(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		newer string
+		want  string
+	}{
+		{"RollingBack", "RollingBack"},
+		{"AbortedByAlarm", "AbortedByAlarm"},
+		{"Failed", "Verified"},
+		{"Promoting", "Promoting"},
+		{"WaitingForMerge", "WaitingForMerge"},
+		{"HealthChecking", "HealthChecking"},
+		{"Pending", "Pending"},
+		{"Verified", "Verified"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.newer, func(t *testing.T) {
+			steps := []v1alpha1.PromotionStep{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "old", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+					Spec:       v1alpha1.PromotionStepSpec{Environment: "prod", StepType: "old-step"},
+					Status:     v1alpha1.PromotionStepStatus{State: "Verified"},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "new", CreationTimestamp: metav1.NewTime(now)},
+					Spec:       v1alpha1.PromotionStepSpec{Environment: "prod", StepType: "new-step"},
+					Status:     v1alpha1.PromotionStepStatus{State: tc.newer},
+				},
+			}
+			var buf bytes.Buffer
+			require.NoError(t, cmd.FormatStepsTable(&buf, steps))
+			assert.Contains(t, buf.String(), " "+tc.want+" ", buf.String())
+		})
+	}
 }

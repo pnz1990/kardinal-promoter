@@ -66,12 +66,10 @@ kardinal get pipelines
 
 # 3. Check what's gating prod
 kardinal explain kardinal-test-app --env prod
-# PIPELINE: kardinal-test-app
-# ENV: prod
-# GATES:
-#   no-weekend-deploys  !schedule.isWeekend          ALLOWED  (today is Wednesday)
-#   uat-soak-gate       upstream.uat.soakMinutes>=30  WAITING  (UAT at 12 min)
-#   no-bot-deploys      bundle.provenance.author!=... ALLOWED  (author: your-alias)
+# ENVIRONMENT   TYPE         NAME                 STATE   EXPRESSION                                      REASON
+# prod          PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true
+# prod          PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-abc1234: !schedule.isWeekend = true
+# prod          PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = false
 
 # 4. After UAT bake completes (30+ min), prod PR opens automatically
 # The PR body includes:
@@ -90,20 +88,23 @@ gh pr merge <PR_NUMBER> --repo pnz1990/kardinal-demo --squash
 
 ```bash
 # Test the weekend gate
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 2pm UTC"
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 2pm" --soak-minutes 45
 # RESULT: BLOCKED
-# GATE: no-weekend-deploys — schedule.isWeekend=true
+# Blocked by: no-weekend-deploys
+# Message: "Block deployments on Saturday and Sunday UTC"
+# Next window: Monday 00:00 UTC
+#
+# no-bot-deploys:       PASS    (bundle.provenance.author != "dependabot[bot]" = true)
+# no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
+# uat-soak-gate:        PASS    (upstream.uat.soakMinutes >= 30 = true)
 
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am UTC"
-# RESULT: ALLOWED
-# All 3 gates ALLOWED
-
-# Test with dependabot author
-kardinal policy simulate --pipeline kardinal-test-app --env prod \
-  --author "dependabot[bot]"
-# RESULT: BLOCKED
-# GATE: no-bot-deploys — bundle.provenance.author="dependabot[bot]"
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" --soak-minutes 45
+# RESULT: PASS
 ```
+
+`--time` is UTC. `--soak-minutes` sets the soak time of every upstream
+environment (default 0, which blocks `uat-soak-gate`). The simulated Bundle has
+no provenance author, so `no-bot-deploys` always passes in a simulation.
 
 ## Emergency Override
 
