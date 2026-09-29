@@ -62,15 +62,14 @@ Output: a filtered list of environment names to include in the Graph.
 
 ### Step 3: Validate skip permissions
 
+Implemented in `pkg/graph/skip.go` (`ValidateSkipPermissions`, `skipPermissionGates`).
+
 For each environment in `intent.skipEnvironments`:
 
-1. Collect all org-level PolicyGates (`kardinal.io/scope: org`) that match this environment via `kardinal.io/applies-to`.
-2. If any org gate applies, check for a SkipPermission PolicyGate:
-   - Scan PolicyGates with `kardinal.io/type: skip-permission` and `kardinal.io/applies-to` matching the skipped environment.
-   - Evaluate the SkipPermission's CEL expression against the Bundle context (synchronously, at translation time).
-   - If the expression evaluates to `true`, the skip is permitted.
-   - If no SkipPermission exists or all evaluate to `false`, the skip is denied.
-3. If denied: set Bundle `status.phase = "SkipDenied"` with reason. Do not create a Graph. Return.
+1. Collect the org gates that apply to it through `kardinal.io/applies-to`. An org gate is a gate in an org policy namespace (`--policy-namespaces`) or one labelled `kardinal.io/scope: org`.
+2. If any org gate applies, the skip needs a permission: a PolicyGate labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`, **in an org policy namespace**. A gate in the Pipeline's namespace or in `spec.policyNamespaces` never grants a skip, even when labelled `scope: org`.
+3. If no permission exists, Build returns `skip denied for environment "<env>": ...` (wrapping `graph.ErrInvalid`). No Graph is created and the Bundle goes to phase `Failed` with the reason in its conditions.
+4. If a permission exists, its expression is not evaluated at translation time (the translator has no CEL). Instead an instance of the permission gate (annotated `kardinal.io/skipped-environments`) is put in front of each kept environment that depended on the skipped one. The PolicyGate reconciler evaluates it like any gate, and that environment waits until the expression is true.
 
 ### Step 4: Collect and match PolicyGates
 
@@ -120,7 +119,6 @@ For each environment in the filtered list (in dependency order):
       approval: <environment.approval>
       health: <environment.health>
       delivery: <environment.delivery>
-      steps: <environment.steps>           # if custom steps specified
       upstreamVerified: ${<upstream-env>.status.state}   # creates dependency edge
       requiredGates: [...]                               # filled in Step 6
 ```
@@ -224,9 +222,9 @@ Test cases for `translator.go`:
 3. Fan-out pipeline (staging -> [prod-us, prod-eu]): verify parallel nodes with shared dependency on staging.
 4. intent.targetEnvironment = staging: verify only dev and staging nodes, no prod.
 5. intent.skipEnvironments = [staging] with SkipPermission: verify staging removed, dev -> prod directly.
-6. intent.skipEnvironments = [staging] without SkipPermission: verify Bundle set to SkipDenied.
+6. intent.skipEnvironments = [staging] without SkipPermission: verify Build fails with `skip denied` (ErrInvalid); with one, verify the permission instance holds prod.
 7. Pipeline with shard on prod: verify shard label on prod PromotionStep.
-8. Pipeline with custom steps on prod: verify steps field on prod PromotionStep.
+8. Pipeline with custom steps or a promotionTemplate on prod: verify Build rejects it (not implemented yet).
 9. Config Bundle: verify different default step sequence (config-merge instead of kustomize-set-image).
 10. Empty Pipeline: verify error.
 11. Circular dependency: verify error.

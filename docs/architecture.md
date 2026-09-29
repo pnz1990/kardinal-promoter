@@ -103,6 +103,8 @@ Built-in step implementations:
 | `integration-test` | Runs a Kubernetes Job as part of the promotion; waits for completion |
 | `custom-step` | Calls a user-defined webhook with the promotion context |
 
+Only the steps of the default sequence run today. `integration-test`, `verify-image` and webhook steps can be selected only through `spec.environments[].steps`, which is not implemented yet: a Pipeline that sets it is rejected (see [Custom Steps](custom-steps.md)).
+
 ### PolicyGate Evaluator (`pkg/reconciler/policygate`)
 
 Evaluates CEL expressions against the promotion context. Uses the

@@ -103,11 +103,12 @@ labels:
   kardinal.io/applies-to: staging,prod             # blocks staging and prod
 ```
 
-The controller scans:
-1. The `--policy-namespaces` flag namespaces (default: `platform-policies`)
-2. The Pipeline's own namespace
+The controller reads gates from these places:
+1. The `--policy-namespaces` flag namespaces (default: `platform-policies`). These are the org policy namespaces.
+2. The Pipeline's own namespace.
+3. Any namespaces listed in the Pipeline's `spec.policyNamespaces`.
 
-All matching PolicyGates from both sources are injected into the Graph.
+Every matching PolicyGate from all three is added to the Graph. `spec.policyNamespaces` can only add namespaces; the org policy namespaces are read whatever it says. A gate from the Pipeline's namespace or from `spec.policyNamespaces` is a team gate, unless it is labelled `kardinal.io/scope: org`. Either way, it can never grant a skip (see [Skip Permissions](#skip-permissions)).
 
 ## CEL Context
 
@@ -337,7 +338,14 @@ expression: |
 
 ## Skip Permissions
 
-When a Bundle's `intent.skip` lists an environment, the controller checks whether the skip is permitted. If any org-level PolicyGate applies to the skipped environment, the skip is denied unless a SkipPermission PolicyGate explicitly allows it.
+A Bundle can skip environments with `intent.skipEnvironments`. When an org-level gate applies to a skipped environment, the skip needs a skip-permission gate. The permission counts only if it meets all of these conditions:
+
+- it is labelled `kardinal.io/type: skip-permission`;
+- it sets `spec.skipPermission: true`;
+- it applies to the skipped environment through `kardinal.io/applies-to`;
+- it lives in an org policy namespace (`--policy-namespaces`, default `platform-policies`).
+
+A gate in a team namespace can never grant a skip, even if it is labelled `kardinal.io/scope: org`. The same holds for a namespace a Pipeline adds with `spec.policyNamespaces`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -346,17 +354,19 @@ metadata:
   name: allow-staging-skip-for-hotfix
   namespace: platform-policies
   labels:
-    kardinal.io/scope: org
     kardinal.io/type: skip-permission
     kardinal.io/applies-to: staging
 spec:
-  expression: "bundle.labels.hotfix == true"
-  message: "Hotfix bundles may skip staging"
+  skipPermission: true
+  expression: 'bundle.version.startsWith("hotfix-")'
+  message: "Only hotfix bundles may skip staging"
 ```
 
-Skip permissions are evaluated synchronously before the Graph is created. If denied, the Bundle's status is set to `SkipDenied` with a reason message. The Bundle does not promote.
+The controller checks for the permission when it builds the Bundle's Graph. If no permission exists, the Bundle goes to phase `Failed`, and its status conditions give the reason: `skip denied for environment "staging": ...`. The Bundle does not promote.
 
-Without any SkipPermission PolicyGate, skipping an environment that has org gates is always denied.
+If a permission exists, the controller evaluates its expression like any other gate. It creates an instance of the permission gate in front of the next environment the Bundle promotes. That environment, `prod` in a `test → staging → prod` pipeline, waits until the expression is true. It never starts for a Bundle the permission does not cover. `kardinal explain` shows the instance with the other gates of that environment. The instance is annotated `kardinal.io/skipped-environments: staging`. If the skipped environment is the last one, nothing comes after it, so nothing waits on the permission.
+
+Without a skip-permission gate, skipping an environment that has org gates is always denied. An environment that only team gates apply to can be skipped without a permission.
 
 ## Re-evaluation
 
@@ -380,10 +390,10 @@ PolicyGates are re-evaluated when any of the following occurs:
 5. **Gate spec change** — Editing a gate's `spec` re-evaluates it. The controller's own status
    writes do not.
 
-The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph only checks
-`status.ready == true`: it does not check how recent the evaluation is. While the controller is
-down, every gate keeps its last result, so a gate that was ready before the outage stays ready
-until the controller re-evaluates it. The controller re-evaluates every gate when it starts.
+The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph and the
+dependent PromotionStep only read `status.ready`: they do not check how recent the evaluation
+is. While the controller is down, every gate keeps its last result, so a gate that was ready
+before the outage stays ready until the controller re-evaluates it. The controller re-evaluates every gate when it starts.
 `kardinal policy list`, `kardinal status` and the UI show when each gate was last evaluated, so a
 stale result is visible.
 
@@ -440,7 +450,7 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
   --reason "P0 hotfix — incident #4521" --expires-in 2h
 ```
 
-The override adds a `PolicyGateOverride` entry to `PolicyGate.spec.overrides[]`. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
+`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's Bundles have created for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates when a Bundle reaches the gate, so run the override while the Bundle waits on the gate. If no instance exists yet, the command fails and says so; it does not write to the template. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
 - `kubectl get policygate <name> -o yaml`
 - PR evidence body (OVERRIDDEN badge in policy compliance table)
 - `kardinal explain` output

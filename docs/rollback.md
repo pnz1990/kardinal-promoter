@@ -93,24 +93,16 @@ The rollback commit is a new commit, not a `git revert`. The history is always a
 
 Rollback Bundles go through the same PolicyGate evaluation as forward promotions. If the `no-weekend-deploys` gate is active and it is a weekend, the rollback PR will also be blocked.
 
-For environments where rollback should bypass time-based gates, the platform team can create a SkipPermission PolicyGate that permits rollback Bundles:
+Rollback Bundles have no gate exemption. A skip-permission gate does not help: it only lets a Bundle skip an environment through `intent.skipEnvironments`, and a rollback does not skip the environment it rolls back.
 
-```yaml
-apiVersion: kardinal.io/v1alpha1
-kind: PolicyGate
-metadata:
-  name: allow-rollback-on-weekends
-  namespace: platform-policies
-  labels:
-    kardinal.io/scope: org
-    kardinal.io/type: skip-permission
-    kardinal.io/applies-to: prod
-spec:
-  expression: "bundle.labels.rollback == true"
-  message: "Rollback bundles are permitted on weekends"
+To let a rollback through a blocking gate, use a break-glass override. It is time-limited and recorded in the audit trail:
+
+```bash
+kardinal override my-app --stage prod --gate no-weekend-deploys \
+  --reason "Rollback of v1.29.0 — incident #4521" --expires-in 1h
 ```
 
-The rollback CLI sets `bundle.labels.rollback: "true"` on the generated Bundle.
+See [Emergency Overrides](policy-gates.md#emergency-overrides-k-09).
 
 ## Rollback History
 

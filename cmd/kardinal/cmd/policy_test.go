@@ -236,7 +236,10 @@ func TestPolicySimulate_PolicyNamespaces(t *testing.T) {
 	}{
 		{name: "controller default", pipeline: policyPipeline("demo", "test", "prod"), want: []string{"platform-gate"}},
 		{name: "controller flag", pipeline: policyPipeline("demo", "test", "prod"), flag: []string{"flag-policies"}, want: []string{"flag-gate"}},
-		{name: "pipeline spec wins", pipeline: custom, flag: []string{"flag-policies"}, want: []string{"custom-gate"}},
+		// spec.policyNamespaces adds to the controller's namespaces; it does
+		// not replace them, so a Pipeline cannot opt out of org policy.
+		{name: "pipeline spec adds to default", pipeline: custom, want: []string{"platform-gate", "custom-gate"}},
+		{name: "pipeline spec adds to flag", pipeline: custom, flag: []string{"flag-policies"}, want: []string{"flag-gate", "custom-gate"}},
 	}
 	all := []string{"platform-gate", "custom-gate", "flag-gate"}
 	for _, tt := range tests {

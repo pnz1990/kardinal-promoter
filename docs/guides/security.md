@@ -55,7 +55,7 @@ rules:
     verbs: ["get", "create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "create", "update", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     resourceNames: ["kardinal-graph-applier", "kardinal-graph-reader"]

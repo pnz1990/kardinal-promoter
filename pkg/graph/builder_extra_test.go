@@ -77,7 +77,7 @@ func TestBuilder_MultipleUpstreams(t *testing.T) {
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.NoError(t, err)
-	// 3 envs × (1 PRStatus + 1 PromotionStep) = 6
+	// 1 Bundle ref + 3 envs × (1 PRStatus + 1 PromotionStep) = 7
 	assert.Equal(t, 7, result.NodeCount)
 
 	nodeMap := nodeByID(result.Graph.Spec.Nodes)
@@ -113,7 +113,7 @@ func TestBuilder_GateInMultipleEnvs(t *testing.T) {
 		PolicyGates: []kardinalv1alpha1.PolicyGate{gate},
 	})
 	require.NoError(t, err)
-	// 2 PromotionStep + 2 PRStatus Watch + 2 PolicyGate (one per env) = 6 nodes
+	// 1 Bundle ref + 2 PromotionStep + 2 PRStatus + 2 PolicyGate (one per env) = 7 nodes
 	assert.Equal(t, 7, result.NodeCount)
 }
 
