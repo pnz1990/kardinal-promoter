@@ -86,11 +86,8 @@ func policyListFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Clien
 
 	// Filter out Graph-managed per-bundle instances (stamped with kardinal.io/bundle
 	// by the graph builder). User-defined template PolicyGates in namespaces like
-	// platform-policies do not have this label.
-	//
-	// Note: krocodile ≤9c18aa34 also stamped internal.kro.run/graph-name on managed
-	// resources; that label is gone in krocodile e082fe9+ (replaced by DNS-subdomain
-	// identity labels). The kardinal.io/bundle guard is sufficient on all versions.
+	// platform-policies do not have this label. kro itself adds no ownership
+	// label kardinal can rely on, so kardinal.io/bundle is the only guard.
 	var templateGates []v1alpha1.PolicyGate
 	for _, g := range gates.Items {
 		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
