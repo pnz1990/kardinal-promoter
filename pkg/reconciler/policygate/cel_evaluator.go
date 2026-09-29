@@ -95,23 +95,17 @@ func newEvaluator() (*evaluator, error) {
 		// Returns true when the named ChangeWindow is NOT currently blocking.
 		// Equivalent to: !changewindow["name"]
 		// Example: changewindow.isAllowed("business-hours") — passes during business hours
+		// An unknown window name is an evaluation error, so the gate fails closed.
 		goccel.Function("isAllowed",
 			goccel.MemberOverload(
 				"changewindow_isAllowed_string",
 				[]*goccel.Type{goccel.DynType, goccel.StringType},
 				goccel.BoolType,
 				goccel.BinaryBinding(func(mapVal ref.Val, nameVal ref.Val) ref.Val {
-					name, ok := nameVal.Value().(string)
-					if !ok {
-						return types.Bool(false)
+					active, errVal := changeWindowActive(mapVal, nameVal)
+					if errVal != nil {
+						return errVal
 					}
-					cwMap, ok := mapVal.Value().(map[string]interface{})
-					if !ok {
-						// changewindow variable is not a map — fail-closed (deny).
-						return types.Bool(false)
-					}
-					active, _ := cwMap[name].(bool)
-					// isAllowed → window must NOT be active (blocking).
 					return types.Bool(!active)
 				}),
 			),
@@ -120,23 +114,17 @@ func newEvaluator() (*evaluator, error) {
 		// Returns true when the named ChangeWindow IS currently blocking.
 		// Equivalent to: changewindow["name"]
 		// Example: !changewindow.isBlocked("holiday-freeze") — passes when freeze is not active
+		// An unknown window name is an evaluation error, so the gate fails closed.
 		goccel.Function("isBlocked",
 			goccel.MemberOverload(
 				"changewindow_isBlocked_string",
 				[]*goccel.Type{goccel.DynType, goccel.StringType},
 				goccel.BoolType,
 				goccel.BinaryBinding(func(mapVal ref.Val, nameVal ref.Val) ref.Val {
-					name, ok := nameVal.Value().(string)
-					if !ok {
-						return types.Bool(false)
+					active, errVal := changeWindowActive(mapVal, nameVal)
+					if errVal != nil {
+						return errVal
 					}
-					cwMap, ok := mapVal.Value().(map[string]interface{})
-					if !ok {
-						// changewindow variable is not a map — fail-closed (active/blocked).
-						return types.Bool(true)
-					}
-					active, _ := cwMap[name].(bool)
-					// isBlocked → window is active (blocking).
 					return types.Bool(active)
 				}),
 			),
@@ -149,6 +137,30 @@ func newEvaluator() (*evaluator, error) {
 		env:   env,
 		cache: make(map[string]goccel.Program),
 	}, nil
+}
+
+// changeWindowActive looks up a ChangeWindow by name in the changewindow context
+// map. It returns a CEL error value when the context is not a map or the name is
+// not a ChangeWindow that exists in the cluster: a typo or a deleted window must
+// block the gate, not silently allow it (C04-gates-31).
+func changeWindowActive(mapVal, nameVal ref.Val) (bool, ref.Val) {
+	name, ok := nameVal.Value().(string)
+	if !ok {
+		return false, types.NewErr("changewindow: window name must be a string, got %s", nameVal.Type().TypeName())
+	}
+	cwMap, ok := mapVal.Value().(map[string]interface{})
+	if !ok {
+		return false, types.NewErr("changewindow: context is not available")
+	}
+	raw, found := cwMap[name]
+	if !found {
+		return false, types.NewErr("changewindow: unknown ChangeWindow %q", name)
+	}
+	active, ok := raw.(bool)
+	if !ok {
+		return false, types.NewErr("changewindow: ChangeWindow %q has no active state", name)
+	}
+	return active, nil
 }
 
 // evaluate compiles (or retrieves from cache) and evaluates the CEL expression

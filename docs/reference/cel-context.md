@@ -13,6 +13,7 @@ This page documents every variable available in `PolicyGate` CEL expressions. Th
 | `environment` | map | The target environment |
 | `upstream` | map | Per-environment soak data from upstream |
 | `metrics` | map | MetricCheck results from the same namespace |
+| `changewindow` | map | ChangeWindow name → `true` while the window is active (blocking); also `changewindow.isBlocked("name")` and `changewindow.isAllowed("name")`. An unknown name blocks the gate. See [ChangeWindow attributes](../policy-gates.md#changewindow-attributes-k-04) |
 
 ---
 

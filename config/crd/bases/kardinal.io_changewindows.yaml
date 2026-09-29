@@ -34,9 +34,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          ChangeWindow defines a time window during which promotions are blocked (K-04).
-          When active, all pipeline promotions in the cluster are blocked by PolicyGates
-          using the changewindow.isBlocked() CEL function.
+          ChangeWindow defines a cluster-scoped time window during which promotions are
+          blocked (K-04). A ChangeWindow blocks nothing by itself: a PolicyGate blocks
+          while a window it references is active, for example
+          !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours").
+          A gate that names a ChangeWindow that does not exist blocks.
         properties:
           apiVersion:
             description: |-
@@ -73,16 +75,23 @@ spec:
                   allowedDays:
                     description: |-
                       AllowedDays lists the days of the week when promotions are allowed.
-                      Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun.
+                      Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun (full names such as Monday
+                      are accepted too). Empty means every day.
                     items:
                       type: string
                     type: array
                   allowedHours:
-                    description: AllowedHours is a time range in "HH:MM-HH:MM" format
-                      (24h, local time).
+                    description: |-
+                      AllowedHours is a time range in "HH:MM-HH:MM" format (24h, in Timezone).
+                      The start is inclusive and the end exclusive; "24:00" is allowed as the end.
+                      An end before the start is an overnight range that belongs to the start day
+                      (for example "22:00-02:00" on Fri allows Friday 22:00 to Saturday 02:00).
+                      Empty means the whole day.
+                    pattern: ^([01][0-9]|2[0-3]):[0-5][0-9]-(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$
                     type: string
                   timezone:
-                    description: Timezone is the IANA timezone name (e.g. "America/Los_Angeles").
+                    description: 'Timezone is the IANA timezone name (e.g. "America/Los_Angeles").
+                      Default: UTC.'
                     type: string
                 type: object
               start:
@@ -93,8 +102,11 @@ spec:
               type:
                 description: |-
                   Type is the ChangeWindow type.
-                  "blackout": no promotions allowed between Start and End.
-                  "recurring": promotions allowed only during AllowedDays/AllowedHours windows.
+                  "blackout": the window is active (blocking) from Start (inclusive) to End (exclusive).
+                  "recurring": Schedule describes when promotions are allowed; the window is
+                  active (blocking) at every other time.
+                  An invalid spec (for example End not after Start, an unknown timezone or a
+                  malformed allowedHours) makes the window active, so gates that reference it block.
                 enum:
                 - blackout
                 - recurring
@@ -102,13 +114,20 @@ spec:
             required:
             - type
             type: object
+            x-kubernetes-validations:
+            - message: a blackout ChangeWindow requires start and end
+              rule: self.type != 'blackout' || (has(self.start) && has(self.end))
+            - message: a recurring ChangeWindow requires schedule
+              rule: self.type != 'recurring' || has(self.schedule)
           status:
             description: ChangeWindowStatus defines the observed state of a ChangeWindow.
             properties:
               active:
                 description: |-
-                  Active is true when the ChangeWindow is currently in effect.
-                  Updated by the controller on each reconcile cycle.
+                  Active is true when the ChangeWindow is currently blocking promotions.
+                  Written by the ChangeWindow reconciler, which requeues at the next window
+                  boundary. PolicyGates evaluate the spec at their own evaluation time with
+                  the same logic, so they never depend on this field being fresh.
                 type: boolean
               reason:
                 description: Reason explains the current active/inactive state.

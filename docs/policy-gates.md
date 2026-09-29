@@ -195,18 +195,60 @@ When no PRStatus exists for the named stage (e.g. the `open-pr` step has not run
 
 ### ChangeWindow attributes (K-04)
 
-The `changewindow` variable is a map populated from all `ChangeWindow` CRDs in the cluster.
-Active windows evaluate to `true`; inactive windows evaluate to `false`.
+A `ChangeWindow` is a cluster-scoped object that describes when promotions are blocked.
+It blocks nothing by itself: a PolicyGate blocks while a window it references is active.
+Reference windows from an org-level gate to freeze every pipeline with one object.
 
-Two equivalent syntaxes are available:
+```yaml
+# A one-off freeze: active from start (inclusive) to end (exclusive)
+apiVersion: kardinal.io/v1alpha1
+kind: ChangeWindow
+metadata:
+  name: q4-holiday-freeze        # cluster-scoped: no namespace
+spec:
+  type: blackout
+  start: "2026-12-20T00:00:00Z"
+  end: "2027-01-02T00:00:00Z"
+  reason: "Q4 holiday freeze"
+---
+# A recurring allowed window: active (blocking) outside Mon-Fri 09:00-17:00 in Los Angeles
+apiVersion: kardinal.io/v1alpha1
+kind: ChangeWindow
+metadata:
+  name: business-hours
+spec:
+  type: recurring
+  schedule:
+    timezone: America/Los_Angeles  # IANA name, default UTC
+    allowedDays: [Mon, Tue, Wed, Thu, Fri]  # empty = every day
+    allowedHours: "09:00-17:00"    # HH:MM-HH:MM, end exclusive; "24:00" allowed as end; empty = all day
+```
+
+For `recurring`, `schedule` lists when promotions are **allowed**; the window is active
+(blocking) at every other time. An overnight range such as `"22:00-02:00"` belongs to the
+day it starts on. A ChangeWindow with an invalid spec (end not after start, an unknown
+timezone, an unknown day name) is treated as active, so gates that reference it block;
+`kubectl get changewindows` shows the reason.
+
+The controller writes `status.active` and `status.reason` at every window boundary, and that
+write re-evaluates the gates that reference a window. Gates evaluate the window spec at their
+own evaluation time, so they never rely on a stale status.
+
+The `changewindow` variable maps each ChangeWindow name to whether it is active. Two
+equivalent syntaxes are available:
 
 | Syntax | Returns | Description |
 |---|---|---|
 | `changewindow["window-name"]` | bool | `true` when the window is currently active (blocking) |
 | `changewindow.isBlocked("window-name")` | bool | Same as above — method-call alias |
-| `changewindow.isAllowed("window-name")` | bool | `true` when the window is NOT active (passes during active window) |
+| `changewindow.isAllowed("window-name")` | bool | `true` when the window is NOT active |
 
-If the named window does not exist, `isBlocked` returns `false` and `isAllowed` returns `true` (fail-open for missing windows).
+Gates fail closed:
+
+- If the named window does not exist, every syntax is an evaluation error and the gate blocks
+  (`unknown ChangeWindow "..."`). A typo or a deleted window never allows a promotion.
+- If the controller cannot list ChangeWindows (for example missing RBAC), gates that
+  reference `changewindow` block with `context error: changewindow: list ChangeWindows: ...`.
 
 Examples:
 
@@ -217,8 +259,8 @@ expression: '!changewindow.isBlocked("q4-holiday-freeze")'
 # Equivalent legacy syntax
 expression: '!changewindow["q4-holiday-freeze"]'
 
-# Require no active freeze window
-expression: 'changewindow.isAllowed("q4-holiday-freeze") && schedule.hour >= 9 && schedule.hour < 17'
+# Only promote inside business hours, and never during the freeze
+expression: 'changewindow.isAllowed("business-hours") && !changewindow.isBlocked("q4-holiday-freeze")'
 ```
 
 ### Planned attributes (not yet available)

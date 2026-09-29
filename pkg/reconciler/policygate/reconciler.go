@@ -24,6 +24,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -297,6 +298,17 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	}
 	bundleCtx["pr"] = prCtx
 
+	// ChangeWindows are only listed when the expression references them, so a
+	// List failure blocks exactly the gates that depend on a window (fail closed).
+	cwCtx := map[string]interface{}{}
+	if strings.Contains(gate.Spec.Expression, "changewindow") {
+		var cwErr error
+		cwCtx, cwErr = r.buildChangeWindowContext(ctx, now)
+		if cwErr != nil {
+			return nil, version, fmt.Errorf("changewindow: %w", cwErr)
+		}
+	}
+
 	return map[string]interface{}{
 		"bundle": bundleCtx,
 		"schedule": map[string]interface{}{
@@ -309,7 +321,7 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		},
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
-		"changewindow": r.buildChangeWindowContext(ctx, now),
+		"changewindow": cwCtx,
 	}, version, nil
 }
 
@@ -514,41 +526,40 @@ func sortBundlesByCreationDesc(bundles []kardinalv1alpha1.Bundle) []kardinalv1al
 	return out
 }
 
-// buildChangeWindowContext lists all ChangeWindow objects cluster-wide and
+// buildChangeWindowContext lists all ChangeWindow objects (cluster-scoped) and
 // returns a map: {"<name>": bool} where the boolean is true if the window
 // is currently active (blocking). CEL expressions use:
 //
-//	changewindow["holiday-freeze"]         → true when the window is active
-//	!changewindow["holiday-freeze"]        → passes when window is inactive
+//	changewindow["holiday-freeze"]               → true when the window is active
+//	!changewindow.isBlocked("holiday-freeze")    → passes when the window is inactive
+//	changewindow.isAllowed("business-hours")     → passes inside a recurring allowed window
 //
-// Graph-first: reads CRD status fields only. The ChangeWindow controller is
-// responsible for updating status.active; this method reads it.
-// Fallback: if status.active is not set, re-derives from spec.start/end vs now.
-func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time) map[string]interface{} {
+// Each window is evaluated at the gate's own evaluation time with
+// changewindow.Evaluate, the same function the ChangeWindow reconciler uses to
+// write status.active. Reading only status.active would let a gate pass for the
+// moment between a window boundary and the ChangeWindow reconciler's next write;
+// the ChangeWindow status write is what triggers the re-evaluation (see the
+// ChangeWindow Watch in SetupWithManager).
+//
+// A List error is returned to the caller so the gate fails closed with a
+// "context error" reason: an unreadable freeze must never allow a promotion
+// (C04-gates-02). An invalid ChangeWindow spec evaluates as active (blocking).
+func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time) (map[string]interface{}, error) {
 	var list kardinalv1alpha1.ChangeWindowList
 	if err := r.List(ctx, &list); err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to list ChangeWindows, using empty context")
-		return map[string]interface{}{}
+		return nil, fmt.Errorf("list ChangeWindows: %w", err)
 	}
 
 	result := make(map[string]interface{}, len(list.Items))
 	for _, cw := range list.Items {
-		// Use status.active if set by the ChangeWindow controller.
-		// Fall back to spec-based derivation for blackout windows.
-		active := cw.Status.Active
-		if cw.Spec.Type == "blackout" {
-			// Re-derive: active if now is between Start and End.
-			// This fallback ensures correctness even when the controller hasn't
-			// run yet (e.g. just after creation).
-			start := cw.Spec.Start.Time
-			end := cw.Spec.End.Time
-			if !start.IsZero() && !end.IsZero() {
-				active = now.After(start) && now.Before(end)
-			}
+		res := changewindow.Evaluate(cw.Spec, now)
+		if res.Err != nil {
+			zerolog.Ctx(ctx).Warn().Err(res.Err).Str("changewindow", cw.Name).
+				Msg("invalid ChangeWindow spec, treating it as active (blocking)")
 		}
-		result[cw.Name] = active
+		result[cw.Name] = res.Active
 	}
-	return result
+	return result, nil
 }
 
 // buildPRContext lists PRStatus CRDs for this bundle and returns a map
@@ -656,53 +667,31 @@ func (r *Reconciler) now() time.Time {
 // instances in ALL namespaces are re-evaluated. This replaces the per-gate
 // ctrl.Result{RequeueAfter: recheckInterval} timer loop for schedule.* expressions.
 // (PG-4 from docs/design/11-graph-purity-tech-debt.md)
+//
+// It also watches ChangeWindow objects: the ChangeWindow reconciler writes
+// status.active at every window boundary, and that write re-evaluates every
+// PolicyGate instance whose expression references changewindow, so a freeze
+// starts blocking at its boundary rather than at the next recheckInterval.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// metricCheckMapper enqueues all PolicyGates in the same namespace as the
 	// changed MetricCheck. This ensures PolicyGates with metrics.* expressions
 	// are re-evaluated immediately when a MetricCheck result changes.
 	metricCheckMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
-		var gateList kardinalv1alpha1.PolicyGateList
-		if err := r.List(ctx, &gateList, client.InNamespace(obj.GetNamespace())); err != nil {
-			return nil
-		}
-		reqs := make([]reconcile.Request, 0, len(gateList.Items))
-		for _, gate := range gateList.Items {
-			// Only enqueue instance gates (those with a bundle label) —
-			// templates have no bundle label and are always skipped by Reconcile.
-			if gate.Labels[labelBundle] == "" {
-				continue
-			}
-			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      gate.Name,
-					Namespace: gate.Namespace,
-				},
-			})
-		}
-		return reqs
+		return r.instanceGateRequests(ctx, "MetricCheck", "", client.InNamespace(obj.GetNamespace()))
 	}
 
 	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
 	// when any ScheduleClock ticks. This ensures schedule.* expressions are
 	// re-evaluated on every clock interval without a per-gate RequeueAfter timer.
 	scheduleClockMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
-		var gateList kardinalv1alpha1.PolicyGateList
-		if err := r.List(ctx, &gateList); err != nil {
-			return nil
-		}
-		reqs := make([]reconcile.Request, 0, len(gateList.Items))
-		for _, gate := range gateList.Items {
-			if gate.Labels[labelBundle] == "" {
-				continue
-			}
-			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      gate.Name,
-					Namespace: gate.Namespace,
-				},
-			})
-		}
-		return reqs
+		return r.instanceGateRequests(ctx, "ScheduleClock", "")
+	}
+
+	// changeWindowMapper enqueues the PolicyGate instances that reference a
+	// ChangeWindow. ChangeWindows are cluster-scoped, so gates in every
+	// namespace the controller can see are considered.
+	changeWindowMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
+		return r.instanceGateRequests(ctx, "ChangeWindow", "changewindow")
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -716,7 +705,40 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// are re-evaluated cluster-wide. This replaces RequeueAfter for schedule.* gates.
 		// (PG-4 elimination — see docs/design/11-graph-purity-tech-debt.md)
 		Watches(&kardinalv1alpha1.ScheduleClock{}, handler.EnqueueRequestsFromMapFunc(scheduleClockMapper)).
+		// Watch ChangeWindow objects: a window boundary (status.active write) or a
+		// spec edit re-evaluates the gates that reference changewindow.
+		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
 		Complete(r)
+}
+
+// instanceGateRequests lists PolicyGates and returns a request for every instance
+// gate (one with a bundle label). When exprContains is non-empty, only gates whose
+// expression contains it are returned. A List error is logged (the watch event is
+// then lost, and the gate is re-evaluated at its next recheckInterval) rather than
+// dropped silently (C04-gates-36).
+func (r *Reconciler) instanceGateRequests(ctx context.Context, source, exprContains string,
+	opts ...client.ListOption) []reconcile.Request {
+	var gateList kardinalv1alpha1.PolicyGateList
+	if err := r.List(ctx, &gateList, opts...); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("source", source).
+			Msg("failed to list PolicyGates for watch event; gates re-evaluate at their recheckInterval")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(gateList.Items))
+	for _, gate := range gateList.Items {
+		// Only enqueue instance gates (those with a bundle label) — templates
+		// are only validated, never evaluated against a context.
+		if gate.Labels[labelBundle] == "" {
+			continue
+		}
+		if exprContains != "" && !strings.Contains(gate.Spec.Expression, exprContains) {
+			continue
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace},
+		})
+	}
+	return reqs
 }
 
 // --- helpers ---
