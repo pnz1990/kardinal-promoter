@@ -397,8 +397,8 @@ The policy allows:
   webhook/Bundle API (`8083`). Restrict who can reach each port with
   `networkPolicy.ingressFrom.{metrics,health,ui,webhook}`.
 - **Egress**: DNS (`:53`), and `:443` and `:6443` to any address (Kubernetes API server, SCM
-  providers, go-git). Traffic to kro is allowed only when `networkPolicy.kroNamespace` is
-  set. Add more rules with `networkPolicy.extraEgress`.
+  providers, go-git), plus the kro namespace (`graph.kroNamespace`, default `kro-system`;
+  set it to `""` to drop that rule). Add more rules with `networkPolicy.extraEgress`.
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
@@ -573,25 +573,19 @@ spec:
 controller:
   tlsCertFile: /etc/kardinal-tls/tls.crt
   tlsKeyFile: /etc/kardinal-tls/tls.key
-
-# Add to values.yaml:
-extraVolumes:
-  - name: kardinal-tls
-    secret:
-      secretName: kardinal-tls
-extraVolumeMounts:
-  - name: kardinal-tls
-    mountPath: /etc/kardinal-tls
-    readOnly: true
+  extraVolumes:
+    - name: kardinal-tls
+      secret:
+        secretName: kardinal-tls
+  extraVolumeMounts:
+    - name: kardinal-tls
+      mountPath: /etc/kardinal-tls
+      readOnly: true
 ```
 
-Or set directly at deploy time:
-
-```bash
-helm upgrade kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-  --set controller.tlsCertFile=/etc/kardinal-tls/tls.crt \
-  --set controller.tlsKeyFile=/etc/kardinal-tls/tls.key
-```
+Or pass the file with `helm upgrade kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter -f tls-values.yaml`.
+The paths must point at a mounted certificate: if the files cannot be read, the controller
+exits at startup instead of serving plain HTTP.
 
 ### Self-signed certificates (development only)
 
