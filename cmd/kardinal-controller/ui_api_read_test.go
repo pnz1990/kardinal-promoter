@@ -29,7 +29,8 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-func uiGet(t *testing.T, c client.Client, path string) *httptest.ResponseRecorder {
+// uiReadGet serves one GET through the UI API routes, without auth or CORS.
+func uiReadGet(t *testing.T, c client.Client, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	mux := http.NewServeMux()
 	newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
@@ -120,7 +121,7 @@ func TestUIAPI_BundleGraph_FollowsPipelineDependencies(t *testing.T) {
 					Spec: v1alpha1.BundleSpec{Pipeline: "app"}},
 			).Build()
 
-			rec := uiGet(t, c, "/api/v1/ui/bundles/app-v1/graph")
+			rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-v1/graph")
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 			var g uiGraphResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &g))
@@ -146,7 +147,7 @@ func TestUIAPI_BundleGraph_GatesPerEnvironment(t *testing.T) {
 		uiGateInstance("default", "app-v1-no-weekend-prod", "app-v1", "no-weekend", "prod", false),
 	).Build()
 
-	rec := uiGet(t, c, "/api/v1/ui/bundles/app-v1/graph")
+	rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-v1/graph")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var g uiGraphResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &g))
@@ -194,7 +195,7 @@ func TestUIAPI_BundleGraph_ScopedToBundleNamespace(t *testing.T) {
 		uiGateInstance("team-b", "b-gate", "app-v1", "no-weekend", "prod", false),
 	).Build()
 
-	rec := uiGet(t, c, "/api/v1/ui/bundles/app-v1/graph?namespace=team-a")
+	rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-v1/graph?namespace=team-a")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var g uiGraphResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &g))
@@ -229,7 +230,7 @@ func TestUIAPI_BundleSteps_ScopedToBundleNamespace(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			rec := uiGet(t, c, tt.path)
+			rec := uiReadGet(t, c, tt.path)
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 			var resp []uiStepResponse
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -278,7 +279,7 @@ func TestUIAPI_ReadHandlersReportListErrors(t *testing.T) {
 				},
 			}).Build()
 
-			rec := uiGet(t, c, tt.path)
+			rec := uiReadGet(t, c, tt.path)
 			assert.Equal(t, http.StatusInternalServerError, rec.Code, rec.Body.String())
 		})
 	}
@@ -332,7 +333,7 @@ func TestUIAPI_Pipelines_ActiveBundleAndCounts(t *testing.T) {
 		uiStep("team-b", "s1", "app-2-new", "test", "Failed"),
 	).Build()
 
-	rec := uiGet(t, c, "/api/v1/ui/pipelines")
+	rec := uiReadGet(t, c, "/api/v1/ui/pipelines")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	var resp []uiPipelineResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -379,7 +380,7 @@ func TestUIAPI_StepEvents_OnlyPromotionStepEvents(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			rec := uiGet(t, c, tt.path)
+			rec := uiReadGet(t, c, tt.path)
 			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
 			assert.NotContains(t, rec.Body.String(), "coredns")
 			if tt.wantCode != http.StatusOK {

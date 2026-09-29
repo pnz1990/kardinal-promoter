@@ -14,7 +14,7 @@ Usage after install:
   kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-<SHA>
 */}}
 {{- if .Values.demo.enabled }}
-{{- $secretName := .Values.demo.secretRef.name | default .Values.github.secretRef.name | default "github-token" }}
+{{- $secretName := .Values.demo.secretRef.name | default (include "kardinal-promoter.githubSecretName" .) | default "github-token" }}
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:

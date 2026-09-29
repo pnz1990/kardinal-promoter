@@ -229,7 +229,7 @@ spec:
 
 ```bash
 # Install kardinal
-helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+helm install kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace
 
 # Apply your Pipeline

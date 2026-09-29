@@ -86,3 +86,72 @@ ClusterRoles bound to the Graph ServiceAccount (templates/graph-rbac.yaml).
 {{- define "kardinal-promoter.graphReaderRole" -}}
 {{- printf "%s-graph-reader" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end }}
+
+{{/*
+Install-mode checks. Rendered from deployment.yaml so a bad combination fails
+`helm install` before anything is applied.
+*/}}
+{{- define "kardinal-promoter.validate" -}}
+{{- $w := .Values.controller.watchNamespace -}}
+{{- if and $w (ne $w .Release.Namespace) -}}
+{{- fail (printf "controller.watchNamespace (%s) must equal the release namespace (%s): in namespace mode the controller's cache holds only the watch namespace, and its Lease, kardinal-version ConfigMap and SCM token Secret live in the release namespace. Install the chart into %s." $w .Release.Namespace $w) -}}
+{{- end -}}
+{{- if $w -}}
+{{- range .Values.controller.policyNamespaces -}}
+{{- if ne . $w -}}
+{{- fail (printf "controller.policyNamespaces entry %q is outside controller.watchNamespace (%s); in namespace mode org-level PolicyGates must live in the watch namespace." . $w) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.github.token .Values.github.secretRef.name -}}
+{{- fail "set github.token or github.secretRef.name, not both" -}}
+{{- end -}}
+{{- with .Values.github.secretRef.namespace -}}
+{{- if ne . $.Release.Namespace -}}
+{{- fail (printf "github.secretRef.namespace (%s) must be empty or the release namespace (%s): GITHUB_TOKEN is read with a secretKeyRef, which only reads the Pod's namespace, so the startup token and the rotation watcher would read different Secrets." . $.Release.Namespace) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Value for --policy-namespaces, or "" to keep the controller default
+(platform-policies). Namespace mode always uses the watch namespace.
+*/}}
+{{- define "kardinal-promoter.policyNamespaces" -}}
+{{- if .Values.controller.watchNamespace -}}
+{{- .Values.controller.watchNamespace -}}
+{{- else -}}
+{{- join "," .Values.controller.policyNamespaces -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Name of the Secret holding the SCM token: the chart-owned Secret when
+github.token is set, else github.secretRef.name.
+*/}}
+{{- define "kardinal-promoter.githubSecretName" -}}
+{{- if .Values.github.token -}}
+{{- printf "%s-github-token" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- .Values.github.secretRef.name -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Key of the SCM token in that Secret.
+*/}}
+{{- define "kardinal-promoter.githubSecretKey" -}}
+{{- if .Values.github.token -}}
+token
+{{- else -}}
+{{- .Values.github.secretRef.key | default "token" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+controller-runtime's --zap-log-level accepts debug, info, error and panic
+(or a positive integer), not warn. Map warn to error.
+*/}}
+{{- define "kardinal-promoter.zapLogLevel" -}}
+{{- if eq .Values.logLevel "warn" -}}error{{- else -}}{{ .Values.logLevel }}{{- end -}}
+{{- end }}

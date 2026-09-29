@@ -122,13 +122,16 @@ helm install kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token \
-  --set controller.shard=cluster-eu \
-  --set controller.remoteKubeconfig.secretRef.name=hub-kubeconfig
+  --set controller.shard=cluster-eu
 ```
 
-The agent uses the `hub-kubeconfig` secret to connect to the Hub Kubernetes API server
-for reading/writing PromotionStep CRs. Its local kubeconfig is used for health checks
-against local workloads.
+!!! warning "No hub kubeconfig value yet"
+    The chart has no value for a separate hub kubeconfig (earlier versions of this page
+    documented `controller.remoteKubeconfig`, which the chart never read; it is now rejected
+    by the chart's values schema). The controller uses one Kubernetes client configuration
+    (in-cluster, or `KUBECONFIG`) for both PromotionSteps and health checks, so a shard
+    controller must reach the PromotionSteps and the workloads it checks through the same
+    API server.
 
 ## RBAC for Remote Agent Service Account
 

@@ -148,12 +148,13 @@ The controller reads the secret on every SCM operation — no restart required.
 
 ### Using OIDC instead of a PAT
 
-If your cluster supports GitHub Actions OIDC tokens (e.g., EKS with GitHub OIDC provider), you can configure the controller to exchange a short-lived OIDC token for a GitHub App installation token. This avoids long-lived PATs entirely.
-
-This requires:
-1. A GitHub App with `Pull requests: Read and write` and `Contents: Read and write`
-2. The app installed on the target repositories
-3. Set `github.auth.type: github-app` in the Helm values (see `values.yaml` for fields)
+The controller has no OIDC or GitHub App token exchange, and the chart has no
+`github.auth` value. The controller only reads a token from the Secret in
+`github.secretRef`. It watches that Secret and reloads the token without a restart. So a
+short-lived GitHub App installation token works if something outside kardinal refreshes
+the Secret before the token expires. The GitHub App needs `Pull requests: Read and write`
+and `Contents: Read and write`. That refresher can be an External Secrets generator or a
+CronJob.
 
 ---
 
@@ -540,7 +541,8 @@ The chart always passes the controller Service's DNS names: `<fullname>`,
 non-default cluster domain, or the node IP you browse to:
 
 ```bash
-helm upgrade kardinal-promoter chart/kardinal-promoter -n kardinal-system \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  -n kardinal-system --reuse-values \
   --set 'ui.allowedHosts={kardinal.example.com}'
 ```
 
