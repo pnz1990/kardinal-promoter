@@ -53,7 +53,10 @@ if [ -z "$PR_DIFF" ]; then
 fi
 
 # ── Step 2: Parse diff with Python ───────────────────────────────────────────
-RESULT=$(python3 - "$PR_NUM" "$REPO" <<'PYEOF'
+# The program is held in a variable so the diff can be piped on stdin
+# (`python3 - <<EOF` would make the heredoc stdin and hide the diff).
+GATE_PY=$(
+  cat <<'PYEOF'
 import sys
 import re
 import os
@@ -226,6 +229,7 @@ else:
 
 PYEOF
 )
+RESULT=$(printf '%s\n' "$PR_DIFF" | python3 -c "$GATE_PY" "$PR_NUM" "$REPO")
 
 # ── Step 3: Interpret result ──────────────────────────────────────────────────
 if echo "$RESULT" | grep -q "^NO_TRANSITIONS"; then

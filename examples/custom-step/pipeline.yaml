@@ -6,11 +6,11 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: nginx-demo-with-version-gate
+  name: version-gate-demo
   namespace: default
 spec:
-  appName: nginx-demo
   git:
+    # Placeholder: change to your GitOps repo.
     url: https://github.com/myorg/gitops-repo
     secretRef:
       name: github-token

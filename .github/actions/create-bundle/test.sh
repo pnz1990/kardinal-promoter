@@ -1,132 +1,164 @@
 #!/usr/bin/env bash
-# test.sh — unit tests for the image-parsing and JSON-building logic in action.yml
-# Runs without network access. Exits 0 on pass, non-zero on fail.
+# test.sh — tests for the create-bundle action. Sources parse.sh, the same code
+# the action runs, and runs create-bundle.sh end to end against a fake curl.
+# Needs no network access. Exits 0 on pass, non-zero on fail.
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
 
 set -euo pipefail
 
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=.github/actions/create-bundle/parse.sh
+source "$HERE/parse.sh"
+
 PASS=0
 FAIL=0
 
-ok() {
-  local desc="$1"
-  PASS=$((PASS + 1))
-  echo "  PASS: $desc"
-}
-
-fail() {
+check() {
   local desc="$1" got="$2" want="$3"
-  FAIL=$((FAIL + 1))
-  echo "  FAIL: $desc"
-  echo "        got:  $got"
-  echo "        want: $want"
-}
-
-# parse_image <ref> [override_digest] — mirrors action.yml logic
-parse_image() {
-  local img="$1"
-  local override_digest="${2:-}"
-  if [ -n "$override_digest" ]; then
-    local repo
-    repo=$(echo "$img" | cut -d: -f1)
-    echo "{\"repository\":\"$repo\",\"digest\":\"$override_digest\"}"
-  elif echo "$img" | grep -q "@"; then
-    local repo digest
-    repo=$(echo "$img" | cut -d@ -f1)
-    digest=$(echo "$img" | cut -d@ -f2)
-    echo "{\"repository\":\"$repo\",\"digest\":\"$digest\"}"
-  elif echo "$img" | grep -q ":"; then
-    local repo tag
-    repo=$(echo "$img" | rev | cut -d: -f2- | rev)
-    tag=$(echo "$img" | rev | cut -d: -f1 | rev)
-    echo "{\"repository\":\"$repo\",\"tag\":\"$tag\"}"
+  if [ "$got" = "$want" ]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
   else
-    echo "{\"repository\":\"$img\"}"
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "        got:  $got"
+    echo "        want: $want"
   fi
 }
 
 echo ""
-echo "--- Image parsing tests ---"
+echo "--- Image parsing ---"
+check "repo:tag" "$(parse_image "ghcr.io/myorg/app:v1.2.3")" \
+  '{"repository":"ghcr.io/myorg/app","tag":"v1.2.3"}'
+check "repo@digest" "$(parse_image "ghcr.io/myorg/app@sha256:abcdef0123456789")" \
+  '{"repository":"ghcr.io/myorg/app","digest":"sha256:abcdef0123456789"}'
+check "bare repo" "$(parse_image "ghcr.io/myorg/app")" \
+  '{"repository":"ghcr.io/myorg/app"}'
+check "image + digest override" "$(parse_image "ghcr.io/myorg/app:v1.2.3" "sha256:abc123")" \
+  '{"repository":"ghcr.io/myorg/app","digest":"sha256:abc123"}'
+check "registry port, tag" "$(parse_image "registry.local:5000/team/app:v1")" \
+  '{"repository":"registry.local:5000/team/app","tag":"v1"}'
+check "registry port, digest override" "$(parse_image "registry.local:5000/team/app:v1" "sha256:abc")" \
+  '{"repository":"registry.local:5000/team/app","digest":"sha256:abc"}'
+check "registry port, no tag" "$(parse_image "registry.local:5000/team/app")" \
+  '{"repository":"registry.local:5000/team/app"}'
+check "tag and digest" "$(parse_image "ghcr.io/myorg/app:v1@sha256:abc")" \
+  '{"repository":"ghcr.io/myorg/app","digest":"sha256:abc"}'
+check "quotes are JSON-escaped" "$(parse_image 'ghcr.io/a"b:v1')" \
+  '{"repository":"ghcr.io/a\"b","tag":"v1"}'
 
-# T1: repo:tag
-T1=$(parse_image "ghcr.io/myorg/app:v1.2.3" "")
-WANT_T1='{"repository":"ghcr.io/myorg/app","tag":"v1.2.3"}'
-if [ "$T1" = "$WANT_T1" ]; then ok "repo:tag parsing"; else fail "repo:tag parsing" "$T1" "$WANT_T1"; fi
+echo ""
+echo "--- Image list ---"
+check "multi-image list, whitespace trimmed" \
+  "$(build_images_json "" "" "  ghcr.io/myorg/app:v1.2.3
+ghcr.io/myorg/sidecar@sha256:deadbeef  
 
-# T2: repo@digest
-T2=$(parse_image "ghcr.io/myorg/app@sha256:abcdef0123456789" "")
-WANT_T2='{"repository":"ghcr.io/myorg/app","digest":"sha256:abcdef0123456789"}'
-if [ "$T2" = "$WANT_T2" ]; then ok "repo@digest parsing"; else fail "repo@digest parsing" "$T2" "$WANT_T2"; fi
+")" \
+  '[{"repository":"ghcr.io/myorg/app","tag":"v1.2.3"},{"repository":"ghcr.io/myorg/sidecar","digest":"sha256:deadbeef"}]'
+check "image wins over images" "$(build_images_json "ghcr.io/a:v1" "" "ghcr.io/b:v2")" \
+  '[{"repository":"ghcr.io/a","tag":"v1"}]'
+check "no images" "$(build_images_json "" "" "")" "[]"
 
-# T3: bare repo (no tag or digest)
-T3=$(parse_image "ghcr.io/myorg/app" "")
-WANT_T3='{"repository":"ghcr.io/myorg/app"}'
-if [ "$T3" = "$WANT_T3" ]; then ok "bare repo parsing"; else fail "bare repo parsing" "$T3" "$WANT_T3"; fi
+echo ""
+echo "--- Request body ---"
+BODY=$(GITHUB_SHA="abc123" GITHUB_SERVER_URL="https://github.com" GITHUB_REPOSITORY="myorg/myapp" \
+  GITHUB_RUN_ID="42" GITHUB_ACTOR="engineer" \
+  build_body "my-app" "image" "default" '[{"repository":"ghcr.io/a","tag":"v1"}]')
+check "body fields" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
+b = json.load(sys.stdin)
+print(b["pipeline"], b["type"], b["namespace"], b["images"][0]["tag"], b["provenance"]["commitSHA"],
+      b["provenance"]["ciRunURL"], b["provenance"]["author"])')" \
+  "my-app image default v1 abc123 https://github.com/myorg/myapp/actions/runs/42 engineer"
 
-# T4: image input + override digest (the image+digest input pattern)
-T4=$(parse_image "ghcr.io/myorg/app:v1.2.3" "sha256:abc123")
-WANT_T4='{"repository":"ghcr.io/myorg/app","digest":"sha256:abc123"}'
-if [ "$T4" = "$WANT_T4" ]; then ok "image+digest override"; else fail "image+digest override" "$T4" "$WANT_T4"; fi
+echo ""
+echo "--- Names and URLs ---"
+for name in my-app a app.v2; do
+  if is_k8s_name "$name"; then check "valid name $name" ok ok; else check "valid name $name" rejected ok; fi
+done
+for name in "" My-App "-app" "app-" "a'b" 'a$(id)' "$(printf 'a\nb')"; do
+  if is_k8s_name "$name"; then check "invalid name ${name@Q}" accepted rejected; else check "invalid name ${name@Q}" rejected rejected; fi
+done
+check "status url" "$(status_url "https://kardinal.example.com:8082/" my-app)" \
+  "https://kardinal.example.com:8082/ui/#pipeline=my-app"
+check "no status url without ui-url" "$(status_url "" my-app)" ""
 
-# T5: multi-image list building
-MULTI_INPUT="ghcr.io/myorg/app:v1.2.3
-ghcr.io/myorg/sidecar@sha256:deadbeef"
-ITEMS=""
-while IFS= read -r img; do
-  [ -z "$img" ] && continue
-  ENTRY=$(parse_image "$img" "")
-  if [ -z "$ITEMS" ]; then ITEMS="$ENTRY"; else ITEMS="$ITEMS,$ENTRY"; fi
-done <<< "$MULTI_INPUT"
-T5="[$ITEMS]"
-WANT_T5='[{"repository":"ghcr.io/myorg/app","tag":"v1.2.3"},{"repository":"ghcr.io/myorg/sidecar","digest":"sha256:deadbeef"}]'
-if [ "$T5" = "$WANT_T5" ]; then ok "multi-image list building"; else fail "multi-image list building" "$T5" "$WANT_T5"; fi
+echo ""
+echo "--- create-bundle.sh against a fake curl ---"
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK/bin"
+# The fake curl answers with $FAKE_CODES (one HTTP code per call, or curl-exit:N),
+# copies the request body to $WORK/sent.json and counts calls.
+cat >"$WORK/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+n=$(($(cat "$FAKE_DIR/calls" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$FAKE_DIR/calls"
+out="" body=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    --data-binary) body="${2#@}"; shift ;;
+    -H) case "$2" in @*) cp "${2#@}" "$FAKE_DIR/header" ;; esac; shift ;;
+  esac
+  shift
+done
+cp "$body" "$FAKE_DIR/sent.json"
+IFS=' ' read -r -a codes <<<"$FAKE_CODES"
+code="${codes[$((n - 1))]:-${codes[-1]}}"
+case "$code" in curl-exit:*) exit "${code#curl-exit:}" ;; esac
+echo '{"name":"my-app-abc12","namespace":"default"}' >"$out"
+printf '%s' "$code"
+CURL
+chmod +x "$WORK/bin/curl"
 
-# T6: URL trailing slash stripping
-KARDINAL_URL="https://kardinal.example.com/"
-KARDINAL_URL="${KARDINAL_URL%/}"
-WANT_T6="https://kardinal.example.com"
-if [ "$KARDINAL_URL" = "$WANT_T6" ]; then ok "URL trailing slash strip"; else fail "URL trailing slash strip" "$KARDINAL_URL" "$WANT_T6"; fi
+run_action() {
+  rm -f "$WORK/calls" "$WORK/sent.json" "$WORK/header" "$WORK/output"
+  : >"$WORK/output"
+  env PATH="$WORK/bin:$PATH" FAKE_DIR="$WORK" FAKE_CODES="$1" GITHUB_OUTPUT="$WORK/output" \
+    CREATE_BUNDLE_RETRY_SLEEP_SECS=0 KARDINAL_TOKEN=test-token \
+    INPUT_PIPELINE="${2:-my-app}" INPUT_IMAGE="${3:-ghcr.io/myorg/app:v1}" \
+    INPUT_KARDINAL_URL="https://kardinal.example.com/" INPUT_UI_URL="https://ui.example.com" \
+    bash "$HERE/create-bundle.sh" >"$WORK/log" 2>&1
+}
+calls() { cat "$WORK/calls" 2>/dev/null || echo 0; }
 
-# T7: bundle-status-url construction
-STATUS_URL="${KARDINAL_URL}/ui#pipeline=my-app"
-WANT_T7="https://kardinal.example.com/ui#pipeline=my-app"
-if [ "$STATUS_URL" = "$WANT_T7" ]; then ok "bundle-status-url construction"; else fail "bundle-status-url construction" "$STATUS_URL" "$WANT_T7"; fi
+if run_action 201; then check "201 succeeds" ok ok; else check "201 succeeds" "failed: $(tail -3 "$WORK/log")" ok; fi
+check "outputs written" "$(cat "$WORK/output")" "bundle-name=my-app-abc12
+bundle-namespace=default
+bundle-status-url=https://ui.example.com/ui/#pipeline=my-app"
+check "token sent in a header file" "$(cat "$WORK/header")" "Authorization: Bearer test-token"
+if grep -q test-token "$WORK/log"; then check "token not logged" logged "not logged"; else check "token not logged" "not logged" "not logged"; fi
 
-# T8: provenance JSON via python3
-PROVENANCE_JSON=$(GITHUB_SHA="abc123" GITHUB_SERVER_URL="https://github.com" \
-  GITHUB_REPOSITORY="myorg/myapp" GITHUB_RUN_ID="42" GITHUB_ACTOR="engineer" \
-  python3 -c "
-import json, os
-print(json.dumps({
-  'commitSHA': os.environ.get('GITHUB_SHA', ''),
-  'ciRunURL': '{}/{}/actions/runs/{}'.format(
-    os.environ.get('GITHUB_SERVER_URL', 'https://github.com'),
-    os.environ.get('GITHUB_REPOSITORY', 'unknown'),
-    os.environ.get('GITHUB_RUN_ID', '0')),
-  'author': os.environ.get('GITHUB_ACTOR', ''),
-}))
-")
-WANT_PROV='{"commitSHA": "abc123", "ciRunURL": "https://github.com/myorg/myapp/actions/runs/42", "author": "engineer"}'
-# Compare via python3 for key-order-agnostic comparison
-T8_MATCH=$(python3 -c "
-import json
-got = json.loads('$PROVENANCE_JSON')
-want = json.loads('$WANT_PROV')
-print('ok' if got == want else 'fail')
-" 2>/dev/null || echo "fail")
-if [ "$T8_MATCH" = "ok" ]; then ok "provenance JSON construction"; else fail "provenance JSON construction" "$PROVENANCE_JSON" "$WANT_PROV"; fi
+# shellcheck disable=SC2016 # the $(...) is the literal payload under test
+INJECT='ghcr.io/myorg/app:v1"$(touch '"$WORK"'/pwned)'"'"
+run_action 201 my-app "$INJECT" || true
+check "hostile image is sent literally" \
+  "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["images"][0]["repository"])' "$WORK/sent.json")" \
+  "$INJECT"
+check "hostile image runs nothing" "$([ -e "$WORK/pwned" ] && echo ran || echo clean)" clean
+
+if run_action 201 'my-app$(id)'; then check "hostile pipeline rejected" accepted rejected; else check "hostile pipeline rejected" rejected rejected; fi
+check "hostile pipeline makes no request" "$(calls)" 0
+
+if run_action "503 201"; then check "503 then 201 succeeds" ok ok; else check "503 then 201 succeeds" failed ok; fi
+check "503 retried once" "$(calls)" 2
+if run_action "curl-exit:7 201"; then check "connect failure then 201" ok ok; else check "connect failure then 201" failed ok; fi
+if run_action 500; then check "500 fails" ok failed; else check "500 fails" failed failed; fi
+check "500 not retried" "$(calls)" 1
+if run_action curl-exit:28; then check "timeout fails" ok failed; else check "timeout fails" failed failed; fi
+check "timeout not retried" "$(calls)" 1
+if run_action 503; then check "503 forever fails" ok failed; else check "503 forever fails" failed failed; fi
+check "503 gives up after 3 attempts" "$(calls)" 3
 
 echo ""
 echo "--- Results ---"
 echo "  Passed: $PASS"
 echo "  Failed: $FAIL"
 echo ""
-
-if [ $FAIL -gt 0 ]; then
+if [ "$FAIL" -gt 0 ]; then
   echo "FAIL: $FAIL test(s) failed"
   exit 1
 fi
-
 echo "PASS: all $PASS tests passed"

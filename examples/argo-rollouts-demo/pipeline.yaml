@@ -23,11 +23,11 @@ spec:
       health:
         type: resource
 
-    # staging: ArgoCD health check — ArgoCD manages the staging environment
-    # ArgoCD Application name is derived: <pipeline>-<env> = kardinal-test-app-staging
-    # namespace defaults to argocd
-    - name: staging
-      path: environments/staging
+    # uat: ArgoCD health check — ArgoCD manages the uat environment
+    # ArgoCD Application name is derived: <pipeline>-<env> = kardinal-test-app-uat
+    # in namespace argocd
+    - name: uat
+      path: environments/uat
       update:
         strategy: kustomize
       approval: auto

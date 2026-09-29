@@ -33,9 +33,11 @@ Thumbs.db
 *.out
 coverage.txt
 
-# Compiled binaries in repo root (standalone agent sometimes builds here)
-kardinal-controller
-kardinal
+# Compiled binaries in the repo root. Anchored with a leading / so they do not
+# also match the cmd/kardinal*/ source directories.
+/kardinal-controller
+/kardinal
+/kardinal-agent
 
 # Worktree artifacts that must not land in main repo root
 CLAIM

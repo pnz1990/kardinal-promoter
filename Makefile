@@ -4,6 +4,7 @@
 CONTROLLER_GEN         ?= $(LOCALBIN)/controller-gen
 CONTROLLER_GEN_VERSION ?= v0.17.3
 GOLANGCI_LINT          ?= $(LOCALBIN)/golangci-lint
+GOLANGCI_LINT_VERSION  ?= v2.11.4
 GOVULNCHECK            ?= $(LOCALBIN)/govulncheck
 LOCALBIN               ?= $(shell pwd)/bin
 
@@ -14,15 +15,22 @@ BINARY_AGENT      = bin/kardinal-agent
 GO                = go
 GOPROXY          ?= https://proxy.golang.org
 
-# Docker image
-IMG ?= kardinal-promoter:dev
+# Docker image (the chart deploys $(IMG_REPO):$(IMG_TAG) when installed by `make install`)
+IMG_REPO ?= ghcr.io/pnz1990/kardinal-promoter
+IMG_TAG  ?= dev
+IMG      ?= $(IMG_REPO):$(IMG_TAG)
 
-.PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration lint vet generate manifests \
+# kind cluster used by the e2e targets
+KIND_CLUSTER ?= kardinal-e2e
+
+.PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration test-cover \
+        lint lint-local vet vuln generate manifests \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro \
-        test-e2e test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
+        install-kro setup-e2e-env setup-e2e-env-fast setup-multi-cluster-env eks-up eks-down \
+        e2e-setup e2e-teardown kind-up kind-down \
+        test-e2e test-e2e-kind test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
-        kind-up kind-down tools help lint-local
+        tools help
 
 all: generate build test lint
 
@@ -49,6 +57,7 @@ ui-test-e2e: ## Run Playwright E2E tests (requires Node.js, npm, and a built dis
 	cd web && npm ci && npm run build && npx playwright install chromium --with-deps && npm run test:e2e
 
 ## Test
+## Cluster e2e tests (test/e2e with build tag e2e) are excluded; see test-e2e-kind.
 test:
 	$(GO) test ./... -race -count=1 -timeout 120s
 
@@ -89,17 +98,19 @@ generate: $(CONTROLLER_GEN)
 
 manifests: $(CONTROLLER_GEN)
 	$(CONTROLLER_GEN) crd:allowDangerousTypes=true paths="./api/..." output:crd:artifacts:config=config/crd/bases
-	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./api/..." output:rbac:artifacts:config=config/rbac
 
-## Install CRDs and chart into current cluster
-install: manifests ## Install CRDs and chart into current cluster
+## Install CRDs and chart into the CURRENT kube context, running $(IMG) (build and load it first)
+install: manifests ## Install CRDs and chart into the current kube context (image $(IMG_REPO):$(IMG_TAG))
+	@echo "Installing into kube context: $$(kubectl config current-context)"
 	kubectl apply -f config/crd/bases/
-	helm upgrade --install kardinal chart/kardinal-promoter \
-		--namespace kardinal-system --create-namespace
+	helm upgrade --install kardinal-promoter chart/kardinal-promoter \
+		--namespace kardinal-system --create-namespace \
+		--set image.repository=$(IMG_REPO) --set image.tag=$(IMG_TAG)
 
 ## Remove chart and CRDs from cluster
-uninstall: ## Remove chart from cluster
-	helm uninstall kardinal -n kardinal-system || true
+uninstall: ## Remove chart and CRDs from the current kube context
+	@echo "Uninstalling from kube context: $$(kubectl config current-context)"
+	helm uninstall kardinal-promoter -n kardinal-system || true
 	kubectl delete -f config/crd/bases/ || true
 
 ## Docker
@@ -110,85 +121,53 @@ docker-build:
 helm-lint:
 	helm lint chart/kardinal-promoter
 
-## Validate Pipeline manifests in demo/ and examples/ against the CRD schema
-## Mirrors the 'Validate demo and example manifests against CRD schema' CI step in ci.yml.
-## Use this locally to catch schema drift before pushing.
-## Requires: config/crd/bases/ to be generated (run 'make manifests' first if not present).
-validate-manifests: ## Validate all Pipeline manifests in demo/ and examples/ against CRD schema (no cluster needed)
-	@echo "Validating Pipeline manifests against CRD schema..."
-	@if command -v kubeconform >/dev/null 2>&1; then \
-	  echo "Using kubeconform for full JSON Schema validation..."; \
-	  SCHEMA_DIR=$$(mktemp -d); \
-	  python3 -c "import json,yaml,os; crd=yaml.safe_load(open('config/crd/bases/kardinal.io_pipelines.yaml')); schema=crd['spec']['versions'][0]['schema']['openAPIV3Schema']; os.makedirs('$$SCHEMA_DIR',exist_ok=True); json.dump(schema,open('$$SCHEMA_DIR/kardinal.io_pipelines.json','w')); print('Schema extracted to $$SCHEMA_DIR')" 2>/dev/null || (echo "Schema extraction failed — run 'make manifests' first"; exit 1); \
-	  FAILURES=0; \
-	  for manifest in $$(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | xargs grep -l "kind: Pipeline" 2>/dev/null); do \
-	    echo "  Validating $$manifest..."; \
-	    kubeconform -schema-location "$$SCHEMA_DIR/{{.ResourceKind}}.json" -strict "$$manifest" 2>/dev/null || FAILURES=$$((FAILURES+1)); \
-	  done; \
-	  rm -rf "$$SCHEMA_DIR"; \
-	  if [ $$FAILURES -gt 0 ]; then \
-	    echo ""; \
-	    echo "❌ $$FAILURES manifest(s) failed kubeconform validation."; \
-	    echo "Run 'make manifests generate' and update manifests to match current CRD schema."; \
-	    exit 1; \
-	  fi; \
-	else \
-	  echo "kubeconform not found — using Python field-name check (install kubeconform for full JSON Schema validation)"; \
-	  FAILURES=0; \
-	  for manifest in $$(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | xargs grep -l "kind: Pipeline" 2>/dev/null); do \
-	    echo "  Validating $$manifest..."; \
-	    python3 -c "import yaml,sys,re; m=sys.argv[1]; raw=open(m).read(); [sys.exit(0) for _ in [1] if re.search(r'{{.*}}',raw)]; docs=list(yaml.safe_load_all(raw)); [sys.exit('FAIL: '+m+': unknown health field: '+k) for d in docs if d and d.get('kind')=='Pipeline' for e in d.get('spec',{}).get('environments',[]) for k in e.get('health',{}).keys() if k not in ('type','timeout','cluster','labelSelector','resource')]; print('  OK: '+m)" "$$manifest" || FAILURES=$$((FAILURES+1)); \
-	  done; \
-	  if [ $$FAILURES -gt 0 ]; then \
-	    echo ""; \
-	    echo "❌ $$FAILURES manifest(s) failed validation."; \
-	    echo "Run 'make manifests generate' and update manifests to match current CRD schema."; \
-	    exit 1; \
-	  fi; \
-	fi
-	@echo "✅ All Pipeline manifests valid against current CRD schema."
+## Validate every kardinal manifest in demo/ and examples/ against the generated CRD
+## schemas (structural schema, pruning, CEL-free validation, label values, strict decode).
+## Mirrors the 'Validate demo and example manifests' CI step. No cluster needed.
+validate-manifests: ## Validate demo/ and examples/ manifests against the CRD schemas (no cluster needed)
+	$(GO) test ./test/examples/... -count=1 -v -run 'TestExampleManifests|TestExamplePaths'
 
 ## Kind cluster for E2E
-kind-up: ## Create local kind cluster and install kro + kardinal-promoter
-	kind create cluster --name kardinal-e2e --config test/e2e/kind-config.yaml
-	kubectl config use-context kind-kardinal-e2e
-	$(MAKE) install-kro
-	$(MAKE) install
+kind-up: e2e-setup ## Create local kind cluster and install kro + kardinal-promoter (alias of e2e-setup)
 
-install-kro: ## Install upstream kro with the Graph controller (GraphKind feature gate) — a prerequisite
+install-kro: ## Install upstream kro with the Graph controller (GraphKind feature gate) into the current (or KUBE_CONTEXT) context
 	bash hack/install-kro.sh
 
-setup-e2e-env: ## Full single-cluster E2E: kind + kro + ArgoCD + test app in test/uat/prod
-	bash hack/setup-e2e-env.sh
+setup-e2e-env: ## Full single-cluster E2E: kind + kro + ArgoCD + test app in test/uat/prod (only touches kind-$(KIND_CLUSTER))
+	KIND_CLUSTER=$(KIND_CLUSTER) bash hack/setup-e2e-env.sh
 
 setup-e2e-env-fast: ## Single-cluster E2E without ArgoCD (faster, for integration testing)
-	SKIP_ARGOCD=1 bash hack/setup-e2e-env.sh
+	KIND_CLUSTER=$(KIND_CLUSTER) SKIP_ARGOCD=1 bash hack/setup-e2e-env.sh
 
 setup-multi-cluster-env: ## Multi-cluster E2E: kind (test+uat) + EKS prod cluster. Requires AWS creds + EKS cluster (see terraform/eks-e2e).
 	bash hack/setup-multi-cluster-env.sh
 
-eks-up: ## Create EKS prod cluster for multi-cluster E2E via Terraform (requires AWS creds)
-	cd terraform/eks-e2e && terraform init && terraform apply -auto-approve
+eks-up: ## Create EKS prod cluster for multi-cluster E2E via Terraform (requires AWS creds; asks for confirmation)
+	cd terraform/eks-e2e && terraform init && terraform apply
 	@echo ""
 	@echo "Cluster ready. Update kubeconfig with:"
 	@cd terraform/eks-e2e && terraform output -raw kubeconfig_update_command
 
-eks-down: ## Destroy EKS prod cluster (saves cost when not running E2E)
-	cd terraform/eks-e2e && terraform destroy -auto-approve
+eks-down: ## Destroy EKS prod cluster (saves cost when not running E2E; asks for confirmation)
+	cd terraform/eks-e2e && terraform destroy
 
-kind-down:
-	kind delete cluster --name kardinal-e2e
+kind-down: ## Delete the e2e kind cluster
+	kind delete cluster --name $(KIND_CLUSTER)
 
-e2e-setup: ## Convenience: create kind cluster + install kro + kardinal (same as kind-up but more verbose output)
-	bash hack/e2e-setup.sh
+e2e-setup: ## Create kind cluster + install kro + kardinal built from this checkout + quickstart fixtures
+	KIND_CLUSTER=$(KIND_CLUSTER) KARDINAL_IMAGE_REPO=$(IMG_REPO) KARDINAL_IMAGE_TAG=$(IMG_TAG) bash hack/e2e-setup.sh
 
 e2e-teardown: ## Convenience: tear down the e2e kind cluster
-	bash hack/e2e-teardown.sh
+	KIND_CLUSTER=$(KIND_CLUSTER) bash hack/e2e-teardown.sh
 
-## E2E Tests — each journey maps to docs/aide/definition-of-done.md
-# These are the acceptance tests. The project is complete when all pass.
+## Journey tests — each journey maps to docs/aide/definition-of-done.md.
+# test-e2e-journey-N run the fake-client journey tests (no cluster).
+# test-e2e-kind runs the tagged cluster tests against kind-$(KIND_CLUSTER) only.
 
-test-e2e: kind-up test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 test-e2e-journey-4 test-e2e-journey-5
+test-e2e: test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 test-e2e-journey-4 test-e2e-journey-5
+
+test-e2e-kind: ## Cluster e2e tests (build tag e2e) against kind-$(KIND_CLUSTER); run make e2e-setup first
+	KARDINAL_E2E_CONTEXT=kind-$(KIND_CLUSTER) $(GO) test -tags e2e ./test/e2e/... -run 'TestInfrastructure|TestKind' -count=1 -v -timeout 10m
 
 test-e2e-journey-1: ## Quickstart: 3-env pipeline, PolicyGates, PR for prod
 	@echo "=== Journey 1: Quickstart ==="
@@ -218,7 +197,7 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
 $(GOLANGCI_LINT): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	GOBIN=$(LOCALBIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 $(GOVULNCHECK): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install golang.org/x/vuln/cmd/govulncheck@latest

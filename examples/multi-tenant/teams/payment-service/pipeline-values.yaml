@@ -7,9 +7,9 @@ gitRepo: https://github.com/pnz1990/kardinal-demo
 gitBranch: main
 
 environments:
-  - name: dev
+  - name: test
     approval: auto
-  - name: staging
+  - name: uat
     approval: auto
   - name: prod
     approval: pr-review

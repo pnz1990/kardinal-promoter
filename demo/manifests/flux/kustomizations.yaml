@@ -8,8 +8,8 @@ spec:
   url: https://github.com/pnz1990/kardinal-demo
   ref:
     branch: main
-  secretRef:
-    name: github-token
+  # kardinal-demo is public, so no secretRef. For a private repo, reference a
+  # Secret with username/password (or bearerToken) keys; Flux ignores `token`.
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -19,6 +19,8 @@ metadata:
 spec:
   interval: 30s
   path: ./environments/test
+  # The overlays hardcode namespace default; move each env into its own.
+  targetNamespace: kardinal-test-app-test
   prune: true
   sourceRef:
     kind: GitRepository
@@ -38,6 +40,8 @@ metadata:
 spec:
   interval: 30s
   path: ./environments/uat
+  # The overlays hardcode namespace default; move each env into its own.
+  targetNamespace: kardinal-test-app-uat
   prune: true
   sourceRef:
     kind: GitRepository

@@ -77,6 +77,9 @@ spec:
 
 Both types go through the same Pipeline, same PolicyGates, and same PR flow.
 
+[`examples/config-promotion/`](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/config-promotion)
+has a Pipeline and a config Bundle.
+
 ### Bundle intent
 
 The `spec.intent` field declares how far the Bundle should be promoted:

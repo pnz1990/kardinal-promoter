@@ -25,9 +25,10 @@ on:
   workflow_dispatch:
     inputs:
       scenario:
-        description: 'Specific scenario to run (1-10), or empty for all'
-        required: false
-        default: ''
+        description: 'Scenario to run (see demo/scripts/validate.sh), or all'
+        type: choice
+        default: all
+        options: [all, '1', '2', '3', '4', '5', '6', '7', '8', '9', '11', '12', '13']
       fast:
         description: 'Fast mode (skip soak waits)'
         type: boolean
@@ -42,7 +43,6 @@ env:
   CONTROL_CLUSTER: kardinal-control
   DEV_CLUSTER: kardinal-dev
   PROD_CLUSTER: kardinal-prod
-  CHART_IMAGE_TAG: v0.8.0   # last known-good published image
 
 jobs:
   demo-validate:
@@ -51,54 +51,57 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
 
       - name: Install tools
         run: |
           BIN="${HOME}/.local/bin"
           mkdir -p "$BIN"
-          echo "$BIN" >> $GITHUB_PATH
+          echo "$BIN" >> "$GITHUB_PATH"
 
           # kind
-          curl -Lo "${BIN}/kind" \
-            https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          curl -fsSLo "${BIN}/kind" \
+            https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
           chmod +x "${BIN}/kind"
 
-          # helm (installs to /usr/local/bin via the official script, which uses sudo)
-          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
           # argocd CLI
-          curl -sSL https://github.com/argoproj/argo-cd/releases/download/v2.10.3/argocd-linux-amd64 \
+          curl -fsSL https://github.com/argoproj/argo-cd/releases/download/v2.10.3/argocd-linux-amd64 \
             -o "${BIN}/argocd"
           chmod +x "${BIN}/argocd"
 
-          # kardinal CLI — build from source (always tests latest code in this PR)
-          go build -mod=mod -o "${BIN}/kardinal" ./cmd/kardinal/
+          # kardinal CLI — built from this checkout
+          go build -o "${BIN}/kardinal" ./cmd/kardinal/
           echo "kardinal version: $("${BIN}/kardinal" version 2>&1 | head -1)"
 
       - name: Set up demo environment
         env:
           GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
         run: |
-          # Use the published image tag (set in env.CHART_IMAGE_TAG = v0.8.0)
-          # The setup.sh script will create clusters and install everything.
+          # setup.sh creates the clusters, builds the controller image from
+          # this checkout, loads it into the control cluster and installs it,
+          # so the run validates this PR's controller, not a published image.
           bash demo/scripts/setup.sh
 
       - name: Run validation
         env:
           GITHUB_TOKEN: ${{ secrets.DEMO_GITHUB_TOKEN }}
-          FAST: ${{ github.event.inputs.fast || 'true' }}
+          FAST: ${{ inputs.fast || 'true' }}
+          SCENARIO: ${{ inputs.scenario || 'all' }}
         run: |
-          SCENARIO_ARG=""
-          if [[ -n "${{ github.event.inputs.scenario }}" ]]; then
-            SCENARIO_ARG="--scenario ${{ github.event.inputs.scenario }}"
+          ARGS=()
+          if [[ "$SCENARIO" != "all" ]]; then
+            ARGS=(--scenario "$SCENARIO")
           fi
-          bash demo/scripts/validate.sh $SCENARIO_ARG
+          bash demo/scripts/validate.sh "${ARGS[@]}"
 
       - name: Collect logs on failure
         if: failure()
@@ -108,9 +111,7 @@ jobs:
           kubectl get pods -n kardinal-system -o wide
           echo ""
           echo "=== Controller logs ==="
-          kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter \
-            --tail=100 2>/dev/null || \
-            kubectl logs -n kardinal-system deployment/kardinal-kardinal-promoter \
+          kubectl logs -n kardinal-system deployment/kardinal-promoter \
             --tail=100 2>/dev/null || echo "no logs"
           echo ""
           echo "=== Pipelines ==="
@@ -123,10 +124,11 @@ jobs:
         if: always() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          STATUS=$([[ "${{ job.status }}" == "success" ]] && echo "✅ PASS" || echo "❌ FAIL")
+          STATUS=$([[ "$JOB_STATUS" == "success" ]] && echo "✅ PASS" || echo "❌ FAIL")
           DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
-          BODY="[DEMO VALIDATE | ${DATE}] Nightly demo validation: **${STATUS}** — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY="[DEMO VALIDATE | ${DATE}] Nightly demo validation: **${STATUS}** — ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           # Find the current open kardinal-labeled report issue (daily rotation creates new ones)
           REPORT_ISSUE=$(gh issue list \
             --repo pnz1990/kardinal-promoter \

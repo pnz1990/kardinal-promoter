@@ -23,18 +23,16 @@ curl -s -X POST http://localhost:8080/step \
 
 ## Deploy to Kubernetes
 
-```bash
-# Build and push the image
-docker build -t ghcr.io/myorg/custom-step-server:latest examples/custom-step/
-docker push ghcr.io/myorg/custom-step-server:latest
-
-# Deploy
-kubectl apply -f examples/custom-step/k8s/
-```
+This directory has no Dockerfile or manifests. Build `server.go` into an image
+with your usual tooling and run it as a Deployment behind a Service. The Pipeline
+calls it at `http://custom-step-server.custom-steps.svc.cluster.local/step`
+(port 80), so either use that Service name and namespace or change
+`webhook.url` in `pipeline.yaml`. The server listens on `:8080`.
 
 ## Use in a Pipeline
 
-Apply `examples/custom-step/pipeline.yaml` to add the version gate to your prod environment:
+`examples/custom-step/pipeline.yaml` adds the version gate to the prod environment. Change
+`spec.git.url` from the placeholder `myorg/gitops-repo` to your repo, then apply it:
 
 ```bash
 kubectl apply -f examples/custom-step/pipeline.yaml

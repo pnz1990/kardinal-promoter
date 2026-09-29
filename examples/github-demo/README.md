@@ -14,7 +14,7 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 | PolicyGate: bundle metadata | `bundle.provenance.author != "dependabot[bot]"` |
 | `kardinal explain` | Shows all three gates, CEL expressions, and current values |
 | `kardinal policy simulate` | Simulate gate results for any time/context |
-| Emergency override | `kardinal override kardinal-test-app --env prod --reason "..."` |
+| Emergency override | `kardinal override kardinal-test-app --stage prod --gate <gate> --reason "..."` |
 | Auto-rollback | `onHealthFailure: rollback` opens rollback PR if prod health fails |
 | Rollback PR | `kardinal rollback kardinal-test-app --env prod` opens PR with `kardinal/rollback` label |
 
@@ -29,12 +29,13 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 ```bash
 # 1. Create namespaces and secrets
 kubectl create namespace kardinal-test-app-test
-kubectl create namespace kardinal-test-app-uat  
-kubectl create namespace prod
+kubectl create namespace kardinal-test-app-uat
+kubectl create namespace kardinal-test-app-prod
 kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_TOKEN
 
-# 2. Apply ArgoCD Applications
+# 2. Apply ArgoCD Applications (kardinal-test-app-{test,uat,prod}, the names
+#    the argocd health check derives from this Pipeline)
 kubectl apply -f examples/quickstart/argocd-applications.yaml
 
 # 3. Apply Pipeline and PolicyGates
@@ -55,9 +56,9 @@ LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
 # 1. Create bundle (simulates CI trigger)
-kardinal create bundle kardinal-test-app \
-  --image $TEST_IMAGE \
-  --ci-run-url "https://github.com/pnz1990/kardinal-test-app/actions/runs/123456"
+# The CLI records no CI provenance; a Bundle created by CI (the create-bundle
+# action or POST /api/v1/bundles) carries the commit SHA and CI run URL.
+kardinal create bundle kardinal-test-app --image "$TEST_IMAGE"
 
 # 2. Watch test auto-promote
 kardinal get pipelines
@@ -77,7 +78,7 @@ kardinal explain kardinal-test-app --env prod
 # The PR body includes:
 #   Image: ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}
 #   Digest: sha256:...
-#   CI Run: https://github.com/pnz1990/kardinal-test-app/actions/runs/123456
+#   CI Run: <the ciRunURL on the Bundle, when CI created it>
 #   UAT soak: 31 minutes
 #   Gates: no-weekend-deploys=ALLOWED, uat-soak-gate=ALLOWED, no-bot-deploys=ALLOWED
 
@@ -89,32 +90,28 @@ gh pr merge <PR_NUMBER> --repo pnz1990/kardinal-demo --squash
 ## Policy Simulation
 
 ```bash
-# Test the weekend gate
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 2pm UTC"
+# Test the weekend gate (times are UTC)
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 2pm"
 # RESULT: BLOCKED
-# GATE: no-weekend-deploys — schedule.isWeekend=true
+# Blocked by: no-weekend-deploys
 
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am UTC"
-# RESULT: ALLOWED
-# All 3 gates ALLOWED
-
-# Test with dependabot author
-kardinal policy simulate --pipeline kardinal-test-app --env prod \
-  --author "dependabot[bot]"
-# RESULT: BLOCKED
-# GATE: no-bot-deploys — bundle.provenance.author="dependabot[bot]"
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am"
+# The per-gate lines show no-weekend-deploys passing on a weekday.
 ```
+
+`policy simulate` evaluates the gates against a synthetic Bundle whose author
+is `simulate`, so it cannot show `no-bot-deploys` blocking a dependabot Bundle.
 
 ## Emergency Override
 
 When a hotfix must be deployed despite a failing gate:
 
 ```bash
-# Override blocks the failing gate and creates an audit record
-kardinal override kardinal-test-app --env prod \
+# Override the failing gate for prod and create an audit record
+kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys \
   --reason "Critical security fix CVE-2026-1234 — approved by on-call lead"
 
-# The override is recorded in PromotionStep.status.overrides
+# The override is recorded in the gate's PolicyGate.spec.overrides
 # The prod PR body will show:
 #   ⚠️ OVERRIDE APPLIED
 #   Reason: Critical security fix CVE-2026-1234 — approved by on-call lead
@@ -147,8 +144,8 @@ Every production PR opened by kardinal includes:
 ```markdown
 ## kardinal Promotion Evidence
 
-**Bundle**: kardinal-test-app@sha-abc1234
-**Image**: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+**Bundle**: kardinal-test-app@sha-9349a3f
+**Image**: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
 **Image digest**: sha256:deadbeef...
 **CI Run**: https://github.com/pnz1990/kardinal-test-app/actions/runs/123456
 **Author**: your-alias

@@ -1,22 +1,28 @@
 # root-appset.yaml — Root ApplicationSet for multi-tenant Pipeline provisioning.
 #
-# Platform team applies this once. When a developer creates a new folder under
-# teams/ with a pipeline-values.yaml file, this ApplicationSet automatically:
-#   1. Creates a Namespace for the team
-#   2. Deploys a kardinal Pipeline using the team's pipeline-values.yaml
+# Platform team applies this once. For every folder under
+# examples/multi-tenant/teams/ that holds a pipeline-values.yaml, this
+# ApplicationSet:
+#   1. Creates a Namespace named after the folder
+#   2. Renders the team-pipeline Helm chart (chart/ in this directory) with the
+#      team's pipeline-values.yaml, which creates the team's kardinal Pipeline
 #
-# Prerequisite: the platform-pipeline Helm chart must be installed or available
-# at the referenced path. See chart/ in this directory.
+# The chart and the team folders both live in this repository, so the
+# Application uses two sources: the chart, and this repository again as
+# `$values` for the team's values file (Argo CD 2.6 or later). In your own
+# setup, point both repoURLs at the repository that holds your chart and team
+# folders.
 #
 # Usage:
 #   kubectl apply -f root-appset.yaml
-#   # Then create a team folder:
-#   mkdir teams/my-service && cat > teams/my-service/pipeline-values.yaml << EOF
+#   # Then add a team folder and push it:
+#   mkdir examples/multi-tenant/teams/my-service
+#   cat > examples/multi-tenant/teams/my-service/pipeline-values.yaml << EOF
 #   appName: my-service
-#   gitRepo: https://github.com/myorg/my-gitops-repo
+#   gitRepo: https://github.com/pnz1990/kardinal-demo
 #   environments:
-#     - name: dev
-#     - name: staging
+#     - name: test
+#     - name: uat
 #     - name: prod
 #       approval: pr-review
 #   EOF
@@ -29,10 +35,10 @@ metadata:
 spec:
   generators:
     - git:
-        repoURL: https://github.com/pnz1990/kardinal-demo
+        repoURL: https://github.com/pnz1990/kardinal-promoter
         revision: main
         directories:
-          - path: teams/*
+          - path: examples/multi-tenant/teams/*
   template:
     metadata:
       name: "{{path.basename}}-pipeline"
@@ -40,14 +46,17 @@ spec:
         kardinal.io/managed-by: team-pipelines
     spec:
       project: default
-      source:
-        repoURL: https://github.com/pnz1990/kardinal-demo
-        targetRevision: main
-        path: "teams/{{path.basename}}"
-        helm:
-          releaseName: "{{path.basename}}"
-          valueFiles:
-            - pipeline-values.yaml
+      sources:
+        - repoURL: https://github.com/pnz1990/kardinal-promoter
+          targetRevision: main
+          path: examples/multi-tenant/chart
+          helm:
+            releaseName: "{{path.basename}}"
+            valueFiles:
+              - "$values/examples/multi-tenant/teams/{{path.basename}}/pipeline-values.yaml"
+        - repoURL: https://github.com/pnz1990/kardinal-promoter
+          targetRevision: main
+          ref: values
       destination:
         server: https://kubernetes.default.svc
         namespace: "{{path.basename}}"

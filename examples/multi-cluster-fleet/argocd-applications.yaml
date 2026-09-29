@@ -1,5 +1,7 @@
 # Argo CD ApplicationSet for 4 environments across 4 clusters.
 # Argo CD runs in the hub cluster and manages Applications in all workload clusters.
+# The Applications are named <pipeline>-<env>, as health.type=argocd expects.
+# The cluster servers and repoURL are placeholders.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -32,7 +34,9 @@ spec:
         path: env/{{env}}
       destination:
         server: "{{server}}"
-        namespace: rollouts-demo
+        # The argoRollouts adapter looks for Rollout <pipeline> in a namespace
+        # named after the environment.
+        namespace: "{{env}}"
       syncPolicy:
         automated:
           prune: true

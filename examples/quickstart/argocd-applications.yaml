@@ -1,9 +1,13 @@
 # Argo CD ApplicationSet for the 3 environments.
-# Each Application syncs from a directory in the GitOps repo.
+# Each Application syncs one kardinal-demo overlay. The names must be
+# <pipeline>-<env> (kardinal-test-app-test, ...): that is the Application the
+# argocd health check looks up in the argocd namespace.
+# If you promote into your own fork of kardinal-demo, change repoURL here and
+# spec.git.url in pipeline.yaml to the fork.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: nginx-demo
+  name: kardinal-test-app
   namespace: argocd
 spec:
   generators:
@@ -14,16 +18,20 @@ spec:
           - env: prod
   template:
     metadata:
-      name: nginx-demo-{{env}}
+      name: kardinal-test-app-{{env}}
     spec:
       project: default
       source:
-        repoURL: https://github.com/<your-username>/kardinal-demo
+        repoURL: https://github.com/pnz1990/kardinal-demo
         targetRevision: main
         path: environments/{{env}}
+        # The kardinal-demo overlays set namespace "default"; move each
+        # environment into its own namespace so they do not collide.
+        kustomize:
+          namespace: kardinal-test-app-{{env}}
       destination:
         server: https://kubernetes.default.svc
-        namespace: nginx-demo-{{env}}
+        namespace: kardinal-test-app-{{env}}
       syncPolicy:
         automated:
           prune: true

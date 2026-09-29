@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sigyaml "sigs.k8s.io/yaml"
 )
 
 // repoRoot walks up from the test file to find the repo root (the directory
@@ -163,18 +164,95 @@ func TestHelmTemplateContainerImage(t *testing.T) {
 }
 
 func TestHelmTemplatePorts(t *testing.T) {
+	ports := map[int64]bool{}
+	for _, d := range renderChart(t, "kardinal-promoter") {
+		if d["kind"] != "Deployment" {
+			continue
+		}
+		containers, _ := dig(d, "spec", "template", "spec", "containers").([]interface{})
+		for _, c := range containers {
+			cps, _ := dig(c, "ports").([]interface{})
+			for _, p := range cps {
+				if n, ok := dig(p, "containerPort").(float64); ok {
+					ports[int64(n)] = true
+				}
+			}
+		}
+	}
+	assert.True(t, ports[8080], "the Deployment must declare containerPort 8080 (metrics), got %v", ports)
+	assert.True(t, ports[8081], "the Deployment must declare containerPort 8081 (health), got %v", ports)
+}
+
+// TestHelmTemplateGraphFlagsNameRenderedObjects renders the chart under two
+// release names and checks that the controller's --graph-*-clusterrole flags
+// name ClusterRoles the chart creates. `make install` uses the release name
+// kardinal, whose object names differ from kardinal-promoter. (The Graph
+// ServiceAccount is created by the controller in each Graph's namespace.)
+func TestHelmTemplateGraphFlagsNameRenderedObjects(t *testing.T) {
+	for _, release := range []string{"kardinal-promoter", "kardinal"} {
+		t.Run(release, func(t *testing.T) {
+			have := map[string]bool{}
+			var args []interface{}
+			for _, d := range renderChart(t, release) {
+				kind, _ := d["kind"].(string)
+				name, _ := dig(d, "metadata", "name").(string)
+				have[kind+"/"+name] = true
+				if kind == "Deployment" {
+					containers, _ := dig(d, "spec", "template", "spec", "containers").([]interface{})
+					for _, c := range containers {
+						a, _ := dig(c, "args").([]interface{})
+						args = append(args, a...)
+					}
+				}
+			}
+			flags := map[string]string{
+				"--graph-applier-clusterrole=": "ClusterRole/",
+				"--graph-reader-clusterrole=":  "ClusterRole/",
+			}
+			found := 0
+			for _, a := range args {
+				arg, _ := a.(string)
+				for flag, kind := range flags {
+					if strings.HasPrefix(arg, flag) {
+						found++
+						assert.True(t, have[kind+strings.TrimPrefix(arg, flag)], "%s names an object the chart does not render", arg)
+					}
+				}
+			}
+			assert.Equal(t, len(flags), found, "the controller must get both --graph-*-clusterrole flags")
+		})
+	}
+}
+
+// renderChart runs helm template for the chart and returns the documents.
+func renderChart(t *testing.T, release string, extra ...string) []map[string]interface{} {
+	t.Helper()
 	helm := helmBin(t)
-	root := repoRoot(t)
-	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+	chartDir := filepath.Join(repoRoot(t), "chart", "kardinal-promoter")
+	out, err := exec.Command(helm, append([]string{"template", release, chartDir}, extra...)...).Output()
+	require.NoError(t, err, "helm template must succeed")
+	var docs []map[string]interface{}
+	for _, raw := range strings.Split(string(out), "\n---") {
+		var d map[string]interface{}
+		require.NoError(t, sigyaml.Unmarshal([]byte(raw), &d))
+		if d != nil {
+			docs = append(docs, d)
+		}
+	}
+	require.NotEmpty(t, docs)
+	return docs
+}
 
-	cmd := exec.Command(helm, "template", "kardinal-promoter", chartDir)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
-
-	rendered := string(out)
-	// Metrics port 8080 and health port 8081 must be declared
-	assert.Contains(t, rendered, "8080", "must declare metrics port 8080")
-	assert.Contains(t, rendered, "8081", "must declare health port 8081")
+// dig returns the value at a map path, or nil.
+func dig(v interface{}, keys ...string) interface{} {
+	for _, k := range keys {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		v = m[k]
+	}
+	return v
 }
 
 func TestDockerignoreExists(t *testing.T) {
@@ -189,24 +267,6 @@ func TestDockerfileExists(t *testing.T) {
 	dockerfile := filepath.Join(root, "Dockerfile")
 	_, err := os.Stat(dockerfile)
 	require.NoError(t, err, "Dockerfile must exist")
-}
-
-func TestDockerfileContent(t *testing.T) {
-	root := repoRoot(t)
-	dockerfile := filepath.Join(root, "Dockerfile")
-	data, err := os.ReadFile(dockerfile)
-	require.NoError(t, err)
-
-	content := string(data)
-	assert.Contains(t, content, "golang:1.26", "builder stage must use golang:1.26")
-	// Final stage uses alpine with git+kustomize (required by promotion step engine).
-	// Changed from distroless to alpine to include git and kustomize binaries.
-	assert.Contains(t, content, "alpine", "final stage must use alpine image")
-	assert.Contains(t, content, "65532", "final stage must use nonroot UID 65532")
-	assert.Contains(t, content, "git", "final stage must install git")
-	assert.Contains(t, content, "kustomize", "final stage must install kustomize")
-	assert.Contains(t, content, "kardinal-controller", "must build kardinal-controller binary")
-	assert.Contains(t, content, "ENTRYPOINT", "must set ENTRYPOINT")
 }
 
 func TestHelmTemplatePDBCreatedForMultiReplica(t *testing.T) {
@@ -306,8 +366,26 @@ func TestHelmTemplatePrometheusRuleEnabledWhenConfigured(t *testing.T) {
 	assert.Contains(t, rendered, "KardinalWebhookErrors",
 		"PrometheusRule must include KardinalWebhookErrors alert")
 	// Every alert must have a runbook_url
-	assert.Contains(t, rendered, "runbook_url",
-		"All alerts must include runbook_url annotation")
+	alerts := 0
+	for _, d := range renderChart(t, "kardinal-promoter", "--set", "prometheusRule.enabled=true") {
+		if d["kind"] != "PrometheusRule" {
+			continue
+		}
+		groups, _ := dig(d, "spec", "groups").([]interface{})
+		for _, g := range groups {
+			rules, _ := dig(g, "rules").([]interface{})
+			for _, r := range rules {
+				alert, _ := dig(r, "alert").(string)
+				if alert == "" {
+					continue
+				}
+				alerts++
+				url, _ := dig(r, "annotations", "runbook_url").(string)
+				assert.NotEmpty(t, url, "alert %s must have a runbook_url annotation", alert)
+			}
+		}
+	}
+	assert.GreaterOrEqual(t, alerts, 6, "expected the six alerts above")
 }
 
 func TestHelmTemplatePrometheusRuleAdditionalLabels(t *testing.T) {

@@ -1,3 +1,5 @@
+# A sample Bundle for manual creation. In CI, use `kardinal create bundle`
+# or the create-bundle action instead (see docs/ci-integration.md).
 apiVersion: kardinal.io/v1alpha1
 kind: Bundle
 metadata:
@@ -6,15 +8,14 @@ metadata:
   labels:
     kardinal.io/pipeline: rollouts-demo
 spec:
-  artifacts:
-    images:
-      - name: rollouts-demo
-        reference: ghcr.io/myorg/rollouts-demo:v2.0.0
-        digest: sha256:replace-with-actual-digest
+  type: image
+  pipeline: rollouts-demo
+  images:
+    - repository: ghcr.io/myorg/rollouts-demo
+      tag: v2.0.0
   provenance:
     commitSHA: "def456abc789"
     ciRunURL: "https://github.com/myorg/rollouts-demo/actions/runs/67890"
     author: "engineer-name"
-    buildTimestamp: "2026-04-09T14:00:00Z"
   intent:
-    target: prod-us
+    targetEnvironment: prod-us

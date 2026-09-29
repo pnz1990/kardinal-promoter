@@ -18,12 +18,13 @@ on:
       - "mkdocs.yml"
       - "api/v1alpha1/**"
       - "cmd/kardinal/**"
+      - "hack/gen-cli-docs/**"
       - "README.md"
+      - ".github/workflows/docs.yml"
 
+# Read-only by default; only the deploy job (main pushes) writes gh-pages.
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 # Serialise gh-pages deploys — never cancel an in-flight deploy (would corrupt
 # the gh-pages branch); queue the next one instead (cancel-in-progress: false).
@@ -39,15 +40,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Generate CLI reference pages
-        run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/
-        env:
-          GOFLAGS: -mod=mod
+        run: go run ./hack/gen-cli-docs/main.go --output docs/reference/cli/ --quickref docs/cli-reference.md
 
       - name: Upload generated CLI docs
         uses: actions/upload-artifact@v7
@@ -56,61 +55,11 @@ jobs:
           path: docs/reference/cli/
           retention-days: 1
 
-  # ── Step 2: Generate CRD API reference from Go types ──────────────────────
-  generate-api-docs:
-    name: Generate API docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install gen-crd-api-reference-docs
-        run: go install github.com/ahmetb/gen-crd-api-reference-docs@v0.3.0
-
-      - name: Create API ref templates directory
-        run: |
-          mkdir -p hack/api-ref-templates
-          # Use default templates — creates clean Markdown output
-          cat > hack/api-ref-config.json << 'EOF'
-          {
-            "hideMemberFields": ["TypeMeta", "ListMeta"],
-            "hideTypePatterns": [".*List$"],
-            "externalPackages": [
-              {
-                "typeMatchPrefix": "k8s.io/apimachinery",
-                "docsURLTemplate": "https://pkg.go.dev/k8s.io/apimachinery/{{.importPath}}#{{.name}}"
-              }
-            ],
-            "typeDisplayNamePrefixOverrides": {
-              "kardinal.io/v1alpha1": ""
-            }
-          }
-          EOF
-
-      - name: Generate API reference
-        run: |
-          gen-crd-api-reference-docs \
-            -api-dir ./api/v1alpha1 \
-            -config hack/api-ref-config.json \
-            -out-file docs/reference/api.md \
-            -v 4 2>&1 || echo "Generation completed (warnings expected for unresolved types)"
-
-      - name: Upload generated API docs
-        uses: actions/upload-artifact@v7
-        with:
-          name: generated-api-docs
-          path: docs/reference/api.md
-          retention-days: 1
-
   # ── Step 3: Build and validate ─────────────────────────────────────────────
   build:
     name: Build docs
     runs-on: ubuntu-latest
-    needs: [generate-cli-docs, generate-api-docs]
+    needs: [generate-cli-docs]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -122,12 +71,6 @@ jobs:
           name: generated-cli-docs
           path: docs/reference/cli/
 
-      - name: Download generated API docs
-        uses: actions/download-artifact@v8
-        with:
-          name: generated-api-docs
-          path: docs/reference/
-        continue-on-error: true  # API gen may fail on partial types
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -167,36 +110,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Check CLI detail pages and quick-reference are up to date
         run: |
-          go run ./hack/gen-cli-docs/main.go --output /tmp/cli-docs/
+          go run ./hack/gen-cli-docs/main.go --output /tmp/cli-docs/ --quickref /tmp/cli-reference-gen.md
           FAIL=0
           # Check per-command detail pages
-          if ! diff -rq /tmp/cli-docs/ docs/reference/cli/ 2>/dev/null; then
+          if ! diff -r /tmp/cli-docs/ docs/reference/cli/; then
             echo "::error::CLI detail docs are stale. Run: go run ./hack/gen-cli-docs/main.go"
-            diff -r /tmp/cli-docs/ docs/reference/cli/ || true
             FAIL=1
           fi
-          # Check consolidated quick-reference (docs/cli-reference.md)
-          # The generator also writes this file; compare against what's in the repo.
-          if [ -f /tmp/cli-reference-gen.md ]; then
-            if ! diff -q /tmp/cli-reference-gen.md docs/cli-reference.md 2>/dev/null; then
-              echo "::error::docs/cli-reference.md is stale. Run: go run ./hack/gen-cli-docs/main.go"
-              diff /tmp/cli-reference-gen.md docs/cli-reference.md || true
-              FAIL=1
-            fi
+          # Check the consolidated quick-reference (docs/cli-reference.md)
+          if ! diff /tmp/cli-reference-gen.md docs/cli-reference.md; then
+            echo "::error::docs/cli-reference.md is stale. Run: go run ./hack/gen-cli-docs/main.go"
+            FAIL=1
           fi
           if [ $FAIL -eq 0 ]; then
             echo "::notice::CLI docs are in sync"
           fi
           exit $FAIL
-        env:
-          GOFLAGS: -mod=mod
 
   # ── Step 5: Deploy to GitHub Pages (main only) ────────────────────────────
   deploy:
@@ -204,6 +140,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # mkdocs gh-deploy pushes the gh-pages branch.
+    permissions:
+      contents: write
     environment:
       name: github-pages
       url: https://pnz1990.github.io/kardinal-promoter/
@@ -218,12 +157,6 @@ jobs:
           name: generated-cli-docs
           path: docs/reference/cli/
 
-      - name: Download generated API docs
-        uses: actions/download-artifact@v8
-        with:
-          name: generated-api-docs
-          path: docs/reference/
-        continue-on-error: true
 
       - name: Set up Python
         uses: actions/setup-python@v7

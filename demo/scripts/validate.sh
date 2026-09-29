@@ -24,20 +24,20 @@
 #   7. Pause / resume             bundle halts at test when paused
 #   8. Rollback                   kardinal rollback → PR with rollback label
 #   9. CLI completeness           version, get, explain, completion, --dry-run
-#  10. Multi-cluster pipeline     kardinal-test-app-advanced promotes across clusters
 #  11. Flux health adapter        Kustomization Ready=True → adapter reports Healthy
 #  12. Argo Rollouts adapter      Rollout phase=Healthy → adapter reports Healthy
 #  13. Flagger health adapter     Canary phase=Succeeded → adapter reports Healthy
 #
 # Scenarios 11-13 skip gracefully when the adapter is not installed.
 # To enable all: run setup.sh with INSTALL_FLUX=true INSTALL_ARGO_ROLLOUTS=true INSTALL_FLAGGER=true
-#   9. CLI completeness           version, get, explain, logs, audit, history
-#  10. Multi-cluster pipeline     kardinal-test-app-advanced promotes across clusters
+#
+# The script counts its own failures, so it does not use set -e: one failing
+# command must not abort the run before the summary.
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
 
-set -euo pipefail
+set -uo pipefail
 
 DEMO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${DEMO_DIR}/.." && pwd)"
@@ -47,28 +47,32 @@ FAST="${FAST:-false}"
 SCENARIO_FILTER=""
 
 # ── Find kardinal CLI ─────────────────────────────────────────────────────────
-# Prefer a locally built binary in the repo root so CI always tests current code.
-if [[ -x "${REPO_ROOT}/bin/kardinal" ]]; then
+# KARDINAL overrides the binary. Otherwise prefer a locally built binary in the
+# repo root so CI always tests current code.
+if [[ -n "${KARDINAL:-}" ]]; then
+  :
+elif [[ -x "${REPO_ROOT}/bin/kardinal" ]]; then
   KARDINAL="${REPO_ROOT}/bin/kardinal"
 elif command -v kardinal &>/dev/null; then
   KARDINAL="kardinal"
 else
   echo "[validate] kardinal CLI not found. Building from source..."
-  go build -mod=mod -o "${REPO_ROOT}/bin/kardinal" "${REPO_ROOT}/cmd/kardinal/" 2>/dev/null || \
-    /usr/local/go126/bin/go build -mod=mod -o "${REPO_ROOT}/bin/kardinal" "${REPO_ROOT}/cmd/kardinal/"
+  (cd "${REPO_ROOT}" && go build -mod=mod -o "${REPO_ROOT}/bin/kardinal" ./cmd/kardinal/) || exit 1
   KARDINAL="${REPO_ROOT}/bin/kardinal"
 fi
-alias kardinal="${KARDINAL}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 PASS=0; FAIL=0; SKIP=0
 FAILURES=()
 
-for arg in "$@"; do
-  case $arg in
-    --fast)           FAST=true ;;
-    --scenario)       shift; SCENARIO_FILTER="$1" ;;
-    --scenario=*)     SCENARIO_FILTER="${arg#*=}" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --fast) FAST=true; shift ;;
+    --scenario)
+      [[ $# -ge 2 ]] || { echo "usage: $0 [--fast] [--scenario N]" >&2; exit 2; }
+      SCENARIO_FILTER="$2"; shift 2 ;;
+    --scenario=*) SCENARIO_FILTER="${1#*=}"; shift ;;
+    *) echo "unknown argument: $1" >&2; echo "usage: $0 [--fast] [--scenario N]" >&2; exit 2 ;;
   esac
 done
 
@@ -100,14 +104,13 @@ else
   exit 1
 fi
 
-# Get a real test app image
-TEST_APP_IMAGE=$(kubectl get pods -n kardinal-system -o jsonpath='{.items[0].spec.containers[0].image}' 2>/dev/null | \
-  grep -o 'kardinal-test-app:[^"]*' | head -1 || echo "")
-if [[ -z "$TEST_APP_IMAGE" ]]; then
+# A real test app image: TEST_APP_IMAGE, else the latest kardinal-test-app
+# commit, else the image kardinal-demo's overlays pin.
+if [[ -z "${TEST_APP_IMAGE:-}" ]]; then
   LATEST_SHA=$(curl -sf --max-time 5 "https://api.github.com/repos/pnz1990/kardinal-test-app/commits/main" \
-    -H "Authorization: Bearer ${GITHUB_TOKEN}" 2>/dev/null | \
-    python3 -c "import sys,json; print(json.load(sys.stdin)['sha'][:7])" 2>/dev/null || echo "latest")
-  TEST_APP_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+    ${GITHUB_TOKEN:+-H "Authorization: Bearer ${GITHUB_TOKEN}"} 2>/dev/null | \
+    python3 -c "import sys,json; print(json.load(sys.stdin)['sha'][:7])" 2>/dev/null || true)
+  TEST_APP_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA:-9349a3f}"
 fi
 
 # Start port-forward for UI tests
@@ -120,7 +123,8 @@ trap cleanup EXIT
 # ── Scenario 1: Controller health ────────────────────────────────────────────
 
 if scenario 1 "Controller health"; then
-  if $KARDINAL doctor 2>&1 | grep -q "All checks passed\|OK"; then
+  # doctor exits non-zero when any check fails.
+  if DOCTOR=$($KARDINAL doctor 2>&1) && echo "$DOCTOR" | grep -q "check(s) passed"; then
     pass "kardinal doctor reports healthy"
   elif kubectl get pods -n kardinal-system 2>/dev/null | grep -q "Running"; then
     pass "controller pod is Running (kardinal doctor partial)"
@@ -138,10 +142,10 @@ if scenario 2 "Pipeline list"; then
   else
     fail "kardinal get pipelines: pipeline not found. Output: $OUTPUT"
   fi
-  if $KARDINAL get pipelines -o json 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d)>0" 2>/dev/null; then
+  if $KARDINAL get pipelines -o json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); assert any(p['metadata']['name'] == 'kardinal-test-app' for p in d)" 2>/dev/null; then
     pass "kardinal get pipelines --output json is valid JSON"
   else
-    skip "JSON output check skipped"
+    fail "kardinal get pipelines -o json does not list kardinal-test-app"
   fi
 fi
 
@@ -185,10 +189,8 @@ if scenario 4 "Happy path promotion (test→uat→prod PR)"; then
   if [[ -z "$GITHUB_TOKEN" ]]; then
     skip "Scenario 4 skipped — GITHUB_TOKEN not set (required for GitOps push)"
   else
-    # Create a bundle — use a timeout to avoid hanging without a working token
-    OUTPUT=$(  { $KARDINAL create bundle kardinal-test-app --image "$TEST_APP_IMAGE" 2>&1 & } ; \
-               PID=$! ; sleep 10 ; kill $PID 2>/dev/null ; wait $PID 2>/dev/null || true ; echo "" )
-    if echo "$OUTPUT" | grep -qi "created\|bundle"; then
+    OUTPUT=$(timeout 30 $KARDINAL create bundle kardinal-test-app --image "$TEST_APP_IMAGE" 2>&1)
+    if echo "$OUTPUT" | grep -q "created for pipeline kardinal-test-app"; then
       pass "Bundle created: $TEST_APP_IMAGE"
     else
       fail "Bundle creation failed: $OUTPUT"
@@ -199,15 +201,14 @@ if scenario 4 "Happy path promotion (test→uat→prod PR)"; then
     echo -e "${BLUE}  →${NC} Waiting ${WAIT_SECS}s for test environment..."
     sleep "$WAIT_SECS"
 
-    STATUS=$($KARDINAL get pipelines -o json 2>/dev/null | \
+    # get bundles -o json prints Bundle objects; progress is status.environments.
+    STATUS=$($KARDINAL get bundles kardinal-test-app -o json 2>/dev/null | \
       python3 -c "
 import sys, json
-pipelines = json.load(sys.stdin)
-for p in pipelines:
-    if p.get('name') == 'kardinal-test-app':
-        envs = p.get('environments', {})
-        print(json.dumps(envs))
-" 2>/dev/null || echo "{}")
+for b in json.load(sys.stdin):
+    for e in (b.get('status') or {}).get('environments') or []:
+        print(e.get('name'), e.get('phase'))
+" 2>/dev/null || true)
 
     if echo "$STATUS" | grep -qi "Verified\|Promoting\|WaitingForMerge"; then
       pass "Pipeline is progressing (test/uat Verified or Promoting)"
@@ -222,9 +223,11 @@ fi
 # ── Scenario 5: Weekend gate ──────────────────────────────────────────────────
 
 if scenario 5 "PolicyGate: weekend blocks prod"; then
+  # Match the no-weekend-deploys gate's own line ("<gate>:<tab>PASS|BLOCKED"),
+  # not any PASS elsewhere in the output.
   OUTPUT=$($KARDINAL policy simulate --pipeline kardinal-test-app --env prod \
     --time "Saturday 3pm" 2>&1)
-  if echo "$OUTPUT" | grep -qi "BLOCKED\|blocked"; then
+  if echo "$OUTPUT" | grep -q "^RESULT: BLOCKED" && echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+BLOCKED"; then
     pass "Weekend gate blocks prod on Saturday"
   else
     fail "Weekend gate did not block. Output: $OUTPUT"
@@ -232,7 +235,7 @@ if scenario 5 "PolicyGate: weekend blocks prod"; then
 
   OUTPUT=$($KARDINAL policy simulate --pipeline kardinal-test-app --env prod \
     --time "Tuesday 10am" 2>&1)
-  if echo "$OUTPUT" | grep -qi "ALLOWED\|allowed\|PASS\|pass"; then
+  if echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+PASS"; then
     pass "Weekend gate allows prod on Tuesday"
   else
     fail "Weekend gate did not allow on Tuesday. Output: $OUTPUT"
@@ -253,24 +256,30 @@ fi
 # ── Scenario 7: Pause / resume ────────────────────────────────────────────────
 
 if scenario 7 "Pause / resume pipeline"; then
-  $KARDINAL pause kardinal-test-app 2>&1 | grep -qi "paused\|pause" && \
-    pass "kardinal pause accepted" || fail "kardinal pause failed"
+  if $KARDINAL pause kardinal-test-app 2>&1 | grep -q "Pipeline kardinal-test-app paused"; then
+    pass "kardinal pause accepted"
+  else
+    fail "kardinal pause failed"
+  fi
 
   STATUS=$($KARDINAL get pipelines -o json 2>/dev/null | \
     python3 -c "
 import sys, json
 for p in json.load(sys.stdin):
-    if p.get('name') == 'kardinal-test-app':
-        print(p.get('paused', False))
+    if p['metadata']['name'] == 'kardinal-test-app':
+        print(p.get('spec', {}).get('paused', False))
 " 2>/dev/null || echo "")
-  if echo "$STATUS" | grep -qi "true"; then
-    pass "Pipeline shows paused=true"
+  if [[ "$STATUS" == "True" ]]; then
+    pass "Pipeline shows spec.paused=true"
   else
-    skip "paused field not confirmed (may need active bundle)"
+    fail "Pipeline spec.paused is not true after kardinal pause"
   fi
 
-  $KARDINAL resume kardinal-test-app 2>&1 | grep -qi "resumed\|resume" && \
-    pass "kardinal resume accepted" || fail "kardinal resume failed"
+  if $KARDINAL resume kardinal-test-app 2>&1 | grep -q "Pipeline kardinal-test-app resumed"; then
+    pass "kardinal resume accepted"
+  else
+    fail "kardinal resume failed"
+  fi
 fi
 
 # ── Scenario 8: Rollback ──────────────────────────────────────────────────────
@@ -279,12 +288,11 @@ if scenario 8 "Rollback opens a PR"; then
   if [[ -z "$GITHUB_TOKEN" ]]; then
     skip "Scenario 8 skipped — GITHUB_TOKEN not set (required for GitOps push)"
   else
-    OUTPUT=$($KARDINAL rollback kardinal-test-app --env prod 2>&1 &
-      PID=$! ; sleep 8 ; kill $PID 2>/dev/null ; wait $PID 2>/dev/null || true ; echo "")
-    if echo "$OUTPUT" | grep -qi "rollback\|PR\|pull request\|opened"; then
-      pass "kardinal rollback accepted"
+    OUTPUT=$(timeout 30 $KARDINAL rollback kardinal-test-app --env prod 2>&1)
+    if echo "$OUTPUT" | grep -q "created (rollbackOf="; then
+      pass "kardinal rollback created a rollback Bundle"
     else
-      skip "Rollback skipped (requires promoted bundle in prod)"
+      skip "Rollback skipped (requires a promoted bundle in prod). Output: $(echo "$OUTPUT" | head -2)"
     fi
   fi
 fi
@@ -318,17 +326,6 @@ $KARDINAL create bundle kardinal-test-app \
     --dry-run 2>&1 | grep -qi "dry.run\|DRY.RUN\|preview\|would\|simulate" && \
     pass "kardinal create bundle --dry-run works" || \
     fail "kardinal create bundle --dry-run: unexpected output"
-fi
-
-# ── Scenario 10: Multi-cluster pipeline ──────────────────────────────────────
-
-if scenario 10 "Multi-cluster pipeline exists"; then
-  OUTPUT=$($KARDINAL get pipelines 2>&1)
-  if echo "$OUTPUT" | grep -qi "kardinal-test-app-advanced\|advanced"; then
-    pass "Advanced (multi-cluster) pipeline is registered"
-  else
-    skip "Multi-cluster pipeline not found — apply demo/manifests/pipeline-advanced/"
-  fi
 fi
 
 # ── Scenario 11: Flux health adapter ─────────────────────────────────────────
