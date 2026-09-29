@@ -223,11 +223,11 @@ fi
 # ── Scenario 5: Weekend gate ──────────────────────────────────────────────────
 
 if scenario 5 "PolicyGate: weekend blocks prod"; then
-  # Match the no-weekend-deploys gate's own line ("<gate>:<tab>PASS|BLOCKED"),
-  # not any PASS elsewhere in the output.
+  # Match the no-weekend-deploys gate's own row ("<gate>:   PASS|BLOCK   (...)",
+  # cmd/kardinal/cmd/policy.go), not any PASS elsewhere in the output.
   OUTPUT=$($KARDINAL policy simulate --pipeline kardinal-test-app --env prod \
     --time "Saturday 3pm" 2>&1)
-  if echo "$OUTPUT" | grep -q "^RESULT: BLOCKED" && echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+BLOCKED"; then
+  if echo "$OUTPUT" | grep -q "^RESULT: BLOCKED" && echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+BLOCK[[:space:]]"; then
     pass "Weekend gate blocks prod on Saturday"
   else
     fail "Weekend gate did not block. Output: $OUTPUT"
@@ -235,7 +235,7 @@ if scenario 5 "PolicyGate: weekend blocks prod"; then
 
   OUTPUT=$($KARDINAL policy simulate --pipeline kardinal-test-app --env prod \
     --time "Tuesday 10am" 2>&1)
-  if echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+PASS"; then
+  if echo "$OUTPUT" | grep -Eq "^no-weekend-deploys:[[:space:]]+PASS[[:space:]]"; then
     pass "Weekend gate allows prod on Tuesday"
   else
     fail "Weekend gate did not allow on Tuesday. Output: $OUTPUT"

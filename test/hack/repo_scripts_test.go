@@ -181,10 +181,11 @@ func TestWorkflowBashSyntaxValidator(t *testing.T) {
 }
 
 // fakeSimulate is a kardinal CLI whose policy simulate output is chosen by
-// the --time argument.
+// the --time argument. The gate rows use the real CLI's format: tabwriter
+// pads with spaces, and a blocking gate is BLOCK (cmd/kardinal/cmd/policy.go).
 const fakeSimulate = `#!/usr/bin/env bash
 case "$*" in
-  *Saturday*) printf 'RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n\nno-weekend-deploys:\tBLOCKED\t(weekend)\nno-bot-deploys:\tPASS\t(ok)\n' ;;
+  *Saturday*) printf 'RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n\nno-weekend-deploys:   BLOCK   (weekend)\nno-bot-deploys:       PASS    (ok)\n' ;;
   *Tuesday*) printf '%b' "$FAKE_TUESDAY" ;;
 esac
 `
@@ -197,11 +198,11 @@ func TestDemoValidateScenarioSelectionAndMatching(t *testing.T) {
 	}{
 		{
 			name:    "weekend gate passes on Tuesday while another gate blocks",
-			tuesday: `RESULT: BLOCKED\nBlocked by: require-uat-soak\n\nno-weekend-deploys:\tPASS\t(weekday)\nrequire-uat-soak:\tBLOCKED\t(soak)\n`,
+			tuesday: `RESULT: BLOCKED\nBlocked by: require-uat-soak\n\nno-weekend-deploys:   PASS    (weekday)\nrequire-uat-soak:     BLOCK   (soak)\n`,
 		},
 		{
 			name:     "weekend gate blocks on Tuesday; another gate's PASS must not count",
-			tuesday:  `RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n\nno-weekend-deploys:\tBLOCKED\t(weekend)\nno-bot-deploys:\tPASS\t(ok)\n`,
+			tuesday:  `RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n\nno-weekend-deploys:   BLOCK   (weekend)\nno-bot-deploys:       PASS    (ok)\n`,
 			wantFail: true,
 		},
 	}
