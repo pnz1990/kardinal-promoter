@@ -37,6 +37,10 @@ func (e *Engine) StepNames() []string {
 	return e.steps
 }
 
+// MaxSequenceRestarts bounds how many times one ExecuteFrom call restarts the
+// sequence from the first step after a step returned StepRestart.
+const MaxSequenceRestarts = 3
+
 // ExecuteFrom executes steps starting at startIndex (0-based).
 // It returns the index of the next step to execute (or len(steps) if all completed),
 // the result of the last executed step, and any fatal error.
@@ -45,10 +49,16 @@ func (e *Engine) StepNames() []string {
 // Callers must persist the returned nextIndex in PromotionStep.status.currentStepIndex
 // before returning from the reconciler.
 //
+// A step that returns StepRestart (for example git-push after the base branch
+// moved) makes the engine run the sequence again from index 0, at most
+// MaxSequenceRestarts times; after that the step is reported as Failed.
+// ExecuteFrom never returns StepRestart.
+//
 // When state.StepTimeoutSeconds > 0, each step is executed with a per-step
 // context.WithTimeout to prevent hung steps from blocking the reconciler indefinitely.
 func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex int) (nextIndex int, result StepResult, err error) {
 	log := zerolog.Ctx(ctx)
+	restarts := 0
 
 	for i := startIndex; i < len(e.steps); i++ {
 		name := e.steps[i]
@@ -59,17 +69,7 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 
 		log.Info().Str("step", name).Int("index", i).Msg("executing step")
 
-		// Apply per-step timeout when configured (state.StepTimeoutSeconds > 0).
-		// The cancel function must be called to release resources even when the
-		// context is not cancelled — defer inside the loop body ensures this.
-		stepCtx := ctx
-		if state.StepTimeoutSeconds > 0 {
-			var cancel context.CancelFunc
-			stepCtx, cancel = context.WithTimeout(ctx, time.Duration(state.StepTimeoutSeconds)*time.Second)
-			defer cancel() //nolint:revive // intentional: cancel is called at function return
-		}
-
-		result, err = step.Execute(stepCtx, state)
+		result, err = executeStep(ctx, step, state)
 		if err != nil {
 			return i, result, fmt.Errorf("step %s: %w", name, err)
 		}
@@ -88,10 +88,33 @@ func (e *Engine) ExecuteFrom(ctx context.Context, state *StepState, startIndex i
 			return i, result, nil
 		case StepFailed:
 			return i, result, fmt.Errorf("step %s: %s", name, result.Message)
+		case StepRestart:
+			if restarts >= MaxSequenceRestarts {
+				result.Status = StepFailed
+				result.Message = fmt.Sprintf("%s (gave up after %d restarts)", result.Message, restarts)
+				return i, result, fmt.Errorf("step %s: %s", name, result.Message)
+			}
+			restarts++
+			log.Info().Str("step", name).Int("restart", restarts).Str("reason", result.Message).
+				Msg("restarting step sequence from the first step")
+			i = -1 // the loop increment makes this 0
 		case StepSuccess:
 			// Continue to next step.
+		default:
+			return i, result, fmt.Errorf("step %s: unknown status %q", name, result.Status)
 		}
 	}
 
 	return len(e.steps), StepResult{Status: StepSuccess, Message: "all steps complete"}, nil
+}
+
+// executeStep runs one step, applying the per-step timeout when configured.
+// The timeout context is released as soon as the step returns.
+func executeStep(ctx context.Context, step Step, state *StepState) (StepResult, error) {
+	if state.StepTimeoutSeconds <= 0 {
+		return step.Execute(ctx, state)
+	}
+	stepCtx, cancel := context.WithTimeout(ctx, time.Duration(state.StepTimeoutSeconds)*time.Second)
+	defer cancel()
+	return step.Execute(stepCtx, state)
 }

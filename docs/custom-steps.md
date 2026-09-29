@@ -39,7 +39,12 @@ spec:
 
 Headers:
 - `Content-Type: application/json`
-- `Authorization: <value from secretRef>` (only if `secretRef` is configured)
+- `Authorization: <value>` (only if `secretRef` is configured; see [Authentication](#authentication))
+
+`webhook.url` must be an `http` or `https` URL. The controller refuses to connect to
+link-local addresses (including the `169.254.169.254` and `fd00:ec2::254` cloud metadata
+endpoints), unspecified and multicast addresses, also after DNS resolution and redirects.
+Cluster Services and other private addresses are allowed.
 
 Body:
 
@@ -51,8 +56,7 @@ Body:
   },
   "environment": "prod",
   "inputs": {
-    "webhook.url": "http://...",
-    "webhook.timeoutSeconds": "30"
+    "suite": "smoke"
   },
   "outputs_so_far": {
     "branch": "kardinal/my-app-v2-0-0/prod"
@@ -76,14 +80,22 @@ Body:
 | `outputs` | `map[string]string` | No | Key/value pairs merged into `PromotionStep.status.outputs` and available to subsequent steps |
 | `message` | `string` | No | Human-readable explanation shown by `kardinal explain` |
 
+`inputs` holds the step's inputs except the step's own `webhook.*` settings (URL, timeout,
+secretRef and the Authorization value), which are never sent in the body.
+
 ### Status codes
 
 | Status | Behaviour |
 |---|---|
-| 2xx | Parse response body, use `result` field |
+| 2xx | Parse response body, use `result` field. A body that is not the JSON above marks the step Failed |
 | 4xx | Mark step Failed immediately (no retry) |
-| 5xx | Retry up to 3 times with 30-second backoff, then fail |
-| Timeout | If the server does not respond within `timeoutSeconds`, mark step Failed |
+| 5xx, connection error | Retry up to 3 times with 30-second backoff, then fail |
+| Timeout | If the server does not respond within `timeoutSeconds`, mark step Failed (no retry) |
+
+On a non-2xx response the first 256 bytes of the body are shown in the PromotionStep status.
+
+A `uses:` name that is not a built-in step and has no `webhook.url` fails with a message
+that names the step, so a typo in a built-in step name is easy to spot.
 
 ## Pipeline `steps:` field
 
@@ -99,15 +111,31 @@ If `steps:` is not set, the default sequence is used (see
 | Step name | Description |
 |---|---|
 | `git-clone` | Clone the GitOps repository |
-| `kustomize-set-image` | Update image tag in `kustomization.yaml` |
+| `kustomize-set-image` | Set the image in `kustomization.yaml` the way `kustomize edit set image` does (see below) |
 | `helm-set-image` | Update image tag in `values.yaml` |
-| `kustomize-build` | Render manifests (layout: branch) |
+| `kustomize-build` | Render the environment's kustomization to `rendered-<env>.yaml` (needs the `kustomize` binary) |
 | `config-merge` | Apply config-only overlay (type: config bundles) |
 | `git-commit` | Commit changes to a promotion branch |
 | `git-push` | Push the promotion branch |
 | `open-pr` | Open a pull request |
-| `wait-for-merge` | Poll until the PR is merged |
-| `health-check` | Verify deployment health via the configured health adapter |
+| `wait-for-merge` | Poll until the PR is merged; fails at once if the SCM API rejects the token (401), denies access (403) or cannot find the PR (404) |
+| `health-check` | Marks the end of the sequence; the PromotionStep reconciler then checks health with the configured adapter |
+
+kustomize matches an `images` entry on its `name` only, against the image name in
+the manifests. So `kustomize-set-image` always writes, or updates, an entry whose
+`name` is the full repository (for example `name: ghcr.io/org/app`), as
+`kustomize edit set image` does. That entry rewrites manifests that use
+`image: ghcr.io/org/app`.
+
+Entries that point at the repository under another name get the same tag or digest,
+so manifests that use that name keep promoting:
+
+- an entry whose `newName` is the repository (for example `name: app`,
+  `newName: ghcr.io/org/app`, as older kardinal versions wrote it);
+- an older short-name entry (`name: app`, no `newName`), when only one Bundle image
+  has that short name. It also gets `newName: ghcr.io/org/app`.
+
+A short-name entry whose `newName` points at another repository is left alone.
 
 ## Authentication
 
@@ -129,8 +157,10 @@ kubectl create secret generic my-custom-step-secret \
   --from-literal=Authorization="Bearer my-token"
 ```
 
-The kardinal controller reads the Secret at execution time and injects the header
-into the POST request.
+> **Not implemented yet.** The controller does not read `secretRef` yet: the step sends the
+> `Authorization` header only when the `webhook.authorization` input is already set, and
+> nothing sets it today. Until Secret resolution lands, protect the webhook with a
+> NetworkPolicy or mTLS instead of a bearer token.
 
 ## Idempotency requirement
 
