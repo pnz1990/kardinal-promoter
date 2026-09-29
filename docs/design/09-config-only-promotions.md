@@ -328,19 +328,20 @@ The config change is applied first, then the image update. This ensures the new 
 
 ### Webhook
 
+The Bundle API (`POST /api/v1/bundles` on the webhook port, `:8083`) takes the
+Bundle's `spec.configRef` (`gitRepo`, `commitSHA`). It rejects unknown fields, so the
+`artifacts.gitCommit` shape above (with `message`, `path` and `secretRef`) is refused.
+
 ```bash
 curl -X POST https://kardinal.example.com/api/v1/bundles \
   -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{
     "pipeline": "my-app",
     "type": "config",
-    "artifacts": {
-      "gitCommit": {
-        "repository": "https://github.com/myorg/app-config",
-        "sha": "'$COMMIT_SHA'",
-        "message": "Update resource limits",
-        "path": "configs/my-app/"
-      }
+    "configRef": {
+      "gitRepo": "https://github.com/myorg/app-config",
+      "commitSHA": "'$COMMIT_SHA'"
     },
     "provenance": {
       "commitSHA": "'$COMMIT_SHA'",

@@ -176,6 +176,14 @@ bundleAPI:
 ui:
   # -- Origins allowed by CORS on the UI API (--cors-allowed-origins).
   corsAllowedOrigins: []
+  # -- Extra host names the UI answers to (--ui-allowed-hosts), for example an
+  # Ingress host or a node IP. The Service DNS names (<fullname>,
+  # <fullname>.<namespace>, .svc and .svc.cluster.local) and localhost are
+  # always allowed. Browser requests to any other Host get no same-origin
+  # grant, and while UI auth is off every UI API request to them, reads
+  # included, gets 403 (DNS rebinding protection). Static /ui/ assets are not
+  # checked. Host names only: no scheme, path or wildcard.
+  allowedHosts: []
   auth:
     # -- Static bearer token for /api/v1/ui/* (KARDINAL_UI_TOKEN).
     tokenSecretRef:

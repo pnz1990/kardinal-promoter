@@ -70,7 +70,9 @@ outweighs the cost.
 
 Each PromotionStep carries a `kardinal.io/shard` label. When a controller starts with
 `--shard <name>`, it processes **only** the steps whose shard label matches. Steps for
-other shards are skipped silently.
+other shards are skipped silently. The shard name must be a valid label value (at most 63
+characters: letters, digits, `-`, `_` and `.`); `kardinal-agent` exits at startup if it
+is not.
 
 The Graph controller (which creates PromotionSteps) assigns the shard label based on the
 `shard` field in the Pipeline environment spec:

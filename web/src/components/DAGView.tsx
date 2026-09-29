@@ -66,6 +66,11 @@ function nodeTypePrefix(node: GraphNode): string {
   return node.type === 'PolicyGate' ? '🔒 ' : ''
 }
 
+/** Display name: the gate name for PolicyGate nodes, else the environment. */
+function nodeName(node: GraphNode): string {
+  return node.type === 'PolicyGate' ? node.label : node.environment
+}
+
 /**
  * Extract PR number from a GitHub PR URL.
  * "https://github.com/org/repo/pull/42" → "#42"
@@ -207,7 +212,7 @@ function DAGNode({
       data-health-state={health}
       role="button"
       tabIndex={0}
-      aria-label={`${node.environment} — ${node.state}`}
+      aria-label={`${nodeName(node)} — ${node.state}`}
       aria-pressed={isSelected}
       onMouseEnter={e => {
         const rect = (e.currentTarget as SVGGElement).getBoundingClientRect()
@@ -256,7 +261,7 @@ function DAGNode({
         fontWeight="600"
         style={{ pointerEvents: 'none' }}
       >
-        {nodeTypePrefix(node)}{node.environment}
+        {nodeTypePrefix(node)}{nodeName(node)}
       </text>
       <text
         x={NODE_WIDTH / 2}
