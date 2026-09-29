@@ -14,7 +14,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,6 +52,9 @@ func NewRootCmd() *cobra.Command {
 It communicates with the Kubernetes API server to read and write CRDs.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			return checkOutputFlag(cmd)
+		},
 	}
 
 	// Persistent flags available to all subcommands.
@@ -60,7 +65,7 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.PersistentFlags().StringVar(&globalContext, "context", "",
 		"Kubeconfig context override")
 	root.PersistentFlags().StringVarP(&globalOutput, "output", "o", "",
-		"Output format: table (default), json, yaml")
+		"Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)")
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newGetCmd())
@@ -87,51 +92,112 @@ It communicates with the Kubernetes API server to read and write CRDs.`,
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newCompletionCmd())
 
+	requireSubcommand(root)
 	return root
+}
+
+// outputAnnotation marks a command that honours -o json|yaml.
+const outputAnnotation = "kardinal.io/structured-output"
+
+// checkOutputFlag rejects an unknown -o value, and json or yaml on a command
+// that only prints tables.
+func checkOutputFlag(cmd *cobra.Command) error {
+	switch OutputFormat() {
+	case "", "table":
+		return nil
+	case "json", "yaml":
+		if cmd.Annotations[outputAnnotation] == "true" {
+			return nil
+		}
+		return fmt.Errorf("-o %s is not supported by %q; it prints a table", globalOutput, cmd.CommandPath())
+	default:
+		return fmt.Errorf("invalid -o %q: must be table, json or yaml", globalOutput)
+	}
+}
+
+// requireSubcommand gives every group command (get, create, policy, ...) a
+// RunE that fails on an unknown subcommand. Without it cobra prints the group
+// help and exits 0 for a typo such as "get bundel".
+func requireSubcommand(cmd *cobra.Command) {
+	for _, sub := range cmd.Commands() {
+		requireSubcommand(sub)
+	}
+	if !cmd.HasParent() || !cmd.HasSubCommands() || cmd.Runnable() {
+		return
+	}
+	cmd.RunE = func(c *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return c.Help()
+		}
+		if c.SuggestionsMinimumDistance <= 0 {
+			c.SuggestionsMinimumDistance = 2
+		}
+		msg := fmt.Sprintf("unknown command %q for %q", args[0], c.CommandPath())
+		if suggestions := c.SuggestionsFor(args[0]); len(suggestions) > 0 {
+			msg += "\n\nDid you mean this?\n\t" + strings.Join(suggestions, "\n\t")
+		}
+		return errors.New(msg)
+	}
 }
 
 // buildClient constructs a controller-runtime client from the persistent flags.
 // Returns actionable error messages with hints for common failures (#688).
 func buildClient() (sigs_client.Client, string, error) {
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if globalKubeconfig != "" {
-		loadingRules.ExplicitPath = globalKubeconfig
-	}
-
-	overrides := &clientcmd.ConfigOverrides{}
-	if globalContext != "" {
-		overrides.CurrentContext = globalContext
-	}
-
-	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadingRules, overrides,
-	).ClientConfig()
+	cfg, ns, err := buildRestConfig()
 	if err != nil {
-		// Fall back to in-cluster config.
-		cfg, err = rest.InClusterConfig()
-		if err != nil {
-			return nil, "", fmt.Errorf(
-				"cannot connect to cluster — run 'kardinal doctor' to diagnose\n"+
-					"  (underlying error: %w)", err)
-		}
+		return nil, "", err
 	}
-
 	c, err := sigs_client.New(cfg, sigs_client.Options{Scheme: rootScheme})
 	if err != nil {
 		return nil, "", fmt.Errorf(
 			"failed to create Kubernetes client — check cluster connectivity: %w", err)
 	}
+	return c, ns, nil
+}
 
-	// Resolve namespace.
-	ns := globalNamespace
-	if ns == "" {
-		ns, _, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-			loadingRules, overrides,
-		).Namespace()
-		if err != nil || ns == "" {
-			ns = "default"
+// buildRestConfig resolves the rest config and namespace from the persistent
+// flags and the kubeconfig, falling back to in-cluster config only when there
+// is no kubeconfig at all.
+func buildRestConfig() (*rest.Config, string, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if globalKubeconfig != "" {
+		loadingRules.ExplicitPath = globalKubeconfig
+	}
+	overrides := &clientcmd.ConfigOverrides{}
+	if globalContext != "" {
+		overrides.CurrentContext = globalContext
+	}
+	return resolveRestConfig(clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides),
+		globalKubeconfig != "", globalNamespace)
+}
+
+func resolveRestConfig(clientConfig clientcmd.ClientConfig, explicitKubeconfig bool,
+	namespace string) (*rest.Config, string, error) {
+	cfg, err := clientConfig.ClientConfig()
+	if err != nil {
+		// A broken file or an unknown context is reported as is; only a
+		// missing kubeconfig falls back to the pod's service account.
+		if explicitKubeconfig || !clientcmd.IsEmptyConfig(err) {
+			return nil, "", fmt.Errorf("load kubeconfig — run 'kardinal doctor' to diagnose: %w", err)
+		}
+		cfg, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, "", fmt.Errorf(
+				"cannot connect to cluster: no kubeconfig and not running in a pod — run 'kardinal doctor' to diagnose\n"+
+					"  (underlying error: %w)", err)
 		}
 	}
 
-	return c, ns, nil
+	// Namespace: the flag, else the context's namespace, else default.
+	ns := namespace
+	if ns == "" {
+		ns, _, err = clientConfig.Namespace()
+		if err != nil && !clientcmd.IsEmptyConfig(err) {
+			return nil, "", fmt.Errorf("resolve namespace from kubeconfig: %w", err)
+		}
+		if ns == "" {
+			ns = "default"
+		}
+	}
+	return cfg, ns, nil
 }

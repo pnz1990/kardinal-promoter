@@ -16,6 +16,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,10 +28,11 @@ func newGetBundlesCmd() *cobra.Command {
 	var activeOnly bool
 
 	cmd := &cobra.Command{
-		Use:     "bundles [pipeline]",
-		Aliases: []string{"bundle"},
-		Short:   "List Bundles, optionally filtered by pipeline name",
-		Args:    cobra.MaximumNArgs(1),
+		Use:         "bundles [pipeline]",
+		Annotations: map[string]string{outputAnnotation: "true"},
+		Aliases:     []string{"bundle"},
+		Short:       "List Bundles, optionally filtered by pipeline name",
+		Args:        cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGetBundles(cmd, args, activeOnly)
 		},
@@ -45,7 +47,10 @@ func runGetBundles(cmd *cobra.Command, args []string, activeOnly bool) error {
 	if err != nil {
 		return fmt.Errorf("get bundles: %w", err)
 	}
+	return getBundlesFn(cmd.OutOrStdout(), client, ns, args, activeOnly)
+}
 
+func getBundlesFn(out io.Writer, client sigs_client.Client, ns string, args []string, activeOnly bool) error {
 	opts := []sigs_client.ListOption{sigs_client.InNamespace(ns)}
 	if len(args) == 1 {
 		opts = append(opts, sigs_client.MatchingFields{"spec.pipeline": args[0]})
@@ -57,7 +62,7 @@ func runGetBundles(cmd *cobra.Command, args []string, activeOnly bool) error {
 		// is not available (e.g. no cache).
 		var all v1alpha1.BundleList
 		if err2 := client.List(context.Background(), &all, sigs_client.InNamespace(ns)); err2 != nil {
-			return fmt.Errorf("list bundles: %w", err)
+			return fmt.Errorf("list bundles: %w (field-selector list: %v)", err2, err)
 		}
 		if len(args) == 1 {
 			pipeline := args[0]
@@ -83,7 +88,6 @@ func runGetBundles(cmd *cobra.Command, args []string, activeOnly bool) error {
 		items = filtered
 	}
 
-	out := cmd.OutOrStdout()
 	switch OutputFormat() {
 	case "json":
 		return WriteJSON(out, items)

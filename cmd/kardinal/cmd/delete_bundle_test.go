@@ -18,6 +18,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,12 +77,14 @@ func TestDeleteBundle_NotFound(t *testing.T) {
 	var buf bytes.Buffer
 	err := deleteBundleFn(&buf, c, "default", "nonexistent-bundle")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.Equal(t, `bundle "nonexistent-bundle" not found in namespace default`, err.Error())
 }
 
 // TestDeleteBundleCmd_ArgsRequired verifies the command requires exactly one arg.
 func TestDeleteBundleCmd_ArgsRequired(t *testing.T) {
-	cmd := newDeleteBundleCmd()
-	assert.Equal(t, "bundle <name>", cmd.Use)
-	assert.NotNil(t, cmd.Args, "cobra.ExactArgs(1) should be set")
+	for _, args := range [][]string{{"delete", "bundle"}, {"delete", "bundle", "a", "b"}} {
+		_, err := executeRoot(t, args...)
+		require.Error(t, err, args)
+		assert.Contains(t, err.Error(), "accepts 1 arg(s), received "+strconv.Itoa(len(args)-2))
+	}
 }

@@ -20,13 +20,15 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// terminalStates are PromotionStep states that indicate the step will not
-// progress further. The follow loop exits when all filtered steps are terminal.
+// terminalStates are PromotionStep states the reconciler takes no further
+// action in (pkg/reconciler/promotionstep). RollingBack is one: the rollback
+// Bundle, not the step, carries the promotion on. logs --follow exits and
+// status prints its idle hint when every step is terminal.
 var terminalStates = map[string]bool{
 	"Verified":       true,
 	"Failed":         true,
-	"Superseded":     true,
 	"AbortedByAlarm": true,
+	"RollingBack":    true,
 }
 
 func newLogsCmd() *cobra.Command {
@@ -48,7 +50,8 @@ For each active PromotionStep, shows:
   - Conditions from the status
 
 Use --follow (-f) to stream step progress in real time, polling every 2 seconds
-until all steps reach a terminal state (Verified, Failed, or Superseded).
+until all steps reach a terminal state (Verified, Failed, or AbortedByAlarm).
+Each state change is printed once.
 
 Example:
   kardinal logs nginx-demo
@@ -75,11 +78,6 @@ Example:
 	return cmd
 }
 
-// LogsFnForTest is an exported wrapper for testing logsFn.
-func LogsFnForTest(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFilter string) error {
-	return logsFn(w, c, ns, pipeline, envFilter, bundleFilter)
-}
-
 // logsFollowFn implements the --follow streaming mode.
 // It polls every 2 seconds and prints only new status.steps[] entries since the
 // last poll. Exits when all filtered PromotionSteps reach a terminal state,
@@ -89,8 +87,10 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// cursor tracks the last-seen step count per PromotionStep name.
+	// Per PromotionStep name: how many status.steps entries were printed, and
+	// the last state printed.
 	cursor := make(map[string]int)
+	lastState := make(map[string]string)
 
 	_, _ = fmt.Fprintf(w, "Following logs for pipeline %s (Ctrl+C to stop)...\n", pipeline)
 
@@ -111,29 +111,27 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 			_, _ = fmt.Fprintf(w, "No promotion steps found for pipeline %s\n", pipeline)
 		}
 
-		// Print new step entries since last poll.
 		for _, s := range filtered {
-			key := s.Spec.Environment + "/" + s.Spec.BundleName
-			prev := cursor[key]
-			newSteps := s.Status.Steps
-			if len(newSteps) > prev {
-				for _, step := range newSteps[prev:] {
+			label := s.Spec.Environment
+			if s.Spec.Region != "" {
+				label += "/" + s.Spec.Region
+			}
+			if newSteps := s.Status.Steps; len(newSteps) > cursor[s.Name] {
+				for _, step := range newSteps[cursor[s.Name]:] {
 					dur := "-"
 					if step.DurationMs > 0 {
 						dur = fmt.Sprintf("%.1fs", float64(step.DurationMs)/1000.0)
 					}
 					_, _ = fmt.Fprintf(w, "[%s/%s] %-25s %-15s %s %s\n",
-						pipeline, s.Spec.Environment,
-						step.Name, string(step.State), dur, step.Message)
+						pipeline, label, step.Name, string(step.State), dur, step.Message)
 				}
-				cursor[key] = len(newSteps)
+				cursor[s.Name] = len(newSteps)
 			}
 
-			// Print state change when step transitions to terminal.
-			if prev < len(newSteps) || cursor[key] == 0 {
-				if terminalStates[s.Status.State] && prev == cursor[key] {
-					_, _ = fmt.Fprintf(w, "[%s/%s] → %s\n", pipeline, s.Spec.Environment, s.Status.State)
-				}
+			// Print each state change once.
+			if state := stepState(s); state != lastState[s.Name] {
+				_, _ = fmt.Fprintf(w, "[%s/%s] → %s\n", pipeline, label, state)
+				lastState[s.Name] = state
 			}
 		}
 
@@ -281,10 +279,7 @@ func logsFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, bundleFi
 				if step.DurationMs > 0 {
 					dur = fmt.Sprintf("%.1fs", float64(step.DurationMs)/1000.0)
 				}
-				msg := step.Message
-				if len(msg) > 80 {
-					msg = msg[:80] + "..."
-				}
+				msg := truncateRunes(step.Message, 83)
 				_, _ = fmt.Fprintf(tw, "    %s\t%s\t%s\t%s\n",
 					step.Name, string(step.State), dur, msg)
 			}
