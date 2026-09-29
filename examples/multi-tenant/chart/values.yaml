@@ -12,9 +12,11 @@ gitBranch: main
 
 # environments lists the promotion environments.
 # Each entry: {name: <env>, approval: auto|pr-review}
+# The path is environments/<name>; the default names match the overlays in
+# pnz1990/kardinal-demo.
 environments:
-  - name: dev
-  - name: staging
+  - name: test
+  - name: uat
   - name: prod
     approval: pr-review
 

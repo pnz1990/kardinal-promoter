@@ -36,6 +36,7 @@ if [ -n "${KUBE_CONTEXT:-}" ]; then
 fi
 
 echo "=== Installing kro v${KRO_VERSION} (Graph controller, rbac.mode=${KRO_RBAC_MODE}) ==="
+echo "Target kube context: ${KUBE_CONTEXT:-$(kubectl config current-context 2>/dev/null || echo '<none>') (current)}"
 
 # ── 1. Helm install with the GraphKind feature gate ───────────────────────────
 "${HELM[@]}" upgrade --install kro "$KRO_CHART" \

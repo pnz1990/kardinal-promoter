@@ -22,19 +22,18 @@
 #     • kardinal-test-app deployed
 #     • Represents production
 #
-#   Two pipelines are configured end-to-end:
+#   The main pipeline, kardinal-test-app (auto test → auto uat → PR prod),
+#   exercises auto-promote, pr-review, the org PolicyGates and rollback. Argo CD
+#   on the control cluster syncs its three environments. Optional Flux, Argo
+#   Rollouts and Flagger pipelines are applied too (see steps 8-10).
 #
-#   Pipeline 1 — kardinal-test-app  (simple: auto test → auto uat → PR prod)
-#     Exercises: auto-promote, pr-review, PolicyGates (weekend + soak), rollback
-#
-#   Pipeline 2 — kardinal-test-app-advanced  (multi-cluster, change window, metrics)
-#     Exercises: multi-cluster shard, change window gate, upstream soak gate,
-#                manual override, pause/resume
+#   The controller is built from this checkout and loaded into the control
+#   cluster, so the demo always runs the code you have checked out.
 #
 # Usage:
 #   ./demo/scripts/setup.sh                    # 3 kind clusters
 #   ./demo/scripts/setup.sh --eks              # kind control+dev, EKS prod
-#   ./demo/scripts/setup.sh --skip-build       # use an already-loaded controller image
+#   ./demo/scripts/setup.sh --skip-build       # reuse the controller image already loaded into kind
 #   ./demo/scripts/setup.sh --clean            # tear down first, then set up
 #   GITHUB_TOKEN=xxx ./demo/scripts/setup.sh   # set GitHub token inline
 #
@@ -74,9 +73,7 @@ elif command -v kardinal &>/dev/null; then
 else
   mkdir -p "${REPO_ROOT}/bin"
   echo "[setup] Building kardinal CLI from source..."
-  cd "${REPO_ROOT}"
-  go build -mod=mod -o "${REPO_ROOT}/bin/kardinal" ./cmd/kardinal/ 2>/dev/null || \
-    /usr/local/go126/bin/go build -mod=mod -o "${REPO_ROOT}/bin/kardinal" ./cmd/kardinal/
+  (cd "${REPO_ROOT}" && go build -o "${REPO_ROOT}/bin/kardinal" ./cmd/kardinal/)
   KARDINAL="${REPO_ROOT}/bin/kardinal"
 fi
 
@@ -88,9 +85,10 @@ GITOPS_REPO="${GITOPS_REPO:-https://github.com/pnz1990/kardinal-demo}"
 TEST_APP_REPO="${TEST_APP_REPO:-pnz1990/kardinal-test-app}"
 
 ARGOCD_VERSION="${ARGOCD_VERSION:-v2.10.3}"
-# The controller image is built from this checkout and loaded into the control
-# cluster, so the demo runs this checkout's controller and chart.
-KARDINAL_IMAGE_REPO="${KARDINAL_IMAGE_REPO:-ghcr.io/pnz1990/kardinal-promoter/controller}"
+FLUX_VERSION="${FLUX_VERSION:-v2.3.0}"
+ARGO_ROLLOUTS_VERSION="${ARGO_ROLLOUTS_VERSION:-v1.7.1}"
+# The controller image built from this checkout and loaded into the control cluster.
+KARDINAL_IMAGE_REPO="${KARDINAL_IMAGE_REPO:-ghcr.io/pnz1990/kardinal-promoter}"
 KARDINAL_IMAGE_TAG="${KARDINAL_IMAGE_TAG:-dev}"
 
 # Colours
@@ -157,41 +155,41 @@ fi
 
 # ── Step 0: Resolve test app image ────────────────────────────────────────────
 
-info "[0/7] Resolving latest test app image..."
-LATEST_SHA=$(curl -sf "https://api.github.com/repos/${TEST_APP_REPO}/commits/main" \
-  -H "Authorization: Bearer ${GITHUB_TOKEN}" | \
-  python3 -c "import sys,json; print(json.load(sys.stdin)['sha'][:7])" 2>/dev/null || \
-  echo "latest")
-TEST_APP_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
+info "[0/10] Resolving latest test app image..."
+# The token is sent as a header read from stdin, so it is not on the command line.
+GH_API_HEADER="Accept: application/vnd.github+json"
+[[ -n "$GITHUB_TOKEN" ]] && GH_API_HEADER="Authorization: Bearer ${GITHUB_TOKEN}"
+LATEST_SHA=$(printf '%s\n' "$GH_API_HEADER" |
+  curl -sf --max-time 10 -H @- "https://api.github.com/repos/${TEST_APP_REPO}/commits/main" |
+  python3 -c "import sys,json; print(json.load(sys.stdin)['sha'][:7])" 2>/dev/null || true)
+# Fall back to the image kardinal-demo's overlays pin; there is no :latest tag.
+TEST_APP_IMAGE="${TEST_APP_IMAGE:-ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA:-9349a3f}}"
 info "  Test app image: ${TEST_APP_IMAGE}"
 
 # ── Step 1: Create kind clusters ──────────────────────────────────────────────
 
-info "[1/7] Creating kind clusters..."
+info "[1/10] Creating kind clusters..."
 
 create_kind_cluster() {
   local name="$1"
-  local config="${2:-}"
-  if kind get clusters 2>/dev/null | grep -q "^${name}$"; then
+  local config="$2"
+  if kind get clusters 2>/dev/null | grep "^${name}$" >/dev/null; then
     warn "  Cluster '${name}' already exists — skipping create"
   else
     info "  Creating cluster '${name}'..."
-    if [[ -n "$config" ]]; then
-      kind create cluster --name "$name" --config "$config"
-    else
-      kind create cluster --name "$name" --image kindest/node:v1.33.1@sha256:050072256b9a903bd914c0b2866828150cb229cea0efe5892e2b644d5dd3b34f
-    fi
+    kind create cluster --name "$name" --config "$config"
     success "  Cluster '${name}' created"
   fi
 }
 
+# Every kind cluster uses the same node image (see test/e2e/kind-config.yaml).
 create_kind_cluster "$CONTROL_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
-create_kind_cluster "$DEV_CLUSTER"
+create_kind_cluster "$DEV_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
 
 if [[ "$USE_EKS" == "true" ]]; then
   info "  EKS prod cluster — using --eks mode..."
   if ! aws eks describe-cluster --name kardinal-e2e-prod --region us-east-2 \
-      --query 'cluster.status' --output text 2>/dev/null | grep -q "ACTIVE"; then
+      --query 'cluster.status' --output text 2>/dev/null | grep "ACTIVE" >/dev/null; then
     info "  Creating EKS cluster via Terraform (this takes ~15 min)..."
     cd "${REPO_ROOT}/terraform/eks-e2e"
     terraform init -input=false
@@ -202,25 +200,25 @@ if [[ "$USE_EKS" == "true" ]]; then
     --alias "$PROD_CLUSTER"
   success "  EKS cluster configured"
 else
-  create_kind_cluster "$PROD_CLUSTER"
+  create_kind_cluster "$PROD_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
 fi
 
-success "[1/7] Clusters ready"
+success "[1/10] Clusters ready"
 
 # ── Step 2: Install ArgoCD on the control cluster ─────────────────────────────
 
-info "[2/7] Installing ArgoCD on control cluster..."
+info "[2/10] Installing ArgoCD on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n argocd \
   -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml" \
   --wait=false
 kubectl rollout status deployment/argocd-server -n argocd --timeout=240s
-success "[2/7] ArgoCD installed"
+success "[2/10] ArgoCD installed"
 
 # ── Step 3: Install kardinal-promoter on the control cluster ─────────────────
 
-info "[3/7] Installing kardinal-promoter on control cluster..."
+info "[3/10] Installing kardinal-promoter on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
 
@@ -238,11 +236,15 @@ fi
 info "  Applying CRDs from this checkout..."
 kubectl apply -f "${REPO_ROOT}/config/crd/bases/"
 
-# GitHub token secret
-kubectl create secret generic github-token \
-  --namespace kardinal-system \
-  --from-literal=token="${GITHUB_TOKEN}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# GitHub token Secret. The chart reads it in kardinal-system; the demo
+# Pipelines (namespace default) resolve spec.git.secretRef in their own
+# namespace, so create it in both.
+for ns in kardinal-system default; do
+  kubectl create secret generic github-token \
+    --namespace "$ns" \
+    --from-literal=token="${GITHUB_TOKEN}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
 
 # Create platform-policies namespace for org-level PolicyGates
 kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
@@ -250,24 +252,23 @@ kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl ap
 # kro (the Graph controller) is a prerequisite of kardinal-promoter.
 KUBE_CONTEXT="kind-${CONTROL_CLUSTER}" bash "${REPO_ROOT}/hack/install-kro.sh"
 
-# Install this checkout's chart with the image loaded above. Helm does not
-# wait; the rollout status below waits for the controller itself.
+# Install the local chart with the image loaded above. Helm does not wait;
+# the rollout status below waits for the controller itself.
 helm --kube-context "kind-${CONTROL_CLUSTER}" upgrade --install kardinal-promoter \
   "${REPO_ROOT}/chart/kardinal-promoter" \
   --namespace kardinal-system \
   --set image.repository="${KARDINAL_IMAGE_REPO}" \
   --set image.tag="${KARDINAL_IMAGE_TAG}" \
   --set image.pullPolicy="${PULL_POLICY}" \
-  --set github.secretRef.name=github-token \
-  --set validatingAdmissionPolicy.enabled=false
+  --set github.secretRef.name=github-token
 
 kubectl rollout status deployment/kardinal-promoter -n kardinal-system --timeout=180s
 
-success "[3/7] kardinal-promoter installed"
+success "[3/10] kardinal-promoter installed"
 
 # ── Step 4: Deploy test app to dev cluster (test + uat) ──────────────────────
 
-info "[4/7] Deploying test app to dev cluster (test + uat)..."
+info "[4/10] Deploying test app to dev cluster (test + uat)..."
 kubectl config use-context "kind-${DEV_CLUSTER}"
 
 for ENV_NAME in test uat; do
@@ -317,11 +318,11 @@ EOF
   info "  Deployed kardinal-test-app to ${NS}"
 done
 
-success "[4/7] Test app deployed to dev cluster"
+success "[4/10] Test app deployed to dev cluster"
 
 # ── Step 5: Deploy test app to prod cluster ───────────────────────────────────
 
-info "[5/7] Deploying test app to prod cluster..."
+info "[5/10] Deploying test app to prod cluster..."
 if [[ "$USE_EKS" == "true" ]]; then
   kubectl config use-context "$PROD_CLUSTER"
 else
@@ -371,11 +372,11 @@ spec:
       targetPort: 8080
 EOF
 
-success "[5/7] Test app deployed to prod cluster"
+success "[5/10] Test app deployed to prod cluster"
 
 # ── Step 6: Apply pipelines and policy gates ──────────────────────────────────
 
-info "[6/7] Applying pipelines and PolicyGates on control cluster..."
+info "[6/10] Applying pipelines and PolicyGates on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 
 # Wait for Pipeline CRD to be established before applying any Pipeline resources.
@@ -388,71 +389,58 @@ kubectl wait --for=condition=established \
 # Org-level PolicyGates (platform team owns these)
 kubectl apply -f "${DEMO_DIR}/manifests/policy-gates/"
 
-# Pipeline 1: simple (test → uat → prod, all in-cluster ArgoCD)
+# The main pipeline: test → uat → prod, synced by Argo CD on the control cluster
 kubectl apply -f "${DEMO_DIR}/manifests/pipeline-simple/"
 
-# Pipeline 2: advanced (multi-cluster, change window, metrics gate)
-kubectl apply -f "${DEMO_DIR}/manifests/pipeline-advanced/"
-
-success "[6/7] Pipelines and PolicyGates applied"
+success "[6/10] Pipelines and PolicyGates applied"
 
 # ── Step 7: Configure ArgoCD Applications ────────────────────────────────────
 
-info "[7/7] Configuring ArgoCD applications..."
+info "[7/10] Configuring ArgoCD applications..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl apply -f "${DEMO_DIR}/manifests/argocd/"
 
-# Wait for ArgoCD to sync
-kubectl rollout status deployment/argocd-application-controller -n argocd --timeout=120s 2>/dev/null || true
+# argocd-application-controller is a StatefulSet in Argo CD v2.x.
+kubectl rollout status statefulset/argocd-application-controller -n argocd --timeout=120s
 
-success "[7/7] ArgoCD applications configured"
+success "[7/10] ArgoCD applications configured"
 
-# ── Step 8: Install Flux (optional — needed for scenarios 11-13) ─────────────
+# ── Step 8: Install Flux (optional — needed for scenario 11) ─────────────────
 
 INSTALL_FLUX="${INSTALL_FLUX:-true}"
 INSTALL_ARGO_ROLLOUTS="${INSTALL_ARGO_ROLLOUTS:-true}"
 INSTALL_FLAGGER="${INSTALL_FLAGGER:-true}"
 
 if [[ "$INSTALL_FLUX" == "true" ]]; then
-  info "[8/13] Installing Flux..."
+  info "[8/10] Installing Flux..."
   kubectl config use-context "kind-${DEV_CLUSTER}"
   # Install Flux controllers (no bootstrap — we apply Kustomizations manually)
   kubectl create namespace flux-system --dry-run=client -o yaml | kubectl apply -f -
-  kubectl apply -f "https://github.com/fluxcd/flux2/releases/latest/download/install.yaml" 2>/dev/null || \
-    kubectl apply -f "https://github.com/fluxcd/flux2/releases/download/v2.3.0/install.yaml"
-  kubectl -n flux-system rollout status deploy/source-controller --timeout=120s 2>/dev/null || true
-  kubectl -n flux-system rollout status deploy/kustomize-controller --timeout=120s 2>/dev/null || true
+  kubectl apply -f "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/install.yaml"
+  kubectl -n flux-system rollout status deploy/source-controller --timeout=120s
+  kubectl -n flux-system rollout status deploy/kustomize-controller --timeout=120s
 
-  # Create GitHub token secret in flux-system if GITHUB_TOKEN is set
-  if [[ -n "$GITHUB_TOKEN" ]]; then
-    kubectl create secret generic github-token \
-      --namespace flux-system \
-      --from-literal=token="$GITHUB_TOKEN" \
-      --dry-run=client -o yaml | kubectl apply -f -
-  fi
-
+  # kardinal-demo is public, so the GitRepository needs no credentials.
   # Apply Flux Kustomizations (on dev cluster — Kustomization resources live here)
   kubectl apply -f "${DEMO_DIR}/manifests/flux/kustomizations.yaml"
 
   # Apply the Flux pipeline on the control cluster (Pipeline CRD is only registered there)
   kubectl config use-context "kind-${CONTROL_CLUSTER}"
   kubectl apply -f "${DEMO_DIR}/manifests/flux/pipeline.yaml"
-  success "[8/13] Flux installed and Kustomizations applied"
+  success "[8/10] Flux installed and Kustomizations applied"
 else
-  info "[8/13] Flux install skipped (INSTALL_FLUX=false)"
+  info "[8/10] Flux install skipped (INSTALL_FLUX=false)"
 fi
 
 # ── Step 9: Install Argo Rollouts ─────────────────────────────────────────────
 
 if [[ "$INSTALL_ARGO_ROLLOUTS" == "true" ]]; then
-  info "[9/13] Installing Argo Rollouts..."
+  info "[9/10] Installing Argo Rollouts..."
   kubectl config use-context "kind-${DEV_CLUSTER}"
   kubectl create namespace argo-rollouts --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -n argo-rollouts \
-    -f "https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml" 2>/dev/null || \
-    kubectl apply -n argo-rollouts \
-    -f "https://github.com/argoproj/argo-rollouts/releases/download/v1.7.1/install.yaml"
-  kubectl -n argo-rollouts rollout status deploy/argo-rollouts --timeout=120s 2>/dev/null || true
+    -f "https://github.com/argoproj/argo-rollouts/releases/download/${ARGO_ROLLOUTS_VERSION}/install.yaml"
+  kubectl -n argo-rollouts rollout status deploy/argo-rollouts --timeout=120s
 
   # Apply Rollout fixture only (pipeline.yaml requires the control cluster — applied separately below)
   kubectl create namespace kardinal-test-app-test --dry-run=client -o yaml | kubectl apply -f -
@@ -460,15 +448,15 @@ if [[ "$INSTALL_ARGO_ROLLOUTS" == "true" ]]; then
   # Apply the rollouts Pipeline on the control cluster (Pipeline CRD is only there)
   kubectl config use-context "kind-${CONTROL_CLUSTER}"
   kubectl apply -f "${DEMO_DIR}/manifests/rollouts/pipeline.yaml"
-  success "[9/13] Argo Rollouts installed and Rollout applied"
+  success "[9/10] Argo Rollouts installed and Rollout applied"
 else
-  info "[9/13] Argo Rollouts install skipped (INSTALL_ARGO_ROLLOUTS=false)"
+  info "[9/10] Argo Rollouts install skipped (INSTALL_ARGO_ROLLOUTS=false)"
 fi
 
 # ── Step 10: Install Flagger ──────────────────────────────────────────────────
 
 if [[ "$INSTALL_FLAGGER" == "true" ]]; then
-  info "[10/13] Installing Flagger..."
+  info "[10/10] Installing Flagger..."
   kubectl config use-context "kind-${DEV_CLUSTER}"
   # Install Flagger (no service mesh — uses Kubernetes provider)
   helm repo add flagger https://flagger.app 2>/dev/null || true
@@ -487,9 +475,9 @@ if [[ "$INSTALL_FLAGGER" == "true" ]]; then
   # Apply the flagger Pipeline on the control cluster
   kubectl config use-context "kind-${CONTROL_CLUSTER}"
   kubectl apply -f "${DEMO_DIR}/manifests/flagger/pipeline.yaml"
-  success "[10/13] Flagger installed and Canary applied"
+  success "[10/10] Flagger installed and Canary applied"
 else
-  info "[10/13] Flagger install skipped (INSTALL_FLAGGER=false)"
+  info "[10/10] Flagger install skipped (INSTALL_FLAGGER=false)"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

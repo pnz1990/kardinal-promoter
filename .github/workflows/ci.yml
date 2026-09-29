@@ -13,36 +13,15 @@ env:
   # the module cache rather than a partial vendor directory.
   GOFLAGS: -mod=mod
 
+permissions:
+  contents: read
+
 # Concurrency: cancel in-progress runs for the same PR/branch
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ── Pre-flight: detect what exists ───────────────────────────────────────────
-  preflight:
-    name: preflight
-    runs-on: ubuntu-latest
-    outputs:
-      has_gomod: ${{ steps.check.outputs.has_gomod }}
-      has_go_sources: ${{ steps.check.outputs.has_go_sources }}
-      has_web: ${{ steps.check.outputs.has_web }}
-      has_e2e: ${{ steps.check.outputs.has_e2e }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - name: Detect project artifacts
-        id: check
-        run: |
-          echo "has_gomod=$(test -f go.mod && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_go_sources=$(find . -name '*.go' -not -path '*/vendor/*' | head -1 | grep -q . && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_web=$(test -d web/src && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_e2e=$(test -f test/e2e/journeys_test.go && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "---"
-          echo "go.mod: $(test -f go.mod && echo EXISTS || echo MISSING - Stage 0 not yet complete)"
-          echo "Go sources: $(find . -name '*.go' -not -path '*/vendor/*' | wc -l | xargs) files"
-          echo "web/src: $(test -d web/src && echo EXISTS || echo MISSING)"
-          echo "test/e2e: $(test -f test/e2e/journeys_test.go && echo EXISTS || echo MISSING)"
-
   # ── Docs and YAML lint (always runs) ─────────────────────────────────────────
   docs-lint:
     name: docs-lint
@@ -52,22 +31,30 @@ jobs:
       - name: Validate YAML files
         run: |
           pip install pyyaml --quiet
-          python3 -c "
-          import yaml, sys, pathlib
-          errors = []
-          skip_patterns = ['.git', 'node_modules', 'vendor', '.specify/extensions', 'mkdocs.yml']
-          for f in pathlib.Path('.').rglob('*.yml'):
-            if any(p in str(f) for p in skip_patterns):
-              continue
-            try:
-              yaml.safe_load(open(f))
-            except yaml.YAMLError as e:
-              errors.append(f'{f}: {e}')
+          python3 - <<'PYEOF'
+          import pathlib, sys
+          import yaml
+          # Skip on whole path components, so ".git" does not also skip ".github".
+          skip_dirs = {'.git', 'node_modules', 'vendor', 'templates'}
+          errors, checked = [], 0
+          for pattern in ('*.yml', '*.yaml'):
+              for f in pathlib.Path('.').rglob(pattern):
+                  if skip_dirs & set(f.parts) or f.parts[:2] == ('.specify', 'extensions') \
+                          or f.name == 'mkdocs.yml':
+                      continue
+                  checked += 1
+                  try:
+                      list(yaml.safe_load_all(f.read_text()))
+                  except yaml.YAMLError as e:
+                      errors.append(f'{f}: {e}')
+          for e in errors:
+              print(e)
           if errors:
-            for e in errors: print(e)
-            sys.exit(1)
-          print(f'All YAML valid')
-          "
+              sys.exit(1)
+          print(f'All {checked} YAML files valid')
+          PYEOF
+      - name: Validate workflow run blocks (bash -n)
+        run: bash scripts/validate-workflow-bash-syntax.sh
       - name: Check required docs exist
         run: |
           required=(
@@ -91,18 +78,21 @@ jobs:
           fi
           echo "All required docs present"
 
-  # ── Go build + test (only when go.mod exists) ────────────────────────────────
+  # ── Go build + test ──────────────────────────────────────────────────────────
   build:
     name: build
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install Helm
+        # test/examples and test/helm render charts with helm template.
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
       - name: Verify go.mod is tidy
         run: |
           go mod tidy
@@ -126,8 +116,8 @@ jobs:
           fi
       - name: Check banned filenames
         run: |
-          banned=$(find . \( -name "util.go" -o -name "helpers.go" -o -name "common.go" \) \
-            | grep -v vendor | grep -v .git || true)
+          banned=$(find . \( -name util.go -o -name helpers.go -o -name common.go \) \
+            -not -path './vendor/*' -not -path './.git/*' -not -path '*/node_modules/*')
           if [ -n "$banned" ]; then
             echo "Banned filenames:"
             echo "$banned"
@@ -146,58 +136,34 @@ jobs:
           diff -r --exclude=.gitkeep config/crd/bases/ chart/kardinal-promoter/crds/ || \
             (echo "chart/kardinal-promoter/crds is stale — run 'make manifests' and commit" && exit 1)
 
-      - name: Validate demo and example manifests against CRD schema
-        run: |
-          # Install kubeconform for CRD-schema validation (no cluster needed)
-          go install github.com/yannh/kubeconform/cmd/kubeconform@latest 2>/dev/null || \
-          curl -sSL "https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz" \
-            | tar -xz -C "${HOME}/.local/bin/" kubeconform 2>/dev/null || true
-
-          # Validate all Pipeline manifests in demo/ and examples/ against the generated CRD
-          SCHEMA_DIR=$(mktemp -d)
-          # Extract CRD schema for validation (inline to avoid YAML heredoc column-0 issues)
-          python3 -c "import json,yaml,os; crd=yaml.safe_load(open('config/crd/bases/kardinal.io_pipelines.yaml')); schema=crd['spec']['versions'][0]['schema']['openAPIV3Schema']; os.makedirs('${SCHEMA_DIR}',exist_ok=True); json.dump(schema,open('${SCHEMA_DIR}/kardinal.io_pipelines.json','w')); print('Schema extracted')" 2>/dev/null || echo "Schema extraction skipped (CRD not generated yet)"
-
-          FAILURES=0
-          for manifest in $(find demo/ examples/ -name "*.yaml" -o -name "*.yml" | \
-              xargs grep -l "kind: Pipeline" 2>/dev/null); do
-            echo "Validating $manifest..."
-            # Skip Helm templates (contain {{ }} syntax) and multi-doc YAML (contain ---)
-            python3 -c "import yaml,sys,re; m=sys.argv[1]; raw=open(m).read(); [sys.exit(0) for _ in [1] if re.search(r'{{.*}}',raw)]; docs=list(yaml.safe_load_all(raw)); [sys.exit('FAIL: '+m+': unknown health field: '+k) for d in docs if d and d.get('kind')=='Pipeline' for e in d.get('spec',{}).get('environments',[]) for k in e.get('health',{}).keys() if k not in ('type','timeout','cluster','labelSelector','resource')]; print('OK: '+m)" "$manifest" || FAILURES=$((FAILURES+1))
-          done
-
-          if [ $FAILURES -gt 0 ]; then
-            echo "::error::$FAILURES manifest(s) failed validation. See above for details."
-            echo "Run 'make manifests generate' and update demo/examples manifests to match current CRD schema."
-            exit 1
-          fi
-          echo "All Pipeline manifests valid against current CRD schema."
-
+      - name: Validate demo and example manifests against the CRD schemas
+        # Decodes every example and demo manifest strictly into the Go API
+        # types and validates it against the generated CRD OpenAPI schemas
+        # (pruning, enums, patterns, label values), and checks that every
+        # git path the examples promote into exists in pnz1990/kardinal-demo.
+        # The same test runs in "go test" above; this step shows its output.
+        run: go test ./test/examples/... -count=1 -v
 
   # ── Integration tests: reconcilers via fake client (no cluster needed) ────────
   integration:
     name: integration tests
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
       - name: Run integration tests
         run: go test ./test/integration/... -tags integration -race -count=1 -timeout 120s
 
-  # ── golangci-lint (only when go.mod exists) ─────────────────────────────────
+  # ── golangci-lint ────────────────────────────────────────────────────────────
   golangci-lint:
     name: golangci-lint
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -206,15 +172,13 @@ jobs:
         with:
           version: v2.11.4
 
-  # ── Security scan (only when go.mod exists) ──────────────────────────────────
+  # ── Security scan ────────────────────────────────────────────────────────────
   govulncheck:
     name: govulncheck
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           # Scan with the toolchain pinned in go.mod so stdlib fixes stay in sync.
           go-version-file: go.mod
@@ -223,29 +187,25 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-  # ── go.sum integrity (only when go.mod exists) ───────────────────────────────
+  # ── go.sum integrity ─────────────────────────────────────────────────────────
   go-sum-integrity:
     name: go.sum integrity
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
       - name: Verify go.sum
         run: go mod verify
 
-  # ── Trivy filesystem vulnerability scan (only when go.mod exists) ────────────
+  # ── Trivy filesystem vulnerability scan ──────────────────────────────────────
   # Scans Go module dependencies for HIGH/CRITICAL CVEs and blocks CI on findings.
   # Uses filesystem scan (no Docker image build required) — complements the
   # release.yml image scan and govulncheck for defense-in-depth.
   # Design ref: docs/design/14-v060-roadmap.md §14.7
   trivy-fs:
     name: trivy vulnerability scan
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -260,31 +220,39 @@ jobs:
           ignore-unfixed: true
           format: table
 
-  # ── E2E journey tests (fake-client, no cluster required) ────────────────────
+  # ── Journey tests (fake-client, no cluster required) ────────────────────────
   e2e-stubs:
     name: e2e stubs compile
-    needs: preflight
-    if: |
-      needs.preflight.outputs.has_gomod == 'true' &&
-      needs.preflight.outputs.has_e2e == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - name: Run E2E journey tests (fake-client, no cluster)
-        # TestJourney1, TestJourney3, TestJourney4: real reconciler with fake K8s client
-        # TestJourney2, TestJourney5: skip (require live cluster / binary)
-        # TestPromotionLoop_*: full promotion loop unit tests
+      - name: Build the CLI for TestJourney5
+        run: make build-cli
+      - name: Run journey tests (fake client, no cluster)
+        # TestJourney*: real reconcilers against a fake Kubernetes client; they
+        # do not go through the translator or the kro Graph.
+        # TestJourney5 runs bin/kardinal, built above.
+        # TestPromotionLoop_*: promotion loop unit tests.
+        # Tests that need a kind cluster are behind the e2e build tag and run
+        # in e2e.yml.
         run: go test ./test/e2e/... -race -count=1 -timeout 120s -v
 
-  # ── Frontend build (only when web/src exists) ─────────────────────────────────
+  # ── create-bundle composite action tests ──────────────────────────────────
+  action-tests:
+    name: action-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Test the create-bundle action
+        run: bash .github/actions/create-bundle/test.sh
+
+  # ── Frontend build ───────────────────────────────────────────────────────────
   frontend:
     name: frontend build
-    needs: preflight
-    if: needs.preflight.outputs.has_web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -323,16 +291,16 @@ jobs:
           echo "has_chart=$(test -d chart/kardinal-promoter && echo true || echo false)" >> $GITHUB_OUTPUT
       - name: Install Helm
         if: steps.chart_check.outputs.has_chart == 'true'
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: "latest"
+          version: v3.22.0
       - name: Lint chart
         if: steps.chart_check.outputs.has_chart == 'true'
         run: helm lint chart/kardinal-promoter
       - name: Template chart
         if: steps.chart_check.outputs.has_chart == 'true'
         run: helm template kardinal-promoter chart/kardinal-promoter
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         if: steps.chart_check.outputs.has_chart == 'true'
         with:
           go-version-file: go.mod
@@ -342,22 +310,3 @@ jobs:
         env:
           KARDINAL_REQUIRE_HELM: "1"
         run: go test ./test/helm/... -count=1
-
-  # ── Pre-Stage-0 status check (always passes, explains state) ─────────────────
-  pre-stage0-notice:
-    name: pre-stage0 notice
-    needs: preflight
-    if: needs.preflight.outputs.has_gomod == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Project is pre-Stage-0
-        run: |
-          echo "go.mod does not exist yet."
-          echo "Go-dependent CI jobs are skipped until Stage 0 (Project Skeleton) completes."
-          echo "Docs and YAML validation have already run."
-          echo ""
-          echo "Stage 0 deliverables (will unblock remaining CI jobs):"
-          echo "  - go.mod + go.sum"
-          echo "  - cmd/kardinal-controller/main.go"
-          echo "  - cmd/kardinal/main.go"
-          echo "  - Makefile (already exists)"

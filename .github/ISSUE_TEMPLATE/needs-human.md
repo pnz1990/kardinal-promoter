@@ -28,4 +28,4 @@ assignees: pnz1990
 
 ---
 **To unblock**: Answer the question above in a comment, then remove the `needs-human` label.
-The coordinator will resume within 2 minutes of the label being removed.
+The agent picks the item up again on its next run after the label is removed.

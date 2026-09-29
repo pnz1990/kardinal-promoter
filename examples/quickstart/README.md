@@ -1,13 +1,15 @@
 # Example: Quickstart
 
-A minimal 3-environment promotion pipeline (test, uat, prod) for an Nginx application.
+A minimal 3-environment promotion pipeline (test, uat, prod) for
+[kardinal-test-app](https://github.com/pnz1990/kardinal-test-app), promoted through the
+[kardinal-demo](https://github.com/pnz1990/kardinal-demo) GitOps repo.
 Equivalent to the [Kargo Quickstart](https://docs.kargo.io/quickstart), reimplemented using kardinal-promoter.
 
 ## What this example does
 
-1. CI builds a new Nginx image and creates a Bundle (artifact snapshot with provenance).
+1. CI builds a new kardinal-test-app image and creates a Bundle (artifact snapshot with provenance).
 2. kardinal-promoter promotes the Bundle through test, uat, and prod via Git PRs.
-3. PolicyGates block production promotion on weekends and enforce a 30-minute staging soak.
+3. PolicyGates block production promotion on weekends and enforce a 30-minute uat soak.
 4. Argo CD syncs each environment from the GitOps repo.
 5. Health verification uses Argo CD Application status.
 
@@ -20,37 +22,33 @@ test (auto) --> uat (auto) --> [no-weekend-deploys] --> prod (pr-review)
 
 ## Prerequisites
 
-- Kubernetes cluster with kardinal-promoter and Graph controller installed
+- Kubernetes cluster with kardinal-promoter and kro installed (kro with the GraphKind
+  feature gate, at the version pinned in `hack/install-kro.sh`)
 - Argo CD installed and running
-- A GitOps repo with Kustomize overlays per environment:
+- A GitOps repo with a Kustomize overlay per environment. The manifests use
+  [pnz1990/kardinal-demo](https://github.com/pnz1990/kardinal-demo), which has this layout:
   ```
-  base/
-    deployment.yaml
-    kustomization.yaml
   environments/
     test/
+      deployment.yaml
       kustomization.yaml
     uat/
-      kustomization.yaml
+      ...
     prod/
-      kustomization.yaml
+      ...
   ```
-- A GitHub PAT with repo write access
+  To promote into your own copy, fork it and change `spec.git.url` in `pipeline.yaml`
+  and `repoURL` in `argocd-applications.yaml` to the fork.
+- A GitHub PAT with write access to that repo
 
 ## Setup
 
 ### 1. Create the Git credentials Secret
 
 ```bash
-export GITOPS_REPO_URL=https://github.com/<your-username>/kardinal-demo
-export GITHUB_USERNAME=<your-username>
-export GITHUB_PAT=<your-pat>
-```
-
-```bash
 kubectl create secret generic github-token \
   --namespace=default \
-  --from-literal=token=$GITHUB_PAT
+  --from-literal=token="$GITHUB_PAT"
 ```
 
 ### 2. Create the Argo CD Applications
@@ -60,6 +58,8 @@ kubectl apply -f argocd-applications.yaml
 ```
 
 ### 3. Create the PolicyGates (org-level)
+
+`policy-gates.yaml` also creates the `platform-policies` namespace the org gates live in.
 
 ```bash
 kubectl apply -f policy-gates.yaml
@@ -73,14 +73,15 @@ kubectl apply -f pipeline.yaml
 
 ### 5. Create your first Bundle
 
-After your CI builds and pushes `ghcr.io/<your-username>/nginx-demo:1.29.0`:
+Pick a kardinal-test-app image that CI has built:
 
 ```bash
-kardinal create bundle nginx-demo \
-  --image ghcr.io/<your-username>/nginx-demo:1.29.0 \
-  --commit abc123 \
-  --ci-run https://github.com/<your-username>/nginx-demo/actions/runs/12345
+IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+kardinal create bundle kardinal-test-app --image "$IMAGE"
 ```
+
+In CI, the create-bundle action (see `docs/ci-integration.md`) creates the Bundle
+and records the commit SHA and CI run URL as provenance.
 
 Or apply the Bundle directly:
 
@@ -91,7 +92,7 @@ kubectl apply -f bundle.yaml
 ## What happens next
 
 1. kardinal-promoter generates a Graph for this Bundle.
-2. Graph controller creates a PromotionStep for test.
+2. kro creates a PromotionStep for test from the Graph.
 3. kardinal-controller updates `environments/test/kustomization.yaml` with the new image tag, pushes directly (auto approval).
 4. Argo CD syncs the test Application. Health adapter verifies `Application.status.health = Healthy`.
 5. Graph advances to uat. Same flow.
@@ -107,13 +108,13 @@ kubectl apply -f bundle.yaml
 kardinal get pipelines
 
 # See promotion steps and policy gates
-kardinal get steps nginx-demo
+kardinal get steps kardinal-test-app
 
 # See why prod is waiting
-kardinal explain nginx-demo --env prod
+kardinal explain kardinal-test-app --env prod
 
 # Watch the promotion live
-kardinal explain nginx-demo --env prod --watch
+kardinal explain kardinal-test-app --env prod --watch
 ```
 
 ## Files in this example

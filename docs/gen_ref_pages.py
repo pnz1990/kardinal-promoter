@@ -3,7 +3,7 @@ docs/gen_ref_pages.py — Auto-generates reference pages from code.
 
 This script runs during mkdocs build via the gen-files plugin.
 It does NOT create new content — it wires existing auto-generated
-files (CLI docs from Cobra, API docs from gen-crd-api-reference-docs)
+files (CLI docs from Cobra, docs/reference/api.md from hack/gen-api-docs)
 into the nav without duplicating anything.
 """
 
