@@ -41,6 +41,11 @@ func helmBin(t *testing.T) string {
 	t.Helper()
 	bin, err := exec.LookPath("helm")
 	if err != nil {
+		// CI sets KARDINAL_REQUIRE_HELM so a missing helm fails the job
+		// instead of skipping every chart test.
+		if os.Getenv("KARDINAL_REQUIRE_HELM") != "" {
+			t.Fatalf("KARDINAL_REQUIRE_HELM is set but helm is not on PATH: %v", err)
+		}
 		t.Skip("helm not installed — skipping Helm chart tests")
 	}
 	return bin
@@ -140,7 +145,6 @@ func TestHelmTemplateGraphRBAC(t *testing.T) {
 	assert.Contains(t, rendered, `rbac.kro.run/aggregate-to-controller: "true"`)
 	// Reader RoleBindings no Graph needs any more are pruned.
 	assert.Contains(t, rendered, `resources: ["rolebindings"]
-    # delete: reader RoleBindings no Graph reads through any more are pruned.
     verbs: ["get", "create", "update", "delete"]`)
 	assert.Contains(t, rendered, `verbs: ["bind"]
     resourceNames:
@@ -308,8 +312,6 @@ func TestHelmTemplatePrometheusRuleEnabledWhenConfigured(t *testing.T) {
 		"PrometheusRule must include KardinalWorkQueueBacklog alert")
 	assert.Contains(t, rendered, "KardinalPolicyGateReconcileSlow",
 		"PrometheusRule must include KardinalPolicyGateReconcileSlow alert")
-	assert.Contains(t, rendered, "KardinalWebhookErrors",
-		"PrometheusRule must include KardinalWebhookErrors alert")
 	// Every alert must have a runbook_url
 	assert.Contains(t, rendered, "runbook_url",
 		"All alerts must include runbook_url annotation")

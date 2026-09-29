@@ -21,6 +21,7 @@ type PolicyGateSpec struct {
 	// RecheckInterval is how often to re-evaluate time-based gates.
 	// Uses Go duration format (e.g. "5m", "1h").
 	// +kubebuilder:default="5m"
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	RecheckInterval string `json:"recheckInterval,omitempty"`
 

@@ -1,17 +1,5 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package v1alpha1
 
@@ -26,6 +14,7 @@ type ScheduleClockSpec struct {
 	// Minimum recommended value is 30s; sub-minute precision is rarely needed
 	// for business-hour gates.
 	// +kubebuilder:default="1m"
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Interval string `json:"interval,omitempty"`
 }
@@ -45,7 +34,7 @@ type ScheduleClockStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=sc
+// +kubebuilder:resource:scope=Namespaced,shortName=sclock
 // +kubebuilder:printcolumn:name="Interval",type=string,JSONPath=`.spec.interval`
 // +kubebuilder:printcolumn:name="Last-Tick",type=string,JSONPath=`.status.tick`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

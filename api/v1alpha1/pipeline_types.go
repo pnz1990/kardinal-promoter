@@ -19,7 +19,12 @@ type PipelineSpec struct {
 	// has no upstream dependency. This sequential default means a list of N environments
 	// without dependsOn fields produces a linear chain. Override with dependsOn to
 	// express parallel fan-out or explicit DAG structure.
+	// Environment names must be unique; at most 100 environments (a bound
+	// the API server needs to cost the CEL rules on each entry).
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=100
+	// +listType=map
+	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`
 
 	// PolicyGates lists org- or team-level PolicyGate references that apply to
@@ -106,9 +111,15 @@ type SecretRef struct {
 }
 
 // EnvironmentSpec defines one environment in a Pipeline.
+// +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed"
 type EnvironmentSpec struct {
 	// Name is the environment identifier (e.g. "test", "uat", "prod").
+	// It must be a DNS label (lower-case letters, digits and '-', at most 63
+	// characters): it names a Graph node, derived objects and, for the
+	// resource, argoRollouts and flagger health checks, a namespace.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 
 	// Path is the subdirectory within the GitOps repository for this environment.
@@ -209,6 +220,7 @@ type EnvironmentSpec struct {
 	// in the WaitingForMerge state before transitioning to Failed. When not set
 	// or zero, the step waits indefinitely (no timeout). Accepts Go duration
 	// strings: "24h", "72h", "168h", etc.
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	WaitForMergeTimeout string `json:"waitForMergeTimeout,omitempty"`
 
@@ -370,6 +382,7 @@ type HealthConfig struct {
 
 	// Timeout is the maximum time to wait for health checks to pass.
 	// Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m".
+	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
 

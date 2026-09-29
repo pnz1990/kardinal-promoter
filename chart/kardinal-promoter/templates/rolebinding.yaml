@@ -2,10 +2,7 @@
 Copyright 2026 The kardinal-promoter Authors.
 Licensed under the Apache License, Version 2.0
 */}}
-{{- if .Values.controller.watchNamespace -}}
-# RoleBinding for namespace-scoped install mode.
-# Rendered only when controller.watchNamespace is non-empty.
-# Design ref: docs/design/15-production-readiness.md §Lens 6
+{{- if .Values.controller.watchNamespace }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -21,4 +18,20 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "kardinal-promoter.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+---
 {{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kardinal-promoter.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kardinal-promoter.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

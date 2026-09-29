@@ -74,6 +74,7 @@ kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/
 bash hack/install-kro.sh
 
 # 1. Create GitHub token secret
+kubectl create namespace kardinal-system
 kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
