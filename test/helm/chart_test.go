@@ -121,6 +121,7 @@ func TestHelmTemplate(t *testing.T) {
 	assert.Contains(t, rendered, "--graph-service-account=kardinal-graph")
 	assert.Contains(t, rendered, "--graph-applier-clusterrole=kardinal-promoter-graph-applier")
 	assert.Contains(t, rendered, "--graph-reader-clusterrole=kardinal-promoter-graph-reader")
+	assert.Contains(t, rendered, "--graph-reader-namespaces=argocd,flux-system")
 }
 
 // TestHelmTemplateGraphRBAC verifies the Graph ServiceAccount's ClusterRoles,
@@ -137,6 +138,10 @@ func TestHelmTemplateGraphRBAC(t *testing.T) {
 	assert.Contains(t, rendered, "name: kardinal-promoter-graph-applier")
 	assert.Contains(t, rendered, "name: kardinal-promoter-graph-reader")
 	assert.Contains(t, rendered, `rbac.kro.run/aggregate-to-controller: "true"`)
+	// Reader RoleBindings no Graph needs any more are pruned.
+	assert.Contains(t, rendered, `resources: ["rolebindings"]
+    # delete: reader RoleBindings no Graph reads through any more are pruned.
+    verbs: ["get", "create", "update", "delete"]`)
 	assert.Contains(t, rendered, `verbs: ["bind"]
     resourceNames:
       - kardinal-promoter-graph-applier

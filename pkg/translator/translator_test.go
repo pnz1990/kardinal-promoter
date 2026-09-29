@@ -190,32 +190,56 @@ func TestCollectGates_MultipleNamespaces(t *testing.T) {
 }
 
 // TestCollectGates_PipelineSpecPolicyNamespaces verifies that
-// pipeline.spec.policyNamespaces overrides the controller-wide default.
+// pipeline.spec.policyNamespaces adds namespaces to the controller's org
+// policy namespaces and never replaces them, so a Pipeline cannot drop a
+// mandatory org gate (C01-graph-02, C08-api-config-03, E2E-22).
 func TestCollectGates_PipelineSpecPolicyNamespaces(t *testing.T) {
-	s := translatorTestScheme()
-	// Gate in custom policy namespace
+	orgGate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploys", Namespace: "platform-policies"},
+		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+	}
 	customGate := &kardinalv1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{Name: "custom-gate", Namespace: "custom-policies"},
 		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "true"},
 	}
-	// Gate in controller default namespace (should NOT be collected when overridden)
-	defaultGate := &kardinalv1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "default-gate", Namespace: "platform-policies"},
-		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "false"},
+	teamGate := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-gate", Namespace: "team-a"},
+		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "true"},
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(customGate, defaultGate).Build()
-
-	tr := New(nil, nil, c, []string{"platform-policies"}, zerolog.Nop())
-	pipeline := &kardinalv1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
-		Spec: kardinalv1alpha1.PipelineSpec{
-			PolicyNamespaces: []string{"custom-policies"},
-		},
+	tests := []struct {
+		name     string
+		policyNS []string
+		spec     []string
+		want     []string
+	}{
+		{name: "spec adds a namespace", policyNS: []string{"platform-policies"}, spec: []string{"custom-policies"},
+			want: []string{"custom-policies/custom-gate", "platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		{name: "spec lists only the pipeline namespace", policyNS: []string{"platform-policies"}, spec: []string{"team-a"},
+			want: []string{"platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		{name: "default org namespace", spec: []string{"custom-policies"},
+			want: []string{"custom-policies/custom-gate", "platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		{name: "spec repeats the org namespace", policyNS: []string{"platform-policies"},
+			spec: []string{"platform-policies", "", "custom-policies"},
+			want: []string{"custom-policies/custom-gate", "platform-policies/no-weekend-deploys", "team-a/team-gate"}},
+		{name: "no spec", policyNS: []string{"platform-policies"},
+			want: []string{"platform-policies/no-weekend-deploys", "team-a/team-gate"}},
 	}
-
-	gates, err := tr.collectGates(context.Background(), pipeline)
-	require.NoError(t, err)
-	require.Len(t, gates, 1)
-	assert.Equal(t, "custom-gate", gates[0].Name,
-		"pipeline.spec.policyNamespaces must override controller-wide default")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(translatorTestScheme()).
+				WithObjects(orgGate.DeepCopy(), customGate.DeepCopy(), teamGate.DeepCopy()).Build()
+			tr := New(nil, nil, c, tt.policyNS, zerolog.Nop())
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "team-a"},
+				Spec:       kardinalv1alpha1.PipelineSpec{PolicyNamespaces: tt.spec},
+			}
+			gates, err := tr.collectGates(context.Background(), pipeline)
+			require.NoError(t, err)
+			got := make([]string, 0, len(gates))
+			for _, g := range gates {
+				got = append(got, g.Namespace+"/"+g.Name)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

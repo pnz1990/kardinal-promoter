@@ -144,6 +144,16 @@ graph:
   serviceAccountName: kardinal-graph
   # -- Namespace kro runs in (NetworkPolicy egress).
   kroNamespace: kro-system
+  # -- Namespaces, besides a Graph's own namespace, where the controller may
+  # bind the Graph ServiceAccount to the reader ClusterRole so the Graph can
+  # read health objects (Argo CD Applications, Flux Kustomizations,
+  # Deployments). A health check in any other namespace gets no Graph ref and
+  # a warning; the PromotionStep health check itself is unaffected. "*" allows
+  # every namespace except kube-system, kube-public and kube-node-lease: use
+  # it only when every Pipeline author may read every namespace.
+  readerNamespaces:
+    - argocd
+    - flux-system
   # -- Ship a ClusterRole aggregated into kro's controller role, for kro
   # installed with rbac.mode=aggregation (the hack/install-kro.sh default).
   aggregateToKro: true
