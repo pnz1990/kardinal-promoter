@@ -13,7 +13,7 @@ Add kardinal-promoter to your Prometheus scrape config:
 scrape_configs:
   - job_name: kardinal-promoter
     static_configs:
-      - targets: ['kardinal-promoter-controller.kardinal-system.svc.cluster.local:8080']
+      - targets: ['kardinal-promoter.kardinal-system.svc.cluster.local:8080']
     metrics_path: /metrics
 ```
 
@@ -69,8 +69,11 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 
 | Metric | Type | Description |
 |---|---|---|
-| `controller_runtime_webhook_requests_total` | Counter | Bundle creation webhook calls by `result` |
-| `controller_runtime_webhook_request_duration_seconds` | Histogram | Webhook latency |
+| `controller_runtime_webhook_requests_total` | Counter | Admission webhook calls by `code` (only with `--pipeline-admission-webhook`) |
+| `controller_runtime_webhook_request_duration_seconds` | Histogram | Admission webhook latency (only with `--pipeline-admission-webhook`) |
+
+These are controller-runtime's admission webhook metrics. The Bundle API
+(`POST /api/v1/bundles`) and the SCM webhook (`/webhook/scm`) on port 8083 do not emit them.
 
 ---
 
@@ -126,7 +129,7 @@ histogram_quantile(0.99,
 workqueue_depth{name=~"bundle|promotionstep|policygate"}
 ```
 
-### Webhook latency P95
+### Admission webhook latency P95 (with `--pipeline-admission-webhook`)
 
 ```promql
 histogram_quantile(0.95,
@@ -177,7 +180,7 @@ prometheusRule:
 Install or upgrade:
 
 ```bash
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set prometheusRule.enabled=true \
   --set 'prometheusRule.additionalLabels.release=kube-prometheus-stack'
 ```
@@ -186,12 +189,11 @@ helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/kardinal-promoter
 
 | Alert | Expression | Severity | Description |
 |---|---|---|---|
-| `KardinalControllerDown` | `up{job="kardinal-promoter"} == 0` for 5m | critical | Controller unreachable; promotions stalled |
+| `KardinalControllerDown` | `up{job="kardinal-promoter"}` is 0 or absent for 5m | critical | Controller unreachable; promotions stalled |
 | `KardinalHighReconcileErrors` | reconcile error rate > 0.1/s for 5m | warning | Reconciler failing; promotions may be stuck |
-| `KardinalBundleReconcilerStalled` | no bundle reconciles for 10m | warning | Controller idle; possible leader election issue |
+| `KardinalBundleReconcilerStalled` | Bundles queued but none reconciled for 10m | warning | Controller stuck; possible leader election issue |
 | `KardinalWorkQueueBacklog` | work queue depth > 100 for 5m | warning | Controller overloaded or starved of CPU |
 | `KardinalPolicyGateReconcileSlow` | PolicyGate P99 latency > 10s | warning | Gate evaluations stale; promotions blocked late |
-| `KardinalWebhookErrors` | webhook 5xx rate > 0 for 5m | warning | Bundle creation API failing; CI pipelines cannot promote |
 
 Every alert includes a `runbook_url` annotation pointing to the relevant section in [troubleshooting.md](../troubleshooting.md).
 
@@ -204,7 +206,7 @@ groups:
   - name: kardinal-promoter
     rules:
       - alert: KardinalControllerDown
-        expr: up{job="kardinal-promoter"} == 0
+        expr: absent(up{job="kardinal-promoter"}) == 1 or up{job="kardinal-promoter"} == 0
         for: 5m
         labels:
           severity: critical
@@ -262,7 +264,7 @@ grafanaDashboard:
 Install or upgrade:
 
 ```bash
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/kardinal-promoter/chart/kardinal-promoter \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set grafanaDashboard.enabled=true \
   --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 ```

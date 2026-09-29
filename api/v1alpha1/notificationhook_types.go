@@ -31,7 +31,8 @@ type NotificationWebhookConfig struct {
 
 	// AuthorizationHeader is the value of the Authorization header to include in the POST.
 	// Typically "Bearer <token>" or "Token <secret>".
-	// Store sensitive values in a Kubernetes Secret and reference it via envFrom if needed.
+	// The value is stored in plain text in the spec and sent as is: anyone who can
+	// read this NotificationHook can read it.
 	// +optional
 	AuthorizationHeader string `json:"authorizationHeader,omitempty"`
 }

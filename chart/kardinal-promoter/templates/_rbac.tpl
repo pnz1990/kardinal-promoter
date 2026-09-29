@@ -76,13 +76,14 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["get"]
 # Graph identity: the ServiceAccount kro impersonates and its RoleBindings.
 # bind is limited to the two Graph ClusterRoles, so the controller cannot
-# grant anything else.
+# grant anything else. delete prunes reader RoleBindings in namespaces that
+# were removed from graph.readerNamespaces (C01-graph-04).
 - apiGroups: [""]
   resources: ["serviceaccounts"]
   verbs: ["get", "create"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["rolebindings"]
-  verbs: ["get", "create", "update"]
+  verbs: ["get", "create", "update", "delete"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["clusterroles"]
   verbs: ["bind"]

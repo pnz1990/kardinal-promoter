@@ -401,7 +401,7 @@ func controllerAccess() []apiAccess {
 		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client"},
 		{"kro.run", "graphs/status", []string{"get"}, inWatched, "", "pkg/graph client"},
 		{"", "serviceaccounts", []string{"get", "create"}, inWatched, "", "graph identity.go"},
-		{"rbac.authorization.k8s.io", "rolebindings", []string{"get", "create", "update"}, inWatched, "", "graph identity.go"},
+		{"rbac.authorization.k8s.io", "rolebindings", []string{"get", "create", "update", "delete"}, inWatched, "", "graph identity.go; delete prunes reader bindings (fix/audit-graph)"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-applier", "graph identity.go"},
 		{"rbac.authorization.k8s.io", "clusterroles", []string{"bind"}, inWatched, "kardinal-promoter-graph-reader", "graph identity.go"},
 		{"apps", "deployments", readVerbs, inWatched, "", "health adapter resource"},

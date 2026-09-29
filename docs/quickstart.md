@@ -9,11 +9,17 @@ Pipeline targeting the [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kard
 reference repository — ready to promote immediately.
 
 ```bash
-# 1. Install with demo mode (no GitOps repo setup required)
+# 1. Store the token in a Secret, then install with demo mode
+#    (no GitOps repo setup required)
+kubectl create namespace kardinal-system
+kubectl create secret generic github-token \
+  --namespace kardinal-system \
+  --from-literal=token=$GITHUB_PAT
+
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-  --namespace kardinal-system --create-namespace \
+  --namespace kardinal-system \
   --set demo.enabled=true \
-  --set github.token=$GITHUB_PAT
+  --set github.secretRef.name=github-token
 
 # 2. Verify the demo Pipeline is running
 kardinal get pipelines
@@ -99,7 +105,8 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set github.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
-# Token rotation requires a controller restart when using this option.
+# The chart stores it in Secret kardinal-promoter-github-token, but the token
+# also stays in the Helm release history.
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace \
   --set github.token=$GITHUB_PAT

@@ -300,6 +300,12 @@
         },
         "aggregateToKro": {
           "type": "boolean"
+        },
+        "readerNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
