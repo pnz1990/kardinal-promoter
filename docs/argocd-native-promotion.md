@@ -74,6 +74,20 @@ There are no git operations. The `argocd-set-image` step:
 After the patch, ArgoCD's own reconciler picks up the spec change and syncs the application.
 The `health-check` step waits for the ArgoCD Application to reach a healthy sync state.
 
+### `approval: pr-review` is not supported
+
+The `argocd` strategy patches the Application directly, so there is no pull request to review.
+An environment with `approval: pr-review` and `update.strategy: argocd` fails the promotion
+at `argocd-set-image`, before the Application is patched, with:
+
+```
+argocd-set-image: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; ...
+```
+
+Use `approval: auto` with a PolicyGate to control when the patch happens, or use the `kustomize`
+or `helm` strategy for a reviewed promotion. Config Bundles (`type: config`) are also rejected by
+this strategy.
+
 ---
 
 ## Required RBAC
@@ -130,7 +144,7 @@ implemented yet (a Pipeline that sets it is rejected; see [Custom Steps](custom-
 |---|---|---|
 | Requires GitOps repo | Yes | No |
 | Creates a git commit | Yes | No |
-| Opens a PR | Yes (pr-review mode) | No |
+| Opens a PR | Yes (pr-review mode) | No (`approval: pr-review` is rejected) |
 | Promotion speed | PR merge required | Immediate |
 | Rollback mechanism | Git revert PR | Re-promote previous bundle |
 | Audit trail | Git history + PR | Kubernetes event log |

@@ -15,11 +15,17 @@ package scm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
+
+// maxTokenInfoBytes caps how much of a token introspection response is read.
+const maxTokenInfoBytes = 1 << 20
 
 // TokenScopeWarning describes a missing or insufficient token scope found during
 // startup validation. It is a warning, not an error — the controller continues
@@ -30,11 +36,6 @@ type TokenScopeWarning struct {
 
 	// Consequence is a human-readable description of what will fail without this scope.
 	Consequence string
-}
-
-// String returns a formatted warning message.
-func (w TokenScopeWarning) String() string {
-	return fmt.Sprintf("missing scope %q: %s", w.MissingScope, w.Consequence)
 }
 
 // ValidateGitHubTokenScopes calls the GitHub /user endpoint and inspects the
@@ -87,15 +88,16 @@ func ValidateGitHubTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 	}
 
 	// X-OAuth-Scopes header: comma-separated list of classic PAT scopes.
-	// For fine-grained PATs, this header may be absent; GitHub-Actions tokens also
-	// use a different mechanism. We treat an absent header as "fine-grained PAT or
-	// GitHub App token" and warn only if specific write endpoints are known to fail.
+	// Fine-grained PATs and GitHub App tokens do not send it, and their
+	// permissions cannot be read from /user, so say that the scopes were not
+	// checked instead of passing silently.
 	rawScopes := resp.Header.Get("X-OAuth-Scopes")
-
-	// Fine-grained PAT or GitHub App: no X-OAuth-Scopes header.
-	// We cannot inspect their scopes from the /user endpoint; skip classic scope check.
 	if rawScopes == "" {
-		return nil, nil
+		return []TokenScopeWarning{{
+			MissingScope: "<unverified>",
+			Consequence: "cannot verify the scopes of a fine-grained PAT or GitHub App token; " +
+				"make sure it has contents:write and pull_requests:write on the GitOps repository",
+		}}, nil
 	}
 
 	// Classic PAT: parse scopes.
@@ -171,10 +173,15 @@ func ValidateGitLabTokenScopes(ctx context.Context, token, apiURL string) ([]Tok
 		return nil, fmt.Errorf("GitLab token introspection returned HTTP %d", resp.StatusCode)
 	}
 
-	// Parse JSON response for scopes.
-	// We only need to check for "api" scope.
-	body, _ := readBody(resp)
-	if !strings.Contains(body, `"api"`) {
+	// The token's own name is in the same response, so match the scopes
+	// list, not the raw body.
+	var info struct {
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxTokenInfoBytes)).Decode(&info); err != nil {
+		return nil, fmt.Errorf("decode GitLab token introspection: %w", err)
+	}
+	if !slices.Contains(info.Scopes, "api") {
 		return []TokenScopeWarning{
 			{MissingScope: "api",
 				Consequence: "cannot create merge requests or push branches. Add the 'api' scope to the GitLab personal access token. " +
@@ -220,13 +227,9 @@ func ValidateForgejoTokenScopes(ctx context.Context, token, apiURL string) ([]To
 			{MissingScope: "<valid token>", Consequence: "token rejected by Forgejo API (401) — token may be expired"},
 		}, nil
 	}
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("forgejo /user returned HTTP %d — cannot validate token", resp.StatusCode)
+	}
 
 	return nil, nil
-}
-
-// readBody reads up to 4096 bytes from the response body as a string.
-func readBody(resp *http.Response) (string, error) {
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	return string(buf[:n]), nil
 }

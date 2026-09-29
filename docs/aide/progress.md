@@ -119,7 +119,7 @@
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
-| 016 | PR Evidence, Labels, Webhook Reliability | ✅ Complete | #64 merged | Full 3-table PR body, AddLabelsToPR interface+impl, EnsureLabels, label application |
+| 016 | PR Evidence, Labels, Webhook Reliability | ✅ Complete | #64 merged | Full 3-table PR body, AddLabelsToPR interface+impl, label application (the unused EnsureLabels was later removed) |
 | 018 | Startup Reconciliation + Webhook Health Endpoint | ✅ Complete | #69 merged | Start(ctx) Runnable, atomic event counter, JSON health endpoint, 5 new tests |
 
 ---

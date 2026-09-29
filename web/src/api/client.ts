@@ -5,8 +5,99 @@ import type { StepEvent } from '../components/EventsPanel'
 
 const BASE = '/api/v1/ui'
 
+// ─── Authentication ──────────────────────────────────────────────────────────
+//
+// With --ui-auth-token or --ui-tokenreview-auth the controller answers 401 to
+// any /api/v1/ui/* request without a valid "Authorization: Bearer" header.
+// The token lives in sessionStorage (this tab only, cleared when it closes).
+// On a 401 the client drops the stored token, asks the registered prompt
+// (TokenPrompt) for a new one and retries. Concurrent requests share one
+// prompt, and requests started while the prompt is open wait for it.
+
+/** sessionStorage key for the UI bearer token. */
+export const TOKEN_STORAGE_KEY = 'kardinal-ui-token'
+
+/** Why a token is requested: none stored yet, or the stored one got a 401. */
+export type TokenPromptReason = 'required' | 'rejected'
+
+/** Resolves with the token the user entered. Rejecting gives up (the 401 is returned). */
+export type TokenPromptHandler = (reason: TokenPromptReason) => Promise<string>
+
+let promptHandler: TokenPromptHandler | null = null
+let pendingPrompt: Promise<string> | null = null
+
+/** Registers the token prompt. Returns a function that unregisters it. */
+export function setTokenPrompt(handler: TokenPromptHandler): () => void {
+  promptHandler = handler
+  return () => {
+    if (promptHandler === handler) promptHandler = null
+  }
+}
+
+function readToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY)
+  } catch {
+    return null // storage disabled: behave as if no token is stored
+  }
+}
+
+function writeToken(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token)
+    else sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+  } catch {
+    // storage disabled: the token is not kept and the prompt reappears
+  }
+}
+
+function askForToken(reason: TokenPromptReason): Promise<string> | null {
+  if (!promptHandler) return null
+  if (!pendingPrompt) {
+    const handler = promptHandler
+    pendingPrompt = handler(reason)
+      .then(token => {
+        writeToken(token)
+        return token
+      })
+      .finally(() => {
+        pendingPrompt = null
+      })
+  }
+  return pendingPrompt
+}
+
+/** fetch with the stored bearer token; on 401 asks for a token and retries. */
+async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  for (;;) {
+    if (pendingPrompt) {
+      try {
+        await pendingPrompt
+      } catch {
+        // prompt abandoned: send the request anyway and report its result
+      }
+    }
+    const token = readToken()
+    const headers: Record<string, string> = { ...(init.headers as Record<string, string> | undefined) }
+    if (token) headers.Authorization = `Bearer ${token}`
+    const resp = await fetch(`${BASE}${path}`, { ...init, headers })
+    if (resp.status !== 401) return resp
+
+    const current = readToken()
+    if (current && current !== token) continue // another request already got a new token
+    if (current) writeToken(null)
+    const next = askForToken(token ? 'rejected' : 'required')
+    if (!next) return resp
+    try {
+      await next
+    } catch {
+      return resp
+    }
+  }
+}
+
 async function get<T>(path: string): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`)
+  const resp = await request(path)
   if (!resp.ok) {
     throw new Error(`API error ${resp.status}: ${resp.statusText}`)
   }
@@ -14,7 +105,7 @@ async function get<T>(path: string): Promise<T> {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
+  const resp = await request(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

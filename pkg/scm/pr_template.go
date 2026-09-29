@@ -16,6 +16,7 @@ package scm
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"text/template"
 	"time"
 
@@ -88,30 +89,14 @@ type PRBody struct {
 	// Each entry includes a pre-computed Elapsed string to avoid time.Since in
 	// template execution (SCM-4 logic leak fix).
 	UpstreamEnvironments []PRBodyUpstreamEnv
-
-	// PreviousCommitSHA is the commit SHA of the previous bundle in the same
-	// environment. When non-empty, the PR body includes a GitHub comparison link
-	// from PreviousCommitSHA to Bundle.Provenance.CommitSHA (Kargo parity:
-	// "External link to diff between freights during promotion").
-	PreviousCommitSHA string
-
-	// RepoURL is the Git repository URL (e.g. "https://github.com/org/repo").
-	// Used together with PreviousCommitSHA to build the comparison link.
-	RepoURL string
 }
 
+// mdCellReplacer keeps free text inside one markdown table cell: a "|" (CEL
+// uses "||") would start a new cell and a newline would end the row.
+var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r", " ")
+
 var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMap{
-	"buildDiffURL": func(repoURL, prevSHA, newSHA string) string {
-		if repoURL == "" || prevSHA == "" || newSHA == "" {
-			return ""
-		}
-		// Normalise repo URL: remove trailing .git
-		repo := repoURL
-		if len(repo) > 4 && repo[len(repo)-4:] == ".git" {
-			repo = repo[:len(repo)-4]
-		}
-		return repo + "/compare/" + prevSHA + "..." + newSHA
-	},
+	"mdcell": mdCellReplacer.Replace,
 }).Parse(`<!-- kardinal-promoter auto-generated PR -->
 {{- if .RollbackOf}}
 ## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
@@ -129,16 +114,9 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 | Image | Tag | Digest | CI Run | Commit SHA | Author |
 |---|---|---|---|---|---|
 {{- range .Bundle.Images}}
-| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}[CI run]({{$.Bundle.Provenance.CIRunURL}}){{else}}—{{end}} | {{if $.Bundle.Provenance}}{{$.Bundle.Provenance.CommitSHA}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{$.Bundle.Provenance.Author}}{{else}}—{{end}} |
+| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}[CI run]({{$.Bundle.Provenance.CIRunURL}}){{else}}—{{end}} | {{if $.Bundle.Provenance}}{{mdcell $.Bundle.Provenance.CommitSHA}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{mdcell $.Bundle.Provenance.Author}}{{else}}—{{end}} |
 {{- else}}
 | — | — | — | — | — | — |
-{{- end}}
-{{- $diffURL := buildDiffURL .RepoURL .PreviousCommitSHA (or (and .Bundle.Provenance .Bundle.Provenance.CommitSHA) "")}}
-{{- if $diffURL}}
-
-### Source Diff
-
-[View changes from previous deployment →]({{$diffURL}})
 {{- end}}
 
 ### Policy Gate Compliance
@@ -146,7 +124,7 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 | Gate | Namespace | Result | Reason | Last Evaluated |
 |---|---|---|---|---|
 {{- range .GateResults}}
-| {{.GateName}} | {{if .GateNamespace}}{{.GateNamespace}}{{else}}—{{end}} | {{.Result}} | {{.Reason}} | {{.EvaluatedAt.UTC.Format "2006-01-02T15:04Z"}} |
+| {{.GateName}} | {{if .GateNamespace}}{{.GateNamespace}}{{else}}—{{end}} | {{.Result}} | {{mdcell .Reason}} | {{.EvaluatedAt.UTC.Format "2006-01-02T15:04Z"}} |
 {{- else}}
 | _(none)_ | — | — | — | — |
 {{- end}}

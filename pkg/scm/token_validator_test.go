@@ -101,7 +101,8 @@ func TestValidateGitHubTokenScopes_HasPublicRepoScope(t *testing.T) {
 }
 
 // TestValidateGitHubTokenScopes_FineGrainedPAT verifies that a fine-grained PAT
-// (no X-OAuth-Scopes header) returns no warnings (cannot inspect their scopes).
+// (no X-OAuth-Scopes header) reports that its scopes were not verified instead
+// of passing silently (C06-scm-health-26).
 func TestValidateGitHubTokenScopes_FineGrainedPAT(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Fine-grained PAT: no X-OAuth-Scopes header.
@@ -113,7 +114,9 @@ func TestValidateGitHubTokenScopes_FineGrainedPAT(t *testing.T) {
 
 	warnings, err := scm.ValidateGitHubTokenScopes(context.Background(), "fine-grained-pat", srv.URL)
 	require.NoError(t, err)
-	assert.Empty(t, warnings, "fine-grained PAT (no X-OAuth-Scopes) should produce no warnings")
+	require.Len(t, warnings, 1)
+	assert.Equal(t, "<unverified>", warnings[0].MissingScope)
+	assert.Contains(t, warnings[0].Consequence, "pull_requests:write")
 }
 
 // TestValidateGitHubTokenScopes_ServerError verifies that a 5xx response returns
@@ -201,13 +204,33 @@ func TestValidateForgejoTokenScopes_ValidToken(t *testing.T) {
 	assert.Empty(t, warnings)
 }
 
-// TestTokenScopeWarning_String verifies the warning string format.
-func TestTokenScopeWarning_String(t *testing.T) {
-	w := scm.TokenScopeWarning{
-		MissingScope: "repo",
-		Consequence:  "cannot open pull requests",
-	}
-	s := w.String()
-	assert.Contains(t, s, "repo")
-	assert.Contains(t, s, "cannot open pull requests")
+// TestTokenValidators_Hardening covers a GitLab token whose name is "api"
+// but has only read_api, and a Forgejo server error (C06-scm-health-26).
+func TestTokenValidators_Hardening(t *testing.T) {
+	t.Run("gitlab token named api without the api scope", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"name": "api", "scopes": []string{"read_api"}})
+		}))
+		defer srv.Close()
+		warnings, err := scm.ValidateGitLabTokenScopes(context.Background(), "tok", srv.URL)
+		require.NoError(t, err)
+		require.Len(t, warnings, 1)
+		assert.Equal(t, "api", warnings[0].MissingScope)
+	})
+	t.Run("gitlab malformed body is an error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`not json`))
+		}))
+		defer srv.Close()
+		_, err := scm.ValidateGitLabTokenScopes(context.Background(), "tok", srv.URL)
+		require.Error(t, err)
+	})
+	t.Run("forgejo server error is an error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+		_, err := scm.ValidateForgejoTokenScopes(context.Background(), "tok", srv.URL)
+		require.Error(t, err)
+	})
 }

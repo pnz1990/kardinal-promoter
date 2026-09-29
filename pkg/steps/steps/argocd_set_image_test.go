@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -295,10 +296,10 @@ func TestDefaultSequenceForBundle_ArgoCDStrategy(t *testing.T) {
 	require.Equal(t, []string{"argocd-set-image", "health-check"}, seq,
 		"argocd strategy must produce exactly [argocd-set-image, health-check]")
 
-	// PR-review mode is ignored for argocd — no git workflow.
+	// pr-review is not dropped silently: the sequence is the same, and
+	// argocd-set-image fails the promotion (TestArgoCDSetImageStep_RejectsPRReview).
 	seqPR := parentsteps.DefaultSequenceForBundle("pr-review", "image", "argocd", "")
-	require.Equal(t, []string{"argocd-set-image", "health-check"}, seqPR,
-		"argocd strategy must not include open-pr or wait-for-merge")
+	require.Equal(t, []string{"argocd-set-image", "health-check"}, seqPR)
 
 	// Must not include any git steps.
 	assert.NotContains(t, seq, "git-clone")
@@ -306,6 +307,54 @@ func TestDefaultSequenceForBundle_ArgoCDStrategy(t *testing.T) {
 	assert.NotContains(t, seq, "git-push")
 	assert.NotContains(t, seq, "open-pr")
 	assert.NotContains(t, seq, "wait-for-merge")
+}
+
+// TestArgoCDSetImageStep_RejectsPRReview verifies approval: pr-review is not
+// bypassed by the argocd strategy, and config Bundles are not silently
+// dropped (C05-steps-11).
+func TestArgoCDSetImageStep_RejectsPRReview(t *testing.T) {
+	cases := []struct {
+		name     string
+		approval string
+		bundle   v1alpha1.BundleSpec
+		wantMsg  string
+	}{
+		{"pr-review", "pr-review", v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2"}}}, "cannot honour approval: pr-review"},
+		{"config bundle", "auto", v1alpha1.BundleSpec{Type: "config", ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "abc"}}, "config Bundles are not supported"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := makeArgoCDApp("argocd", "my-app", map[string]interface{}{
+				"image": map[string]interface{}{"tag": "1"},
+			})
+			k8s := fake.NewClientBuilder().WithScheme(newArgoCDScheme(t)).WithObjects(app).Build()
+			state := &parentsteps.StepState{
+				K8sClient: k8s,
+				Environment: v1alpha1.EnvironmentSpec{
+					Name:     "prod",
+					Approval: tc.approval,
+					Update: v1alpha1.UpdateConfig{
+						Strategy: "argocd",
+						ArgoCD:   &v1alpha1.ArgoCDUpdateConfig{Application: "my-app", Namespace: "argocd"},
+					},
+				},
+				Bundle:  tc.bundle,
+				Inputs:  map[string]string{},
+				Outputs: map[string]string{},
+			}
+			step, err := parentsteps.Lookup("argocd-set-image")
+			require.NoError(t, err)
+			result, execErr := step.Execute(context.Background(), state)
+			assert.Error(t, execErr)
+			assert.Equal(t, parentsteps.StepFailed, result.Status)
+			assert.Contains(t, result.Message, tc.wantMsg)
+
+			got := makeArgoCDApp("argocd", "my-app", nil)
+			require.NoError(t, k8s.Get(context.Background(), client.ObjectKeyFromObject(got), got))
+			tag, _, _ := unstructured.NestedString(got.Object, "spec", "source", "helm", "valuesObject", "image", "tag")
+			assert.Equal(t, "1", tag, "the Application must not be patched")
+		})
+	}
 }
 
 // newArgoCDScheme returns a runtime.Scheme with the ArgoCD Application type registered

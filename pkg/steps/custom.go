@@ -17,15 +17,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 const (
@@ -37,6 +44,18 @@ const (
 
 	// inputKeyWebhookSecretName is the Inputs key for the auth secret name.
 	inputKeyWebhookSecretName = "webhook.secretRef.name"
+
+	// inputKeyWebhookAuthorization is the Inputs key for the Authorization
+	// header value. It is sent only as a header, never in the body.
+	inputKeyWebhookAuthorization = "webhook.authorization"
+
+	// inputPrefixWebhook marks the step's own configuration inputs. They are
+	// not sent in the request body (C05-steps-23).
+	inputPrefixWebhook = "webhook."
+
+	// maxEchoedBody bounds how much of an error response body is copied into
+	// the PromotionStep status (C05-steps-25).
+	maxEchoedBody = 256
 
 	// defaultWebhookTimeout is the default timeout when none is specified.
 	defaultWebhookTimeout = 300 * time.Second
@@ -113,8 +132,12 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 
 	webhookURL := state.Inputs[inputKeyWebhookURL]
 	if webhookURL == "" {
-		msg := fmt.Sprintf("custom step %q: missing input %q", s.stepName, inputKeyWebhookURL)
+		msg := fmt.Sprintf("step %q is not a built-in step, so it runs as a custom webhook step, "+
+			"but it has no %q input; check the step name for a typo", s.stepName, inputKeyWebhookURL)
 		return StepResult{Status: StepFailed, Message: msg}, nil
+	}
+	if err := validateWebhookURL(webhookURL); err != nil {
+		return StepResult{Status: StepFailed, Message: fmt.Sprintf("custom step %q: %v", s.stepName, err)}, nil
 	}
 
 	timeout := defaultWebhookTimeout
@@ -129,7 +152,7 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 	// state.Inputs["webhook.authorization"] before calling the step.
 	authHeader := ""
 	if state.Inputs[inputKeyWebhookSecretName] != "" {
-		authHeader = state.Inputs["webhook.authorization"]
+		authHeader = state.Inputs[inputKeyWebhookAuthorization]
 	}
 
 	// Read the current attempt count from persisted outputs.
@@ -147,13 +170,14 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 		return StepResult{Status: StepFailed, Message: msg}, nil
 	}
 
-	log.Info().Int("attempt", attempt+1).Int("max", maxRetries).Str("url", webhookURL).Msg("invoking custom webhook")
+	log.Info().Int("attempt", attempt+1).Int("max", maxRetries).Str("url", scm.RedactURL(webhookURL)).Msg("invoking custom webhook")
 
-	// Build request body.
+	// Build request body. The step's own webhook.* inputs (URL, timeout,
+	// secretRef, Authorization) stay out of the body.
 	reqBody := webhookRequest{
 		Bundle:       state.Bundle,
 		Environment:  state.Environment.Name,
-		Inputs:       state.Inputs,
+		Inputs:       bodyInputs(state.Inputs),
 		OutputsSoFar: state.Outputs,
 	}
 	bodyBytes, err := json.Marshal(reqBody)
@@ -166,6 +190,12 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 	cancel()
 
 	if callErr != nil {
+		if errors.Is(callErr, context.DeadlineExceeded) || errors.Is(callErr, errBlockedAddress) {
+			// A timeout fails the step, as documented; a blocked address never
+			// becomes reachable by retrying (C05-steps-24, C05-steps-25).
+			delete(state.Outputs, outputKeyRetryAttempt)
+			return StepResult{Status: StepFailed, Message: fmt.Sprintf("custom step %q: %v", s.stepName, callErr)}, nil
+		}
 		log.Warn().Err(callErr).Int("attempt", attempt+1).Msg("webhook call failed, scheduling retry")
 		return s.scheduleRetry(state, attempt, fmt.Sprintf("attempt %d/%d: %v", attempt+1, maxRetries, callErr))
 	}
@@ -207,6 +237,7 @@ type callResult struct {
 	statusCode int
 	response   webhookResponse
 	rawBody    []byte
+	decodeErr  error
 }
 
 // doCall performs one HTTP POST and parses the response.
@@ -222,12 +253,12 @@ func (s *CustomWebhookStep) doCall(ctx context.Context, url string, body []byte,
 
 	hc := s.HTTPClient
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = webhookHTTPClient
 	}
 
 	resp, err := hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("POST %s: %w", url, err)
+		return nil, fmt.Errorf("POST %s: %w", scm.RedactURL(url), err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -237,9 +268,11 @@ func (s *CustomWebhookStep) doCall(ctx context.Context, url string, body []byte,
 	}
 
 	result := &callResult{statusCode: resp.StatusCode, rawBody: rawBody}
-	if len(rawBody) > 0 {
+	// Only a 2xx body is the step's JSON result; 4xx and 5xx bodies are
+	// often HTML error pages and are handled by status code (C05-steps-24).
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 && len(rawBody) > 0 {
 		if err := json.Unmarshal(rawBody, &result.response); err != nil {
-			return nil, fmt.Errorf("decode response JSON (HTTP %d): %w", resp.StatusCode, err)
+			result.decodeErr = err
 		}
 	}
 	return result, nil
@@ -250,7 +283,13 @@ func (s *CustomWebhookStep) processResponse(r *callResult) (StepResult, error) {
 	if r.statusCode < 200 || r.statusCode >= 300 {
 		return StepResult{
 			Status:  StepFailed,
-			Message: fmt.Sprintf("custom step %q: HTTP %d: %s", s.stepName, r.statusCode, string(r.rawBody)),
+			Message: fmt.Sprintf("custom step %q: HTTP %d: %s", s.stepName, r.statusCode, truncateBody(r.rawBody)),
+		}, nil
+	}
+	if r.decodeErr != nil {
+		return StepResult{
+			Status:  StepFailed,
+			Message: fmt.Sprintf("custom step %q: response is not the expected JSON: %v", s.stepName, r.decodeErr),
 		}, nil
 	}
 
@@ -273,4 +312,88 @@ func (s *CustomWebhookStep) processResponse(r *callResult) (StepResult, error) {
 				s.stepName, r.response.Result),
 		}, nil
 	}
+}
+
+// bodyInputs returns the inputs to send in the request body: every input
+// except the step's own webhook.* configuration.
+func bodyInputs(inputs map[string]string) map[string]string {
+	out := make(map[string]string, len(inputs))
+	for k, v := range inputs {
+		if !strings.HasPrefix(k, inputPrefixWebhook) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// truncateBody returns at most maxEchoedBody bytes of an error response body.
+func truncateBody(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > maxEchoedBody {
+		return s[:maxEchoedBody] + "…(truncated)"
+	}
+	return s
+}
+
+// validateWebhookURL accepts absolute http and https URLs with a host.
+func validateWebhookURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid %s: %w", inputKeyWebhookURL, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s must be an http or https URL", inputKeyWebhookURL)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("%s has no host", inputKeyWebhookURL)
+	}
+	return nil
+}
+
+// errBlockedAddress is returned when a webhook resolves to an address the
+// controller must not call.
+var errBlockedAddress = errors.New("address is not allowed for custom webhooks")
+
+// imdsIPv6 is the AWS instance metadata service IPv6 address.
+var imdsIPv6 = netip.MustParseAddr("fd00:ec2::254")
+
+// blockWebhookAddress refuses connections to link-local addresses (which
+// include the 169.254.169.254 cloud metadata endpoint), the IPv6 metadata
+// endpoint, and unspecified or multicast addresses (C05-steps-25). It runs
+// after DNS resolution, so a hostname cannot hide such an address.
+// Cluster-private and loopback addresses stay allowed: webhook servers are
+// usually cluster Services, and the controller's own loopback ports are also
+// served on its Service.
+func blockWebhookAddress(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("%w: %s", errBlockedAddress, address)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("%w: %s", errBlockedAddress, address)
+	}
+	ip = ip.Unmap()
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() || ip == imdsIPv6 {
+		return fmt.Errorf("%w: %s", errBlockedAddress, ip)
+	}
+	return nil
+}
+
+// webhookHTTPClient is the client used for custom webhook steps. It applies
+// blockWebhookAddress to every connection, including redirects, and ignores
+// proxy settings, since a proxy would hide the real destination. Every call
+// is bounded by the webhook.timeoutSeconds context deadline.
+var webhookHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+			Control:   blockWebhookAddress,
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        10,
+		IdleConnTimeout:     90 * time.Second,
+	},
 }
