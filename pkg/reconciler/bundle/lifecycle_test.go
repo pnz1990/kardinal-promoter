@@ -266,39 +266,67 @@ func TestLifecycle_FailedBundleWithNewerSiblingIsSuperseded(t *testing.T) {
 }
 
 // C02-bundle-05: a Bundle failed by an invalid Pipeline is retried when the
-// Pipeline is corrected.
+// Pipeline is corrected. The InvalidSpec message is the graph package's cycle
+// error, which names each edge, so a wave cycle is not reported as a
+// dependsOn cycle.
 func TestLifecycle_InvalidPipelineRetriedWhenCorrected(t *testing.T) {
-	p := lcPipeline("app",
-		kardinalv1alpha1.EnvironmentSpec{Name: "a", DependsOn: []string{"b"}},
-		kardinalv1alpha1.EnvironmentSpec{Name: "b", DependsOn: []string{"a"}})
-	c := lcClient(p, lcBundle("app-v1", "image", "Available", time.Now().UTC()))
-	tr := &countingTranslator{}
-	r := &bundle.Reconciler{Client: c, Translator: tr}
-	lcReconcile(t, r, "app-v1")
-
-	got := lcGet(t, c, "app-v1")
-	assert.Equal(t, "Failed", got.Status.Phase)
-	inv := meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec")
-	require.NotNil(t, inv)
-	assert.Equal(t, "CircularDependency", inv.Reason)
-	assert.Contains(t, inv.Message, "apply a corrected Pipeline to retry")
-	assert.Zero(t, tr.calls, "an invalid Pipeline is not translated")
-
-	// Nothing changed: the Bundle stays Failed.
-	lcReconcile(t, r, "app-v1")
-	assert.Equal(t, "Failed", lcGet(t, c, "app-v1").Status.Phase)
-
-	var pl kardinalv1alpha1.Pipeline
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "app", Namespace: "default"}, &pl))
-	pl.Spec.Environments = lcEnvs("a", "b")
-	require.NoError(t, c.Update(context.Background(), &pl))
-	for range 2 {
-		lcReconcile(t, r, "app-v1")
+	tests := []struct {
+		name     string
+		envs     []kardinalv1alpha1.EnvironmentSpec
+		contains []string
+	}{
+		{name: "dependsOn cycle",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "a", DependsOn: []string{"b"}},
+				{Name: "b", DependsOn: []string{"a"}},
+			},
+			contains: []string{"a dependsOn b", "b dependsOn a"}},
+		{name: "waves listed out of order",
+			envs: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"}, {Name: "a", Wave: 2}, {Name: "staging"}, {Name: "b", Wave: 1},
+			},
+			contains: []string{
+				"a (wave 2) waits for all of wave 1, which includes b",
+				"list the waves in ascending order",
+			}},
 	}
-	got = lcGet(t, c, "app-v1")
-	assert.Equal(t, "Promoting", got.Status.Phase)
-	assert.Equal(t, 1, tr.calls)
-	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := lcClient(lcPipeline("app", tc.envs...), lcBundle("app-v1", "image", "Available", time.Now().UTC()))
+			tr := &countingTranslator{}
+			r := &bundle.Reconciler{Client: c, Translator: tr}
+			lcReconcile(t, r, "app-v1")
+
+			got := lcGet(t, c, "app-v1")
+			assert.Equal(t, "Failed", got.Status.Phase)
+			inv := meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec")
+			require.NotNil(t, inv)
+			assert.Equal(t, "CircularDependency", inv.Reason)
+			for _, want := range tc.contains {
+				assert.Contains(t, inv.Message, want)
+			}
+			assert.NotContains(t, inv.Message, "circular dependsOn",
+				"the message is the graph error, not a dependsOn-only summary")
+			assert.Contains(t, inv.Message, "apply a corrected Pipeline to retry")
+			assert.Zero(t, tr.calls, "an invalid Pipeline is not translated")
+
+			// Nothing changed: the Bundle stays Failed.
+			lcReconcile(t, r, "app-v1")
+			assert.Equal(t, "Failed", lcGet(t, c, "app-v1").Status.Phase)
+
+			var pl kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "app", Namespace: "default"}, &pl))
+			pl.Spec.Environments = lcEnvs("a", "b")
+			require.NoError(t, c.Update(context.Background(), &pl))
+			for range 2 {
+				lcReconcile(t, r, "app-v1")
+			}
+			got = lcGet(t, c, "app-v1")
+			assert.Equal(t, "Promoting", got.Status.Phase)
+			assert.Equal(t, 1, tr.calls)
+			assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
+		})
+	}
 }
 
 // C02-bundle-05: a transient translate error keeps the Bundle Available and

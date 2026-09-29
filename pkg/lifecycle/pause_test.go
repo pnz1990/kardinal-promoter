@@ -6,6 +6,7 @@ package lifecycle_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,6 +60,26 @@ func TestPauseResume(t *testing.T) {
 	paused, err = lifecycle.IsPaused(ctx, c, ns, "app")
 	require.NoError(t, err)
 	assert.False(t, paused)
+}
+
+// TestPause_LongPipelineNameKeepsFreezePrefix: the PolicyGate CRD limits
+// names to 63 characters except freeze gates ("freeze-" prefix) and gate
+// instances ("--"). A pipeline name longer than that still gets a freeze gate
+// the API server accepts, because the name keeps the prefix.
+func TestPause_LongPipelineNameKeepsFreezePrefix(t *testing.T) {
+	ctx := context.Background()
+	name := strings.Repeat("p", 100)
+	c := newClient(t, pipeline(name, "test", "prod"))
+	require.NoError(t, lifecycle.Pause(ctx, c, ns, name))
+
+	gateName := lifecycle.FreezeGateName(name)
+	assert.True(t, strings.HasPrefix(gateName, "freeze-"), "the CRD name rule exempts only freeze- names")
+	assert.Greater(t, len(gateName), 63)
+	var gate v1alpha1.PolicyGate
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: gateName}, &gate))
+	paused, err := lifecycle.IsPaused(ctx, c, ns, name)
+	require.NoError(t, err)
+	assert.True(t, paused)
 }
 
 func TestPauseResume_Errors(t *testing.T) {
