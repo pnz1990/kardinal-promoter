@@ -781,14 +781,20 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 // handleHealthChecking verifies that the environment runs the promoted
 // revision and is healthy, using the adapter the environment selects.
 //
-// The check target, the expected revision (the pushed or merged commit) and
-// the expected images all come from the Pipeline and Bundle, through
-// health.OptionsForEnv, the same helper the translator uses for the Graph
-// health nodes (C03-promotionstep-04, -11, -19, E2E-01).
+// The adapter type and the object it checks come from the Pipeline through
+// health.OptionsForEnv, which the translator also uses for the Graph health
+// ref nodes (C03-promotionstep-04, -19). The expected revision is the pushed
+// or merged commit (expectedRevision) and the expected images are the Bundle
+// images (C03-promotionstep-11, E2E-01).
 //
-// health.timeout bounds the time until the first Healthy result. Once a bake
-// window has started the timeout no longer applies, so a bake longer than the
-// timeout can complete (C03-promotionstep-03).
+// health.timeout bounds the time until the first Healthy result. Reaching it
+// is a health failure: it counts in status.consecutiveHealthFailures and
+// applies onHealthFailure (Failed, AbortedByAlarm or a rollback Bundle), as a
+// terminal result does. A crash-looping new image keeps a Deployment rolling
+// out (Progressing) until its progressDeadlineSeconds, so without this the
+// step would fail with no rollback. Once a bake window has started the
+// timeout no longer applies, so a bake longer than the timeout can complete
+// (C03-promotionstep-03).
 //
 // Health checks are spaced at least requeueHealthCheck apart, whatever the
 // reconcile rate, and only Unhealthy or Terminal results (not Progressing
@@ -836,16 +842,20 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 
 	// Time-to-healthy timeout, compared against the stored expiry. It stops
 	// applying once the bake window started (the environment was healthy).
+	// Never becoming healthy is a health failure: count it and apply
+	// onHealthFailure.
 	if ps.Status.BakeStartedAt == nil && time.Now().After(ps.Status.HealthCheckExpiry.Time) {
 		log.Warn().
 			Time("expiry", ps.Status.HealthCheckExpiry.Time).
 			Dur("timeout", timeout).
+			Str("onHealthFailure", env.OnHealthFailure).
 			Msg("health check timeout")
 		msg := fmt.Sprintf("health check timeout after %s", timeout)
 		if last := ps.Status.Message; last != "" {
 			msg += "; last result: " + last
 		}
-		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
+		ps.Status.ConsecutiveHealthFailures++
+		return r.applyHealthFailurePolicy(ctx, log, base, ps, env, health.EffectiveType(env), msg)
 	}
 
 	// Space checks: a status patch re-enqueues the step at once, so without
@@ -947,8 +957,9 @@ func (r *Reconciler) verify(ctx context.Context, base, ps *v1alpha1.PromotionSte
 }
 
 // applyHealthFailurePolicy dispatches the onHealthFailure action (K-03).
-// Called for a terminal health result, and from handleBake when the bake
-// policy is fail-on-alarm.
+// Called for a terminal health result, when health.timeout passes before the
+// first Healthy result, and from handleBake when the bake policy is
+// fail-on-alarm.
 //
 // "rollback": creates a rollback Bundle, transitions step to RollingBack.
 // "abort":    transitions step to AbortedByAlarm (human intervention required).
@@ -971,6 +982,19 @@ func (r *Reconciler) applyHealthFailurePolicy(
 			adapterName, reason))
 
 	case "rollback":
+		// A rollback Bundle whose health check fails is not rolled back in
+		// turn: that would chain rollback Bundles, one per health.timeout.
+		var bundle v1alpha1.Bundle
+		getErr := r.Get(ctx, types.NamespacedName{Name: ps.Spec.BundleName, Namespace: ps.Namespace}, &bundle)
+		if getErr != nil && !apierrors.IsNotFound(getErr) {
+			return ctrl.Result{}, fmt.Errorf("get bundle %s: %w", ps.Spec.BundleName, getErr)
+		}
+		if getErr == nil && isRollbackBundle(&bundle) {
+			log.Info().Str("env", ps.Spec.Environment).Msg("health failure of a rollback Bundle: AbortedByAlarm")
+			return ctrl.Result{}, r.transition(ctx, base, ps, StateAbortedByAlarm, fmt.Sprintf(
+				"health alarm via %s (onHealthFailure=rollback): %s — Bundle %s is a rollback and is not rolled back again; human intervention required",
+				adapterName, reason, ps.Spec.BundleName))
+		}
 		// Create a rollback Bundle at the previous version.
 		// The rollback Bundle travels the full pipeline, restoring the prior state.
 		rollbackBundle := r.buildRollbackBundle(ps)
@@ -990,6 +1014,12 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, fmt.Sprintf(
 			"health alarm via %s (onHealthFailure=none): %s", adapterName, reason))
 	}
+}
+
+// isRollbackBundle reports whether b is a rollback Bundle, created by
+// onHealthFailure=rollback, a RollbackPolicy or `kardinal rollback`.
+func isRollbackBundle(b *v1alpha1.Bundle) bool {
+	return b.Labels["kardinal.io/rollback"] == "true" || (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "")
 }
 
 // buildRollbackBundle creates a rollback Bundle for K-03.

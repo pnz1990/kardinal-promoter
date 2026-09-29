@@ -37,6 +37,8 @@ type healthCase struct {
 	prsRef  string
 	objs    []client.Object
 	dynObjs []runtime.Object
+	// bundle, when set, adjusts the Bundle b1 before the reconcile.
+	bundle func(*v1alpha1.Bundle)
 }
 
 func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, time.Duration) {
@@ -45,6 +47,9 @@ func (hc healthCase) run(t *testing.T) (client.Client, v1alpha1.PromotionStep, t
 	pipeline.Spec.Environments = []v1alpha1.EnvironmentSpec{hc.env}
 	bundle := makeBundle("b1", "p")
 	bundle.Spec.Images = hc.images
+	if hc.bundle != nil {
+		hc.bundle(bundle)
+	}
 	ps := labelled(makeStep("step", "p", "b1", hc.env.Name))
 	ps.Spec.PRStatusRef = hc.prsRef
 	ps.Status = hc.status
