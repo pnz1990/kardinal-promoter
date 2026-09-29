@@ -105,13 +105,7 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	// Configure zerolog level.
-	level, err := zerolog.ParseLevel(zerologLevel)
-	if err != nil {
-		level = zerolog.InfoLevel
-	}
-	zerolog.SetGlobalLevel(level)
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	logger := newAgentLogger(zerologLevel)
 
 	// O3: shard is required. An agent without a shard would compete with the controller.
 	if err := validateShard(shard); err != nil {
@@ -152,6 +146,7 @@ func main() {
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		Shard:          shard,
+		Recorder:       mgr.GetEventRecorderFor("kardinal-agent"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("[kardinal-agent] unable to set up PromotionStepReconciler")
 	}
@@ -172,6 +167,22 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Fatal().Err(err).Msg("[kardinal-agent] problem running manager")
 	}
+}
+
+// newAgentLogger sets the global zerolog level and returns the agent logger.
+// It is also the default context logger: reconcilers log through
+// zerolog.Ctx(ctx), and controller-runtime puts no zerolog logger in the
+// reconcile context, so without it every reconciler line, errors included,
+// goes to a disabled logger.
+func newAgentLogger(levelName string) zerolog.Logger {
+	level, err := zerolog.ParseLevel(levelName)
+	if err != nil {
+		level = zerolog.InfoLevel
+	}
+	zerolog.SetGlobalLevel(level)
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	zerolog.DefaultContextLogger = &logger
+	return logger
 }
 
 // validateShard returns an error if shard is empty or whitespace-only.

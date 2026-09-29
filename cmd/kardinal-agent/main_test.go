@@ -16,8 +16,10 @@
 package main
 
 import (
+	"context"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,4 +77,32 @@ func TestValidateShard(t *testing.T) {
 func TestErrShardRequired(t *testing.T) {
 	err := validateShard("")
 	assert.Contains(t, err.Error(), "--shard is required")
+}
+
+// TestNewAgentLogger covers C07-controller-18: the agent never set
+// zerolog.DefaultContextLogger, so reconciler logs written through
+// zerolog.Ctx(ctx) went to a disabled logger.
+func TestNewAgentLogger(t *testing.T) {
+	prevLevel, prevDefault := zerolog.GlobalLevel(), zerolog.DefaultContextLogger
+	t.Cleanup(func() {
+		zerolog.SetGlobalLevel(prevLevel)
+		zerolog.DefaultContextLogger = prevDefault
+	})
+
+	tests := []struct {
+		level string
+		want  zerolog.Level
+	}{
+		{level: "debug", want: zerolog.DebugLevel},
+		{level: "not-a-level", want: zerolog.InfoLevel},
+	}
+	for _, tt := range tests {
+		t.Run(tt.level, func(t *testing.T) {
+			zerolog.DefaultContextLogger = nil
+			newAgentLogger(tt.level)
+			assert.Equal(t, tt.want, zerolog.GlobalLevel())
+			assert.NotEqual(t, zerolog.Disabled, zerolog.Ctx(context.Background()).GetLevel(),
+				"reconcilers log through zerolog.Ctx(ctx); it must not be the disabled logger")
+		})
+	}
 }
