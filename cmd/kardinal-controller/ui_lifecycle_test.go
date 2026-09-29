@@ -207,38 +207,46 @@ func TestUIAPI_Rollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 	}
 }
 
-// TestUIAPI_PauseResume_FreezeGate covers C10a-web-01 (server half) and the
-// pause half of C07-controller-24: UI pause creates the freeze gate the
-// PromotionStep reconciler holds on, resume deletes it, and a concurrent write
-// to the Pipeline does not fail the request (merge patch, not Update).
-func TestUIAPI_PauseResume_FreezeGate(t *testing.T) {
+// TestUIAPI_PauseResume_SetsSpecPaused covers C10a-web-01 (server half) and
+// the pause half of C07-controller-24: UI pause and resume set spec.paused
+// and leave the freeze gate to the Pipeline reconciler
+// (TestPipelineLifecycle_FreezeGateFollowsSpecPaused), so a UI user needs
+// only get and update on the Pipeline. A conflict with a concurrent write to
+// the Pipeline is retried, not returned.
+func TestUIAPI_PauseResume_SetsSpecPaused(t *testing.T) {
 	ctx := context.Background()
+	conflicts := 0
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-				if _, ok := obj.(*v1alpha1.Pipeline); ok {
+				if _, ok := obj.(*v1alpha1.Pipeline); ok && conflicts == 0 {
+					conflicts++
 					return apierrors.NewConflict(schema.GroupResource{Group: "kardinal.io", Resource: "pipelines"}, obj.GetName(), nil)
 				}
 				return cl.Update(ctx, obj, opts...)
 			},
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				t.Errorf("UI pause and resume must not create objects, created %T", obj)
+				return cl.Create(ctx, obj, opts...)
+			},
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				t.Errorf("UI pause and resume must not delete objects, deleted %T", obj)
+				return cl.Delete(ctx, obj, opts...)
+			},
 		}).Build()
 	key := types.NamespacedName{Namespace: "default", Name: "app"}
-	gateKey := types.NamespacedName{Namespace: "default", Name: lifecycle.FreezeGateName("app")}
 
 	w := uiLcPost(t, c, "/api/v1/ui/pause", `{"pipeline":"app"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, 1, conflicts, "the conflict was retried")
 	var p v1alpha1.Pipeline
 	require.NoError(t, c.Get(ctx, key, &p))
 	assert.True(t, p.Spec.Paused)
-	var gate v1alpha1.PolicyGate
-	require.NoError(t, c.Get(ctx, gateKey, &gate), "UI pause creates the freeze gate")
-	assert.Equal(t, "true", gate.Labels[lifecycle.LabelFreeze])
 
 	w = uiLcPost(t, c, "/api/v1/ui/resume", `{"pipeline":"app"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.NoError(t, c.Get(ctx, key, &p))
 	assert.False(t, p.Spec.Paused)
-	assert.True(t, apierrors.IsNotFound(c.Get(ctx, gateKey, &gate)), "UI resume deletes the freeze gate")
 
 	w = uiLcPost(t, c, "/api/v1/ui/pause", `{"pipeline":"missing"}`)
 	assert.Equal(t, http.StatusNotFound, w.Code)

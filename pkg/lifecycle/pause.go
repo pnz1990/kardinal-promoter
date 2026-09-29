@@ -5,11 +5,13 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -24,11 +26,14 @@ import (
 // merge or running a health check carry on, because stopping them would leave
 // a merged change unverified.
 //
-// Pause and Resume write both. The Pipeline reconciler converges the gate to
-// spec.paused, so `kubectl patch pipeline --type merge -p '{"spec":{"paused":true}}'`
-// pauses too. Deleting or creating the gate wakes every PromotionStep in the
-// namespace (the PromotionStep reconciler watches PolicyGates), so resume takes
-// effect at once.
+// The Pipeline reconciler converges the gate to spec.paused, so setting the
+// field is enough: SetPaused (the UI) and
+// `kubectl patch pipeline --type merge -p '{"spec":{"paused":true}}'` write
+// only the Pipeline. Pause and Resume (the CLI) also write the gate, so the
+// hold starts without waiting for the Pipeline reconciler. Deleting or
+// creating the gate wakes every PromotionStep in the namespace (the
+// PromotionStep reconciler watches PolicyGates), so resume takes effect at
+// once.
 
 // FreezeGateName returns the name of the freeze PolicyGate of a pipeline.
 func FreezeGateName(pipeline string) string {
@@ -127,6 +132,32 @@ func Resume(ctx context.Context, c client.Client, ns, pipeline string) error {
 		return err
 	}
 	return RemoveFreezeGate(ctx, c, ns, pipeline)
+}
+
+// SetPaused sets spec.paused on the Pipeline and leaves the freeze gate to
+// the Pipeline reconciler. It needs only get and update on the Pipeline, so a
+// UI user needs no rights on PolicyGates. A conflict with a concurrent write
+// is retried. It is idempotent and returns ErrNotFound when the Pipeline does
+// not exist.
+func SetPaused(ctx context.Context, c client.Client, ns, pipeline string, paused bool) error {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var p v1alpha1.Pipeline
+		if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: pipeline}, &p); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("pipeline %s/%s: %w", ns, pipeline, ErrNotFound)
+			}
+			return err
+		}
+		if p.Spec.Paused == paused {
+			return nil
+		}
+		p.Spec.Paused = paused
+		return c.Update(ctx, &p)
+	})
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("set pipeline %s/%s paused=%t: %w", ns, pipeline, paused, err)
+	}
+	return err
 }
 
 // setPaused patches spec.paused with a merge patch. The patch carries no

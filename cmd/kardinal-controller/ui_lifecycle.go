@@ -185,9 +185,10 @@ func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handlePause handles POST /api/v1/ui/pause. It sets spec.paused and creates
-// the freeze gate (lifecycle.Pause): no new step starts and in-flight steps
-// hold at the next safe point.
+// handlePause handles POST /api/v1/ui/pause. It sets spec.paused
+// (lifecycle.SetPaused); the Pipeline reconciler then creates the freeze gate,
+// so no new step starts and in-flight steps hold at the next safe point. The
+// caller needs only get and update on the Pipeline.
 //
 // Request body (JSON):
 //
@@ -200,8 +201,8 @@ func (s *uiAPIServer) handlePause(w http.ResponseWriter, r *http.Request) {
 	s.handlePauseResume(w, r, true)
 }
 
-// handleResume handles POST /api/v1/ui/resume. It clears spec.paused and
-// deletes the freeze gate (lifecycle.Resume).
+// handleResume handles POST /api/v1/ui/resume. It clears spec.paused; the
+// Pipeline reconciler then deletes the freeze gate.
 func (s *uiAPIServer) handleResume(w http.ResponseWriter, r *http.Request) {
 	s.handlePauseResume(w, r, false)
 }
@@ -229,14 +230,12 @@ func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, 
 	}
 
 	action, done := "resume", "resumed"
-	apply := lifecycle.Resume
 	if pause {
 		action, done = "pause", "paused"
-		apply = lifecycle.Pause
 	}
-	// lifecycle.Pause/Resume use a merge patch, so a concurrent write to the
-	// Pipeline (for example its status) cannot fail the request with a conflict.
-	if err := apply(r.Context(), s.client, ns, req.Pipeline); err != nil {
+	// SetPaused retries a conflict, so a concurrent write to the Pipeline (for
+	// example its status) does not fail the request.
+	if err := lifecycle.SetPaused(r.Context(), s.client, ns, req.Pipeline, pause); err != nil {
 		s.writeLifecycleError(w, action+" pipeline", err)
 		return
 	}
