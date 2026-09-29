@@ -15,6 +15,7 @@ package scm
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -125,7 +126,9 @@ func (w *SecretWatcher) checkAndReload(ctx context.Context, log zerolog.Logger) 
 		return
 	}
 
-	token := string(tokenBytes)
+	// Trim so a trailing newline neither breaks the header nor looks like a
+	// rotation on every poll.
+	token := strings.TrimSpace(string(tokenBytes))
 	if token == w.lastToken {
 		// Token unchanged — no-op.
 		return

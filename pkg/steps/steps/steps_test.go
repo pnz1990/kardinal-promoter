@@ -360,6 +360,8 @@ func TestHealthCheckStep_AlwaysSuccess(t *testing.T) {
 	result, err := step.Execute(context.Background(), state)
 	require.NoError(t, err)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
+	assert.NotContains(t, result.Message, "Stage", "stale stage message (C05-steps-37)")
+	assert.Contains(t, result.Message, "PromotionStep reconciler")
 }
 
 func TestDefaultSequence_Auto(t *testing.T) {

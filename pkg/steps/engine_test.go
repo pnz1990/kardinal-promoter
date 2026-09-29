@@ -199,3 +199,15 @@ func TestEngine_StepRestart(t *testing.T) {
 		})
 	}
 }
+
+// TestEngine_EmptyStepName proves an empty step name fails the sequence
+// instead of becoming a custom webhook step (C05-steps-34).
+func TestEngine_EmptyStepName(t *testing.T) {
+	_, err := steps.Lookup("")
+	require.Error(t, err)
+
+	next, _, err := steps.NewEngine([]string{""}).ExecuteFrom(context.Background(), &steps.StepState{Outputs: map[string]string{}}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty step name")
+	assert.Equal(t, 0, next)
+}
