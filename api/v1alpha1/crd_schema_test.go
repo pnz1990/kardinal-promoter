@@ -350,14 +350,14 @@ func TestCRDSchemaCoversRemovedVAPRules(t *testing.T) {
 		return p
 	}
 	rejected := map[string]map[string]interface{}{
-		"policygate empty expression":   gate(map[string]interface{}{"expression": ""}),
+		"policygate empty expression":    gate(map[string]interface{}{"expression": ""}),
 		"policygate bad recheckInterval": gate(map[string]interface{}{"expression": "true", "recheckInterval": "5 minutes"}),
-		"pipeline no environments":      pipelineWithEnvs(),
-		"pipeline env empty name":       pipelineWithEnvs(""),
-		"pipeline bad update strategy":  env(map[string]interface{}{"name": "test", "update": map[string]interface{}{"strategy": "custom"}}),
-		"pipeline bad approval":         env(map[string]interface{}{"name": "test", "approval": "manual"}),
-		"bundle empty pipeline":         bundle(map[string]interface{}{"type": "image", "pipeline": ""}),
-		"bundle bad type":               bundle(map[string]interface{}{"type": "tarball", "pipeline": "p"}),
+		"pipeline no environments":       pipelineWithEnvs(),
+		"pipeline env empty name":        pipelineWithEnvs(""),
+		"pipeline bad update strategy":   env(map[string]interface{}{"name": "test", "update": map[string]interface{}{"strategy": "custom"}}),
+		"pipeline bad approval":          env(map[string]interface{}{"name": "test", "approval": "manual"}),
+		"bundle empty pipeline":          bundle(map[string]interface{}{"type": "image", "pipeline": ""}),
+		"bundle bad type":                bundle(map[string]interface{}{"type": "tarball", "pipeline": "p"}),
 	}
 	for name, obj := range rejected {
 		assert.NotEmpty(t, validateCR(t, crds, obj), "%s must be rejected by the CRD schema", name)
