@@ -524,6 +524,43 @@ The UI calls its API on the same origin, which always works. A cross-origin requ
 (chart value `ui.corsAllowedOrigins`). `*` allows every origin and is for development
 only.
 
+### Host names (DNS rebinding)
+
+A request counts as same-origin only when its `Host` header is one of the UI server's
+own names:
+
+- `localhost`, `127.0.0.1` and `::1`, which are always allowed (for `kubectl port-forward`);
+- the names in `--ui-allowed-hosts` (env `KARDINAL_UI_ALLOWED_HOSTS`, chart value
+  `ui.allowedHosts`). This is a comma-separated list of host names or IP addresses with
+  no scheme, path or wildcard; a port is ignored.
+
+The chart always passes the controller Service's DNS names: `<fullname>`,
+`<fullname>.<namespace>`, `<fullname>.<namespace>.svc` and
+`<fullname>.<namespace>.svc.cluster.local`. Add your Ingress host name, a
+non-default cluster domain, or the node IP you browse to:
+
+```bash
+helm upgrade kardinal-promoter chart/kardinal-promoter -n kardinal-system \
+  --set 'ui.allowedHosts={kardinal.example.com}'
+```
+
+Checking `Origin` against `Host` alone would not be enough. Under DNS rebinding, a page
+on `evil.example` gets its name re-resolved to the controller's address. The browser
+then treats the page as same-origin with the controller, so the `Origin` and `Host`
+headers match. To stop this:
+
+- A request to any other `Host` never gets a same-origin grant. It is handled as
+  cross-origin and needs `--cors-allowed-origins`.
+- While UI auth is off, the controller also rejects writes to any other `Host` with
+  `403`: every method except `GET`, `HEAD` and `OPTIONS`, even with no `Origin` header.
+  This blocks a rebound page's plain form post.
+- Reads with no `Origin` are not blocked. Browsers do not send `Origin` on a
+  same-origin `GET`, so a rebound page can still read pipeline state while UI auth is
+  off. Turn on one of the auth modes above to close that too.
+
+If the UI loads but its actions fail with `host not allowed`, add the host name you
+browse to to `ui.allowedHosts`.
+
 ### Accessing the UI securely (before TLS is configured)
 
 Until TLS is configured, the recommended access method is:

@@ -132,6 +132,16 @@ github:
     namespace: ""
     key: "token"
 
+# -- Embedded UI (:8082).
+ui:
+  # -- Extra host names the UI answers to (--ui-allowed-hosts), for example an
+  # Ingress host. The Service DNS names (<fullname>, <fullname>.<namespace>,
+  # .svc and .svc.cluster.local) and localhost are always allowed. Browser
+  # requests to any other Host get no same-origin grant, and while UI auth is
+  # off writes to them are rejected (DNS rebinding protection). Host names
+  # only: no scheme, path or wildcard.
+  allowedHosts: []
+
 # -- kro Graph integration.
 # kardinal renders one kro Graph (kro.run/v1alpha1) per Bundle. kro >= v0.10.0
 # with the GraphKind feature gate must be installed separately:

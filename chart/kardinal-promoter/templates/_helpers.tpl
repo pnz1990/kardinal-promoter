@@ -66,6 +66,18 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Host names the UI server answers to (--ui-allowed-hosts): the controller
+Service's DNS names plus ui.allowedHosts. The controller always allows
+localhost, 127.0.0.1 and ::1 as well.
+*/}}
+{{- define "kardinal-promoter.uiAllowedHosts" -}}
+{{- $svc := include "kardinal-promoter.fullname" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $own := list $svc (printf "%s.%s" $svc $ns) (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) -}}
+{{- concat $own (.Values.ui.allowedHosts | default list) | uniq | join "," -}}
+{{- end }}
+
+{{/*
 ClusterRoles bound to the Graph ServiceAccount (templates/graph-rbac.yaml).
 */}}
 {{- define "kardinal-promoter.graphApplierRole" -}}

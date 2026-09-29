@@ -61,8 +61,10 @@ func buildUIAuth(cfg *rest.Config, staticToken string, tokenReview bool, scopeNa
 
 // newUIHandler builds the UI server handler: the /api/v1/ui/* API, the
 // embedded React app at /ui/, authentication, a request body limit and CORS.
-// assets may be nil when the embedded filesystem is unavailable.
-func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowedOrigins string, log zerolog.Logger) http.Handler {
+// assets may be nil when the embedded filesystem is unavailable. hosts is
+// --ui-allowed-hosts; nil allows loopback only.
+func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowedOrigins string,
+	hosts uiHostAllowlist, log zerolog.Logger) http.Handler {
 	tokenReview := auth.staticToken == "" && auth.tokens != nil && auth.access != nil
 
 	apiClient := k8s
@@ -84,9 +86,11 @@ func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowe
 	}
 	handler = limitUIRequestBody(handler)
 
-	// Same-origin requests always pass; cross-origin requests pass only when
-	// listed in --cors-allowed-origins ("*" allows all).
-	return applyCORSMiddleware(handler, corsAllowedOrigins, log)
+	// Same-origin requests to an allowed Host pass; cross-origin requests pass
+	// only when listed in --cors-allowed-origins ("*" allows all). With auth
+	// off, writes to any other Host are refused (DNS rebinding).
+	authEnabled := auth.staticToken != "" || tokenReview
+	return applyCORSMiddleware(handler, corsAllowedOrigins, hosts, authEnabled, log)
 }
 
 // staticTokenMiddleware requires "Authorization: Bearer <token>" on

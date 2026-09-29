@@ -55,6 +55,8 @@ func uiAuthDo(t *testing.T, h http.Handler, method, path, token, body string) *h
 	} else {
 		req = httptest.NewRequest(method, path, nil)
 	}
+	// The UI is reached through kubectl port-forward: a loopback Host.
+	req.Host = "localhost:8082"
 	if token != "" {
 		req.Header.Set("Authorization", token)
 	}
@@ -86,7 +88,7 @@ func TestUIHandler_StaticToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-			h := newUIHandler(c, uiTestAssets, uiAuthConfig{staticToken: tt.token}, "", zerolog.Nop())
+			h := newUIHandler(c, uiTestAssets, uiAuthConfig{staticToken: tt.token}, "", nil, zerolog.Nop())
 			rec := uiAuthDo(t, h, http.MethodGet, tt.path, tt.header, "")
 			require.Equal(t, tt.wantCode, rec.Code)
 			if tt.wantCode == http.StatusUnauthorized {
@@ -103,7 +105,7 @@ func TestUIHandler_StaticTokenTakesPrecedenceOverTokenReview(t *testing.T) {
 	const staticToken = "static-secret-token"
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
 	tr := &uiTestTokens{users: map[string]string{"kube-token": "alice"}}
-	h := newUIHandler(c, nil, uiAuthConfig{staticToken: staticToken, tokens: tr, access: &uiTestAccess{}}, "", zerolog.Nop())
+	h := newUIHandler(c, nil, uiAuthConfig{staticToken: staticToken, tokens: tr, access: &uiTestAccess{}}, "", nil, zerolog.Nop())
 
 	assert.Equal(t, http.StatusOK, uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer "+staticToken, "").Code)
 	assert.Equal(t, http.StatusUnauthorized, uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer kube-token", "").Code)
@@ -197,7 +199,7 @@ func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
 				&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}},
 				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "team-a"}},
 			).Build()
-			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: &uiTestAccess{rules: rbac}}, "", zerolog.Nop())
+			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: &uiTestAccess{rules: rbac}}, "", nil, zerolog.Nop())
 
 			rec := uiAuthDo(t, h, tt.method, tt.path, "Bearer "+tt.token, tt.body)
 			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
@@ -225,7 +227,7 @@ func TestUIHandler_TokenReviewScopeNamespace(t *testing.T) {
 	tokens := &uiTestTokens{users: map[string]string{"t": "alice"}}
 	access := &uiTestAccess{rules: map[string]map[string][]string{"alice": {"team-a": {"get", "list"}}}}
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access, scopeNamespace: "team-a"}, "", zerolog.Nop())
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access, scopeNamespace: "team-a"}, "", nil, zerolog.Nop())
 
 	rec := uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer t", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
@@ -304,7 +306,7 @@ func TestUIHandler_GateApproveBounds(t *testing.T) {
 				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}},
 				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-b"}},
 			).Build()
-			h := newUIHandler(c, nil, uiAuthConfig{}, "", zerolog.Nop())
+			h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
 			before := time.Now()
 			rec := uiAuthDo(t, h, http.MethodPost, tt.path, "", tt.body)
 			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
@@ -330,7 +332,7 @@ func TestUIHandler_GateApproveBounds(t *testing.T) {
 // are served, directories are not listed.
 func TestUIHandler_StaticAssets(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	h := newUIHandler(c, uiTestAssets, uiAuthConfig{}, "", zerolog.Nop())
+	h := newUIHandler(c, uiTestAssets, uiAuthConfig{}, "", nil, zerolog.Nop())
 
 	tests := []struct {
 		path     string
@@ -360,7 +362,7 @@ func TestUIHandler_BodyLimit(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
 		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
 	).Build()
-	h := newUIHandler(c, nil, uiAuthConfig{}, "", zerolog.Nop())
+	h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
 
 	pad := strings.Repeat(" ", maxUIRequestBody)
 	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/pause", "", `{"pipeline":"app"`+pad+`}`)

@@ -137,6 +137,14 @@ func main() {
 			"Set to '*' to allow all origins (development only). "+
 			"Also readable from KARDINAL_CORS_ORIGINS environment variable.")
 
+	var uiAllowedHosts string
+	flag.StringVar(&uiAllowedHosts, "ui-allowed-hosts", os.Getenv("KARDINAL_UI_ALLOWED_HOSTS"),
+		"Comma-separated host names (no scheme; a port is ignored) the UI server answers to, "+
+			"on top of localhost, 127.0.0.1 and ::1: the controller Service DNS names and any Ingress host. "+
+			"A request counts as same-origin only when its Host header is one of these, and while UI auth is "+
+			"off, writes to /api/v1/ui/* with any other Host are rejected with 403 (DNS rebinding protection). "+
+			"Also readable from KARDINAL_UI_ALLOWED_HOSTS environment variable.")
+
 	// --ui-tokenreview-auth enables Kubernetes TokenReview-based authentication for
 	// the UI API. When set to true (and --ui-auth-token is NOT set), the UI API server
 	// validates each bearer token by calling authenticationv1.TokenReview against the
@@ -264,6 +272,11 @@ func main() {
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
+
+	uiHosts, err := parseUIAllowedHosts(uiAllowedHosts)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("invalid --ui-allowed-hosts")
+	}
 
 	if watchNamespace != "" {
 		logger.Info().Str("watchNamespace", watchNamespace).
@@ -507,7 +520,7 @@ func main() {
 		distFS = nil
 	}
 	uiServer, err := newHTTPServer("ui", uiListenAddress,
-		newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, logger),
+		newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, uiHosts, logger),
 		tlsCertFile, tlsKeyFile, logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to configure UI server")
@@ -710,9 +723,16 @@ func ptr[T any](v T) *T { return &v }
 //   - allowedOriginsCSV == "*": all origins allowed (development / opt-out).
 //   - otherwise: comma-separated list. Only listed origins receive CORS headers.
 //
+// A request is same-origin only when its Host is in hosts (loopback plus
+// --ui-allowed-hosts) and its Origin names that Host: under DNS rebinding a
+// hostile page sends matching Origin and Host headers for its own name. While
+// UI auth is off (authEnabled false), writes (any method but GET, HEAD and
+// OPTIONS) with a Host outside hosts are rejected even without an Origin, so a
+// rebound page cannot use a plain form post either.
+//
 // CORS headers are only written for /api/v1/ui/* paths. Static /ui/* assets and
 // webhook routes are not affected.
-func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolog.Logger) http.Handler {
+func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, hosts uiHostAllowlist, authEnabled bool, log zerolog.Logger) http.Handler {
 	// Parse allow-list once at startup.
 	allowAll := allowedOriginsCSV == "*"
 	allowedSet := make(map[string]struct{})
@@ -737,6 +757,8 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 	default:
 		log.Info().Msg("CORS: same-origin only for /api/v1/ui/* (no --cors-allowed-origins set)")
 	}
+	log.Info().Strs("hosts", hosts.names()).
+		Msg("UI API: Host names accepted as same-origin, on top of localhost, 127.0.0.1 and ::1 (--ui-allowed-hosts)")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only apply CORS logic to UI API routes.
@@ -745,17 +767,25 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 			return
 		}
 
+		hostAllowed := hosts.allows(r.Host)
+		if !authEnabled && !hostAllowed && !isSafeMethod(r.Method) {
+			// No credential stands between a rebound page and this write.
+			http.Error(w, "UI API: host not allowed; add it to --ui-allowed-hosts", http.StatusForbidden)
+			return
+		}
+
 		origin := r.Header.Get("Origin")
 		if origin == "" {
-			// Same-origin request (no Origin header) — pass through unconditionally.
+			// Not a cross-origin browser request — pass through.
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		// Same-origin request: browsers send Origin on every POST, including
 		// the embedded UI's own. Origin host:port equal to the Host header is the
-		// same origin (a single port cannot serve two schemes), so pass through.
-		if isSameOrigin(origin, r.Host) {
+		// same origin (a single port cannot serve two schemes), but only for a
+		// Host this server knows as its own name (DNS rebinding).
+		if hostAllowed && isSameOrigin(origin, r.Host) {
 			next.ServeHTTP(w, r)
 			return
 		}

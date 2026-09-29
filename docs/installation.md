@@ -139,6 +139,13 @@ Then open <http://localhost:8082/ui/> in your browser.
     display a security warning. Use port-forward from localhost instead, or configure
     TLS with `--tls-cert-file` / `--tls-key-file`.
 
+!!! note "Browsing to a name other than localhost"
+    The UI API only accepts its own host names: localhost and the controller Service's
+    DNS names. If you browse to an Ingress host or a node IP, add it to
+    `ui.allowedHosts` (`--ui-allowed-hosts`). Otherwise UI actions fail with
+    `host not allowed`. See
+    [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
+
 ### With TLS (production)
 
 If you configure TLS via `--tls-cert-file` / `--tls-key-file` (or the Helm values

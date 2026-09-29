@@ -43,6 +43,7 @@ spec:
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
             - --graph-service-account={{ .Values.graph.serviceAccountName }}
+            - --ui-allowed-hosts={{ include "kardinal-promoter.uiAllowedHosts" . }}
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
           env:
