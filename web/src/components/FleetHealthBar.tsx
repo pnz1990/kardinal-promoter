@@ -29,8 +29,25 @@ export interface FleetHealthSummary {
   ciRed: number
   /** Pipelines with cdLevel = 'full-cd'. */
   fullCD: number
-  /** Pipelines with activeBundleName set and phase Promoting. */
+  /** Pipelines with at least one environment in flight (see isPromoting). */
   promoting: number
+}
+
+/** PromotionStep states that mean a promotion is in flight. */
+const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthChecking', 'RollingBack'])
+
+/**
+ * A pipeline is promoting when any environment of its active bundle is in
+ * flight. Pipeline.phase cannot be used: the backend only sets it to Ready,
+ * Degraded, Unknown or a condition reason, never "Promoting".
+ */
+export function isPromoting(p: Pipeline): boolean {
+  return Object.values(p.environmentStates ?? {}).some(s => IN_FLIGHT_STATES.has(s))
+}
+
+/** Healthy: nothing blocked, no failed or alarm-aborted step, not paused. */
+function isHealthy(p: Pipeline): boolean {
+  return (p.blockerCount ?? 0) === 0 && (p.failedStepCount ?? 0) === 0 && !p.paused
 }
 
 /**
@@ -45,15 +62,11 @@ export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
   let promoting = 0
 
   for (const p of pipelines) {
-    const isBlocked = (p.blockerCount ?? 0) > 0
-    const isCiRed = (p.failedStepCount ?? 0) > 0
-    const isProblematic = isBlocked || isCiRed || p.paused
-
-    if (!isProblematic) healthy++
-    if (isBlocked) blocked++
-    if (isCiRed) ciRed++
+    if (isHealthy(p)) healthy++
+    if ((p.blockerCount ?? 0) > 0) blocked++
+    if ((p.failedStepCount ?? 0) > 0) ciRed++
     if (p.cdLevel === 'full-cd') fullCD++
-    if (p.phase === 'Promoting') promoting++
+    if (isPromoting(p)) promoting++
   }
 
   return {
@@ -81,7 +94,7 @@ export function filterPipelines(
     case 'all':
       return pipelines
     case 'healthy':
-      return pipelines.filter(p => (p.blockerCount ?? 0) === 0 && (p.failedStepCount ?? 0) === 0 && !p.paused)
+      return pipelines.filter(isHealthy)
     case 'blocked':
       return pipelines.filter(p => (p.blockerCount ?? 0) > 0)
     case 'ci-red':
@@ -89,7 +102,7 @@ export function filterPipelines(
     case 'full-cd':
       return pipelines.filter(p => p.cdLevel === 'full-cd')
     case 'promoting':
-      return pipelines.filter(p => p.phase === 'Promoting')
+      return pipelines.filter(isPromoting)
   }
 }
 
@@ -217,8 +230,8 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         label="Healthy"
         count={s.healthy}
         color="var(--color-success)"
-        bgColor="#052e16"
-        borderColor="#166534"
+        bgColor="var(--color-success-bg)"
+        borderColor="var(--color-success)"
         active={activeFilter === 'healthy'}
         onClick={toggle('healthy')}
         aria-label={`${s.healthy} healthy pipelines`}
@@ -226,9 +239,9 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
       <SummaryBadge
         label="Blocked"
         count={s.blocked}
-        color="#f59e0b"
-        bgColor="#1c1507"
-        borderColor="#92400e"
+        color="var(--color-warning)"
+        bgColor="var(--color-warning-bg)"
+        borderColor="var(--color-warning)"
         active={activeFilter === 'blocked'}
         onClick={toggle('blocked')}
         aria-label={`${s.blocked} blocked pipelines`}
@@ -237,9 +250,9 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         <SummaryBadge
           label="CI Red"
           count={s.ciRed}
-          color="#ef4444"
-          bgColor="#1e0c0c"
-          borderColor="#7f1d1d"
+          color="var(--color-error)"
+          bgColor="var(--color-error-bg)"
+          borderColor="var(--color-error)"
           active={activeFilter === 'ci-red'}
           onClick={toggle('ci-red')}
           aria-label={`${s.ciRed} pipelines with CI failures`}
@@ -252,8 +265,8 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         label="Promoting"
         count={s.promoting}
         color="var(--color-code)"
-        bgColor="#0c1a2e"
-        borderColor="#075985"
+        bgColor="var(--color-surface-2)"
+        borderColor="var(--color-code)"
         active={activeFilter === 'promoting'}
         onClick={toggle('promoting')}
         aria-label={`${s.promoting} pipelines currently promoting`}
@@ -262,8 +275,8 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         label="Full CD"
         count={s.fullCD}
         color="var(--color-accent)"
-        bgColor="#12103a"
-        borderColor="#3730a3"
+        bgColor="var(--color-accent-bg)"
+        borderColor="var(--color-accent)"
         active={activeFilter === 'full-cd'}
         onClick={toggle('full-cd')}
         aria-label={`${s.fullCD} fully automated pipelines`}

@@ -58,7 +58,7 @@ kardinal explain my-app --env prod
 ```
 
 If the output shows a PolicyGate in FAIL state, the gate's CEL expression has not been satisfied. Common causes:
-- `no-weekend-deploys`: it is a weekend. Wait for Monday or create a SkipPermission gate.
+- `no-weekend-deploys`: it is a weekend. Wait for Monday, or record a break-glass override with `kardinal override <pipeline> --stage prod --gate no-weekend-deploys --reason "..."` (see [Emergency Overrides](policy-gates.md#emergency-overrides-k-09)).
 - `staging-soak`: the upstream environment was verified recently. Wait for the soak time to pass.
 - CEL error: the expression references an attribute from a later phase. Check `kardinal policy test <file>`.
 
@@ -140,15 +140,15 @@ kubectl get bundle <name> -o yaml | grep kardinal.io/pipeline
 
 The `kardinal.io/pipeline` label on the Bundle must match a Pipeline name. If the label is missing or mismatched, the controller ignores the Bundle.
 
-### Symptom: Bundle status is "SkipDenied"
+### Symptom: Bundle is Failed with "skip denied"
 
-The Bundle's `intent.skip` lists an environment that has org-level PolicyGates, but no SkipPermission gate allows the skip.
+The Bundle's `intent.skipEnvironments` lists an environment that an org gate applies to, and no skip-permission gate allows the skip. The Bundle's phase is `Failed` and its status conditions say `skip denied for environment "<env>": ...`.
 
 ```bash
-kubectl get bundle <name> -o jsonpath='{.status.reason}'
+kubectl get bundle <name> -o jsonpath='{.status.conditions[*].message}'
 ```
 
-Either remove `intent.skip` from the Bundle or create a SkipPermission PolicyGate in the `platform-policies` namespace.
+Either remove the environment from `intent.skipEnvironments`, or have the platform team create a skip-permission gate for it: a PolicyGate in an org policy namespace (`--policy-namespaces`, default `platform-policies`) labelled `kardinal.io/type: skip-permission` and `kardinal.io/applies-to: <env>`, with `spec.skipPermission: true`. A gate in the Pipeline's namespace or in `spec.policyNamespaces` cannot grant a skip. See [Skip Permissions](policy-gates.md#skip-permissions).
 
 ## Git errors
 

@@ -145,3 +145,67 @@ describe('BundleTimeline — skeleton loading state (#784)', () => {
     expect(queryByTestId('bundle-timeline-skeleton')).toBeNull()
   })
 })
+
+// Audit C10a-web-19 / C10b-web-29: one ordering shared with App, the selected
+// bundle never drops off the timeline, and chips report their state.
+describe('BundleTimeline — ordering and visibility', () => {
+  const chipNames = () =>
+    screen.getAllByRole('button', { pressed: undefined })
+      .filter(b => b.classList.contains('bundle-chip'))
+      .map(b => b.title.split(':')[0])
+
+  const a = makeBundle({ name: 'app-aaaaa', createdAt: '2026-04-15T10:00:00Z' })
+  const b = makeBundle({ name: 'app-bbbbb', createdAt: '2026-04-15T11:00:00Z' })
+  const c = makeBundle({ name: 'app-ccccc', createdAt: undefined })
+
+  it.each([
+    { name: 'oldest first input', input: [a, b, c] },
+    { name: 'newest first input', input: [c, b, a] },
+  ])('shows newest first, undated last, for $name', ({ input }) => {
+    render(<BundleTimeline bundles={input} />)
+    expect(chipNames()).toEqual(['app-bbbbb', 'app-aaaaa', 'app-ccccc'])
+  })
+
+  it('keeps the selected and comparison bundles visible when they are older than the 10 newest', () => {
+    const many = Array.from({ length: 14 }, (_, i) =>
+      makeBundle({ name: `app-${String(i).padStart(5, '0')}`, createdAt: `2026-04-15T${String(i).padStart(2, '0')}:00:00Z` }))
+    render(<BundleTimeline bundles={many} selectedBundle="app-00000" compareBundle="app-00001" />)
+    const names = chipNames()
+    expect(names).toHaveLength(12)
+    expect(names.slice(0, 10)).toEqual(many.slice(4).reverse().map(x => x.name))
+    expect(names.slice(10)).toEqual(['app-00001', 'app-00000'])
+  })
+
+  it('marks only the selected chip as pressed', () => {
+    render(<BundleTimeline bundles={[a, b]} selectedBundle="app-aaaaa" />)
+    expect(screen.getByRole('button', { pressed: true })).toHaveAttribute('title', expect.stringContaining('app-aaaaa'))
+    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(1)
+  })
+
+  it.each([
+    { phase: '', wantClass: 'bundle-chip--unknown', label: 'Unknown' },
+    { phase: 'Failed', wantClass: 'bundle-chip--failed', label: 'Failed' },
+  ])('phase "$phase" gets class $wantClass and label $label', ({ phase, wantClass, label }) => {
+    render(<BundleTimeline bundles={[makeBundle({ phase })]} />)
+    const chip = screen.getByRole('button', { pressed: false })
+    expect(chip).toHaveClass(wantClass)
+    expect(chip).toHaveTextContent(label)
+  })
+
+  it.each([
+    { name: 'shift-click picks the comparison bundle', compare: undefined, want: 'app-bbbbb' },
+    { name: 'shift-click on the comparison bundle clears it', compare: 'app-bbbbb', want: null },
+  ])('$name', async ({ compare, want }) => {
+    const user = userEvent.setup()
+    const onCompareBundle = vi.fn()
+    const onSelectBundle = vi.fn()
+    render(<BundleTimeline bundles={[a, b]} selectedBundle="app-aaaaa" compareBundle={compare}
+      onCompareBundle={onCompareBundle} onSelectBundle={onSelectBundle} />)
+    const chip = screen.getAllByRole('button').find(x => x.title.startsWith('app-bbbbb'))!
+    await user.keyboard('{Shift>}')
+    await user.click(chip)
+    await user.keyboard('{/Shift}')
+    expect(onCompareBundle).toHaveBeenCalledExactlyOnceWith(want)
+    expect(onSelectBundle).not.toHaveBeenCalled()
+  })
+})

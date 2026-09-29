@@ -21,15 +21,19 @@ import '../styles/HealthChip.css'
 
 /** The 7 canonical health chip states. */
 export type HealthState =
-  | 'Ready'         // Succeeded / Verified / Pass — green
-  | 'Reconciling'   // Running / WaitingForMerge / HealthChecking / Promoting — amber
-  | 'Error'         // Failed / Block — red
-  | 'Pending'       // Pending / Available (not yet started) — slate
+  | 'Ready'         // Verified / Pass / Pipeline Ready — green
+  | 'Reconciling'   // Promoting / WaitingForMerge / HealthChecking / RollingBack — amber
+  | 'Error'         // Failed / AbortedByAlarm / Block — red
+  | 'Pending'       // Pending / Available / NotStarted — slate
   | 'Unknown'       // Superseded / unknown — gray
-  | 'Degraded'      // Partial failure (reserved for future use) — orange
+  | 'Degraded'      // Pipeline phase Degraded — orange
   | 'Paused'        // Pipeline paused (spec.paused=true) — indigo
 
-/** Maps a kardinal promotion/gate state string to a HealthState. */
+/**
+ * Maps a kardinal state string to a HealthState. Handles PromotionStep states
+ * (api/v1alpha1/promotionstep_types.go), the graph API's synthetic NotStarted,
+ * Bundle phases, Pipeline phases (Ready/Degraded/Unknown) and gate states.
+ */
 export function kardinalStateToHealth(state: string, nodeType?: string): HealthState {
   if (nodeType === 'PolicyGate') {
     switch (state) {
@@ -39,64 +43,33 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       case 'Pending': return 'Pending'
       default:       return 'Unknown'
     }
-   }
+  }
   switch (state) {
-    case 'Succeeded':
     case 'Verified':
     case 'Pass':
     case 'Ready':
       return 'Ready'
-    case 'Running':
     case 'Promoting':
     case 'WaitingForMerge':
     case 'HealthChecking':
+    case 'RollingBack':
       return 'Reconciling'
     case 'Failed':
+    case 'AbortedByAlarm':  // terminal: an alarm stopped the promotion; a human must act
     case 'Block':
       return 'Error'
+    case 'Degraded':
+      return 'Degraded'
     case 'Pending':
     case 'Available':
+    case 'NotStarted':      // graph API: environment not reached yet
       return 'Pending'
-    case 'Superseded':
-      return 'Unknown'
     case 'Paused':
       return 'Paused'
-    case 'Idle':
-      return 'Unknown'  // Idle environments shown as gray (not yet started)
+    case 'Superseded':
     default:
       return 'Unknown'
   }
-}
-
-/**
- * #523: pipelinePhaseLabel translates the backend Pipeline.phase into a
- * display-friendly string for the sidebar chip.
- *
- * The backend DerivePhase() returns "Unknown" as the default (non-Ready,
- * non-Degraded) state, which renders as "Unknown — Unknown" in the chip
- * and confuses users. This function provides context-aware translation:
- *
- * - "Unknown" + no active bundle/environmentStates → "Idle"
- * - "Unknown" + environmentStates present (active bundle) → "Promoting"
- * - All other phases → pass through unchanged
- */
-export function pipelinePhaseLabel(pipeline: {
-  phase: string
-  environmentCount?: number
-  environmentStates?: Record<string, string>
-  activeBundleName?: string
-}): string {
-  if (pipeline.phase !== 'Unknown') return pipeline.phase
-
-  // Any environmentStates means there's an active bundle — show "Promoting"
-  const hasActiveBundleData = pipeline.environmentStates &&
-    Object.keys(pipeline.environmentStates).length > 0
-  if (hasActiveBundleData) return 'Promoting'
-
-  // active bundle name also indicates activity
-  if (pipeline.activeBundleName) return 'Promoting'
-
-  return 'Idle'
 }
 
 /**
@@ -110,21 +83,22 @@ export function healthStateClass(state: HealthState): string {
 /**
  * Returns the background and text colors for a given HealthState.
  * Retained for SVG rendering contexts (DAGView) that cannot use CSS classes.
+ * All values are theme tokens, so dark and light mode both work.
  */
 export function healthChipColors(state: HealthState): { bg: string; text: string; border: string } {
   switch (state) {
     case 'Ready':
-      return { bg: '#14532d', text: 'var(--color-success)', border: 'var(--color-success)' }
+      return { bg: 'var(--color-success-bg)', text: 'var(--color-success)', border: 'var(--color-success)' }
     case 'Reconciling':
-      return { bg: '#78350f', text: 'var(--color-warning)', border: '#f59e0b' }
+      return { bg: 'var(--color-warning-bg)', text: 'var(--color-warning)', border: 'var(--color-warning)' }
     case 'Error':
-      return { bg: '#7f1d1d', text: 'var(--color-error)', border: '#ef4444' }
+      return { bg: 'var(--color-error-bg)', text: 'var(--color-error)', border: 'var(--color-error)' }
     case 'Pending':
       return { bg: 'var(--color-surface)', text: 'var(--color-text-muted)', border: 'var(--color-text-faint)' }
     case 'Degraded':
-      return { bg: '#7c2d12', text: '#fb923c', border: '#f97316' }
+      return { bg: 'var(--color-degraded-bg)', text: 'var(--color-degraded)', border: 'var(--color-degraded)' }
     case 'Paused':
-      return { bg: '#1e1b4b', text: 'var(--color-accent)', border: 'var(--color-accent)' }
+      return { bg: 'var(--color-accent-bg)', text: 'var(--color-accent)', border: 'var(--color-accent)' }
     case 'Unknown':
     default:
       return { bg: 'var(--color-surface)', text: 'var(--color-text-faint)', border: 'var(--color-border)' }

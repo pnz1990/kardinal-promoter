@@ -1,3 +1,6 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // useRefreshIndicator.ts — Tracks last successful poll time and returns elapsed seconds.
 // Designed to pair with usePolling: call onSuccess() when a poll succeeds, and
 // the hook returns elapsed seconds since the last success for display.

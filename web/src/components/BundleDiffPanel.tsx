@@ -1,9 +1,17 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/BundleDiffPanel.tsx — Side-by-side bundle field comparison.
 // #338: Shows key differences between two Bundle objects. Triggered by
 // shift-clicking a bundle in BundleTimeline and pressing 'Compare'.
+// Compares what a bundle deploys (images) and where it got to (environments),
+// plus its provenance. Created is shown but never counts as a difference:
+// two bundles are always created at different times.
 //
 // Adapted from kro-ui InstanceTable.tsx SpecDiffPanel pattern.
-import type { Bundle } from '../types'
+import { useRef } from 'react'
+import type { Bundle, ImageRef } from '../types'
+import { useModalFocus } from '../useModalFocus'
 
 interface Props {
   bundleA: Bundle
@@ -17,6 +25,22 @@ type FieldRow = {
   valueB: string | null
   /** If true, highlight this row as changed */
   changed: boolean
+  /** Show the whole value, one item per line (images, environments). */
+  full?: boolean
+}
+
+function imageRef(i: ImageRef): string {
+  return `${i.repository ?? ''}${i.tag ? `:${i.tag}` : ''}${i.digest ? `@${i.digest}` : ''}`
+}
+
+function imagesOf(b: Bundle): string | null {
+  const refs = (b.images ?? []).map(imageRef).filter(Boolean)
+  return refs.length ? refs.join('\n') : null
+}
+
+function environmentsOf(b: Bundle): string | null {
+  const envs = (b.environments ?? []).map(e => `${e.name}: ${e.phase || 'Pending'}`)
+  return envs.length ? envs.join('\n') : null
 }
 
 function truncate(s: string | undefined, max = 40): string {
@@ -24,8 +48,14 @@ function truncate(s: string | undefined, max = 40): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
 
-function buildRows(a: Bundle, b: Bundle): FieldRow[] {
+export function buildRows(a: Bundle, b: Bundle): FieldRow[] {
+  const imagesA = imagesOf(a)
+  const imagesB = imagesOf(b)
+  const envsA = environmentsOf(a)
+  const envsB = environmentsOf(b)
   const rows: FieldRow[] = [
+    { label: 'Images', valueA: imagesA, valueB: imagesB, changed: imagesA !== imagesB, full: true },
+    { label: 'Environments', valueA: envsA, valueB: envsB, changed: envsA !== envsB, full: true },
     {
       label: 'Phase',
       valueA: a.phase ?? null,
@@ -42,7 +72,7 @@ function buildRows(a: Bundle, b: Bundle): FieldRow[] {
       label: 'Created',
       valueA: a.createdAt ? new Date(a.createdAt).toLocaleString() : null,
       valueB: b.createdAt ? new Date(b.createdAt).toLocaleString() : null,
-      changed: a.createdAt !== b.createdAt,
+      changed: false,
     },
     {
       label: 'Author',
@@ -69,6 +99,8 @@ function buildRows(a: Bundle, b: Bundle): FieldRow[] {
 export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
   const rows = buildRows(bundleA, bundleB)
   const changedCount = rows.filter(r => r.changed).length
+  const panelRef = useRef<HTMLDivElement>(null)
+  useModalFocus(panelRef, onClose)
 
   return (
     <div style={{
@@ -86,10 +118,11 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
     aria-label="Bundle comparison"
     >
       <div
+        ref={panelRef}
         onClick={e => e.stopPropagation()}
         style={{
-          background: 'var(--color-bg)',
-          border: '1px solid #334155',
+          background: 'var(--color-surface)',
+          border: '1px solid var(--color-border)',
           borderRadius: '8px',
           padding: '1.5rem',
           maxWidth: '700px',
@@ -104,8 +137,8 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
             <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-text)', margin: 0 }}>
               Bundle Comparison
             </h2>
-            <p style={{ fontSize: '0.75rem', color: '#64748b', margin: '0.25rem 0 0' }}>
-              {changedCount} field{changedCount !== 1 ? 's' : ''} differ between these bundles
+            <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', margin: '0.25rem 0 0' }}>
+              {changedCount === 1 ? '1 field differs' : `${changedCount} fields differ`} between these bundles
             </p>
           </div>
           <button
@@ -114,7 +147,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
             style={{
               background: 'none',
               border: 'none',
-              color: '#64748b',
+              color: 'var(--color-text-muted)',
               cursor: 'pointer',
               fontSize: '1.2rem',
               padding: '0 4px',
@@ -145,7 +178,7 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           gridTemplateColumns: '140px 1fr 1fr',
           gap: '0.5rem',
           marginBottom: '0.75rem',
-          background: 'var(--color-surface)',
+          background: 'var(--color-surface-2)',
           borderRadius: '4px',
           padding: '0.4rem 0.6rem',
         }}>
@@ -165,20 +198,20 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
             gridTemplateColumns: '140px 1fr 1fr',
             gap: '0.5rem',
             marginBottom: '0.3rem',
-            background: row.changed ? '#1a1000' : 'transparent',
-            border: row.changed ? '1px solid #78350f' : '1px solid transparent',
+            background: row.changed ? 'var(--color-warning-bg)' : 'transparent',
+            border: row.changed ? '1px solid var(--color-warning)' : '1px solid transparent',
             borderRadius: '4px',
             padding: '0.35rem 0.6rem',
           }}>
             <span style={{
               fontSize: '0.75rem',
-              color: row.changed ? 'var(--color-warning)' : '#64748b',
+              color: row.changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
               fontWeight: row.changed ? 600 : 400,
             }}>
               {row.changed ? '▸ ' : ''}{row.label}
             </span>
-            <DiffCell value={row.valueA} changed={row.changed} isLink={row.label === 'CI Run'} />
-            <DiffCell value={row.valueB} changed={row.changed} isLink={row.label === 'CI Run'} />
+            <DiffCell value={row.valueA} changed={row.changed} full={row.full} isLink={row.label === 'CI Run'} />
+            <DiffCell value={row.valueB} changed={row.changed} full={row.full} isLink={row.label === 'CI Run'} />
           </div>
         ))}
 
@@ -192,8 +225,8 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
           <button
             onClick={onClose}
             style={{
-              background: 'var(--color-surface)',
-              border: '1px solid #334155',
+              background: 'var(--color-surface-2)',
+              border: '1px solid var(--color-border)',
               color: 'var(--color-text)',
               borderRadius: '4px',
               padding: '0.4rem 1rem',
@@ -209,11 +242,24 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
   )
 }
 
-function DiffCell({ value, changed, isLink }: { value: string | null; changed: boolean; isLink?: boolean }) {
+function DiffCell({ value, changed, isLink, full }: { value: string | null; changed: boolean; isLink?: boolean; full?: boolean }) {
   if (!value) {
     return <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>—</span>
   }
-  if (isLink && value.startsWith('http')) {
+  if (full) {
+    return (
+      <span style={{
+        fontSize: '0.75rem',
+        color: changed ? 'var(--color-warning)' : 'var(--color-text-muted)',
+        fontFamily: 'monospace',
+        whiteSpace: 'pre-line',
+        overflowWrap: 'anywhere',
+      }}>
+        {value}
+      </span>
+    )
+  }
+  if (isLink && /^https?:\/\//i.test(value)) {
     return (
       <a
         href={value}

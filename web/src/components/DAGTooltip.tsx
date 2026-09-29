@@ -16,8 +16,9 @@
 //
 // Key behaviors:
 // - React portal rendered above the SVG, never clipped by SVG bounds
-// - Viewport-clamped: tooltip never renders off-screen
-// - 150ms debounced hide: cursor can travel from node to tooltip without disappearing
+// - Viewport-clamped: tooltip never renders off-screen; the position is
+//   recomputed when the content changes (state, message, PR)
+// - DAGView delays the hide by 150ms so the cursor can travel from node to tooltip
 // - Content adapts per node type (PromotionStep vs PolicyGate)
 // #526
 
@@ -25,6 +26,7 @@ import { useRef, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { GraphNode } from '../types'
 import { healthChipColors, kardinalStateToHealth } from './HealthChip'
+import { isHttpURL } from '../prLink'
 
 export interface DAGTooltipTarget {
   node: GraphNode
@@ -108,7 +110,11 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
     })
 
     return () => cancelAnimationFrame(rafId)
-  }, [target?.node.id, target?.rect.left, target?.rect.top])
+  }, [
+    target?.node.id, target?.rect.left, target?.rect.top,
+    // Content changes change the tooltip's size, so re-clamp it.
+    target?.node.state, target?.node.message, target?.node.prURL,
+  ])
 
   if (!target) return null
 
@@ -130,7 +136,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
         top: pos?.top ?? 0,
         zIndex: 9999,
         background: 'var(--color-bg)',
-        border: '1px solid #334155',
+        border: '1px solid var(--color-border)',
         borderRadius: '6px',
         padding: '10px 14px',
         minWidth: '200px',
@@ -148,7 +154,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
 
       {/* State */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-        <span style={{ fontSize: '11px', color: '#64748b' }}>State:</span>
+        <span style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>State:</span>
         <span style={{ fontSize: '12px', fontWeight: 600, color: stateColor }}>
           {node.state || '—'}
         </span>
@@ -162,14 +168,14 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
               {node.message}
             </div>
           )}
-          {node.prURL && (
+          {isHttpURL(node.prURL) && (
             <div style={{ marginBottom: '4px' }}>
               <a
                 href={node.prURL}
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={e => e.stopPropagation()}
-                style={{ color: '#818cf8', fontSize: '12px', textDecoration: 'underline' }}
+                style={{ color: 'var(--color-accent)', fontSize: '12px', textDecoration: 'underline' }}
               >
                 View Pull Request ↗
               </a>
@@ -185,7 +191,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
             <div style={{
               marginBottom: '6px',
               background: 'var(--color-surface)',
-              border: '1px solid #334155',
+              border: '1px solid var(--color-border)',
               borderRadius: '4px',
               padding: '6px 8px',
               fontFamily: 'monospace',
@@ -197,7 +203,7 @@ export default function DAGTooltip({ target, onMouseEnter, onMouseLeave }: Props
             </div>
           )}
           {node.lastEvaluatedAt && (
-            <div style={{ fontSize: '11px', color: '#64748b' }}>
+            <div style={{ fontSize: '11px', color: 'var(--color-text-faint)' }}>
               Evaluated {relativeTime(node.lastEvaluatedAt)}
             </div>
           )}

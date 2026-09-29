@@ -41,6 +41,9 @@ interface ErrorGroup {
   }>
 }
 
+/** PromotionStep states that count as a failed promotion. */
+const FAILED_STATES = new Set(['Failed', 'AbortedByAlarm'])
+
 /**
  * groupStepErrors — aggregate failed PromotionSteps into error groups.
  *
@@ -48,7 +51,7 @@ interface ErrorGroup {
  * Pure function — no side effects.
  */
 export function groupStepErrors(steps: PromotionStep[]): ErrorGroup[] {
-  const failedSteps = steps.filter(s => s.state === 'Failed' && s.stepType !== '')
+  const failedSteps = steps.filter(s => FAILED_STATES.has(s.state))
 
   const acc = new Map<string, ErrorGroup>()
 
@@ -87,12 +90,24 @@ export function groupStepErrors(steps: PromotionStep[]): ErrorGroup[] {
     })
 }
 
-/** Infer a human-readable step type from the PromotionStep.
- * The stepType field is the high-level type (e.g. "promotion", "rollback").
- * The message prefix often contains the sub-step that failed (e.g. "git-push: ...").
+/**
+ * Name of the step that failed, e.g. "git-push" or "health-check".
+ *
+ * Order: the status.steps[] entry marked Failed; else the one still running
+ * (a health-check timeout or a PR closed without merging is recorded on the
+ * PromotionStep, not on the step entry); else a step name in the message;
+ * else "promotion". spec.stepType is the update strategy, not the failed step,
+ * so it is never used as the label.
  */
-function inferStepType(step: PromotionStep): string {
-  // Check if the message starts with a known sub-step name.
+export function inferStepType(step: PromotionStep): string {
+  const list = step.steps ?? []
+  const failed = list.find(s => s.state === 'Failed')
+  if (failed) return failed.name
+  const current = step.currentStepIndex !== undefined ? list[step.currentStepIndex] : undefined
+  if (current && current.state !== 'Completed') return current.name
+  const running = list.find(s => s.state === 'InProgress')
+  if (running) return running.name
+
   const knownSubSteps = [
     'git-clone', 'git-commit', 'git-push',
     'kustomize-set-image', 'helm-set-image',
@@ -101,12 +116,11 @@ function inferStepType(step: PromotionStep): string {
   ]
   const msg = step.message?.toLowerCase() ?? ''
   for (const sub of knownSubSteps) {
-    if (msg.startsWith(sub) || msg.includes(`${sub}:`)) {
+    if (msg.startsWith(sub) || msg.includes(`${sub}:`) || msg.includes(`step ${sub}`)) {
       return sub
     }
   }
-  // Fall back to the high-level step type from spec.
-  return step.stepType || 'promotion'
+  return 'promotion'
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -153,9 +167,9 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
       data-testid="promotion-errors-panel"
       style={{
         margin: '0 1.5rem 1rem',
-        border: '1px solid #7f1d1d',
+        border: '1px solid var(--color-error)',
         borderRadius: '6px',
-        background: '#1c0a0a',
+        background: 'var(--color-surface)',
         overflow: 'hidden',
       }}
     >
@@ -165,14 +179,14 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
         alignItems: 'center',
         gap: '8px',
         padding: '10px 14px',
-        background: '#2d0f0f',
-        borderBottom: '1px solid #7f1d1d',
+        background: 'var(--color-error-bg)',
+        borderBottom: '1px solid var(--color-error)',
       }}>
-        <span style={{ color: '#ef4444', fontSize: '14px' }}>✗</span>
-        <span style={{ fontWeight: 600, color: '#fca5a5', fontSize: '13px' }}>
+        <span style={{ color: 'var(--color-error)', fontSize: '14px' }}>✗</span>
+        <span style={{ fontWeight: 600, color: 'var(--color-error)', fontSize: '13px' }}>
           {totalFailed} environment{totalFailed !== 1 ? 's' : ''} failed
         </span>
-        <span style={{ color: '#6b7280', fontSize: '12px' }}>
+        <span style={{ color: 'var(--color-text-faint)', fontSize: '12px' }}>
           — {groups.length} distinct failure pattern{groups.length !== 1 ? 's' : ''}
         </span>
       </div>
@@ -188,7 +202,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
             key={key}
             data-testid="error-group"
             style={{
-              borderBottom: gi < groups.length - 1 ? '1px solid #3f1515' : undefined,
+              borderBottom: gi < groups.length - 1 ? '1px solid var(--color-border)' : undefined,
             }}
           >
             {/* Group header row */}
@@ -206,9 +220,9 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                   fontWeight: 600,
                   padding: '2px 7px',
                   borderRadius: '3px',
-                  background: '#450a0a',
-                  border: '1px solid #991b1b',
-                  color: '#fca5a5',
+                  background: 'var(--color-error-bg)',
+                  border: '1px solid var(--color-error)',
+                  color: 'var(--color-error)',
                   flexShrink: 0,
                   fontFamily: 'monospace',
                   whiteSpace: 'nowrap',
@@ -223,7 +237,7 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                 data-testid="error-count"
                 style={{
                   fontSize: '11px',
-                  color: '#dc2626',
+                  color: 'var(--color-error)',
                   flexShrink: 0,
                   fontWeight: 600,
                   marginTop: '2px',
@@ -236,14 +250,14 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
                   fontSize: '12px',
-                  color: '#fca5a5',
+                  color: 'var(--color-error)',
                   fontFamily: 'monospace',
                   wordBreak: 'break-all',
                   lineHeight: 1.4,
                 }}>
                   {isRawExpanded ? group.message : group.messagePrefix}
                   {group.message.length > 80 && !isRawExpanded && (
-                    <span style={{ color: '#6b7280' }}>…</span>
+                    <span style={{ color: 'var(--color-text-faint)' }}>…</span>
                   )}
                 </div>
 
@@ -300,19 +314,19 @@ export default function PromotionErrorsPanel({ steps, onSelectEnvironment }: Pro
                     data-testid="environment-link"
                     onClick={() => onSelectEnvironment?.(env.environment)}
                     style={{
-                      background: '#2d1515',
-                      border: '1px solid #7f1d1d',
+                      background: 'var(--color-error-bg)',
+                      border: '1px solid var(--color-error)',
                       borderRadius: '4px',
                       padding: '3px 10px',
                       cursor: 'pointer',
-                      color: '#fca5a5',
+                      color: 'var(--color-error)',
                       fontSize: '12px',
                       fontFamily: 'monospace',
                     }}
                   >
                     {env.environment}
                     {env.namespace !== 'default' && (
-                      <span style={{ color: '#6b7280', marginLeft: '4px' }}>
+                      <span style={{ color: 'var(--color-text-faint)', marginLeft: '4px' }}>
                         ({env.namespace})
                       </span>
                     )}

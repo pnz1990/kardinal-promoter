@@ -55,7 +55,7 @@ rules:
     verbs: ["get", "create"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "create", "update", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["clusterroles"]
     resourceNames: ["kardinal-graph-applier", "kardinal-graph-reader"]
@@ -573,7 +573,7 @@ host name you browse to to `ui.allowedHosts`.
 Until TLS is configured, the recommended access method is:
 
 ```bash
-kubectl port-forward svc/kardinal-promoter 8082:8082 -n kardinal-system
+kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
 ```
 
 The Service is named after the Helm release (`<fullname>`, `kardinal-promoter` for a
@@ -581,6 +581,19 @@ release named `kardinal-promoter`). Then open the UI at `http://localhost:8082/u
 browser may display a warning when accessed over plain HTTP.
 
 > **Production note**: Do not expose port 8082 via a LoadBalancer or Ingress without TLS and auth enabled. Use port-forward for operator access or configure TLS as described below.
+
+### Browser security headers
+
+Every response from the UI server (the app at `/ui/` and the API at `/api/v1/ui/*`) carries these headers:
+
+| Header | Value | Why |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'` | Scripts and API calls come from the UI's own origin only, and no other site can frame the UI. |
+| `X-Frame-Options` | `DENY` | The same framing block, for older browsers. |
+| `X-Content-Type-Options` | `nosniff` | The browser uses the declared content type and does not guess. |
+| `Referrer-Policy` | `no-referrer` | Links to pull requests do not send the UI's address. |
+
+Because of `frame-ancestors 'none'`, the UI cannot be embedded in another dashboard with an `<iframe>`. Open it in its own tab. If an Ingress or proxy in front of the controller adds its own `Content-Security-Policy`, the browser applies both, so the stricter one wins.
 
 ---
 

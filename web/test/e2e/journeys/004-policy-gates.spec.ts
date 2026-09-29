@@ -24,13 +24,22 @@ test.describe('Journey 004 — Policy gates auto-expand when blocked (#524)', ()
   })
 
   test('Step 3: Blocked gate CEL expression is visible', async ({ page }) => {
-    // Gate is expanded, so the expression should be visible
-    await expect(page.getByText('!schedule.isWeekend()')).toBeVisible()
+    // Gate is expanded, so the expression should be visible (the real
+    // PolicyGate context has schedule.isWeekend as a bool, not a function).
+    await expect(page.getByText('!schedule.isWeekend', { exact: true })).toBeVisible()
   })
 
   test('Step 4: Blocked gate summary shows "blocked" count', async ({ page }) => {
     // Use the summary chip inside the Policy Gates toggle button (e.g. "1 blocked")
     await expect(page.getByRole('button', { name: /Policy Gates/i }).getByText(/blocked/i)).toBeVisible()
+  })
+
+  test('Step 4b: Counts the gates of the shown bundle only, not the template', async ({ page }) => {
+    // The mock serves two gate instances for kardinal-test-app-abc123 and one
+    // template with the same name. The panel counts the two instances.
+    const toggleBtn = page.getByRole('button', { name: /Policy Gates/i })
+    await expect(toggleBtn).toContainText('Policy Gates (2)')
+    await expect(toggleBtn.getByText('1 blocked')).toBeVisible()
   })
 
   test('Step 5: Toggle button collapses the panel', async ({ page }) => {

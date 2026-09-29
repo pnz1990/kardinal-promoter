@@ -45,11 +45,11 @@ type PipelineSpec struct {
 	// +optional
 	HistoryLimit int `json:"historyLimit,omitempty"`
 
-	// PolicyNamespaces lists additional namespaces to scan for org-level PolicyGates.
-	// The pipeline's own namespace is always included. When unset, the controller
-	// defaults to "platform-policies". Setting this field makes the namespace list
-	// explicit in the Pipeline spec rather than hardcoded in the controller.
-	// Eliminates TR-2 from docs/design/11-graph-purity-tech-debt.md.
+	// PolicyNamespaces lists extra namespaces to read PolicyGates from. It only
+	// adds to the list: the controller's org policy namespaces (--policy-namespaces,
+	// default "platform-policies") and the pipeline's own namespace are always read,
+	// so a Pipeline cannot opt out of org gates. Gates found only through this
+	// field are team gates: they never count as org gates and never grant a skip.
 	// +optional
 	PolicyNamespaces []string `json:"policyNamespaces,omitempty"`
 
@@ -155,13 +155,16 @@ type EnvironmentSpec struct {
 	DependsOn []string `json:"dependsOn,omitempty"`
 
 	// Wave assigns this environment to a numbered deployment wave (K-06).
-	// Environments with the same wave number are promoted in parallel.
-	// Wave N environments automatically depend on ALL wave (N-1) environments —
-	// the translator generates the edges so users need not write explicit dependsOn.
-	// Wave and explicit DependsOn are composable: the final dependency set is the
-	// union of wave-derived edges and any explicit DependsOn entries.
-	// Wave values must be >= 1. Environments without a Wave use the default
-	// sequential ordering (each depends on the previous in the list).
+	// Environments with the same wave number are promoted in parallel. An
+	// environment of a wave depends on every environment of the next lower wave
+	// present; gaps in the numbering (10, 20, 30) are allowed and create no roots.
+	// Without DependsOn, a wave also follows the last environment without a wave
+	// listed before its first environment, so a wave after "staging" starts once
+	// staging is verified, and an environment without a wave follows the
+	// environment listed before it, or every environment of that one's wave.
+	// DependsOn replaces these list-order edges but never the edges to the
+	// previous wave. Only the first listed environment is a root unless
+	// DependsOn says otherwise.
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Wave int `json:"wave,omitempty"`
@@ -203,18 +206,17 @@ type EnvironmentSpec struct {
 	// +optional
 	Layout string `json:"layout,omitempty"`
 
-	// Steps overrides the default step sequence for this environment.
-	// If empty, the default sequence is used (see DefaultSequenceForBundle).
-	// Steps can include custom webhook steps alongside built-in step names.
-	// When both Steps and PromotionTemplate are set, Steps takes precedence
-	// (local override wins).
+	// Steps is reserved for a custom step sequence and is not implemented yet:
+	// the controller always runs the default sequence (see
+	// DefaultSequenceForBundle). A Pipeline that sets it is rejected when a
+	// Bundle is translated and by "kardinal validate", instead of silently
+	// running the default steps. See docs/custom-steps.md.
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
 
-	// PromotionTemplate references a PromotionTemplate CR whose step sequence
-	// should be used for this environment. The translator inlines the template's
-	// steps at graph-build time; no runtime dependency remains after Graph creation.
-	// When Steps is also set, Steps takes precedence.
+	// PromotionTemplate is reserved for a shared step sequence and is not
+	// implemented yet. A Pipeline that sets it is rejected when a Bundle is
+	// translated and by "kardinal validate". See docs/custom-steps.md.
 	// +optional
 	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
 

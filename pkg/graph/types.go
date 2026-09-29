@@ -40,27 +40,6 @@ type GraphSpec struct {
 	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 }
 
-// DeepCopyInto copies all fields of GraphSpec into out.
-func (in *GraphSpec) DeepCopyInto(out *GraphSpec) {
-	out.ServiceAccountName = in.ServiceAccountName
-	if in.Nodes != nil {
-		out.Nodes = make([]GraphNode, len(in.Nodes))
-		for i := range in.Nodes {
-			in.Nodes[i].DeepCopyInto(&out.Nodes[i])
-		}
-	}
-}
-
-// DeepCopy returns a deep copy of GraphSpec.
-func (in *GraphSpec) DeepCopy() *GraphSpec {
-	if in == nil {
-		return nil
-	}
-	out := new(GraphSpec)
-	in.DeepCopyInto(out)
-	return out
-}
-
 // GraphNode represents one node in the kro Graph.
 //
 // Exactly one of Template or Ref is set:
@@ -100,52 +79,6 @@ type GraphNode struct {
 	// iterator name mapped to a CEL expression that yields a list, for example
 	// {"region": "${[\"us-east-1\",\"eu-west-1\"]}"}.
 	ForEach []map[string]string `json:"forEach,omitempty"`
-}
-
-// DeepCopyInto copies all fields of GraphNode into out.
-func (in *GraphNode) DeepCopyInto(out *GraphNode) {
-	out.ID = in.ID
-	if in.Template != nil {
-		out.Template = make(map[string]interface{}, len(in.Template))
-		for k, v := range in.Template {
-			out.Template[k] = v
-		}
-	}
-	if in.Ref != nil {
-		out.Ref = make(map[string]interface{}, len(in.Ref))
-		for k, v := range in.Ref {
-			out.Ref[k] = v
-		}
-	}
-	if in.ReadyWhen != nil {
-		in, out := &in.ReadyWhen, &out.ReadyWhen
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	if in.IncludeWhen != nil {
-		in, out := &in.IncludeWhen, &out.IncludeWhen
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	if in.ForEach != nil {
-		out.ForEach = make([]map[string]string, len(in.ForEach))
-		for i, dim := range in.ForEach {
-			out.ForEach[i] = make(map[string]string, len(dim))
-			for k, v := range dim {
-				out.ForEach[i][k] = v
-			}
-		}
-	}
-}
-
-// DeepCopy returns a deep copy of GraphNode.
-func (in *GraphNode) DeepCopy() *GraphNode {
-	if in == nil {
-		return nil
-	}
-	out := new(GraphNode)
-	in.DeepCopyInto(out)
-	return out
 }
 
 // GraphStatus is a minimal representation of the kro Graph status.

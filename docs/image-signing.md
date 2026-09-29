@@ -10,6 +10,12 @@ kardinal includes a built-in `verify-image` promotion step that calls
 advancing a Bundle to the next environment. This gives platform teams supply-chain
 assurance: only images signed by your CI pipeline reach production.
 
+> **Not runnable yet.** `verify-image` is not part of the default step sequence, so it runs
+> only when it is listed in `spec.environments[].steps`, and `steps` is not implemented yet.
+> A Pipeline that sets `steps` is rejected: `kardinal validate` reports it, and its Bundles
+> go to phase `Failed` with the reason in their status conditions. This page describes the step for when `steps`
+> ships. See [Custom Steps](custom-steps.md).
+
 ---
 
 ## Prerequisites

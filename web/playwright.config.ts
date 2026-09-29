@@ -16,16 +16,18 @@
 // The test suite runs against a mock API server (web/test/e2e/mock-server/)
 // that serves deterministic fixture data. No real Kubernetes cluster is required.
 //
-// Journey structure (8 baseline journeys):
-//   001 — pipeline-list:   List renders, click selects pipeline
+// Journeys (test/e2e/journeys/):
+//   001 — pipeline-list:   List renders, click selects pipeline, logo loads from /ui/
 //   002 — dag-node-click:  Click DAG node → NodeDetail panel opens
-//   003 — health-chip:     CSS class assertions for all 7 states (regression guard #532)
-//   004 — policy-gates:    Blocked gate auto-expands (#524 regression guard)
-//   005 — bundle-timeline: Click bundle chip → DAG switches
-//   006 — pause-resume:    ActionBar pause/resume state changes
-//   007 — empty-state:     No pipelines → onboarding card visible
+//   003 — health-chip:     State colors come from CSS classes, not inline styles (#532)
+//   004 — policy-gates:    Blocked gate auto-expands; only the shown bundle's gates count (#524)
+//   005 — bundle-timeline: Click bundle chip → DAG switches, and stays after a poll
+//   006 — pause-resume:    Pause/Resume confirm, send the pipeline, and flip the button
+//   007 — empty-state:     No pipelines → onboarding card with the kubectl command
 //   008 — loading-state:   Spinner clears after first successful fetch (#522 guard)
 //   009 — accessibility:   WCAG 2.1 AA axe-core scan (#748)
+//   010 — responsive:      No horizontal overflow at 1280×800 (#799)
+//   011 — rollback-button: Rollback asks first, then calls the API
 
 import { defineConfig, devices } from '@playwright/test'
 
@@ -62,7 +64,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
 
-  // Start the Vite dev server (with mock API) before tests
+  // Start the mock API server, which also serves the built UI from web/dist
+  // (run `npm run build` first).
   webServer: {
     command: `KARDINAL_E2E_PORT=${PORT} node test/e2e/mock-server/server.mjs`,
     port: PORT,

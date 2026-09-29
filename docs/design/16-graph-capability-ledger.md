@@ -105,8 +105,11 @@ ignored (contagious propagation)"), applied by the executor at `simple.go:55` an
 
 **kardinal workaround.** Skipping is resolved statically when the Graph is built. The builder
 drops skipped environments and rewires their dependents to the nearest non-skipped upstream
-(`pkg/graph/builder.go`, the `skipEnvironments` filter, about lines 304-318;
-`builder_test.go` covers it). A skip decision that depends on runtime state cannot be expressed.
+(`pkg/graph/builder.go` `filterByIntent`; `builder_test.go` and `skip_test.go` cover it). A skip
+decision that depends on runtime state cannot be expressed. When a skip needs a skip-permission
+gate, only its existence is checked at build time (`pkg/graph/skip.go` `ValidateSkipPermissions`);
+its expression runs on the Graph, as a PolicyGate instance in front of each kept environment that
+depended on the skipped one (`skipPermissionGates`).
 
 **Upstream contribution.** A per-edge or per-node mode where an ignored dependency counts
 as satisfied (`includeWhen` with `propagate: false`, or a `skipWhen` that passes
@@ -189,6 +192,17 @@ list/watch on every kind a Graph uses.
   ServiceAccount, an applier RoleBinding in the Graph namespace, and reader RoleBindings
   named `<readerRole>-<graphNamespace>` in each ref namespace. It runs before every
   Graph create.
+- Reader bindings go only into the Graph's own namespace and the allowlist
+  `--graph-reader-namespaces` (chart `graph.readerNamespaces`, default `argocd`,
+  `flux-system`; `*` allows every namespace; `kube-system`, `kube-public` and `kube-node-lease` are never allowed). Pipeline authors
+  choose ref namespaces, so without the allowlist any author could make the controller grant
+  read access anywhere. A health ref into another namespace, or one where the bind is
+  forbidden, is dropped from the Graph with a warning: kro treats a forbidden ref read as a
+  hard error, while health refs are only observational (G3).
+- The namespaces that hold a reader binding are recorded in the applier RoleBinding's
+  `kardinal.io/reader-namespaces` annotation. After each Graph create, `Prune` deletes the
+  bindings that no Graph in the namespace reads through any more. Bindings are not pruned
+  when the last Graph of a namespace goes away without another translation.
 - The chart ships the applier and reader ClusterRoles, plus an aggregation ClusterRole
   that gives kro list/watch on kardinal kinds (`chart/kardinal-promoter/templates/graph-rbac.yaml`).
 
