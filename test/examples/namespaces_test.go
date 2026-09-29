@@ -24,7 +24,7 @@ var kubectlCreateNamespace = regexp.MustCompile(`kubectl create (?:namespace|ns)
 // component the example lists as a prerequisite creates them. The pattern is
 // the text that must appear in the example's docs. "default" always exists.
 var prerequisiteNamespaces = map[string]*regexp.Regexp{
-	"argocd":      regexp.MustCompile(`Argo ?CD`),    // the Argo CD install
+	"argocd":      regexp.MustCompile(`Argo ?CD`),     // the Argo CD install
 	"flux-system": regexp.MustCompile(`flux install`), // the Flux install
 }
 
