@@ -110,19 +110,9 @@ The step creates intermediate maps as needed if they do not exist.
 ## Multi-image bundles
 
 When a Bundle contains multiple images, the `argocd-set-image` step uses the **first image
-with a non-empty tag**. For multi-image promotions where different keys need different
-tags, use custom steps via `PromotionStep.Spec.Inputs`:
-
-```yaml
-# PromotionStep override (advanced)
-spec:
-  steps:
-    - name: argocd-set-image
-      inputs:
-        argocd.application: my-app-prod
-        argocd.namespace: argocd
-        argocd.imageKey: frontend.tag
-```
+with a non-empty tag**. Setting different tags for different keys in one promotion is not
+supported: it would need a custom step sequence, and `spec.environments[].steps` is not
+implemented yet (a Pipeline that sets it is rejected; see [Custom Steps](custom-steps.md)).
 
 ---
 

@@ -56,9 +56,10 @@ spec:
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
       shard: <string>                   # Agent shard name for distributed mode (optional)
-      steps:                            # Custom promotion step sequence (optional, overrides defaults)
-        - uses: <string>                # Step name (built-in or custom)
-          config: <map>                 # Step-specific configuration (for custom steps: url, timeout)
+      steps:                            # Reserved, not implemented yet: a Pipeline that sets it is rejected
+        - uses: <string>                #   (see docs/custom-steps.md)
+      promotionTemplate:                # Reserved, not implemented yet: a Pipeline that sets it is rejected
+        name: <string>
 
   historyLimit: <int>                   # Number of Bundles to retain (default: 20)
 ```
@@ -86,7 +87,7 @@ spec:
 | `name` | Yes | | Environment name. Must be unique within the Pipeline. Used in PolicyGate matching (`kardinal.io/applies-to` label). |
 | `path` | No | `environments/<name>` | Directory (layout: directory) or branch (layout: branch) in the GitOps repo containing the environment's manifests. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
-| `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. Wave N automatically depends on all wave N-1 environments. Composable with `dependsOn`. |
+| `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
 | `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: runs `kustomize edit set-image`. `helm`: patches a configurable path in `values.yaml`. |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `renderManifests` | No | `false` | When `true`, runs `kustomize-build` after `kustomize-set-image` and commits rendered plain YAML to the environment branch. Requires `layout: branch`. Enables the rendered manifests pattern. |
@@ -96,7 +97,8 @@ spec:
 | `health.labelSelector` | No | (none) | Label selector for collection mode (`health.type=resource` only). When set, the Graph gets a kro `ref` node with `metadata.selector.matchLabels` that reads **all** Deployments in the environment namespace matching these labels. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is watched (named `ref` node). Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
 | `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` will reconcile this environment's PromotionSteps. When omitted, the control plane controller handles the step. |
-| `steps` | No | (inferred) | Custom promotion step sequence. When omitted, the default sequence is inferred from `update.strategy`, `approval`, and `renderManifests`. When specified, overrides the default entirely. See [Promotion Steps](#promotion-steps). |
+| `steps` | No | (inferred) | **Not implemented yet.** Reserved for a custom step sequence. The controller always runs the default sequence, which it infers from `update.strategy`, `approval` and `renderManifests`. A Pipeline that sets `steps` is rejected: `kardinal validate` reports it, and its Bundles fail with a message naming the environment. See [Custom Steps](custom-steps.md). |
+| `promotionTemplate` | No | (none) | **Not implemented yet.** Reserved for a shared step sequence. It is rejected the same way as `steps`. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A health alarm resets the timer. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
 | `onHealthFailure` | No | `none` | What to do when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle at the previous image version; step → RollingBack. |
@@ -163,7 +165,7 @@ environments:
 
 ### Wave Topology (K-06)
 
-For multi-region deployments with many parallel environments, `wave:` is syntactic sugar for `dependsOn`. Environments with the same wave number are promoted in parallel. Wave N environments automatically depend on **all** wave N-1 environments.
+For multi-region deployments with many parallel environments, `wave:` is syntactic sugar for `dependsOn`. Environments with the same wave number are promoted in parallel. Each wave environment automatically depends on **all** environments of the next lower wave.
 
 ```yaml
 environments:
@@ -191,7 +193,14 @@ environments:
       minutes: 480
 ```
 
-`wave:` and explicit `dependsOn` are composable — the final dependency set is the union of wave-derived edges and any explicit `dependsOn` entries. Non-wave environments (Wave == 0) continue to use the sequential default (each depends on the previous in the list).
+The rules, in full:
+
+- **Previous wave.** A wave environment depends on every environment of the next lower wave that exists. Numbers need not be consecutive: with waves 10, 20 and 30, wave 20 follows wave 10. A gap never makes a wave start on its own.
+- **Environments before a wave.** Without `dependsOn`, the environments of a wave also depend on the last environment without a wave listed before the wave's first environment. In the example, that is why wave 1 waits for `staging`.
+- **Environments after a wave.** Without `dependsOn`, an environment without a wave depends on the environment listed before it. If that environment is in a wave, it depends on every environment of that wave.
+- **`dependsOn`.** Explicit `dependsOn` entries are added to the previous-wave edges; they replace only the list-order edges.
+
+Only the first environment in the list is a root, unless `dependsOn` says otherwise.
 
 See `examples/wave-topology/pipeline.yaml` for a complete example.
 
@@ -260,6 +269,8 @@ Without `renderManifests: true`, the standard sequence omits `kustomize-build`.
 
 ## Integration Test Step (K-07)
 
+> **Not reachable yet.** A step outside the default sequence runs only when it is listed in `spec.environments[].steps`, and `steps` is not implemented yet. A Pipeline that sets it is rejected (see [Custom Steps](custom-steps.md)). This section describes the step for when `steps` ships.
+
 The `integration-test` built-in step creates a Kubernetes Job in the target environment namespace, waits for it to complete, and writes the result to the step output accumulator. This is the most powerful quality gate after bake time — running real tests against the actual deployed service.
 
 ### Configuration
@@ -310,7 +321,7 @@ environments:
       - uses: integration-test   # runs after health check passes
 ```
 
-See `examples/integration-test/pipeline.yaml` for a complete example.
+`examples/integration-test/pipeline.yaml` shows the environment layout; its `steps` block is commented out until the field is implemented.
 
 ## Examples
 

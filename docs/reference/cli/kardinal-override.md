@@ -13,6 +13,12 @@ the CEL expression until the override expires.
 All overrides are preserved for audit purposes. Use --expires-in to control
 the override window (default: 1h).
 
+--gate takes the gate template name (for example no-weekend-deploy). The
+override is recorded on the instances of that gate the Pipeline's promoting
+Bundles have for --stage (every stage when --stage is not set), so run it
+while the Bundle waits on the gate. The name of one gate instance is also
+accepted.
+
 Example:
   kardinal override my-app --stage prod --gate no-weekend-deploy \
     --reason "P0 hotfix — incident #4521"

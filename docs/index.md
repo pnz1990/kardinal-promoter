@@ -58,7 +58,7 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 | Change freeze management (`ChangeWindow` CRD) | ✅ | ❌ | ❌ |
 | Pre-deploy gate type | ✅ | ❌ | ❌ |
 | DORA metrics built-in | ✅ | ❌ | ❌ |
-| Integration test step | ✅ | ❌ | ❌ |
+| Integration test step | Planned (step built; `steps` not implemented yet) | ❌ | ❌ |
 | Emergency override with audit record | ✅ | ❌ | ❌ |
 | Cross-stage history in gates | ✅ | ❌ | ❌ |
 | Graph-first architecture (kro Graph) | ✅ | ❌ | ❌ |

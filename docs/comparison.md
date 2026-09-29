@@ -30,8 +30,8 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **UI dashboard** | Full control plane UI: fleet dashboard, ops view, bake countdown, gate detail panel, bundle timeline, metrics bar, in-UI approve/rollback/override | Polished Kargo UI | No UI |
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
-| **Integration test step** | Yes — `integration-test` step runs a Kubernetes Job | No | No |
-| **Image signature verification** | Yes — `verify-image` step calls cosign to verify OCI signatures before promoting | No | No |
+| **Integration test step** | Not yet — the `integration-test` step is built, but a Pipeline cannot select it until `spec.environments[].steps` is implemented | No | No |
+| **Image signature verification** | Not yet — the `verify-image` step (cosign) is built, but a Pipeline cannot select it until `spec.environments[].steps` is implemented | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, PolicyGate.Blocked, PromotionStep.Failed; optional auth header; pipeline selector | Yes (Kargo via Argo Notifications) | No |
 | **Multi-cluster** | Yes (Pipeline CRD, kubeconfig Secrets) | Yes | Yes |
@@ -179,7 +179,6 @@ you don't need.
 - You want **auto-rollback** triggered by health check failures, with per-stage abort vs. rollback vs. ignore policy
 - You are a **platform team** that needs org-level policies automatically applied to all pipelines without teams being able to bypass them
 - You want **DORA metrics** — time-to-production, rollback rate, operator interventions — surfaced per pipeline
-- You need **integration tests as promotion steps** — run a Kubernetes Job as part of the promotion sequence
 - You need **emergency override with audit record** — escape hatch that produces evidence, not a silent bypass
 
 ---

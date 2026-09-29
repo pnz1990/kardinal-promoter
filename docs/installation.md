@@ -112,6 +112,7 @@ kubectl get pods -n kro-system
 | `graph.serviceAccountName` | `kardinal-graph` | ServiceAccount kro impersonates to apply each Graph's children (`spec.serviceAccountName`) |
 | `graph.kroNamespace` | `kro-system` | Namespace kro runs in (NetworkPolicy egress) |
 | `graph.aggregateToKro` | `true` | Ship a ClusterRole aggregated into kro's controller role (kro with `rbac.mode=aggregation`) |
+| `graph.readerNamespaces` | `[argocd, flux-system]` | `--graph-reader-namespaces`: namespaces, besides a Graph's own, where the Graph identity may be bound to the reader role for health `ref` nodes. A health ref into any other namespace is dropped from the Graph with a warning (health refs are observational; the PromotionStep reconciler still checks health). Add the namespaces your `health.resource` targets live in. `["*"]` allows every namespace; use it only when every Pipeline author may read every namespace. `kube-system`, `kube-public` and `kube-node-lease` are never allowed |
 
 ---
 
@@ -218,7 +219,7 @@ The kardinal-promoter controller's `ServiceAccount` requires:
 | `pipelines`, `bundles`, `promotionsteps`, `policygates`, `prstatuses`, `rollbackpolicies` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 | `graphs.kro.run` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
 | `serviceaccounts` | `get`, `create` (Graph identity) |
-| `rolebindings` | `get`, `create`, `update` (Graph identity) |
+| `rolebindings` | `get`, `create`, `update`, `delete` (Graph identity; `delete` removes reader bindings no Graph needs) |
 | `clusterroles` | `bind`, limited to `kardinal-graph-applier` and `kardinal-graph-reader` |
 | `deployments`, `services`, `pods` | `get`, `list`, `watch` |
 | `secrets` | `get` (GitHub token secret only) |
@@ -228,8 +229,20 @@ The kardinal-promoter controller's `ServiceAccount` requires:
 kro does not apply a Graph's children with its own identity. It impersonates the Graph's
 `spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
 controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-graph-applier`
-(in the Graph namespace) and `kardinal-graph-reader` (in each namespace a health `ref` node reads).
+(in the Graph namespace) and `kardinal-graph-reader` (in each namespace a health `ref` node reads,
+limited to the Graph's own namespace and `graph.readerNamespaces`). Reader bindings that no Graph
+in the namespace needs any more are deleted.
 See G5 in the [Graph capability ledger](design/16-graph-capability-ledger.md).
+
+**Upgrading:** earlier versions bound the reader role in every namespace a health `ref` named,
+and did not record those bindings, so the controller does not delete them. After upgrading,
+list them and delete any in a namespace that is not the Graph's own and not in
+`graph.readerNamespaces`:
+
+```bash
+kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \
+  -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name | grep kardinal-graph-reader-
+```
 
 Both `ClusterRole` and `ClusterRoleBinding` resources are created automatically by the Helm chart.
 

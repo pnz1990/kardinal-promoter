@@ -1,5 +1,15 @@
 # Custom Promotion Steps
 
+> **Not implemented yet.** `spec.environments[].steps` and
+> `spec.environments[].promotionTemplate` are in the Pipeline CRD, but the
+> controller does not use them yet. Every environment runs the default step
+> sequence. The controller used to ignore these fields silently. Now it
+> rejects a Pipeline that sets them: `kardinal validate` reports the
+> environment, and its Bundles go to phase `Failed` with the message
+> `spec.environments[].steps is not implemented yet`. The step contract below
+> describes custom steps as they are designed; the step engine implements it,
+> but no Pipeline can reach it until `steps` ships.
+
 Custom steps let you inject arbitrary HTTP webhook calls into the promotion
 sequence. Any step `uses:` value that is not a built-in step name is dispatched
 as an HTTP POST to the configured webhook URL.
@@ -158,7 +168,7 @@ A complete example custom step server is in `examples/custom-step/`.
 # Run locally
 go run examples/custom-step/server.go
 
-# Apply the example Pipeline
+# Apply the example Pipeline (its steps block is commented out until steps ships)
 kubectl apply -f examples/custom-step/pipeline.yaml
 ```
 

@@ -98,6 +98,13 @@ The PromotionStep reconciler calls `engine.RunStep()` for each step in the seque
 
 ## Default Step Inference
 
+> **Status (audit 2026-09):** only the inferred default sequence runs
+> (`steps.DefaultSequenceForBundle`). `PromotionStepSpec` has no field that carries a
+> custom sequence, so `spec.environments[].steps` and `promotionTemplate` cannot reach the
+> reconciler. `graph.Build` rejects a Pipeline that sets either one, and so does
+> `kardinal validate`, so they no longer fail silently. The custom-sequence and
+> PromotionTemplate sections below are the design for when that field exists.
+
 When `spec.steps` is omitted from the environment, the engine infers the sequence:
 
 ```go
@@ -458,7 +465,7 @@ environments:
     stepsRef: { name: prod-steps }
 ```
 
-This is a Phase 3 feature. Phase 1-2 use inline `steps` on each environment.
+This is a Phase 3 feature and is not implemented: the CRD exists, but `graph.Build` rejects `promotionTemplate` on an environment (see the status note under Default Step Inference). The field shipped as `promotionTemplate: {name, namespace}`, not `stepsRef`.
 
 ## Unit Tests
 
