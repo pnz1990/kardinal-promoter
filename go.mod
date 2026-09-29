@@ -12,7 +12,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/mod v0.38.0
+	golang.org/x/mod v0.40.0
 	k8s.io/api v0.37.1
 	k8s.io/apiextensions-apiserver v0.37.0
 	k8s.io/apimachinery v0.37.1
