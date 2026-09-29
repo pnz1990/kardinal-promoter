@@ -34,6 +34,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // uiPipelineResponse is the JSON shape for a Pipeline in the UI API.
@@ -778,207 +779,6 @@ func pipelineCDLevel(p *v1alpha1.Pipeline) string {
 	}
 }
 
-// handlePromote handles POST /api/v1/ui/promote — creates a Bundle targeting the
-// given pipeline and environment, triggering a new promotion. This is the UI
-// equivalent of `kardinal promote <pipeline> --env <env>`.
-//
-// Request body (JSON):
-//
-//	{"pipeline": "nginx-demo", "environment": "prod", "namespace": "default"}
-//
-// Response (JSON on success):
-//
-//	{"bundle": "nginx-demo-abc123", "message": "promotion started"}
-func (s *uiAPIServer) handlePromote(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		Pipeline    string `json:"pipeline"`
-		Environment string `json:"environment"`
-		Namespace   string `json:"namespace"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Pipeline == "" || req.Environment == "" {
-		http.Error(w, "pipeline and environment are required", http.StatusBadRequest)
-		return
-	}
-	ns := req.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-
-	// Verify the pipeline exists.
-	var pl v1alpha1.Pipeline
-	if err := s.client.Get(r.Context(), client.ObjectKey{Name: req.Pipeline, Namespace: ns}, &pl); err != nil {
-		http.Error(w, "pipeline not found", http.StatusNotFound)
-		return
-	}
-
-	// Verify the environment exists in the pipeline.
-	found := false
-	for _, e := range pl.Spec.Environments {
-		if e.Name == req.Environment {
-			found = true
-			break
-		}
-	}
-	if !found {
-		http.Error(w, "environment not found in pipeline", http.StatusBadRequest)
-		return
-	}
-
-	// Create a Bundle targeting the specified environment (same as CLI promote).
-	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: req.Pipeline + "-",
-			Namespace:    ns,
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     "image",
-			Pipeline: req.Pipeline,
-			Intent: &v1alpha1.BundleIntent{
-				TargetEnvironment: req.Environment,
-			},
-		},
-	}
-	if err := s.client.Create(r.Context(), bundle); err != nil {
-		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Str("env", req.Environment).Msg("ui: create promote bundle")
-		http.Error(w, "failed to create bundle", http.StatusInternalServerError)
-		return
-	}
-
-	s.log.Info().
-		Str("bundle", bundle.Name).
-		Str("pipeline", req.Pipeline).
-		Str("env", req.Environment).
-		Msg("ui: promote triggered")
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"bundle":  bundle.Name,
-		"message": "promotion started — track with kardinal get bundles " + req.Pipeline,
-	})
-}
-
-// handleRollback handles POST /api/v1/ui/rollback — creates a rollback Bundle
-// for the given pipeline and environment. UI equivalent of `kardinal rollback`.
-//
-// Request body (JSON):
-//
-//	{"pipeline": "nginx-demo", "environment": "prod", "namespace": "default", "toBundle": "nginx-demo-abc"}
-//
-// Response (JSON on success):
-//
-//	{"bundle": "nginx-demo-rollback-xyz", "message": "rollback started"}
-func (s *uiAPIServer) handleRollback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		Pipeline    string `json:"pipeline"`
-		Environment string `json:"environment"`
-		Namespace   string `json:"namespace"`
-		ToBundle    string `json:"toBundle"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Pipeline == "" {
-		http.Error(w, "pipeline is required", http.StatusBadRequest)
-		return
-	}
-	ns := req.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-
-	rollbackOf := req.ToBundle
-	if rollbackOf == "" {
-		// Find the most recently Verified PromotionStep for this pipeline+env.
-		var steps v1alpha1.PromotionStepList
-		labelSel := client.MatchingLabels{"kardinal.io/pipeline": req.Pipeline}
-		if req.Environment != "" {
-			labelSel["kardinal.io/environment"] = req.Environment
-		}
-		if err := s.client.List(r.Context(), &steps, client.InNamespace(ns), labelSel); err != nil {
-			http.Error(w, "failed to list steps", http.StatusInternalServerError)
-			return
-		}
-		var latest *v1alpha1.PromotionStep
-		for i := range steps.Items {
-			ps := &steps.Items[i]
-			if ps.Status.State != "Verified" {
-				continue
-			}
-			if latest == nil || ps.CreationTimestamp.After(latest.CreationTimestamp.Time) {
-				latest = ps
-			}
-		}
-		if latest == nil {
-			http.Error(w, "no verified promotion found to roll back to", http.StatusNotFound)
-			return
-		}
-		rollbackOf = latest.Spec.BundleName
-	}
-
-	// Copy bundle type from the target bundle.
-	bundleType := "image"
-	var srcBundle v1alpha1.Bundle
-	if err := s.client.Get(r.Context(), client.ObjectKey{Name: rollbackOf, Namespace: ns}, &srcBundle); err == nil {
-		if srcBundle.Spec.Type != "" {
-			bundleType = srcBundle.Spec.Type
-		}
-	}
-
-	rollbackBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: req.Pipeline + "-rollback-",
-			Namespace:    ns,
-			Labels:       map[string]string{"kardinal.io/rollback": "true"},
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     bundleType,
-			Pipeline: req.Pipeline,
-			Provenance: &v1alpha1.BundleProvenance{
-				RollbackOf: rollbackOf,
-			},
-		},
-	}
-	if req.Environment != "" {
-		rollbackBundle.Spec.Intent = &v1alpha1.BundleIntent{
-			TargetEnvironment: req.Environment,
-		}
-	}
-	if err := s.client.Create(r.Context(), rollbackBundle); err != nil {
-		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create rollback bundle")
-		http.Error(w, "failed to create rollback bundle", http.StatusInternalServerError)
-		return
-	}
-
-	s.log.Info().
-		Str("bundle", rollbackBundle.Name).
-		Str("pipeline", req.Pipeline).
-		Str("rollbackOf", rollbackOf).
-		Msg("ui: rollback triggered")
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"bundle":  rollbackBundle.Name,
-		"message": "rollback started — rolling back to " + rollbackOf,
-	})
-}
-
 // user types to provide syntax feedback without needing the full evaluation context.
 //
 // POST /api/v1/ui/validate-cel
@@ -1135,75 +935,6 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "gate overridden until " + expiresAt.UTC().Format(time.RFC3339),
-	})
-}
-
-// handlePause handles POST /api/v1/ui/pause — sets Pipeline.spec.paused=true.
-//
-// Request body (JSON):
-//
-//	{"pipeline": "nginx-demo", "namespace": "default"}
-//
-// Response (JSON on success):
-//
-//	{"message": "pipeline nginx-demo paused"}
-func (s *uiAPIServer) handlePause(w http.ResponseWriter, r *http.Request) {
-	s.handlePauseResume(w, r, true)
-}
-
-// handleResume handles POST /api/v1/ui/resume — sets Pipeline.spec.paused=false.
-func (s *uiAPIServer) handleResume(w http.ResponseWriter, r *http.Request) {
-	s.handlePauseResume(w, r, false)
-}
-
-func (s *uiAPIServer) handlePauseResume(w http.ResponseWriter, r *http.Request, pause bool) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		Pipeline  string `json:"pipeline"`
-		Namespace string `json:"namespace"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.Pipeline == "" {
-		http.Error(w, "pipeline is required", http.StatusBadRequest)
-		return
-	}
-	ns := req.Namespace
-	if ns == "" {
-		ns = "default"
-	}
-
-	var pl v1alpha1.Pipeline
-	if err := s.client.Get(r.Context(), client.ObjectKey{Name: req.Pipeline, Namespace: ns}, &pl); err != nil {
-		http.Error(w, "pipeline not found", http.StatusNotFound)
-		return
-	}
-
-	pl.Spec.Paused = pause
-	if err := s.client.Update(r.Context(), &pl); err != nil {
-		action := "pause"
-		if !pause {
-			action = "resume"
-		}
-		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: " + action + " pipeline")
-		http.Error(w, "failed to update pipeline", http.StatusInternalServerError)
-		return
-	}
-
-	action := "paused"
-	if !pause {
-		action = "resumed"
-	}
-	s.log.Info().Str("pipeline", req.Pipeline).Bool("paused", pause).Msg("ui: pipeline " + action)
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"message": "pipeline " + req.Pipeline + " " + action,
 	})
 }
 
@@ -1420,6 +1151,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 			Provenance: provenance,
 		},
 	}
+	lifecycle.StampCreatedAt(bundle, time.Now())
 
 	if err := s.client.Create(r.Context(), bundle); err != nil {
 		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create bundle")

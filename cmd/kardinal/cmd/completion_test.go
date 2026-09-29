@@ -27,7 +27,8 @@ import (
 // coreSubcommands are the CLI subcommands that must be reachable via completion.
 // We verify these by exercising the __complete protocol directly, since cobra
 // generates dynamic completion scripts that do not embed command names statically.
-var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "approve"}
+// approve is deprecated (it had no effect), so cobra leaves it out of completion.
+var coreSubcommands = []string{"get", "explain", "logs", "status", "rollback", "override"}
 
 func TestCompletion_Bash(t *testing.T) {
 	root := NewRootCmd()
