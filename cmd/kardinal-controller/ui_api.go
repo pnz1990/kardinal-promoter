@@ -32,6 +32,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -1146,12 +1147,6 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		createdBy = u.Username
 	}
 
-	var gate v1alpha1.PolicyGate
-	if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
-		http.Error(w, "gate not found", http.StatusNotFound)
-		return
-	}
-
 	now := time.Now().UTC()
 	expiresAt := metav1.Time{Time: now.Add(time.Duration(expiresMins) * time.Minute)}
 	createdAt := metav1.Time{Time: now}
@@ -1162,8 +1157,21 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		CreatedAt: &createdAt,
 		CreatedBy: createdBy,
 	}
-	gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-	if err := s.client.Update(r.Context(), &gate); err != nil {
+	// Re-read and re-apply on a conflict: the reconciler and other approvers
+	// write the same gate, and a stale resourceVersion is not a user error.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var gate v1alpha1.PolicyGate
+		if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
+			return err
+		}
+		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+		return s.client.Update(r.Context(), &gate)
+	})
+	switch {
+	case apierrors.IsNotFound(err):
+		http.Error(w, "gate not found", http.StatusNotFound)
+		return
+	case err != nil:
 		s.log.Error().Err(err).Str("gate", gateName).Msg("ui: approve gate")
 		http.Error(w, "failed to update gate", http.StatusInternalServerError)
 		return
@@ -1343,17 +1351,19 @@ func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, n
 		return
 	}
 
+	// The manager client reads Events from the API server (they are not
+	// cached, see uncachedObjects), which applies the field selector. Clients
+	// that cannot, such as the fake client, fall back to listing the
+	// namespace and filtering here.
 	var eventList corev1.EventList
 	if err := s.client.List(r.Context(), &eventList,
 		client.InNamespace(namespace),
-		client.MatchingFields{"involvedObject.name": stepName},
+		client.MatchingFields{"involvedObject.kind": "PromotionStep", "involvedObject.name": stepName},
 	); err != nil {
-		// Graceful fallback: field-indexed listing may not be supported in all setups.
-		// Re-try with a full list and filter client-side.
 		var fallbackList corev1.EventList
 		if ferr := s.client.List(r.Context(), &fallbackList, client.InNamespace(namespace)); ferr != nil {
-			s.log.Warn().Err(ferr).Str("step", stepName).Msg("ui: failed to list events")
-			writeJSON(w, []uiEventResponse{})
+			s.log.Error().Err(ferr).Str("step", stepName).Msg("ui: list events")
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		for _, ev := range fallbackList.Items {

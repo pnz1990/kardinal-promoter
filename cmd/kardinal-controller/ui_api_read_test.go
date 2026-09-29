@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +18,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -216,6 +219,7 @@ func TestUIAPI_ReadHandlersReportListErrors(t *testing.T) {
 		{name: "graph: bundles", fail: &v1alpha1.BundleList{}, path: "/api/v1/ui/bundles/app-v1/graph"},
 		{name: "graph: gates", fail: &v1alpha1.PolicyGateList{}, path: "/api/v1/ui/bundles/app-v1/graph"},
 		{name: "graph: steps", fail: &v1alpha1.PromotionStepList{}, path: "/api/v1/ui/bundles/app-v1/graph"},
+		{name: "step events", fail: &corev1.EventList{}, path: "/api/v1/ui/steps/default/app-v1-test/events"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -224,6 +228,7 @@ func TestUIAPI_ReadHandlersReportListErrors(t *testing.T) {
 					Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}}}},
 				&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default"},
 					Spec: v1alpha1.BundleSpec{Pipeline: "app"}},
+				uiStep("default", "app-v1-test", "app-v1", "test", "Verified"),
 			).WithInterceptorFuncs(interceptor.Funcs{
 				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 					if sameListType(list, tt.fail) {
@@ -249,6 +254,9 @@ func sameListType(a, b client.ObjectList) bool {
 		return ok
 	case *v1alpha1.PromotionStepList:
 		_, ok := b.(*v1alpha1.PromotionStepList)
+		return ok
+	case *corev1.EventList:
+		_, ok := b.(*corev1.EventList)
 		return ok
 	}
 	return false
@@ -344,6 +352,61 @@ func TestUIAPI_StepEvents_OnlyPromotionStepEvents(t *testing.T) {
 				reasons = append(reasons, e.Reason)
 			}
 			assert.Equal(t, tt.reasons, reasons)
+		})
+	}
+}
+
+// TestUIAPI_GateApprove_RetriesConflicts covers C07-controller-24: a
+// concurrent write to the gate (the reconciler, a second approver) made the
+// Update fail with 409, shown to the user as a 500. Other Get errors were
+// reported as "gate not found".
+func TestUIAPI_GateApprove_RetriesConflicts(t *testing.T) {
+	gateGR := schema.GroupResource{Group: "kardinal.io", Resource: "policygates"}
+	tests := []struct {
+		name          string
+		getErr        error
+		conflicts     int
+		wantCode      int
+		wantOverrides int
+	}{
+		{name: "one conflict is retried", conflicts: 1, wantCode: http.StatusOK, wantOverrides: 1},
+		{name: "persistent conflict fails", conflicts: 100, wantCode: http.StatusInternalServerError},
+		{name: "get error is not reported as not found", getErr: errors.New("apiserver unavailable"),
+			wantCode: http.StatusInternalServerError},
+		{name: "missing gate", getErr: apierrors.NewNotFound(gateGR, "g"), wantCode: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conflicts := tt.conflicts
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}},
+			).WithInterceptorFuncs(interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*v1alpha1.PolicyGate); ok && tt.getErr != nil {
+						return tt.getErr
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if conflicts > 0 {
+						conflicts--
+						return apierrors.NewConflict(gateGR, obj.GetName(), errors.New("object was modified"))
+					}
+					return c.Update(ctx, obj, opts...)
+				},
+			}).Build()
+
+			mux := http.NewServeMux()
+			newUIAPIServer(c, zerolog.Nop()).RegisterRoutes(mux)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/ui/gates/team-a/g/approve",
+				strings.NewReader(`{"reason":"hotfix"}`)))
+			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
+
+			tt.getErr = nil
+			var gate v1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "g"}, &gate))
+			assert.Len(t, gate.Spec.Overrides, tt.wantOverrides)
 		})
 	}
 }
