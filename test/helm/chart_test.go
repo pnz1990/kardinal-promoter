@@ -198,7 +198,7 @@ func TestDockerfileContent(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(data)
-	assert.Contains(t, content, "golang:1.25", "builder stage must use golang:1.25")
+	assert.Contains(t, content, "golang:1.26", "builder stage must use golang:1.26")
 	// Final stage uses alpine with git+kustomize (required by promotion step engine).
 	// Changed from distroless to alpine to include git and kustomize binaries.
 	assert.Contains(t, content, "alpine", "final stage must use alpine image")

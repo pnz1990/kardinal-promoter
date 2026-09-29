@@ -11,7 +11,7 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go builder ───────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Install git (needed by go modules for VCS stamping)
 RUN apk add --no-cache git
