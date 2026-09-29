@@ -22,8 +22,11 @@ type SortDir = 'asc' | 'desc'
 
 interface Props {
   pipelines: Pipeline[]
+  /** Name of the selected pipeline. */
   selected?: string
-  onSelect: (name: string) => void
+  /** Namespace of the selected pipeline; pipelines are identified by namespace + name. */
+  selectedNamespace?: string
+  onSelect: (name: string, namespace: string) => void
   loading?: boolean
   error?: string
 }
@@ -44,9 +47,9 @@ function relativeTime(iso: string | undefined): string {
 
 /** Red/amber/green staleness color for inventory age. */
 function inventoryColor(days: number | undefined): string {
-  if (days === undefined) return '#64748b'
-  if (days > 30) return '#ef4444'
-  if (days > 14) return '#f59e0b'
+  if (days === undefined) return 'var(--color-text-muted)'
+  if (days > 30) return 'var(--color-error)'
+  if (days > 14) return 'var(--color-warning)'
   return 'var(--color-success)'
 }
 
@@ -55,9 +58,9 @@ function cdLevelBadge(level: string | undefined) {
   const map: Record<string, { label: string; color: string }> = {
     'full-cd': { label: 'Full CD', color: 'var(--color-success)' },
     'mostly-cd': { label: 'Mostly CD', color: 'var(--color-accent)' },
-    'manual': { label: 'Manual', color: '#f59e0b' },
+    'manual': { label: 'Manual', color: 'var(--color-warning)' },
   }
-  const { label, color } = map[level ?? ''] ?? { label: '—', color: '#64748b' }
+  const { label, color } = map[level ?? ''] ?? { label: '—', color: 'var(--color-text-muted)' }
   return (
     <span style={{ color, fontSize: '0.75rem', fontWeight: 600 }}>{label}</span>
   )
@@ -65,7 +68,7 @@ function cdLevelBadge(level: string | undefined) {
 
 const CELL: React.CSSProperties = {
   padding: '0.45rem 0.75rem',
-  borderBottom: '1px solid #1e293b',
+  borderBottom: '1px solid var(--color-border-muted)',
   fontSize: '0.82rem',
   color: 'var(--color-text)',
   whiteSpace: 'nowrap',
@@ -78,8 +81,8 @@ const HEADER_CELL: React.CSSProperties = {
   fontSize: '0.72rem',
   textTransform: 'uppercase' as const,
   letterSpacing: '0.05em',
-  background: '#0a1628',
-  borderBottom: '1px solid #334155',
+  background: 'var(--color-bg-deep)',
+  borderBottom: '1px solid var(--color-border)',
   cursor: 'pointer',
   userSelect: 'none' as const,
 }
@@ -100,7 +103,7 @@ const COLUMNS: Column[] = [
   { key: 'cdLevel', label: 'CD Level', title: 'Automation level based on number of policy gates' },
 ]
 
-export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error }: Props) {
+export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSelect, loading, error }: Props) {
   const [sortCol, setSortCol] = useState<SortColumn>('blockerCount')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [filter, setFilter] = useState('')
@@ -159,14 +162,14 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
 
   if (loading) {
     return (
-      <div style={{ padding: '1.5rem', color: '#64748b', fontSize: '0.85rem' }}>
+      <div style={{ padding: '1.5rem', color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>
         Loading pipelines…
       </div>
     )
   }
   if (error) {
     return (
-      <div style={{ padding: '1rem', color: '#ef4444', fontSize: '0.82rem' }}>
+      <div role="alert" style={{ padding: '1rem', color: 'var(--color-error)', fontSize: '0.82rem' }}>
         Error: {error}
       </div>
     )
@@ -177,7 +180,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
       {/* Filter bar */}
       <div style={{
         padding: '0.6rem 1rem',
-        borderBottom: '1px solid #1e293b',
+        borderBottom: '1px solid var(--color-border-muted)',
         background: 'var(--color-bg-deep)',
         display: 'flex',
         alignItems: 'center',
@@ -191,7 +194,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
           aria-label="Filter pipelines"
           style={{
             background: 'var(--color-surface)',
-            border: '1px solid #334155',
+            border: '1px solid var(--color-border)',
             borderRadius: '4px',
             padding: '0.3rem 0.6rem',
             fontSize: '0.8rem',
@@ -253,6 +256,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
             )}
             {sorted.map(p => {
               const isSelected = selected === p.name
+                && (selectedNamespace === undefined || selectedNamespace === p.namespace)
               const hasBlockers = (p.blockerCount ?? 0) > 0
               const hasFailed = (p.failedStepCount ?? 0) > 0
               const isStale = (p.inventoryAgeDays ?? 0) > 14
@@ -260,14 +264,18 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
               return (
                 <tr
                   key={`${p.namespace}/${p.name}`}
-                  onClick={() => onSelect(p.name)}
+                  onClick={() => onSelect(p.name, p.namespace)}
                   tabIndex={0}
-                  onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onSelect(p.name)}
+                  onKeyDown={e => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return
+                    e.preventDefault() // Space would otherwise scroll the table
+                    onSelect(p.name, p.namespace)
+                  }}
                   aria-selected={isSelected}
                   style={{
                     cursor: 'pointer',
                     background: isSelected ? 'var(--color-surface)' : 'transparent',
-                    borderLeft: isSelected ? '3px solid #6366f1' : '3px solid transparent',
+                    borderLeft: isSelected ? '3px solid var(--color-accent)' : '3px solid transparent',
                   }}
                 >
                   {/* Pipeline name */}
@@ -277,9 +285,9 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                       {p.paused && (
                         <span style={{
                           fontSize: '0.6rem',
-                          background: '#1e1b4b',
+                          background: 'var(--color-accent-bg)',
                           color: 'var(--color-accent)',
-                          border: '1px solid #4338ca',
+                          border: '1px solid var(--color-accent)',
                           borderRadius: '3px',
                           padding: '0px 4px',
                           fontWeight: 700,
@@ -308,7 +316,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                   </td>
 
                   {/* Blockers */}
-                  <td style={{ ...CELL, color: hasBlockers ? '#ef4444' : 'var(--color-success)' }}>
+                  <td style={{ ...CELL, color: hasBlockers ? 'var(--color-error)' : 'var(--color-success)' }}>
                     {hasBlockers ? (
                       <span title={`${p.blockerCount} gate${p.blockerCount === 1 ? '' : 's'} blocking`}>
                         ⛔ {p.blockerCount}
@@ -319,7 +327,7 @@ export function PipelineOpsTable({ pipelines, selected, onSelect, loading, error
                   </td>
 
                   {/* Failed steps */}
-                  <td style={{ ...CELL, color: hasFailed ? '#ef4444' : 'var(--color-success)' }}>
+                  <td style={{ ...CELL, color: hasFailed ? 'var(--color-error)' : 'var(--color-success)' }}>
                     {hasFailed ? (
                       <span title={`${p.failedStepCount} failed step${p.failedStepCount === 1 ? '' : 's'}`}>
                         ✗ {p.failedStepCount}

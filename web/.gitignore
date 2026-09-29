@@ -2,3 +2,6 @@
 # Playwright test artifacts
 test-results/
 test/e2e/playwright-report/
+
+# TypeScript incremental build state (written by `tsc -b` in npm run build)
+tsconfig.tsbuildinfo

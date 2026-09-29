@@ -3,60 +3,105 @@
  * Licensed under the Apache License, Version 2.0
  *
  * BundleTimeline.css — CSS classes for the bundle timeline chips (#532).
+ * All colors are theme tokens (theme.css), so dark and light mode both work.
+ * The bundle phase sets --phase-color, used by the dot and the phase label;
+ * selection and comparison only change the chip border, so the rules never
+ * compete for the same property.
  */
 
-/* ── Timeline container ──────────────────────────────────────────────────── */
-.bundle-timeline {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
+.bundle-timeline-bar {
+  padding: 0.5rem 1rem;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border-muted);
   overflow-x: auto;
-  padding-bottom: 0.25rem;
-  scrollbar-width: thin;
 }
 
 /* ── Bundle chip base ────────────────────────────────────────────────────── */
 .bundle-chip {
+  --phase-color: var(--color-text-muted);
   flex-shrink: 0;
-  border: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 56px;
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 0.3rem 0.5rem;
   cursor: pointer;
   font-size: 0.72rem;
-  background: #0f172a;
-  color: #94a3b8;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
   transition: border-color 0.1s ease;
 }
 
+.bundle-chip:hover {
+  border-color: var(--color-accent-hover);
+}
+
 .bundle-chip--selected {
-  border-color: #6366f1;
-  background: #1e1b4b;
-  color: #e2e8f0;
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  color: var(--color-text);
 }
 
 .bundle-chip--compare {
-  border-color: #0891b2;
-  background: #0c4a6e;
+  border-style: dashed;
+  border-color: var(--color-info);
+  color: var(--color-text);
 }
 
-/* ── Bundle phase color variants ─────────────────────────────────────────── */
-.bundle-chip--promoting {
-  border-color: #6366f1;
+.bundle-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--phase-color);
 }
 
-.bundle-chip--verified {
-  border-color: #22c55e;
+.bundle-chip--selected .bundle-chip__dot {
+  box-shadow: 0 0 6px var(--phase-color);
 }
 
-.bundle-chip--failed {
-  border-color: #ef4444;
+.bundle-chip__name {
+  font-size: 0.75rem;
+  font-family: monospace;
 }
 
-.bundle-chip--superseded {
-  border-color: #475569;
-  color: #94a3b8;  /* clear muted (7.5:1 on #0f172a bg) instead of opacity — opacity reduces contrast */
+.bundle-chip--selected .bundle-chip__name,
+.bundle-chip--compare .bundle-chip__name {
+  font-weight: 600;
 }
 
-.bundle-chip--available {
-  border-color: #f59e0b;
+.bundle-chip__phase {
+  font-size: 0.75rem;
+  color: var(--phase-color);
+}
+
+.bundle-chip__compare-badge {
+  font-size: 0.55rem;
+  color: var(--color-info);
+  font-weight: 700;
+}
+
+/* ── Bundle phase colors ─────────────────────────────────────────────────── */
+.bundle-chip--promoting  { --phase-color: var(--color-accent); }
+.bundle-chip--verified   { --phase-color: var(--color-success); }
+.bundle-chip--failed     { --phase-color: var(--color-error); }
+.bundle-chip--available  { --phase-color: var(--color-warning); }
+.bundle-chip--superseded,
+.bundle-chip--unknown    { --phase-color: var(--color-text-muted); }
+
+/* ── Loading skeleton (#784) ─────────────────────────────────────────────── */
+.bundle-chip-skeleton {
+  height: 28px;
+  border-radius: 14px;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%);
+  background-size: 200% 100%;
+  animation: bundle-chip-shimmer 1.5s infinite;
+}
+
+@keyframes bundle-chip-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

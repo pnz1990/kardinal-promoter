@@ -7,7 +7,6 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -18,8 +17,7 @@
     "@dagrejs/dagre": "^1.1.4",
     "@tanstack/react-virtual": "^3.13.24",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "reactflow": "^11.11.4"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.2",

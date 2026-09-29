@@ -1,5 +1,9 @@
-// components/PolicyGatesPanel.tsx — Collapsible panel showing all active PolicyGates.
-// Wires up api.listGates() to display gate state with CEL expressions (#340).
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
+// components/PolicyGatesPanel.tsx — Collapsible panel with the policy gates of
+// the bundle on screen, each with its state and CEL expression (#340). App
+// passes only that bundle's gate instances, never the templates.
 import { useState, useEffect } from 'react'
 import type { PolicyGate } from '../types'
 import { HealthChip } from './HealthChip'
@@ -31,9 +35,9 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
   return (
     <span style={{
       fontSize: '0.65rem',
-      background: blocked > 0 ? '#7f1d1d' : '#14532d',
-      color: blocked > 0 ? '#fca5a5' : '#86efac',
-      border: `1px solid ${blocked > 0 ? '#dc2626' : '#16a34a'}`,
+      background: blocked > 0 ? 'var(--color-error-bg)' : 'var(--color-success-bg)',
+      color: blocked > 0 ? 'var(--color-error)' : 'var(--color-success)',
+      border: `1px solid ${blocked > 0 ? 'var(--color-error)' : 'var(--color-success)'}`,
       borderRadius: '4px',
       padding: '1px 6px',
       marginLeft: '0.5rem',
@@ -68,7 +72,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
             style={{
               height: '16px',
               borderRadius: '3px',
-              background: 'linear-gradient(90deg, #1e293b 25%, #293548 50%, #1e293b 75%)',
+              background: 'linear-gradient(90deg, var(--color-surface) 25%, var(--color-surface-2) 50%, var(--color-surface) 75%)',
               backgroundSize: '200% 100%',
               animation: 'shimmer-pg 1.5s infinite',
               marginBottom: '0.4rem',
@@ -105,7 +109,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
 
       {open && (
         <div style={{
-          borderLeft: '2px solid #1e293b',
+          borderLeft: '2px solid var(--color-border)',
           paddingLeft: '0.75rem',
           marginTop: '0.25rem',
         }}>
@@ -117,7 +121,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 flexDirection: 'column',
                 gap: '0.2rem',
                 padding: '0.4rem 0',
-                borderBottom: '1px solid #1e293b',
+                borderBottom: '1px solid var(--color-border-muted)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -138,7 +142,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                   fontSize: '0.72rem',
                   color: 'var(--color-code)',
                   background: 'var(--color-bg)',
-                  border: '1px solid #1e293b',
+                  border: '1px solid var(--color-border-muted)',
                   borderRadius: '3px',
                   padding: '2px 6px',
                   fontFamily: 'monospace',

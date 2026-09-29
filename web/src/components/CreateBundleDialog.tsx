@@ -14,8 +14,10 @@
 // components/CreateBundleDialog.tsx — UI Bundle creation dialog (#917).
 // Allows platform engineers to create a Bundle directly from the UI
 // without CLI access — Kargo parity for competitive evaluations.
-import { useState, useCallback, type FormEvent } from 'react'
+import { useState, useCallback, useRef, type FormEvent } from 'react'
 import { api } from '../api/client'
+import { useModalFocus } from '../useModalFocus'
+import { actionErrorMessage } from './ConfirmDialog'
 
 interface CreateBundleDialogProps {
   /** Pipeline name to create the Bundle for. */
@@ -41,6 +43,8 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | undefined>()
   const [imageError, setImageError] = useState<string | undefined>()
+  const formRef = useRef<HTMLFormElement>(null)
+  useModalFocus(formRef, () => { if (!loading) onCancel() })
 
   const handleSubmit = useCallback(async (e: FormEvent) => {
     e.preventDefault()
@@ -63,7 +67,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
       )
       onDone()
     } catch (err) {
-      setError(String(err))
+      setError(actionErrorMessage('create the bundle', err))
     } finally {
       setLoading(false)
     }
@@ -82,10 +86,11 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
       }}
     >
       <form
+        ref={formRef}
         onSubmit={handleSubmit}
         style={{
-          background: 'var(--color-bg)',
-          border: '1px solid #1e293b',
+          background: 'var(--color-surface)',
+          border: '1px solid var(--color-border)',
           borderRadius: '8px',
           padding: '1.5rem',
           maxWidth: '460px',
@@ -107,7 +112,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           htmlFor="bundle-image"
           style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.25rem' }}
         >
-          Container image <span style={{ color: '#ef4444' }}>*</span>
+          Container image <span style={{ color: 'var(--color-error)' }}>*</span>
         </label>
         <input
           id="bundle-image"
@@ -118,7 +123,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           aria-describedby={imageError ? 'bundle-image-error' : undefined}
           style={{
             width: '100%', boxSizing: 'border-box',
-            background: 'var(--color-surface)', border: `1px solid ${imageError ? '#ef4444' : '#334155'}`,
+            background: 'var(--color-bg)', border: `1px solid ${imageError ? 'var(--color-error)' : 'var(--color-border)'}`,
             borderRadius: '6px', padding: '0.5rem 0.75rem',
             color: 'var(--color-text)', fontSize: '0.875rem',
             marginBottom: imageError ? '0.25rem' : '0.75rem',
@@ -129,7 +134,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           <div
             id="bundle-image-error"
             role="alert"
-            style={{ color: '#ef4444', fontSize: '0.75rem', marginBottom: '0.75rem' }}
+            style={{ color: 'var(--color-error)', fontSize: '0.75rem', marginBottom: '0.75rem' }}
           >
             {imageError}
           </div>
@@ -150,7 +155,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           placeholder="abc1234"
           style={{
             width: '100%', boxSizing: 'border-box',
-            background: 'var(--color-surface)', border: '1px solid #334155',
+            background: 'var(--color-bg)', border: '1px solid var(--color-border)',
             borderRadius: '6px', padding: '0.5rem 0.75rem',
             color: 'var(--color-text)', fontSize: '0.875rem',
             marginBottom: '0.75rem',
@@ -173,7 +178,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           placeholder="alice"
           style={{
             width: '100%', boxSizing: 'border-box',
-            background: 'var(--color-surface)', border: '1px solid #334155',
+            background: 'var(--color-bg)', border: '1px solid var(--color-border)',
             borderRadius: '6px', padding: '0.5rem 0.75rem',
             color: 'var(--color-text)', fontSize: '0.875rem',
             marginBottom: '1rem',
@@ -185,8 +190,8 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
           <div
             role="alert"
             style={{
-              color: '#ef4444', fontSize: '0.8rem', marginBottom: '0.75rem',
-              background: '#1e0c0c', border: '1px solid #7f1d1d', borderRadius: '4px',
+              color: 'var(--color-error)', fontSize: '0.8rem', marginBottom: '0.75rem',
+              background: 'var(--color-error-bg)', border: '1px solid var(--color-error)', borderRadius: '4px',
               padding: '0.5rem 0.75rem',
             }}
           >
@@ -204,7 +209,7 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             style={{
               padding: '0.45rem 1rem',
               background: 'transparent',
-              border: '1px solid #334155',
+              border: '1px solid var(--color-border)',
               borderRadius: '6px',
               color: 'var(--color-text-muted)',
               cursor: loading ? 'not-allowed' : 'pointer',
@@ -219,10 +224,10 @@ export function CreateBundleDialog({ pipelineName, namespace, onDone, onCancel }
             aria-label="Create bundle"
             style={{
               padding: '0.45rem 1rem',
-              background: '#0c1a2e',
-              border: '1px solid #2563eb',
+              background: 'var(--color-accent-bg)',
+              border: '1px solid var(--color-accent)',
               borderRadius: '6px',
-              color: '#93c5fd',
+              color: 'var(--color-accent)',
               cursor: loading ? 'not-allowed' : 'pointer',
               fontSize: '0.875rem',
               fontWeight: 600,
@@ -262,10 +267,10 @@ export function CreateBundleButton({ pipelineName, namespace, onRefresh }: Creat
         aria-label={`Create bundle for ${pipelineName}`}
         style={{
           padding: '0.35rem 0.85rem',
-          background: '#0c1a2e',
-          border: '1px solid #1d4ed8',
+          background: 'var(--color-accent-bg)',
+          border: '1px solid var(--color-accent)',
           borderRadius: '6px',
-          color: '#93c5fd',
+          color: 'var(--color-accent)',
           cursor: 'pointer',
           fontSize: '0.8rem',
           fontWeight: 600,

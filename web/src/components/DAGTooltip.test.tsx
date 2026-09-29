@@ -12,7 +12,7 @@
 // limitations under the License.
 
 // components/DAGTooltip.test.tsx — Unit tests for #526 portal tooltip.
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import DAGTooltip, { type DAGTooltipTarget } from './DAGTooltip'
 import type { GraphNode } from '../types'
@@ -48,7 +48,7 @@ const policyGateNode: GraphNode = {
   label: 'no-weekend-deploys',
   environment: 'prod',
   state: 'Blocked',
-  expression: '!schedule.isWeekend()',
+  expression: '!schedule.isWeekend',
   lastEvaluatedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
   message: 'Weekend: gate is blocking',
 }
@@ -97,7 +97,7 @@ describe('DAGTooltip', () => {
 
   it('shows CEL expression for PolicyGate', () => {
     render(<DAGTooltip target={makeTarget(policyGateNode)} />)
-    expect(screen.getByText('!schedule.isWeekend()')).toBeInTheDocument()
+    expect(screen.getByText('!schedule.isWeekend')).toBeInTheDocument()
   })
 
   it('shows last evaluated timestamp for PolicyGate', () => {
@@ -119,5 +119,29 @@ describe('DAGTooltip', () => {
     const tooltip = screen.getByTestId('dag-tooltip')
     fireEvent.mouseLeave(tooltip)
     expect(onLeave).toHaveBeenCalledOnce()
+  })
+
+  it('shows no PR link for a prURL that is not http(s)', () => {
+    render(<DAGTooltip target={makeTarget({ ...promotionStepNode, prURL: 'javascript:alert(1)//pull/1' })} />)
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  })
+})
+
+describe('DAGTooltip — viewport clamping follows the content (C10a-web-18)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('re-clamps when a longer message arrives for the same node', () => {
+    let tipHeight = 100
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(cb => { cb(0); return 1 })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => ({ width: 200, height: tipHeight, left: 0, top: 0, right: 200, bottom: tipHeight, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect,
+    )
+    const rect = makeRect()
+    const { rerender } = render(<DAGTooltip target={{ node: promotionStepNode, rect }} />)
+    expect(screen.getByTestId('dag-tooltip')).toHaveStyle({ top: '50px' })
+
+    tipHeight = window.innerHeight + 100 // the new message makes it taller than the viewport
+    rerender(<DAGTooltip target={{ node: { ...promotionStepNode, message: 'x'.repeat(2000) }, rect }} />)
+    expect(screen.getByTestId('dag-tooltip')).toHaveStyle({ top: '8px' })
   })
 })

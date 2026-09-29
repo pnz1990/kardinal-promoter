@@ -2,13 +2,18 @@
 // Licensed under the Apache License, Version 2.0
 
 import { renderHook, act } from '@testing-library/react'
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useUrlState } from './useUrlState'
 
 describe('useUrlState', () => {
   beforeEach(() => {
     // Reset hash before each test
     window.history.replaceState(null, '', window.location.pathname)
+  })
+
+  // A failed assertion must not leave a pushState spy behind for the next test.
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('initializes with empty state when hash is empty', () => {
@@ -95,5 +100,37 @@ describe('useUrlState', () => {
     expect(result.current[0].pipeline).toBeUndefined()
     // Hash should be empty or just the pathname
     expect(window.location.hash).toBe('')
+  })
+  it('pushes one history entry when several fields change together', () => {
+    window.history.replaceState(null, '', '#pipeline=a&node=n1')
+    const { result } = renderHook(() => useUrlState())
+    const push = vi.spyOn(window.history, 'pushState')
+    act(() => result.current[1]({ pipeline: 'b', ns: 'team-b', node: undefined }))
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(window.location.hash).toBe('#pipeline=b&ns=team-b')
+  })
+
+  it('merges consecutive calls made in the same event', () => {
+    const { result } = renderHook(() => useUrlState())
+    act(() => {
+      result.current[1]({ pipeline: 'my-app' })
+      result.current[1]({ node: 'prod-step' })
+    })
+    expect(result.current[0]).toMatchObject({ pipeline: 'my-app', node: 'prod-step' })
+    expect(window.location.hash).toBe('#pipeline=my-app&node=prod-step')
+  })
+
+  it('does not push when nothing changes', () => {
+    window.history.replaceState(null, '', '#pipeline=my-app')
+    const { result } = renderHook(() => useUrlState())
+    const push = vi.spyOn(window.history, 'pushState')
+    act(() => result.current[1]({ node: undefined }))
+    expect(push).not.toHaveBeenCalled()
+  })
+
+  it('reads the namespace from the hash', () => {
+    window.history.replaceState(null, '', '#pipeline=app&ns=team-b')
+    const { result } = renderHook(() => useUrlState())
+    expect(result.current[0].ns).toBe('team-b')
   })
 })

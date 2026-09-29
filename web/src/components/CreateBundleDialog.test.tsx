@@ -21,7 +21,6 @@ vi.mock('../api/client', () => ({
   api: {
     pause: vi.fn(),
     resume: vi.fn(),
-    approveGate: vi.fn(),
     listPipelines: vi.fn(),
     listBundles: vi.fn(),
     getGraph: vi.fn(),
@@ -135,7 +134,7 @@ describe('CreateBundleDialog', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toBeInTheDocument()
     })
-    expect(screen.getByRole('alert')).toHaveTextContent('API error 500')
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not create the bundle: API error 500')
     expect(onDone).not.toHaveBeenCalled()
     // Dialog remains open
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -181,6 +180,22 @@ describe('CreateBundleDialog', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /cancel bundle creation/i }))
     expect(onCancel).toHaveBeenCalledOnce()
+  })
+})
+
+describe('CreateBundleDialog keyboard', () => {
+  it('focuses the image field on open, closes on Escape and returns focus to the opener', () => {
+    render(<CreateBundleButton pipelineName="nginx-demo" namespace="default" onRefresh={() => {}} />)
+    const opener = screen.getByRole('button', { name: /create bundle for nginx-demo/i })
+    opener.focus()
+    fireEvent.click(opener)
+    expect(screen.getByLabelText(/container image/i)).toHaveFocus()
+    // Shift+Tab from the first field wraps to the last button.
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
+    expect(screen.getByRole('button', { name: 'Create bundle' })).toHaveFocus()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(opener).toHaveFocus()
   })
 })
 
