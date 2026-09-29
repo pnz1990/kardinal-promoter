@@ -193,9 +193,15 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		name, _ := labels["kardinal.io/gate-name"].(string)
 		gatesByEnv[env] = append(gatesByEnv[env], name)
 	}
-	for _, env := range pipe.Spec.Environments {
-		line := "  \u2022 " + env.Name
-		if g := gatesByEnv[env.Name]; len(g) > 0 {
+	// Promotion order is the dependsOn order the Graph follows, not the order
+	// the environments are declared in.
+	order, err := graph.PromotedEnvironments(&pipe, bundle)
+	if err != nil {
+		return fmt.Errorf("dry-run: environment order: %w", err)
+	}
+	for _, env := range order {
+		line := "  \u2022 " + env
+		if g := gatesByEnv[env]; len(g) > 0 {
 			sort.Strings(g)
 			line += " (gates: " + strings.Join(g, ", ") + ")"
 		}
