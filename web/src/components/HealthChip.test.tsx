@@ -25,19 +25,27 @@ import {
 
 describe('kardinalStateToHealth', () => {
   it.each<[string, HealthState]>([
-    ['Succeeded', 'Ready'],
-    ['Verified', 'Ready'],
-    ['Pass', 'Ready'],
-    ['Running', 'Reconciling'],
+    // PromotionStep states (api/v1alpha1) and the graph API's NotStarted.
+    ['Pending', 'Pending'],
     ['Promoting', 'Reconciling'],
     ['WaitingForMerge', 'Reconciling'],
     ['HealthChecking', 'Reconciling'],
+    ['Verified', 'Ready'],
     ['Failed', 'Error'],
-    ['Block', 'Error'],
-    ['Pending', 'Pending'],
+    ['AbortedByAlarm', 'Error'],
+    ['RollingBack', 'Reconciling'],
+    ['NotStarted', 'Pending'],
+    // Bundle phases.
     ['Available', 'Pending'],
     ['Superseded', 'Unknown'],
+    // Pipeline phases (DerivePhase) and the paused pseudo-state.
+    ['Ready', 'Ready'],
+    ['Degraded', 'Degraded'],
+    ['Unknown', 'Unknown'],
     ['Paused', 'Paused'],
+    // Gate states rendered without nodeType.
+    ['Pass', 'Ready'],
+    ['Block', 'Error'],
     ['SomeUnknownState', 'Unknown'],
   ])('maps %s → %s (default nodeType)', (state, expected) => {
     expect(kardinalStateToHealth(state)).toBe(expected)
@@ -59,42 +67,33 @@ describe('kardinalStateToHealth', () => {
 // ─── healthChipColors (retained for SVG use) ──────────────────────────────────
 
 describe('healthChipColors', () => {
-  it('Ready → green palette', () => {
-    const { bg, text, border } = healthChipColors('Ready')
-    expect(bg).toContain('14532d')    // dark green bg (not yet tokenized)
-    expect(text).toContain('color-success')  // was #4ade80, now CSS var
-    expect(border).toContain('color-success')  // was #22c55e, now CSS var (#757)
+  const ALL: HealthState[] = ['Ready', 'Reconciling', 'Error', 'Pending', 'Degraded', 'Paused', 'Unknown']
+
+  it.each<[HealthState, string, string]>([
+    ['Ready', 'var(--color-success-bg)', 'var(--color-success)'],
+    ['Reconciling', 'var(--color-warning-bg)', 'var(--color-warning)'],
+    ['Error', 'var(--color-error-bg)', 'var(--color-error)'],
+    ['Pending', 'var(--color-surface)', 'var(--color-text-muted)'],
+    ['Degraded', 'var(--color-degraded-bg)', 'var(--color-degraded)'],
+    ['Paused', 'var(--color-accent-bg)', 'var(--color-accent)'],
+    ['Unknown', 'var(--color-surface)', 'var(--color-text-faint)'],
+  ])('%s uses theme tokens (bg %s, text %s)', (state, bg, text) => {
+    const c = healthChipColors(state)
+    expect(c.bg).toBe(bg)
+    expect(c.text).toBe(text)
+    expect(c.border).toMatch(/^var\(--color-[a-z-]+\)$/)
   })
 
-  it('Error → red palette', () => {
-    const { bg, text } = healthChipColors('Error')
-    expect(bg).toContain('7f1d1d')
-    expect(text).toContain('color-error')  // was #f87171, now CSS var
-  })
-
-  it('Reconciling → amber palette', () => {
-    const { text } = healthChipColors('Reconciling')
-    expect(text).toContain('color-warning')  // was #fbbf24, now CSS var
-  })
-
-  it('Paused → indigo palette (distinct from other states)', () => {
-    const { bg, text } = healthChipColors('Paused')
-    expect(bg).toContain('1e1b4b')  // dark indigo (not yet tokenized)
-    expect(text).toContain('color-accent') // was #a5b4fc, now CSS var
-  })
-
-  it('Unknown → gray palette', () => {
-    const { text } = healthChipColors('Unknown')
-    expect(text).toContain('color-text-faint')  // was #64748b, now CSS var (#757)
+  // A hard-coded dark color made DAG nodes unreadable in light mode
+  // (dark green fill behind light-mode dark-green text).
+  it.each(ALL)('%s has no hard-coded color', state => {
+    const c = healthChipColors(state)
+    for (const v of [c.bg, c.text, c.border]) expect(v).not.toMatch(/#[0-9a-f]{3,8}/i)
   })
 
   it('all 7 states return distinct text colors', () => {
-    const states: HealthState[] = [
-      'Ready', 'Reconciling', 'Error', 'Pending', 'Degraded', 'Paused', 'Unknown',
-    ]
-    const textColors = states.map(s => healthChipColors(s).text)
-    const unique = new Set(textColors)
-    expect(unique.size).toBe(states.length)
+    const unique = new Set(ALL.map(s => healthChipColors(s).text))
+    expect(unique.size).toBe(ALL.length)
   })
 })
 
@@ -133,8 +132,8 @@ describe('HealthChip component', () => {
   })
 
   it('sets title attribute for hover tooltip', () => {
-    const { getByTitle } = render(<HealthChip state="Running" />)
-    expect(getByTitle('Running (Reconciling)')).toBeInTheDocument()
+    const { getByTitle } = render(<HealthChip state="WaitingForMerge" />)
+    expect(getByTitle('WaitingForMerge (Reconciling)')).toBeInTheDocument()
   })
 
   // #532: Assert CSS classes, NOT hex color strings

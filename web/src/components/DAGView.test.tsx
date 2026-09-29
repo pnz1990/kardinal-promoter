@@ -12,9 +12,10 @@
 // limitations under the License.
 
 // DAGView.test.tsx — Tests for the DAG visualization component (#533).
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import dagre from '@dagrejs/dagre'
 import { DAGView } from './DAGView'
 import type { GraphNode, GraphEdge } from '../types'
 
@@ -95,7 +96,7 @@ describe('DAGView — node rendering', () => {
       label: 'weekend-gate',
       environment: 'weekend-gate',
       state: 'Block',
-      expression: '!schedule.isWeekend()',
+      expression: '!schedule.isWeekend',
     }]
     render(<DAGView nodes={nodes} edges={[]} />)
     const elements = screen.getAllByText(/weekend-gate/i)
@@ -150,5 +151,101 @@ describe('DAGView — legend', () => {
     const nodes = [makeNode()]
     render(<DAGView nodes={nodes} edges={[]} />)
     expect(screen.getByText('Legend:')).toBeInTheDocument()
+  })
+})
+
+// The PR badge text is "🔗 #N" (aria-hidden SVG text, found by text content).
+function prBadge(): Element | null {
+  return Array.from(document.querySelectorAll('svg text')).find(t => t.textContent?.startsWith('🔗')) ?? null
+}
+
+describe('DAGView — PR badge (C10a-web-13, C10a-web-14)', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each([
+    { scm: 'GitHub', url: 'https://github.com/o/r/pull/42', want: '🔗 #42' },
+    { scm: 'GitLab', url: 'https://gitlab.com/o/r/-/merge_requests/7', want: '🔗 #7' },
+    { scm: 'Forgejo', url: 'https://code.example.com/o/r/pulls/9', want: '🔗 #9' },
+    { scm: 'Bitbucket', url: 'https://bitbucket.example.com/projects/P/repos/r/pull-requests/3/', want: '🔗 #3' },
+    { scm: 'Azure DevOps', url: 'https://dev.azure.com/o/p/_git/r/pullrequest/12', want: '🔗 #12' },
+  ])('shows the PR number for a $scm PR', ({ url, want }) => {
+    render(<DAGView nodes={[makeNode({ state: 'WaitingForMerge', prURL: url })]} edges={[]} />)
+    expect(prBadge()).toHaveTextContent(want)
+  })
+
+  it('opens an https PR in a new tab without selecting the node', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const onSelect = vi.fn()
+    render(<DAGView nodes={[makeNode({ prURL: 'https://github.com/o/r/pull/42' })]} edges={[]} onSelectNode={onSelect} />)
+    fireEvent.click(prBadge()!)
+    expect(open).toHaveBeenCalledWith('https://github.com/o/r/pull/42', '_blank', 'noopener,noreferrer')
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'javascript:alert(document.domain)//x/pull/1',
+    'data:text/html,x/pull/1',
+  ])('shows no badge and opens nothing for %s', url => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    render(<DAGView nodes={[makeNode({ prURL: url })]} edges={[]} />)
+    expect(prBadge()).toBeNull()
+    expect(open).not.toHaveBeenCalled()
+  })
+})
+
+describe('DAGView — layout only re-runs when the topology changes (C10a-web-15)', () => {
+  const topology = () => ({
+    nodes: [makeNode({ id: 'a', environment: 'a', state: 'Promoting' }), makeNode({ id: 'b', environment: 'b' })],
+    edges: [makeEdge('a', 'b')],
+  })
+
+  it('reuses the layout for polls that return the same nodes and edges', () => {
+    vi.mocked(dagre.layout).mockClear()
+    const first = topology()
+    const { rerender } = render(<DAGView nodes={first.nodes} edges={first.edges} />)
+    for (let i = 0; i < 3; i++) {
+      const next = topology() // fresh arrays, as each poll returns
+      rerender(<DAGView nodes={next.nodes} edges={next.edges} />)
+    }
+    expect(dagre.layout).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the new state from a poll even though the layout is reused', () => {
+    const first = topology()
+    const { rerender } = render(<DAGView nodes={first.nodes} edges={first.edges} />)
+    const next = topology()
+    next.nodes[0] = { ...next.nodes[0], state: 'Verified' }
+    rerender(<DAGView nodes={next.nodes} edges={next.edges} />)
+    expect(screen.getByRole('button', { name: 'a — Verified' })).toBeInTheDocument()
+  })
+
+  it('re-runs the layout when a node is added', () => {
+    vi.mocked(dagre.layout).mockClear()
+    const first = topology()
+    const { rerender } = render(<DAGView nodes={first.nodes} edges={first.edges} />)
+    const next = topology()
+    next.nodes.push(makeNode({ id: 'c', environment: 'c' }))
+    next.edges.push(makeEdge('b', 'c'))
+    rerender(<DAGView nodes={next.nodes} edges={next.edges} />)
+    expect(dagre.layout).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('DAGView — tooltip on keyboard focus (C10a-web-18)', () => {
+  it('opens on focus with the PR link and closes on blur', () => {
+    vi.useFakeTimers()
+    try {
+      render(<DAGView nodes={[makeNode({ environment: 'uat', state: 'WaitingForMerge', prURL: 'https://github.com/o/r/pull/5' })]} edges={[]} />)
+      const node = screen.getByRole('button', { name: 'uat — WaitingForMerge' })
+      act(() => { node.focus() })
+      const tooltip = screen.getByRole('tooltip')
+      expect(tooltip).toHaveTextContent('uat')
+      expect(tooltip.querySelector('a')).toHaveAttribute('href', 'https://github.com/o/r/pull/5')
+      act(() => { node.blur() })
+      act(() => { vi.advanceTimersByTime(200) })
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

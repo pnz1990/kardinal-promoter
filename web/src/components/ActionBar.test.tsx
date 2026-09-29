@@ -14,7 +14,7 @@
 // components/ActionBar.test.tsx — Tests for #506 in-UI actions.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { ActionBar, GateActionButton } from './ActionBar'
+import { ActionBar } from './ActionBar'
 import * as apiModule from '../api/client'
 
 // Mock the api module
@@ -22,7 +22,6 @@ vi.mock('../api/client', () => ({
   api: {
     pause: vi.fn(),
     resume: vi.fn(),
-    approveGate: vi.fn(),
     listPipelines: vi.fn(),
     listBundles: vi.fn(),
     getGraph: vi.fn(),
@@ -143,67 +142,26 @@ describe('ActionBar', () => {
     const confirmBtn = dialog.querySelector('button[aria-label="Pause pipeline"]')!
     fireEvent.click(confirmBtn)
     await waitFor(() => {
-      // Error appears in toolbar and/or dialog — at least one alert is present
-      expect(screen.getAllByRole('alert').length).toBeGreaterThan(0)
+      // One alert (in the dialog), saying what failed.
+      expect(screen.getAllByRole('alert')).toHaveLength(1)
     })
-  })
-})
-
-// ─── GateActionButton ─────────────────────────────────────────────────────────
-
-describe('GateActionButton', () => {
-  it('renders Override button', () => {
-    render(
-      <GateActionButton gateName="no-weekend" gateNamespace="default" onRefresh={() => {}} />
-    )
-    expect(screen.getByRole('button', { name: /override gate/i })).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not pause my-app: network error')
+    // Cancelling leaves the error visible next to the button, still once.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
   })
 
-  it('opens override dialog when clicked', () => {
-    render(
-      <GateActionButton gateName="no-weekend" gateNamespace="default" onRefresh={() => {}} />
-    )
-    fireEvent.click(screen.getByRole('button', { name: /override gate/i }))
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
-    expect(screen.getByText(/override gate: no-weekend/i)).toBeInTheDocument()
-  })
-
-  it('requires reason text before submit is enabled', () => {
-    render(
-      <GateActionButton gateName="no-weekend" gateNamespace="default" onRefresh={() => {}} />
-    )
-    fireEvent.click(screen.getByRole('button', { name: /override gate/i }))
-    const submitBtn = screen.getByRole('button', { name: /confirm gate override/i })
-    // Reason is empty — button should be disabled
-    expect(submitBtn).toBeDisabled()
-  })
-
-  it('calls api.approveGate with reason and onRefresh', async () => {
-    const onRefresh = vi.fn()
-    ;(mockApi.approveGate as ReturnType<typeof vi.fn>).mockResolvedValue({ message: 'overridden' })
-    render(
-      <GateActionButton gateName="no-weekend" gateNamespace="platform-policies" onRefresh={onRefresh} />
-    )
-    fireEvent.click(screen.getByRole('button', { name: /override gate/i }))
-    // Fill in reason
-    const textarea = screen.getByRole('textbox')
-    fireEvent.change(textarea, { target: { value: 'Emergency hotfix' } })
-    fireEvent.click(screen.getByRole('button', { name: /confirm gate override/i }))
-    await waitFor(() => {
-      expect(mockApi.approveGate).toHaveBeenCalledWith(
-        'no-weekend', 'platform-policies', 'Emergency hotfix', 60
-      )
-      expect(onRefresh).toHaveBeenCalled()
-    })
-  })
-
-  it('closes dialog on cancel without API call', () => {
-    render(
-      <GateActionButton gateName="no-weekend" gateNamespace="default" onRefresh={() => {}} />
-    )
-    fireEvent.click(screen.getByRole('button', { name: /override gate/i }))
-    fireEvent.click(screen.getByRole('button', { name: /cancel gate override/i }))
+  it.each([
+    { paused: false, open: /pause pipeline/i },
+    { paused: true, open: /resume pipeline/i },
+  ])('dialog takes focus and Esc closes it (paused=$paused)', ({ paused, open }) => {
+    render(<ActionBar pipelineName="my-app" namespace="default" paused={paused} onRefresh={() => {}} />)
+    const opener = screen.getByRole('button', { name: open })
+    opener.focus()
+    fireEvent.click(opener)
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    expect(mockApi.approveGate).not.toHaveBeenCalled()
+    expect(opener).toHaveFocus()
   })
 })

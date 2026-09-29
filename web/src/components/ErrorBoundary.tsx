@@ -11,7 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// components/ErrorBoundary.tsx — React error boundary for async components (#747).
+// components/ErrorBoundary.tsx — React error boundary (#747). It catches errors
+// thrown while its children render or run lifecycle methods. It does not catch
+// rejected promises or errors in event handlers; those components show their own
+// error state.
 //
 // Usage:
 //   <ErrorBoundary fallbackMessage="Graph failed to load">

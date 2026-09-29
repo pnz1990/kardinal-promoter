@@ -146,7 +146,7 @@ All 7 UI issues (#462–#468) are implemented and shipped.
 - **Pipeline operations view (#462)** — per-pipeline list with sortable health columns: inventory age, last merge, blockage time, interventions/deploy
 - **Per-stage workflow detail (#463)** — step list, bake countdown with health overlay, override history
 - **In-UI actions (#464)** — approve gates, pause/resume bundles, rollback, override with mandatory reason, restart failed steps
-- **Release efficiency metrics bar (#465)** — inline P50/P90 commit-to-prod, rollback rate, operator interventions
+- **Release efficiency metrics bar (#465)** — over the last 10 bundles: mean time from bundle creation to the last environment's health check, rollback rate, deploys to the last environment
 - **Bundle promotion timeline (#466)** — full artifact history with diff links, rollback records, override audit trail
 - **Policy gate detail panel (#468)** — CEL expression highlighting, current variable values, blocking duration, override history
 

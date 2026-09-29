@@ -124,10 +124,13 @@ The kardinal controller serves an embedded web UI at port `8082` (configurable v
 The supported access method for in-cluster deployments without Ingress is `kubectl port-forward`:
 
 ```bash
-kubectl port-forward svc/kardinal-controller -n kardinal-system 8082:8082
+kubectl port-forward -n kardinal-system deploy/kardinal-promoter 8082:8082
 ```
 
-Then open <http://localhost:8082/ui/> in your browser.
+Then open <http://localhost:8082/ui/> in your browser. The command targets the
+Deployment because the chart's Service does not expose the UI port. If you installed
+with a release name other than `kardinal-promoter`, the Deployment is named
+`<release>-kardinal-promoter`.
 
 !!! tip "Why port-forward?"
     Port-forwarding routes traffic through the Kubernetes API server over a secure

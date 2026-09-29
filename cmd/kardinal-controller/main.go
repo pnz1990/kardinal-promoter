@@ -551,6 +551,8 @@ func main() {
 		// Explicit list: only listed origins are allowed.
 		// Wildcard "*": all origins allowed (development / opt-out).
 		handler = applyCORSMiddleware(handler, corsAllowedOrigins, logger)
+		// Anti-framing, CSP and nosniff on every UI response (C10b-web-09).
+		handler = withUISecurityHeaders(handler)
 
 		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
 		if err := listenAndServeWithTLS(uiListenAddress, handler, tlsCertFile, tlsKeyFile, logger); err != nil {

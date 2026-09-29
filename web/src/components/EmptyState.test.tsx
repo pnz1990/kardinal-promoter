@@ -14,7 +14,7 @@
 // components/EmptyState.test.tsx — Unit tests for #530 improved empty state.
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import EmptyState from './EmptyState'
+import EmptyState, { EXPECTED_OUTPUT } from './EmptyState'
 
 describe('EmptyState', () => {
   it('renders the empty state panel', () => {
@@ -56,5 +56,22 @@ describe('EmptyState', () => {
     render(<EmptyState />)
     expect(screen.getByTestId('watching-indicator')).toBeInTheDocument()
     expect(screen.getByTestId('watching-indicator').textContent).toContain('Watching for new pipelines')
+  })
+})
+
+// Audit C10a-web-21: the preview must match what `kubectl get pipelines` prints.
+describe('EmptyState expected output', () => {
+  // The +kubebuilder:printcolumn lines in api/v1alpha1/pipeline_types.go.
+  const columns = ['PHASE', 'PAUSED', 'AGE']
+  const [header, row] = EXPECTED_OUTPUT.split('\n').map(l => l.trim().split(/\s+/))
+
+  it('uses the Pipeline printer columns', () => {
+    expect(header).toEqual(['NAME', ...columns])
+  })
+
+  // DerivePhase (pkg/reconciler/pipeline) sets Unknown until the first bundle runs.
+  it('shows the phase of a freshly applied quickstart pipeline', () => {
+    expect(row.slice(0, 3)).toEqual(['kardinal-test-app', 'Unknown', 'false'])
+    expect(row).toHaveLength(header.length)
   })
 })

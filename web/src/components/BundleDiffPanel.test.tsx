@@ -13,7 +13,7 @@
 
 // BundleDiffPanel.test.tsx — Tests for the bundle comparison panel (#533).
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BundleDiffPanel } from './BundleDiffPanel'
 import type { Bundle } from '../types'
@@ -43,28 +43,19 @@ describe('BundleDiffPanel — rendering', () => {
     expect(screen.getByText(/bundle-beta/i)).toBeInTheDocument()
   })
 
-  it('shows changed Phase field when phases differ', () => {
-    const a = makeBundle({ phase: 'Verified' })
-    const b = makeBundle({ phase: 'Failed' })
-    render(<BundleDiffPanel bundleA={a} bundleB={b} onClose={vi.fn()} />)
-    // Label is rendered as "▸ Phase" when changed
-    expect(screen.getByText(/Phase/)).toBeInTheDocument()
-    expect(screen.getByText('Verified')).toBeInTheDocument()
-    expect(screen.getByText('Failed')).toBeInTheDocument()
-  })
-
-  it('shows Author field when provenance differs', () => {
-    const a = makeBundle({ provenance: { author: 'alice' } })
-    const b = makeBundle({ provenance: { author: 'bob' } })
-    render(<BundleDiffPanel bundleA={a} bundleB={b} onClose={vi.fn()} />)
-    expect(screen.getByText(/Author/)).toBeInTheDocument()
-  })
-
-  it('shows Commit SHA when SHAs differ', () => {
-    const a = makeBundle({ provenance: { commitSHA: 'aaaaaa000000' } })
-    const b = makeBundle({ provenance: { commitSHA: 'bbbbbb111111' } })
-    render(<BundleDiffPanel bundleA={a} bundleB={b} onClose={vi.fn()} />)
-    expect(screen.getByText(/Commit SHA/)).toBeInTheDocument()
+  // C10a-web-16: assert the changed marker and the count, not just the label
+  // (the label renders on every row, changed or not).
+  it.each([
+    { field: 'Phase', a: { phase: 'Verified' }, b: { phase: 'Failed' } },
+    { field: 'Author', a: { provenance: { author: 'alice' } }, b: { provenance: { author: 'bob' } } },
+    { field: 'Commit SHA', a: { provenance: { commitSHA: 'aaaaaa000000' } }, b: { provenance: { commitSHA: 'bbbbbb111111' } } },
+  ])('marks $field as the one changed field', ({ field, a, b }) => {
+    render(<BundleDiffPanel bundleA={makeBundle(a)} bundleB={makeBundle(b)} onClose={vi.fn()} />)
+    expect(screen.getByText(`▸ ${field}`)).toBeInTheDocument()
+    expect(screen.getByText(/1 field differs/)).toBeInTheDocument()
+    for (const other of ['Phase', 'Author', 'Commit SHA'].filter(f => f !== field)) {
+      expect(screen.queryByText(`▸ ${other}`)).not.toBeInTheDocument()
+    }
   })
 })
 
@@ -77,5 +68,41 @@ describe('BundleDiffPanel — close button', () => {
     const closeBtn = screen.getByLabelText('Close comparison')
     await user.click(closeBtn)
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('BundleDiffPanel — what counts as a difference (C10a-web-07)', () => {
+  const img = (tag: string) => [{ repository: 'ghcr.io/pnz1990/kardinal-test-app', tag }]
+  it.each([
+    {
+      name: 'different image tags are a difference',
+      a: { images: img('sha-aaa1111') }, b: { images: img('sha-bbb2222') },
+      summary: '1 field differs between these bundles', shown: ['ghcr.io/pnz1990/kardinal-test-app:sha-bbb2222'],
+    },
+    {
+      name: 'different environment states are a difference',
+      a: { environments: [{ name: 'prod', phase: 'Verified' }] }, b: { environments: [{ name: 'prod', phase: 'Failed' }] },
+      summary: '1 field differs between these bundles', shown: ['prod: Failed'],
+    },
+    {
+      name: 'only the creation time differs: no difference',
+      a: { images: img('sha-aaa1111'), createdAt: '2026-04-15T10:00:00Z' },
+      b: { images: img('sha-aaa1111'), createdAt: '2026-04-16T10:00:00Z' },
+      summary: '0 fields differ between these bundles', shown: ['✓ No differences found between these bundles.'],
+    },
+  ])('$name', ({ a, b, summary, shown }) => {
+    render(<BundleDiffPanel bundleA={makeBundle({ name: 'a', ...a })} bundleB={makeBundle({ name: 'b', ...b })} onClose={vi.fn()} />)
+    expect(screen.getByText(summary)).toBeInTheDocument()
+    for (const text of shown) expect(screen.getByText(text)).toBeInTheDocument()
+  })
+})
+
+describe('BundleDiffPanel — keyboard (C10a-web-17)', () => {
+  it('moves focus into the panel and closes on Escape', () => {
+    const onClose = vi.fn()
+    render(<BundleDiffPanel bundleA={makeBundle()} bundleB={makeBundle({ name: 'b2' })} onClose={onClose} />)
+    expect(screen.getByLabelText('Close comparison')).toHaveFocus()
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledOnce()
   })
 })

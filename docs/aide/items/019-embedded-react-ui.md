@@ -22,11 +22,11 @@ browser to see live promotion progress without kubectl.
 ### 1. React UI project (`web/src/`)
 
 Create `web/src/` with Vite + React 19 + TypeScript project:
-- `package.json` with: react@19, typescript, vite, @dagrejs/dagre, reactflow
+- `package.json` with: react@19, typescript, vite, @dagrejs/dagre (reactflow was planned but never used, and was removed)
 - `vite.config.ts` with base path `/ui/`
 - `src/App.tsx`: root component with Pipeline list sidebar and DAG view
 - `src/components/PipelineList.tsx`: list of Pipelines with active Bundle phase badges
-- `src/components/DAGView.tsx`: reactflow graph with PromotionStep (green/amber/red) and PolicyGate (green/red/grey) nodes
+- `src/components/DAGView.tsx`: SVG graph laid out with dagre, with PromotionStep (green/amber/red) and PolicyGate (green/red/grey) nodes
 - `src/components/NodeDetail.tsx`: detail panel on node click — step outputs, gate expression + reason, PR link, provenance
 - `src/api/client.ts`: typed fetch wrappers for all backend API endpoints
 - `src/types.ts`: TypeScript types matching the Go API response shapes

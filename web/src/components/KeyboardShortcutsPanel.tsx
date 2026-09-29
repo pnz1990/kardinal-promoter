@@ -7,9 +7,11 @@
 // Closed by pressing ? again or Esc.
 //
 // #783: Focus trap — Tab/Shift+Tab cycles within the modal. Focus returns to the
-// trigger element on close (WCAG 2.1 §2.1.2, §2.4.3).
+// trigger element on close (WCAG 2.1 §2.1.2, §2.4.3). See useModalFocus.
+// Global shortcuts are off while the panel is open, so ? is handled here.
 
-import { useRef, useEffect } from 'react'
+import { useRef } from 'react'
+import { useModalFocus } from '../useModalFocus'
 
 interface ShortcutRow {
   key: string
@@ -23,10 +25,6 @@ const SHORTCUTS: ShortcutRow[] = [
   { key: 'Esc', description: 'Close the open side panel' },
 ]
 
-/** Selector for all naturally focusable elements within a container. */
-const FOCUSABLE =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-
 interface KeyboardShortcutsPanelProps {
   onClose: () => void
 }
@@ -34,53 +32,7 @@ interface KeyboardShortcutsPanelProps {
 export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    // Capture the element that had focus before the modal opened.
-    const previouslyFocused = document.activeElement as HTMLElement | null
-
-    // Move focus to the close button (first focusable element) on mount.
-    if (panelRef.current) {
-      const first = panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)[0]
-      first?.focus()
-    }
-
-    // Focus trap: intercept Tab / Shift+Tab to cycle within the modal.
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!panelRef.current) return
-      if (e.key !== 'Tab') return
-
-      const focusable = Array.from(
-        panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE),
-      ).filter(el => !el.hasAttribute('disabled'))
-
-      if (focusable.length === 0) return
-
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-
-      if (e.shiftKey) {
-        // Shift+Tab: wrap backward from first to last
-        if (document.activeElement === first) {
-          e.preventDefault()
-          last.focus()
-        }
-      } else {
-        // Tab: wrap forward from last to first
-        if (document.activeElement === last) {
-          e.preventDefault()
-          first.focus()
-        }
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      // Return focus to the element that had it before the modal opened.
-      previouslyFocused?.focus()
-    }
-  }, [])
+  useModalFocus(panelRef, onClose)
 
   return (
     <div
@@ -99,6 +51,9 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
       onClick={e => {
         // Close on backdrop click
         if (e.target === e.currentTarget) onClose()
+      }}
+      onKeyDown={e => {
+        if (e.key === '?') { e.preventDefault(); onClose() }
       }}
     >
       <div
@@ -158,7 +113,7 @@ export function KeyboardShortcutsPanel({ onClose }: KeyboardShortcutsPanelProps)
                 }}>
                   <kbd style={{
                     display: 'inline-block',
-                    background: 'var(--color-surface-raised)',
+                    background: 'var(--color-surface-2)',
                     border: '1px solid var(--color-border)',
                     borderRadius: '4px',
                     padding: '1px 6px',

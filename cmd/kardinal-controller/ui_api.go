@@ -60,7 +60,8 @@ type uiPipelineResponse struct {
 	FailedStepCount int `json:"failedStepCount,omitempty"`
 	// InventoryAgeDays is the number of days since the latest bundle was created.
 	// A high value indicates stale inventory (no recent deploys).
-	InventoryAgeDays int `json:"inventoryAgeDays,omitempty"`
+	// A pointer so that 0 ("created today") is sent; nil means no active bundle.
+	InventoryAgeDays *int `json:"inventoryAgeDays,omitempty"`
 	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
 	// Empty string when no environment has been verified yet.
 	LastMergedAt string `json:"lastMergedAt,omitempty"`
@@ -101,6 +102,9 @@ type uiBundleEnvStatus struct {
 	Name  string `json:"name"`
 	Phase string `json:"phase,omitempty"`
 	PRURL string `json:"prURL,omitempty"`
+	// HealthCheckedAt is when the post-merge health check for this environment
+	// completed (RFC 3339). The release metrics bar uses it for time-to-production.
+	HealthCheckedAt string `json:"healthCheckedAt,omitempty"`
 }
 
 // uiGraphNode is a node in the promotion DAG.
@@ -145,7 +149,7 @@ type uiStepResponse struct {
 	CurrentStepIndex int               `json:"currentStepIndex"` // index into step sequence (#359)
 	// #341: Kubernetes conditions — shown in NodeDetail conditions panel.
 	Conditions []uiCondition `json:"conditions,omitempty"`
-	// #501: Bake countdown fields — shown in StageDetailPanel.
+	// #501: Bake countdown fields (served; the UI does not show them yet).
 	// BakeElapsedMinutes is contiguous healthy minutes so far in the current bake window.
 	BakeElapsedMinutes int64 `json:"bakeElapsedMinutes,omitempty"`
 	// BakeTargetMinutes is the required contiguous healthy duration from Pipeline spec.
@@ -153,6 +157,19 @@ type uiStepResponse struct {
 	BakeTargetMinutes int `json:"bakeTargetMinutes,omitempty"`
 	// BakeResets is the number of times the bake timer was reset due to a health alarm.
 	BakeResets int `json:"bakeResets,omitempty"`
+	// Steps is the per-step progress from status.steps[], in execution order.
+	// The UI renders it as the step progress list.
+	Steps []uiStepStatus `json:"steps,omitempty"`
+}
+
+// uiStepStatus is the JSON shape for one entry of PromotionStep status.steps[].
+type uiStepStatus struct {
+	Name        string `json:"name"`
+	State       string `json:"state"` // Pending, InProgress, Completed or Failed
+	StartedAt   string `json:"startedAt,omitempty"`
+	CompletedAt string `json:"completedAt,omitempty"`
+	DurationMs  int64  `json:"durationMs,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 // uiCondition is the JSON shape for a Kubernetes condition.
@@ -172,7 +189,16 @@ type uiGateResponse struct {
 	Ready           bool   `json:"ready"`
 	Reason          string `json:"reason,omitempty"`
 	LastEvaluatedAt string `json:"lastEvaluatedAt,omitempty"`
-	// #502: Override history from spec.overrides[] — shown in GateDetailPanel.
+	// Pipeline, Bundle and Environment come from the kardinal.io/* labels the
+	// graph builder sets on gate instances. They are empty on templates.
+	Pipeline    string `json:"pipeline,omitempty"`
+	Bundle      string `json:"bundle,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	// Template is true for a PolicyGate template (no kardinal.io/bundle label).
+	// Templates are never evaluated for a bundle and always report ready=false,
+	// so the UI must not count them as blocking.
+	Template bool `json:"template,omitempty"`
+	// #502: Override history from spec.overrides[].
 	Overrides []uiGateOverride `json:"overrides,omitempty"`
 }
 
@@ -302,7 +328,8 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	_ = s.client.List(r.Context(), &stepList)
 	failedStepsByBundle := make(map[string]int, len(stepList.Items))
 	for _, ps := range stepList.Items {
-		if ps.Status.State == "Failed" {
+		// AbortedByAlarm is a failure too: the health alarm stopped the promotion.
+		if ps.Status.State == "Failed" || ps.Status.State == "AbortedByAlarm" {
 			failedStepsByBundle[ps.Spec.BundleName]++
 		}
 	}
@@ -348,7 +375,8 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			// Inventory age: days since the active bundle was created.
 			if !ab.createdAt.IsZero() {
-				resp.InventoryAgeDays = int(now.Sub(ab.createdAt).Hours() / 24)
+				days := int(now.Sub(ab.createdAt).Hours() / 24)
+				resp.InventoryAgeDays = &days
 			}
 			// Last merged at: most recent HealthCheckedAt across all envs.
 			if !ab.lastVerified.IsZero() {
@@ -376,25 +404,48 @@ func (s *uiAPIServer) handlePipelinesSubpath(w http.ResponseWriter, r *http.Requ
 	http.NotFound(w, r)
 }
 
+// handleBundlesForPipeline lists the Bundles of one pipeline, newest first
+// (creationTimestamp descending, then name descending), so every call returns
+// the same order. The optional ?namespace= query parameter keeps same-named
+// pipelines in other namespaces out of the result.
 func (s *uiAPIServer) handleBundlesForPipeline(w http.ResponseWriter, r *http.Request, pipelineName string) {
 	var list v1alpha1.BundleList
 	if err := s.client.List(r.Context(), &list); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	result := make([]uiBundleResponse, 0)
+	namespace := r.URL.Query().Get("namespace")
+	items := make([]v1alpha1.Bundle, 0, len(list.Items))
 	for _, b := range list.Items {
 		if b.Spec.Pipeline != pipelineName {
 			continue
 		}
+		if namespace != "" && b.Namespace != namespace {
+			continue
+		}
+		items = append(items, b)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		ti, tj := items[i].CreationTimestamp.Time, items[j].CreationTimestamp.Time
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return items[i].Name > items[j].Name
+	})
+	result := make([]uiBundleResponse, 0, len(items))
+	for _, b := range items {
 		// #503: Per-environment statuses for the timeline view.
 		envStatuses := make([]uiBundleEnvStatus, 0, len(b.Status.Environments))
 		for _, env := range b.Status.Environments {
-			envStatuses = append(envStatuses, uiBundleEnvStatus{
+			es := uiBundleEnvStatus{
 				Name:  env.Name,
 				Phase: env.Phase,
 				PRURL: env.PRURL,
-			})
+			}
+			if env.HealthCheckedAt != nil {
+				es.HealthCheckedAt = env.HealthCheckedAt.UTC().Format(time.RFC3339)
+			}
+			envStatuses = append(envStatuses, es)
 		}
 		resp := uiBundleResponse{
 			Name:       b.Name,
@@ -694,9 +745,34 @@ func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, 
 			BakeElapsedMinutes: ps.Status.BakeElapsedMinutes,
 			BakeTargetMinutes:  bakeMinutes,
 			BakeResets:         ps.Status.BakeResets,
+			Steps:              buildUIStepStatuses(ps.Status.Steps),
 		})
 	}
 	writeJSON(w, result)
+}
+
+// buildUIStepStatuses converts status.steps[] to the UI shape.
+func buildUIStepStatuses(steps []v1alpha1.StepStatus) []uiStepStatus {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]uiStepStatus, 0, len(steps))
+	for _, st := range steps {
+		u := uiStepStatus{
+			Name:       st.Name,
+			State:      string(st.State),
+			DurationMs: st.DurationMs,
+			Message:    st.Message,
+		}
+		if st.StartedAt != nil {
+			u.StartedAt = st.StartedAt.UTC().Format(time.RFC3339)
+		}
+		if st.CompletedAt != nil {
+			u.CompletedAt = st.CompletedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, u)
+	}
+	return out
 }
 
 // handleGates handles GET /api/v1/ui/gates.
@@ -713,11 +789,15 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 	result := make([]uiGateResponse, 0, len(list.Items))
 	for _, g := range list.Items {
 		resp := uiGateResponse{
-			Name:       g.Name,
-			Namespace:  g.Namespace,
-			Expression: g.Spec.Expression,
-			Ready:      g.Status.Ready,
-			Reason:     g.Status.Reason,
+			Name:        g.Name,
+			Namespace:   g.Namespace,
+			Expression:  g.Spec.Expression,
+			Ready:       g.Status.Ready,
+			Reason:      g.Status.Reason,
+			Pipeline:    g.Labels["kardinal.io/pipeline"],
+			Bundle:      g.Labels["kardinal.io/bundle"],
+			Environment: g.Labels["kardinal.io/environment"],
+			Template:    g.Labels["kardinal.io/bundle"] == "",
 		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")

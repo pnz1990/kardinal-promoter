@@ -1,3 +1,6 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/InsecureConnectionBanner.test.tsx — Tests for InsecureConnectionBanner (#913)
 
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -40,6 +43,15 @@ describe('isInsecureNonLocalConnection', () => {
     expect(isInsecureNonLocalConnection()).toBe(false)
   })
 
+  // Audit C10a-web-22: location.hostname keeps the brackets on IPv6.
+  it.each([
+    { href: 'http://[::1]:8082/ui/', want: false },
+    { href: 'http://[fd00::1]:8082/ui/', want: true },
+  ])('returns $want for $href', ({ href, want }) => {
+    mockLocation(href)
+    expect(isInsecureNonLocalConnection()).toBe(want)
+  })
+
   it('returns false for HTTPS (O3)', () => {
     mockLocation('https://kardinal.example.com/ui/')
     expect(isInsecureNonLocalConnection()).toBe(false)
@@ -62,6 +74,15 @@ describe('InsecureConnectionBanner', () => {
     render(<InsecureConnectionBanner dismissed={false} onDismiss={vi.fn()} />)
     expect(screen.getByRole('alert')).toBeDefined()
     expect(screen.getByText(/Insecure connection/)).toBeDefined()
+  })
+
+  // Audit C10a-web-04: the chart's Service has no 8082 port, so the command
+  // must target the Deployment, in the release namespace.
+  it('tells the user a port-forward command that reaches the UI port', () => {
+    mockLocation('http://10.0.0.1:8082/ui/')
+    render(<InsecureConnectionBanner dismissed={false} onDismiss={vi.fn()} />)
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'kubectl port-forward -n kardinal-system deploy/kardinal-promoter 8082:8082')
   })
 
   it('does not render on localhost (O2)', () => {

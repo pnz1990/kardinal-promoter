@@ -1,4 +1,15 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // App.tsx — Root component with Pipeline list sidebar and DAG view.
+//
+// Which bundle is on screen: the one the user picked in the timeline, for as
+// long as it exists; otherwise the pipeline's active bundle (resolveShownBundle).
+// Polls never override the user's pick.
+// A pipeline is identified by namespace + name, so same-named pipelines in two
+// namespaces never share a header, bundle list or DAG.
+// Every load carries a view sequence number; a response that arrives after the
+// user moved to another pipeline or bundle is dropped.
 // #326: selectedNode is lifted here so NodeDetail renders as a split panel
 // sibling of DAGView rather than a position:fixed overlay.
 // #740: URL routing — pipeline and node selection persisted in hash fragment.
@@ -31,6 +42,7 @@ import { useRefreshIndicator } from './useRefreshIndicator'
 import { useTheme } from './ThemeContext'
 import { useUrlState } from './useUrlState'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
+import { resolveShownBundle } from './bundleSelection'
 import { KeyboardShortcutsPanel } from './components/KeyboardShortcutsPanel'
 
 import type { Pipeline, Bundle, GraphNode, GraphResponse, PromotionStep, PolicyGate } from './types'
@@ -54,15 +66,12 @@ export function App() {
   const [pipelinesLoading, setPipelinesLoading] = useState(true)
   const [pipelinesError, setPipelinesError] = useState<string | undefined>()
 
-  const [selectedPipeline, setSelectedPipeline] = [
-    urlState.pipeline,
-    (name: string | undefined) => setUrlState({ pipeline: name }),
-  ] as const
+  const selectedPipeline = urlState.pipeline
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [bundlesLoading, setBundlesLoading] = useState(false)
   const [bundleHistoryOpen, setBundleHistoryOpen] = useState(false)
-  // Bundle selected via timeline — overrides the automatic activeBundle selection.
-  const [timelineSelectedBundle, setTimelineSelectedBundle] = useState<string | undefined>()
+  // Name of the bundle whose graph is on screen.
+  const [shownBundleName, setShownBundleName] = useState<string | undefined>()
 
   const [graph, setGraph] = useState<GraphResponse | undefined>()
   const [graphLoading, setGraphLoading] = useState(false)
@@ -128,6 +137,18 @@ export function App() {
   // #800: Ref for the pipeline search input — used by the / keyboard shortcut.
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // Latest pipeline list, the user's timeline pick, and the view sequence
+  // number (bumped on every pipeline or bundle switch) for the loaders below.
+  const pipelinesRef = useRef<Pipeline[]>([])
+  const userBundleRef = useRef<string | undefined>(undefined)
+  const viewSeq = useRef(0)
+  const inflight = useRef<{ seq: number; promise: Promise<void> } | null>(null)
+  const track = (seq: number, promise: Promise<void>): Promise<void> => {
+    const entry = { seq, promise }
+    inflight.current = entry
+    return promise.finally(() => { if (inflight.current === entry) inflight.current = null })
+  }
+
   // Shared fetch function — called by both interval poll and manual refresh.
   const doFetchAll = useCallback(async () => {
     try {
@@ -135,6 +156,7 @@ export function App() {
         api.listPipelines(),
         api.listGates().catch(() => [] as PolicyGate[]),
       ])
+      pipelinesRef.current = ps
       setPipelines(ps)
       setGates(gs)
       setGatesLoading(false)
@@ -148,45 +170,99 @@ export function App() {
     }
   }, [onPollSuccess])
 
-  const doFetchGraph = useCallback(async (pipelineName: string) => {
-    try {
-      const bs = await api.listBundles(pipelineName)
-      setBundles(bs)
-      const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
-      if (promoting) {
-        const [g, steps] = await Promise.all([
-          api.getGraph(promoting.name),
-          api.getSteps(promoting.name),
-        ])
-        setGraph(g)
-        setActiveSteps(steps)
-        setGraphError(undefined)
+  // Load bundles, then the graph and steps of the bundle to show, for one
+  // pipeline. seq is the view the load belongs to; results for an older view
+  // are dropped.
+  const loadPipeline = useCallback((name: string, ns: string | undefined, seq: number): Promise<void> => {
+    const stale = () => seq !== viewSeq.current
+    const run = async () => {
+      try {
+        const nsEff = ns ?? pipelinesRef.current.find(p => p.name === name)?.namespace
+        const listed = await api.listBundles(name, nsEff)
+        if (stale()) return
+        const bs = nsEff ? listed.filter(b => b.namespace === nsEff) : listed
+        if (userBundleRef.current && !bs.some(b => b.name === userBundleRef.current)) {
+          userBundleRef.current = undefined // the picked bundle is gone
+        }
+        const pl = pipelinesRef.current.find(p => p.name === name && (!nsEff || p.namespace === nsEff))
+        const shown = resolveShownBundle(bs, userBundleRef.current, pl?.activeBundleName)
+        if (!shown) {
+          setBundles(bs)
+          setBundlesLoading(false)
+          setShownBundleName(undefined)
+          setGraph(undefined)
+          setActiveSteps([])
+          setGraphError(undefined)
+          return
+        }
+        try {
+          const [g, steps] = await Promise.all([api.getGraph(shown.name), api.getSteps(shown.name)])
+          if (stale()) return
+          setGraph(g)
+          setActiveSteps(steps)
+          setGraphError(undefined)
+        } finally {
+          if (!stale()) {
+            setBundles(bs)
+            setBundlesLoading(false)
+            setShownBundleName(shown.name)
+          }
+        }
+      } catch (e) {
+        if (!stale()) {
+          setGraphError(String(e))
+          setBundlesLoading(false)
+        }
+      } finally {
+        if (!stale()) setGraphLoading(false)
       }
-      onPollSuccess()
-    } catch (e) {
-      setGraphError(String(e))
     }
-  }, [onPollSuccess])
+    return track(seq, run())
+  }, [])
+
+  // Load the selected pipeline whenever it changes (list click, Back/forward,
+  // deep link). Everything tied to the previous pipeline is cleared first.
+  useEffect(() => {
+    const seq = ++viewSeq.current
+    userBundleRef.current = undefined
+    setShownBundleName(undefined)
+    setGraph(undefined)
+    setGraphError(undefined)
+    setActiveSteps([])
+    setBundles([])
+    setBundleHistoryOpen(false)
+    setShowBlockedOnly(false)
+    setSelectedNodeLocal(null)
+    if (!selectedPipeline) {
+      setGraphLoading(false)
+      setBundlesLoading(false)
+      return
+    }
+    setGraphLoading(true)
+    setBundlesLoading(true)
+    void loadPipeline(selectedPipeline, urlState.ns, seq)
+  }, [selectedPipeline, urlState.ns, loadPipeline])
 
   // Poll pipeline list every 5 seconds.
   usePolling(doFetchAll, POLL_INTERVAL_MS)
 
   // Refresh bundles + graph + steps for the selected pipeline every 5 seconds.
   // Single poll callback — no independent sub-polls in children (#321, #322, #324).
-  const selectedPipelineRef = useRef(selectedPipeline)
-  selectedPipelineRef.current = selectedPipeline
-  usePolling(async () => {
-    if (!selectedPipelineRef.current) return
-    await doFetchGraph(selectedPipelineRef.current)
+  // A tick is skipped while a load for the current view is still running.
+  const viewRef = useRef({ pipeline: selectedPipeline, ns: urlState.ns })
+  viewRef.current = { pipeline: selectedPipeline, ns: urlState.ns }
+  usePolling(() => {
+    const { pipeline, ns } = viewRef.current
+    if (!pipeline || inflight.current?.seq === viewSeq.current) return
+    void loadPipeline(pipeline, ns, viewSeq.current)
   }, POLL_INTERVAL_MS, !!selectedPipeline)
 
   // Manual refresh (#362): re-fetch everything immediately on demand.
   const manualRefresh = useCallback(async () => {
     await doFetchAll()
-    if (selectedPipelineRef.current) {
-      await doFetchGraph(selectedPipelineRef.current)
-    }
-  }, [doFetchAll, doFetchGraph])
+    const { pipeline, ns } = viewRef.current
+    if (pipeline) await loadPipeline(pipeline, ns, ++viewSeq.current)
+  }, [doFetchAll, loadPipeline])
 
   // #746: Global keyboard shortcuts — ?, r, Esc.
   useKeyboardShortcuts({
@@ -196,83 +272,67 @@ export function App() {
       if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
       if (selectedNode) { setSelectedNode(null); return }
       if (showDiffPanel) { setShowDiffPanel(false); return }
-    }, [showShortcutsPanel, selectedNode, showDiffPanel]),
+    }, [showShortcutsPanel, selectedNode, showDiffPanel, setSelectedNode, setShowDiffPanel]),
     // #800: / focuses the pipeline search input
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
     }, []),
   })
 
-  const handleSelectPipeline = useCallback((name: string) => {
-    setSelectedPipeline(name)
-    setGraph(undefined)
-    setGraphError(undefined)
-    setGraphLoading(true)
-    setBundlesLoading(true)
-    setBundles([])
-    setBundleHistoryOpen(false)
-    setShowBlockedOnly(false)
-    setTimelineSelectedBundle(undefined) // reset timeline selection on pipeline change
-    setActiveSteps([])
-    setSelectedNode(null) // close detail panel when switching pipelines
+  // One history entry per switch: the new pipeline, with no node or diff open.
+  // The load effect above does the fetching.
+  const handleSelectPipeline = useCallback((name: string, namespace: string) => {
+    setSelectedNodeLocal(null)
+    setUrlState({ pipeline: name, ns: namespace, node: undefined, bundle: undefined })
+  }, [setUrlState])
 
-    api.listBundles(name)
-      .then(bs => {
-        setBundles(bs)
-        setBundlesLoading(false)
-        const promoting = bs.find(b => b.phase === 'Promoting') ?? bs[0]
-        if (promoting) {
-          return Promise.all([
-            api.getGraph(promoting.name),
-            api.getSteps(promoting.name),
-          ]).then(([g, steps]) => {
-            setGraph(g)
-            setActiveSteps(steps)
-          })
-        }
-      })
-      .catch(e => { setGraphError(String(e)); setBundlesLoading(false) })
-      .finally(() => setGraphLoading(false))
-  }, [])
+  const activePipeline = selectedPipeline
+    ? pipelines.find(p => p.name === selectedPipeline && (!urlState.ns || p.namespace === urlState.ns))
+    : undefined
+  const selectedNamespace = urlState.ns ?? activePipeline?.namespace
+  const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
 
-  const activePipeline = pipelines.find(p => p.name === selectedPipeline)
-  // Use timeline-selected bundle if set, otherwise fall back to auto-selection.
-  const autoActiveBundle = bundles.find(b => b.phase === 'Promoting') ?? bundles[0]
-  const activeBundle = timelineSelectedBundle
-    ? bundles.find(b => b.name === timelineSelectedBundle) ?? autoActiveBundle
-    : autoActiveBundle
-
-  // Handler for timeline bundle selection — loads that bundle's graph.
+  // Handler for timeline bundle selection — shows that bundle until the user
+  // picks another one or it disappears.
   const handleTimelineBundleSelect = useCallback((bundleName: string) => {
-    setTimelineSelectedBundle(bundleName)
+    const seq = ++viewSeq.current
+    const stale = () => seq !== viewSeq.current
+    userBundleRef.current = bundleName
+    setShownBundleName(bundleName)
     setGraphLoading(true)
     setGraphError(undefined)
     setSelectedNode(null) // close detail panel when switching bundles
-    Promise.all([
-      api.getGraph(bundleName),
-      api.getSteps(bundleName),
-    ])
+    void track(seq, Promise.all([api.getGraph(bundleName), api.getSteps(bundleName)])
       .then(([g, steps]) => {
+        if (stale()) return
         setGraph(g)
         setActiveSteps(steps)
-        setGraphError(undefined)
       })
-      .catch(e => setGraphError(String(e)))
-      .finally(() => setGraphLoading(false))
-  }, [])
+      .catch(e => { if (!stale()) setGraphError(String(e)) })
+      .finally(() => { if (!stale()) setGraphLoading(false) }))
+  }, [setSelectedNode])
 
-  // Derive current namespace from the first loaded pipeline.
-  const currentNamespace = pipelines[0]?.namespace
+  // Namespace chip: the selected pipeline's namespace, or the only namespace.
+  const currentNamespace = activePipeline?.namespace
+    ?? (new Set(pipelines.map(p => p.namespace)).size === 1 ? pipelines[0].namespace : undefined)
+
+  // Gates of the bundle on screen; templates are never evaluated, so they are left out.
+  const shownGates = useMemo(
+    () => activeBundle
+      ? gates.filter(g => !g.template && g.bundle === activeBundle.name && g.namespace === activeBundle.namespace)
+      : [],
+    [gates, activeBundle],
+  )
 
   // Determine staleness indicator color — escalates at 15s (amber) and 30s (red).
   const staleness = elapsedSeconds ?? 0
   const indicatorColor = pipelinesError
-    ? '#f59e0b'   // amber on error
+    ? 'var(--color-warning)'   // amber on error
     : staleness > 30
-    ? '#ef4444'   // red when critically stale > 30s (#766)
+    ? 'var(--color-error)'     // red when critically stale > 30s (#766)
     : staleness > 15
-    ? '#f59e0b'  // amber when stale > 15s
-    : 'var(--color-text-secondary)'  // WCAG AA compliant; was #64748b which fails at small font sizes
+    ? 'var(--color-warning)'   // amber when stale > 15s
+    : 'var(--color-text-secondary)'
 
   // Compute blocked PolicyGate node IDs from the graph.
   const blockedGateIds = useMemo<Set<string>>(() => {
@@ -300,7 +360,7 @@ export function App() {
       type: 'PromotionStep' as const,
       label: env.name,
       environment: env.name,
-      state: 'Idle',
+      state: 'NotStarted',
       message: env.approval === 'pr-review' ? 'Manual approval required' : undefined,
     }))
     // Build edges: if dependsOn is set, draw edges from each dependency; otherwise
@@ -353,7 +413,7 @@ export function App() {
           {/* Brand: logo + wordmark */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <img
-              src="/logo.png"
+              src={`${import.meta.env.BASE_URL}logo.png`}
               alt="Kardinal"
               style={{ width: '32px', height: '32px', objectFit: 'contain' }}
             />
@@ -467,7 +527,8 @@ export function App() {
             <PipelineList
               pipelines={filteredPipelines}
               selected={selectedPipeline}
-              onSelect={name => { handleSelectPipeline(name); if (viewMode === 'ops-table') setViewMode('list') }}
+              selectedNamespace={selectedNamespace}
+              onSelect={(name, ns) => { handleSelectPipeline(name, ns); if (viewMode === 'ops-table') setViewMode('list') }}
               loading={pipelinesLoading}
               error={pipelinesError}
               searchInputRef={searchInputRef}
@@ -482,7 +543,8 @@ export function App() {
           <PipelineOpsTable
             pipelines={pipelines}
             selected={selectedPipeline}
-            onSelect={name => { handleSelectPipeline(name); setViewMode('list') }}
+            selectedNamespace={selectedNamespace}
+            onSelect={(name, ns) => { handleSelectPipeline(name, ns); setViewMode('list') }}
             loading={pipelinesLoading}
             error={pipelinesError}
           />
@@ -518,9 +580,9 @@ export function App() {
                   {activePipeline?.paused && (
                     <span style={{
                       fontSize: '0.7rem',
-                      background: '#1e1b4b',
+                      background: 'var(--color-accent-bg)',
                       color: 'var(--color-accent)',
-                      border: '1px solid #4338ca',
+                      border: '1px solid var(--color-accent)',
                       borderRadius: '4px',
                       padding: '2px 8px',
                       fontWeight: 700,
@@ -615,7 +677,7 @@ export function App() {
               />
 
               {/* #340: PolicyGates panel — shows all active gates with CEL expressions */}
-              <PolicyGatesPanel gates={gates} loading={gatesLoading} />
+              <PolicyGatesPanel gates={shownGates} loading={gatesLoading} />
 
               {/* Bundle history (collapsible) */}
               {bundles.length > 0 && (
@@ -650,7 +712,7 @@ export function App() {
                           gap: '0.5rem',
                           marginBottom: '0.35rem',
                           fontSize: '0.8rem',
-                          color: '#cbd5e1',
+                          color: 'var(--color-text-muted)',
                         }}>
                           <HealthChip state={b.phase} size="sm" />
                           <span style={{ fontFamily: 'monospace', color: 'var(--color-text)' }}>{b.name}</span>
@@ -667,9 +729,10 @@ export function App() {
               )}
 
               {/* #504: Release efficiency metrics bar — inline metrics for the pipeline. */}
-              <div style={{ marginBottom: '1rem' }}>
-                <ReleaseMetricsBar bundles={bundles} />
-              </div>
+              <ReleaseMetricsBar
+                bundles={bundles}
+                finalEnvironment={activePipeline?.environmentTopology?.at(-1)?.name}
+              />
 
               {/* Bundle Timeline — horizontal strip showing bundle history (Kargo freight timeline parity).
                   Receives bundles from parent state — no independent fetch (#321). */}
@@ -716,20 +779,13 @@ export function App() {
             />
             <PipelineLaneView
               nodes={graph?.nodes ?? []}
+              edges={graph?.edges ?? []}
               selectedNode={selectedNode}
               onSelectNode={setSelectedNode}
               activeBundleName={activeBundle?.name}
-              pipelineName={selectedPipeline ?? undefined}
-              onPromote={(environment) => {
-                if (!selectedPipeline || !activePipeline) return
-                api.promote(selectedPipeline, environment, activePipeline.namespace ?? 'default')
-                  .catch((err: Error) => console.error('promote failed:', err.message))
-              }}
-              onRollback={(environment) => {
-                if (!selectedPipeline || !activePipeline) return
-                api.rollback(selectedPipeline, environment, activePipeline.namespace ?? 'default')
-                  .catch((err: Error) => console.error('rollback failed:', err.message))
-              }}
+              pipelineName={activePipeline?.name}
+              namespace={activePipeline?.namespace ?? 'default'}
+              onActionDone={() => { void manualRefresh() }}
               loading={graphLoading}
             />
 
@@ -765,10 +821,11 @@ export function App() {
                     node={selectedNode}
                     onClose={() => setSelectedNode(null)}
                     bundleName={activeBundle?.name}
-                    pipelineName={selectedPipeline}
+                    pipelineName={activePipeline?.name}
                     namespace={activePipeline?.namespace ?? 'default'}
                     steps={activeSteps}
                     activeBundle={activeBundle}
+                    onActionDone={() => { void manualRefresh() }}
                   />
                 </ErrorBoundary>
               )}

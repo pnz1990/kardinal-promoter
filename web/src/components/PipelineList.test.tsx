@@ -48,9 +48,10 @@ describe('PipelineList — empty and loading states', () => {
     expect(screen.getByText(/No pipelines found/i)).toBeInTheDocument()
   })
 
-  it('shows kubectl command in empty state', () => {
+  it('leaves the setup commands to the main panel onboarding card', () => {
     render(<PipelineList pipelines={[]} onSelect={vi.fn()} />)
-    expect(screen.getByText(/kubectl apply/i)).toBeInTheDocument()
+    expect(screen.queryByText(/kubectl apply/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/kardinal init/i)).not.toBeInTheDocument()
   })
 })
 
@@ -79,7 +80,8 @@ describe('PipelineList — pipeline items', () => {
     const pipelines = [makePipeline({ name: 'my-pipeline' })]
     render(<PipelineList pipelines={pipelines} onSelect={onSelect} />)
     await user.click(screen.getByText('my-pipeline'))
-    expect(onSelect).toHaveBeenCalledWith('my-pipeline')
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('my-pipeline', 'default')
   })
 
   it('calls onSelect on Enter key press', async () => {
@@ -87,16 +89,18 @@ describe('PipelineList — pipeline items', () => {
     const onSelect = vi.fn()
     const pipelines = [makePipeline({ name: 'kb-pipeline' })]
     render(<PipelineList pipelines={pipelines} onSelect={onSelect} />)
-    const item = screen.getByRole('button', { name: /kb-pipeline/i })
+    // The copy button's name starts with "Copy"; the row's name starts with the pipeline.
+    const item = screen.getByRole('button', { name: /^kb-pipeline/ })
     item.focus()
     await user.keyboard('{Enter}')
-    expect(onSelect).toHaveBeenCalled()
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('kb-pipeline', 'default')
   })
 
   it('highlights selected pipeline with aria-pressed=true', () => {
     const pipelines = [makePipeline({ name: 'selected-app' })]
     render(<PipelineList pipelines={pipelines} selected="selected-app" onSelect={vi.fn()} />)
-    const item = screen.getByRole('button', { name: /selected-app/i })
+    const item = screen.getByRole('button', { name: /^selected-app/ })
     expect(item).toHaveAttribute('aria-pressed', 'true')
   })
 

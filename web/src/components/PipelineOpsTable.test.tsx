@@ -69,11 +69,7 @@ describe('PipelineOpsTable', () => {
     )
     const blockerCell = container.querySelector('td:nth-child(3)')
     expect(blockerCell?.textContent).toContain('3')
-    // JSDOM normalizes hex to rgb — check for the red color in either format
-    const style = blockerCell?.getAttribute('style') ?? ''
-    expect(
-      style.includes('#ef4444') || style.includes('rgb(239, 68, 68)')
-    ).toBe(true)
+    expect(blockerCell?.getAttribute('style') ?? '').toContain('var(--color-error)')
   })
 
   it('shows green when no blockers', () => {
@@ -113,7 +109,7 @@ describe('PipelineOpsTable', () => {
     const rows = screen.getAllByRole('row')
     const dataRow = rows.find(r => r.getAttribute('aria-selected') !== null)!
     fireEvent.click(dataRow)
-    expect(onSelect).toHaveBeenCalledWith('click-me')
+    expect(onSelect).toHaveBeenCalledWith('click-me', 'default')
   })
 
   it('calls onSelect on Enter key', () => {
@@ -127,7 +123,49 @@ describe('PipelineOpsTable', () => {
     const rows = screen.getAllByRole('row')
     const dataRow = rows.find(r => r.getAttribute('aria-selected') !== null)!
     fireEvent.keyDown(dataRow, { key: 'Enter' })
-    expect(onSelect).toHaveBeenCalledWith('keyboard-select')
+    expect(onSelect).toHaveBeenCalledWith('keyboard-select', 'default')
+  })
+
+  // C10b-web-22: Space selects the row once and does not scroll the page.
+  it.each([
+    { key: 'Enter' },
+    { key: ' ' },
+  ])('selects once on "$key" and prevents the default action', ({ key }) => {
+    const onSelect = vi.fn()
+    render(<PipelineOpsTable pipelines={[makePipeline({ name: 'kb' })]} onSelect={onSelect} />)
+    const dataRow = screen.getAllByRole('row').find(r => r.getAttribute('aria-selected') !== null)!
+    const notCancelled = fireEvent.keyDown(dataRow, { key })
+    expect(notCancelled).toBe(false)
+    expect(onSelect).toHaveBeenCalledTimes(1)
+  })
+
+  // C10b-web-24: 0 means the active bundle was created today; undefined means no bundle.
+  it.each([
+    { name: 'created today', days: 0, want: 'today' },
+    { name: 'no active bundle', days: undefined, want: '—' },
+    { name: 'three days old', days: 3, want: '3d' },
+  ])('inventory age: $name', ({ days, want }) => {
+    const { container } = render(
+      <PipelineOpsTable pipelines={[makePipeline({ inventoryAgeDays: days })]} onSelect={() => {}} />,
+    )
+    expect(container.querySelector('tbody td:nth-child(5)')?.textContent).toBe(want)
+  })
+
+  // C10b-web-12: same-named pipelines in two namespaces are told apart.
+  it('marks only the row of the selected namespace and reports the namespace', () => {
+    const onSelect = vi.fn()
+    render(
+      <PipelineOpsTable
+        pipelines={[makePipeline({ name: 'app', namespace: 'team-a' }), makePipeline({ name: 'app', namespace: 'team-b' })]}
+        selected="app"
+        selectedNamespace="team-b"
+        onSelect={onSelect}
+      />,
+    )
+    const rows = screen.getAllByRole('row').filter(r => r.getAttribute('aria-selected') !== null)
+    expect(rows.map(r => r.getAttribute('aria-selected'))).toEqual(['false', 'true'])
+    fireEvent.click(rows[0])
+    expect(onSelect).toHaveBeenCalledWith('app', 'team-a')
   })
 
   it('filters pipelines by name substring', () => {

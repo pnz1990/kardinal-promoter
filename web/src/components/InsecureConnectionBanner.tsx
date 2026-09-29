@@ -1,3 +1,6 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // components/InsecureConnectionBanner.tsx — Warning banner when UI is accessed over HTTP
 // from a non-localhost origin. Prompts users to use kubectl port-forward for in-cluster access.
 //
@@ -10,17 +13,21 @@ interface InsecureConnectionBannerProps {
   onDismiss: () => void
 }
 
+/** The command that reaches the UI on a default install (release kardinal-promoter). */
+export const PORT_FORWARD_COMMAND = 'kubectl port-forward -n kardinal-system deploy/kardinal-promoter 8082:8082'
+
+/** Loopback host names. `location.hostname` keeps the brackets on IPv6 ("[::1]"). */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
 /**
  * Returns true when the page is accessed over plain HTTP from a non-localhost origin.
- * Port-forward to localhost (http://localhost:* or http://127.0.0.1:*) is safe and
- * is the documented access method — it must NOT trigger the warning.
+ * Port-forward to loopback (localhost, 127.0.0.1 or [::1]) is safe and is the
+ * documented access method — it must NOT trigger the warning.
  */
 export function isInsecureNonLocalConnection(): boolean {
   if (typeof window === 'undefined') return false
   if (window.location.protocol === 'https:') return false
-  const host = window.location.hostname
-  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false
-  return true
+  return !LOOPBACK_HOSTS.has(window.location.hostname)
 }
 
 /**
@@ -38,8 +45,8 @@ export function InsecureConnectionBanner({ dismissed, onDismiss }: InsecureConne
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        background: '#451a03',
-        border: '1px solid #92400e',
+        background: 'var(--color-warning-bg)',
+        border: '1px solid var(--color-warning)',
         borderRadius: '6px',
         padding: '0.5rem 0.75rem',
         marginBottom: '0.75rem',
@@ -48,14 +55,14 @@ export function InsecureConnectionBanner({ dismissed, onDismiss }: InsecureConne
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <span style={{ color: 'var(--color-warning)', fontSize: '0.9rem' }} aria-hidden="true">⚠</span>
-        <span style={{ fontSize: '0.82rem', color: '#fcd34d', fontWeight: 600 }}>
+        <span style={{ fontSize: '0.82rem', color: 'var(--color-warning)', fontWeight: 600 }}>
           Insecure connection — kardinal UI is accessed over plain HTTP.{' '}
           Use{' '}
           <code style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>
-            kubectl port-forward svc/kardinal-controller 8082
+            {PORT_FORWARD_COMMAND}
           </code>{' '}
           and open{' '}
-          <a href="http://localhost:8082/ui/" style={{ color: '#fde68a' }}>
+          <a href="http://localhost:8082/ui/" style={{ color: 'var(--color-warning)' }}>
             http://localhost:8082/ui/
           </a>
           {' '}for secure in-cluster access.
@@ -66,9 +73,9 @@ export function InsecureConnectionBanner({ dismissed, onDismiss }: InsecureConne
         aria-label="Dismiss insecure connection warning"
         style={{
           background: 'none',
-          border: '1px solid #92400e',
+          border: '1px solid var(--color-warning)',
           borderRadius: '4px',
-          color: '#fcd34d',
+          color: 'var(--color-warning)',
           cursor: 'pointer',
           fontSize: '0.75rem',
           fontWeight: 600,

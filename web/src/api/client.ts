@@ -1,3 +1,6 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+//
 // api/client.ts — Typed fetch wrappers for the kardinal UI backend API.
 
 import type { Pipeline, Bundle, GraphResponse, PromotionStep, PolicyGate } from '../types'
@@ -26,15 +29,21 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return resp.json() as Promise<T>
 }
 
+/** Encode one URL path segment, so a name can never add path segments or a query. */
+const seg = encodeURIComponent
+
 export const api = {
   listPipelines: () => get<Pipeline[]>('/pipelines'),
-  listBundles: (pipelineName: string) => get<Bundle[]>(`/pipelines/${pipelineName}/bundles`),
-  getGraph: (bundleName: string) => get<GraphResponse>(`/bundles/${bundleName}/graph`),
-  getSteps: (bundleName: string) => get<PromotionStep[]>(`/bundles/${bundleName}/steps`),
+  /** Bundles of a pipeline, newest first. With namespace, only that namespace's
+   *  bundles (pipelines are namespaced; the same name can exist twice). */
+  listBundles: (pipelineName: string, namespace?: string) =>
+    get<Bundle[]>(`/pipelines/${seg(pipelineName)}/bundles${namespace ? `?namespace=${seg(namespace)}` : ''}`),
+  getGraph: (bundleName: string) => get<GraphResponse>(`/bundles/${seg(bundleName)}/graph`),
+  getSteps: (bundleName: string) => get<PromotionStep[]>(`/bundles/${seg(bundleName)}/steps`),
   listGates: () => get<PolicyGate[]>('/gates'),
   /** Kubernetes events for a PromotionStep node — newest-first, capped at 20 (#527). */
   getStepEvents: (namespace: string, stepName: string) =>
-    get<StepEvent[]>(`/steps/${namespace}/${stepName}/events`),
+    get<StepEvent[]>(`/steps/${seg(namespace)}/${seg(stepName)}/events`),
   /** Trigger a new promotion for the given pipeline+environment (UI promote button). */
   promote: (pipeline: string, environment: string, namespace = 'default') =>
     post<{ bundle: string; message: string }>('/promote', { pipeline, environment, namespace }),
@@ -47,9 +56,6 @@ export const api = {
   /** Resume a paused pipeline — sets spec.paused=false (#506). */
   resume: (pipeline: string, namespace = 'default') =>
     post<{ message: string }>('/resume', { pipeline, namespace }),
-  /** Approve (override) a PolicyGate with a reason and expiry (#506). */
-  approveGate: (gateName: string, gateNamespace = 'default', reason: string, expiresInMinutes = 60) =>
-    post<{ message: string }>(`/gates/${gateNamespace}/${gateName}/approve`, { reason, expiresInMinutes }),
   /** Validate a CEL expression using the server-side kro CEL environment. */
   validateCEL: (expression: string) =>
     post<{ valid: boolean; error?: string }>('/validate-cel', { expression }),
