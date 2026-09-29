@@ -1,6 +1,6 @@
 # kardinal-promoter Demo Environment
 
-This directory contains everything needed to create a **complete, working demo environment** for kardinal-promoter — three clusters, two pipelines, all features exercised, and a validation script that serves as the source of truth that the product works.
+This directory contains everything needed to create a **complete, working demo environment** for kardinal-promoter — three clusters, one main pipeline plus optional Flux, Argo Rollouts and Flagger pipelines, and a validation script that serves as the source of truth that the product works. The controller is built from your checkout, so the demo always runs the code you have.
 
 ## What You Get
 
@@ -10,16 +10,18 @@ kind-kardinal-dev       ← test + uat environments (kardinal-test-app)
 kind-kardinal-prod      ← prod environment  (kind locally, or EKS with --eks)
 ```
 
-**Pipeline 1 — `kardinal-test-app` (simple)**
+> **Current limitation:** promotions do not yet reach the dev and prod clusters.
+> Argo CD runs on the control cluster and syncs all three environments of
+> `kardinal-test-app` into namespaces `kardinal-test-app-{test,uat,prod}` there.
+> The copies setup.sh deploys directly to the dev and prod clusters are static,
+> and the Flux, Argo Rollouts and Flagger fixtures on the dev cluster are not
+> visible to the controller.
+
+**Pipeline `kardinal-test-app`**
 ```
 test (auto) → uat (auto) → prod (PR review)
-                                ↑ gates: no-weekend-deploys, require-uat-soak, no-bot-deploys
-```
-
-**Pipeline 2 — `kardinal-test-app-advanced` (all features)**
-```
-test-fast (auto) → uat (auto) → prod-canary (PR) → prod-full (PR)
-                                ↑ gates: business-hours-only, require-uat-soak, no-bot-deploys
+                                ↑ gates: no-weekend-deploys, require-uat-soak,
+                                         business-hours-only, no-bot-deploys
 ```
 
 **Features exercised end-to-end:**
@@ -37,7 +39,6 @@ test-fast (auto) → uat (auto) → prod-canary (PR) → prod-full (PR)
 | Policy simulate | `kardinal policy simulate --time "Saturday 3pm"` |
 | CLI completeness | version, get, explain, logs, history, audit, completion, --dry-run |
 | Web UI | `kardinal dashboard` → React DAG view |
-| Multi-cluster | advanced pipeline across dev + prod clusters |
 
 ---
 
@@ -79,7 +80,7 @@ kardinal get pipelines --watch
 
 # 4. Open the UI
 kubectl port-forward -n kardinal-system \
-  deployment/kardinal-kardinal-promoter 8082:8082 &
+  deployment/kardinal-promoter 8082:8082 &
 kardinal dashboard     # opens http://localhost:8082/ui/
 
 # 5. Validate everything works
@@ -93,12 +94,17 @@ kardinal dashboard     # opens http://localhost:8082/ui/
 
 ## Scenario Walkthroughs
 
+The scenarios use a real kardinal-test-app image:
+
+```bash
+IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+```
+
 ### Scenario A: Happy path
 
 ```bash
 # Promote a new image
-kardinal create bundle kardinal-test-app \
-  --image ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+kardinal create bundle kardinal-test-app --image "$IMAGE"
 
 # Watch: test verifies in ~60s, uat in ~90s, then prod PR opens
 kardinal get pipelines --watch
@@ -110,27 +116,30 @@ kardinal explain kardinal-test-app --env prod --color
 ### Scenario B: Weekend gate
 
 ```bash
-# Simulate what happens Saturday
+# Simulate what happens Saturday, with uat soaked for 45 minutes
 kardinal policy simulate \
   --pipeline kardinal-test-app \
   --env prod \
-  --time "Saturday 3pm"
+  --time "Saturday 3pm" \
+  --soak-minutes 45
 # → RESULT: BLOCKED
+#   Blocked by: business-hours-only
 #   Blocked by: no-weekend-deploys
 
 # Simulate weekday
 kardinal policy simulate \
   --pipeline kardinal-test-app \
   --env prod \
-  --time "Tuesday 10am"
+  --time "Tuesday 10am" \
+  --soak-minutes 45
 # → RESULT: PASS
+#   Without --soak-minutes (default 0), require-uat-soak blocks.
 ```
 
 ### Scenario C: Pause mid-promotion
 
 ```bash
-kardinal create bundle kardinal-test-app \
-  --image ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+kardinal create bundle kardinal-test-app --image "$IMAGE"
 
 # Immediately pause
 kardinal pause kardinal-test-app
@@ -163,9 +172,7 @@ kardinal override kardinal-test-app --stage prod \
 ### Scenario F: --dry-run before creating bundle
 
 ```bash
-kardinal create bundle kardinal-test-app \
-  --image ghcr.io/pnz1990/kardinal-test-app:sha-abc1234 \
-  --dry-run
+kardinal create bundle kardinal-test-app --image "$IMAGE" --dry-run
 # → Shows what Graph would be created, no resources written
 ```
 
@@ -176,7 +183,7 @@ kardinal create bundle kardinal-test-app \
 The `validate.sh` script is the canonical definition of "kardinal works":
 
 ```bash
-./demo/scripts/validate.sh              # all 10 scenarios
+./demo/scripts/validate.sh              # all scenarios
 ./demo/scripts/validate.sh --scenario 5 # just policy gate scenario
 ./demo/scripts/validate.sh --fast       # skip soak waits (for CI)
 ```
@@ -194,7 +201,9 @@ The `validate.sh` script is the canonical definition of "kardinal works":
 | 7 | Pause / resume | `kardinal pause` + `resume` |
 | 8 | Rollback | `kardinal rollback` opens PR |
 | 9 | CLI completeness | version, explain, history, completion, --dry-run |
-| 10 | Multi-cluster pipeline | advanced pipeline registered |
+| 11 | Flux adapter | `kardinal-test-app-flux` pipeline and Kustomizations |
+| 12 | Argo Rollouts adapter | `kardinal-test-app-rollouts` pipeline and Rollout |
+| 13 | Flagger adapter | `kardinal-test-app-flagger` pipeline and Canary |
 
 This script also runs **nightly in CI** (`.github/workflows/demo-validate.yml`). If it's red, the product is broken.
 
@@ -205,19 +214,17 @@ This script also runs **nightly in CI** (`.github/workflows/demo-validate.yml`).
 For a real production cluster:
 
 ```bash
-# Create EKS cluster (us-east-2, ~15 min)
-cd demo/terraform
-terraform init
-terraform apply
-
-# Set up with EKS prod
+# Set up with EKS prod. If the cluster kardinal-e2e-prod does not exist,
+# setup.sh creates it from terraform/eks-e2e (us-east-2, ~15 min).
 GITHUB_TOKEN=ghp_xxx ./demo/scripts/setup.sh --eks
 
 # Tear down EKS when done (costs money while running)
 ./demo/scripts/teardown.sh --eks
 ```
 
-The Terraform creates a minimal EKS cluster: 2× t3.medium nodes in us-east-2. See `demo/terraform/` for configuration.
+The Terraform in `terraform/eks-e2e/` (also used by `make eks-up`) creates a minimal EKS cluster: 2× t3.medium nodes in us-east-2.
+
+If you created a cluster from the old `demo/terraform/` directory, destroy it from a checkout that still has that directory (`cd demo/terraform && terraform destroy`); `teardown.sh --eks` does not know about it.
 
 ---
 
@@ -252,13 +259,10 @@ demo/
 │   │   └── org-gates.yaml       # 4 PolicyGates covering all gate types
 │   ├── pipeline-simple/
 │   │   └── pipeline.yaml        # kardinal-test-app (test→uat→prod)
-│   ├── pipeline-advanced/
-│   │   └── pipeline.yaml        # multi-env with all gate types
-│   └── argocd/
-│       └── applications.yaml    # ArgoCD Applications for all envs
-└── terraform/
-    ├── main.tf                  # EKS cluster definition
-    ├── variables.tf
-    ├── outputs.tf
-    └── backend.tf
+│   ├── argocd/
+│   │   └── applications.yaml    # ArgoCD Applications for all envs
+│   ├── flux/                    # Flux pipeline + Kustomizations (scenario 11)
+│   ├── rollouts/                # Argo Rollouts pipeline + Rollout (scenario 12)
+│   └── flagger/                 # Flagger pipeline + Canary (scenario 13)
+└── (EKS prod cluster: terraform/eks-e2e/ at the repo root)
 ```

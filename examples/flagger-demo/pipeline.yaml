@@ -24,7 +24,7 @@ spec:
         resource:
           name: kardinal-test-app
           namespace: kardinal-test-app-test
-          condition: Available
+          # The resource adapter always waits for the Available condition.
 
     # uat: resource health check with short bake
     - name: uat

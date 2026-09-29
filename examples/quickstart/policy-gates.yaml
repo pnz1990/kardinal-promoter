@@ -2,6 +2,11 @@
 # These are applied to the platform-policies namespace and automatically
 # injected into every Pipeline that targets prod environments.
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-policies
+---
 apiVersion: kardinal.io/v1alpha1
 kind: PolicyGate
 metadata:

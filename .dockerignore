@@ -30,11 +30,11 @@ hack/
 *.swp
 *.swo
 
-# CI/CD config (not needed in image)
+# CI/CD config and infrastructure (not needed in image)
 .github/
-maqa-ci/
-maqa-github-projects/
-maqa-config.yml
+demo/
+scripts/
+terraform/
 
 # Test files
 test/

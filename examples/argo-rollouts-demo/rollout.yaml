@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: kardinal-test-app
-          image: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234  # updated by kardinal
+          image: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f  # updated by kardinal
           ports:
             - containerPort: 8080
           readinessProbe:

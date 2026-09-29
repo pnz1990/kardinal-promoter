@@ -17,16 +17,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERBOSE=${1:-}
-RUN_FILTER=""
-if [[ "${1:-}" == "-v" ]]; then
-  VERBOSE="-v"
-  shift || true
-fi
-if [[ "${1:-}" == "-run" && -n "${2:-}" ]]; then
-  RUN_FILTER="-run $2"
-  shift 2 || true
-fi
+VERBOSE=""
+RUN_FILTER=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -v)
+      VERBOSE="-v"
+      shift
+      ;;
+    -run)
+      [[ -n "${2:-}" ]] || {
+        echo "usage: $0 [-v] [-run <regex>]" >&2
+        exit 2
+      }
+      RUN_FILTER=(-run "$2")
+      shift 2
+      ;;
+    *)
+      echo "usage: $0 [-v] [-run <regex>]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 echo "================================================================"
 echo "kardinal-promoter demo-validate: health adapter coverage check"
@@ -54,7 +66,7 @@ go test ./pkg/health/... \
   -count=1 \
   -timeout 60s \
   ${VERBOSE} \
-  ${RUN_FILTER} \
+  ${RUN_FILTER[@]+"${RUN_FILTER[@]}"} \
   2>&1
 
 echo ""
@@ -69,12 +81,16 @@ echo ""
 echo "  Adapter        | Test count | GVR"
 echo "  --------------|------------|--------------------------------------------"
 
-# Count tests per adapter by grepping test names
-RESOURCE_COUNT=$(grep -c "func TestDeploymentAdapter_" "$REPO_ROOT/pkg/health/health_test.go" 2>/dev/null || echo 0)
-ARGOCD_COUNT=$(grep -c "func TestArgoCDAdapter_" "$REPO_ROOT/pkg/health/health_test.go" 2>/dev/null || echo 0)
-FLUX_COUNT=$(grep -c "func TestFluxAdapter_" "$REPO_ROOT/pkg/health/health_test.go" 2>/dev/null || echo 0)
-ROLLOUTS_COUNT=$(grep -c "func TestArgoRolloutsAdapter_" "$REPO_ROOT/pkg/health/health_test.go" 2>/dev/null || echo 0)
-FLAGGER_COUNT=$(grep -c "func TestFlaggerAdapter_" "$REPO_ROOT/pkg/health/health_test.go" 2>/dev/null || echo 0)
+# Count tests per adapter by grepping test names across pkg/health's test files.
+# grep -c prints 0 (and exits 1) on no match, so `|| true` keeps a single "0".
+count_tests() {
+  cat "$REPO_ROOT"/pkg/health/*_test.go | grep -c "func $1" || true
+}
+RESOURCE_COUNT=$(count_tests TestDeploymentAdapter_)
+ARGOCD_COUNT=$(count_tests TestArgoCDAdapter_)
+FLUX_COUNT=$(count_tests TestFluxAdapter_)
+ROLLOUTS_COUNT=$(count_tests TestArgoRolloutsAdapter_)
+FLAGGER_COUNT=$(count_tests TestFlaggerAdapter_)
 
 printf "  %-14s | %-10s | %s\n" "resource"      "$RESOURCE_COUNT"  "apps/v1 Deployment"
 printf "  %-14s | %-10s | %s\n" "argocd"        "$ARGOCD_COUNT"   "argoproj.io/v1alpha1 Application"
@@ -98,9 +114,11 @@ for COUNT_NAME in "resource:$RESOURCE_COUNT" "argocd:$ARGOCD_COUNT" "flux:$FLUX_
   fi
 done
 
-if [[ "$PASS" == "true" ]]; then
-  echo "  ✅ All adapters have ≥3 tests"
+if [[ "$PASS" != "true" ]]; then
+  echo "  ❌ adapter coverage check failed"
+  exit 1
 fi
+echo "  ✅ All adapters have ≥3 tests"
 
 echo ""
 echo "================================================================"

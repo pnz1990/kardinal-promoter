@@ -53,7 +53,10 @@ if [ -z "$PR_DIFF" ]; then
 fi
 
 # ── Step 2: Parse diff with Python ───────────────────────────────────────────
-RESULT=$(python3 - "$PR_NUM" "$REPO" <<'PYEOF'
+# The program is held in a variable so the diff can be piped on stdin
+# (`python3 - <<EOF` would make the heredoc stdin and hide the diff).
+GATE_PY=$(
+  cat <<'PYEOF'
 import sys
 import re
 import os
@@ -226,14 +229,15 @@ else:
 
 PYEOF
 )
+RESULT=$(printf '%s\n' "$PR_DIFF" | python3 -c "$GATE_PY" "$PR_NUM" "$REPO")
 
 # ── Step 3: Interpret result ──────────────────────────────────────────────────
-if echo "$RESULT" | grep -q "^NO_TRANSITIONS"; then
+if echo "$RESULT" | grep "^NO_TRANSITIONS" >/dev/null; then
   echo "[QA §3b-docs-gate] PASS — no Future→Present transitions detected in design docs."
   exit 0
 fi
 
-if echo "$RESULT" | grep -q "^WRONG:"; then
+if echo "$RESULT" | grep "^WRONG:" >/dev/null; then
   WRONG_COUNT=$(echo "$RESULT" | grep "^WRONG_COUNT:" | cut -d: -f2 || echo "?")
   TOTAL=$(echo "$RESULT" | grep "^TOTAL:" | cut -d: -f2 || echo "?")
   DOCS=$(echo "$RESULT" | grep "^DOCS:" | cut -d: -f2 || echo "0")
@@ -244,7 +248,7 @@ if echo "$RESULT" | grep -q "^WRONG:"; then
   echo ""
   echo "  Affected items:"
   while IFS= read -r line; do
-    if echo "$line" | grep -q "^WRONG:"; then
+    if echo "$line" | grep "^WRONG:" >/dev/null; then
       desc="${line#WRONG: }"
       echo "  • $desc"
     fi
@@ -260,7 +264,7 @@ if echo "$RESULT" | grep -q "^WRONG:"; then
   exit 1
 fi
 
-if echo "$RESULT" | grep -q "^PASS_COUNT:"; then
+if echo "$RESULT" | grep "^PASS_COUNT:" >/dev/null; then
   PASS_COUNT=$(echo "$RESULT" | grep "^PASS_COUNT:" | cut -d: -f2 || echo "?")
   TOTAL=$(echo "$RESULT" | grep "^TOTAL:" | cut -d: -f2 || echo "?")
   DOCS=$(echo "$RESULT" | grep "^DOCS:" | cut -d: -f2 || echo "0")

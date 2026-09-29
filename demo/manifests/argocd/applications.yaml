@@ -28,6 +28,9 @@ spec:
     repoURL: https://github.com/pnz1990/kardinal-demo
     targetRevision: main
     path: environments/test
+    # The overlays hardcode namespace default; move each env into its own.
+    kustomize:
+      namespace: kardinal-test-app-test
   destination:
     server: https://kubernetes.default.svc
     namespace: kardinal-test-app-test
@@ -52,6 +55,9 @@ spec:
     repoURL: https://github.com/pnz1990/kardinal-demo
     targetRevision: main
     path: environments/uat
+    # The overlays hardcode namespace default; move each env into its own.
+    kustomize:
+      namespace: kardinal-test-app-uat
   destination:
     server: https://kubernetes.default.svc
     namespace: kardinal-test-app-uat
@@ -76,6 +82,9 @@ spec:
     repoURL: https://github.com/pnz1990/kardinal-demo
     targetRevision: main
     path: environments/prod
+    # The overlays hardcode namespace default; move each env into its own.
+    kustomize:
+      namespace: kardinal-test-app-prod
   destination:
     server: https://kubernetes.default.svc
     namespace: kardinal-test-app-prod

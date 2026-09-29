@@ -1,6 +1,11 @@
 # subscription-git.yaml — Git repository subscription example.
-# Watches the main branch of kardinal-demo for new commits touching the "app/" path.
-# Creates a config Bundle when a new commit is detected.
+# Watches the main branch of a config repo for new commits touching "config/"
+# and creates a config Bundle for the platform-config Pipeline
+# (examples/config-promotion/pipeline.yaml) when one is detected.
+#
+# myorg/platform-config is a placeholder; change it to your config repo. Keep
+# pathGlob outside the environment paths the Pipeline writes, so kardinal's own
+# promotion commits do not trigger new Bundles.
 #
 # Usage:
 #   kubectl apply -f subscription-git.yaml
@@ -8,13 +13,13 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Subscription
 metadata:
-  name: kardinal-demo-git
+  name: platform-config-git
   namespace: default
 spec:
   type: git
-  pipeline: kardinal-test-app
+  pipeline: platform-config
   git:
-    repoURL: https://github.com/pnz1990/kardinal-demo
+    repoURL: https://github.com/myorg/platform-config
     branch: main
-    pathGlob: "app/**"
+    pathGlob: "config/**"
     interval: 5m

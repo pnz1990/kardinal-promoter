@@ -70,6 +70,9 @@ spec:
     interval: 5m
 ```
 
+Complete manifests for both source types are in
+[`examples/subscription/`](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/subscription).
+
 ## Status Fields
 
 | Field | Description |

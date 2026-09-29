@@ -13,10 +13,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package e2e contains end-to-end journey tests for kardinal-promoter.
-// Journey tests 1, 3, 4, and 5 run without a live cluster using fake clients
-// and the real reconciler/CEL code paths.
-// Journey test 2 (multi-cluster) requires Stages 14+ and is skipped until then.
+// Package e2e contains journey tests for kardinal-promoter.
+//
+// The untagged files (journeys_test.go, promotion_loop_test.go,
+// benchmark_test.go) use fake clients and the real reconciler/CEL code paths;
+// they never contact a cluster and run in plain `go test ./...`.
+//
+// The cluster tests (e2e_test.go, kind_test.go) carry the `e2e` build tag and
+// only run against the kind context named in KARDINAL_E2E_CONTEXT:
+//
+//	make e2e-setup
+//	KARDINAL_E2E_CONTEXT=kind-kardinal-e2e go test -tags e2e ./test/e2e/... -run 'TestInfrastructure|TestKind'
 package e2e
 
 import (
@@ -718,10 +725,14 @@ func findKardinalBinary() (string, error) {
 }
 
 // runCLICmd runs the kardinal CLI with the given args and returns combined output.
+// KUBECONFIG is pointed at an empty file so the CLI can never reach the
+// developer's current kube context from an untagged unit test.
 func runCLICmd(binary string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, binary, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+os.DevNull)
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 

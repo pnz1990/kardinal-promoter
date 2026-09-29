@@ -1,10 +1,14 @@
 name: PDCA Product Validation
 
-# Runs the 6 PDCA scenarios from AGENTS.md §Product Validation Scenarios.
-# Uses a live kind cluster, kro, and the real kardinal-test-app image.
-# Posts [PDCA AUTOMATED] evidence to Issue #1 on completion.
+# Runs the PDCA product validation scenarios on a live kind cluster with kro,
+# Argo CD, the controller built from this checkout, and the real
+# kardinal-test-app image. The scenario input selects one of the six scenarios
+# in AGENTS.md §Product Validation Scenarios (with the checks that depend on
+# it); "all" also runs the extra CLI and API checks and the UI journeys.
 #
-# Partially closes #413: automated PDCA validation runs on schedule.
+# Every check either passes or fails; there is no "note" outcome. The job fails
+# when any check fails, when no check ran, or when a scenario step aborted, and
+# the [PDCA AUTOMATED] comment on Issue #1 says which.
 
 on:
   schedule:
@@ -13,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       scenario:
-        description: 'Scenario to run (1-6, or all)'
+        description: 'AGENTS.md scenario to run (1-6), or all'
         required: true
         default: 'all'
         type: choice
@@ -21,7 +25,7 @@ on:
 
 jobs:
   pdca:
-    name: PDCA validation (${{ github.event.inputs.scenario || 'all' }})
+    name: PDCA validation (${{ inputs.scenario || 'all' }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -29,27 +33,30 @@ jobs:
       contents: read
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SCENARIO: ${{ inputs.scenario || 'all' }}
+      RESULTS_FILE: /tmp/pdca-results.txt
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v5.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+
       - name: Install kind
         run: |
-          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
           chmod +x kind && sudo mv kind /usr/local/bin/
 
       - name: Install kubectl
         run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          KUBECTL_VERSION=$(curl -fsSL https://dl.k8s.io/release/stable.txt)
+          curl -fsSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-
-      - name: Install helm
-        run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
       - name: Create kind cluster
         run: |
@@ -69,7 +76,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           make build
-          echo "$(pwd)/bin" >> $GITHUB_PATH
+          echo "$(pwd)/bin" >> "$GITHUB_PATH"
           # Pre-generate CRD manifests here (installs controller-gen ~2min) so
           # the controller install step only needs docker-build + kind load + helm.
           make manifests
@@ -93,481 +100,364 @@ jobs:
             --set image.repository=ghcr.io/pnz1990/kardinal-promoter \
             --set image.tag=dev \
             --set image.pullPolicy=Never \
-            --set validatingAdmissionPolicy.enabled=false \
             --wait --timeout 300s
           kubectl get pods -n kardinal-system
 
       - name: Get real test image SHA
         id: image
         run: |
-          SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]' 2>/dev/null || echo "latest")
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-          echo "image=ghcr.io/pnz1990/kardinal-test-app:sha-$SHA" >> $GITHUB_OUTPUT
+          # No fallback: a made-up tag would make every promotion check fail
+          # for a reason unrelated to kardinal.
+          SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
+          echo "image=ghcr.io/pnz1990/kardinal-test-app:sha-$SHA" >> "$GITHUB_OUTPUT"
           echo "Using image: ghcr.io/pnz1990/kardinal-test-app:sha-$SHA"
 
       - name: Apply Pipeline and PolicyGates
+        env:
+          KARDINAL_DEMO_PAT: ${{ secrets.KARDINAL_DEMO_PAT }}
         run: |
           # Create the platform-policies namespace required by the org-level PolicyGates
           kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f examples/quickstart/pipeline.yaml
           kubectl apply -f examples/quickstart/policy-gates.yaml
-          # Use KARDINAL_DEMO_PAT if available (required for cross-repo push to kardinal-demo).
-          # Falls back to GITHUB_TOKEN which works for read-only scenarios (S3/S4/S6).
-          # See issue #558 for why GITHUB_TOKEN alone cannot push to pnz1990/kardinal-demo.
-          DEMO_TOKEN="${{ secrets.KARDINAL_DEMO_PAT }}"
-          if [ -z "$DEMO_TOKEN" ]; then DEMO_TOKEN="${{ secrets.GITHUB_TOKEN }}"; fi
+          # KARDINAL_DEMO_PAT is required for the promotion checks, which push to
+          # pnz1990/kardinal-demo. GITHUB_TOKEN cannot push there (#558), so
+          # without the PAT those checks fail rather than pass.
+          if [ -z "$KARDINAL_DEMO_PAT" ]; then
+            echo "::warning::KARDINAL_DEMO_PAT is not set; promotion checks will fail"
+          fi
+          # The token goes through a private file, never a command line.
+          TOKEN_FILE=$(mktemp)
+          chmod 600 "$TOKEN_FILE"
+          printf '%s' "${KARDINAL_DEMO_PAT:-$GITHUB_TOKEN}" > "$TOKEN_FILE"
           kubectl create secret generic github-token \
-            --from-literal=token="$DEMO_TOKEN" \
+            --from-file=token="$TOKEN_FILE" \
             --dry-run=client -o yaml | kubectl apply -f -
+          rm -f "$TOKEN_FILE"
           # Give the controller a moment to process the new resources
           sleep 5
           kubectl get pipeline -A || true
           kubectl get policygate -A || true
 
-      - name: Run PDCA Scenarios
+      - name: Run PDCA scenarios
         id: scenarios
         env:
           TEST_IMAGE: ${{ steps.image.outputs.image }}
           GOTOOLCHAIN: local
         run: |
-          PASS=0
-          FAIL=0
-          RESULTS=""
+          # Each check records exactly one ✅ or ❌ line in $RESULTS_FILE; the
+          # report step counts them. A command that errors fails its check.
+          set +e
+          : > "$RESULTS_FILE"
+          NS=default
+          PIPELINE=kardinal-test-app
+          TEST_TAG="${TEST_IMAGE##*:}"
+          LAST_STATE=""
 
-          # Scenario 1: Happy path promotion
-          echo "=== Scenario 1: Happy path promotion ==="
-          kardinal create bundle kardinal-test-app --image "$TEST_IMAGE" || true
-          # Wait up to 5 minutes for promotion to start — increased from 3min (12×15s) to 5min (20×15s)
-          # Reliability fix: slow controller reconcile on resource-constrained CI runners. (PR #513)
-          for i in $(seq 1 20); do
-            sleep 15
-            OUTPUT=$(kardinal get pipelines 2>&1 || true)
-            if echo "$OUTPUT" | grep -q "Verified\|Promoting\|WaitingForMerge"; then break; fi
-          done
-          OUTPUT=$(kardinal get pipelines 2>&1 || true)
-          echo "S1 pipelines output: $OUTPUT"
-          if echo "$OUTPUT" | grep -q "Verified\|Promoting\|WaitingForMerge"; then
-            echo "S1: PASS"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S1: Happy path — Bundle created, promotion started"
-          else
-            echo "S1: FAIL — output: $OUTPUT"
-            # Dump controller logs — use --since to get step execution logs, not just startup
-            echo "--- Controller logs (--since=10m, captures step execution) ---"
-            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --since=10m 2>/dev/null || \
-              kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --tail=200 2>/dev/null || true
-            echo "--- PromotionStep describe (shows State + Message) ---"
-            for ps in $(kubectl get promotionstep -A -o name 2>/dev/null); do
-              echo "=== $ps ==="
-              kubectl describe $ps 2>/dev/null | grep -A3 "State:\|Message:\|Conditions:" || true
+          oneline() { local s="${1//$'\n'/ | }"; printf '%s' "${s:0:400}"; }
+          pass() { echo "PASS: $1"; printf '✅ %s\n' "$1" >> "$RESULTS_FILE"; }
+          fail() { echo "FAIL: $1"; printf '❌ %s\n' "$(oneline "$1")" >> "$RESULTS_FILE"; }
+          # want N...: true when the selected scenario is "all" or one of N.
+          want() {
+            [ "$SCENARIO" = all ] && return 0
+            local s
+            for s in "$@"; do [ "$s" = "$SCENARIO" ] && return 0; done
+            return 1
+          }
+          # newest_bundle PIPELINE TAG: the newest Bundle of PIPELINE with image TAG.
+          newest_bundle() {
+            kubectl get bundles -n "$NS" -o json | jq -r --arg p "$1" --arg t "$2" \
+              '[.items[] | select(.spec.pipeline == $p and any(.spec.images[]?; .tag == $t))]
+               | sort_by(.metadata.creationTimestamp) | last | .metadata.name // empty'
+          }
+          bundle_phase() { kubectl get bundle "$1" -n "$NS" -o jsonpath='{.status.phase}' 2>/dev/null; }
+          # step_field BUNDLE ENV FIELD: a status field of the bundle's PromotionStep in ENV.
+          step_field() {
+            kubectl get promotionsteps -n "$NS" -l "kardinal.io/bundle=$1,kardinal.io/environment=$2" \
+              -o jsonpath="{.items[0].status.$3}" 2>/dev/null
+          }
+          # wait_state BUNDLE ENV SECONDS STATE...: wait until the step is in one of STATE.
+          wait_state() {
+            local b=$1 e=$2 deadline=$((SECONDS + $3)) s
+            shift 3
+            while :; do
+              LAST_STATE=$(step_field "$b" "$e" state)
+              for s in "$@"; do [ "$LAST_STATE" = "$s" ] && return 0; done
+              [ "$SECONDS" -ge "$deadline" ] && return 1
+              sleep 10
             done
-            echo "--- PromotionStep status (wide) ---"
-            kubectl get promotionstep -A -o wide 2>/dev/null || true
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S1: Happy path — Expected Verified/Promoting; got: $OUTPUT"
-          fi
+          }
+          # wait_superseded SECONDS BUNDLE...: wait until every BUNDLE is Superseded.
+          wait_superseded() {
+            local deadline=$((SECONDS + $1)) b all
+            shift
+            while :; do
+              all=true
+              for b in "$@"; do [ -n "$b" ] && [ "$(bundle_phase "$b")" = Superseded ] || all=false; done
+              [ "$all" = true ] && return 0
+              [ "$SECONDS" -ge "$deadline" ] && return 1
+              sleep 10
+            done
+          }
+          diagnostics() {
+            echo "--- controller logs (last 10m) ---"
+            kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter --since=10m 2>/dev/null
+            echo "--- PromotionSteps ---"
+            kubectl get promotionsteps -A -o wide 2>/dev/null
+            kubectl get promotionsteps -A -o json 2>/dev/null \
+              | jq -r '.items[] | "\(.metadata.name): \(.status.state // "-") \(.status.message // "")"'
+          }
 
-          # Scenario 3: Weekend gate blocks prod
-          echo "=== Scenario 3: Weekend gate ==="
-          OUTPUT=$(kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm" 2>&1 || true)
-          if echo "$OUTPUT" | grep -q "BLOCKED"; then
-            echo "S3: PASS"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S3: Weekend gate — BLOCKED returned"
-          else
-            echo "S3: FAIL — output: $OUTPUT"
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S3: Weekend gate — Expected BLOCKED; got: $OUTPUT"
-          fi
-
-          OUTPUT=$(kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" 2>&1 || true)
-          if echo "$OUTPUT" | grep -q "PASS\|ALLOWED\|RESULT: PASS"; then
-            echo "S3b: PASS"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S3b: Weekend gate Tuesday — PASS returned"
-          else
-            echo "S3b: NOTE — policy simulate output: $OUTPUT (PASS not found but may be no gates)"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S3b: Weekend gate Tuesday — output: $OUTPUT"
-          fi
-
-          # Scenario 4: Explain shows gate details
-          echo "=== Scenario 4: Explain ==="
-          OUTPUT=$(kardinal explain kardinal-test-app --env prod 2>&1 || true)
-          if echo "$OUTPUT" | grep -qE "ENVIRONMENT|PolicyGate|schedule|isWeekend"; then
-            echo "S4: PASS"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S4: Explain shows gate details"
-          else
-            echo "S4: NOTE — output: $OUTPUT"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S4: Explain output: $OUTPUT"
-          fi
-
-          # Scenario 6: Concurrent bundles supersession
-          echo "=== Scenario 6: Concurrent bundles ==="
-          kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-aaa0001" || true
-          sleep 3
-          kardinal create bundle kardinal-test-app --image "$TEST_IMAGE" || true
-          sleep 30
-          OUTPUT=$(kardinal get bundles kardinal-test-app 2>&1 || true)
-          echo "S6 output: $OUTPUT"
-          # Verify that the older bundle is superseded and newer is promoting
-          if echo "$OUTPUT" | grep -q "Superseded\|superseded"; then
-            echo "S6: PASS — supersession detected"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S6: Concurrent bundles — older bundle superseded"
-          else
-            echo "S6: NOTE — supersession not yet visible; output: $OUTPUT"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S6: Concurrent bundles — output: $OUTPUT (supersession timing)"
-          fi
-
-          # Scenario 7: Config-only promotion (no image change)
-          echo "=== Scenario 7: Config-only promotion ==="
-          CONFIG_OUTPUT=$(kardinal create bundle kardinal-test-app --type config 2>&1 || true)
-          echo "S7 create output: $CONFIG_OUTPUT"
-          if echo "$CONFIG_OUTPUT" | grep -q "Bundle\|bundle\|created"; then
-            echo "S7: PASS — config bundle created"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S7: Config-only promotion — bundle created without image"
-          else
-            echo "S7: FAIL — unexpected output: $CONFIG_OUTPUT"
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S7: Config-only promotion — expected Bundle created; got: $CONFIG_OUTPUT"
-          fi
-
-          # Scenario 8: Full multi-stage assertion (test+uat both Verified)
-          echo "=== Scenario 8: Full multi-stage assertion ==="
-          # After S1, wait up to 5 additional minutes for both test+uat to show Verified
-          S8_PASS=false
-          for i in $(seq 1 20); do
-            sleep 15
-            S8_OUTPUT=$(kardinal get pipelines 2>&1 || true)
-            TEST_VERIFIED=$(echo "$S8_OUTPUT" | grep -c "test.*Verified\|Verified.*test" || true)
-            UAT_VERIFIED=$(echo "$S8_OUTPUT" | grep -c "uat.*Verified\|Verified.*uat" || true)
-            # Also check get steps for multi-stage evidence
-            STEPS_OUTPUT=$(kardinal get steps kardinal-test-app 2>&1 || true)
-            MULTI_ENV=$(echo "$STEPS_OUTPUT" | grep -cE "test|uat" || true)
-            if [ "$MULTI_ENV" -ge 2 ]; then
-              S8_PASS=true
-              break
-            fi
-          done
-          S8_FINAL=$(kardinal get steps kardinal-test-app 2>&1 || true)
-          echo "S8 steps output: $S8_FINAL"
-          if [ "$S8_PASS" = "true" ]; then
-            echo "S8: PASS — multi-stage steps visible"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S8: Full multi-stage assertion — test+uat steps present"
-          else
-            echo "S8: NOTE — steps output: $S8_FINAL"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S8: Full multi-stage assertion — steps: $S8_FINAL"
-          fi
-
-          # Scenario 9: Health check failure blocks promotion
-          echo "=== Scenario 9: Health check failure blocks ==="
-          # Apply a pipeline with resource-type health check pointing at a Deployment we'll scale to 0
-          kubectl create namespace s9-health-test --dry-run=client -o yaml | kubectl apply -f -
-          # Create a Deployment that is immediately scaled to 0 (simulates not-ready)
-          kubectl create deployment s9-test-app --image=nginx:alpine -n s9-health-test --dry-run=client -o yaml \
-            | kubectl apply -f -
-          kubectl scale deployment s9-test-app --replicas=0 -n s9-health-test || true
-          # Apply a minimal pipeline with resource health check (using printf to avoid heredoc column-0 YAML issues)
-          printf '%s\n' \
-            'apiVersion: kardinal.io/v1alpha1' \
-            'kind: Pipeline' \
-            'metadata:' \
-            '  name: s9-health-test' \
-            '  namespace: default' \
-            'spec:' \
-            '  git:' \
-            '    url: https://github.com/pnz1990/kardinal-demo' \
-            '    branch: main' \
-            '    layout: directory' \
-            '    provider: github' \
-            '    secretRef:' \
-            '      name: github-token' \
-            '  environments:' \
-            '  - name: test' \
-            '    path: environments/test' \
-            '    update:' \
-            '      strategy: kustomize' \
-            '    approval: auto' \
-            '    health:' \
-            '      type: resource' \
-            '      timeout: 30s' \
-            '      resource:' \
-            '        kind: Deployment' \
-            '        name: s9-test-app' \
-            '        namespace: s9-health-test' \
-            | kubectl apply -f -
-          sleep 5
-          S9_BUNDLE_OUTPUT=$(kardinal create bundle s9-health-test --image "ghcr.io/pnz1990/kardinal-test-app:sha-aaa0001" 2>&1 || true)
-          echo "S9 bundle output: $S9_BUNDLE_OUTPUT"
-          # Wait for PromotionStep to show health check state
-          S9_PASS=false
-          for i in $(seq 1 8); do
-            sleep 10
-            S9_STEPS=$(kardinal get steps s9-health-test 2>&1 || true)
-            if echo "$S9_STEPS" | grep -qE "HealthCheck|Failed|Blocked|health"; then
-              S9_PASS=true
-              echo "S9 steps: $S9_STEPS"
-              break
-            fi
-          done
-          if [ "$S9_PASS" = "true" ]; then
-            echo "S9: PASS — health check state detected"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S9: Health check failure blocks — HealthCheck state visible"
-          else
-            echo "S9: NOTE — steps output: $(kardinal get steps s9-health-test 2>&1 || true)"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S9: Health check failure blocks — promotion did not reach HealthCheck state in time"
-          fi
-          # Cleanup S9 resources
-          kubectl delete pipeline s9-health-test 2>/dev/null || true
-          kubectl delete namespace s9-health-test 2>/dev/null || true
-
-          # Scenario 10: CLI completeness — kardinal get bundles
-          echo "=== Scenario 10: kardinal get bundles ==="
-          S10_OUTPUT=$(kardinal get bundles kardinal-test-app 2>&1 || true)
-          echo "S10 output: $S10_OUTPUT"
-          if echo "$S10_OUTPUT" | grep -qE "kardinal-test-app|Bundle|bundle|AGE|NAME|No bundles"; then
-            echo "S10: PASS — get bundles returned expected output"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S10: CLI get bundles — command works and returns output"
-          else
-            echo "S10: FAIL — unexpected output: $S10_OUTPUT"
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S10: CLI get bundles — unexpected output: $S10_OUTPUT"
-          fi
-
-          # Scenario 11: CLI completeness — kardinal delete bundle
-          echo "=== Scenario 11: kardinal delete bundle ==="
-          # Create a bundle then delete it immediately
-          DEL_BUNDLE_OUT=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-del1111" 2>&1 || true)
-          echo "S11 create output: $DEL_BUNDLE_OUT"
-          DEL_BUNDLE_NAME=$(echo "$DEL_BUNDLE_OUT" | grep -oE 'Bundle [a-z0-9-]+ created' | awk '{print $2}' | head -1)
-          if [ -n "$DEL_BUNDLE_NAME" ]; then
-            DEL_OUT=$(kardinal delete bundle "$DEL_BUNDLE_NAME" 2>&1 || true)
-            echo "S11 delete output: $DEL_OUT"
-            if echo "$DEL_OUT" | grep -q "deleted"; then
-              echo "S11: PASS — bundle deleted"
-              PASS=$((PASS+1))
-              RESULTS="$RESULTS\n✅ S11: CLI delete bundle — bundle $DEL_BUNDLE_NAME deleted"
+          # ── AGENTS.md scenario 1: happy path (S1, S8); also the setup for 4 and 5 ──
+          S1_BUNDLE=""
+          if want 1 4 5; then
+            echo "=== S1: happy path ==="
+            if OUT=$(kardinal create bundle "$PIPELINE" --image "$TEST_IMAGE" 2>&1); then
+              S1_BUNDLE=$(newest_bundle "$PIPELINE" "$TEST_TAG")
+              if [ -n "$S1_BUNDLE" ] && wait_state "$S1_BUNDLE" test 300 Promoting WaitingForMerge HealthChecking Verified; then
+                pass "S1: happy path — bundle $S1_BUNDLE is promoting in test ($LAST_STATE)"
+              else
+                fail "S1: happy path — bundle '$S1_BUNDLE' test step is '$LAST_STATE' after 5m"
+                diagnostics
+              fi
             else
-              echo "S11: FAIL — delete output: $DEL_OUT"
-              FAIL=$((FAIL+1))
-              RESULTS="$RESULTS\n❌ S11: CLI delete bundle — unexpected output: $DEL_OUT"
+              fail "S1: happy path — create bundle failed: $OUT"
             fi
-          else
-            echo "S11: NOTE — could not extract bundle name from: $DEL_BUNDLE_OUT"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S11: CLI delete bundle — could not extract bundle name: $DEL_BUNDLE_OUT"
+          fi
+          if want 1; then
+            echo "=== S8: test Verified, uat promoting ==="
+            if [ -n "$S1_BUNDLE" ] && wait_state "$S1_BUNDLE" test 300 Verified \
+              && wait_state "$S1_BUNDLE" uat 120 Promoting WaitingForMerge HealthChecking Verified; then
+              pass "S8: multi-stage — test Verified and uat promoting ($LAST_STATE)"
+            else
+              fail "S8: multi-stage — test=$(step_field "$S1_BUNDLE" test state) uat=$(step_field "$S1_BUNDLE" uat state): $(step_field "$S1_BUNDLE" test message)"
+            fi
           fi
 
-          # Scenario 12: CLI completeness — kardinal get steps
-          echo "=== Scenario 12: kardinal get steps ==="
-          S12_OUTPUT=$(kardinal get steps kardinal-test-app 2>&1 || true)
-          echo "S12 output: $S12_OUTPUT"
-          if echo "$S12_OUTPUT" | grep -qE "kardinal-test-app|Step|step|AGE|PIPELINE|ENV|No steps"; then
-            echo "S12: PASS — get steps returned expected output"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S12: CLI get steps — command works and returns output"
-          else
-            echo "S12: FAIL — unexpected output: $S12_OUTPUT"
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S12: CLI get steps — unexpected output: $S12_OUTPUT"
+          # ── AGENTS.md scenario 5: rollback ──
+          if want 5; then
+            echo "=== S5: rollback (test) ==="
+            if [ -n "$S1_BUNDLE" ] && wait_state "$S1_BUNDLE" test 300 Verified; then
+              if OUT=$(kardinal rollback "$PIPELINE" --env test 2>&1); then
+                RB=$(kubectl get bundles -n "$NS" -l kardinal.io/rollback=true -o json \
+                  | jq --arg p "$PIPELINE" '[.items[] | select(.spec.pipeline == $p and (.spec.provenance.rollbackOf // "") != "")] | length')
+                if [ "${RB:-0}" -ge 1 ]; then
+                  pass "S5: rollback — rollback Bundle created: $(oneline "$OUT")"
+                else
+                  fail "S5: rollback — the command succeeded but no rollback Bundle exists: $OUT"
+                fi
+              else
+                fail "S5: rollback — $OUT"
+              fi
+            else
+              fail "S5: rollback — test never reached Verified (state '$LAST_STATE'), so there is nothing to roll back to"
+            fi
           fi
 
-
-          # Scenario 13: Multiple policy gates — both org-level gates apply to prod
-          echo "=== Scenario 13: Multiple policy gates ==="
-          S13_OUTPUT=$(kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm" 2>&1 || true)
-          echo "S13 simulate output: $S13_OUTPUT"
-          if echo "$S13_OUTPUT" | grep -q "BLOCKED"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S13: Multiple policy gates — prod blocked by org gate on weekend"
-          else
-            echo "S13: FAIL — expected BLOCKED for prod on weekend; got: $S13_OUTPUT"
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S13: Multiple policy gates — expected BLOCKED; got: $S13_OUTPUT"
+          # ── AGENTS.md scenario 2: pause and resume ──
+          if want 2; then
+            echo "=== S2: pause and resume ==="
+            paused() { kubectl get pipeline "$PIPELINE" -n "$NS" -o jsonpath='{.spec.paused}'; }
+            if OUT=$(kardinal pause "$PIPELINE" 2>&1) && [ "$(paused)" = true ]; then
+              if OUT=$(kardinal resume "$PIPELINE" 2>&1) && [ "$(paused)" != true ]; then
+                pass "S2: pause sets spec.paused and resume clears it"
+              else
+                fail "S2: resume — spec.paused=$(paused): $OUT"
+              fi
+            else
+              fail "S2: pause — spec.paused=$(paused): $OUT"
+            fi
           fi
 
-          # Scenario 14: Custom expression gate — require-uat-soak (bundle.upstreamSoakMinutes >= 30)
-          echo "=== Scenario 14: Custom expression gate (soak requirement) ==="
-          S14_OUTPUT=$(kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" 2>&1 || true)
-          echo "S14 simulate output: $S14_OUTPUT"
-          if echo "$S14_OUTPUT" | grep -qE "BLOCKED|PASS|RESULT|soak|upstreamSoak"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S14: Custom expression gate (soak) — simulate returned deterministic output"
-          else
-            echo "S14: FAIL — no policy output: $S14_OUTPUT"
-            FAIL=$((FAIL+1))
-            RESULTS="$RESULTS\n❌ S14: Custom expression gate — no policy output: $S14_OUTPUT"
+          # ── AGENTS.md scenario 3: policy gates (S3, S3b, S13, S14) ──
+          # simulate TIME SOAK_MINUTES: prints the CLI's output; the exit status is the CLI's.
+          simulate() { kardinal policy simulate --pipeline "$PIPELINE" --env prod --time "$1" --soak-minutes "$2" 2>&1; }
+          if want 3; then
+            echo "=== S3: weekend gate ==="
+            if OUT=$(simulate "Saturday 3pm" 60) && grep -q '^RESULT: BLOCKED' <<<"$OUT" \
+              && grep -q 'Blocked by: no-weekend-deploys' <<<"$OUT" && ! grep -q 'Blocked by: require-uat-soak' <<<"$OUT"; then
+              pass "S3: weekend gate — Saturday 3pm is BLOCKED by no-weekend-deploys"
+            else
+              fail "S3: weekend gate — expected BLOCKED by no-weekend-deploys only; got: $OUT"
+            fi
+            if OUT=$(simulate "Tuesday 10am" 60) && grep -q '^RESULT: PASS' <<<"$OUT"; then
+              pass "S3b: weekend gate — Tuesday 10am with 60m soak passes"
+            else
+              fail "S3b: weekend gate — expected RESULT: PASS; got: $OUT"
+            fi
+            if OUT=$(simulate "Saturday 3pm" 0) && grep -q 'Blocked by: no-weekend-deploys' <<<"$OUT" \
+              && grep -q 'Blocked by: require-uat-soak' <<<"$OUT"; then
+              pass "S13: multiple gates — both org gates block prod on Saturday without soak"
+            else
+              fail "S13: multiple gates — expected both gates to block; got: $OUT"
+            fi
+            if OUT=$(simulate "Tuesday 10am" 0) && grep -q 'Blocked by: require-uat-soak' <<<"$OUT" \
+              && ! grep -q 'Blocked by: no-weekend-deploys' <<<"$OUT"; then
+              pass "S14: expression gate — require-uat-soak blocks Tuesday without soak"
+            else
+              fail "S14: expression gate — expected BLOCKED by require-uat-soak only; got: $OUT"
+            fi
           fi
 
-          # Scenario 15: Gate override (K-09 emergency override)
-          echo "=== Scenario 15: Emergency gate override ==="
-          S15_OUTPUT=$(kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys \
-            --reason "S15 PDCA anchor test" --expires-in 1m 2>&1 || true)
-          echo "S15 override output: $S15_OUTPUT"
-          if echo "$S15_OUTPUT" | grep -qE "override|Override|audit|applied|success|Error|error"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S15: Emergency override — K-09 override command executed"
-          else
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S15: Emergency override — ran but no clear output: $S15_OUTPUT"
+          # ── AGENTS.md scenario 4: explain shows gate details ──
+          if want 4; then
+            echo "=== S4: explain ==="
+            for _ in $(seq 1 18); do
+              OUT=$(kardinal explain "$PIPELINE" --env prod 2>&1) && grep -q 'no-weekend-deploys' <<<"$OUT" \
+                && grep -qF '!schedule.isWeekend' <<<"$OUT" && break
+              sleep 10
+            done
+            if OUT=$(kardinal explain "$PIPELINE" --env prod 2>&1) && grep -q 'no-weekend-deploys' <<<"$OUT" \
+              && grep -qF '!schedule.isWeekend' <<<"$OUT"; then
+              pass "S4: explain — shows the no-weekend-deploys gate and its expression"
+            else
+              fail "S4: explain — expected the no-weekend-deploys gate and !schedule.isWeekend; got: $OUT"
+            fi
           fi
 
-
-          # Scenario 16: HTTP healthcheck adapter (structural — API surface only)
-          echo "=== Scenario 16: HTTP healthcheck adapter API ==="
-          # Verify pipeline webhook health config can be patched via API (structural check)
-          # Real HTTP health check requires an HTTP endpoint — we verify the pipeline spec is valid
-          S16_OUTPUT=$(kubectl get pipeline kardinal-test-app -o jsonpath='{.spec.stages}' 2>&1 || true)
-          echo "S16 pipeline stages: $S16_OUTPUT"
-          if [ -n "$S16_OUTPUT" ]; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S16: HTTP health adapter (structural) — pipeline stages spec readable"
-          else
-            echo "S16: NOTE — pipeline not found or stages empty: $S16_OUTPUT"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S16: HTTP health adapter (structural) — pipeline API accessible"
+          # ── AGENTS.md scenario 6: supersession (S6, S19) ──
+          if want 6; then
+            echo "=== S6: concurrent bundles ==="
+            if OUT=$(kardinal create bundle "$PIPELINE" --image ghcr.io/pnz1990/kardinal-test-app:sha-aaa0001 2>&1) \
+              && sleep 3 && OUT=$(kardinal create bundle "$PIPELINE" --image "$TEST_IMAGE" 2>&1); then
+              OLD=$(newest_bundle "$PIPELINE" sha-aaa0001)
+              NEW=$(newest_bundle "$PIPELINE" "$TEST_TAG")
+              if wait_superseded 90 "$OLD" && [ "$(bundle_phase "$NEW")" != Superseded ]; then
+                pass "S6: concurrent bundles — $OLD Superseded, $NEW $(bundle_phase "$NEW")"
+              else
+                fail "S6: concurrent bundles — old '$OLD' is '$(bundle_phase "$OLD")', new '$NEW' is '$(bundle_phase "$NEW")'"
+              fi
+            else
+              fail "S6: concurrent bundles — create bundle failed: $OUT"
+            fi
+            echo "=== S19: three concurrent bundles ==="
+            S19_ERR=""
+            for t in sha-s19a sha-s19b sha-s19c; do
+              OUT=$(kardinal create bundle "$PIPELINE" --image "ghcr.io/pnz1990/kardinal-test-app:$t" 2>&1) \
+                || S19_ERR="${S19_ERR}create bundle $t failed: $OUT; "
+            done
+            A=$(newest_bundle "$PIPELINE" sha-s19a)
+            B=$(newest_bundle "$PIPELINE" sha-s19b)
+            C=$(newest_bundle "$PIPELINE" sha-s19c)
+            if [ -z "$S19_ERR" ] && wait_superseded 90 "$A" "$B" && [ "$(bundle_phase "$C")" != Superseded ]; then
+              pass "S19: three concurrent bundles — the two older are Superseded, the newest is $(bundle_phase "$C")"
+            else
+              fail "S19: three concurrent bundles — ${S19_ERR}phases: a=$(bundle_phase "$A") b=$(bundle_phase "$B") c=$(bundle_phase "$C")"
+            fi
           fi
 
-          # Scenario 17: Prometheus MetricCheck adapter (structural — CRD presence)
-          echo "=== Scenario 17: Prometheus MetricCheck adapter ==="
-          # Verify MetricCheck CRD is installed in the cluster
-          S17_OUTPUT=$(kubectl get crd metricchecks.kardinal.io 2>&1 || true)
-          echo "S17 MetricCheck CRD: $S17_OUTPUT"
-          if echo "$S17_OUTPUT" | grep -q "metricchecks.kardinal.io"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S17: Prometheus MetricCheck CRD present — adapter available"
-          else
-            echo "S17: NOTE — MetricCheck CRD not found: $S17_OUTPUT"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S17: Prometheus MetricCheck CRD — not found (cluster may predate CRD install)"
+          # ── Extra checks (scenario "all" only) ──
+          if want extra; then
+            echo "=== S7: config-only bundle ==="
+            if OUT=$(kardinal create bundle "$PIPELINE" --type config 2>&1) \
+              && [ "$(kubectl get bundles -n "$NS" -o json | jq --arg p "$PIPELINE" '[.items[] | select(.spec.pipeline == $p and .spec.type == "config")] | length')" -ge 1 ]; then
+              pass "S7: config-only bundle — a type=config Bundle was created"
+            else
+              fail "S7: config-only bundle — $OUT"
+            fi
+
+            echo "=== S10: kardinal get bundles ==="
+            if OUT=$(kardinal get bundles "$PIPELINE" 2>&1) && grep -q "$PIPELINE-" <<<"$OUT"; then
+              pass "S10: get bundles — lists the pipeline's bundles"
+            else
+              fail "S10: get bundles — $OUT"
+            fi
+
+            echo "=== S11: kardinal delete bundle ==="
+            if kardinal create bundle "$PIPELINE" --image ghcr.io/pnz1990/kardinal-test-app:sha-del1111 \
+              && DEL=$(newest_bundle "$PIPELINE" sha-del1111) && [ -n "$DEL" ] \
+              && OUT=$(kardinal delete bundle "$DEL" 2>&1) \
+              && kubectl wait --for=delete "bundle/$DEL" -n "$NS" --timeout=30s; then
+              pass "S11: delete bundle — $DEL is gone"
+            else
+              fail "S11: delete bundle — bundle '$DEL': $OUT"
+            fi
+
+            echo "=== S12: kardinal get steps ==="
+            if OUT=$(kardinal get steps "$PIPELINE" 2>&1) && grep -qE '^test[[:space:]]' <<<"$OUT"; then
+              pass "S12: get steps — lists the pipeline's test step"
+            else
+              fail "S12: get steps — $OUT"
+            fi
+
+            echo "=== S15: emergency gate override ==="
+            if OUT=$(kardinal -n platform-policies override "$PIPELINE" --stage prod --gate no-weekend-deploys \
+                --reason "S15 PDCA check" --expires-in 1m 2>&1) \
+              && [ "$(kubectl get policygate no-weekend-deploys -n platform-policies -o json \
+                | jq '[.spec.overrides[]? | select(.reason == "S15 PDCA check")] | length')" -ge 1 ]; then
+              pass "S15: emergency override — override recorded on no-weekend-deploys"
+            else
+              fail "S15: emergency override — $OUT"
+            fi
+
+            echo "=== S16: Pipeline environments ==="
+            ENVS=$(kubectl get pipeline "$PIPELINE" -n "$NS" -o jsonpath='{.spec.environments[*].name}' 2>&1)
+            if [ "$ENVS" = "test uat prod" ]; then
+              pass "S16: Pipeline environments — test uat prod, in order"
+            else
+              fail "S16: Pipeline environments — expected 'test uat prod'; got: $ENVS"
+            fi
+
+            echo "=== S17: MetricCheck CRD ==="
+            if OUT=$(kubectl get crd metricchecks.kardinal.io -o name 2>&1); then
+              pass "S17: MetricCheck CRD is installed"
+            else
+              fail "S17: MetricCheck CRD — $OUT"
+            fi
+
+            echo "=== S18: resource health check accepted by the API server ==="
+            if OUT=$(kubectl apply --dry-run=server -f test/pdca/s9-health-pipeline.yaml 2>&1) \
+              && grep -q '(server dry run)' <<<"$OUT"; then
+              pass "S18: the installed Pipeline CRD accepts a resource health check (server dry run)"
+            else
+              fail "S18: server dry run — $OUT"
+            fi
+
+            echo "=== S9: health check failure blocks promotion ==="
+            kubectl create namespace s9-health-test --dry-run=client -o yaml | kubectl apply -f -
+            # Zero replicas: the Deployment never becomes available.
+            kubectl create deployment s9-test-app --image="$TEST_IMAGE" --replicas=0 -n s9-health-test \
+              --dry-run=client -o yaml | kubectl apply -f -
+            kubectl apply -f test/pdca/s9-health-pipeline.yaml
+            sleep 5
+            S9=""
+            if OUT=$(kardinal create bundle s9-health-test --image "$TEST_IMAGE" 2>&1); then
+              S9_BUNDLE=$(newest_bundle s9-health-test "$TEST_TAG")
+              for _ in $(seq 1 12); do
+                sleep 10
+                case "$(step_field "$S9_BUNDLE" test state)" in
+                  Verified) S9=Verified; break ;;
+                  HealthChecking) S9=HealthChecking ;;
+                  Failed) S9="Failed: $(step_field "$S9_BUNDLE" test message)"; break ;;
+                esac
+              done
+              if [ "$S9" = HealthChecking ] || { [[ "$S9" == Failed:* ]] && grep -qi health <<<"$S9"; }; then
+                pass "S9: health check failure blocks — the step stopped at the health check ($S9)"
+              else
+                fail "S9: health check failure blocks — expected HealthChecking or a health failure; got '${S9:-$(step_field "$S9_BUNDLE" test state)}'"
+              fi
+            else
+              fail "S9: create bundle failed: $OUT"
+            fi
+            kubectl delete pipeline s9-health-test -n "$NS" --ignore-not-found
+            kubectl delete namespace s9-health-test --ignore-not-found --wait=false
+
+            echo "=== S23: org gates are installed ==="
+            if OUT=$(kubectl get policygate no-weekend-deploys require-uat-soak -n platform-policies -o name 2>&1); then
+              pass "S23: platform engineer — both org PolicyGates exist in platform-policies"
+            else
+              fail "S23: org PolicyGates — $OUT"
+            fi
+
+            echo "=== S24: kardinal history ==="
+            if OUT=$(kardinal history "$PIPELINE" 2>&1) && grep -q "$PIPELINE-" <<<"$OUT"; then
+              pass "S24: history — lists the pipeline's bundles"
+            else
+              fail "S24: history — $OUT"
+            fi
           fi
 
-          # Scenario 18: Custom health adapter configuration (webhook step)
-          echo "=== Scenario 18: Custom health adapter configuration ==="
-          # Verify the pipeline API accepts a custom webhook step spec (dry-run)
-          S18_MANIFEST="apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: s18-test-dry-run\n  namespace: default\nspec:\n  stages:\n  - name: test\n    path: environments/test\n    update:\n      strategy: kustomize\n    health:\n      type: resource\n      resource:\n        kind: Deployment\n        name: s18-placeholder\n        namespace: default"
-          S18_OUTPUT=$(printf '%s' "$S18_MANIFEST" | kubectl apply --dry-run=server -f - 2>&1 || true)
-          echo "S18 dry-run output: $S18_OUTPUT"
-          if echo "$S18_OUTPUT" | grep -qE "configured|created|serverside|dry run|validated|Pipeline"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S18: Custom health adapter config — pipeline spec validates (dry-run)"
-          else
-            echo "S18: NOTE — dry-run result: $S18_OUTPUT"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S18: Custom health adapter config — dry-run: $S18_OUTPUT"
-          fi
-
-
-          # Scenario 19: 3+ concurrent bundles (supersession ordering)
-          echo "=== Scenario 19: 3+ concurrent bundles ==="
-          # Create 3 bundles in rapid succession — oldest should be superseded by newest
-          S19_A=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-s19a" 2>&1 || true)
-          S19_B=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-s19b" 2>&1 || true)
-          S19_C=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-s19c" 2>&1 || true)
-          sleep 5
-          S19_BUNDLES=$(kardinal get bundles kardinal-test-app 2>&1 || true)
-          echo "S19 bundles output: $S19_BUNDLES"
-          # With 3+ bundles created, the system should show active bundles
-          if echo "$S19_BUNDLES" | grep -qE "sha-s19|bundle|Bundle|NAME|AGE"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S19: 3+ concurrent bundles — bundle list accessible after multi-bundle create"
-          else
-            echo "S19: NOTE — bundles output: $S19_BUNDLES"
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S19: 3+ concurrent bundles — bundle list: $S19_BUNDLES"
-          fi
-
-          # Scenario 20: App readiness failure (image that will never become Ready)
-          echo "=== Scenario 20: App readiness failure ==="
-          # Use a known-invalid image tag to trigger readiness failure in health check
-          S20_OUTPUT=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-badimage000" 2>&1 || true)
-          echo "S20 bundle output: $S20_OUTPUT"
-          # The bundle should be created even with a bad image (controller handles readiness)
-          if echo "$S20_OUTPUT" | grep -qE "Bundle|bundle|created|error|Error"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S20: App readiness failure — bundle creation attempted (controller handles readiness)"
-          else
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S20: App readiness failure — output: $S20_OUTPUT"
-          fi
-
-          # Scenario 21: SRE rollback+explain flow (full lifecycle)
-          echo "=== Scenario 21: SRE rollback+explain flow ==="
-          # First, explain to diagnose; then rollback
-          EXPLAIN_OUT=$(kardinal explain kardinal-test-app 2>&1 || true)
-          echo "S21 explain output: $EXPLAIN_OUT"
-          ROLLBACK_OUT=$(kardinal rollback kardinal-test-app 2>&1 || true)
-          echo "S21 rollback output: $ROLLBACK_OUT"
-          if echo "$EXPLAIN_OUT" | grep -qE "Pipeline|pipeline|gate|Gate|Stage|stage|explain|Bundle" &&              echo "$ROLLBACK_OUT" | grep -qE "rollback|Rollback|rolled|PR|pr|reverted|success"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S21: SRE rollback+explain — explain shows state, rollback executes"
-          elif echo "$EXPLAIN_OUT" | grep -qE "Pipeline|pipeline|Bundle|bundle"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S21: SRE rollback+explain — explain ok; rollback: $ROLLBACK_OUT"
-          else
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S21: SRE rollback+explain — explain: $EXPLAIN_OUT; rollback: $ROLLBACK_OUT"
-          fi
-
-
-          # Scenario 22: Developer persona journey — create bundle, check status, rollback
-          echo "=== Scenario 22: Developer persona journey ==="
-          S22_BUNDLE=$(kardinal create bundle kardinal-test-app --image "ghcr.io/pnz1990/kardinal-test-app:sha-dev22" 2>&1 || true)
-          echo "S22 create: $S22_BUNDLE"
-          S22_STATUS=$(kardinal get pipelines 2>&1 || true)
-          echo "S22 status: $S22_STATUS"
-          S22_ROLLBACK=$(kardinal rollback kardinal-test-app 2>&1 || true)
-          echo "S22 rollback: $S22_ROLLBACK"
-          if echo "$S22_BUNDLE" | grep -qE "Bundle|bundle|created|sha-dev22" &&              echo "$S22_STATUS" | grep -qE "Pipeline|pipeline|Verified|Promoting"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S22: Developer journey — create→status→rollback all executed"
-          else
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S22: Developer journey — create: $S22_BUNDLE; status: $S22_STATUS"
-          fi
-
-          # Scenario 23: Platform engineer persona — pipeline describe + policy list
-          echo "=== Scenario 23: Platform engineer persona journey ==="
-          S23_DESC=$(kardinal describe pipeline kardinal-test-app 2>&1 || kubectl get pipeline kardinal-test-app -o yaml 2>&1 || true)
-          echo "S23 describe: ${S23_DESC:0:200}"
-          S23_GATES=$(kubectl get policygate -A -o wide 2>&1 || true)
-          echo "S23 gates: $S23_GATES"
-          if echo "$S23_DESC" | grep -qE "kardinal-test-app|Pipeline|pipeline|apiVersion" &&              echo "$S23_GATES" | grep -qE "policygate|PolicyGate|no-weekend|require-uat|NAME"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S23: Platform engineer journey — pipeline describe + policy gates visible"
-          else
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S23: Platform engineer — desc: ${S23_DESC:0:80}; gates: ${S23_GATES:0:80}"
-          fi
-
-          # Scenario 24: SRE incident response — audit + explain + rollback
-          echo "=== Scenario 24: SRE incident response journey ==="
-          S24_AUDIT=$(kardinal audit kardinal-test-app 2>&1 || kardinal history kardinal-test-app 2>&1 || true)
-          echo "S24 audit: ${S24_AUDIT:0:200}"
-          S24_EXPLAIN=$(kardinal explain kardinal-test-app 2>&1 || true)
-          echo "S24 explain: ${S24_EXPLAIN:0:200}"
-          if echo "$S24_AUDIT" | grep -qE "audit|history|AuditEvent|event|bundle|Bundle" ||              echo "$S24_EXPLAIN" | grep -qE "Pipeline|pipeline|explain|gate|Gate|Bundle"; then
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n✅ S24: SRE journey — audit/history + explain flow executed"
-          else
-            PASS=$((PASS+1))
-            RESULTS="$RESULTS\n⚠️ S24: SRE journey — audit: ${S24_AUDIT:0:60}; explain: ${S24_EXPLAIN:0:60}"
-          fi
-
-          echo "PASS=$PASS" >> $GITHUB_OUTPUT
-          echo "FAIL=$FAIL" >> $GITHUB_OUTPUT
-          # Write results to file for next step
-          printf "%b" "$RESULTS" > /tmp/pdca-results.txt
+          echo "Scenario checks: $(grep -c '^✅' "$RESULTS_FILE") passed, $(grep -c '^❌' "$RESULTS_FILE") failed"
 
       # ── UI scenarios S25–S27: Playwright against mock server (no cluster required) ──
       # Design ref: docs/design/25-anchor-kardinal-promoter.md §Future →
@@ -575,6 +465,7 @@ jobs:
       # These run against the mock server only (web/test/e2e/mock-server/server.mjs).
       # The cluster is already up but not used by these steps.
       - name: Setup Node.js for Playwright UI tests
+        if: env.SCENARIO == 'all'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -582,118 +473,95 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install web dependencies
+        if: env.SCENARIO == 'all'
         run: npm ci --prefix web
 
       - name: Build web UI (required by mock server to serve static assets)
+        if: env.SCENARIO == 'all'
         run: npm run --prefix web build
 
       - name: Install Playwright browsers (chromium only)
+        if: env.SCENARIO == 'all'
         run: npx --prefix web playwright install chromium --with-deps
 
       - name: Run PDCA UI scenarios S25–S27 (Playwright)
         id: ui_scenarios
+        if: env.SCENARIO == 'all'
         env:
           CI: 'true'
           KARDINAL_E2E_PORT: '3099'
         run: |
-          UI_PASS=0
-          UI_FAIL=0
-          UI_RESULTS=""
-
-          # S25: Journey 001 — Pipeline list + bundle status visible
-          echo "=== S25: UI — Pipeline list + bundle status ==="
-          if npx --prefix web playwright test \
-              web/test/e2e/journeys/001-pipeline-list.spec.ts \
-              --config=web/playwright.config.ts \
-              --reporter=line \
-              --timeout=30000 2>&1; then
-            echo "S25: PASS"
-            UI_PASS=$((UI_PASS+1))
-            UI_RESULTS="$UI_RESULTS\n✅ S25: UI bundle status — journey 001 all steps pass"
-          else
-            echo "S25: FAIL"
-            UI_FAIL=$((UI_FAIL+1))
-            UI_RESULTS="$UI_RESULTS\n❌ S25: UI bundle status — journey 001 failed (see logs)"
-          fi
-
-          # S26: Journey 002 — DAG node click → pipeline graph visible
-          echo "=== S26: UI — Pipeline graph (DAG node click) ==="
-          if npx --prefix web playwright test \
-              web/test/e2e/journeys/002-dag-node-click.spec.ts \
-              --config=web/playwright.config.ts \
-              --reporter=line \
-              --timeout=30000 2>&1; then
-            echo "S26: PASS"
-            UI_PASS=$((UI_PASS+1))
-            UI_RESULTS="$UI_RESULTS\n✅ S26: UI pipeline graph — journey 002 all steps pass"
-          else
-            echo "S26: FAIL"
-            UI_FAIL=$((UI_FAIL+1))
-            UI_RESULTS="$UI_RESULTS\n❌ S26: UI pipeline graph — journey 002 failed (see logs)"
-          fi
-
-          # S27: Journey 011 — Rollback button visible and clickable in NodeDetail
-          echo "=== S27: UI — Rollback button ==="
-          if npx --prefix web playwright test \
-              web/test/e2e/journeys/011-rollback-button.spec.ts \
-              --config=web/playwright.config.ts \
-              --reporter=line \
-              --timeout=30000 2>&1; then
-            echo "S27: PASS"
-            UI_PASS=$((UI_PASS+1))
-            UI_RESULTS="$UI_RESULTS\n✅ S27: UI rollback button — journey 011 all steps pass"
-          else
-            echo "S27: FAIL"
-            UI_FAIL=$((UI_FAIL+1))
-            UI_RESULTS="$UI_RESULTS\n❌ S27: UI rollback button — journey 011 failed (see logs)"
-          fi
-
-          echo "UI_PASS=$UI_PASS" >> $GITHUB_OUTPUT
-          echo "UI_FAIL=$UI_FAIL" >> $GITHUB_OUTPUT
-          printf "%b" "$UI_RESULTS" >> /tmp/pdca-results.txt
-          echo "UI scenarios complete: PASS=$UI_PASS FAIL=$UI_FAIL"
+          set +e
+          ui() {
+            local id=$1 spec=$2 what=$3
+            echo "=== $id: $what ==="
+            if npx --prefix web playwright test "web/test/e2e/journeys/$spec" \
+                --config=web/playwright.config.ts --reporter=line --timeout=30000 2>&1; then
+              printf '✅ %s: %s — %s passes\n' "$id" "$what" "$spec" >> "$RESULTS_FILE"
+            else
+              printf '❌ %s: %s — %s failed (see logs)\n' "$id" "$what" "$spec" >> "$RESULTS_FILE"
+            fi
+          }
+          ui S25 "UI bundle status" 001-pipeline-list.spec.ts
+          ui S26 "UI pipeline graph" 002-dag-node-click.spec.ts
+          ui S27 "UI rollback button" 011-rollback-button.spec.ts
 
       - name: Post PDCA evidence to Issue #1
         if: always()
         env:
-          PASS: ${{ steps.scenarios.outputs.PASS }}
-          FAIL: ${{ steps.scenarios.outputs.FAIL }}
-          UI_PASS: ${{ steps.ui_scenarios.outputs.UI_PASS }}
-          UI_FAIL: ${{ steps.ui_scenarios.outputs.UI_FAIL }}
           TEST_IMAGE: ${{ steps.image.outputs.image }}
+          SCENARIOS_OUTCOME: ${{ steps.scenarios.outcome }}
+          UI_OUTCOME: ${{ steps.ui_scenarios.outcome }}
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           TRIGGER: ${{ github.event_name }}
         run: |
-          FAIL_COUNT=$((${FAIL:-0} + ${UI_FAIL:-0}))
-          PASS_COUNT=$((${PASS:-0} + ${UI_PASS:-0}))
+          touch "$RESULTS_FILE"
+          # grep -c prints 0 but exits 1 when nothing matches.
+          PASS_COUNT=$(grep -c '^✅' "$RESULTS_FILE" || true)
+          FAIL_COUNT=$(grep -c '^❌' "$RESULTS_FILE" || true)
           TOTAL=$((PASS_COUNT + FAIL_COUNT))
-          STATUS="ALL PASS"
-          if [ "${FAIL_COUNT}" -gt 0 ]; then STATUS="${FAIL_COUNT} FAILED"; fi
-          RESULTS=$(cat /tmp/pdca-results.txt 2>/dev/null || echo "no results")
-          DATE=$(date -u '+%Y-%m-%d')
-          # Compute coverage percentage
-          if [ "$TOTAL" -gt 0 ]; then
-            PCT=$(python3 -c "print(int(${PASS_COUNT}/${TOTAL}*100))")
+          # A step that did not finish means some checks never ran.
+          INCOMPLETE=""
+          [ "$SCENARIOS_OUTCOME" = success ] || INCOMPLETE="scenario step: ${SCENARIOS_OUTCOME:-not run}"
+          case "$UI_OUTCOME" in
+            success | skipped) ;;
+            *) INCOMPLETE="${INCOMPLETE:+$INCOMPLETE; }UI step: ${UI_OUTCOME:-not run}" ;;
+          esac
+          if [ "$TOTAL" -eq 0 ]; then
+            STATUS="NO CHECKS RAN"
+          elif [ "$FAIL_COUNT" -gt 0 ]; then
+            STATUS="${FAIL_COUNT} FAILED"
+          elif [ -n "$INCOMPLETE" ]; then
+            STATUS="INCOMPLETE"
           else
-            PCT=0
+            STATUS="ALL PASS"
           fi
-          echo "PDCA AUTOMATED - Product Validation $DATE" > /tmp/comment.txt
-          echo "" >> /tmp/comment.txt
-          echo "Status: $STATUS (PASS=$PASS_COUNT FAIL=$FAIL_COUNT)" >> /tmp/comment.txt
-          echo "Image: $TEST_IMAGE" >> /tmp/comment.txt
-          echo "CI Run: https://github.com/$GH_REPO/actions/runs/$RUN_ID" >> /tmp/comment.txt
-          echo "Trigger: $TRIGGER" >> /tmp/comment.txt
-          echo "" >> /tmp/comment.txt
-          echo "Scenario Results:" >> /tmp/comment.txt
-          echo "$RESULTS" >> /tmp/comment.txt
-          echo "" >> /tmp/comment.txt
-          echo "Note: S2 (pause) and S5 (rollback) require full cluster - run manually." >> /tmp/comment.txt
-          echo "Issue: #413" >> /tmp/comment.txt
-          gh issue comment 1 --repo "$GH_REPO" --body-file /tmp/comment.txt
-          # Post structured anchor score line to Issue #1 for otherness coverage tracking
+          PCT=0
+          if [ "$TOTAL" -gt 0 ]; then PCT=$((PASS_COUNT * 100 / TOTAL)); fi
+          DATE=$(date -u '+%Y-%m-%d')
+          COMMENT_FILE=$(mktemp)
+          {
+            echo "PDCA AUTOMATED - Product Validation $DATE"
+            echo ""
+            echo "Status: $STATUS (PASS=$PASS_COUNT FAIL=$FAIL_COUNT, scenario=$SCENARIO)"
+            if [ -n "$INCOMPLETE" ]; then echo "Did not finish: $INCOMPLETE"; fi
+            echo "Image: $TEST_IMAGE"
+            echo "CI Run: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
+            echo "Trigger: $TRIGGER"
+            echo ""
+            echo "Scenario Results:"
+            cat "$RESULTS_FILE"
+          } > "$COMMENT_FILE"
+          cat "$COMMENT_FILE"
+          gh issue comment 1 --repo "$GH_REPO" --body-file "$COMMENT_FILE"
+          # Post structured anchor score line to Issue #1 for coverage tracking
           gh issue comment 1 --repo "$GH_REPO" \
             --body "[ANCHOR | kardinal-promoter | ${DATE}] coverage: ${PASS_COUNT}/${TOTAL} (${PCT}%) | PASS=${PASS_COUNT} FAIL=${FAIL_COUNT}"
+          if [ "$STATUS" != "ALL PASS" ]; then
+            echo "::error::PDCA validation: $STATUS"
+            exit 1
+          fi
 
       - name: Tear down cluster
         if: always()

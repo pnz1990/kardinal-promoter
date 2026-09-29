@@ -2,7 +2,7 @@
 name: Feature Request
 about: Suggest a new feature or improvement for kardinal-promoter
 title: "[FEATURE] "
-labels: enhancement
+labels: kind/enhancement
 assignees: pnz1990
 ---
 
