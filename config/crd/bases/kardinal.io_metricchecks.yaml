@@ -67,12 +67,13 @@ spec:
               interval:
                 description: |-
                   Interval is how often to re-evaluate the metric (e.g. "1m", "5m").
-                  Defaults to "1m" if empty.
+                  Defaults to "1m" if empty. Values below "10s" are raised to "10s".
                 pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                 type: string
               prometheusURL:
                 description: |-
-                  PrometheusURL is the base URL of the Prometheus server.
+                  PrometheusURL is the base URL of the Prometheus HTTP API (http or https).
+                  A path is kept as a prefix: the query goes to <prometheusURL>/api/v1/query.
                   Example: http://prometheus.monitoring.svc:9090
                 minLength: 1
                 type: string
@@ -131,8 +132,10 @@ spec:
                   Empty string means no evaluation has completed yet.
                 type: string
               reason:
-                description: Reason is a human-readable explanation of the current
-                  result.
+                description: |-
+                  Reason is a human-readable explanation of the current result. On a query
+                  error it holds the HTTP status and, for a Prometheus API error, its error
+                  text; the response body is never copied here.
                 type: string
               result:
                 description: |-

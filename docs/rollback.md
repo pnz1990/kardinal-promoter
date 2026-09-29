@@ -47,31 +47,31 @@ For environments where emergency rollbacks should not require PR review, configu
 
 ## Automatic Rollback
 
-kardinal-promoter triggers automatic rollback in two scenarios:
-
-### Consecutive health-check failures (configurable threshold)
-
-The most common automatic rollback scenario. Configure per environment:
+Automatic rollback is configured per environment with `onHealthFailure`:
 
 ```yaml
 spec:
   environments:
     - name: prod
-      autoRollback:
-        failureThreshold: 3   # default: 3 consecutive failures
+      bake:
+        minutes: 30
+        policy: fail-on-alarm
+      onHealthFailure: rollback   # rollback | abort | none (default)
 ```
 
-**How it works:**
+| `onHealthFailure` | What happens to the PromotionStep |
+|---|---|
+| `none` (default) | `Failed`; downstream environments stop |
+| `abort` | `AbortedByAlarm`; a human must intervene |
+| `rollback` | A rollback Bundle is created (`spec.provenance.rollbackOf`, label `kardinal.io/rollback: "true"`) and the step moves to `RollingBack` |
 
-1. The `PromotionStep` reconciler tracks `status.consecutiveHealthFailures` during `HealthChecking`.
-2. On each failed health check the counter increments. On success it resets to 0.
-3. When `consecutiveHealthFailures >= failureThreshold`, the controller automatically creates a rollback Bundle with:
-   - `spec.provenance.rollbackOf: <original bundle name>`
-   - Label `kardinal.io/rollback: "true"`
-4. The rollback Bundle runs through the same promotion flow (same gates, same PR flow).
-5. **Idempotent**: if a rollback Bundle already exists for the original Bundle, no duplicate is created.
+**When it applies.** The controller applies `onHealthFailure` when:
 
-Omit `spec.environments[].autoRollback` to disable automatic rollback for an environment.
+- the PromotionStep has no Healthy check within `health.timeout` (default: 10m);
+- the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed`);
+- a health check fails during a bake window with `bake.policy: fail-on-alarm`.
+
+A rollback Bundle is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
 
 ### What counts as a failed health check
 
@@ -81,10 +81,8 @@ Each health check has one of four results (see [Timings and failures](health-ada
 |---|---|---|---|
 | Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
 | Waiting | A rollout in progress, including new pods that are not available yet; Argo CD or Flux not synced to the promoted commit yet; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
-| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded`; target not found | Yes, once per check | No |
+| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded`; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
 | Failed | Deployment `ProgressDeadlineExceeded`; Flagger canary `Failed` | Yes | Yes, at once |
-
-`onHealthFailure` sets what happens to the PromotionStep: `none` (default) marks it `Failed`, `abort` marks it `AbortedByAlarm` (a human must intervene), and `rollback` creates a rollback Bundle (`spec.provenance.rollbackOf`, label `kardinal.io/rollback: "true"`) and moves the step to `RollingBack`. A rollback Bundle is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain. With `bake.policy: fail-on-alarm`, an unhealthy check during the bake window also applies `onHealthFailure`.
 
 ### Health timeout
 
@@ -94,9 +92,15 @@ A new image whose pods crash-loop is the common case. Kubernetes reports such a 
 
 ### Delegation failure
 
-A Flagger canary `Failed` is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase is Unhealthy: each check counts, and the step fails through the health timeout, or sooner under `bake.policy: fail-on-alarm`.
+A Flagger canary `Failed` is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or sooner under `bake.policy: fail-on-alarm`.
 
-In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node).
+In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node). Use `kardinal rollback` to roll back manually.
+
+### `autoRollback` is not implemented
+
+`spec.environments[].autoRollback.failureThreshold` (roll back after N consecutive failed health checks) is reserved. The API server rejects a Pipeline that sets it, with the message `environments[].autoRollback is not implemented`. Remove the field and use `onHealthFailure`.
+
+The `RollbackPolicy` CRD is the building block for that feature. The controller reconciles RollbackPolicy objects that you create yourself, but nothing creates them automatically. A RollbackPolicy reads only the PromotionSteps of its `spec.bundleRef` in `spec.environment`. When the highest `status.consecutiveHealthFailures` among them reaches `spec.failureThreshold` (default: 3), it creates one rollback Bundle.
 
 ## What Happens in Git
 

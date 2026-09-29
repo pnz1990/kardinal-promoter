@@ -8,6 +8,7 @@ package library
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -16,10 +17,14 @@ import (
 
 const alphanumericChars = "0123456789abcdefghijklmnopqrstuvwxyz"
 
+// maxSeededStringLength bounds random.seededString, so one gate expression
+// cannot make the controller allocate an arbitrarily large string.
+const maxSeededStringLength = 1024
+
 // Random returns a CEL library that provides deterministic random generation.
 //
 //   - random.seededInt(min int, max int, seed string) → int
-//   - random.seededString(length int, seed string) → string
+//   - random.seededString(length int, seed string) → string (length 1 to 1024)
 func Random() cel.EnvOption {
 	return cel.Lib(&randomLibrary{})
 }
@@ -74,11 +79,12 @@ func generateDeterministicInt(args ...ref.Val) ref.Val {
 	}
 	seedStr := seed.(types.String).Value().(string)
 	hash := sha256.Sum256([]byte(seedStr))
-	v := uint64(hash[0])<<56 | uint64(hash[1])<<48 | uint64(hash[2])<<40 | uint64(hash[3])<<32 |
-		uint64(hash[4])<<24 | uint64(hash[5])<<16 | uint64(hash[6])<<8 | uint64(hash[7])
+	v := binary.BigEndian.Uint64(hash[:8])
+	// Go integer arithmetic wraps, so max-min is the exact range size modulo
+	// 2^64 and min+offset is exact too: the result is in [min, max) even when
+	// the range is wider than MaxInt64.
 	rangeSize := uint64(maxInt - minInt)
-	result := minInt + int64(v%rangeSize)
-	return types.Int(result)
+	return types.Int(minInt + int64(v%rangeSize))
 }
 
 func generateDeterministicString(length ref.Val, seed ref.Val) ref.Val {
@@ -88,24 +94,28 @@ func generateDeterministicString(length ref.Val, seed ref.Val) ref.Val {
 	if length.(types.Int) <= 0 {
 		return types.NewErr("random.seededString length must be positive")
 	}
+	if length.(types.Int) > maxSeededStringLength {
+		return types.NewErr("random.seededString length must be at most %d", maxSeededStringLength)
+	}
 	if seed.Type() != types.StringType {
 		return types.NewErr("random.seededString seed must be a string")
 	}
 	n := int(length.(types.Int).Value().(int64))
 	seedStr := seed.(types.String).Value().(string)
+	// Each 32-byte hash yields 8 characters (4 bytes each). The first block is
+	// sha256(seed), so strings of up to 8 characters are unchanged; every later
+	// block is the hash of the previous one. Reusing one hash made the output
+	// repeat every 8 characters (C04-gates-29).
 	hash := sha256.Sum256([]byte(seedStr))
 	result := make([]byte, n)
-	charsLen := len(alphanumericChars)
+	charsLen := uint32(len(alphanumericChars))
 	for i := 0; i < n; i++ {
-		start := (i * 4) % len(hash)
-		end := start + 4
-		if end > len(hash) {
-			newHash := sha256.Sum256(append(hash[:], result[:i]...))
-			hash = newHash
-			start = 0
+		off := (i * 4) % len(hash)
+		if i > 0 && off == 0 {
+			hash = sha256.Sum256(hash[:])
 		}
-		idx := uint32(hash[start])<<24 | uint32(hash[start+1])<<16 | uint32(hash[start+2])<<8 | uint32(hash[start+3])
-		result[i] = alphanumericChars[idx%uint32(charsLen)]
+		idx := binary.BigEndian.Uint32(hash[off : off+4])
+		result[i] = alphanumericChars[idx%charsLen]
 	}
 	return types.String(string(result))
 }

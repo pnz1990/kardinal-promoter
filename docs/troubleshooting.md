@@ -124,7 +124,7 @@ The CEL expression references an attribute that does not exist in the current ph
 kardinal policy test my-gate.yaml
 ```
 
-The output will show which attribute is unavailable. For example, `delegation.status` and `externalApproval.*` are planned future attributes — remove them or wait for that feature to ship. Attributes like `metrics.*` and `bundle.upstreamSoakMinutes` are available now but require the `MetricCheck` CRD to be configured for the relevant environment.
+The output will show which attribute is unavailable. Only the attributes in the [CEL context reference](reference/cel-context.md) exist; anything else (for example `delegation.status`, `externalApproval.*`, `previousBundle.*` or `bundle.metadata.*`) is an error and the gate blocks. `metrics.<name>` exists only when a `MetricCheck` named `<name>` exists in the gate's namespace, and `upstream.<env>` only when that environment appears in the Bundle's status or recent history.
 
 ## Bundle not promoting
 
@@ -303,7 +303,7 @@ kardinal explain my-app --env prod
 
 **CEL syntax error:** The expression failed to compile. Common mistakes:
 - Parentheses mismatch: `!schedule.isWeekend` (correct) vs `!schedule.isWeekend()` (wrong — it's a map field, not a function)
-- Unknown variable: `bundle.spec.images[0].tag` (correct) vs `bundle.images.tag` (wrong field path)
+- Unknown variable: `bundle.version` (correct) vs `bundle.spec.images[0].tag` (not in the context; see the [CEL context reference](reference/cel-context.md))
 - Type mismatch: comparing string to int without casting
 
 Test your expression before applying:
@@ -322,14 +322,18 @@ kubectl get promotionstep -l kardinal.io/bundle=my-app-v1 -o jsonpath='{range .i
 ### Symptom: PolicyGate stays FAIL even when condition should pass
 
 ```bash
-# Force re-evaluation by annotating the gate
-kubectl annotate policygate no-weekend-deploys \
+# Force re-evaluation by annotating the gate instances. The controller evaluates
+# the per-Bundle instances, which are labelled with their template's name.
+kubectl annotate policygate -A -l kardinal.io/gate-template=no-weekend-deploys \
   kardinal.io/force-recheck=$(date +%s) --overwrite
 
-# Or trigger a ScheduleClock tick
+# Or trigger a ScheduleClock tick, which re-evaluates every gate
 kubectl annotate scheduleclock kardinal-clock \
   kardinal.io/manual-tick=$(date +%s) -n kardinal-system --overwrite
 ```
+
+Any annotation change on a PolicyGate or ScheduleClock triggers a reconcile; the two keys
+above are conventions. A status-only write does not.
 
 ---
 

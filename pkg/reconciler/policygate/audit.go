@@ -18,21 +18,32 @@ package policygate
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/rs/zerolog"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
+// maxObjectNameLength is the longest valid Kubernetes object name.
+const maxObjectNameLength = 253
+
 // writeGateAuditEvent creates an AuditEvent recording a PolicyGate readiness
-// change. Called by patchStatus only on state transitions (ready flip).
-// Fire-and-forget: errors are dropped — audit must never block gate evaluation.
+// change at time at. patchStatus calls it when the gate first evaluates and
+// on every ready flip.
+//
+// The name carries the outcome and the transition time, so every transition
+// gets its own record (C04-gates-22); a fixed name per gate recorded only the
+// first one. A failed write is logged, not returned: audit must never block
+// gate evaluation.
 func writeGateAuditEvent(
 	ctx context.Context,
 	c client.Client,
 	gate *kardinalv1alpha1.PolicyGate,
 	outcome, reason string,
+	at metav1.Time,
 ) {
 	if c == nil || gate == nil {
 		return
@@ -47,26 +58,36 @@ func writeGateAuditEvent(
 	}
 
 	action := "GateEvaluated"
-	now := metav1.Now()
+	suffix := fmt.Sprintf("-gate-%s-%d", strings.ToLower(outcome), at.Unix())
+	base := gate.Name
+	if limit := maxObjectNameLength - len(suffix); len(base) > limit {
+		base = base[:limit]
+	}
+	name := sanitizeGateName(base + suffix)
 
-	// Name: {gate.Name}-gate-evaluated (truncated)
-	rawName := fmt.Sprintf("%s-gate-evaluated", gate.Name)
-	name := sanitizeGateName(rawName)
+	aeLabels := map[string]string{
+		"kardinal.io/pipeline":    pipelineName,
+		"kardinal.io/bundle":      bundleName,
+		"kardinal.io/environment": envName,
+		"kardinal.io/action":      action,
+	}
+	// kardinal.io/gate is the user-facing gate name. Instances carry it in
+	// kardinal.io/gate-name; gate-template is the fallback for instances created
+	// before that label existed.
+	if g := labels["kardinal.io/gate-name"]; g != "" {
+		aeLabels["kardinal.io/gate"] = g
+	} else if g := labels["kardinal.io/gate-template"]; g != "" {
+		aeLabels["kardinal.io/gate"] = g
+	}
 
 	ae := &kardinalv1alpha1.AuditEvent{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: gate.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    pipelineName,
-				"kardinal.io/bundle":      bundleName,
-				"kardinal.io/environment": envName,
-				"kardinal.io/action":      action,
-				"kardinal.io/gate":        gate.Labels["kardinal.io/gate-template"],
-			},
+			Labels:    aeLabels,
 		},
 		Spec: kardinalv1alpha1.AuditEventSpec{
-			Timestamp:    now,
+			Timestamp:    at,
 			BundleName:   bundleName,
 			PipelineName: pipelineName,
 			Environment:  envName,
@@ -76,16 +97,18 @@ func writeGateAuditEvent(
 		},
 	}
 
-	if err := c.Create(ctx, ae); err != nil {
-		// AlreadyExists = idempotent re-reconcile; non-conflict errors are silently ignored.
-		_ = client.IgnoreAlreadyExists(err)
+	// AlreadyExists is the same transition written by an earlier attempt.
+	if err := c.Create(ctx, ae); client.IgnoreAlreadyExists(err) != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).
+			Str("gate", gate.Name).Str("auditEvent", name).
+			Msg("failed to write PolicyGate AuditEvent")
 	}
 }
 
 // sanitizeGateName produces a valid Kubernetes name from a gate event name.
 func sanitizeGateName(s string) string {
-	if len(s) > 253 {
-		s = s[:253]
+	if len(s) > maxObjectNameLength {
+		s = s[:maxObjectNameLength]
 	}
 	result := make([]byte, 0, len(s))
 	for _, c := range []byte(s) {

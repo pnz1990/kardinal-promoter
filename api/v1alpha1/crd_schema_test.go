@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -414,22 +415,46 @@ func TestCRDAuditEventSpecImmutable(t *testing.T) {
 
 // ── C08-api-config-24, -28: printer columns, enums, short names ──────────────
 
+// listFilter matches a JSONPath list filter such as [?(@.type=="Ready")],
+// the usual form of a condition printer column.
+var listFilter = regexp.MustCompile(`\[\?\(@\.([A-Za-z0-9_]+)=="[^"]*"\)\]`)
+
 // TestCRDPrinterColumnsResolve: every printer column's JSONPath must name a
-// field in the schema whose type matches the column type.
+// field in the schema whose type matches the column type. A list filter
+// ([?(@.type=="Valid")]) resolves to the list's items, and its key must be an
+// item field.
 func TestCRDPrinterColumnsResolve(t *testing.T) {
 	for kind, c := range loadCRDs(t) {
 		for _, col := range c.crd.Spec.Versions[0].AdditionalPrinterColumns {
 			if strings.HasPrefix(col.JSONPath, ".metadata.") {
 				continue
 			}
+			// Rewrite each filter to "[key]" so that the path splits on ".".
+			path := listFilter.ReplaceAllString(strings.TrimPrefix(col.JSONPath, "."), "[$1]")
 			s := c.structural
-			for _, part := range strings.Split(strings.TrimPrefix(col.JSONPath, "."), ".") {
-				next, ok := s.Properties[part]
-				if !assert.True(t, ok, "%s column %q: %s does not resolve at %q", kind, col.Name, col.JSONPath, part) {
+			for _, part := range strings.Split(path, ".") {
+				name, filterKey, filtered := strings.Cut(strings.TrimSuffix(part, "]"), "[")
+				next, ok := s.Properties[name]
+				if !assert.True(t, ok, "%s column %q: %s does not resolve at %q", kind, col.Name, col.JSONPath, name) {
 					s = nil
 					break
 				}
 				s = &next
+				if !filtered {
+					continue
+				}
+				if !assert.True(t, s.Type == "array" && s.Items != nil,
+					"%s column %q: %s filters %q, which is not a list", kind, col.Name, col.JSONPath, name) {
+					s = nil
+					break
+				}
+				s = s.Items
+				_, ok = s.Properties[filterKey]
+				if !assert.True(t, ok, "%s column %q: %s filters on %q, which %q items do not have",
+					kind, col.Name, col.JSONPath, filterKey, name) {
+					s = nil
+					break
+				}
 			}
 			if s == nil {
 				continue

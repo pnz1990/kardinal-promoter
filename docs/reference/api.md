@@ -107,7 +107,7 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 
 `kardinal.io/v1alpha1`
 
-ChangeWindow defines a time window during which promotions are blocked (K-04). When active, all pipeline promotions in the cluster are blocked by PolicyGates using the changewindow.isBlocked() CEL function.
+ChangeWindow defines a cluster-scoped time window during which promotions are blocked (K-04). A ChangeWindow blocks nothing by itself: a PolicyGate blocks while a window it references is active, for example !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours"). A gate that names a ChangeWindow that does not exist blocks.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -115,13 +115,20 @@ ChangeWindow defines a time window during which promotions are blocked (K-04). W
 | `spec.end` | string (date-time) |  | End is when a blackout window ends (required for type: blackout). |
 | `spec.reason` | string |  | Reason is a human-readable explanation for this window. |
 | `spec.schedule` | object |  | Schedule configures a recurring allowed-hours window (for type: recurring). |
-| `spec.schedule.allowedDays` | []string |  | AllowedDays lists the days of the week when promotions are allowed. Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun. |
-| `spec.schedule.allowedHours` | string |  | AllowedHours is a time range in "HH:MM-HH:MM" format (24h, local time). |
-| `spec.schedule.timezone` | string |  | Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). |
+| `spec.schedule.allowedDays` | []string |  | AllowedDays lists the days of the week when promotions are allowed. Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun (full names such as Monday are accepted too). Empty means every day. |
+| `spec.schedule.allowedHours` | string |  | AllowedHours is a time range in "HH:MM-HH:MM" format (24h, in Timezone). The start is inclusive and the end exclusive; "24:00" is allowed as the end. An end before the start is an overnight range that belongs to the start day (for example "22:00-02:00" on Fri allows Friday 22:00 to Saturday 02:00). Empty means the whole day. |
+| `spec.schedule.timezone` | string |  | Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). Default: UTC. "Local" is rejected: it would be the controller's own timezone. An unknown name makes the window invalid: status condition Valid is False with the error, and the window is active (blocking). |
 | `spec.start` | string (date-time) |  | Start is when a blackout window begins (required for type: blackout). |
-| `spec.type` | string | yes | Type is the ChangeWindow type. "blackout": no promotions allowed between Start and End. "recurring": promotions allowed only during AllowedDays/AllowedHours windows. One of: `blackout`, `recurring`. |
+| `spec.type` | string | yes | Type is the ChangeWindow type. "blackout": the window is active (blocking) from Start (inclusive) to End (exclusive). "recurring": Schedule describes when promotions are allowed; the window is active (blocking) at every other time. An invalid spec (for example End not after Start, an unknown timezone or a malformed allowedHours) makes the window active, so gates that reference it block. One of: `blackout`, `recurring`. |
 | `status` | object |  | ChangeWindowStatus defines the observed state of a ChangeWindow. |
-| `status.active` | boolean |  | Active is true when the ChangeWindow is currently in effect. Updated by the controller on each reconcile cycle. |
+| `status.active` | boolean |  | Active is true when the ChangeWindow is currently blocking promotions. Written by the ChangeWindow reconciler, which requeues at the next window boundary. PolicyGates evaluate the spec at their own evaluation time with the same logic, so they never depend on this field being fresh. |
+| `status.conditions` | []object |  | Conditions holds status conditions. Valid is True when the spec can be evaluated. It is False (reason InvalidSpec, the error in the message) when it cannot, for example for an unknown timezone; the window is then active, so every gate that references it blocks until the spec is fixed. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
 
 ## MetricCheck
@@ -133,8 +140,8 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | MetricCheckSpec defines a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus at spec.interval, evaluates the threshold, and writes results to status. PolicyGate CEL expressions can reference these results via the metrics.* context variable. |
-| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty. |
-| `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus server. Example: http://prometheus.monitoring.svc:9090 |
+| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty. Values below "10s" are raised to "10s". |
+| `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Example: http://prometheus.monitoring.svc:9090 |
 | `spec.provider` | string | yes | Provider is the metrics backend. Currently only "prometheus" is supported. One of: `prometheus`. Default: `prometheus`. |
 | `spec.query` | string | yes | Query is the PromQL query string to evaluate. The query must return a scalar or a single-element vector. |
 | `spec.threshold` | object | yes | Threshold defines how to compare the metric value. |
@@ -143,7 +150,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | `status` | object |  | MetricCheckStatus records the most recent metric evaluation result. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is the timestamp of the most recent evaluation. |
 | `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
-| `status.reason` | string |  | Reason is a human-readable explanation of the current result. |
+| `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
 
 ## NotificationHook
@@ -161,10 +168,13 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 | `spec.webhook.authorizationHeader` | string |  | AuthorizationHeader is the value of the Authorization header to include in the POST. Typically "Bearer &lt;token&gt;" or "Token &lt;secret&gt;". The value is stored in plain text in the spec and sent as is: anyone who can read this NotificationHook can read it. |
 | `spec.webhook.url` | string | yes | URL is the HTTPS URL to POST the notification payload to. |
 | `status` | object |  | NotificationHookStatus defines the observed state of a NotificationHook. |
+| `status.failedAttempts` | integer (int32) |  | FailedAttempts counts consecutive failed deliveries. The controller retries with exponential backoff and gives up on an event after 10 attempts. Reset to zero on a successful delivery. |
 | `status.failureMessage` | string |  | FailureMessage records the last webhook delivery failure, if any. Cleared on next successful delivery. |
 | `status.lastEvent` | string |  | LastEvent is the event type of the last successfully delivered notification. |
-| `status.lastEventKey` | string |  | LastEventKey is a deterministic string identifying the last delivered event (e.g. "Bundle.Verified/nginx-demo-abc123"). Used for idempotency. |
-| `status.lastSentAt` | string |  | LastSentAt is the RFC3339 timestamp of the last successful webhook delivery. Used for idempotency: the reconciler will not re-deliver the same event if lastEvent and lastSentAt match the current event key. |
+| `status.lastEventKey` | string |  | LastEventKey is a deterministic string identifying the last delivered event (e.g. "Bundle.Verified/nginx-demo-abc123"). Idempotency uses processedEventKeys; this field is informational. |
+| `status.lastSentAt` | string |  | LastSentAt is the RFC3339 timestamp of the last successful webhook delivery. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the hook generation the controller last reconciled. Zero means the hook was never reconciled. On that first reconcile only the newest qualifying event that already exists is delivered; older ones are recorded as processed rather than backfilled. |
+| `status.processedEventKeys` | []string |  | ProcessedEventKeys lists the keys of the qualifying events that were delivered, or given up on after the retry limit. Each event is delivered once. The list is pruned to events that still qualify, so it stays bounded. |
 
 ## PRStatus
 
@@ -198,7 +208,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec` | object |  | PipelineSpec defines the desired state of a Pipeline. |
 | `spec.environments` | []object | yes | Environments lists the promotion path. Sequential ordering (GB-1): when an environment does not specify dependsOn, it implicitly depends on the previous entry in this list. The first environment has no upstream dependency. This sequential default means a list of N environments without dependsOn fields produces a linear chain. Override with dependsOn to express parallel fan-out or explicit DAG structure. Environment names must be unique; at most 100 environments (a bound the API server needs to cost the CEL rules on each entry). |
 | `spec.environments[].approval` | string |  | Approval controls whether promotion into this environment requires a PR review. One of: `auto`, `pr-review`. Default: `auto`. |
-| `spec.environments[].autoRollback` | object |  | AutoRollback configures automatic rollback when health checks fail repeatedly. When not set, automatic rollback is disabled. |
+| `spec.environments[].autoRollback` | object |  | AutoRollback is reserved and rejected by the API server: consecutive-failure auto-rollback is not implemented. See OnHealthFailure. |
 | `spec.environments[].autoRollback.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures that trigger an automatic rollback Bundle creation. Default: 3. Default: `3`. |
 | `spec.environments[].bake` | object |  | Bake configures a contiguous-healthy soak window for this environment (K-01). When set, the health check must pass continuously for Bake.Minutes before the step transitions to Verified. A health failure resets the timer if policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm". |
 | `spec.environments[].bake.minutes` | integer | yes | Minutes is the required contiguous healthy duration in minutes. The timer resets on health failure when Policy is "reset-on-alarm". |
@@ -308,7 +318,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.overrides[].expiresAt` | string (date-time) | yes | ExpiresAt is when this override stops being effective. After this time the gate evaluates CEL normally. |
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
-| `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
+| `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). The minimum is 10s: a smaller value is raised to 10s, and "0" or an invalid value means the default. Default: `5m`. |
 | `spec.selector` | object |  | Selector is a label selector for org-level auto-injection: this gate is automatically applied to any Pipeline whose labels match the selector. |
 | `spec.selector.matchExpressions` | []object |  | matchExpressions is a list of label selector requirements. The requirements are ANDed. |
 | `spec.selector.matchExpressions[].key` | string | yes | key is the label key that the selector applies to. |
@@ -412,8 +422,8 @@ RollbackPolicy monitors consecutive health-check failures on a PromotionStep and
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | RollbackPolicySpec defines the desired state of a RollbackPolicy. RollbackPolicy objects are created per environment that has autoRollback configured. They are typically created by the Pipeline/Graph controller when a Bundle is promoted to an environment with AutoRollback enabled. |
-| `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. When ConsecutiveHealthFailures on the associated PromotionStep reaches FailureThreshold, a rollback Bundle is created from this Bundle's spec. |
+| `spec` | object |  | RollbackPolicySpec defines the desired state of a RollbackPolicy. Nothing creates RollbackPolicy objects automatically: the controller only reconciles the ones that exist. Automatic rollback on health failure is configured with Pipeline spec.environments[].onHealthFailure: rollback. |
+| `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. Only the PromotionSteps of this Bundle in Environment are read: the steps labelled kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest ConsecutiveHealthFailures among them (one step per region) reaches FailureThreshold, a rollback Bundle is created. |
 | `spec.environment` | string | yes | Environment is the environment this policy monitors. |
 | `spec.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures required to trigger a rollback. Defaults to 3 if &lt;= 0. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this policy monitors. |
@@ -448,18 +458,18 @@ Subscription watches an OCI registry or Git repository for new artifacts and aut
 | `spec.git` | object |  | Git holds Git repository watching parameters. Required when type=git. |
 | `spec.git.branch` | string |  | Branch is the branch to watch. Defaults to "main". Default: `main`. |
 | `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
-| `spec.git.pathGlob` | string |  | PathGlob is an optional glob pattern for files to watch. Only commits that touch matching paths trigger Bundle creation. Empty string watches all paths. |
+| `spec.git.pathGlob` | string |  | PathGlob is reserved for path filtering, which is not implemented. A non-empty value puts the Subscription in phase Error; leave it empty (every new commit on the branch creates a Bundle). |
 | `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. |
 | `spec.image` | object |  | Image holds OCI registry watching parameters. Required when type=image. |
 | `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
-| `spec.image.registry` | string | yes | Registry is the OCI registry URL (e.g. "ghcr.io/myorg/myapp"). |
-| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. |
-| `spec.namespace` | string |  | Namespace is the namespace where Bundles will be created. Defaults to the Subscription's own namespace. |
+| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://localhost:5000/myapp" for a plain-HTTP registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. |
+| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. With one matching tag its digest is tracked (a moving tag such as "^main$"); when every matching tag is a semantic version the highest wins; otherwise the most recently built image wins (at most 50 matching tags). No matching tag is an error. |
+| `spec.namespace` | string |  | Namespace must be empty or equal to the Subscription's own namespace. Bundles are always created in the Subscription's namespace; any other value puts the Subscription in phase Error and creates no Bundle. Leave it empty: the field is kept only so existing manifests still apply. |
 | `spec.pipeline` | string | yes | Pipeline is the name of the Pipeline CRD that Bundles should target. |
 | `spec.type` | string | yes | Type identifies the artifact source: "image" (OCI) or "git". |
 | `status` | object |  | SubscriptionStatus defines the observed state of a Subscription. |
 | `status.lastBundleCreated` | string |  | LastBundleCreated is the name of the last Bundle created by this Subscription. |
 | `status.lastCheckedAt` | string |  | LastCheckedAt is the RFC3339 timestamp of the last poll. |
-| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest or Git commit SHA from the last successful check. Used for deduplication — a new Bundle is only created when this changes. |
+| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest or Git commit SHA from the last successful check. The first check only records it (no Bundle); a later check that sees a different value creates a Bundle. |
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |

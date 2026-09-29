@@ -154,8 +154,9 @@ Resume with `kardinal resume <pipeline>`.
 Rollbacks are triggered:
 
 1. **Manual**: `kardinal rollback <pipeline> --env prod` — opens a rollback PR
-2. **Automatic**: If `spec.autoRollback.enabled: true` in a `RollbackPolicy` CRD and
-   the health check fails after merge beyond the configured failure threshold
+2. **Automatic**: If the environment sets `onHealthFailure: rollback` and a health check
+   fails during a `bake` window with `policy: fail-on-alarm`. See [Rollback](rollback.md#automatic-rollback).
+   (`environments[].autoRollback` is not implemented and is rejected by the API server.)
 
 A rollback is a forward promotion of the previously-verified Bundle image through the
 same pipeline, same gates, same audit trail.
@@ -180,11 +181,12 @@ Yes. Combine conditions:
 ```yaml
 spec:
   expression: >
-    !schedule.isWeekend() ||
-    bundle.metadata.annotations.exists(a, a == 'kardinal.io/hotfix')
+    !schedule.isWeekend ||
+    ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-Annotate the Bundle at creation time to mark it as a hotfix.
+Label the Bundle `kardinal.io/hotfix=true` at creation time to mark it as a hotfix.
+Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 
 ### How often does kardinal re-evaluate a gate?
 

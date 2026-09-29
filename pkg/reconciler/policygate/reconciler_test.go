@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
@@ -181,6 +182,9 @@ func TestPolicyGateReconciler_TemplateIgnored(t *testing.T) {
 		types.NamespacedName{Name: "no-weekend-template", Namespace: "platform-policies"}, &got))
 	assert.Contains(t, got.Status.Reason, "valid CEL syntax",
 		"valid template must indicate valid syntax in status.reason")
+	// A template is not evaluated against a bundle (C04-gates-11).
+	assert.Nil(t, got.Status.LastEvaluatedAt, "template must not look evaluated")
+	assert.Empty(t, got.Status.Conditions, "template must not carry a Ready condition")
 }
 
 // TestPolicyGateReconciler_RequeueAfterRecheckInterval verifies RequeueAfter.
@@ -496,74 +500,145 @@ func makeBundleWithImage(name, ns, repo, tag string) *kardinalv1alpha1.Bundle {
 	return b
 }
 
-// TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes verifies that
-// bundle.upstreamSoakMinutes is the max SoakMinutes across all upstream envs.
-// This is the convenience shorthand documented in docs/policy-gates.md and used
-// in examples/quickstart/policy-gates.yaml.
-func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Passes(t *testing.T) {
-	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	healthCheckedAt := metav1.NewTime(now.Add(-50 * time.Minute))
-
-	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
-		{Name: "test", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 50},
-		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 45},
-	})
-	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
-		`bundle.upstreamSoakMinutes >= 30`, "1m")
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
-		Build()
-
-	r, err := policygate.NewReconciler(c)
-	require.NoError(t, err)
-	r.NowFn = func() time.Time { return now }
-
-	_, err = r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
-	})
-	require.NoError(t, err)
-
-	var got kardinalv1alpha1.PolicyGate
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
-	assert.True(t, got.Status.Ready,
-		"gate must pass: bundle.upstreamSoakMinutes = max(50,45) = 50 >= 30")
+func makePipeline(name, ns string, envs ...kardinalv1alpha1.EnvironmentSpec) *kardinalv1alpha1.Pipeline {
+	return &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: envs},
+	}
 }
 
-// TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks verifies that
-// bundle.upstreamSoakMinutes blocks when all upstream envs have soak < threshold.
-func TestPolicyGateReconciler_BundleUpstreamSoakMinutes_Blocks(t *testing.T) {
-	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
-	healthCheckedAt := metav1.NewTime(now.Add(-10 * time.Minute))
+// TestPolicyGateReconciler_BundleUpstreamSoakMinutes verifies that
+// bundle.upstreamSoakMinutes is the soak of the environment(s) directly upstream
+// of the gated environment in the Pipeline DAG (C04-gates-01, C12-examples-demo-04),
+// not the maximum over every environment. With fan-in it is the minimum across
+// the direct upstreams; an upstream that is not Verified counts as 0.
+func TestPolicyGateReconciler_BundleUpstreamSoakMinutes(t *testing.T) {
+	sequential := makePipeline("nginx-demo", "default",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "uat"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod"},
+	)
+	fanIn := makePipeline("nginx-demo", "default",
+		kardinalv1alpha1.EnvironmentSpec{Name: "test"},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod-eu", DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod-us", DependsOn: []string{"test"}},
+		kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"prod-eu", "prod-us"}},
+	)
 
-	bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", []kardinalv1alpha1.EnvironmentStatus{
-		{Name: "test", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 5},
-		{Name: "uat", Phase: "Verified", HealthCheckedAt: &healthCheckedAt, SoakMinutes: 10},
-	})
-	gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
-		`bundle.upstreamSoakMinutes >= 30`, "1m")
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(gate, bundle).
-		WithStatusSubresource(gate, bundle).
-		Build()
+	tests := []struct {
+		name       string
+		pipeline   *kardinalv1alpha1.Pipeline
+		envs       []kardinalv1alpha1.EnvironmentStatus
+		intent     *kardinalv1alpha1.BundleIntent
+		wantReady  bool
+		wantReason string
+	}{
+		{
+			name:     "passes when direct upstream uat soaked long enough",
+			pipeline: sequential,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 50},
+				{Name: "uat", Phase: "Verified", SoakMinutes: 45},
+			},
+			wantReady: true,
+		},
+		{
+			name:     "blocks when direct upstream uat soaked 1m even though test soaked 120m",
+			pipeline: sequential,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 120},
+				{Name: "uat", Phase: "Verified", SoakMinutes: 1},
+			},
+			wantReady: false,
+		},
+		{
+			name:     "blocks when direct upstream is not Verified",
+			pipeline: sequential,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 120},
+				{Name: "uat", Phase: "HealthChecking", SoakMinutes: 90},
+			},
+			wantReady: false,
+		},
+		{
+			name:     "skipped uat is bridged to test",
+			pipeline: sequential,
+			intent:   &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"uat"}},
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 40},
+			},
+			wantReady: true,
+		},
+		{
+			name:     "fan-in uses the minimum of the direct upstreams",
+			pipeline: fanIn,
+			envs: []kardinalv1alpha1.EnvironmentStatus{
+				{Name: "test", Phase: "Verified", SoakMinutes: 300},
+				{Name: "prod-eu", Phase: "Verified", SoakMinutes: 60},
+				{Name: "prod-us", Phase: "Verified", SoakMinutes: 5},
+			},
+			wantReady: false,
+		},
+		{
+			name:       "missing pipeline fails closed",
+			pipeline:   nil,
+			envs:       []kardinalv1alpha1.EnvironmentStatus{{Name: "uat", Phase: "Verified", SoakMinutes: 90}},
+			wantReady:  false,
+			wantReason: "context error: bundle.upstreamSoakMinutes: load pipeline nginx-demo",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+			bundle := makeBundleWithEnvironments("nginx-demo-v1", "default", tt.envs)
+			bundle.Spec.Intent = tt.intent
+			gate := makeGateInstance("soak-gate", "default", "nginx-demo-v1",
+				`bundle.upstreamSoakMinutes >= 30`, "1m")
+			objs := []client.Object{gate, bundle}
+			if tt.pipeline != nil {
+				objs = append(objs, tt.pipeline.DeepCopy())
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(newScheme()).
+				WithObjects(objs...).
+				WithStatusSubresource(gate, bundle).
+				Build()
 
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			r.NowFn = func() time.Time { return now }
+
+			_, err = r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+			})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
+			assert.Equal(t, tt.wantReady, got.Status.Ready, "reason: %s", got.Status.Reason)
+			if tt.wantReason != "" {
+				assert.Contains(t, got.Status.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestPolicyGateReconciler_NoSoakReference_NoPipelineNeeded verifies that a gate
+// that does not use bundle.upstreamSoakMinutes is not affected by a missing Pipeline.
+func TestPolicyGateReconciler_NoSoakReference_NoPipelineNeeded(t *testing.T) {
+	gate := makeGateInstance("plain", "default", "nginx-demo-v1", `bundle.type == "image"`, "1m")
+	bundle := makeBundle("nginx-demo-v1", "default")
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(gate, bundle).
+		WithStatusSubresource(gate).Build()
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
-	r.NowFn = func() time.Time { return now }
-
 	_, err = r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "soak-gate", Namespace: "default"},
+		NamespacedName: types.NamespacedName{Name: "plain", Namespace: "default"},
 	})
 	require.NoError(t, err)
-
 	var got kardinalv1alpha1.PolicyGate
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "soak-gate", Namespace: "default"}, &got))
-	assert.False(t, got.Status.Ready,
-		"gate must block: bundle.upstreamSoakMinutes = max(5,10) = 10 < 30")
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "plain", Namespace: "default"}, &got))
+	assert.True(t, got.Status.Ready, "reason: %s", got.Status.Reason)
 }
 
 // TestPolicyGateReconciler_InvalidCEL_SurfacesErrorInStatus verifies that a PolicyGate
@@ -911,38 +986,177 @@ func TestPolicyGateReconciler_ChangeWindowBothSyntaxesEquivalent(t *testing.T) {
 	// Build context with one active window.
 	cwCtx := map[string]interface{}{"my-freeze": true}
 	ctx := map[string]interface{}{
-		"bundle":         map[string]interface{}{},
-		"schedule":       map[string]interface{}{"isWeekend": false, "hour": 10, "dayOfWeek": "Tuesday"},
-		"environment":    map[string]interface{}{"name": "prod"},
-		"metrics":        map[string]interface{}{},
-		"upstream":       map[string]interface{}{},
-		"previousBundle": map[string]interface{}{},
-		"changewindow":   cwCtx,
+		"bundle":       map[string]interface{}{},
+		"schedule":     map[string]interface{}{"isWeekend": false, "hour": 10, "dayOfWeek": "Tuesday"},
+		"environment":  map[string]interface{}{"name": "prod"},
+		"metrics":      map[string]interface{}{},
+		"upstream":     map[string]interface{}{},
+		"changewindow": cwCtx,
 	}
 
 	tableTests := []struct {
 		name       string
 		expression string
 		wantPass   bool
+		wantErr    bool
 	}{
 		// Map-access (legacy syntax — still works)
-		{"map-blocked", `changewindow["my-freeze"]`, true},
-		{"map-not-blocked", `!changewindow["my-freeze"]`, false},
+		{"map-blocked", `changewindow["my-freeze"]`, true, false},
+		{"map-not-blocked", `!changewindow["my-freeze"]`, false, false},
 		// Method syntax (new in #506)
-		{"isBlocked-true", `changewindow.isBlocked("my-freeze")`, true},
-		{"not-isBlocked", `!changewindow.isBlocked("my-freeze")`, false},
-		{"isAllowed-false", `changewindow.isAllowed("my-freeze")`, false},
-		{"not-isAllowed", `!changewindow.isAllowed("my-freeze")`, true},
-		// Missing window — defaults to inactive (isBlocked=false, isAllowed=true)
-		{"missing-isBlocked", `changewindow.isBlocked("nonexistent")`, false},
-		{"missing-isAllowed", `changewindow.isAllowed("nonexistent")`, true},
+		{"isBlocked-true", `changewindow.isBlocked("my-freeze")`, true, false},
+		{"not-isBlocked", `!changewindow.isBlocked("my-freeze")`, false, false},
+		{"isAllowed-false", `changewindow.isAllowed("my-freeze")`, false, false},
+		{"not-isAllowed", `!changewindow.isAllowed("my-freeze")`, true, false},
+		// A missing window is an error in every syntax, so the gate fails closed
+		// (C04-gates-31): a typo must not silently allow a promotion.
+		{"missing-map", `!changewindow["nonexistent"]`, false, true},
+		{"missing-isBlocked", `!changewindow.isBlocked("nonexistent")`, false, true},
+		{"missing-isAllowed", `changewindow.isAllowed("nonexistent")`, false, true},
 	}
 
 	for _, tt := range tableTests {
 		t.Run(tt.name, func(t *testing.T) {
 			pass, _, err := policygate.EvaluateForTest(tt.expression, ctx)
+			if tt.wantErr {
+				require.Error(t, err, "expression must fail closed: %s", tt.expression)
+				assert.False(t, pass)
+				return
+			}
 			require.NoError(t, err, "expression must evaluate without error: %s", tt.expression)
 			assert.Equal(t, tt.wantPass, pass, "expression %q result mismatch", tt.expression)
+		})
+	}
+}
+
+// TestPolicyGateReconciler_ChangeWindowFailsClosed verifies that a gate that
+// references a ChangeWindow blocks when the windows cannot be listed
+// (C04-gates-02) or when the named window does not exist (C04-gates-31), and
+// that a List failure does not affect gates that do not reference a window.
+func TestPolicyGateReconciler_ChangeWindowFailsClosed(t *testing.T) {
+	listErr := fmt.Errorf("changewindows.kardinal.io is forbidden")
+	tests := []struct {
+		name       string
+		expression string
+		failList   bool
+		wantReady  bool
+		wantReason string
+	}{
+		{
+			name:       "list error blocks a map-syntax gate",
+			expression: `!changewindow["holiday-freeze"]`,
+			failList:   true,
+			wantReason: "context error: changewindow: list ChangeWindows",
+		},
+		{
+			name:       "list error blocks an isAllowed gate",
+			expression: `changewindow.isAllowed("business-hours")`,
+			failList:   true,
+			wantReason: "forbidden",
+		},
+		{
+			name:       "list error does not affect a gate without changewindow",
+			expression: `bundle.type == "image"`,
+			failList:   true,
+			wantReady:  true,
+		},
+		{
+			name:       "unknown window name blocks",
+			expression: `!changewindow.isBlocked("holiday-frezee")`,
+			wantReason: `unknown ChangeWindow "holiday-frezee"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gate := makeGateInstance("cw-gate", "default", "bundle-1", tt.expression, "5m")
+			bundle := makeBundle("bundle-1", "default")
+			b := fake.NewClientBuilder().WithScheme(newScheme()).
+				WithObjects(gate, bundle).
+				WithStatusSubresource(&kardinalv1alpha1.PolicyGate{})
+			if tt.failList {
+				b = b.WithInterceptorFuncs(interceptor.Funcs{
+					List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+						if _, ok := list.(*kardinalv1alpha1.ChangeWindowList); ok {
+							return listErr
+						}
+						return c.List(ctx, list, opts...)
+					},
+				})
+			}
+			c := b.Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tt.wantReady, got.Status.Ready, "reason: %s", got.Status.Reason)
+			if tt.wantReason != "" {
+				assert.Contains(t, got.Status.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestPolicyGateReconciler_RecurringChangeWindow verifies that a recurring
+// ChangeWindow is evaluated from its schedule at the gate's evaluation time
+// (C04-gates-03): before this fix a recurring window was never active.
+func TestPolicyGateReconciler_RecurringChangeWindow(t *testing.T) {
+	businessHours := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "business-hours"},
+		Spec: kardinalv1alpha1.ChangeWindowSpec{
+			Type: "recurring",
+			Schedule: &kardinalv1alpha1.ChangeWindowSchedule{
+				Timezone:     "UTC",
+				AllowedDays:  []string{"Mon", "Tue", "Wed", "Thu", "Fri"},
+				AllowedHours: "09:00-17:00",
+			},
+		},
+	}
+	broken := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "broken"},
+		Spec: kardinalv1alpha1.ChangeWindowSpec{
+			Type:     "recurring",
+			Schedule: &kardinalv1alpha1.ChangeWindowSchedule{AllowedHours: "9am-5pm"},
+		},
+	}
+	tests := []struct {
+		name       string
+		now        time.Time
+		expression string
+		wantReady  bool
+	}{
+		{"friday afternoon is allowed", time.Date(2026, 1, 2, 16, 30, 0, 0, time.UTC),
+			`changewindow.isAllowed("business-hours")`, true},
+		{"friday evening is blocked", time.Date(2026, 1, 2, 17, 0, 0, 0, time.UTC),
+			`changewindow.isAllowed("business-hours")`, false},
+		{"saturday is blocked (map syntax)", time.Date(2026, 1, 3, 12, 0, 0, 0, time.UTC),
+			`!changewindow["business-hours"]`, false},
+		{"monday morning is allowed (isBlocked)", time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC),
+			`!changewindow.isBlocked("business-hours")`, true},
+		{"invalid window blocks", time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC),
+			`changewindow.isAllowed("broken")`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gate := makeGateInstance("cw-gate", "default", "bundle-1", tt.expression, "5m")
+			bundle := makeBundle("bundle-1", "default")
+			c := fake.NewClientBuilder().WithScheme(newScheme()).
+				WithObjects(gate, bundle, businessHours.DeepCopy(), broken.DeepCopy()).
+				WithStatusSubresource(&kardinalv1alpha1.PolicyGate{}).
+				Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			r.NowFn = func() time.Time { return tt.now }
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "cw-gate", Namespace: "default"}}
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tt.wantReady, got.Status.Ready, "reason: %s", got.Status.Reason)
 		})
 	}
 }
