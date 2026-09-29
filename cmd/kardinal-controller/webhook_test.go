@@ -248,6 +248,7 @@ func TestWebhook_FailsClosed(t *testing.T) {
 	const secret = "test-secret"
 	forged := `{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"org/app"}}`
 	noNumber := `{"action":"closed","pull_request":{"merged":true}}`
+	oversized := forged + strings.Repeat(" ", maxWebhookBody)
 	sign := func(key, body string) string {
 		m := hmac.New(sha256.New, []byte(key))
 		m.Write([]byte(body))
@@ -267,6 +268,10 @@ func TestWebhook_FailsClosed(t *testing.T) {
 		{name: "secret, unsigned", secret: secret, body: forged, wantCode: http.StatusUnauthorized},
 		{name: "secret, wrong key", secret: secret, body: forged, signature: sign("other", forged), wantCode: http.StatusUnauthorized},
 		{name: "secret, valid signature", secret: secret, body: forged, signature: sign(secret, forged), wantCode: http.StatusNoContent, wantMerged: true},
+		// C07-controller-25: an oversized body is rejected with 413 instead of
+		// being truncated and misreported as a bad signature (401).
+		{name: "secret, valid signature, oversized body", secret: secret, body: oversized, signature: sign(secret, oversized),
+			wantCode: http.StatusRequestEntityTooLarge},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

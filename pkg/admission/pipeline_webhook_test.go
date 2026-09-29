@@ -156,3 +156,75 @@ func TestPipelineWebhookHandler_MethodNotAllowed(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
+
+// TestPipelineWebhookHandler_Operations covers C07-controller-20 (a, b):
+// DELETE (no object) is allowed, and each ordering error is reported as
+// itself instead of always as a cycle.
+func TestPipelineWebhookHandler_Operations(t *testing.T) {
+	pipe := func(envs ...kardinalv1alpha1.EnvironmentSpec) []byte {
+		raw, err := json.Marshal(&kardinalv1alpha1.Pipeline{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "kardinal.io/v1alpha1", Kind: "Pipeline"},
+			ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+			Spec:       kardinalv1alpha1.PipelineSpec{Environments: envs},
+		})
+		require.NoError(t, err)
+		return raw
+	}
+	tests := []struct {
+		name        string
+		op          admissionv1.Operation
+		raw         []byte
+		wantAllowed bool
+		wantMsg     string
+		notMsg      string
+	}{
+		{name: "delete without object is allowed", op: admissionv1.Delete, wantAllowed: true},
+		{name: "valid create is allowed", op: admissionv1.Create,
+			raw: pipe(kardinalv1alpha1.EnvironmentSpec{Name: "test"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod"}), wantAllowed: true},
+		{name: "unknown dependsOn is not called a cycle", op: admissionv1.Create,
+			raw:     pipe(kardinalv1alpha1.EnvironmentSpec{Name: "test"}, kardinalv1alpha1.EnvironmentSpec{Name: "prod", DependsOn: []string{"stagin"}}),
+			wantMsg: "unknown environment", notMsg: "circular"},
+		{name: "no environments is not called a cycle", op: admissionv1.Update, raw: pipe(),
+			wantMsg: "no environments", notMsg: "circular"},
+		{name: "cycle is reported as a cycle", op: admissionv1.Create,
+			raw: pipe(kardinalv1alpha1.EnvironmentSpec{Name: "a", DependsOn: []string{"b"}},
+				kardinalv1alpha1.EnvironmentSpec{Name: "b", DependsOn: []string{"a"}}),
+			wantMsg: "circular"},
+		{name: "create without object is denied", op: admissionv1.Create, wantMsg: "failed to decode Pipeline"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			review := admissionv1.AdmissionReview{
+				TypeMeta: metav1.TypeMeta{APIVersion: "admission.k8s.io/v1", Kind: "AdmissionReview"},
+				Request:  &admissionv1.AdmissionRequest{UID: "u", Operation: tt.op, Object: runtime.RawExtension{Raw: tt.raw}},
+			}
+			body, err := json.Marshal(review)
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			admission.PipelineWebhookHandler(zerolog.Nop())(rec,
+				httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(body)))
+			require.Equal(t, http.StatusOK, rec.Code)
+			var out admissionv1.AdmissionReview
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &out))
+			require.NotNil(t, out.Response)
+			assert.Equal(t, tt.wantAllowed, out.Response.Allowed)
+			if tt.wantMsg != "" {
+				require.NotNil(t, out.Response.Result)
+				assert.Contains(t, out.Response.Result.Message, tt.wantMsg)
+			}
+			if tt.notMsg != "" {
+				assert.NotContains(t, out.Response.Result.Message, tt.notMsg)
+			}
+		})
+	}
+}
+
+// TestPipelineWebhookHandler_OversizedBody covers the admission half of
+// C07-controller-25: a body over 1 MB is rejected with 413, not truncated.
+func TestPipelineWebhookHandler_OversizedBody(t *testing.T) {
+	body := append(buildReview(t, &kardinalv1alpha1.Pipeline{}), bytes.Repeat([]byte(" "), 1<<20)...)
+	rec := httptest.NewRecorder()
+	admission.PipelineWebhookHandler(zerolog.Nop())(rec,
+		httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(body)))
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}

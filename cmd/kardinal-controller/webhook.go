@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,8 +81,15 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			return
 		}
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				// Reject instead of truncating: a truncated body fails the HMAC
+				// check and would be misreported as a bad signature.
+				http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			s.log.Error().Err(err).Msg("failed to read webhook body")
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return

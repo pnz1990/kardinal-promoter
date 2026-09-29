@@ -20,7 +20,6 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -502,66 +501,39 @@ func main() {
 		}
 	}()
 
+	// UI API authentication. TokenReview mode fails closed: the controller does
+	// not start when the review clients cannot be built, instead of serving an
+	// open UI.
+	uiAuth := uiAuthConfig{staticToken: uiAuthToken, scopeNamespace: watchNamespace}
+	switch {
+	case uiAuthToken != "":
+		// O4 (spec issue-975): the static token takes precedence over TokenReview.
+		logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
+	case uiTokenReviewAuth:
+		tokens, trErr := uiauth.NewKubeTokenReviewer(mgr.GetConfig())
+		if trErr != nil {
+			logger.Fatal().Err(trErr).Msg("UI API TokenReview: unable to create TokenReview client")
+		}
+		access, sarErr := uiauth.NewKubeAccessReviewer(mgr.GetConfig())
+		if sarErr != nil {
+			logger.Fatal().Err(sarErr).Msg("UI API TokenReview: unable to create SubjectAccessReview client")
+		}
+		uiAuth.tokens = uiauth.NewCachedTokenReviewer(tokens, uiauth.DefaultCacheTTL)
+		uiAuth.access = uiauth.NewCachedAccessReviewer(access, uiauth.DefaultCacheTTL)
+		logger.Info().Msg("UI API TokenReview authentication enabled; every read and write is authorized with a SubjectAccessReview for the caller")
+	default:
+		logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
+	}
+
 	// Start embedded UI server in a goroutine.
 	go func() {
-		uiMux := http.NewServeMux()
-		// Register read-only UI API routes.
-		uiAPI := newUIAPIServer(mgr.GetClient(), logger)
-		uiAPI.RegisterRoutes(uiMux)
 		// Serve the embedded React app at /ui/.
 		distFS, err := fs.Sub(web.Assets, "dist")
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to create UI sub-filesystem")
-		} else {
-			uiMux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(distFS))))
+			distFS = nil
 		}
-
-		// Apply Bearer token authentication to all /api/v1/ui/* routes when
-		// --ui-auth-token is set. Static /ui/* assets bypass auth (no sensitive data).
-		var handler http.Handler = uiMux
-		switch {
-		case uiAuthToken != "":
-			// O4 (spec issue-975): Static token takes precedence over TokenReview.
-			logger.Info().Msg("UI API authentication enabled (--ui-auth-token set)")
-			tokenBytes := []byte(uiAuthToken)
-			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Only guard /api/v1/ui/* — static assets at /ui/* are public.
-				if strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
-					authHeader := r.Header.Get("Authorization")
-					provided := strings.TrimPrefix(authHeader, "Bearer ")
-					// Use constant-time comparison to prevent timing attacks.
-					if !strings.HasPrefix(authHeader, "Bearer ") ||
-						subtle.ConstantTimeCompare([]byte(provided), tokenBytes) != 1 {
-						w.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
-						http.Error(w, "unauthorized", http.StatusUnauthorized)
-						return
-					}
-				}
-				uiMux.ServeHTTP(w, r)
-			})
-		case uiTokenReviewAuth:
-			// O1–O3, O6–O8 (spec issue-975): Kubernetes TokenReview auth mode.
-			// Only activated when --ui-auth-token is not set (O4).
-			logger.Info().Msg("UI API TokenReview authentication enabled")
-			reviewer, reviewerErr := uiauth.NewKubeTokenReviewer(mgr.GetConfig())
-			if reviewerErr != nil {
-				// Non-fatal: fall through to open mode with a warning. The controller
-				// must still start — TokenReview unavailability should not block the
-				// controller itself from serving other APIs.
-				logger.Warn().Err(reviewerErr).
-					Msg("UI API TokenReview: failed to create reviewer — UI API will be open (no auth)")
-			} else {
-				handler = uiauth.Middleware(uiMux, reviewer)
-			}
-		default:
-			logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
-		}
-
-		// Apply CORS lockdown to /api/v1/ui/* routes.
-		// Default (empty corsAllowedOrigins): same-origin only — cross-origin requests rejected.
-		// Explicit list: only listed origins are allowed.
-		// Wildcard "*": all origins allowed (development / opt-out).
-		handler = applyCORSMiddleware(handler, corsAllowedOrigins, logger)
+		handler := newUIHandler(mgr.GetClient(), distFS, uiAuth, corsAllowedOrigins, logger)
 
 		logger.Info().Str("addr", uiListenAddress).Msg("starting UI server")
 		if err := listenAndServeWithTLS(uiListenAddress, handler, tlsCertFile, tlsKeyFile, logger); err != nil {

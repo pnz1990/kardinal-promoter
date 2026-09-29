@@ -16,171 +16,324 @@
 package main
 
 import (
-	"crypto/subtle"
+	"context"
+	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authv1 "k8s.io/api/authentication/v1"
+	authzv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// uiAuthMiddleware mirrors the inline handler built in main() for testability.
-// Returns an http.Handler that requires a Bearer token on /api/v1/ui/* routes
-// and serves uiMux directly for all other paths.
-func uiAuthMiddleware(uiMux *http.ServeMux, token string) http.Handler {
-	if token == "" {
-		return uiMux
+// uiTestAssets stands in for the embedded React build.
+var uiTestAssets = fstest.MapFS{
+	"index.html":           {Data: []byte("<html>kardinal</html>")},
+	"assets/index-abc.js":  {Data: []byte("console.log(1)")},
+	"assets/index-abc.css": {Data: []byte("body{}")},
+}
+
+func uiAuthDo(t *testing.T, h http.Handler, method, path, token, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var req *http.Request
+	if body != "" {
+		req = httptest.NewRequest(method, path, strings.NewReader(body))
+	} else {
+		req = httptest.NewRequest(method, path, nil)
 	}
-	tokenBytes := []byte(token)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
-			authHeader := r.Header.Get("Authorization")
-			provided := strings.TrimPrefix(authHeader, "Bearer ")
-			if !strings.HasPrefix(authHeader, "Bearer ") ||
-				subtle.ConstantTimeCompare([]byte(provided), tokenBytes) != 1 {
-				w.Header().Set("Www-Authenticate", `Bearer realm="kardinal-ui"`)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		uiMux.ServeHTTP(w, r)
-	})
+	if token != "" {
+		req.Header.Set("Authorization", token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
 }
 
-// TestUIAuth_NoToken verifies open mode: all /api/v1/ui/* routes accessible without auth.
-func TestUIAuth_NoToken(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	srv := newUIAPIServer(c, zerolog.Nop())
-	uiMux := http.NewServeMux()
-	srv.RegisterRoutes(uiMux)
-
-	handler := uiAuthMiddleware(uiMux, "") // no token → open mode
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	// Should NOT be 401 — open mode returns 200 (empty list).
-	assert.Equal(t, http.StatusOK, w.Code,
-		"open mode: /api/v1/ui/pipelines must return 200 without auth header")
-}
-
-// TestUIAuth_CorrectToken verifies that a correct Bearer token grants access.
-func TestUIAuth_CorrectToken(t *testing.T) {
+// TestUIHandler_StaticToken exercises the real UI handler in static-token
+// mode. Replaces a test that exercised a copy of the middleware defined in
+// the test file (C07-controller-34).
+func TestUIHandler_StaticToken(t *testing.T) {
 	const secret = "supersecrettoken"
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	srv := newUIAPIServer(c, zerolog.Nop())
-	uiMux := http.NewServeMux()
-	srv.RegisterRoutes(uiMux)
-
-	handler := uiAuthMiddleware(uiMux, secret)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
-	req.Header.Set("Authorization", "Bearer "+secret)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"correct Bearer token must return 200")
-}
-
-// TestUIAuth_WrongToken verifies that a wrong token returns 401.
-func TestUIAuth_WrongToken(t *testing.T) {
-	const secret = "supersecrettoken"
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	srv := newUIAPIServer(c, zerolog.Nop())
-	uiMux := http.NewServeMux()
-	srv.RegisterRoutes(uiMux)
-
-	handler := uiAuthMiddleware(uiMux, secret)
-
-	cases := []struct {
-		name   string
-		header string
+	tests := []struct {
+		name     string
+		token    string
+		path     string
+		header   string
+		wantCode int
 	}{
-		{"wrong token", "Bearer wrongtoken"},
-		{"no header", ""},
-		{"malformed — no bearer prefix", "Token " + secret},
-		{"empty bearer", "Bearer "},
+		{name: "open mode, no header", path: "/api/v1/ui/pipelines", wantCode: http.StatusOK},
+		{name: "correct token", token: secret, path: "/api/v1/ui/pipelines", header: "Bearer " + secret, wantCode: http.StatusOK},
+		{name: "wrong token", token: secret, path: "/api/v1/ui/pipelines", header: "Bearer wrongtoken", wantCode: http.StatusUnauthorized},
+		{name: "no header", token: secret, path: "/api/v1/ui/pipelines", wantCode: http.StatusUnauthorized},
+		{name: "no bearer prefix", token: secret, path: "/api/v1/ui/pipelines", header: "Token " + secret, wantCode: http.StatusUnauthorized},
+		{name: "empty bearer", token: secret, path: "/api/v1/ui/pipelines", header: "Bearer ", wantCode: http.StatusUnauthorized},
+		{name: "static assets are public", token: secret, path: "/ui/assets/index-abc.js", wantCode: http.StatusOK},
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
-			if tc.header != "" {
-				req.Header.Set("Authorization", tc.header)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
+			h := newUIHandler(c, uiTestAssets, uiAuthConfig{staticToken: tt.token}, "", zerolog.Nop())
+			rec := uiAuthDo(t, h, http.MethodGet, tt.path, tt.header, "")
+			require.Equal(t, tt.wantCode, rec.Code)
+			if tt.wantCode == http.StatusUnauthorized {
+				assert.Contains(t, rec.Header().Get("Www-Authenticate"), `Bearer realm="kardinal-ui"`)
 			}
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, req)
-
-			require.Equal(t, http.StatusUnauthorized, w.Code,
-				"must return 401 for unauthenticated request (case: %s)", tc.name)
-			assert.Contains(t, w.Header().Get("Www-Authenticate"), `Bearer realm="kardinal-ui"`,
-				"must set Www-Authenticate header on 401")
 		})
 	}
 }
 
-// TestUIAuth_StaticAssetsUnprotected verifies that /ui/* static assets bypass auth (O4).
-func TestUIAuth_StaticAssetsUnprotected(t *testing.T) {
-	const secret = "supersecrettoken"
+// TestUIHandler_StaticTokenTakesPrecedenceOverTokenReview verifies O4 (spec
+// issue-975): with both modes configured, only the static token is accepted
+// and TokenReview is never called.
+func TestUIHandler_StaticTokenTakesPrecedenceOverTokenReview(t *testing.T) {
+	const staticToken = "static-secret-token"
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	srv := newUIAPIServer(c, zerolog.Nop())
-	uiMux := http.NewServeMux()
-	srv.RegisterRoutes(uiMux)
-	// Register a trivial /ui/ handler to simulate the static file server.
-	uiMux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	tr := &uiTestTokens{users: map[string]string{"kube-token": "alice"}}
+	h := newUIHandler(c, nil, uiAuthConfig{staticToken: staticToken, tokens: tr, access: &uiTestAccess{}}, "", zerolog.Nop())
 
-	handler := uiAuthMiddleware(uiMux, secret)
-
-	req := httptest.NewRequest(http.MethodGet, "/ui/index.html", nil)
-	// Deliberately omit auth header.
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"static /ui/* assets must not be gated by auth middleware (O4)")
+	assert.Equal(t, http.StatusOK, uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer "+staticToken, "").Code)
+	assert.Equal(t, http.StatusUnauthorized, uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer kube-token", "").Code)
+	assert.Zero(t, tr.calls, "TokenReview must not be called when a static token is set")
 }
 
-// TestUIAuth_StaticTokenTakesPrecedenceOverTokenReview verifies O4 (spec issue-975):
-// when --ui-auth-token is set, the static token middleware is applied and
-// TokenReview is NOT called. The static token is the gate.
-func TestUIAuth_StaticTokenTakesPrecedenceOverTokenReview(t *testing.T) {
-	// Scenario: static token is set AND TokenReview would return authenticated.
-	// Expected: only the static token check applies.
-	// A correct static token → 200.
-	// A token that would pass TokenReview but is NOT the static token → 401.
-	const staticToken = "static-secret-token"
+// uiTestTokens maps bearer tokens to usernames; unknown tokens are rejected.
+type uiTestTokens struct {
+	users map[string]string
+	calls int
+}
 
+func (r *uiTestTokens) Review(_ context.Context, token string) (*authv1.TokenReviewStatus, error) {
+	r.calls++
+	u, ok := r.users[token]
+	if !ok {
+		return &authv1.TokenReviewStatus{Authenticated: false}, nil
+	}
+	return &authv1.TokenReviewStatus{Authenticated: true, User: authv1.UserInfo{Username: u}}, nil
+}
+
+// uiTestAccess is a tiny RBAC table: user -> namespace -> allowed verbs on
+// kardinal.io resources ("*" namespace means cluster-wide).
+type uiTestAccess struct {
+	rules map[string]map[string][]string
+	calls []authzv1.ResourceAttributes
+}
+
+func (a *uiTestAccess) Allowed(_ context.Context, u authv1.UserInfo, attrs authzv1.ResourceAttributes) (bool, string, error) {
+	a.calls = append(a.calls, attrs)
+	for _, ns := range []string{attrs.Namespace, "*"} {
+		for _, v := range a.rules[u.Username][ns] {
+			if v == attrs.Verb && attrs.Group == "kardinal.io" {
+				return true, "", nil
+			}
+		}
+	}
+	return false, "", nil
+}
+
+// TestUIHandler_TokenReviewAuthorizesActions runs the real UI API behind
+// TokenReview mode. Regression test for C13b-design-04 and C07-controller-07:
+// any authenticated token (for example a ServiceAccount in an unrelated
+// namespace) could pause pipelines and override gates.
+func TestUIHandler_TokenReviewAuthorizesActions(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{
+		"deployer-token": "system:serviceaccount:team-a:deployer",
+		"random-token":   "system:serviceaccount:random-ns:default",
+		"viewer-token":   "viewer",
+	}}
+	rbac := map[string]map[string][]string{
+		"system:serviceaccount:team-a:deployer": {"team-a": {"get", "list", "update", "create"}},
+		"viewer":                                {"*": {"get", "list"}},
+	}
+
+	tests := []struct {
+		name       string
+		token      string
+		method     string
+		path       string
+		body       string
+		wantCode   int
+		wantPaused bool
+		wantGateBy string
+	}{
+		{name: "deployer pauses its pipeline", token: "deployer-token", method: http.MethodPost, path: "/api/v1/ui/pause",
+			body: `{"pipeline":"app","namespace":"team-a"}`, wantCode: http.StatusOK, wantPaused: true},
+		{name: "unrelated service account cannot pause", token: "random-token", method: http.MethodPost, path: "/api/v1/ui/pause",
+			body: `{"pipeline":"app","namespace":"team-a"}`, wantCode: http.StatusForbidden},
+		{name: "viewer cannot pause", token: "viewer-token", method: http.MethodPost, path: "/api/v1/ui/pause",
+			body: `{"pipeline":"app","namespace":"team-a"}`, wantCode: http.StatusForbidden},
+		{name: "deployer approves its gate, recorded as the user", token: "deployer-token", method: http.MethodPost,
+			path: "/api/v1/ui/gates/team-a/no-weekend/approve", body: `{"reason":"hotfix"}`,
+			wantCode: http.StatusOK, wantGateBy: "system:serviceaccount:team-a:deployer"},
+		{name: "unrelated service account cannot approve", token: "random-token", method: http.MethodPost,
+			path: "/api/v1/ui/gates/team-a/no-weekend/approve", body: `{"reason":"x"}`, wantCode: http.StatusForbidden},
+		{name: "viewer cannot approve", token: "viewer-token", method: http.MethodPost,
+			path: "/api/v1/ui/gates/team-a/no-weekend/approve", body: `{"reason":"x"}`, wantCode: http.StatusForbidden},
+		{name: "viewer lists pipelines", token: "viewer-token", method: http.MethodGet, path: "/api/v1/ui/pipelines",
+			wantCode: http.StatusOK},
+		{name: "namespace-scoped deployer cannot list all namespaces", token: "deployer-token", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", wantCode: http.StatusForbidden},
+		{name: "unrelated service account cannot read", token: "random-token", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", wantCode: http.StatusForbidden},
+		{name: "unknown token", token: "nope", method: http.MethodGet, path: "/api/v1/ui/pipelines",
+			wantCode: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+				&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team-a"}},
+				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "no-weekend", Namespace: "team-a"}},
+			).Build()
+			h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: &uiTestAccess{rules: rbac}}, "", zerolog.Nop())
+
+			rec := uiAuthDo(t, h, tt.method, tt.path, "Bearer "+tt.token, tt.body)
+			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
+
+			var pl v1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "app"}, &pl))
+			assert.Equal(t, tt.wantPaused, pl.Spec.Paused)
+
+			var gate v1alpha1.PolicyGate
+			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "no-weekend"}, &gate))
+			if tt.wantGateBy == "" {
+				assert.Empty(t, gate.Spec.Overrides)
+			} else {
+				require.Len(t, gate.Spec.Overrides, 1)
+				assert.Equal(t, tt.wantGateBy, gate.Spec.Overrides[0].CreatedBy)
+			}
+		})
+	}
+}
+
+// TestUIHandler_TokenReviewScopeNamespace verifies that in namespace-scoped
+// mode (--watch-namespace) all-namespace reads are checked against the
+// watched namespace, so a namespace-scoped user can use the dashboard.
+func TestUIHandler_TokenReviewScopeNamespace(t *testing.T) {
+	tokens := &uiTestTokens{users: map[string]string{"t": "alice"}}
+	access := &uiTestAccess{rules: map[string]map[string][]string{"alice": {"team-a": {"get", "list"}}}}
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
-	srv := newUIAPIServer(c, zerolog.Nop())
-	uiMux := http.NewServeMux()
-	srv.RegisterRoutes(uiMux)
+	h := newUIHandler(c, nil, uiAuthConfig{tokens: tokens, access: access, scopeNamespace: "team-a"}, "", zerolog.Nop())
 
-	// Apply only static token middleware (as main.go does when uiAuthToken != "").
-	// TokenReview is NOT wired — it would never be called.
-	handler := uiAuthMiddleware(uiMux, staticToken)
+	rec := uiAuthDo(t, h, http.MethodGet, "/api/v1/ui/pipelines", "Bearer t", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NotEmpty(t, access.calls)
+	for _, a := range access.calls {
+		assert.Equal(t, "team-a", a.Namespace)
+	}
+}
 
-	t.Run("correct static token → 200", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
-		req.Header.Set("Authorization", "Bearer "+staticToken)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Code)
-	})
+// TestUIHandler_GateApproveBounds covers C07-controller-23: expiry is bounded
+// to 1..1440 minutes (an overflowing value used to produce an already-expired
+// override with 200), and the path namespace wins over the body.
+func TestUIHandler_GateApproveBounds(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		body        string
+		wantCode    int
+		wantNS      string
+		wantMinutes int
+	}{
+		{name: "default expiry", path: "/api/v1/ui/gates/team-a/g/approve", body: `{"reason":"r"}`,
+			wantCode: http.StatusOK, wantNS: "team-a", wantMinutes: 60},
+		{name: "max expiry", path: "/api/v1/ui/gates/team-a/g/approve", body: `{"reason":"r","expiresInMinutes":1440}`,
+			wantCode: http.StatusOK, wantNS: "team-a", wantMinutes: 1440},
+		{name: "overflowing expiry", path: "/api/v1/ui/gates/team-a/g/approve",
+			body: `{"reason":"r","expiresInMinutes":` + strconv.FormatInt(math.MaxInt64, 10) + `}`, wantCode: http.StatusBadRequest},
+		{name: "above max", path: "/api/v1/ui/gates/team-a/g/approve", body: `{"reason":"r","expiresInMinutes":1441}`,
+			wantCode: http.StatusBadRequest},
+		{name: "negative", path: "/api/v1/ui/gates/team-a/g/approve", body: `{"reason":"r","expiresInMinutes":-5}`,
+			wantCode: http.StatusBadRequest},
+		{name: "body namespace does not override the path", path: "/api/v1/ui/gates/team-a/g/approve",
+			body: `{"reason":"r","namespace":"team-b"}`, wantCode: http.StatusOK, wantNS: "team-a", wantMinutes: 60},
+		{name: "body namespace used with the short path", path: "/api/v1/ui/gates/g/approve",
+			body: `{"reason":"r","namespace":"team-b"}`, wantCode: http.StatusOK, wantNS: "team-b", wantMinutes: 60},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-a"}},
+				&v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "team-b"}},
+			).Build()
+			h := newUIHandler(c, nil, uiAuthConfig{}, "", zerolog.Nop())
+			before := time.Now()
+			rec := uiAuthDo(t, h, http.MethodPost, tt.path, "", tt.body)
+			require.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
 
-	t.Run("wrong token (even if TokenReview would accept it) → 401", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/ui/pipelines", nil)
-		req.Header.Set("Authorization", "Bearer valid-kube-token-but-not-static-secret")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusUnauthorized, w.Code,
-			"O4: static token takes precedence — a valid kubeconfig token is rejected if it does not match --ui-auth-token")
-	})
+			for _, ns := range []string{"team-a", "team-b"} {
+				var gate v1alpha1.PolicyGate
+				require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "g"}, &gate))
+				if ns != tt.wantNS {
+					assert.Empty(t, gate.Spec.Overrides, "gate in %s must not change", ns)
+					continue
+				}
+				require.Len(t, gate.Spec.Overrides, 1)
+				o := gate.Spec.Overrides[0]
+				assert.Equal(t, "ui-action", o.CreatedBy)
+				assert.True(t, o.ExpiresAt.After(before))
+				assert.WithinDuration(t, before.Add(time.Duration(tt.wantMinutes)*time.Minute), o.ExpiresAt.Time, time.Minute)
+			}
+		})
+	}
+}
+
+// TestUIHandler_StaticAssets covers C07-controller-27: files and the index
+// are served, directories are not listed.
+func TestUIHandler_StaticAssets(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
+	h := newUIHandler(c, uiTestAssets, uiAuthConfig{}, "", zerolog.Nop())
+
+	tests := []struct {
+		path     string
+		wantCode int
+		contains string
+	}{
+		{path: "/ui/", wantCode: http.StatusOK, contains: "kardinal"},
+		{path: "/ui/assets/index-abc.js", wantCode: http.StatusOK, contains: "console.log"},
+		{path: "/ui/assets/", wantCode: http.StatusNotFound},
+		{path: "/ui/assets", wantCode: http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := uiAuthDo(t, h, http.MethodGet, tt.path, "", "")
+			assert.Equal(t, tt.wantCode, rec.Code)
+			assert.NotContains(t, rec.Body.String(), "index-abc.css", "directory listing")
+			if tt.contains != "" {
+				assert.Contains(t, rec.Body.String(), tt.contains)
+			}
+		})
+	}
+}
+
+// TestUIHandler_BodyLimit covers the UI half of C07-controller-25: request
+// bodies over maxUIRequestBody are rejected instead of read into memory.
+func TestUIHandler_BodyLimit(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
+	).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{}, "", zerolog.Nop())
+
+	pad := strings.Repeat(" ", maxUIRequestBody)
+	rec := uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/pause", "", `{"pipeline":"app"`+pad+`}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var pl v1alpha1.Pipeline
+	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "app"}, &pl))
+	assert.False(t, pl.Spec.Paused)
+
+	rec = uiAuthDo(t, h, http.MethodPost, "/api/v1/ui/pause", "", `{"pipeline":"app"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 }

@@ -13,8 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package main (ui_api.go) implements the read-only REST API that backs the
-// embedded kardinal-ui React application.
+// Package main (ui_api.go) implements the REST API that backs the embedded
+// kardinal-ui React application: reads, plus the promote, rollback, pause,
+// resume, gate-approve and bundle-create actions.
 package main
 
 import (
@@ -34,7 +35,11 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
+
+// maxGateOverrideMinutes bounds a UI gate override to one day.
+const maxGateOverrideMinutes = 24 * 60
 
 // uiPipelineResponse is the JSON shape for a Pipeline in the UI API.
 type uiPipelineResponse struct {
@@ -185,7 +190,7 @@ type uiGateOverride struct {
 	CreatedBy string `json:"createdBy,omitempty"`
 }
 
-// uiAPIServer serves the read-only REST API for the embedded UI.
+// uiAPIServer serves the REST API for the embedded UI.
 type uiAPIServer struct {
 	client client.Client
 	log    zerolog.Logger
@@ -1049,6 +1054,9 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 //
 //	{"reason": "emergency deploy", "namespace": "default", "expiresInMinutes": 60}
 //
+// The namespace in the path wins; the body namespace is used only with the
+// {name}/approve form. expiresInMinutes defaults to 60 and must be 1..1440.
+//
 // Response (JSON on success):
 //
 //	{"message": "gate overridden until 2026-04-14T15:04:05Z"}
@@ -1095,12 +1103,20 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "reason is required", http.StatusBadRequest)
 		return
 	}
-	if req.Namespace != "" {
+	if len(parts) == 2 && req.Namespace != "" {
 		gateNS = req.Namespace
 	}
 	expiresMins := req.ExpiresInMinutes
-	if expiresMins <= 0 {
+	if expiresMins == 0 {
 		expiresMins = 60 // default 1h
+	}
+	if expiresMins < 1 || expiresMins > maxGateOverrideMinutes {
+		http.Error(w, fmt.Sprintf("expiresInMinutes must be between 1 and %d", maxGateOverrideMinutes), http.StatusBadRequest)
+		return
+	}
+	createdBy := "ui-action"
+	if u, ok := uiauth.UserFrom(r.Context()); ok && u.Username != "" {
+		createdBy = u.Username
 	}
 
 	var gate v1alpha1.PolicyGate
@@ -1117,7 +1133,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		Stage:     req.Stage,
 		ExpiresAt: expiresAt,
 		CreatedAt: &createdAt,
-		CreatedBy: "ui-action",
+		CreatedBy: createdBy,
 	}
 	gate.Spec.Overrides = append(gate.Spec.Overrides, override)
 	if err := s.client.Update(r.Context(), &gate); err != nil {
@@ -1129,6 +1145,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 	s.log.Info().
 		Str("gate", gateName).
 		Str("reason", req.Reason).
+		Str("createdBy", createdBy).
 		Time("expiresAt", expiresAt.Time).
 		Msg("ui: gate approved via override")
 
@@ -1423,7 +1440,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.client.Create(r.Context(), bundle); err != nil {
 		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create bundle")
-		http.Error(w, fmt.Sprintf("failed to create bundle: %v", err), http.StatusInternalServerError)
+		http.Error(w, "failed to create bundle", http.StatusInternalServerError)
 		return
 	}
 
