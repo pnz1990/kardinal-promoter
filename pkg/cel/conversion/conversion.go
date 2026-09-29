@@ -18,9 +18,6 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/sentinels"
 )
 
 // ErrUnsupportedType is returned when the type is not supported.
@@ -72,9 +69,6 @@ func GoNativeType(v ref.Val) (interface{}, error) {
 	case types.NullType:
 		return nil, nil
 	default:
-		if _, ok := v.Value().(sentinels.Omit); ok {
-			return sentinels.Omit{}, nil
-		}
 		return v.Value(), fmt.Errorf("%w: %v", ErrUnsupportedType, v.Type())
 	}
 }
@@ -102,9 +96,9 @@ func convertMap(v ref.Val) (interface{}, error) {
 	if !ok {
 		return v.ConvertToNative(reflect.TypeOf(map[string]any{}))
 	}
-	if rawMap, ok := v.Value().(map[string]interface{}); ok {
-		return runtime.DeepCopyJSON(rawMap), nil
-	}
+	// Always convert entry by entry. A map[string]interface{} built in Go (the
+	// PolicyGate context) can hold values such as int that runtime.DeepCopyJSON
+	// panics on (C04-gates-28); the adapter turns each of them into a CEL value.
 	result := make(map[string]interface{})
 	it := mapper.Iterator()
 	for it.HasNext() == types.True {

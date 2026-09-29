@@ -7,8 +7,6 @@
 package library
 
 import (
-	"math"
-
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -21,28 +19,11 @@ import (
 //   - lists.setAtIndex(list(T), int, T) -> list(T)
 //   - lists.insertAtIndex(list(T), int, T) -> list(T)
 //   - lists.removeAtIndex(list(T), int) -> list(T)
-func Lists(options ...ListsOption) cel.EnvOption {
-	l := &listsLibrary{version: math.MaxUint32}
-	for _, o := range options {
-		l = o(l)
-	}
-	return cel.Lib(l)
+func Lists() cel.EnvOption {
+	return cel.Lib(&listsLibrary{})
 }
 
-// ListsOption is a functional option for configuring the lists library.
-type ListsOption func(*listsLibrary) *listsLibrary
-
-// ListsVersion configures the version of the lists library.
-func ListsVersion(version uint32) ListsOption {
-	return func(lib *listsLibrary) *listsLibrary {
-		lib.version = version
-		return lib
-	}
-}
-
-type listsLibrary struct {
-	version uint32
-}
+type listsLibrary struct{}
 
 func (l *listsLibrary) LibraryName() string {
 	return "kro.lists"

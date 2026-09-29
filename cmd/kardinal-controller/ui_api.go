@@ -27,8 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/ext"
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,9 +35,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
 
@@ -912,14 +910,16 @@ func pipelineCDLevel(p *v1alpha1.Pipeline) string {
 	}
 }
 
+// handleValidateCEL compiles a PolicyGate expression while the
 // user types to provide syntax feedback without needing the full evaluation context.
 //
 // POST /api/v1/ui/validate-cel
 // Request: {"expression": "!schedule.isWeekend"}
 // Response: {"valid": true} or {"valid": false, "error": "no such key: ..."}
 //
-// This endpoint uses pkg/cel/library directly (not pkg/cel) — library is explicitly
-// allowed outside policygate and creates no logic leaks (stateless, no CRD writes).
+// It compiles in the PolicyGate reconciler's own CEL environment
+// (policygate.ValidateExpression), so the UI accepts exactly the expressions the
+// controller evaluates. Stateless, no CRD writes.
 func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -934,31 +934,11 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Build a CEL environment with all kro library extensions — same function set
-	// as the backend PolicyGate evaluator. Uses pkg/cel/library directly.
-	env, err := cel.NewEnv(
-		cel.Variable("bundle", cel.DynType),
-		cel.Variable("schedule", cel.DynType),
-		cel.Variable("environment", cel.DynType),
-		cel.Variable("metrics", cel.DynType),
-		cel.Variable("upstream", cel.DynType),
-		cel.Variable("previousBundle", cel.DynType),
-		ext.Strings(),
-		library.JSON(),
-		library.Maps(),
-		library.Lists(),
-		library.Random(),
-	)
-	if err != nil {
-		http.Error(w, "failed to build CEL environment", http.StatusInternalServerError)
-		return
-	}
-
-	_, issues := env.Compile(req.Expression)
+	compileErr := policygate.ValidateExpression(req.Expression)
 	w.Header().Set("Content-Type", "application/json")
-	if issues != nil && issues.Err() != nil {
+	if compileErr != nil {
 		// Normalise error to a short, user-friendly message.
-		msg := issues.Err().Error()
+		msg := compileErr.Error()
 		if len(msg) > 200 {
 			msg = msg[:197] + "…"
 		}

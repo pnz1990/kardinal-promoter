@@ -130,8 +130,8 @@ spec:
   type: image
   image:
     registry: ghcr.io/myorg/my-app
-    tagFilter: "^1\\..*"         # semver-compatible regex
-  interval: 2m
+    tagFilter: '^1\.\d+\.\d+$'   # 1.x.y semantic versions; the highest is promoted
+    interval: 2m
 ```
 
 ---
@@ -159,6 +159,13 @@ kubectl get warehouse my-app -n kargo-demo -o yaml
 # Translate repoURL → spec.image.registry
 # Translate semverConstraint → spec.image.tagFilter (Go regex)
 ```
+
+When every tag matching `tagFilter` is a semantic version, the highest version is
+selected (Kargo `SemVer`). A filter that matches exactly one tag tracks that tag's
+digest (Kargo `Digest`). Other tag sets are ordered by image build time (Kargo
+`NewestBuild`), limited to 50 matching tags. Subscriptions only poll public
+repositories; Warehouses that use registry credentials should create Bundles from CI
+instead. See [Subscription](../subscription.md).
 
 ### Step 3: Remove Kargo `Promotion` objects (if any)
 
@@ -192,18 +199,16 @@ kind: MetricCheck
 metadata:
   name: success-rate
   namespace: platform-policies
-  labels:
-    kardinal.io/applies-to: prod
 spec:
+  provider: prometheus
   query: |
     sum(rate(http_requests_total{status=~"2.."}[5m])) /
     sum(rate(http_requests_total[5m]))
   prometheusURL: http://prometheus.monitoring.svc:9090
   threshold:
-    operator: ">="
+    operator: gte   # one of lt, gt, lte, gte, eq
     value: 0.95
-  recheckInterval: 1m
-  windowDuration: 5m
+  interval: 1m
 ```
 
 ### Step 5: Convert AnalysisRunArguments to PolicyGate CEL expressions
@@ -220,7 +225,9 @@ metadata:
   labels:
     kardinal.io/applies-to: prod
 spec:
-  expression: "metrics.successRate >= 0.95"
+  # metrics.<MetricCheck name>.result is "Pass" when the threshold holds;
+  # .value is the raw value as a string (use double(...) to compare it).
+  expression: 'metrics["success-rate"].result == "Pass"'
   message: "Success rate below 95%"
   recheckInterval: 1m
 ```

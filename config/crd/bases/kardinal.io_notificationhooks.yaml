@@ -105,6 +105,13 @@ spec:
           status:
             description: NotificationHookStatus defines the observed state of a NotificationHook.
             properties:
+              failedAttempts:
+                description: |-
+                  FailedAttempts counts consecutive failed deliveries. The controller retries
+                  with exponential backoff and gives up on an event after 10 attempts.
+                  Reset to zero on a successful delivery.
+                format: int32
+                type: integer
               failureMessage:
                 description: |-
                   FailureMessage records the last webhook delivery failure, if any.
@@ -117,14 +124,29 @@ spec:
               lastEventKey:
                 description: |-
                   LastEventKey is a deterministic string identifying the last delivered event
-                  (e.g. "Bundle.Verified/nginx-demo-abc123"). Used for idempotency.
+                  (e.g. "Bundle.Verified/nginx-demo-abc123"). Idempotency uses
+                  processedEventKeys; this field is informational.
                 type: string
               lastSentAt:
-                description: |-
-                  LastSentAt is the RFC3339 timestamp of the last successful webhook delivery.
-                  Used for idempotency: the reconciler will not re-deliver the same event if
-                  lastEvent and lastSentAt match the current event key.
+                description: LastSentAt is the RFC3339 timestamp of the last successful
+                  webhook delivery.
                 type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the hook generation the controller last reconciled.
+                  Zero means the hook was never reconciled. On that first reconcile only the
+                  newest qualifying event that already exists is delivered; older ones are
+                  recorded as processed rather than backfilled.
+                format: int64
+                type: integer
+              processedEventKeys:
+                description: |-
+                  ProcessedEventKeys lists the keys of the qualifying events that were
+                  delivered, or given up on after the retry limit. Each event is delivered
+                  once. The list is pruned to events that still qualify, so it stays bounded.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

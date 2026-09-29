@@ -8,7 +8,6 @@ package library
 
 import (
 	"encoding/json"
-	"math"
 	"reflect"
 
 	"github.com/google/cel-go/cel"
@@ -23,28 +22,11 @@ import (
 // Functions:
 //   - json.unmarshal(jsonString string) → dyn  — parses JSON string into CEL value
 //   - json.marshal(value dyn) → string         — converts CEL value to JSON string
-func JSON(options ...JSONOption) cel.EnvOption {
-	lib := &jsonLibrary{version: math.MaxUint32}
-	for _, o := range options {
-		lib = o(lib)
-	}
-	return cel.Lib(lib)
+func JSON() cel.EnvOption {
+	return cel.Lib(&jsonLibrary{})
 }
 
-// JSONOption is a functional option for configuring the json library.
-type JSONOption func(*jsonLibrary) *jsonLibrary
-
-// JSONVersion configures the version of the json library.
-func JSONVersion(version uint32) JSONOption {
-	return func(lib *jsonLibrary) *jsonLibrary {
-		lib.version = version
-		return lib
-	}
-}
-
-type jsonLibrary struct {
-	version uint32
-}
+type jsonLibrary struct{}
 
 func (l *jsonLibrary) LibraryName() string {
 	return "json"
