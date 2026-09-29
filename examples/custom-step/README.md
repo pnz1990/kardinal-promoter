@@ -34,8 +34,15 @@ kubectl apply -f examples/custom-step/k8s/
 
 ## Use in a Pipeline
 
-Apply `examples/custom-step/pipeline.yaml` to add the version gate to your prod environment:
+> **Not runnable yet.** A custom step runs only when it is listed in
+> `spec.environments[].steps`, and `steps` is not implemented yet. The
+> controller rejects a Pipeline that sets it, so the `steps` block in
+> `pipeline.yaml` is commented out. Applied as is, the Pipeline promotes with
+> the default steps and does not call this server. See
+> [docs/custom-steps.md](../../docs/custom-steps.md).
+
+`examples/custom-step/pipeline.yaml` shows where the version gate will go in the prod environment:
 
 ```bash
-kubectl apply -f examples/custom-step/pipeline.yaml
+kubectl apply -f examples/custom-step/pipeline.yaml   # default steps only, for now
 ```

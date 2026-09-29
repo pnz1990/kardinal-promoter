@@ -228,20 +228,28 @@ main-branch Bundle in prod (different intent target).
 
 ### Pattern: Skip environment for hotfixes
 
-For hotfixes that must skip staging and go directly to prod:
+For hotfixes that must skip staging and go directly to prod, create the Bundle with `spec.intent.skipEnvironments`:
 
 ```yaml
-# CI creates a Bundle with skip intent
-{
-  "pipeline": "my-app",
-  "artifacts": { "images": [...] },
-  "provenance": { "commitSHA": "...", "author": "engineer" },
-  "intent": { "skip": ["staging"] },
-  "labels": { "hotfix": "true" }
-}
+apiVersion: kardinal.io/v1alpha1
+kind: Bundle
+metadata:
+  generateName: my-app-hotfix-
+  namespace: my-team
+spec:
+  type: image
+  pipeline: my-app
+  images:
+    - repository: ghcr.io/myorg/my-app
+      tag: hotfix-1.29.1
+  provenance:
+    commitSHA: "..."
+    author: engineer
+  intent:
+    skipEnvironments: [staging]
 ```
 
-This requires a SkipPermission PolicyGate allowing hotfix Bundles to skip staging:
+If an org gate applies to staging, the platform team must allow the skip. It does so with a skip-permission gate in an org policy namespace:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -250,15 +258,15 @@ metadata:
   name: allow-staging-skip-for-hotfix
   namespace: platform-policies
   labels:
-    kardinal.io/scope: org
     kardinal.io/type: skip-permission
     kardinal.io/applies-to: staging
 spec:
-  expression: "bundle.labels.hotfix == true"
-  message: "Hotfix bundles may skip staging"
+  skipPermission: true
+  expression: 'bundle.version.startsWith("hotfix-")'
+  message: "Only hotfix bundles may skip staging"
 ```
 
-Without this gate, the skip is denied and the Bundle remains in `SkipDenied` state.
+With no such gate, the skip is denied: the Bundle goes to phase `Failed` with a `skip denied` reason. With the gate, prod waits until the controller has found the expression true for this Bundle; `bundle.version` is the tag of the first image. See [Skip Permissions](policy-gates.md#skip-permissions).
 
 ### Pattern: Ephemeral Pipeline for feature environments
 

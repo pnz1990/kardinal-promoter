@@ -1,17 +1,5 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package translator
 
@@ -19,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -30,14 +19,14 @@ import (
 )
 
 // makeTestGraph builds a minimal Graph with one PromotionStep node per environment.
-// Mirrors the convention used by graph.Builder: node ID = celSafeSlug(envName).
+// Mirrors the convention used by graph.Builder: node ID = graph.CELSafeSlug(envName).
 func makeTestGraph(envNames ...string) *graph.Graph {
 	g := &graph.Graph{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-graph", Namespace: "default"},
 	}
 	for _, name := range envNames {
 		g.Spec.Nodes = append(g.Spec.Nodes, graph.GraphNode{
-			ID: celSafeSlug(name),
+			ID: graph.CELSafeSlug(name),
 			Template: map[string]interface{}{
 				"apiVersion": "kardinal.io/v1alpha1",
 				"kind":       "PromotionStep",
@@ -45,11 +34,29 @@ func makeTestGraph(envNames ...string) *graph.Graph {
 				"spec":       map[string]interface{}{"environment": name},
 			},
 			ReadyWhen: []string{
-				`${` + celSafeSlug(name) + `.status.state == "Verified"}`,
+				`${` + graph.CELSafeSlug(name) + `.status.state == "Verified"}`,
 			},
 		})
 	}
 	return g
+}
+
+// envNames returns the names of the pipeline's environments.
+func envNames(p *kardinalv1alpha1.Pipeline) []string {
+	if p == nil {
+		return nil
+	}
+	names := make([]string, 0, len(p.Spec.Environments))
+	for _, e := range p.Spec.Environments {
+		names = append(names, e.Name)
+	}
+	return names
+}
+
+// injectAll injects health ref nodes for every environment of p, with every
+// kind served and every namespace readable, and returns how many it added.
+func injectAll(p *kardinalv1alpha1.Pipeline, g *graph.Graph) int {
+	return len(healthInjector{log: zerolog.Nop()}.inject(p, g, envNames(p)))
 }
 
 // makePipeline builds a minimal Pipeline with the given environments.
@@ -70,8 +77,7 @@ func TestInjectHealthWatchNodes_NoHealthType(t *testing.T) {
 	g := makeTestGraph("test", "prod")
 	originalCount := len(g.Spec.Nodes)
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 0, injected, "no ref nodes should be injected when health.type is empty")
 	assert.Len(t, g.Spec.Nodes, originalCount, "node count must not change")
 }
@@ -85,8 +91,7 @@ func TestInjectHealthWatchNodes_Resource(t *testing.T) {
 	g := makeTestGraph("prod")
 	originalStepCount := len(g.Spec.Nodes)
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 	assert.Len(t, g.Spec.Nodes, originalStepCount+1, "one ref node added")
 
@@ -138,8 +143,7 @@ func TestInjectHealthWatchNodes_ArgoCD(t *testing.T) {
 	})
 	g := makeTestGraph("prod")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	watchNode := findHealthNode(g, "prod")
@@ -164,8 +168,7 @@ func TestInjectHealthWatchNodes_Flux(t *testing.T) {
 	})
 	g := makeTestGraph("staging")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	watchNode := findHealthNode(g, "staging")
@@ -189,8 +192,7 @@ func TestInjectHealthWatchNodes_ArgoRollouts(t *testing.T) {
 	})
 	g := makeTestGraph("prod-eu")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	watchNode := findHealthNode(g, "prod-eu")
@@ -212,8 +214,7 @@ func TestInjectHealthWatchNodes_Flagger(t *testing.T) {
 	})
 	g := makeTestGraph("prod")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	watchNode := findHealthNode(g, "prod")
@@ -236,8 +237,7 @@ func TestInjectHealthWatchNodes_MultipleEnvs(t *testing.T) {
 	g := makeTestGraph("test", "uat", "prod")
 	originalCount := len(g.Spec.Nodes)
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 2, injected, "test has no health.type, uat and prod do")
 	assert.Len(t, g.Spec.Nodes, originalCount+2)
 
@@ -261,8 +261,7 @@ func TestInjectHealthWatchNodes_PromotionStepReadyWhenUnchanged(t *testing.T) {
 	g := makeTestGraph("prod")
 	orig := append([]string{}, g.Spec.Nodes[0].ReadyWhen...)
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	var stepNode *graph.GraphNode
@@ -282,20 +281,19 @@ func TestInjectHealthWatchNodes_NilGraph(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
 	})
-	injected, err := injectHealthWatchNodes(pipeline, nil)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, nil)
 	assert.Equal(t, 0, injected, "nil graph must return 0 without error")
 }
 
 // TestInjectHealthWatchNodes_NilPipeline handles nil pipeline gracefully.
 func TestInjectHealthWatchNodes_NilPipeline(t *testing.T) {
 	g := makeTestGraph("prod")
-	injected, err := injectHealthWatchNodes(nil, g)
-	require.NoError(t, err)
+	injected := injectAll(nil, g)
 	assert.Equal(t, 0, injected, "nil pipeline must return 0 without error")
 }
 
-// TestInjectHealthWatchNodes_UnknownHealthType skips unknown types without error.
+// TestInjectHealthWatchNodes_UnknownHealthType skips unknown types with a
+// warning instead of failing the translation (C01-graph-25).
 func TestInjectHealthWatchNodes_UnknownHealthType(t *testing.T) {
 	pipeline := makePipeline("nginx", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "unknown-type"}},
@@ -303,9 +301,8 @@ func TestInjectHealthWatchNodes_UnknownHealthType(t *testing.T) {
 	g := makeTestGraph("prod")
 	originalCount := len(g.Spec.Nodes)
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
-	assert.Equal(t, 0, injected, "unknown health type is skipped silently")
+	injected := injectAll(pipeline, g)
+	assert.Equal(t, 0, injected, "unknown health type is skipped")
 	assert.Len(t, g.Spec.Nodes, originalCount, "node count unchanged for unknown type")
 }
 
@@ -331,8 +328,7 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 			})
 			g := makeTestGraph("prod")
 
-			_, err := injectHealthWatchNodes(pipeline, g)
-			require.NoError(t, err)
+			injectAll(pipeline, g)
 
 			watchNode := findHealthNode(g, "prod")
 			require.NotNil(t, watchNode, "health ref node must exist for type %s", tc.healthType)
@@ -362,38 +358,9 @@ func TestInjectHealthWatchNodes_WatchNodeIsIdentityOnly(t *testing.T) {
 	}
 }
 
-// TestCelSafeSlug verifies celSafeSlug produces identifiers that pass kro's
-// node ID grammar ^[A-Za-z][A-Za-z0-9]*$ (pkg/graphengine/compiler/validation.go).
-func TestCelSafeSlug(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		// Simple names: unchanged
-		{"prod", "prod"},
-		// Hyphenated: camelCase (hyphens become word boundaries)
-		{"prod-eu", "prodEu"},
-		{"prod-eu-2", "prodEu2"},
-		// All-uppercase: first char lowercased, rest preserved (valid camelCase)
-		{"PROD", "pROD"},
-		// Leading digit: guarded with "x" prefix (kro IDs must start with a letter)
-		{"0prod", "x0prod"},
-		// Dot-separated: camelCase (dots become word boundaries)
-		{"my.env", "myEnv"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			got := celSafeSlug(tc.input)
-			assert.Equal(t, tc.want, got)
-			// Invariant: result must be a valid kro node ID
-			assert.Regexp(t, `^[A-Za-z][A-Za-z0-9]*$`, got, "must be a valid kro node ID")
-		})
-	}
-}
-
 // findHealthNode finds the health ref node for a given environment in the graph.
 func findHealthNode(g *graph.Graph, envName string) *graph.GraphNode {
-	target := "health" + strings.ToUpper(celSafeSlug(envName)[:1]) + celSafeSlug(envName)[1:]
+	target := "health" + strings.ToUpper(graph.CELSafeSlug(envName)[:1]) + graph.CELSafeSlug(envName)[1:]
 	for i := range g.Spec.Nodes {
 		if g.Spec.Nodes[i].ID == target {
 			return &g.Spec.Nodes[i]
@@ -420,8 +387,7 @@ func TestInjectHealthWatchNodes_ResourceWatchKind(t *testing.T) {
 	})
 	g := makeTestGraph("prod")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	watchNode := findHealthNode(g, "prod")
@@ -460,8 +426,7 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 		{Name: "uat", Health: kardinalv1alpha1.HealthConfig{Type: "resource"}},
 	})
 	gWatch := makeTestGraph("uat")
-	_, err := injectHealthWatchNodes(watchPipeline, gWatch)
-	require.NoError(t, err)
+	injectAll(watchPipeline, gWatch)
 
 	watchNode := findHealthNode(gWatch, "uat")
 	require.NotNil(t, watchNode)
@@ -482,8 +447,7 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 		},
 	})
 	gWatchKind := makeTestGraph("uat")
-	_, err = injectHealthWatchNodes(watchKindPipeline, gWatchKind)
-	require.NoError(t, err)
+	injectAll(watchKindPipeline, gWatchKind)
 
 	watchKindNode := findHealthNode(gWatchKind, "uat")
 	require.NotNil(t, watchKindNode)
@@ -519,8 +483,7 @@ func TestInjectHealthWatchNodes_ResourceRef(t *testing.T) {
 	})
 	g := makeTestGraph("test")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	var watchNode *graph.GraphNode
@@ -559,8 +522,7 @@ func TestInjectHealthWatchNodes_ResourceRef_Defaults(t *testing.T) {
 	})
 	g := makeTestGraph("staging")
 
-	injected, err := injectHealthWatchNodes(pipeline, g)
-	require.NoError(t, err)
+	injected := injectAll(pipeline, g)
 	assert.Equal(t, 1, injected)
 
 	var watchNode *graph.GraphNode
@@ -593,8 +555,7 @@ func TestInjectHealthNodes_SkipsUnservedKinds(t *testing.T) {
 	})
 	g := makeTestGraph("uat", "prod")
 
-	injected, err := injectHealthNodes(pipeline, g, tr.servedKind)
-	require.NoError(t, err)
+	injected := len(healthInjector{served: tr.servedKind}.inject(pipeline, g, envNames(pipeline)))
 	assert.Equal(t, 1, injected, "argocd Application is not served and must be skipped")
 	assert.NotNil(t, findHealthNode(g, "uat"))
 	assert.Nil(t, findHealthNode(g, "prod"))
