@@ -20,10 +20,8 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/spf13/cobra"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,18 +30,21 @@ import (
 )
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var controllerNS string
+	cmd := &cobra.Command{
 		Use:   "status [pipeline]",
 		Short: "Show controller health or per-pipeline in-flight promotion details",
 		Long: `Show the health of the kardinal controller and cluster resource summary.
 
-When called without arguments: displays controller version, pipeline count, and
-active bundle count.
+When called without arguments: displays the controller version (the
+kardinal-version ConfigMap in --controller-namespace), the pipeline count with
+any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
 When called with a pipeline name: shows in-flight promotion details for that
-pipeline — active bundle, PromotionStep states (with active steps highlighted),
-blocking PolicyGates (with CEL expression and current reason), and open PR URLs.
-This is the first command to run when a promotion is stuck.
+pipeline — the active bundle per environment, its PromotionSteps (one row per
+region, active steps marked), the PolicyGates holding it back (with CEL
+expression and current reason), and open PR URLs. This is the first command to
+run when a promotion is stuck.
 
 Examples:
   # Cluster-level summary
@@ -56,98 +57,65 @@ For detailed gate diagnostics, use 'kardinal explain <pipeline>'.
 For step-level log output, use 'kardinal logs <pipeline>'.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 {
-				return runStatusPipeline(cmd, args[0])
+			c, ns, err := buildClient()
+			if err != nil {
+				return err // buildClient already provides actionable message
 			}
-			return runStatus(cmd)
+			if len(args) == 1 {
+				return statusPipelineWriter(cmd.OutOrStdout(), c, ns, args[0])
+			}
+			return statusSummaryFn(cmd.OutOrStdout(), c, controllerNS)
 		},
 	}
+	cmd.Flags().StringVar(&controllerNS, "controller-namespace", defaultControllerNamespace,
+		"Namespace kardinal-promoter is installed in")
+	return cmd
 }
 
-// runStatus shows the cluster-level controller summary.
-// Preserves the existing behaviour when no pipeline argument is given.
-func runStatus(cmd *cobra.Command) error {
-	out := cmd.OutOrStdout()
-
-	client, _, err := buildClient()
-	if err != nil {
-		return err // buildClient already provides actionable message
-	}
+// statusSummaryFn writes the cluster-level controller summary.
+func statusSummaryFn(out io.Writer, c sigs_client.Reader, controllerNS string) error {
 	ctx := context.Background()
+	ctrlVersion := controllerVersion(ctx, c, controllerNS)
 
-	// 1. Controller version from ConfigMap
-	var versionCM corev1.ConfigMap
-	ctrlVersion := "(unknown)"
-	if err := client.Get(ctx, types.NamespacedName{
-		Name:      "kardinal-version",
-		Namespace: "kardinal-system",
-	}, &versionCM); err == nil {
-		if v := versionCM.Data["version"]; v != "" {
-			ctrlVersion = v
-		}
-	}
-
-	// 2. Pipeline count (all namespaces)
 	var pipelines v1alpha1.PipelineList
-	if err := client.List(ctx, &pipelines); err != nil {
-		_, _ = fmt.Fprintln(out, "Controller: "+ctrlVersion)
+	if err := c.List(ctx, &pipelines); err != nil {
 		return fmt.Errorf("list pipelines: %w", err)
 	}
-
-	// 3. Bundle counts
 	var bundles v1alpha1.BundleList
-	_ = client.List(ctx, &bundles)
+	if err := c.List(ctx, &bundles); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
 
-	var activeBundles, failedPipelines int
-	failedPipelineNames := []string{}
+	activeBundles := 0
 	for _, b := range bundles.Items {
-		phase := b.Status.Phase
-		if phase == "Promoting" || phase == "Pending" {
+		if b.Status.Phase == "Available" || b.Status.Phase == "Promoting" {
 			activeBundles++
 		}
 	}
+	var degraded []string
 	for _, p := range pipelines.Items {
-		if p.Status.Phase == "Failed" || p.Status.Phase == "Error" {
-			failedPipelines++
-			failedPipelineNames = append(failedPipelineNames, p.Name)
+		if p.Status.Phase == "Degraded" {
+			degraded = append(degraded, p.Namespace+"/"+p.Name)
 		}
 	}
+	sort.Strings(degraded)
 
-	// Print summary
 	_, _ = fmt.Fprintf(out, "Controller:  %s\n", ctrlVersion)
 	_, _ = fmt.Fprintf(out, "Pipelines:   %d", len(pipelines.Items))
-	if failedPipelines > 0 {
-		_, _ = fmt.Fprintf(out, " (%d failed: %v)", failedPipelines, failedPipelineNames)
+	if len(degraded) > 0 {
+		_, _ = fmt.Fprintf(out, " (%d degraded: %s)", len(degraded), strings.Join(degraded, ", "))
 	}
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintf(out, "Bundles:     %d (%d active)\n", len(bundles.Items), activeBundles)
-
-	if failedPipelines > 0 {
-		_, _ = fmt.Fprintf(out, "\nWarning: %d pipeline(s) in failed state — run 'kardinal get pipelines' for details\n", failedPipelines)
+	if len(degraded) > 0 {
+		_, _ = fmt.Fprintf(out,
+			"\nWarning: %d pipeline(s) Degraded — run 'kardinal get pipelines' for details\n", len(degraded))
 	}
-
 	return nil
 }
 
-// runStatusPipeline shows in-flight promotion details for a specific pipeline.
-// It answers: "what is <pipeline> doing right now?"
-func runStatusPipeline(cmd *cobra.Command, pipeline string) error {
-	c, ns, err := buildClient()
-	if err != nil {
-		return err
-	}
-	return statusPipelineWriter(cmd.OutOrStdout(), c, ns, pipeline)
-}
-
-// StatusPipelineWriterForTest is an exported wrapper around statusPipelineWriter
-// for use in tests. It allows tests to inject a fake client without going through
-// the CLI flag parsing.
-func StatusPipelineWriterForTest(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
-	return statusPipelineWriter(w, c, ns, pipeline)
-}
-
 // statusPipelineWriter renders the per-pipeline status to w using client c.
-// Separated from runStatusPipeline to allow unit testing with a fake client.
+// It is separate from the command so tests can pass a fake client.
 func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string) error {
 	ctx := context.Background()
 
@@ -180,60 +148,27 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		return fmt.Errorf("list policy gates: %w", err)
 	}
 
-	if len(steps.Items) == 0 {
-		_, _ = fmt.Fprintln(w, "No active promotions.")
-		return nil
-	}
+	active := activeBundleByEnv(&pl, steps.Items, gates.Items)
 
-	// Determine the most active bundle per environment (same priority logic as explain).
-	type envBest struct {
-		bundleName string
-		priority   int
-		createdAt  time.Time
-	}
-	activeBundleByEnv := make(map[string]envBest)
-	for i := range steps.Items {
-		s := &steps.Items[i]
-		env := s.Spec.Environment
-		state := s.Status.State
-		if state == "" {
-			state = "Pending"
-		}
-		pri := stepStatePriority(state)
-		existing, ok := activeBundleByEnv[env]
-		if !ok || pri > existing.priority ||
-			(pri == existing.priority && s.CreationTimestamp.After(existing.createdAt)) {
-			activeBundleByEnv[env] = envBest{
-				bundleName: s.Spec.BundleName,
-				priority:   pri,
-				createdAt:  s.CreationTimestamp.Time,
-			}
-		}
-	}
-
-	// Build the active steps view, keyed by environment.
+	// One row per PromotionStep of the active Bundle, so the regions of a
+	// multi-region environment each get a row.
 	type stepRow struct {
 		env        string
+		region     string
 		state      string
 		activeStep string // currently executing step (from status.steps[])
 		prURL      string
 		age        string
-		bundleName string
 	}
-	stepsByEnv := make(map[string]stepRow)
-
+	var rows []stepRow
+	stepped := make(map[string]bool) // env with a step of its active Bundle
 	for i := range steps.Items {
 		s := &steps.Items[i]
 		env := s.Spec.Environment
-		best, ok := activeBundleByEnv[env]
-		if !ok || s.Spec.BundleName != best.bundleName {
+		if s.Spec.BundleName != active[env] {
 			continue
 		}
-
-		state := s.Status.State
-		if state == "" {
-			state = "Pending"
-		}
+		stepped[env] = true
 
 		// Find the currently executing step (first non-terminal step in status.steps).
 		activeStep := "-"
@@ -243,38 +178,53 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 				break
 			}
 		}
-
-		prURL := s.Status.PRURL
-		if prURL == "" {
-			prURL = "-"
-		}
-
 		age := "-"
 		if !s.CreationTimestamp.IsZero() {
 			age = HumanAge(s.CreationTimestamp.Time)
 		}
-
-		stepsByEnv[env] = stepRow{
+		rows = append(rows, stepRow{
 			env:        env,
-			state:      state,
+			region:     orDash(s.Spec.Region),
+			state:      stepState(*s),
 			activeStep: activeStep,
-			prURL:      prURL,
+			prURL:      orDash(s.Status.PRURL),
 			age:        age,
-			bundleName: s.Spec.BundleName,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].env != rows[j].env {
+			return rows[i].env < rows[j].env
+		}
+		return rows[i].region < rows[j].region
+	})
+
+	// A gate blocks when it belongs to the active Bundle of its environment,
+	// is not ready, and that Bundle has no step there yet: the Graph creates
+	// the step only once every gate passes.
+	var blockingGates []v1alpha1.PolicyGate
+	for _, g := range gates.Items {
+		env, bundle := g.Labels["kardinal.io/environment"], g.Labels["kardinal.io/bundle"]
+		if bundle != "" && bundle == active[env] && !stepped[env] && !g.Status.Ready {
+			blockingGates = append(blockingGates, g)
 		}
 	}
+	sort.Slice(blockingGates, func(i, j int) bool {
+		ei, ej := blockingGates[i].Labels["kardinal.io/environment"], blockingGates[j].Labels["kardinal.io/environment"]
+		if ei != ej {
+			return ei < ej
+		}
+		return gateDisplayName(blockingGates[i]) < gateDisplayName(blockingGates[j])
+	})
 
-	// Collect and sort environments.
-	envs := make([]string, 0, len(stepsByEnv))
-	for e := range stepsByEnv {
-		envs = append(envs, e)
+	if len(rows) == 0 && len(blockingGates) == 0 {
+		_, _ = fmt.Fprintln(w, "No active promotions.")
+		return nil
 	}
-	sort.Strings(envs)
 
 	// Print active bundle summary.
 	bundleNames := map[string]struct{}{}
-	for _, r := range stepsByEnv {
-		bundleNames[r.bundleName] = struct{}{}
+	for _, b := range active {
+		bundleNames[b] = struct{}{}
 	}
 	bnames := make([]string, 0, len(bundleNames))
 	for b := range bundleNames {
@@ -287,9 +237,8 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	_, _ = fmt.Fprintln(w, "Promotion Steps")
 	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tSTATE\tACTIVE STEP\tPR\tAGE")
-	for _, env := range envs {
-		r := stepsByEnv[env]
+	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tREGION\tSTATE\tACTIVE STEP\tPR\tAGE")
+	for _, r := range rows {
 		// Mark in-progress states with a pointer.
 		marker := "  "
 		switch r.state {
@@ -300,19 +249,10 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		if len(prDisplay) > 40 {
 			prDisplay = prDisplay[len(prDisplay)-40:]
 		}
-		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\n",
-			marker, env, r.state, r.activeStep, prDisplay, r.age)
+		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\n",
+			marker, r.env, r.region, r.state, r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
-
-	// Show blocking PolicyGates (status.ready == false).
-	var blockingGates []v1alpha1.PolicyGate
-	for i := range gates.Items {
-		g := &gates.Items[i]
-		if !g.Status.Ready {
-			blockingGates = append(blockingGates, *g)
-		}
-	}
 
 	if len(blockingGates) > 0 {
 		_, _ = fmt.Fprintln(w)
@@ -322,41 +262,25 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		_, _ = fmt.Fprintln(gtw, "GATE\tENV\tEXPRESSION\tREASON\tLAST CHECKED")
 		for i := range blockingGates {
 			g := &blockingGates[i]
-			// Gate environment from label (set by translator) or fall back to name.
-			env := g.Labels["kardinal.io/environment"]
-
-			expr := g.Spec.Expression
-			if len(expr) > 40 {
-				expr = expr[:37] + "..."
-			}
-			reason := g.Status.Reason
-			if reason == "" {
-				reason = "-"
-			}
-			if len(reason) > 35 {
-				reason = reason[:32] + "..."
-			}
 			lastChecked := "-"
 			if g.Status.LastEvaluatedAt != nil && !g.Status.LastEvaluatedAt.IsZero() {
 				lastChecked = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
 			}
 			_, _ = fmt.Fprintf(gtw, "%s\t%s\t%s\t%s\t%s\n",
-				g.Name, env, expr, reason, lastChecked)
+				gateDisplayName(*g), g.Labels["kardinal.io/environment"],
+				truncateRunes(g.Spec.Expression, 40), truncateRunes(orDash(g.Status.Reason), 35), lastChecked)
 		}
 		_ = gtw.Flush()
 	}
 
 	// Show a hint if everything is terminal.
-	allTerminal := true
-	for _, r := range stepsByEnv {
-		switch r.state {
-		case "Verified", "Failed", "AbortedByAlarm":
-			// terminal
-		default:
+	allTerminal := len(blockingGates) == 0
+	for _, r := range rows {
+		if !terminalStates[r.state] {
 			allTerminal = false
 		}
 	}
-	if allTerminal && len(stepsByEnv) > 0 {
+	if allTerminal && len(rows) > 0 {
 		_, _ = fmt.Fprintln(w, "\n(all steps are in a terminal state — no active promotion)")
 	}
 

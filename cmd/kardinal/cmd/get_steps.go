@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,9 +28,10 @@ func newGetStepsCmd() *cobra.Command {
 	var watchFlag bool
 
 	cmd := &cobra.Command{
-		Use:     "steps <pipeline>",
-		Aliases: []string{"step"},
-		Short:   "List PromotionSteps for a pipeline",
+		Use:         "steps <pipeline>",
+		Annotations: map[string]string{outputAnnotation: "true"},
+		Aliases:     []string{"step"},
+		Short:       "List PromotionSteps for a pipeline",
 		Long: `List PromotionSteps for a pipeline.
 
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).`,
@@ -57,15 +57,10 @@ func runGetSteps(cmd *cobra.Command, args []string, watch bool) error {
 		return getStepsOnce(cmd.OutOrStdout(), c, ns, pipeline)
 	}
 
-	// Watch mode: poll every 2s and refresh the terminal output.
-	for {
-		_, _ = fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
-		if err := getStepsOnce(cmd.OutOrStdout(), c, ns, pipeline); err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
-		time.Sleep(getPipelinesWatchInterval) // reuse 2s constant from get_pipelines.go
-	}
+	w := cmd.OutOrStdout()
+	return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, func() error {
+		return getStepsOnce(w, c, ns, pipeline)
+	})
 }
 
 // getStepsOnce fetches and renders a single snapshot of PromotionStep status.
@@ -80,30 +75,22 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 		return fmt.Errorf("list promotion steps: %w", err)
 	}
 
-	// Exclude steps from Superseded bundles. A Superseded bundle's steps are
-	// historical and should not appear in the current view. We build a set of
-	// non-Superseded bundle names, then filter steps accordingly.
-	activeBundles := make(map[string]bool)
+	// Steps of Superseded Bundles are history, not the current view.
 	var bundles v1alpha1.BundleList
-	if listErr := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); listErr == nil {
-		for _, b := range bundles.Items {
-			if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
-				activeBundles[b.Name] = true
-			}
+	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
+	activeBundles := make(map[string]bool)
+	for _, b := range bundles.Items {
+		if b.Spec.Pipeline == pipeline && b.Status.Phase != "Superseded" {
+			activeBundles[b.Name] = true
 		}
 	}
-
-	var activeSteps []v1alpha1.PromotionStep
-	if len(activeBundles) > 0 {
-		for _, s := range steps.Items {
-			bundleName := s.Labels["kardinal.io/bundle"]
-			if bundleName == "" || activeBundles[bundleName] {
-				activeSteps = append(activeSteps, s)
-			}
+	activeSteps := []v1alpha1.PromotionStep{}
+	for _, s := range steps.Items {
+		if activeBundles[s.Spec.BundleName] {
+			activeSteps = append(activeSteps, s)
 		}
-	} else {
-		// Fallback: show all steps if bundle list failed or no active bundles.
-		activeSteps = steps.Items
 	}
 
 	switch OutputFormat() {
@@ -112,6 +99,12 @@ func getStepsOnce(w io.Writer, c sigs_client.Client, ns, pipeline string) error 
 	case "yaml":
 		return WriteYAML(w, activeSteps)
 	default:
+		if len(activeBundles) == 0 {
+			if _, err := fmt.Fprintf(w, "No active bundles for pipeline %q.\n", pipeline); err != nil {
+				return fmt.Errorf("write: %w", err)
+			}
+			return nil
+		}
 		return FormatStepsTable(w, activeSteps)
 	}
 }

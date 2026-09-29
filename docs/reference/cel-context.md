@@ -224,15 +224,25 @@ kardinal policy simulate \
   --env prod \
   --time "Saturday 3pm"
 # RESULT: BLOCKED
-# no-weekend-deploys: !schedule.isWeekend evaluated to false (isWeekend=true)
+# Blocked by: no-weekend-deploys
+# Message: "Blocked by no-weekend-deploys"
+# Next window: Monday 00:00 UTC
+#
+# no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
 
 kardinal policy simulate \
   --pipeline my-app \
   --env prod \
   --time "Tuesday 10am"
-# RESULT: ALLOWED
-# no-weekend-deploys: !schedule.isWeekend evaluated to true
+# RESULT: PASS
+# no-weekend-deploys:   PASS   (!schedule.isWeekend = true)
 ```
+
+Simulate evaluates the same gates the controller attaches to that environment
+(team gates in the pipeline namespace and org gates in the policy namespaces),
+with the controller's CEL environment. `--time` is UTC and accepts an RFC 3339
+timestamp or a weekday and an hour ("Saturday 3pm", "tue 10:30"); it defaults to
+now, and anything else is an error.
 
 ---
 
@@ -241,8 +251,13 @@ kardinal policy simulate \
 Validate CEL syntax and semantics before deploying:
 
 ```bash
-kardinal policy test --file my-gate.yaml
-# PASS: expression "!schedule.isWeekend && upstream.uat.soakMinutes >= 30" is valid CEL
+kardinal policy test my-gate.yaml
+# PolicyGate "no-weekend-deploys" (my-gate.yaml):
+#   Expression: !schedule.isWeekend
+#   Syntax: valid
+#   Result: PASS (!schedule.isWeekend = true)
+#
+# All gates valid and pass current context (1 gate(s))
 ```
 
 ---

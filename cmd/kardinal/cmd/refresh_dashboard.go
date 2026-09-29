@@ -25,9 +25,11 @@ func newRefreshCmd() *cobra.Command {
 		Short: "Force re-reconciliation of a Pipeline (Kargo parity)",
 		Long: `Force the controller to re-reconcile a Pipeline immediately.
 
-Adds a kardinal.io/refresh annotation to the Pipeline, which triggers the
-controller to run a reconciliation cycle. Useful when you need to re-evaluate
-PolicyGates, re-check health adapters, or force a retry after a transient error.
+Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
+The change requeues the Pipeline reconciler and the reconcilers of the
+Pipeline's Bundles. PolicyGates and PromotionSteps do not watch Pipelines, so
+this does not re-evaluate gates or re-run health checks; they re-check on their
+own intervals.
 
 Example:
   kardinal refresh nginx-demo`,
@@ -78,8 +80,10 @@ func newDashboardCmd() *cobra.Command {
 		Short: "Open the kardinal UI dashboard in a browser (Kargo parity)",
 		Long: `Open the embedded kardinal UI in the default system browser.
 
-The UI is served by the controller at /ui/ (default port 8082).
-Uses port-forwarding to access the controller's UI port from localhost.
+The UI is served by the controller at /ui/ (default port 8082). This command
+only prints and opens the URL (default http://localhost:8082/ui/); it does not
+port-forward. For an in-cluster controller, start a kubectl port-forward to
+port 8082 first (see "Accessing the UI" in docs/installation.md).
 
 Example:
   kardinal dashboard

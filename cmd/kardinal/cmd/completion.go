@@ -16,8 +16,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
 
@@ -71,11 +69,9 @@ To install completions permanently:
 				return root.GenZshCompletion(out)
 			case "fish":
 				return root.GenFishCompletion(out, true)
-			case "powershell":
-				return root.GenPowerShellCompletionWithDesc(out)
-			default:
-				return fmt.Errorf("unsupported shell %q — choose from: bash, zsh, fish, powershell", args[0])
 			}
+			// cobra.OnlyValidArgs has rejected every other shell.
+			return root.GenPowerShellCompletionWithDesc(out)
 		},
 	}
 	return cmd

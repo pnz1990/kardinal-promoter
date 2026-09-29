@@ -129,8 +129,8 @@ kardinal get steps rollouts-demo
 # Why is prod-eu waiting?
 kardinal explain rollouts-demo --env prod-eu
 
-# Watch prod-eu until it finishes
-kardinal explain rollouts-demo --env prod-eu --watch
+# In-flight steps (one row per region) and blocking gates
+kardinal status rollouts-demo
 
 # See the full promotion history
 kardinal history rollouts-demo

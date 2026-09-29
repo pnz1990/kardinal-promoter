@@ -80,8 +80,8 @@ func TestFormatSubscriptionTable_rows(t *testing.T) {
 	assert.Contains(t, out, "git-watcher")
 	assert.Contains(t, out, "git")
 	assert.Contains(t, out, "Error")
-	// last-bundle for git-watcher with empty status
-	assert.Contains(t, out, "-")
+	// git-watcher has no last bundle.
+	assert.Regexp(t, `(?m)^git-watcher +git +my-pipeline +Error +2m ago +- +10m$`, out)
 }
 
 func TestFormatSubscriptionTable_showNamespace(t *testing.T) {
@@ -166,9 +166,8 @@ func TestFormatSubscriptionTable_noLastChecked(t *testing.T) {
 	require.NoError(t, err)
 	out := buf.String()
 	assert.Contains(t, out, "bare")
-	// last-check shows "-" when no LastCheckedAt is set
-	// last-bundle shows "-" when no LastBundleCreated is set
-	assert.Contains(t, out, "-")
+	// LAST-CHECK and LAST-BUNDLE are "-" when unset.
+	assert.Regexp(t, `(?m)^bare +git +pipe +Unknown +- +- +\S+$`, out)
 	// Phase should show "Unknown" when empty
 	assert.Contains(t, out, "Unknown")
 }

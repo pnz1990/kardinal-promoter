@@ -116,21 +116,24 @@ kardinal explain kardinal-test-app --env prod --color
 ### Scenario B: Weekend gate
 
 ```bash
-# Simulate what happens Saturday
+# Simulate what happens Saturday, with uat soaked for 45 minutes
 kardinal policy simulate \
   --pipeline kardinal-test-app \
   --env prod \
-  --time "Saturday 3pm"
-# → RESULT: BLOCKED (no-weekend-deploys)
+  --time "Saturday 3pm" \
+  --soak-minutes 45
+# → RESULT: BLOCKED
+#   Blocked by: business-hours-only
+#   Blocked by: no-weekend-deploys
 
 # Simulate weekday
 kardinal policy simulate \
   --pipeline kardinal-test-app \
   --env prod \
-  --time "Tuesday 10am"
-# → no-weekend-deploys:  PASS
-#   The overall RESULT can still be BLOCKED by require-uat-soak, because
-#   simulate has no upstream soak data.
+  --time "Tuesday 10am" \
+  --soak-minutes 45
+# → RESULT: PASS
+#   Without --soak-minutes (default 0), require-uat-soak blocks.
 ```
 
 ### Scenario C: Pause mid-promotion
@@ -192,7 +195,7 @@ The `validate.sh` script is the canonical definition of "kardinal works":
 | 2 | Pipeline list | `kardinal get pipelines` |
 | 3 | UI reachable | HTTP 200 from `/api/v1/ui/pipelines` |
 | 4 | Happy path promotion | test → uat auto, prod PR |
-| 5 | Weekend gate | `policy simulate` → BLOCKED / ALLOWED |
+| 5 | Weekend gate | `policy simulate` → BLOCKED / PASS |
 | 6 | Soak gate | gate visible in `kardinal explain` |
 | 7 | Pause / resume | `kardinal pause` + `resume` |
 | 8 | Rollback | `kardinal rollback` opens PR |

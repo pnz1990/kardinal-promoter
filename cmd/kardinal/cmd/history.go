@@ -21,6 +21,7 @@ import (
 	"io"
 	"sort"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,10 +41,11 @@ were promoted to which environments and when.
 
 Output columns:
   BUNDLE      Bundle name
-  ACTION      promote or rollback
+  ACTION      promote, or rollback when the Bundle is a rollback Bundle
   ENV         Target environment
   PR          Pull request number or --
-  DURATION    Time to complete (from step creation to Verified)
+  DURATION    Time from step creation to Verified (or to its last completed
+              step when it failed); ... while running, -- when unknown
   TIMESTAMP   When the step was created`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -90,7 +92,20 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 		return nil
 	}
 
-	rows := buildHistoryRows(steps.Items, envFilter, limit)
+	// Rollback is a property of the Bundle (spec.provenance.rollbackOf), not
+	// of its PromotionSteps.
+	var bundles v1alpha1.BundleList
+	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
+	rollbacks := map[string]bool{}
+	for _, b := range bundles.Items {
+		if b.Spec.Pipeline == pipeline && isRollbackBundle(b) {
+			rollbacks[b.Name] = true
+		}
+	}
+
+	rows := buildHistoryRows(steps.Items, rollbacks, envFilter, limit)
 
 	if len(rows) == 0 {
 		if envFilter != "" {
@@ -108,10 +123,9 @@ func historyFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	return formatHistoryTable(w, rows)
 }
 
-// buildHistoryRows converts PromotionSteps into history rows.
-// Only steps that have reached a terminal state (Verified or Failed) produce rows.
-// Steps still in progress are included with their current state.
-func buildHistoryRows(steps []v1alpha1.PromotionStep, envFilter string, limit int) []HistoryRow {
+// buildHistoryRows converts PromotionSteps into history rows, newest first.
+// rollbacks holds the names of rollback Bundles.
+func buildHistoryRows(steps []v1alpha1.PromotionStep, rollbacks map[string]bool, envFilter string, limit int) []HistoryRow {
 	// Sort steps newest first by creation timestamp.
 	sorted := make([]v1alpha1.PromotionStep, len(steps))
 	copy(sorted, steps)
@@ -130,7 +144,10 @@ func buildHistoryRows(steps []v1alpha1.PromotionStep, envFilter string, limit in
 			continue
 		}
 
-		action := deriveAction(s)
+		action := "promote"
+		if rollbacks[s.Spec.BundleName] {
+			action = "rollback"
+		}
 		pr := derivePR(s)
 		duration := deriveDuration(s)
 		ts := s.CreationTimestamp.Time.UTC().Format("2006-01-02 15:04")
@@ -147,12 +164,11 @@ func buildHistoryRows(steps []v1alpha1.PromotionStep, envFilter string, limit in
 	return rows
 }
 
-// deriveAction determines whether a step is a promote or rollback action.
-func deriveAction(s v1alpha1.PromotionStep) string {
-	if s.Labels["kardinal.io/rollback"] == "true" {
-		return "rollback"
-	}
-	return "promote"
+// isRollbackBundle reports whether b was created by a rollback (CLI, UI,
+// auto-rollback or RollbackPolicy all set provenance.rollbackOf and the label).
+func isRollbackBundle(b v1alpha1.Bundle) bool {
+	return (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "") ||
+		b.Labels["kardinal.io/rollback"] == "true"
 }
 
 // derivePR extracts the PR display string (e.g. "#144" or "--").
@@ -185,16 +201,36 @@ func shortenPRURL(url string) string {
 	return url
 }
 
-// deriveDuration estimates duration as age since creation (a proxy when no completion time is stored).
-// Returns "--" for in-progress steps.
+// deriveDuration is the time from step creation to its end: the Verified
+// condition's transition, else the last completed step. "..." while the step
+// is running, "--" when no end time is recorded.
 func deriveDuration(s v1alpha1.PromotionStep) string {
-	state := s.Status.State
-	if state == "" || state == "Pending" || state == "Promoting" ||
-		state == "WaitingForMerge" || state == "HealthChecking" {
+	switch s.Status.State {
+	case "Verified", "Failed", "AbortedByAlarm":
+	case "", "Pending", "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
 		return "..."
+	default:
+		return "--"
 	}
-	// Completed: use the step age as a proxy (creation → now).
-	return HumanAge(s.CreationTimestamp.Time)
+	var end time.Time
+	if s.Status.State == "Verified" {
+		for _, c := range s.Status.Conditions {
+			if c.Type == "Verified" && c.Status == "True" {
+				end = c.LastTransitionTime.Time
+			}
+		}
+	}
+	if end.IsZero() {
+		for _, st := range s.Status.Steps {
+			if st.CompletedAt != nil && st.CompletedAt.After(end) {
+				end = st.CompletedAt.Time
+			}
+		}
+	}
+	if end.IsZero() || s.CreationTimestamp.IsZero() || end.Before(s.CreationTimestamp.Time) {
+		return "--"
+	}
+	return humanDuration(end.Sub(s.CreationTimestamp.Time))
 }
 
 // formatHistoryTable writes the history table to w.

@@ -48,8 +48,11 @@ func main() {
 	// so the pages don't contain a timestamp that changes every build.
 	setDisableAutoGenTag(root)
 
-	// Generate one .md file per command and subcommand.
-	if err := doc.GenMarkdownTree(root, *outDir); err != nil {
+	// Generate one .md file per command and subcommand. Files are renamed to
+	// hyphens below, so SEE ALSO links use hyphens too.
+	noPrepend := func(string) string { return "" }
+	hyphenLink := func(name string) string { return strings.ReplaceAll(name, "_", "-") }
+	if err := doc.GenMarkdownTreeCustom(root, *outDir, noPrepend, hyphenLink); err != nil {
 		log.Fatalf("generate docs: %v", err)
 	}
 
