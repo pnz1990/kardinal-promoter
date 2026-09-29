@@ -358,6 +358,19 @@ kubectl create secret generic github-token \
 
 A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)`. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
 
+### Symptom: "get PR status failed: HTTP 401", "HTTP 403" or "HTTP 404" on a PromotionStep
+
+`wait-for-merge` fails the step at once, instead of polling, when the SCM API answers:
+
+- **401**: the SCM token was rejected (expired or revoked). Rotate the token as shown above.
+- **403** (not a rate limit): the token has no access to the repository or its pull requests.
+  Give it read access to pull requests.
+- **404 or 410**: the repository or the PR does not exist, or the token cannot see it. Check
+  `spec.git.url` on the Pipeline and that the PR was not deleted.
+
+Polling again cannot fix these, so the step is marked as a permanent failure. A 403 rate limit,
+429, 5xx or network error keeps the step waiting and it is retried every 30 seconds.
+
 ### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 
 GitHub's API rate limit (5000 req/hr for authenticated requests) or GitLab's rate limit has been hit. The **SCM circuit breaker** (shipped in v0.7.0) handles this automatically.

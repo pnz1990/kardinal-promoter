@@ -16,6 +16,7 @@ package scm
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 )
 
@@ -57,9 +58,9 @@ func NewDynamicProvider(providerType, token, apiURL, webhookSecret string) (*Dyn
 // use the new credentials. Reload is safe to call from multiple goroutines;
 // only one new provider is created per call.
 //
-// Reload is a no-op if token is empty.
+// Reload is a no-op if token is empty or only whitespace.
 func (d *DynamicProvider) Reload(token string) error {
-	if token == "" {
+	if strings.TrimSpace(token) == "" {
 		return nil
 	}
 	return d.reload(token)

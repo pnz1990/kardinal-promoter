@@ -594,7 +594,7 @@ Behavioral contracts: `CreatePR` must be idempotent (if a PR already exists for 
 | `gitlab` | Phase 2 |
 | `bitbucket` | Phase 3+ |
 
-**Manifest Update Strategy** (`pkg/update/strategy.go`): Rewrites artifact references in manifests.
+**Manifest Update Strategy** (`pkg/update/strategy.go`): Rewrites artifact references in manifests. *(As built, this is the `kustomize-set-image` and `helm-set-image` steps in `pkg/steps/steps`; there is no `pkg/update` package.)*
 
 ```go
 type Strategy interface {

@@ -13,9 +13,31 @@
 
 package scm
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// providerHTTPTimeout bounds every SCM API call, so a hung SCM endpoint cannot
+// pin a reconcile worker (the reconcile context has no deadline).
+const providerHTTPTimeout = 30 * time.Second
+
+const (
+	// maxListPages bounds how many pages a paginated list call reads.
+	maxListPages = 20
+	// githubPageSize is the per_page used for GitHub list calls (the maximum).
+	githubPageSize = 100
+	// forgejoPageSize is the limit used for Forgejo/Gitea list calls (the
+	// default server maximum).
+	forgejoPageSize = 50
+)
 
 // WebhookEvent carries parsed SCM webhook payload data.
+//
+// Every provider reports a merged pull request (GitLab merge request, Azure
+// DevOps completed PR) the same way: EventType "pull_request", Action
+// "closed" and Merged true, so the webhook handler needs a single check.
+// Other events keep the provider's own event type and action.
 type WebhookEvent struct {
 	// EventType is the SCM event type (e.g., "pull_request").
 	EventType string
@@ -23,7 +45,10 @@ type WebhookEvent struct {
 	// PRNumber is the pull request number, if applicable.
 	PRNumber int
 
-	// RepoFullName is the repository full name (owner/repo).
+	// RepoFullName is the repository identifier in the format the provider
+	// APIs use (see RepoFromURL): "owner/repo", the full GitLab project path,
+	// or "org/project/repo" for Azure DevOps. For a pull request it is the
+	// base (target) repository, not a fork.
 	RepoFullName string
 
 	// Merged indicates whether the PR was merged.
@@ -31,6 +56,11 @@ type WebhookEvent struct {
 
 	// Action is the event action (e.g., "closed", "opened").
 	Action string
+}
+
+// mergedPREvent returns the normalised event for a merged pull request.
+func mergedPREvent(repo string, number int) WebhookEvent {
+	return WebhookEvent{EventType: "pull_request", Action: "closed", Merged: true, RepoFullName: repo, PRNumber: number}
 }
 
 // SCMProvider abstracts pull request lifecycle operations for a given SCM platform.
@@ -65,15 +95,18 @@ type SCMProvider interface {
 // GitClient abstracts Git operations needed by the promotion steps engine.
 // All implementations must be safe for sequential use within a single step sequence.
 type GitClient interface {
-	// Clone performs a shallow (depth=1) clone of the repository into dir.
-	Clone(ctx context.Context, url, branch, dir string) error
+	// Clone performs a shallow (depth=1) clone of branch into dir, using token
+	// (when non-empty) for HTTP(S) authentication.
+	Clone(ctx context.Context, url, branch, dir, token string) error
 
-	// Checkout creates or switches to the given branch in dir.
-	Checkout(ctx context.Context, dir, branch string) error
+	// CloneAt clones the repository into dir and checks out commitSHA.
+	CloneAt(ctx context.Context, url, commitSHA, dir, token string) error
 
-	// CommitAll stages all changes in dir and creates a commit with the given message.
+	// CommitAll stages all changes in dir and creates a commit with the given
+	// message. It returns ErrNothingToCommit when there is nothing to commit.
 	CommitAll(ctx context.Context, dir, message, authorName, authorEmail string) error
 
-	// Push pushes the given branch to the remote using the provided token for auth.
-	Push(ctx context.Context, dir, remote, branch, token string) error
+	// Push pushes HEAD to branch on the remote using token for auth. With
+	// force=false it returns ErrNonFastForward when the remote branch moved.
+	Push(ctx context.Context, dir, remote, branch, token string, force bool) error
 }

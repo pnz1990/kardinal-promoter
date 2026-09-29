@@ -70,10 +70,10 @@ func (n *noopSCM) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) 
 
 type noopGit struct{}
 
-func (n *noopGit) Clone(_ context.Context, _, _, _ string) error        { return nil }
-func (n *noopGit) Checkout(_ context.Context, _, _ string) error        { return nil }
-func (n *noopGit) CommitAll(_ context.Context, _, _, _, _ string) error { return nil }
-func (n *noopGit) Push(_ context.Context, _, _, _, _ string) error      { return nil }
+func (n *noopGit) Clone(_ context.Context, _, _, _, _ string) error        { return nil }
+func (n *noopGit) CloneAt(_ context.Context, _, _, _, _ string) error      { return nil }
+func (n *noopGit) CommitAll(_ context.Context, _, _, _, _ string) error    { return nil }
+func (n *noopGit) Push(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
 
 // TestHealthCheckingWithRealAdapter_Healthy verifies that the PromotionStep reconciler
 // uses the DeploymentAdapter when HealthDetector is configured and the Deployment is healthy.
