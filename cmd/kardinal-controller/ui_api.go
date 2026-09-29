@@ -13,11 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package main (ui_api.go) implements the read-only REST API that backs the
-// embedded kardinal-ui React application.
+// Package main (ui_api.go) implements the REST API that backs the embedded
+// kardinal-ui React application: reads, plus the promote, rollback, pause,
+// resume, gate-approve and bundle-create actions.
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -29,12 +31,19 @@ import (
 	"github.com/google/cel-go/ext"
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
+	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/uiauth"
 )
+
+// maxGateOverrideMinutes bounds a UI gate override to one day.
+const maxGateOverrideMinutes = 24 * 60
 
 // uiPipelineResponse is the JSON shape for a Pipeline in the UI API.
 type uiPipelineResponse struct {
@@ -185,7 +194,7 @@ type uiGateOverride struct {
 	CreatedBy string `json:"createdBy,omitempty"`
 }
 
-// uiAPIServer serves the read-only REST API for the embedded UI.
+// uiAPIServer serves the REST API for the embedded UI.
 type uiAPIServer struct {
 	client client.Client
 	log    zerolog.Logger
@@ -235,22 +244,22 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	// For each pipeline, find the most recent Promoting (or Verified) Bundle
 	// and read its per-environment states for the health bar (#342).
 	var bundleList v1alpha1.BundleList
-	// List all bundles — ignore error (best-effort; env states will be nil on error)
-	_ = s.client.List(r.Context(), &bundleList)
-	// Index: pipelineName → active bundle (prefer Promoting > Available > Verified)
+	if err := s.client.List(r.Context(), &bundleList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list bundles")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	// Index: namespace/pipeline → active bundle (prefer Promoting > Available >
+	// Verified; the newest bundle wins a tie).
 	type activeBundleEntry struct {
 		name         string
+		phase        string
 		envStates    map[string]string
 		createdAt    time.Time
 		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
 	}
 	activeBundles := make(map[string]*activeBundleEntry)
 	phaseOrder := map[string]int{"Promoting": 3, "Available": 2, "Verified": 1, "Failed": 0, "Superseded": -1}
-	// Build a name→phase index for existing bundle lookup.
-	bundlePhase := make(map[string]string, len(bundleList.Items))
-	for _, b := range bundleList.Items {
-		bundlePhase[b.Name] = b.Status.Phase
-	}
 	for _, b := range bundleList.Items {
 		if b.Spec.Pipeline == "" {
 			continue
@@ -260,9 +269,10 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		newScore := phaseOrder[b.Status.Phase]
 		existingScore := -99
 		if existing != nil {
-			existingScore = phaseOrder[bundlePhase[existing.name]]
+			existingScore = phaseOrder[existing.phase]
 		}
-		if existing == nil || newScore > existingScore {
+		if existing == nil || newScore > existingScore ||
+			(newScore == existingScore && b.CreationTimestamp.After(existing.createdAt)) {
 			envStates := make(map[string]string, len(b.Status.Environments))
 			var lastVerified time.Time
 			for _, env := range b.Status.Environments {
@@ -276,6 +286,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			}
 			activeBundles[key] = &activeBundleEntry{
 				name:         b.Name,
+				phase:        b.Status.Phase,
 				envStates:    envStates,
 				createdAt:    b.CreationTimestamp.Time,
 				lastVerified: lastVerified,
@@ -284,26 +295,34 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build per-pipeline blocker count from PolicyGates (ops table #462).
-	// Index: bundleName → count of gates with ready=false.
+	// Index: namespace/bundle → count of gates with ready=false.
 	var gateList v1alpha1.PolicyGateList
-	_ = s.client.List(r.Context(), &gateList)
+	if err := s.client.List(r.Context(), &gateList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list policy gates")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	blockersByBundle := make(map[string]int, len(gateList.Items))
 	for _, g := range gateList.Items {
 		if !g.Status.Ready {
 			bundleLabel := g.Labels["kardinal.io/bundle"]
 			if bundleLabel != "" {
-				blockersByBundle[bundleLabel]++
+				blockersByBundle[g.Namespace+"/"+bundleLabel]++
 			}
 		}
 	}
 
 	// Build per-pipeline failed step count from PromotionSteps (ops table #462).
 	var stepList v1alpha1.PromotionStepList
-	_ = s.client.List(r.Context(), &stepList)
+	if err := s.client.List(r.Context(), &stepList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list promotion steps")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	failedStepsByBundle := make(map[string]int, len(stepList.Items))
 	for _, ps := range stepList.Items {
 		if ps.Status.State == "Failed" {
-			failedStepsByBundle[ps.Spec.BundleName]++
+			failedStepsByBundle[ps.Namespace+"/"+ps.Spec.BundleName]++
 		}
 	}
 
@@ -340,10 +359,10 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				resp.EnvironmentStates = ab.envStates
 			}
 			// Ops table: blocker + failed step counts derived from active bundle.
-			if n := blockersByBundle[ab.name]; n > 0 {
+			if n := blockersByBundle[p.Namespace+"/"+ab.name]; n > 0 {
 				resp.BlockerCount = n
 			}
-			if n := failedStepsByBundle[ab.name]; n > 0 {
+			if n := failedStepsByBundle[p.Namespace+"/"+ab.name]; n > 0 {
 				resp.FailedStepCount = n
 			}
 			// Inventory age: days since the active bundle was created.
@@ -441,41 +460,74 @@ func (s *uiAPIServer) handleBundleSubresource(w http.ResponseWriter, r *http.Req
 	}
 }
 
-// handleBundleGraph builds a clean, readable DAG for a single Bundle:
-//   - One PromotionStep node per environment (synthetic "NotStarted" when not yet created)
-//   - One PolicyGate node per unique gate template that applies to this bundle (deduped by kardinal.io/gate-template label)
-//   - Directed edges: env[i] → gate(s) for env[i+1] → env[i+1] → ...
+// findBundle returns the Bundle called name and the namespace its steps and
+// gates live in. namespace (the optional ?namespace= query parameter) narrows
+// the lookup when bundle names repeat across namespaces. When no Bundle
+// matches, the Bundle is nil and the namespace is returned as given.
+func (s *uiAPIServer) findBundle(ctx context.Context, name, namespace string) (*v1alpha1.Bundle, string, error) {
+	var bl v1alpha1.BundleList
+	if err := s.client.List(ctx, &bl, client.InNamespace(namespace)); err != nil {
+		return nil, "", fmt.Errorf("list bundles: %w", err)
+	}
+	for i := range bl.Items {
+		if bl.Items[i].Name == name {
+			return &bl.Items[i], bl.Items[i].Namespace, nil
+		}
+	}
+	return nil, namespace, nil
+}
+
+// handleBundleGraph builds the DAG for a single Bundle:
+//   - one PromotionStep node per environment (synthetic "NotStarted" when the
+//     step does not exist yet);
+//   - one PolicyGate node per gate and environment it guards;
+//   - edges that follow the Pipeline's dependencies (the Graph builder's
+//     rules: waves, dependsOn, else the previous environment), with each
+//     environment's gates between its upstream steps and its own step.
+//
+// Steps and gates are read from the Bundle's namespace. The optional
+// ?namespace= query parameter picks the Bundle when names repeat across
+// namespaces.
 func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, bundleName string) {
 	ctx := r.Context()
-
-	// 1. Look up the Bundle to find its pipeline name and namespace.
-	var bundle v1alpha1.Bundle
-	var psList v1alpha1.PromotionStepList
-	if err := s.client.List(ctx, &psList, client.MatchingLabels{"kardinal.io/bundle": bundleName}); err != nil {
+	fail := func(err error, what string) {
+		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle graph: " + what)
 		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
+
+	// 1. Find the Bundle; its namespace scopes the steps, gates and Pipeline.
+	bundle, namespace, err := s.findBundle(ctx, bundleName, r.URL.Query().Get("namespace"))
+	if err != nil {
+		fail(err, "list bundles")
 		return
 	}
-	var bl v1alpha1.BundleList
-	if err := s.client.List(ctx, &bl); err == nil {
-		for _, b := range bl.Items {
-			if b.Name == bundleName {
-				bundle = b
-				break
-			}
-		}
+	byBundle := client.MatchingLabels{"kardinal.io/bundle": bundleName}
+	var psList v1alpha1.PromotionStepList
+	if err := s.client.List(ctx, &psList, client.InNamespace(namespace), byBundle); err != nil {
+		fail(err, "list promotion steps")
+		return
+	}
+	var gateList v1alpha1.PolicyGateList
+	if err := s.client.List(ctx, &gateList, client.InNamespace(namespace), byBundle); err != nil {
+		fail(err, "list policy gates")
+		return
 	}
 
-	// 2. Fetch the Pipeline spec for ordered environments.
+	// 2. Environment order and dependencies from the Pipeline.
 	var envOrder []string
-	if bundle.Spec.Pipeline != "" {
+	var deps map[string][]string
+	if bundle != nil && bundle.Spec.Pipeline != "" {
 		var pl v1alpha1.Pipeline
-		if err := s.client.Get(ctx, client.ObjectKey{Name: bundle.Spec.Pipeline, Namespace: bundle.Namespace}, &pl); err == nil {
-			for _, e := range pl.Spec.Environments {
-				envOrder = append(envOrder, e.Name)
-			}
+		err := s.client.Get(ctx, client.ObjectKey{Name: bundle.Spec.Pipeline, Namespace: bundle.Namespace}, &pl)
+		switch {
+		case err == nil:
+			envOrder, deps = pipelineEnvDeps(&pl)
+		case !apierrors.IsNotFound(err):
+			fail(err, "get pipeline")
+			return
 		}
 	}
-	// Fallback: derive order from existing PromotionSteps if pipeline not found.
+	// Fallback when the Pipeline is gone: a chain in step order.
 	if len(envOrder) == 0 {
 		seen := map[string]bool{}
 		for _, ps := range psList.Items {
@@ -484,138 +536,96 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 				seen[ps.Spec.Environment] = true
 			}
 		}
+		deps = linearEnvDeps(envOrder)
 	}
 
-	// 3. Build PromotionStep lookup by environment.
+	// 3. PromotionStep lookup by environment.
 	stepByEnv := map[string]*v1alpha1.PromotionStep{}
 	for i := range psList.Items {
 		ps := &psList.Items[i]
 		stepByEnv[ps.Spec.Environment] = ps
 	}
 
-	// 4. Fetch PolicyGates for this bundle, deduplicate by kardinal.io/gate-name label.
-	//    The gate-name label holds the user-defined gate name (e.g. "no-weekend-deploys")
-	//    and is propagated through cross-product instantiations by the graph builder.
-	//    We pick the canonical instance: prefer the gate whose own name equals the gate-name
-	//    (i.e. the direct instantiation for this bundle), falling back to lexicographic first.
-	var gateList v1alpha1.PolicyGateList
-	_ = s.client.List(ctx, &gateList, client.MatchingLabels{"kardinal.io/bundle": bundleName})
-
-	// namedGates: gate-name → best PolicyGate for that human-readable gate name
-	namedGates := map[string]*v1alpha1.PolicyGate{}
+	// 4. Gates keyed by gate name and environment. The kardinal.io/gate-name
+	//    label holds the user-defined gate name (e.g. "no-weekend-deploys") and
+	//    is carried through cross-product instances by the graph builder. When
+	//    several instances share a name and environment, prefer the one whose
+	//    own name equals the gate name, else the lexicographically first.
+	type gateKey struct{ name, env string }
+	gates := map[gateKey]*v1alpha1.PolicyGate{}
 	for i := range gateList.Items {
 		g := &gateList.Items[i]
-		// Prefer kardinal.io/gate-name (stable, human-readable, set by graph builder).
-		// Fall back to gate-template, then to own name.
-		gateName := g.Labels["kardinal.io/gate-name"]
-		if gateName == "" {
-			gateName = g.Labels["kardinal.io/gate-template"]
+		name := g.Labels["kardinal.io/gate-name"]
+		if name == "" {
+			name = g.Labels["kardinal.io/gate-template"]
 		}
-		if gateName == "" {
-			gateName = g.Name
+		if name == "" {
+			name = g.Name
 		}
-		prev, exists := namedGates[gateName]
-		if !exists {
-			namedGates[gateName] = g
-			continue
-		}
-		// Prefer the gate whose own name equals the gate-name (direct instance for this bundle).
-		if g.Name == gateName {
-			namedGates[gateName] = g
-		} else if prev.Name != gateName {
-			// Both are cross-product copies — pick lexicographically first for stability.
-			if g.Name < prev.Name {
-				namedGates[gateName] = g
-			}
-		}
-	}
-	// templateGates is an alias for namedGates to keep the rest of the code readable.
-	templateGates := namedGates
-
-	// Group deduplicated gates by the environment they apply to.
-	// Sort gate names within each env group for stable rendering.
-	gatesByEnv := map[string][]string{} // env → []gateName (sorted)
-	for gateName, g := range templateGates {
 		env := g.Labels["kardinal.io/environment"]
 		if env == "" {
 			env = g.Labels["kardinal.io/applies-to"]
 		}
-		if env != "" {
-			gatesByEnv[env] = append(gatesByEnv[env], gateName)
+		if env == "" {
+			continue
 		}
+		k := gateKey{name: name, env: env}
+		prev, exists := gates[k]
+		switch {
+		case !exists:
+			gates[k] = g
+		case prev.Name == name:
+		case g.Name == name || g.Name < prev.Name:
+			gates[k] = g
+		}
+	}
+	gatesByEnv := map[string][]string{} // env → sorted gate names
+	for k := range gates {
+		gatesByEnv[k.env] = append(gatesByEnv[k.env], k.name)
 	}
 	for env := range gatesByEnv {
 		sort.Strings(gatesByEnv[env])
 	}
 
-	// 5. Build nodes and edges in pipeline env order.
-	nodes := make([]uiGraphNode, 0)
+	// 5. Nodes: one step per environment, then its gates.
+	nodes := make([]uiGraphNode, 0, len(envOrder)+len(gates))
 	edges := make([]uiGraphEdge, 0)
-
-	prevIDs := []string{} // last node(s) in the chain before current env
-
+	stepIDs := make(map[string]string, len(envOrder))
 	for _, env := range envOrder {
-		// PromotionStep node (synthetic if not yet created).
-		stepID := "step-" + env
+		stepIDs[env] = "step-" + env
 		if ps, ok := stepByEnv[env]; ok {
-			stepID = ps.Name
-			state := ps.Status.State
-			if state == "" {
-				state = "NotStarted"
+			stepIDs[env] = ps.Name
+		}
+	}
+	for _, env := range envOrder {
+		stepID := stepIDs[env]
+		stepNode := uiGraphNode{
+			ID:          stepID,
+			Type:        "PromotionStep",
+			Label:       env,
+			Environment: env,
+			State:       "NotStarted",
+		}
+		if ps, ok := stepByEnv[env]; ok {
+			if ps.Status.State != "" {
+				stepNode.State = ps.Status.State
 			}
-			startedAt := ""
+			stepNode.Message = ps.Status.Message
+			stepNode.PRURL = ps.Status.PRURL
+			stepNode.Outputs = ps.Status.Outputs
 			if !ps.CreationTimestamp.IsZero() {
-				startedAt = ps.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00")
-			}
-			nodes = append(nodes, uiGraphNode{
-				ID:          stepID,
-				Type:        "PromotionStep",
-				Label:       env,
-				Environment: env,
-				State:       state,
-				Message:     ps.Status.Message,
-				PRURL:       ps.Status.PRURL,
-				Outputs:     ps.Status.Outputs,
-				StartedAt:   startedAt,
-			})
-		} else {
-			nodes = append(nodes, uiGraphNode{
-				ID:          stepID,
-				Type:        "PromotionStep",
-				Label:       env,
-				Environment: env,
-				State:       "NotStarted",
-			})
-		}
-
-		// Edges from previous chain tail → this step node.
-		for _, pid := range prevIDs {
-			edges = append(edges, uiGraphEdge{From: pid, To: stepID})
-		}
-
-		// Gate nodes that guard the *next* environment after this one.
-		// Attach them after the current step, before the next step.
-		nextEnvIdx := -1
-		for i, e := range envOrder {
-			if e == env {
-				nextEnvIdx = i + 1
-				break
+				stepNode.StartedAt = ps.CreationTimestamp.Format("2006-01-02T15:04:05Z07:00")
 			}
 		}
-		var nextEnv string
-		if nextEnvIdx < len(envOrder) {
-			nextEnv = envOrder[nextEnvIdx]
-		}
-		gateTemplates := gatesByEnv[nextEnv]
-		if len(gateTemplates) == 0 {
-			// No gates guard the next env — current step is the tail.
-			prevIDs = []string{stepID}
-		} else {
-			// Insert gate nodes between current step and next step.
-			gateIDs := make([]string, 0, len(gateTemplates))
-			for _, tmpl := range gateTemplates {
-				g := templateGates[tmpl]
-				gateID := "gate-" + tmpl
+		nodes = append(nodes, stepNode)
+
+		// Entry points of this environment: its gates, or the step itself.
+		entries := []string{stepID}
+		if names := gatesByEnv[env]; len(names) > 0 {
+			entries = entries[:0]
+			for _, name := range names {
+				g := gates[gateKey{name: name, env: env}]
+				gateID := "gate-" + g.Name
 				state := "Pending"
 				if g.Status.Ready {
 					state = "Pass"
@@ -629,26 +639,69 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 				nodes = append(nodes, uiGraphNode{
 					ID:              gateID,
 					Type:            "PolicyGate",
-					Label:           tmpl,
-					Environment:     tmpl,
+					Label:           name,
+					Environment:     env,
 					State:           state,
 					Message:         g.Status.Reason,
 					Expression:      g.Spec.Expression,
 					LastEvaluatedAt: lastEval,
 				})
-				edges = append(edges, uiGraphEdge{From: stepID, To: gateID})
-				gateIDs = append(gateIDs, gateID)
+				edges = append(edges, uiGraphEdge{From: gateID, To: stepID})
+				entries = append(entries, gateID)
 			}
-			prevIDs = gateIDs
+		}
+		for _, dep := range deps[env] {
+			from, ok := stepIDs[dep]
+			if !ok {
+				continue
+			}
+			for _, to := range entries {
+				edges = append(edges, uiGraphEdge{From: from, To: to})
+			}
 		}
 	}
 
 	writeJSON(w, uiGraphResponse{Nodes: nodes, Edges: edges})
 }
 
+// pipelineEnvDeps returns the Pipeline's environments in execution order and
+// the environments each one waits for, using the Graph builder's rules. An
+// invalid topology (admission rejects cycles) falls back to a chain in list
+// order so the UI still renders.
+func pipelineEnvDeps(pl *v1alpha1.Pipeline) ([]string, map[string][]string) {
+	order, orderErr := graphpkg.EnvironmentOrder(pl)
+	deps, depsErr := graphpkg.EnvironmentDependencies(pl)
+	if orderErr == nil && depsErr == nil {
+		return order, deps
+	}
+	order = make([]string, 0, len(pl.Spec.Environments))
+	for _, e := range pl.Spec.Environments {
+		order = append(order, e.Name)
+	}
+	return order, linearEnvDeps(order)
+}
+
+// linearEnvDeps makes each environment depend on the one before it.
+func linearEnvDeps(order []string) map[string][]string {
+	deps := make(map[string][]string, len(order))
+	for i := 1; i < len(order); i++ {
+		deps[order[i]] = []string{order[i-1]}
+	}
+	return deps
+}
+
+// handleBundleSteps handles GET /api/v1/ui/bundles/{name}/steps[?namespace=].
+// Steps are read from the Bundle's namespace only (see findBundle).
 func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, bundleName string) {
+	_, namespace, err := s.findBundle(r.Context(), bundleName, r.URL.Query().Get("namespace"))
+	if err != nil {
+		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle steps: list bundles")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	var list v1alpha1.PromotionStepList
-	if err := s.client.List(r.Context(), &list); err != nil {
+	if err := s.client.List(r.Context(), &list, client.InNamespace(namespace)); err != nil {
+		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle steps: list promotion steps")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -1049,6 +1102,9 @@ func (s *uiAPIServer) handleValidateCEL(w http.ResponseWriter, r *http.Request) 
 //
 //	{"reason": "emergency deploy", "namespace": "default", "expiresInMinutes": 60}
 //
+// The namespace in the path wins; the body namespace is used only with the
+// {name}/approve form. expiresInMinutes defaults to 60 and must be 1..1440.
+//
 // Response (JSON on success):
 //
 //	{"message": "gate overridden until 2026-04-14T15:04:05Z"}
@@ -1095,18 +1151,20 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "reason is required", http.StatusBadRequest)
 		return
 	}
-	if req.Namespace != "" {
+	if len(parts) == 2 && req.Namespace != "" {
 		gateNS = req.Namespace
 	}
 	expiresMins := req.ExpiresInMinutes
-	if expiresMins <= 0 {
+	if expiresMins == 0 {
 		expiresMins = 60 // default 1h
 	}
-
-	var gate v1alpha1.PolicyGate
-	if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
-		http.Error(w, "gate not found", http.StatusNotFound)
+	if expiresMins < 1 || expiresMins > maxGateOverrideMinutes {
+		http.Error(w, fmt.Sprintf("expiresInMinutes must be between 1 and %d", maxGateOverrideMinutes), http.StatusBadRequest)
 		return
+	}
+	createdBy := "ui-action"
+	if u, ok := uiauth.UserFrom(r.Context()); ok && u.Username != "" {
+		createdBy = u.Username
 	}
 
 	now := time.Now().UTC()
@@ -1117,10 +1175,23 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 		Stage:     req.Stage,
 		ExpiresAt: expiresAt,
 		CreatedAt: &createdAt,
-		CreatedBy: "ui-action",
+		CreatedBy: createdBy,
 	}
-	gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-	if err := s.client.Update(r.Context(), &gate); err != nil {
+	// Re-read and re-apply on a conflict: the reconciler and other approvers
+	// write the same gate, and a stale resourceVersion is not a user error.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var gate v1alpha1.PolicyGate
+		if err := s.client.Get(r.Context(), client.ObjectKey{Name: gateName, Namespace: gateNS}, &gate); err != nil {
+			return err
+		}
+		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+		return s.client.Update(r.Context(), &gate)
+	})
+	switch {
+	case apierrors.IsNotFound(err):
+		http.Error(w, "gate not found", http.StatusNotFound)
+		return
+	case err != nil:
 		s.log.Error().Err(err).Str("gate", gateName).Msg("ui: approve gate")
 		http.Error(w, "failed to update gate", http.StatusInternalServerError)
 		return
@@ -1129,6 +1200,7 @@ func (s *uiAPIServer) handleGatesSubpath(w http.ResponseWriter, r *http.Request)
 	s.log.Info().
 		Str("gate", gateName).
 		Str("reason", req.Reason).
+		Str("createdBy", createdBy).
 		Time("expiresAt", expiresAt.Time).
 		Msg("ui: gate approved via override")
 
@@ -1279,24 +1351,39 @@ func (s *uiAPIServer) handleStepsSubpath(w http.ResponseWriter, r *http.Request)
 }
 
 // handleStepEvents returns the last 20 Kubernetes events for the named PromotionStep,
-// sorted by lastTimestamp descending (newest first) (#527).
+// sorted by lastTimestamp descending (newest first) (#527). The step must
+// exist (404 otherwise) and only events whose involvedObject is that step are
+// returned, so the endpoint cannot read events of other objects.
 func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, namespace, stepName string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	var step v1alpha1.PromotionStep
+	if err := s.client.Get(r.Context(), client.ObjectKey{Namespace: namespace, Name: stepName}, &step); err != nil {
+		if apierrors.IsNotFound(err) {
+			http.Error(w, "promotion step not found", http.StatusNotFound)
+			return
+		}
+		s.log.Error().Err(err).Str("step", stepName).Msg("ui: get promotion step")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// The manager client reads Events from the API server (they are not
+	// cached, see uncachedObjects), which applies the field selector. Clients
+	// that cannot, such as the fake client, fall back to listing the
+	// namespace and filtering here.
 	var eventList corev1.EventList
 	if err := s.client.List(r.Context(), &eventList,
 		client.InNamespace(namespace),
-		client.MatchingFields{"involvedObject.name": stepName},
+		client.MatchingFields{"involvedObject.kind": "PromotionStep", "involvedObject.name": stepName},
 	); err != nil {
-		// Graceful fallback: field-indexed listing may not be supported in all setups.
-		// Re-try with a full list and filter client-side.
 		var fallbackList corev1.EventList
 		if ferr := s.client.List(r.Context(), &fallbackList, client.InNamespace(namespace)); ferr != nil {
-			s.log.Warn().Err(ferr).Str("step", stepName).Msg("ui: failed to list events")
-			writeJSON(w, []uiEventResponse{})
+			s.log.Error().Err(ferr).Str("step", stepName).Msg("ui: list events")
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		for _, ev := range fallbackList.Items {
@@ -1306,12 +1393,19 @@ func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, n
 		}
 	}
 
-	// Filter to only events where involvedObject.name matches (field index may not filter).
+	// Keep only events about this PromotionStep (the field selector may not
+	// have filtered, and other kinds can share the name). A UID mismatch is
+	// an earlier step with the same name.
 	filtered := make([]corev1.Event, 0, len(eventList.Items))
 	for _, ev := range eventList.Items {
-		if ev.InvolvedObject.Name == stepName {
-			filtered = append(filtered, ev)
+		obj := ev.InvolvedObject
+		if obj.Kind != "PromotionStep" || obj.Name != stepName {
+			continue
 		}
+		if obj.UID != "" && step.UID != "" && obj.UID != step.UID {
+			continue
+		}
+		filtered = append(filtered, ev)
 	}
 
 	// Sort by lastTimestamp descending (newest first).
@@ -1423,7 +1517,7 @@ func (s *uiAPIServer) handleBundles(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.client.Create(r.Context(), bundle); err != nil {
 		s.log.Error().Err(err).Str("pipeline", req.Pipeline).Msg("ui: create bundle")
-		http.Error(w, fmt.Sprintf("failed to create bundle: %v", err), http.StatusInternalServerError)
+		http.Error(w, "failed to create bundle", http.StatusInternalServerError)
 		return
 	}
 

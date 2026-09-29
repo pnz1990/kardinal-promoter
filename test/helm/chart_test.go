@@ -182,6 +182,30 @@ func TestHelmTemplatePorts(t *testing.T) {
 	assert.Contains(t, rendered, "8081", "must declare health port 8081")
 }
 
+// TestHelmTemplateUIAllowedHosts verifies --ui-allowed-hosts carries the
+// controller Service's DNS names plus ui.allowedHosts, and that the schema
+// rejects an entry with a scheme (the controller would refuse to start).
+func TestHelmTemplateUIAllowedHosts(t *testing.T) {
+	helm := helmBin(t)
+	root := repoRoot(t)
+	chartDir := filepath.Join(root, "chart", "kardinal-promoter")
+
+	out, err := exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--namespace", "kardinal-system").CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.Contains(t, string(out), "--ui-allowed-hosts=kardinal-promoter,kardinal-promoter.kardinal-system,"+
+		"kardinal-promoter.kardinal-system.svc,kardinal-promoter.kardinal-system.svc.cluster.local\n")
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir, "--namespace", "kardinal-system",
+		"--set", "ui.allowedHosts={kardinal.example.com}").CombinedOutput()
+	require.NoError(t, err, "helm template must succeed:\n%s", string(out))
+	assert.Contains(t, string(out), "kardinal-promoter.kardinal-system.svc.cluster.local,kardinal.example.com\n")
+
+	out, err = exec.Command(helm, "template", "kardinal-promoter", chartDir,
+		"--set", "ui.allowedHosts={https://kardinal.example.com}").CombinedOutput()
+	assert.Error(t, err, "a scheme in ui.allowedHosts must fail the schema:\n%s", string(out))
+}
+
 func TestDockerignoreExists(t *testing.T) {
 	root := repoRoot(t)
 	dockerignore := filepath.Join(root, ".dockerignore")
