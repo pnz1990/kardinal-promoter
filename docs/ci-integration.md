@@ -70,6 +70,7 @@ jobs:
           image: ghcr.io/${{ github.repository }}:${{ github.sha }}
           digest: ${{ steps.build.outputs.digest }}
           kardinal-url: https://kardinal.example.com
+          ui-url: https://kardinal-ui.example.com
 
       - name: Log bundle URL
         run: echo "Promotion started: ${{ steps.bundle.outputs.bundle-status-url }}"
@@ -99,7 +100,8 @@ jobs:
 | `digest` | No | — | Override digest for the `image` input |
 | `images` | No | — | Newline-separated list of images (multi-image case) |
 | `namespace` | No | `default` | Kubernetes namespace |
-| `kardinal-url` | Yes | — | Controller base URL |
+| `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
+| `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
 | `type` | No | `image` | Bundle type (`image`, `config`, `mixed`) |
 
 **Action outputs:**
@@ -108,11 +110,18 @@ jobs:
 |---|---|
 | `bundle-name` | Name of the created Bundle CRD |
 | `bundle-namespace` | Namespace of the created Bundle CRD |
-| `bundle-status-url` | Link to the pipeline view in the kardinal UI |
+| `bundle-status-url` | Link to the pipeline view in the kardinal UI (`<ui-url>/ui/#pipeline=<pipeline>`); empty when `ui-url` is not set |
 
-The action retries on transient failures (network errors, HTTP 5xx) up to 3 times
-with exponential backoff. Permanent errors (HTTP 4xx — bad token, bad input) do not
-retry. `KARDINAL_TOKEN` must be set as a secret in your repository settings.
+Creating a Bundle is not idempotent, so the action retries only when the request
+cannot have reached the controller: DNS or connection failures, and HTTP 502/503 from
+a proxy. It makes up to 3 attempts with exponential backoff. Every other error —
+HTTP 4xx (bad token, bad input), HTTP 500, or a timeout — fails the step without a
+retry, because the Bundle may already exist; check `kubectl get bundles` before
+re-running the job. `pipeline` and `namespace` must be valid Kubernetes names.
+Inputs are passed to the action's script as environment variables, so branch names
+or tags used in inputs cannot inject shell commands. `KARDINAL_TOKEN` must be set as
+a secret in your repository settings; the action sends it in a header file, not on
+the curl command line.
 
 ### GitLab CI
 

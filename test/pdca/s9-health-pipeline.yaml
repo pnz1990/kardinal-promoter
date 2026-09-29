@@ -1,0 +1,30 @@
+# Pipeline for PDCA scenarios S9 and S18 (.github/workflows/pdca.yml).
+# Its resource health check points at a Deployment that the workflow scales to
+# zero, so the promotion must stop at the health check and never be Verified.
+# test/examples validates this file against the CRD schemas.
+apiVersion: kardinal.io/v1alpha1
+kind: Pipeline
+metadata:
+  name: s9-health-test
+  namespace: default
+spec:
+  git:
+    url: https://github.com/pnz1990/kardinal-demo
+    branch: main
+    layout: directory
+    provider: github
+    secretRef:
+      name: github-token
+  environments:
+    - name: test
+      path: environments/test
+      update:
+        strategy: kustomize
+      approval: auto
+      health:
+        type: resource
+        timeout: 30s
+        resource:
+          kind: Deployment
+          name: s9-test-app
+          namespace: s9-health-test

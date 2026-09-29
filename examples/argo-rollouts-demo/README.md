@@ -1,6 +1,6 @@
 # Argo Rollouts Demo — standalone single-cluster example
 
-This example demonstrates kardinal-promoter with [Argo Rollouts](https://argoproj.github.io/rollouts/) for canary delivery in a single cluster. Unlike the multi-cluster-fleet example (which uses shards), this example runs entirely in one cluster with three environments: `test` (Deployment), `staging` (ArgoCD Application), `prod` (Argo Rollouts canary).
+This example demonstrates kardinal-promoter with [Argo Rollouts](https://argoproj.github.io/rollouts/) for canary delivery in a single cluster. Unlike the multi-cluster-fleet example (which uses shards), this example runs entirely in one cluster with three environments: `test` (Deployment), `uat` (ArgoCD Application), `prod` (Argo Rollouts canary).
 
 ## Architecture
 
@@ -9,7 +9,7 @@ CI creates Bundle
     ↓
 kardinal-controller
     ↓ test:    kustomize-set-image → Deployment → resource adapter → Ready
-    ↓ staging: kustomize-set-image → ArgoCD syncs → argocd adapter → Healthy+Synced
+    ↓ uat:     kustomize-set-image → ArgoCD syncs → argocd adapter → Healthy+Synced
     ↓ prod:    kustomize-set-image → open-pr → human merges
                 ↓
            Rollout detects new image → starts canary steps
@@ -28,16 +28,16 @@ kardinal-controller
 | Clusters | Single | Multiple (shards) |
 | Strategy | Steps (setWeight + pause) | Steps (setWeight + pause) |
 | Focus | Learning Argo Rollouts integration | Multi-cluster fan-out |
-| ArgoCD needed | Optional (staging only) | Required (prod environments) |
+| ArgoCD needed | Optional (uat only) | Required (prod environments) |
 
 ## Prerequisites
 
 - [Argo Rollouts](https://argoproj.github.io/rollouts/installation/) installed
   ```bash
   kubectl create namespace argo-rollouts
-  kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+  kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/download/v1.7.1/install.yaml
   ```
-- [ArgoCD](https://argo-cd.readthedocs.io/en/stable/getting_started/) installed (for staging env)
+- [ArgoCD](https://argo-cd.readthedocs.io/en/stable/getting_started/) installed (for the uat env)
 - `kubectl` connected to your cluster
 
 ## Setup
@@ -45,7 +45,7 @@ kardinal-controller
 ```bash
 # 1. Create namespaces
 kubectl create namespace prod
-kubectl create namespace staging
+kubectl create namespace uat
 
 # 2. Apply Rollout and Services
 kubectl apply -f examples/argo-rollouts-demo/rollout.yaml
@@ -54,22 +54,26 @@ kubectl apply -f examples/argo-rollouts-demo/rollout.yaml
 kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_TOKEN
 
-# 4. Create ArgoCD Application for staging (optional — remove staging env if not using ArgoCD)
+# 4. Create ArgoCD Application for uat (optional — remove the uat env if not using ArgoCD)
+#    The kardinal-demo overlays set namespace "default"; kustomize.namespace
+#    moves the uat copy into the uat namespace.
 kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: kardinal-test-app-staging
+  name: kardinal-test-app-uat
   namespace: argocd
 spec:
   project: default
   source:
     repoURL: https://github.com/pnz1990/kardinal-demo
     targetRevision: main
-    path: environments/staging
+    path: environments/uat
+    kustomize:
+      namespace: uat
   destination:
     server: https://kubernetes.default.svc
-    namespace: staging
+    namespace: uat
   syncPolicy:
     automated:
       prune: true
@@ -91,10 +95,10 @@ kubectl argo rollouts get rollout kardinal-test-app -n prod
 LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
-# Create bundle — starts promotion through test → staging → prod
+# Create bundle — starts promotion through test → uat → prod
 kardinal create bundle kardinal-test-app --image $TEST_IMAGE
 
-# Watch test and staging auto-promote
+# Watch test and uat auto-promote
 kardinal get pipelines
 
 # Merge the prod PR when it opens, then watch the rollout
@@ -123,11 +127,12 @@ A `Degraded` phase triggers kardinal's failure path: the PromotionStep is marked
 ```yaml
 health:
   type: argoRollouts
-  argoRollouts:
-    name: my-app      # Rollout CR name (default: pipeline name)
-    namespace: prod   # namespace (default: environment name)
   timeout: 30m        # must exceed total canary step duration (default: 10m)
 ```
+
+The adapter always looks for a Rollout named after the Pipeline
+(`kardinal-test-app`) in a namespace named after the environment (`prod`).
+The name and namespace cannot be overridden.
 
 ## Manual Canary Control
 

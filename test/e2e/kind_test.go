@@ -1,34 +1,22 @@
+//go:build e2e
+
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package e2e
 
-// kind_test.go — live-cluster integration tests using an actual kind cluster.
+// kind_test.go — live-cluster tests against a kind cluster.
 //
-// These tests use the dynamic client from e2e_test.go (infraClient) to connect
-// to a real Kubernetes cluster. They are skipped automatically when no cluster
-// is reachable (KUBECONFIG not set or cluster unreachable).
+// Built only with `-tags e2e`. They use infraClient (e2e_test.go), which only
+// connects to the kind context named in KARDINAL_E2E_CONTEXT. The fixtures come
+// from hack/e2e-setup.sh (examples/quickstart/pipeline.yaml and
+// policy-gates.yaml); when the context is set but a fixture is missing the
+// test fails rather than skipping, so a broken setup cannot pass silently.
 //
 // Run with:
 //
-//	make test-e2e-journey-1
-//	make test-e2e-journey-3
-//
-// Or after running hack/e2e-setup.sh:
-//
-//	KUBECONFIG=~/.kube/config go test ./test/e2e/... -run TestKindJourney -v
+//	make e2e-setup
+//	make test-e2e-kind
 
 import (
 	"context"
@@ -61,8 +49,12 @@ var (
 	}
 )
 
+// kindTestImageTag is a real kardinal-test-app image (the tag kardinal-demo's
+// overlays pin).
+const kindTestImageTag = "sha-9349a3f"
+
 // TestKindJourney1_BundleBecomesAvailable verifies that:
-// 1. A Pipeline exists in the cluster (applied by e2e-setup.sh)
+// 1. The quickstart Pipeline kardinal-test-app exists (applied by e2e-setup.sh)
 // 2. Creating a Bundle causes it to become Available within 15 seconds
 //
 // This is the minimal J1 smoke test for a live cluster. It does not perform
@@ -75,14 +67,12 @@ func TestKindJourney1_BundleBecomesAvailable(t *testing.T) {
 	defer cancel()
 
 	// Verify Pipeline exists (applied by e2e-setup.sh before tests run).
-	_, err := dc.Resource(pipelineGVR).Namespace("default").Get(ctx, "nginx-demo", metav1.GetOptions{})
-	if err != nil {
-		t.Skipf("Pipeline nginx-demo not found — run hack/e2e-setup.sh first: %v", err)
-	}
-	t.Log("Pipeline nginx-demo exists ✅")
+	_, err := dc.Resource(pipelineGVR).Namespace("default").Get(ctx, "kardinal-test-app", metav1.GetOptions{})
+	require.NoError(t, err, "Pipeline kardinal-test-app not found — run hack/e2e-setup.sh first")
+	t.Log("Pipeline kardinal-test-app exists ✅")
 
 	// Create a test Bundle.
-	bundleName := "nginx-demo-kind-test"
+	bundleName := "kardinal-test-app-kind-test"
 	bundleObj := map[string]interface{}{
 		"apiVersion": "kardinal.io/v1alpha1",
 		"kind":       "Bundle",
@@ -92,11 +82,11 @@ func TestKindJourney1_BundleBecomesAvailable(t *testing.T) {
 		},
 		"spec": map[string]interface{}{
 			"type":     "image",
-			"pipeline": "nginx-demo",
+			"pipeline": "kardinal-test-app",
 			"images": []interface{}{
 				map[string]interface{}{
-					"repository": "ghcr.io/nginx/nginx",
-					"tag":        "1.29.0",
+					"repository": "ghcr.io/pnz1990/kardinal-test-app",
+					"tag":        kindTestImageTag,
 				},
 			},
 		},
@@ -151,9 +141,7 @@ func TestKindJourney3_PolicyGateExists(t *testing.T) {
 	// Check that no-weekend-deploys gate exists.
 	gate, err := dc.Resource(policyGateGVR).Namespace("platform-policies").
 		Get(ctx, "no-weekend-deploys", metav1.GetOptions{})
-	if err != nil {
-		t.Skipf("PolicyGate no-weekend-deploys not found — run hack/e2e-setup.sh first: %v", err)
-	}
+	require.NoError(t, err, "PolicyGate no-weekend-deploys not found — run hack/e2e-setup.sh first")
 
 	spec, ok := gate.Object["spec"].(map[string]interface{})
 	require.True(t, ok, "gate must have spec")

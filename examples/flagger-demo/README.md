@@ -69,7 +69,7 @@ spec:
     spec:
       containers:
         - name: kardinal-test-app
-          image: ghcr.io/pnz1990/kardinal-test-app:sha-abc1234
+          image: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
           ports:
             - containerPort: 8080
 EOF
@@ -130,11 +130,12 @@ The `flagger` health adapter maps Flagger's `Canary.status.phase` to kardinal he
 ```yaml
 health:
   type: flagger
-  flagger:
-    name: my-app        # Canary CR name (default: pipeline name)
-    namespace: prod     # namespace where Canary lives (default: environment name)
   timeout: 30m          # must exceed Flagger's canary analysis duration
 ```
+
+The adapter always looks for a Canary named after the Pipeline
+(`kardinal-test-app`) in a namespace named after the environment (`prod`).
+The name and namespace cannot be overridden.
 
 ## Without a Service Mesh (simplified metrics)
 

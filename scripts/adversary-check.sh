@@ -49,10 +49,10 @@ LABELS=$(echo "$ISSUE_DATA" | python3 -c "import json,sys; d=json.load(sys.stdin
 
 # Classify the item kind
 KIND="enhancement"
-if echo "$LABELS" | grep -q "kind/chore\|kind/docs"; then
+if echo "$LABELS" | grep "kind/chore\|kind/docs" >/dev/null; then
   KIND="housekeeping"
 fi
-if echo "$LABELS" | grep -q "kind/bug"; then
+if echo "$LABELS" | grep "kind/bug" >/dev/null; then
   KIND="bugfix"
 fi
 
@@ -75,7 +75,7 @@ DESIGN_DOC=$(echo "$BODY" | grep -oP '(?<=Design doc\*\*: `)docs/design/[^`]+(?=
 # Does the issue body name a specific function, CRD field, API, or config key?
 MECHANISM_SCORE=0
 MECHANISM_NOTE=""
-if echo "$BODY" | grep -qiE '`[a-z][A-Za-z0-9_/.-]+`|func |\.spec\.|\.status\.|pkg/|cmd/|api/'; then
+if echo "$BODY" | grep -iE '`[a-z][A-Za-z0-9_/.-]+`|func |\.spec\.|\.status\.|pkg/|cmd/|api/' >/dev/null; then
   MECHANISM_SCORE=1
   MECHANISM_NOTE="Issue references specific code artifact"
 else
@@ -87,15 +87,15 @@ fi
 BLAST_SCORE=0
 BLAST_NOTE=""
 BLAST_AREAS=""
-if echo "$TITLE$BODY" | grep -qiE 'reconciler|controller|crd|graph|kro|cel|schedule|policygate'; then
+if echo "$TITLE$BODY" | grep -iE 'reconciler|controller|crd|graph|kro|cel|schedule|policygate' >/dev/null; then
   BLAST_SCORE=1
   BLAST_AREAS="controller/reconciler path"
 fi
-if echo "$TITLE$BODY" | grep -qiE 'merge|branch.protect|workflow|ci|yaml'; then
+if echo "$TITLE$BODY" | grep -iE 'merge|branch.protect|workflow|ci|yaml' >/dev/null; then
   BLAST_SCORE=1
   BLAST_AREAS="${BLAST_AREAS:+$BLAST_AREAS, }CI/workflow"
 fi
-if echo "$TITLE$BODY" | grep -qiE 'state\.json|_state|queue|session'; then
+if echo "$TITLE$BODY" | grep -iE 'state\.json|_state|queue|session' >/dev/null; then
   BLAST_SCORE=1
   BLAST_AREAS="${BLAST_AREAS:+$BLAST_AREAS, }agent state"
 fi
@@ -109,12 +109,12 @@ fi
 # Does the issue reference any external project (Kargo, GitOps Promoter, Flux, etc.)?
 COMPETING_NOTE=""
 COMPETING_REF=0
-if echo "$TITLE$BODY" | grep -qiE 'kargo|gitops.promoter|flux|argo.?rollout|competitor'; then
+if echo "$TITLE$BODY" | grep -iE 'kargo|gitops.promoter|flux|argo.?rollout|competitor' >/dev/null; then
   COMPETING_NOTE="Issue references a competing design as context"
   COMPETING_REF=1
 else
   # Check if the item is in a domain with known external references
-  if echo "$TITLE$BODY" | grep -qiE 'promotion|pipeline|bundle|policygate|health.check'; then
+  if echo "$TITLE$BODY" | grep -iE 'promotion|pipeline|bundle|policygate|health.check' >/dev/null; then
     COMPETING_NOTE="Domain has competing implementations (Kargo/GitOps Promoter) — no explicit comparison found"
     COMPETING_REF=0
   else

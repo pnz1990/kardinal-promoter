@@ -110,7 +110,7 @@ spec:
   type: git
   pipeline: my-app-pipeline
   git:
-    repoURL: https://github.com/myorg/my-gitops-repo
+    repoURL: https://github.com/myorg/my-config-source
     branch: main
     interval: 5m
 ```
@@ -120,6 +120,16 @@ Every new commit on `branch` creates a `config` Bundle named
 that sets it goes to phase `Error` instead of silently creating a Bundle for every
 commit. The repository must speak the Git smart HTTP protocol (GitHub, GitLab,
 Gitea, `git http-backend`); an empty advertisement or a missing branch is an error.
+
+Watch a repository, or a branch, that the Pipeline does not write to. Without path
+filtering, a Subscription on the Pipeline's own `spec.git.url` and `spec.git.branch`
+creates a new Bundle for every promotion commit kardinal makes there. The Bundle's
+`configRef.gitRepo` is the Subscription's `repoURL`, and `config-merge` copies each
+environment's path (`environments[].path`, default `environments/<name>`) from that
+commit, so the source repository uses the same layout.
+
+Complete manifests for both source types are in
+[`examples/subscription/`](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/subscription).
 
 ## Status Fields
 
