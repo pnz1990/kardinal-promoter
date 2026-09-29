@@ -122,7 +122,7 @@ func DerivePhase(steps []kardinalv1alpha1.PromotionStep) string {
 		return "Unknown"
 	}
 
-	// Track the most recent step per pipeline+env (same logic as FormatPipelineTable).
+	// Track the most recent step per pipeline+env (same logic as FormatPipelineTableFull in cmd/kardinal/cmd).
 	type envKey struct{ pipeline, env string }
 	bestStep := make(map[envKey]*kardinalv1alpha1.PromotionStep)
 	for i := range steps {

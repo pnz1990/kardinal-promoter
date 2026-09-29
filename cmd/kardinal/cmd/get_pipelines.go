@@ -17,6 +17,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,9 +28,35 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-// watchInterval is the polling interval for --watch mode.
-// 2 seconds matches the issue requirement and is fast enough to see step transitions.
+// getPipelinesWatchInterval is the polling interval of get --watch: fast
+// enough to see step transitions.
 const getPipelinesWatchInterval = 2 * time.Second
+
+// watchLoop calls render every interval until ctx is done or render fails.
+// The screen is cleared only for a table written to a terminal, and the footer
+// is printed only for a table, so -o json|yaml output stays machine-readable.
+func watchLoop(ctx context.Context, w io.Writer, interval time.Duration, render func() error) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	table := OutputFormat() == "" || OutputFormat() == "table"
+	clearScreen := table && isTerminal(w)
+	for {
+		if clearScreen {
+			_, _ = fmt.Fprint(w, "\033[H\033[2J")
+		}
+		if err := render(); err != nil {
+			return err
+		}
+		if table {
+			_, _ = fmt.Fprintln(w, "\n(watching — press Ctrl-C to quit)")
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(interval):
+		}
+	}
+}
 
 func newGetPipelinesCmd() *cobra.Command {
 	var (
@@ -36,9 +65,10 @@ func newGetPipelinesCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "pipelines [name]",
-		Aliases: []string{"pipeline"},
-		Short:   "List Pipelines",
+		Use:         "pipelines [name]",
+		Annotations: map[string]string{outputAnnotation: "true"},
+		Aliases:     []string{"pipeline"},
+		Short:       "List Pipelines",
 		Long: `List Pipelines and their per-environment promotion status.
 
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
@@ -73,16 +103,10 @@ func runGetPipelines(cmd *cobra.Command, args []string, allNamespaces, watch boo
 		return getPipelinesOnce(cmd.OutOrStdout(), c, ns, args, allNamespaces)
 	}
 
-	// Watch mode: poll every 2s and refresh the terminal output.
-	for {
-		// Clear screen using ANSI escape (same pattern as explain --watch).
-		_, _ = fmt.Fprint(cmd.OutOrStdout(), "\033[H\033[2J")
-		if err := getPipelinesOnce(cmd.OutOrStdout(), c, ns, args, allNamespaces); err != nil {
-			return err
-		}
-		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(watching — press Ctrl-C to quit)")
-		time.Sleep(getPipelinesWatchInterval)
-	}
+	w := cmd.OutOrStdout()
+	return watchLoop(cmd.Context(), w, getPipelinesWatchInterval, func() error {
+		return getPipelinesOnce(w, c, ns, args, allNamespaces)
+	})
 }
 
 // getPipelinesOnce fetches and renders a single snapshot of pipeline status.
@@ -155,7 +179,7 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		// Surface Bundle-level errors (e.g. dependsOn validation failures) that
 		// would otherwise be invisible in the table. Non-fatal: ignore write errors
 		// so a partial error notice does not mask the successfully rendered table.
-		_ = FormatBundleErrors(w, bundlesItems)
+		_ = FormatBundleErrors(w, bundlesItems, allNamespaces)
 		return nil
 	}
 }

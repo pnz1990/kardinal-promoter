@@ -16,6 +16,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,32 +48,35 @@ func newAuditSummaryCmd() *cobra.Command {
 		Short: "Aggregate promotion metrics from AuditEvent records",
 		Long: `Show a summary of promotion activity from the AuditEvent log.
 
-Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.`,
+Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
+The success rate is succeeded / (succeeded + failed + superseded) among the
+promotions that finished inside the window.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuditSummary(cmd, pipeline, since)
 		},
 	}
 
 	cmd.Flags().StringVar(&pipeline, "pipeline", "", "Filter by pipeline name (default: all pipelines)")
-	cmd.Flags().StringVar(&since, "since", "24h", "Time window for events (e.g. 24h, 7d, 30d)")
+	cmd.Flags().StringVar(&since, "since", "24h", "Time window for events: a positive duration (e.g. 90m, 24h, 7d)")
 
 	return cmd
 }
 
 func runAuditSummary(cmd *cobra.Command, pipeline, sinceDuration string) error {
-	out := cmd.OutOrStdout()
-
 	client, ns, err := buildClient()
 	if err != nil {
 		return fmt.Errorf("audit summary: %w", err)
 	}
+	return auditSummaryFn(cmd.OutOrStdout(), client, ns, pipeline, sinceDuration, time.Now())
+}
 
+func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinceDuration string, now time.Time) error {
 	// Parse the --since duration.
 	dur, err := parseSinceDuration(sinceDuration)
 	if err != nil {
 		return fmt.Errorf("invalid --since %q: %w", sinceDuration, err)
 	}
-	cutoff := metav1.NewTime(time.Now().UTC().Add(-dur))
+	cutoff := metav1.NewTime(now.UTC().Add(-dur))
 
 	// List AuditEvents.
 	var aeList v1alpha1.AuditEventList
@@ -156,9 +162,11 @@ func runAuditSummary(cmd *cobra.Command, pipeline, sinceDuration string) error {
 
 	_, _ = fmt.Fprintf(out, "Pipeline: %s  (last %s)\n\n", pipelineLabel, sinceDuration)
 
+	// Rate over promotions that finished in the window, so one that started
+	// before the window cannot push it over 100%.
 	successRate := float64(0)
-	if started > 0 {
-		successRate = float64(succeeded) / float64(started) * 100
+	if completed := succeeded + failed + superseded; completed > 0 {
+		successRate = float64(succeeded) / float64(completed) * 100
 	}
 	_, _ = fmt.Fprintf(out, "Promotions:   %d started, %d succeeded, %d failed, %d superseded\n",
 		started, succeeded, failed, superseded)
@@ -180,22 +188,25 @@ func runAuditSummary(cmd *cobra.Command, pipeline, sinceDuration string) error {
 	return nil
 }
 
-// parseSinceDuration parses strings like "24h", "7d", "30d" into a time.Duration.
+// parseSinceDuration parses a positive window like "24h", "90m" or "7d".
 func parseSinceDuration(s string) (time.Duration, error) {
-	if len(s) == 0 {
-		return 0, fmt.Errorf("empty duration")
-	}
-	switch {
-	case s[len(s)-1] == 'd':
-		days := s[:len(s)-1]
-		var n int
-		if _, err := fmt.Sscanf(days, "%d", &n); err != nil {
-			return 0, fmt.Errorf("invalid days: %s", days)
+	var d time.Duration
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil {
+			return 0, fmt.Errorf("invalid days %q: want a whole number such as 7d", days)
 		}
-		return time.Duration(n) * 24 * time.Hour, nil
-	default:
-		return time.ParseDuration(s)
+		d = time.Duration(n) * 24 * time.Hour
+	} else {
+		var err error
+		if d, err = time.ParseDuration(s); err != nil {
+			return 0, fmt.Errorf("parse duration: %w", err)
+		}
 	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return d, nil
 }
 
 // formatAuditDuration formats a duration as "Xm Ys" for display.

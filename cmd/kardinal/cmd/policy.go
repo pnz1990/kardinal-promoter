@@ -17,20 +17,24 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
-	"github.com/google/cel-go/cel"
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
-	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/library"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
 func newPolicyCmd() *cobra.Command {
@@ -44,68 +48,113 @@ func newPolicyCmd() *cobra.Command {
 	return policy
 }
 
+// defaultPolicyNamespaces matches the controller's --policy-namespaces default.
+var defaultPolicyNamespaces = []string{"platform-policies"}
+
+func addPolicyNamespacesFlag(cmd *cobra.Command, target *[]string) {
+	cmd.Flags().StringSliceVar(target, "policy-namespaces", defaultPolicyNamespaces,
+		"Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); "+
+			"a Pipeline's spec.policyNamespaces takes precedence")
+}
+
 // ─── policy list ────────────────────────────────────────────────────────────
 
 func newPolicyListCmd() *cobra.Command {
-	var pipelineFlag string
+	var (
+		pipelineFlag string
+		policyNS     []string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List PolicyGates",
+		Long: `List PolicyGate templates.
+
+Without --pipeline, lists every template in every namespace. With --pipeline,
+lists the templates the controller attaches to that pipeline's environments.
+
+The CEL column is the controller's syntax check of the expression: valid,
+invalid (see kubectl describe), or - when not checked yet.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("policy list: %w", err)
 			}
-			return policyListFn(cmd.OutOrStdout(), c, ns, pipelineFlag)
+			return policyListFn(cmd.OutOrStdout(), c, ns, pipelineFlag, policyNS)
 		},
 	}
-	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Filter by pipeline name")
+	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Show only the gates attached to this pipeline")
+	addPolicyNamespacesFlag(cmd, &policyNS)
 	return cmd
 }
 
-// policyListFn is the testable implementation of policy list.
-// It lists all PolicyGates across ALL namespaces and filters to show only
-// user-defined template gates (not per-bundle Graph instances). This ensures
-// org-level gates in namespaces like 'platform-policies' are always shown,
-// matching the documented behavior (Journey 3 pass criteria).
-func policyListFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipelineFilter string) error {
-	// List across all namespaces — policy templates can be in any namespace
-	// (e.g. platform-policies for org-level, or team namespaces for team-level).
-	// The current-namespace default is intentionally NOT used here; operators
-	// want to see all gates regardless of where kubectl is pointed.
-	opts := []sigs_client.ListOption{}
-	if pipelineFilter != "" {
-		opts = append(opts, sigs_client.MatchingLabels{"kardinal.io/pipeline": pipelineFilter})
-	}
-
-	var gates v1alpha1.PolicyGateList
-	if listErr := c.List(context.Background(), &gates, opts...); listErr != nil {
-		return fmt.Errorf("list policy gates: %w", listErr)
-	}
-
-	// Filter out Graph-managed per-bundle instances (stamped with kardinal.io/bundle
-	// by the graph builder). User-defined template PolicyGates in namespaces like
-	// platform-policies do not have this label. kro itself adds no ownership
-	// label kardinal can rely on, so kardinal.io/bundle is the only guard.
-	var templateGates []v1alpha1.PolicyGate
-	for _, g := range gates.Items {
-		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
-			continue
+// policyListFn is the testable implementation of policy list. Graph-stamped
+// gate instances are never listed; see `kardinal explain` for those.
+func policyListFn(w io.Writer, c sigs_client.Client, ns, pipelineFilter string, policyNS []string) error {
+	ctx := context.Background()
+	if pipelineFilter == "" {
+		var gates v1alpha1.PolicyGateList
+		if err := c.List(ctx, &gates); err != nil {
+			return fmt.Errorf("list policy gates: %w", err)
 		}
-		templateGates = append(templateGates, g)
+		var templates []v1alpha1.PolicyGate
+		for _, g := range gates.Items {
+			if isGateInstance(g) {
+				continue
+			}
+			templates = append(templates, g)
+		}
+		return formatPolicyGateTable(w, templates)
 	}
 
-	return formatPolicyGateTable(w, templateGates)
+	pipe, err := getPipeline(ctx, c, ns, pipelineFilter)
+	if err != nil {
+		return err
+	}
+	templates, err := translator.CollectGates(ctx, c, policyNS, pipe)
+	if err != nil {
+		return fmt.Errorf("collect policy gates: %w", err)
+	}
+	attached := map[string]bool{}
+	for _, env := range pipe.Spec.Environments {
+		instances, _, err := gatesForEnv(pipe, simulatedBundle(pipe, time.Time{}), templates, env.Name)
+		if err != nil {
+			return err
+		}
+		for _, g := range instances {
+			attached[g.Labels["kardinal.io/gate-template"]] = true
+		}
+	}
+	var shown []v1alpha1.PolicyGate
+	for _, g := range templates {
+		if attached[g.Name] {
+			shown = append(shown, g)
+		}
+	}
+	return formatPolicyGateTable(w, shown)
+}
+
+// isGateInstance reports whether g was stamped by a Graph from a template.
+func isGateInstance(g v1alpha1.PolicyGate) bool {
+	if _, ok := g.Labels["kardinal.io/gate-template"]; ok {
+		return true
+	}
+	_, ok := g.Labels["kardinal.io/bundle"]
+	return ok
 }
 
 func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "NAME\tNAMESPACE\tSCOPE\tAPPLIES-TO\tRECHECK\tREADY\tLAST-EVALUATED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "NAME\tNAMESPACE\tSCOPE\tAPPLIES-TO\tRECHECK\tCEL\tLAST-EVALUATED"); err != nil {
 		return fmt.Errorf("write policy list header: %w", err)
 	}
 
-	sort.Slice(gates, func(i, j int) bool { return gates[i].Name < gates[j].Name })
+	sort.Slice(gates, func(i, j int) bool {
+		if gates[i].Name != gates[j].Name {
+			return gates[i].Name < gates[j].Name
+		}
+		return gates[i].Namespace < gates[j].Namespace
+	})
 
 	for _, g := range gates {
 		scope := g.Labels["kardinal.io/scope"]
@@ -120,14 +169,13 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 		if recheck == "" {
 			recheck = "5m"
 		}
-		ready := PolicyGatePhase(g)
 		lastEval := "-"
 		if g.Status.LastEvaluatedAt != nil {
 			lastEval = HumanAge(g.Status.LastEvaluatedAt.Time) + " ago"
 		}
 
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			g.Name, g.Namespace, scope, appliesTo, recheck, ready, lastEval,
+			g.Name, g.Namespace, scope, appliesTo, recheck, templateCELState(g), lastEval,
 		); err != nil {
 			return fmt.Errorf("write policy gate row: %w", err)
 		}
@@ -136,23 +184,77 @@ func formatPolicyGateTable(w io.Writer, gates []v1alpha1.PolicyGate) error {
 	return tw.Flush()
 }
 
+// templateCELState reads the controller's syntax check of a template from
+// status.reason (pkg/reconciler/policygate reconcileTemplate).
+func templateCELState(g v1alpha1.PolicyGate) string {
+	switch {
+	case strings.HasPrefix(g.Status.Reason, celSyntaxErrorPrefix):
+		return "invalid"
+	case strings.HasPrefix(g.Status.Reason, celSyntaxValidPrefix):
+		return "valid"
+	default:
+		return "-"
+	}
+}
+
+func getPipeline(ctx context.Context, c sigs_client.Reader, ns, name string) (*v1alpha1.Pipeline, error) {
+	var pipe v1alpha1.Pipeline
+	if err := c.Get(ctx, sigs_client.ObjectKey{Namespace: ns, Name: name}, &pipe); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("pipeline %q not found in namespace %q", name, ns)
+		}
+		return nil, fmt.Errorf("get pipeline %q: %w", name, err)
+	}
+	return &pipe, nil
+}
+
+func pipelineEnvNames(pipe *v1alpha1.Pipeline) []string {
+	names := make([]string, 0, len(pipe.Spec.Environments))
+	for _, e := range pipe.Spec.Environments {
+		names = append(names, e.Name)
+	}
+	return names
+}
+
+// simulatedBundle is the Bundle simulate evaluates gates for: an image Bundle
+// of pipe with no images, provenance or intent.
+func simulatedBundle(pipe *v1alpha1.Pipeline, created time.Time) *v1alpha1.Bundle {
+	b := &v1alpha1.Bundle{}
+	b.Name = pipe.Name + "-simulated"
+	b.Namespace = pipe.Namespace
+	b.CreationTimestamp = metav1.NewTime(created)
+	b.Labels = map[string]string{"kardinal.io/pipeline": pipe.Name}
+	b.Spec.Type = "image"
+	b.Spec.Pipeline = pipe.Name
+	return b
+}
+
 // ─── policy simulate ────────────────────────────────────────────────────────
 
 func newPolicySimulateCmd() *cobra.Command {
-	var (
-		pipelineFlag    string
-		envFlag         string
-		timeFlag        string
-		soakMinutesFlag int
-	)
+	var opts simulateOptions
 
 	cmd := &cobra.Command{
 		Use:   "simulate",
 		Short: "Simulate PolicyGate evaluation for a hypothetical promotion context",
 		Long: `Simulate PolicyGate evaluation.
 
-Builds a mock CEL context from the provided flags and evaluates each
-PolicyGate for the pipeline/environment against that context.
+Selects the PolicyGates the controller attaches to the environment (the
+pipeline's namespace plus the policy namespaces, matched by the
+kardinal.io/applies-to label) and evaluates each one with the controller's
+PolicyGate reconciler, against a Bundle that has promoted through every
+upstream environment. Metrics, change windows and promotion history are read
+from the cluster; nothing is written to it.
+
+--time is UTC: a weekday and an hour ("Saturday 3pm", "tue 10:00",
+"15 Friday") or an RFC 3339 timestamp. The weekday is its next occurrence
+(today counts). Without --time the current time is used.
+
+--soak-minutes is the soak time of every upstream environment
+(upstream.<env>.soakMinutes and bundle.upstreamSoakMinutes).
+
+A blocked gate shows the next hour, within 7 days, at which it would pass with
+the same inputs. Gates that do not depend on time show no window.
 
 Example:
   kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
@@ -163,167 +265,146 @@ Example:
 			if err != nil {
 				return fmt.Errorf("policy simulate: %w", err)
 			}
-			return policySimulateFn(cmd.OutOrStdout(), c, ns, pipelineFlag, envFlag, timeFlag, soakMinutesFlag)
+			opts.Now = time.Now().UTC()
+			return policySimulateFn(cmd.OutOrStdout(), c, ns, opts)
 		},
 	}
 
-	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Pipeline name (required)")
-	cmd.Flags().StringVar(&envFlag, "env", "", "Environment name (required)")
-	cmd.Flags().StringVar(&timeFlag, "time", "", "Simulated time (e.g. \"Saturday 3pm\", \"Tuesday 10am\")")
-	cmd.Flags().IntVar(&soakMinutesFlag, "soak-minutes", 0, "Simulated upstream soak time in minutes")
+	cmd.Flags().StringVar(&opts.Pipeline, "pipeline", "", "Pipeline name (required)")
+	cmd.Flags().StringVar(&opts.Env, "env", "", "Environment name (required)")
+	cmd.Flags().StringVar(&opts.Time, "time", "", `Simulated UTC time (e.g. "Saturday 3pm", "Tuesday 10:00", RFC 3339)`)
+	cmd.Flags().Int64Var(&opts.SoakMinutes, "soak-minutes", 0, "Simulated soak time of each upstream environment, in minutes")
+	addPolicyNamespacesFlag(cmd, &opts.PolicyNamespaces)
 	_ = cmd.MarkFlagRequired("pipeline")
 	_ = cmd.MarkFlagRequired("env")
 
 	return cmd
 }
 
+// simulateOptions are the inputs of policy simulate.
+type simulateOptions struct {
+	Pipeline         string
+	Env              string
+	Time             string
+	SoakMinutes      int64
+	PolicyNamespaces []string
+	// Now is the reference time: the default simulated time, and the day
+	// --time weekdays are resolved from.
+	Now time.Time
+}
+
+// nextWindowSearchHours bounds the next-window search to one week.
+const nextWindowSearchHours = 7 * 24
+
 // policySimulateFn is the testable implementation of policy simulate.
-func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, env, timeStr string, soakMinutes int) error {
+func policySimulateFn(w io.Writer, c sigs_client.Client, ns string, opts simulateOptions) error {
 	ctx := context.Background()
 
-	// Find PolicyGates across ALL namespaces — org-level gates may be in namespaces
-	// like 'platform-policies', not the kubectl default namespace.
-	// Note: the applies-to label filter below (CLI-3) selects gates scoped to this
-	// environment OR gates with no applies-to restriction (global gates). A pure
-	// server-side label selector cannot express this OR-absent condition in one call,
-	// so the distinction is done client-side. See: docs/design/11-graph-purity-tech-debt.md#CLI-3
-	var gates v1alpha1.PolicyGateList
-	if listErr := c.List(ctx, &gates); listErr != nil {
-		return fmt.Errorf("list policy gates: %w", listErr)
+	simTime, err := parseSimulatedTime(opts.Time, opts.Now)
+	if err != nil {
+		return err
+	}
+	if opts.SoakMinutes < 0 {
+		return fmt.Errorf("--soak-minutes must not be negative")
 	}
 
-	// Filter out Graph-managed per-bundle instances (same filter as policy list).
-	// Only evaluate user-defined template gates — per-bundle instances are evaluated
-	// by the Graph and would produce N² duplicate results (#297).
-	// See policyListFn for rationale on using kardinal.io/bundle as the sole guard.
-	var templateGates []v1alpha1.PolicyGate
-	for _, g := range gates.Items {
-		if _, isBundleInstance := g.Labels["kardinal.io/bundle"]; isBundleInstance {
-			continue
-		}
-		templateGates = append(templateGates, g)
+	pipe, err := getPipeline(ctx, c, ns, opts.Pipeline)
+	if err != nil {
+		return err
+	}
+	if !containsString(pipelineEnvNames(pipe), opts.Env) {
+		return fmt.Errorf("environment %q not found in pipeline %q (environments: %s)",
+			opts.Env, opts.Pipeline, strings.Join(pipelineEnvNames(pipe), ", "))
 	}
 
-	// Build simulated time.
-	simTime := time.Now().UTC()
-	if timeStr != "" {
-		if parsed, parseErr := parseSimulatedTime(timeStr); parseErr == nil {
-			simTime = parsed
-		}
+	templates, err := translator.CollectGates(ctx, c, opts.PolicyNamespaces, pipe)
+	if err != nil {
+		return fmt.Errorf("collect policy gates: %w", err)
+	}
+	bundle := simulatedBundle(pipe, simTime)
+	gates, upstreams, err := gatesForEnv(pipe, bundle, templates, opts.Env)
+	if err != nil {
+		return err
+	}
+	healthy := metav1.NewTime(simTime.Add(-time.Duration(opts.SoakMinutes) * time.Minute))
+	for _, env := range upstreams {
+		bundle.Status.Environments = append(bundle.Status.Environments, v1alpha1.EnvironmentStatus{
+			Name: env, Phase: "Verified", SoakMinutes: opts.SoakMinutes, HealthCheckedAt: &healthy,
+		})
 	}
 
-	// Build CEL evaluator (inline: avoids pkg/cel import which is banned outside policygate).
-	celEnv, celErr := newSimulateCELEnvironment()
-	if celErr != nil {
-		return fmt.Errorf("init CEL environment: %w", celErr)
+	objs := []sigs_client.Object{bundle}
+	for i := range gates {
+		gates[i].Namespace = pipe.Namespace
+		objs = append(objs, &gates[i])
 	}
-
-	// Build CEL context.
-	celCtx := map[string]interface{}{
-		"bundle": map[string]interface{}{
-			"type":                "image",
-			"version":             "v1.0.0",
-			"upstreamSoakMinutes": float64(soakMinutes),
-			"provenance": map[string]interface{}{
-				"author":    "simulate",
-				"commitSHA": "abc1234",
-				"ciRunURL":  "",
-			},
-			"intent": map[string]interface{}{
-				"targetEnvironment": env,
-			},
-		},
-		"schedule": map[string]interface{}{
-			"isWeekend": simTime.Weekday() == time.Saturday || simTime.Weekday() == time.Sunday,
-			"hour":      float64(simTime.Hour()),
-			"dayOfWeek": simTime.Weekday().String(),
-		},
-		"environment": map[string]interface{}{
-			"name": env,
-		},
+	ev, err := newGateEvaluator(newSimulationClient(c.Scheme(), c, objs...))
+	if err != nil {
+		return err
 	}
 
 	type gateResult struct {
-		name    string
-		pass    bool
-		reason  string
-		message string
+		name, reason, message string
+		pass                  bool
+		nextWindow            *time.Time
 	}
-
 	var results []gateResult
-	var blocked []string
-
-	// Only evaluate gates that apply to this pipeline/environment.
-	for _, g := range templateGates {
-		if g.Spec.Expression == "" {
-			continue
+	for i := range gates {
+		g := &gates[i]
+		key := sigs_client.ObjectKeyFromObject(g)
+		pass, reason, err := ev.evaluate(ctx, key, simTime)
+		if err != nil {
+			return err
 		}
-		// Filter by environment label or no restriction.
-		appliesTo := g.Labels["kardinal.io/applies-to"]
-		if appliesTo != "" && appliesTo != env {
-			continue
+		r := gateResult{name: gateDisplayName(*g), reason: reason, message: g.Spec.Message, pass: pass}
+		if r.message == "" {
+			r.message = reason
 		}
-
-		pass, reason, evalErr := simulateCELEvaluate(celEnv, g.Spec.Expression, celCtx)
-		if evalErr != nil {
-			reason = fmt.Sprintf("eval error: %v", evalErr)
-			pass = false
-		}
-
-		message := g.Spec.Message
-		if message == "" {
-			message = reason
-		}
-
-		results = append(results, gateResult{
-			name:    g.Name,
-			pass:    pass,
-			reason:  reason,
-			message: message,
-		})
-
 		if !pass {
-			blocked = append(blocked, g.Name)
-		}
-	}
-
-	// Print results.
-	if len(blocked) > 0 {
-		if _, err := fmt.Fprintf(w, "RESULT: BLOCKED\n"); err != nil {
-			return fmt.Errorf("write result: %w", err)
-		}
-		for _, name := range blocked {
-			for _, r := range results {
-				if r.name == name {
-					if _, err := fmt.Fprintf(w, "Blocked by: %s\nMessage: %q\n", r.name, r.message); err != nil {
-						return fmt.Errorf("write blocked: %w", err)
-					}
-					// Show next window for schedule-based gates (e.g. weekend gates).
-					// Compute the next weekday window when the simulated time is on a weekend.
-					if simTime.Weekday() == time.Saturday || simTime.Weekday() == time.Sunday {
-						daysUntilMonday := (int(time.Monday) - int(simTime.Weekday()) + 7) % 7
-						if daysUntilMonday == 0 {
-							daysUntilMonday = 7
-						}
-						nextWindow := time.Date(simTime.Year(), simTime.Month(), simTime.Day()+daysUntilMonday, 0, 0, 0, 0, time.UTC)
-						if _, err := fmt.Fprintf(w, "Next window: %s\n", nextWindow.Format("Monday 15:04 UTC")); err != nil {
-							return fmt.Errorf("write next window: %w", err)
-						}
-					}
-					if _, err := fmt.Fprintf(w, "\n"); err != nil {
-						return fmt.Errorf("write newline: %w", err)
-					}
+			// Hour by hour from the next whole hour, same inputs.
+			start := simTime.Truncate(time.Hour)
+			for h := 1; h <= nextWindowSearchHours; h++ {
+				t := start.Add(time.Duration(h) * time.Hour)
+				ok, _, err := ev.evaluate(ctx, key, t)
+				if err != nil {
+					return err
+				}
+				if ok {
+					r.nextWindow = &t
 					break
 				}
 			}
 		}
-	} else {
-		if _, err := fmt.Fprintf(w, "RESULT: PASS\n"); err != nil {
-			return fmt.Errorf("write result: %w", err)
+		results = append(results, r)
+	}
+	sort.SliceStable(results, func(i, j int) bool { return results[i].name < results[j].name })
+
+	var out strings.Builder
+	blocked := false
+	for _, r := range results {
+		if !r.pass {
+			blocked = true
 		}
 	}
+	if blocked {
+		out.WriteString("RESULT: BLOCKED\n")
+		for _, r := range results {
+			if r.pass {
+				continue
+			}
+			fmt.Fprintf(&out, "Blocked by: %s\nMessage: %q\n", r.name, r.message)
+			if r.nextWindow != nil {
+				fmt.Fprintf(&out, "Next window: %s\n", r.nextWindow.Format("Monday 15:04 UTC"))
+			}
+			out.WriteString("\n")
+		}
+	} else {
+		out.WriteString("RESULT: PASS\n")
+	}
+	if _, err := io.WriteString(w, out.String()); err != nil {
+		return fmt.Errorf("write result: %w", err)
+	}
 
-	// Print per-gate table.
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	for _, r := range results {
 		status := "PASS"
@@ -335,156 +416,147 @@ func policySimulateFn(w interface{ Write([]byte) (int, error) }, c sigs_client.C
 		}
 	}
 	if len(results) == 0 {
-		if _, err := fmt.Fprintf(tw, "No PolicyGates found for pipeline %q environment %q\n", pipeline, env); err != nil {
+		if _, err := fmt.Fprintf(tw, "No PolicyGates found for pipeline %q environment %q\n", opts.Pipeline, opts.Env); err != nil {
 			return fmt.Errorf("write empty: %w", err)
 		}
 	}
-
 	return tw.Flush()
 }
 
-// parseSimulatedTime parses informal time strings like "Saturday 3pm" or "Tuesday 10am".
-// Returns a UTC time on the nearest such day relative to today.
-func parseSimulatedTime(s string) (time.Time, error) {
-	// Try to find a day-of-week prefix.
-	days := map[string]time.Weekday{
-		"sunday": time.Sunday, "sun": time.Sunday,
-		"monday": time.Monday, "mon": time.Monday,
-		"tuesday": time.Tuesday, "tue": time.Tuesday,
-		"wednesday": time.Wednesday, "wed": time.Wednesday,
-		"thursday": time.Thursday, "thu": time.Thursday,
-		"friday": time.Friday, "fri": time.Friday,
-		"saturday": time.Saturday, "sat": time.Saturday,
+// gateDisplayName is the user-facing name of a gate instance: its template's
+// name, not the Graph-generated resource name.
+func gateDisplayName(g v1alpha1.PolicyGate) string {
+	if n := g.Labels["kardinal.io/gate-name"]; n != "" {
+		return n
 	}
-
-	lower := toLower(s)
-	now := time.Now().UTC()
-	targetWeekday := now.Weekday()
-	targetHour := now.Hour()
-
-	for name, day := range days {
-		if len(lower) >= len(name) && lower[:len(name)] == name {
-			targetWeekday = day
-			rest := lower[len(name):]
-			// Parse hour from rest: "3pm" → 15, "10am" → 10
-			if h, err := parseHour(rest); err == nil {
-				targetHour = h
-			}
-			break
-		}
+	if n := g.Labels["kardinal.io/gate-template"]; n != "" {
+		return n
 	}
-
-	// Find the next occurrence of targetWeekday.
-	daysUntil := int(targetWeekday) - int(now.Weekday())
-	if daysUntil < 0 {
-		daysUntil += 7
-	}
-	target := now.AddDate(0, 0, daysUntil)
-	return time.Date(target.Year(), target.Month(), target.Day(), targetHour, 0, 0, 0, time.UTC), nil
+	return g.Name
 }
 
-// parseHour parses hour strings like "3pm", "15", "10am".
-func parseHour(s string) (int, error) {
-	s = trimSpace(s)
-	pm := false
-	if len(s) > 2 && s[len(s)-2:] == "pm" {
-		pm = true
-		s = s[:len(s)-2]
-	} else if len(s) > 2 && s[len(s)-2:] == "am" {
-		s = s[:len(s)-2]
+var weekdayNames = []time.Weekday{
+	time.Sunday, time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday,
+}
+
+// parseSimulatedTime parses the --time flag relative to now (UTC).
+//
+// Accepted: an RFC 3339 timestamp, or a weekday and an hour in any order,
+// separated by spaces, with an optional trailing "UTC". The weekday is a full
+// name or its three-letter form; the hour is "15", "3pm", "12am" or "15:30".
+// The result is the next occurrence of the weekday (today counts) at that time.
+// An empty string means now. Anything else is an error.
+func parseSimulatedTime(s string, now time.Time) (time.Time, error) {
+	now = now.UTC()
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return now, nil
 	}
-	trimmed := trimSpace(s)
-	if len(trimmed) == 0 {
-		return 0, fmt.Errorf("empty hour")
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), nil
 	}
-	h := 0
-	for _, c := range trimmed {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("non-digit in hour")
+
+	fields := strings.Fields(strings.ToLower(s))
+	if n := len(fields); n > 0 && fields[n-1] == "utc" {
+		fields = fields[:n-1]
+	}
+	day, hour, minute := -1, -1, 0
+	for _, f := range fields {
+		if d, ok := parseWeekday(f); ok && day < 0 {
+			day = int(d)
+			continue
 		}
-		h = h*10 + int(c-'0')
+		if h, m, err := parseClock(f); err == nil && hour < 0 {
+			hour, minute = h, m
+			continue
+		}
+		return time.Time{}, invalidTimeError(s)
 	}
-	if pm && h < 12 {
-		h += 12
+	if day < 0 || hour < 0 {
+		return time.Time{}, invalidTimeError(s)
+	}
+	daysAhead := (day - int(now.Weekday()) + 7) % 7
+	d := now.AddDate(0, 0, daysAhead)
+	return time.Date(d.Year(), d.Month(), d.Day(), hour, minute, 0, 0, time.UTC), nil
+}
+
+func invalidTimeError(s string) error {
+	return fmt.Errorf("invalid --time %q: want a weekday and an hour in UTC "+
+		"(\"Saturday 3pm\", \"tue 10:00\") or an RFC 3339 timestamp", s)
+}
+
+func parseWeekday(f string) (time.Weekday, bool) {
+	for _, d := range weekdayNames {
+		name := strings.ToLower(d.String())
+		if f == name || f == name[:3] {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
+// parseClock parses "15", "15:30", "3pm", "3:30pm" and "12am" (midnight).
+func parseClock(f string) (int, int, error) {
+	hourText, minuteText, hasMinutes := strings.Cut(f, ":")
+	suffix := ""
+	last := hourText
+	if hasMinutes {
+		last = minuteText
+	}
+	if strings.HasSuffix(last, "am") || strings.HasSuffix(last, "pm") {
+		suffix = last[len(last)-2:]
+		last = last[:len(last)-2]
+	}
+	if hasMinutes {
+		minuteText = last
+	} else {
+		hourText = last
+	}
+	h, err := parseHour(hourText + suffix)
+	if err != nil {
+		return 0, 0, err
+	}
+	m := 0
+	if hasMinutes {
+		if len(minuteText) != 2 {
+			return 0, 0, fmt.Errorf("invalid minutes %q", minuteText)
+		}
+		if m, err = strconv.Atoi(minuteText); err != nil || m < 0 || m > 59 {
+			return 0, 0, fmt.Errorf("invalid minutes %q", minuteText)
+		}
+	}
+	return h, m, nil
+}
+
+// parseHour parses "15" (0-23) or "3pm"/"12am" (1-12 with am/pm).
+func parseHour(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	suffix := ""
+	if strings.HasSuffix(s, "am") || strings.HasSuffix(s, "pm") {
+		suffix, s = s[len(s)-2:], s[:len(s)-2]
+	}
+	if s == "" || strings.Trim(s, "0123456789") != "" {
+		return 0, fmt.Errorf("invalid hour %q", s+suffix)
+	}
+	h, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("invalid hour %q: %w", s+suffix, err)
+	}
+	switch suffix {
+	case "":
+		if h > 23 {
+			return 0, fmt.Errorf("hour %d out of range 0-23", h)
+		}
+	default:
+		if h < 1 || h > 12 {
+			return 0, fmt.Errorf("hour %d%s out of range 1-12", h, suffix)
+		}
+		h %= 12
+		if suffix == "pm" {
+			h += 12
+		}
 	}
 	return h, nil
-}
-
-// toLower returns a lowercase copy of s without using strings.ToLower.
-func toLower(s string) string {
-	out := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 32
-		}
-		out[i] = c
-	}
-	return string(out)
-}
-
-// trimSpace removes leading/trailing spaces.
-func trimSpace(s string) string {
-	start, end := 0, len(s)
-	for start < end && s[start] == ' ' {
-		start++
-	}
-	for end > start && s[end-1] == ' ' {
-		end--
-	}
-	return s[start:end]
-}
-
-// newSimulateCELEnvironment creates a CEL environment for policy simulation in the CLI.
-// It registers the same variables and library extensions as
-// pkg/reconciler/policygate/cel_evaluator.go:newEvaluator(), so that complex
-// expressions using json.*, maps.*, lists.*, random.* work correctly in simulate.
-//
-// The import of pkg/cel/library is allowed (see AGENTS.md — only pkg/cel itself is banned
-// outside pkg/reconciler/policygate). pkg/cel/library has no dependency on pkg/cel.
-func newSimulateCELEnvironment() (*cel.Env, error) {
-	env, err := cel.NewEnv(
-		cel.Variable("bundle", cel.DynType),
-		cel.Variable("schedule", cel.DynType),
-		cel.Variable("environment", cel.DynType),
-		cel.Variable("metrics", cel.DynType),
-		cel.Variable("upstream", cel.DynType),
-		cel.Variable("previousBundle", cel.DynType),
-		// kro CEL library extensions — same set as pkg/reconciler/policygate/cel_evaluator.go.
-		// Ensures expressions like json.unmarshal(...), map1.merge(map2), etc. work in simulate.
-		library.JSON(),
-		library.Maps(),
-		library.Lists(),
-		library.Random(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("cel.NewEnv: %w", err)
-	}
-	return env, nil
-}
-
-// simulateCELEvaluate compiles and evaluates a single CEL expression against the given context.
-// Returns (pass, reason, error). Errors are fail-closed (pass=false on error).
-// This mirrors pkg/reconciler/policygate/cel_evaluator.go:evaluate() in the CLI context.
-func simulateCELEvaluate(env *cel.Env, expr string, ctx map[string]interface{}) (bool, string, error) {
-	ast, issues := env.Compile(expr)
-	if issues != nil && issues.Err() != nil {
-		return false, fmt.Sprintf("CEL compile error: %s", issues.Err()), issues.Err()
-	}
-	prg, err := env.Program(ast)
-	if err != nil {
-		return false, fmt.Sprintf("CEL program error: %s", err), err
-	}
-	out, _, err := prg.Eval(ctx)
-	if err != nil {
-		return false, fmt.Sprintf("CEL evaluation error: %s", err), err
-	}
-	result, ok := out.Value().(bool)
-	if !ok {
-		e := fmt.Errorf("CEL expression %q returned non-boolean: %T(%v)", expr, out.Value(), out.Value())
-		return false, e.Error(), e
-	}
-	return result, fmt.Sprintf("%s = %v", expr, result), nil
 }
 
 // ─── policy test ─────────────────────────────────────────────────────────────
@@ -493,32 +565,43 @@ func newPolicyTestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test <file>",
 		Short: "Validate PolicyGate YAML syntax and dry-run CEL expressions",
-		Long: `Validate a PolicyGate YAML file: check CEL syntax and dry-run evaluate
-each gate against a default context (current time, empty bundle).
+		Long: `Validate every PolicyGate in a YAML file (multiple documents are fine).
 
-No cluster access is required — all validation is performed locally.
+Each expression is compiled with the controller's PolicyGate CEL environment,
+then evaluated by the controller's reconciler against a local context: the
+current time, a Bundle with no images or provenance, no metrics, no upstream
+history and no change windows. The environment is the first entry of the
+gate's kardinal.io/applies-to label.
+
+Results:
+  PASS     the gate would allow promotion in that context
+  FAIL     the gate would block promotion in that context
+  UNKNOWN  the expression needs cluster data the local context lacks
+           (metrics, upstream, bundle.pr); use 'kardinal policy simulate'
+
+No cluster access is required. The command exits non-zero only when an
+expression does not compile.
 
 Example:
   kardinal policy test policy-gates.yaml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return policyTestFn(cmd.OutOrStdout(), args[0])
+			return policyTestFn(cmd.OutOrStdout(), args[0], time.Now().UTC())
 		},
 	}
 }
 
-// policyTestFn reads a PolicyGate YAML file, validates each gate's CEL expression,
-// and performs a dry-run evaluation with a default context.
-// Returns a non-nil error only if the file cannot be read or parsed.
-// Individual gate validation errors are printed inline without aborting.
-func policyTestFn(w io.Writer, filename string) error {
+// policyTestFn reads a PolicyGate YAML file, compiles each gate's CEL
+// expression and dry-runs it with the controller's reconciler at now.
+// Returns an error when the file cannot be read or parsed, or when an
+// expression does not compile.
+func policyTestFn(w io.Writer, filename string, now time.Time) error {
+	ctx := context.Background()
 	data, err := os.ReadFile(filename) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("read %q: %w", filename, err)
 	}
 
-	// Parse: the file may contain a single PolicyGate or a list inside a List manifest.
-	// Try single gate first; if Kind is List, iterate items.
 	gates, err := parsePolicyGateYAML(data)
 	if err != nil {
 		return fmt.Errorf("parse %q: %w", filename, err)
@@ -531,145 +614,101 @@ func policyTestFn(w io.Writer, filename string) error {
 		return nil
 	}
 
-	celEnv, celErr := newSimulateCELEnvironment()
-	if celErr != nil {
-		return fmt.Errorf("init CEL environment: %w", celErr)
-	}
-
-	// Default dry-run context: current time, empty bundle.
-	now := time.Now().UTC()
-	defaultCtx := map[string]interface{}{
-		"bundle": map[string]interface{}{
-			"type":                "image",
-			"version":             "v0.0.0",
-			"upstreamSoakMinutes": float64(0),
-			"provenance": map[string]interface{}{
-				"author":    "test",
-				"commitSHA": "0000000",
-				"ciRunURL":  "",
-			},
-			"intent": map[string]interface{}{
-				"targetEnvironment": "test",
-			},
-		},
-		"schedule": map[string]interface{}{
-			"isWeekend": now.Weekday() == time.Saturday || now.Weekday() == time.Sunday,
-			"hour":      float64(now.Hour()),
-			"dayOfWeek": now.Weekday().String(),
-		},
-		"environment": map[string]interface{}{
-			"name": "test",
-		},
-		"metrics":        map[string]interface{}{},
-		"upstream":       map[string]interface{}{},
-		"previousBundle": map[string]interface{}{},
-	}
-
-	allPassed := true
-	hasSyntaxError := false
+	var out strings.Builder
+	syntaxErrors, failed, unknown := 0, 0, 0
 	for _, g := range gates {
 		name := g.Name
 		if name == "" {
 			name = "(unnamed)"
 		}
 		expr := g.Spec.Expression
-		if _, werr := fmt.Fprintf(w, "PolicyGate %q (%s):\n", name, filename); werr != nil {
-			return fmt.Errorf("write: %w", werr)
-		}
-		if _, werr := fmt.Fprintf(w, "  Expression: %s\n", expr); werr != nil {
-			return fmt.Errorf("write: %w", werr)
-		}
+		fmt.Fprintf(&out, "PolicyGate %q (%s):\n", name, filename)
+		fmt.Fprintf(&out, "  Expression: %s\n", expr)
 
 		if expr == "" {
-			if _, werr := fmt.Fprintf(w, "  Syntax: SKIP (no expression)\n\n"); werr != nil {
-				return fmt.Errorf("write: %w", werr)
-			}
+			out.WriteString("  Syntax: SKIP (no expression)\n\n")
 			continue
 		}
 
-		// Validate CEL syntax.
-		_, issues := celEnv.Compile(expr)
-		if issues != nil && issues.Err() != nil {
-			allPassed = false
-			hasSyntaxError = true
-			if _, werr := fmt.Fprintf(w, "  Syntax: INVALID — %s\n\n", issues.Err()); werr != nil {
-				return fmt.Errorf("write: %w", werr)
-			}
+		if msg, invalid, err := celSyntaxCheck(ctx, expr); err != nil {
+			return err
+		} else if invalid {
+			syntaxErrors++
+			fmt.Fprintf(&out, "  Syntax: INVALID — %s\n\n", msg)
 			continue
 		}
-		if _, werr := fmt.Fprintf(w, "  Syntax: valid\n"); werr != nil {
-			return fmt.Errorf("write: %w", werr)
-		}
+		out.WriteString("  Syntax: valid\n")
 
-		// Dry-run evaluation.
-		pass, reason, evalErr := simulateCELEvaluate(celEnv, expr, defaultCtx)
-		if evalErr != nil {
-			allPassed = false
-			hasSyntaxError = true // eval errors are also syntax-level issues
-			if _, werr := fmt.Fprintf(w, "  Result: ERROR (%s)\n\n", evalErr); werr != nil {
-				return fmt.Errorf("write: %w", werr)
-			}
-			continue
+		env := "test"
+		if a := strings.TrimSpace(strings.Split(g.Labels["kardinal.io/applies-to"], ",")[0]); a != "" {
+			env = a
 		}
-
+		pass, reason, err := localGateCheck(ctx, g, env, now)
+		if err != nil {
+			return err
+		}
 		result := "PASS"
-		if !pass {
-			allPassed = false
+		switch {
+		case pass:
+		case strings.HasPrefix(reason, celEvalErrorPrefix):
+			unknown++
+			result = "UNKNOWN"
+		default:
+			failed++
 			result = "FAIL"
 		}
-		if _, werr := fmt.Fprintf(w, "  Result: %s (%s)\n\n", result, reason); werr != nil {
-			return fmt.Errorf("write: %w", werr)
-		}
+		fmt.Fprintf(&out, "  Result: %s (%s)\n\n", result, reason)
 	}
 
-	// Summary: distinguish syntax errors from evaluation failures.
-	// - Syntax errors → error message + exit non-zero (for CI use)
-	// - Evaluation FAIL → informational (gate blocks on current context, not a bug)
 	var summary string
 	switch {
-	case hasSyntaxError:
+	case syntaxErrors > 0:
 		summary = "CEL syntax errors found"
-	case !allPassed:
+	case failed > 0:
 		summary = "Some gates would BLOCK with current context (see FAIL results above)"
+	case unknown > 0:
+		summary = "All gates valid; some need cluster context to evaluate (see UNKNOWN results above)"
 	default:
 		summary = "All gates valid and pass current context"
 	}
-	if _, werr := fmt.Fprintf(w, "%s (%d gate(s))\n", summary, len(gates)); werr != nil {
-		return fmt.Errorf("write: %w", werr)
+	fmt.Fprintf(&out, "%s (%d gate(s))\n", summary, len(gates))
+	if _, err := io.WriteString(w, out.String()); err != nil {
+		return fmt.Errorf("write: %w", err)
 	}
-	// Return error only for syntax errors (enables CI gating).
-	// Evaluation FAIL is informational — not a test failure.
-	if hasSyntaxError {
-		return fmt.Errorf("CEL syntax errors in %d gate(s)", len(gates))
+	if syntaxErrors > 0 {
+		return fmt.Errorf("CEL syntax errors in %d of %d gate(s)", syntaxErrors, len(gates))
 	}
 	return nil
 }
 
-// parsePolicyGateYAML decodes YAML that contains one or more PolicyGate objects.
-// Supports: a single PolicyGate document, or multiple documents in a --- separated file.
+// parsePolicyGateYAML decodes every PolicyGate in data: one or more YAML (or
+// JSON) documents, each a PolicyGate or a List of PolicyGates. Documents of
+// other kinds are ignored.
 func parsePolicyGateYAML(data []byte) ([]v1alpha1.PolicyGate, error) {
-	// Try single object first.
-	var single v1alpha1.PolicyGate
-	if err := sigsyaml.Unmarshal(data, &single); err == nil && single.Kind == "PolicyGate" {
-		return []v1alpha1.PolicyGate{single}, nil
+	type document struct {
+		v1alpha1.PolicyGate `json:",inline"`
+		Items               []v1alpha1.PolicyGate `json:"items"`
 	}
-
-	// Try as a list wrapper with items field (kubectl-style).
-	type listWrapper struct {
-		Items []v1alpha1.PolicyGate `json:"items"`
+	dec := k8syaml.NewYAMLOrJSONDecoder(strings.NewReader(string(data)), 4096)
+	var gates []v1alpha1.PolicyGate
+	for {
+		var doc document
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("decode YAML: %w", err)
+		}
+		switch {
+		case len(doc.Items) > 0:
+			gates = append(gates, doc.Items...)
+		case doc.Kind == "PolicyGate",
+			doc.Kind == "" && (doc.Name != "" || doc.Spec.Expression != ""):
+			gates = append(gates, doc.PolicyGate)
+		}
 	}
-	var list listWrapper
-	if err := sigsyaml.Unmarshal(data, &list); err == nil && len(list.Items) > 0 {
-		return list.Items, nil
+	if len(gates) == 0 {
+		return nil, fmt.Errorf("no PolicyGate resources found in YAML")
 	}
-
-	// Fallback: assume it's a single gate even without Kind set.
-	if single.Spec.Expression != "" || single.Name != "" {
-		return []v1alpha1.PolicyGate{single}, nil
-	}
-
-	return nil, fmt.Errorf("no PolicyGate resources found in YAML")
+	return gates, nil
 }
-
-// ensure context is used (avoids 'context imported and not used' lint error)
-var _ = context.Background

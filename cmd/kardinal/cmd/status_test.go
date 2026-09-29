@@ -11,224 +11,222 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmd_test
+package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
 )
 
-func buildSchemeForStatus() *runtime.Scheme {
-	s := runtime.NewScheme()
-	_ = corev1.AddToScheme(s)
-	_ = v1alpha1.AddToScheme(s)
-	return s
+func runStatusPipeline(t *testing.T, objs ...sigs_client.Object) string {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, statusPipelineWriter(&buf, policyClient(t, objs...), "default", "demo"))
+	return buf.String()
 }
 
-// TestStatusPipelineWriter_NoSteps verifies that the output says "No active promotions"
-// when there are no PromotionSteps.
 func TestStatusPipelineWriter_NoSteps(t *testing.T) {
-	scheme := buildSchemeForStatus()
-
-	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-pipeline", Namespace: "default"},
-	}
-
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(pipeline).
-		Build()
-
-	var buf bytes.Buffer
-	err := cmd.StatusPipelineWriterForTest(&buf, fakeClient, "default", "my-pipeline")
-	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "No active promotions.")
+	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"))
+	assert.Contains(t, out, "No active promotions.")
 }
 
-// TestStatusPipelineWriter_NotFound verifies that a missing pipeline returns an error.
 func TestStatusPipelineWriter_NotFound(t *testing.T) {
-	scheme := buildSchemeForStatus()
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		Build()
-
 	var buf bytes.Buffer
-	err := cmd.StatusPipelineWriterForTest(&buf, fakeClient, "default", "missing-pipeline")
+	err := statusPipelineWriter(&buf, policyClient(t), "default", "missing-pipeline")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), `pipeline "missing-pipeline" not found`)
 }
 
-// TestStatusPipelineWriter_ActiveStep verifies that an in-flight PromotionStep
-// is shown with a ▶ marker and the active step name.
+// An in-flight PromotionStep is shown with a ▶ marker and the active step name.
 func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
-	scheme := buildSchemeForStatus()
-
-	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+	step := explainStep("demo", "bundle-abc", "prod", "WaitingForMerge", "waiting for PR merge",
+		time.Now().Add(-5*time.Minute))
+	step.Status.PRURL = "https://github.com/org/repo/pull/42"
+	step.Status.Steps = []v1alpha1.StepStatus{
+		{Name: "git-clone", State: "Completed"},
+		{Name: "open-pr", State: "Running"},
 	}
+	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"), step)
 
-	now := time.Now()
-	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "nginx-demo-prod-bundle-abc",
-			Namespace:         "default",
-			CreationTimestamp: metav1.Time{Time: now.Add(-5 * time.Minute)},
-			Labels: map[string]string{
-				"kardinal.io/pipeline": "nginx-demo",
-			},
-		},
-		Spec: v1alpha1.PromotionStepSpec{
-			Environment: "prod",
-			BundleName:  "bundle-abc",
-		},
-		Status: v1alpha1.PromotionStepStatus{
-			State:   "WaitingForMerge",
-			PRURL:   "https://github.com/org/repo/pull/42",
-			Message: "waiting for PR merge",
-			Steps: []v1alpha1.StepStatus{
-				{Name: "git-clone", State: "Completed"},
-				{Name: "open-pr", State: "Running"},
-			},
-		},
-	}
-
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(pipeline, step).
-		Build()
-
-	var buf bytes.Buffer
-	err := cmd.StatusPipelineWriterForTest(&buf, fakeClient, "default", "nginx-demo")
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Pipeline: nginx-demo")
-	assert.Contains(t, output, "Active bundle(s): bundle-abc")
-	assert.Contains(t, output, "WaitingForMerge")
-	assert.Contains(t, output, "▶")
-	assert.Contains(t, output, "open-pr") // active step name
-	assert.Contains(t, output, "pull/42") // PR URL (truncated)
+	assert.Contains(t, out, "Pipeline: demo")
+	assert.Contains(t, out, "Active bundle(s): bundle-abc")
+	assert.Contains(t, out, "▶ prod")
+	assert.Contains(t, out, "WaitingForMerge")
+	assert.Contains(t, out, "open-pr")
+	assert.Contains(t, out, "pull/42")
 }
 
-// TestStatusPipelineWriter_BlockingGate verifies that a blocking PolicyGate is shown.
+// C09b-cli-18: a gate blocks when it is an instance of the Bundle waiting at
+// that environment. Gate instances carry the bundle label; the step is created
+// only once every gate passes (pkg/graph/builder.go requiredGates).
 func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
-	scheme := buildSchemeForStatus()
+	recent := time.Now().Add(-time.Hour)
+	gate := explainGateInstance("demo", "bundle-abc", "prod", "no-weekend-deploys", "!schedule.isWeekend",
+		false, true, "!schedule.isWeekend = false")
+	out := runStatusPipeline(t,
+		policyPipeline("demo", "uat", "prod"),
+		explainStep("demo", "bundle-abc", "uat", "Verified", "", recent),
+		gate,
+	)
 
-	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
-	}
-
-	now := time.Now()
-	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "nginx-demo-prod-bundle-abc",
-			Namespace:         "default",
-			CreationTimestamp: metav1.Time{Time: now.Add(-2 * time.Hour)},
-			Labels: map[string]string{
-				"kardinal.io/pipeline": "nginx-demo",
-			},
-		},
-		Spec: v1alpha1.PromotionStepSpec{
-			Environment: "prod",
-			BundleName:  "bundle-abc",
-		},
-		Status: v1alpha1.PromotionStepStatus{
-			State: "Promoting",
-		},
-	}
-
-	checked := metav1.Time{Time: now.Add(-30 * time.Second)}
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "no-weekend-deploys",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    "nginx-demo",
-				"kardinal.io/environment": "prod",
-			},
-		},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "!schedule.isWeekend",
-		},
-		Status: v1alpha1.PolicyGateStatus{
-			Ready:           false,
-			Reason:          "BLOCKED: schedule.isWeekend is true",
-			LastEvaluatedAt: &checked,
-		},
-	}
-
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(pipeline, step, gate).
-		Build()
-
-	var buf bytes.Buffer
-	err := cmd.StatusPipelineWriterForTest(&buf, fakeClient, "default", "nginx-demo")
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Blocking Policy Gates")
-	assert.Contains(t, output, "no-weekend-deploys")
-	assert.Contains(t, output, "!schedule.isWeekend")
-	assert.Contains(t, output, "prod")
+	_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
+	require.True(t, found, out)
+	assert.Contains(t, gateSection, "no-weekend-deploys")
+	assert.NotContains(t, gateSection, "bundle-abc-prod-no-weekend-deploys", "rows use the gate name")
+	assert.Contains(t, gateSection, "prod")
+	assert.Contains(t, gateSection, "!schedule.isWeekend = false")
+	assert.NotContains(t, out, "terminal state", "a Bundle held at a gate is not idle")
 }
 
-// TestStatusPipelineWriter_TerminalSteps verifies the "all steps terminal" hint.
+// C09b-cli-18: gates of another Bundle, templates and passing gates are not
+// reported as blocking.
+func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
+	old := time.Now().Add(-3 * time.Hour)
+	recent := time.Now().Add(-time.Hour)
+	template := policyGate("no-weekend-deploys", "default", "prod", "!schedule.isWeekend")
+	template.Labels["kardinal.io/pipeline"] = "demo"
+	cases := []struct {
+		name string
+		objs []sigs_client.Object
+	}{
+		{
+			name: "stale gate of a superseded bundle",
+			objs: []sigs_client.Object{
+				explainStep("demo", "demo-old", "prod", "Failed", "", old),
+				explainStep("demo", "demo-new", "prod", "Verified", "", recent),
+				explainGateInstance("demo", "demo-old", "prod", "no-weekend-deploys", "!schedule.isWeekend",
+					false, true, "weekend"),
+			},
+		},
+		{
+			name: "template without a bundle label",
+			objs: []sigs_client.Object{
+				explainStep("demo", "b1", "prod", "Promoting", "", recent),
+				template,
+			},
+		},
+		{
+			name: "step already created",
+			objs: []sigs_client.Object{
+				explainStep("demo", "b1", "prod", "Promoting", "", recent),
+				explainGateInstance("demo", "b1", "prod", "g", "true", false, false, ""),
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append([]sigs_client.Object{policyPipeline("demo", "test", "prod")}, tc.objs...)
+			out := runStatusPipeline(t, objs...)
+			assert.NotContains(t, out, "Blocking Policy Gates", out)
+		})
+	}
+}
+
+// C09b-cli-18: only the active Bundle's steps are listed, one row per region.
+func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
+	old := time.Now().Add(-3 * time.Hour)
+	recent := time.Now().Add(-time.Hour)
+	east := explainStep("demo", "b2", "prod", "Promoting", "", recent)
+	east.Name += "-us-east-1"
+	east.Spec.Region = "us-east-1"
+	west := explainStep("demo", "b2", "prod", "Verified", "", recent)
+	west.Name += "-eu-west-1"
+	west.Spec.Region = "eu-west-1"
+	out := runStatusPipeline(t,
+		policyPipeline("demo", "test", "prod"),
+		explainStep("demo", "b1", "prod", "Verified", "", old),
+		explainStep("demo", "b1", "test", "Verified", "", old),
+		explainStep("demo", "b2", "test", "Verified", "", recent),
+		east, west,
+	)
+
+	assert.Contains(t, out, "Active bundle(s): b2\n")
+	assert.Contains(t, out, "REGION")
+	assert.Regexp(t, `\n  prod +eu-west-1 +Verified`, out)
+	assert.Regexp(t, `\n▶ prod +us-east-1 +Promoting`, out)
+	assert.Regexp(t, `\n  test +- +Verified`, out)
+	assert.Equal(t, 3, strings.Count(out, "\n  prod")+strings.Count(out, "\n▶ prod")+strings.Count(out, "\n  test"),
+		"b1's steps are not listed:\n%s", out)
+}
+
 func TestStatusPipelineWriter_TerminalSteps(t *testing.T) {
-	scheme := buildSchemeForStatus()
-
-	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+	for _, state := range []string{"Verified", "Failed", "AbortedByAlarm", "RollingBack"} {
+		t.Run(state, func(t *testing.T) {
+			out := runStatusPipeline(t,
+				policyPipeline("demo", "test", "prod"),
+				explainStep("demo", "b1", "prod", state, "", time.Now().Add(-time.Hour)),
+			)
+			assert.Contains(t, out, state)
+			assert.Contains(t, out, "terminal state")
+		})
 	}
-
-	now := time.Now()
-	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "nginx-demo-prod-bundle-abc",
-			Namespace:         "default",
-			CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Hour)},
-			Labels: map[string]string{
-				"kardinal.io/pipeline": "nginx-demo",
-			},
-		},
-		Spec: v1alpha1.PromotionStepSpec{
-			Environment: "prod",
-			BundleName:  "bundle-abc",
-		},
-		Status: v1alpha1.PromotionStepStatus{
-			State: "Verified",
-		},
-	}
-
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(pipeline, step).
-		Build()
-
-	var buf bytes.Buffer
-	err := cmd.StatusPipelineWriterForTest(&buf, fakeClient, "default", "nginx-demo")
-	require.NoError(t, err)
-
-	output := buf.String()
-	assert.Contains(t, output, "Verified")
-	assert.Contains(t, output, "terminal state")
+	out := runStatusPipeline(t,
+		policyPipeline("demo", "test", "prod"),
+		explainStep("demo", "b1", "prod", "HealthChecking", "", time.Now().Add(-time.Hour)),
+	)
+	assert.NotContains(t, out, "terminal state")
 }
 
-// Compile-time check: StatusPipelineWriterForTest must accept the right signature.
-var _ = func() {
-	var w *bytes.Buffer
-	var c sigs_client.Client
-	_ = cmd.StatusPipelineWriterForTest(w, c, "", "")
+// C09b-cli-19: the summary reads the version from --controller-namespace,
+// counts Available and Promoting Bundles as active, and names Degraded
+// Pipelines.
+func TestStatusSummary(t *testing.T) {
+	pipe := func(ns, name, phase string) *v1alpha1.Pipeline {
+		p := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		p.Status.Phase = phase
+		return p
+	}
+	bundle := func(name, phase string) *v1alpha1.Bundle {
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"}}
+		b.Status.Phase = phase
+		return b
+	}
+	c := doctorClient(
+		versionConfigMap("kardinal", "v0.6.0"),
+		pipe("team-a", "web", "Ready"),
+		pipe("team-b", "api", "Degraded"),
+		bundle("b1", "Available"), bundle("b2", "Promoting"),
+		bundle("b3", "Verified"), bundle("b4", "Superseded"),
+	)
+
+	var buf bytes.Buffer
+	require.NoError(t, statusSummaryFn(&buf, c, "kardinal"))
+	out := buf.String()
+	assert.Contains(t, out, "Controller:  v0.6.0\n")
+	assert.Contains(t, out, "Pipelines:   2 (1 degraded: team-b/api)\n")
+	assert.Contains(t, out, "Bundles:     4 (2 active)\n")
+	assert.Contains(t, out, "Warning: 1 pipeline(s) Degraded")
+
+	buf.Reset()
+	require.NoError(t, statusSummaryFn(&buf, c, defaultControllerNamespace))
+	assert.Contains(t, buf.String(), "Controller:  unknown\n")
+}
+
+func TestStatusSummary_ListError(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(rootScheme).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(_ context.Context, _ sigs_client.WithWatch, list sigs_client.ObjectList, _ ...sigs_client.ListOption) error {
+			if _, ok := list.(*v1alpha1.BundleList); ok {
+				return errors.New("bundles.kardinal.io is forbidden")
+			}
+			return nil
+		},
+	}).Build()
+
+	var buf bytes.Buffer
+	err := statusSummaryFn(&buf, c, "kardinal")
+	require.Error(t, err)
+	assert.Equal(t, "list bundles: bundles.kardinal.io is forbidden", err.Error())
 }
