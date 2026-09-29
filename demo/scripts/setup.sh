@@ -34,7 +34,7 @@
 # Usage:
 #   ./demo/scripts/setup.sh                    # 3 kind clusters
 #   ./demo/scripts/setup.sh --eks              # kind control+dev, EKS prod
-#   ./demo/scripts/setup.sh --skip-build       # skip local image build (use published)
+#   ./demo/scripts/setup.sh --skip-build       # use an already-loaded controller image
 #   ./demo/scripts/setup.sh --clean            # tear down first, then set up
 #   GITHUB_TOKEN=xxx ./demo/scripts/setup.sh   # set GitHub token inline
 #
@@ -88,7 +88,10 @@ GITOPS_REPO="${GITOPS_REPO:-https://github.com/pnz1990/kardinal-demo}"
 TEST_APP_REPO="${TEST_APP_REPO:-pnz1990/kardinal-test-app}"
 
 ARGOCD_VERSION="${ARGOCD_VERSION:-v2.10.3}"
-CHART_IMAGE_TAG="${CHART_IMAGE_TAG:-v0.8.0}"   # last successfully published image
+# The controller image is built from this checkout and loaded into the control
+# cluster, so the demo runs this checkout's controller and chart.
+KARDINAL_IMAGE_REPO="${KARDINAL_IMAGE_REPO:-ghcr.io/pnz1990/kardinal-promoter/controller}"
+KARDINAL_IMAGE_TAG="${KARDINAL_IMAGE_TAG:-dev}"
 
 # Colours
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -141,7 +144,7 @@ info "Demo configuration:"
 info "  Control cluster : $CONTROL_CLUSTER (kind)"
 info "  Dev cluster     : $DEV_CLUSTER (kind)"
 info "  Prod cluster    : $PROD_CLUSTER ($( [[ $USE_EKS == true ]] && echo "EKS" || echo "kind" ))"
-info "  Controller image: ghcr.io/pnz1990/kardinal-promoter/controller:${CHART_IMAGE_TAG}"
+info "  Controller image: ${KARDINAL_IMAGE_REPO}:${KARDINAL_IMAGE_TAG} (built from this checkout)"
 info "  GitOps repo     : $GITOPS_REPO"
 echo ""
 
@@ -176,7 +179,7 @@ create_kind_cluster() {
     if [[ -n "$config" ]]; then
       kind create cluster --name "$name" --config "$config"
     else
-      kind create cluster --name "$name" --image kindest/node:v1.29.0
+      kind create cluster --name "$name" --image kindest/node:v1.33.1@sha256:050072256b9a903bd914c0b2866828150cb229cea0efe5892e2b644d5dd3b34f
     fi
     success "  Cluster '${name}' created"
   fi
@@ -221,20 +224,19 @@ info "[3/7] Installing kardinal-promoter on control cluster..."
 kubectl config use-context "kind-${CONTROL_CLUSTER}"
 kubectl create namespace kardinal-system --dry-run=client -o yaml | kubectl apply -f -
 
+# Build the controller from this checkout and load it into the control cluster.
+PULL_POLICY=IfNotPresent
+if [[ "$SKIP_BUILD" != "true" ]]; then
+  info "  Building controller image ${KARDINAL_IMAGE_REPO}:${KARDINAL_IMAGE_TAG}..."
+  docker build -t "${KARDINAL_IMAGE_REPO}:${KARDINAL_IMAGE_TAG}" "${REPO_ROOT}"
+  kind load docker-image "${KARDINAL_IMAGE_REPO}:${KARDINAL_IMAGE_TAG}" --name "$CONTROL_CLUSTER"
+  PULL_POLICY=Never
+fi
+
 # CRDs must be applied before Helm — the chart includes a ScheduleClock resource
 # that requires the CRDs to exist before the chart renders (#593)
-if [[ -d "${REPO_ROOT}/config/crd/bases" ]]; then
-  info "  Applying CRDs from local repo..."
-  kubectl apply -f "${REPO_ROOT}/config/crd/bases/" 2>/dev/null || true
-else
-  # Running from a release tarball — pull CRDs from the published chart
-  info "  Fetching CRDs from published chart..."
-  helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-    --version "${CHART_IMAGE_TAG#v}" 2>/dev/null | kubectl apply -f - || \
-  helm pull oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-    --version "${CHART_IMAGE_TAG#v}" --untar --untardir /tmp/kardinal-chart 2>/dev/null && \
-  kubectl apply -f /tmp/kardinal-chart/kardinal-promoter/crds/ 2>/dev/null || true
-fi
+info "  Applying CRDs from this checkout..."
+kubectl apply -f "${REPO_ROOT}/config/crd/bases/"
 
 # GitHub token secret
 kubectl create secret generic github-token \
@@ -248,26 +250,18 @@ kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl ap
 # kro (the Graph controller) is a prerequisite of kardinal-promoter.
 KUBE_CONTEXT="kind-${CONTROL_CLUSTER}" bash "${REPO_ROOT}/hack/install-kro.sh"
 
-# Install from OCI registry — use last known-good published tag.
-# Use --wait=false for the install, then wait for the controller pod
-# separately — the Helm wait includes all chart resources and can timeout on slow CI runners; the controller pod
-# itself comes up quickly once the image is pulled.
-helm upgrade --install kardinal-promoter \
-  oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+# Install this checkout's chart with the image loaded above. Helm does not
+# wait; the rollout status below waits for the controller itself.
+helm --kube-context "kind-${CONTROL_CLUSTER}" upgrade --install kardinal-promoter \
+  "${REPO_ROOT}/chart/kardinal-promoter" \
   --namespace kardinal-system \
-  --set "image.tag=${CHART_IMAGE_TAG}" \
-  --set github.secretRef.name=github-token \
-  --set validatingAdmissionPolicy.enabled=false \
-  --wait=false --timeout 60s 2>/dev/null || \
-helm upgrade --install kardinal-promoter \
-  oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-  --namespace kardinal-system \
-  --set "image.tag=${CHART_IMAGE_TAG}" \
+  --set image.repository="${KARDINAL_IMAGE_REPO}" \
+  --set image.tag="${KARDINAL_IMAGE_TAG}" \
+  --set image.pullPolicy="${PULL_POLICY}" \
   --set github.secretRef.name=github-token \
   --set validatingAdmissionPolicy.enabled=false
 
-# Wait for the controller pod to be Ready (up to 3 min)
-kubectl rollout status deployment -n kardinal-system --timeout=180s 2>/dev/null || true
+kubectl rollout status deployment/kardinal-promoter -n kardinal-system --timeout=180s
 
 success "[3/7] kardinal-promoter installed"
 
@@ -516,7 +510,7 @@ $KARDINAL get pipelines 2>/dev/null || kubectl get pipelines -A 2>/dev/null | he
 echo ""
 echo "  Access the UI:"
 echo "    kubectl config use-context kind-${CONTROL_CLUSTER}"
-echo "    kubectl port-forward -n kardinal-system deployment/kardinal-kardinal-promoter 8082:8082 &"
+echo "    kubectl port-forward -n kardinal-system deployment/kardinal-promoter 8082:8082 &"
 echo "    kardinal dashboard"
 echo ""
 echo "  Trigger a promotion:"
