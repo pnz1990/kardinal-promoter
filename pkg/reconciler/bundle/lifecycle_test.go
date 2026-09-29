@@ -163,6 +163,22 @@ func TestLifecycle_AllEnvironmentsVerifiedMakesBundleVerified(t *testing.T) {
 	assert.Zero(t, res.RequeueAfter, "a Verified bundle has no soak to tick")
 }
 
+// C02-bundle-20: status.metrics.bakeResets is the sum of the steps' bake
+// resets, not always 0.
+func TestLifecycle_MetricsSumBakeResets(t *testing.T) {
+	b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC().Add(-time.Hour))
+	test, prod := lcStep("app-v1", "test", "s-test", "Verified"), lcStep("app-v1", "prod", "s-prod", "Verified")
+	test.Status.BakeResets, prod.Status.BakeResets = 1, 2
+	c := lcClient(lcPipeline("app", lcEnvs("test", "prod")...), b, test, prod)
+	r := &bundle.Reconciler{Client: c}
+	lcReconcile(t, r, "app-v1")
+	lcReconcile(t, r, "app-v1")
+
+	got := lcGet(t, c, "app-v1")
+	require.NotNil(t, got.Status.Metrics)
+	assert.Equal(t, 3, got.Status.Metrics.BakeResets)
+}
+
 // C02-bundle-01: a Verified bundle stays Verified when a newer one arrives;
 // the history keeps the successful promotion.
 func TestLifecycle_VerifiedBundleIsNotSuperseded(t *testing.T) {
