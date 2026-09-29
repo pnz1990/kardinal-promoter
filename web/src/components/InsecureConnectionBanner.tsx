@@ -14,7 +14,7 @@ interface InsecureConnectionBannerProps {
 }
 
 /** The command that reaches the UI on a default install (release kardinal-promoter). */
-export const PORT_FORWARD_COMMAND = 'kubectl port-forward -n kardinal-system deploy/kardinal-promoter 8082:8082'
+export const PORT_FORWARD_COMMAND = 'kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082'
 
 /** Loopback host names. `location.hostname` keeps the brackets on IPv6 ("[::1]"). */
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])

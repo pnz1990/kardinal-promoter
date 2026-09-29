@@ -463,7 +463,7 @@ The static React assets at `/ui/*` are **not** gated — they contain no sensiti
 Until TLS is configured, the recommended access method is:
 
 ```bash
-kubectl port-forward -n kardinal-system deploy/kardinal-promoter 8082:8082
+kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082
 ```
 
 Then access the UI at `http://localhost:8082/ui/`. The browser may display a warning when accessed over plain HTTP (`window.location.protocol != 'https:'`).

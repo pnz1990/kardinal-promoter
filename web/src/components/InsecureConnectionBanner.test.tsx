@@ -76,13 +76,14 @@ describe('InsecureConnectionBanner', () => {
     expect(screen.getByText(/Insecure connection/)).toBeDefined()
   })
 
-  // Audit C10a-web-04: the chart's Service has no 8082 port, so the command
-  // must target the Deployment, in the release namespace.
+  // Audit C10a-web-04: the old command named a Service that does not exist.
+  // The chart Service (chart/kardinal-promoter/templates/service.yaml) exposes
+  // the UI as port "ui"; the command must name it in the release namespace.
   it('tells the user a port-forward command that reaches the UI port', () => {
     mockLocation('http://10.0.0.1:8082/ui/')
     render(<InsecureConnectionBanner dismissed={false} onDismiss={vi.fn()} />)
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'kubectl port-forward -n kardinal-system deploy/kardinal-promoter 8082:8082')
+      'kubectl port-forward svc/kardinal-promoter -n kardinal-system 8082:8082')
   })
 
   it('does not render on localhost (O2)', () => {

@@ -2,6 +2,7 @@
 Copyright 2026 The kardinal-promoter Authors.
 Licensed under the Apache License, Version 2.0
 */}}
+{{- include "kardinal-promoter.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,44 +40,92 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.leaderElect }}
-            - --zap-log-level={{ .Values.logLevel }}
+            - --log-level={{ .Values.logLevel }}
+            - --zap-log-level={{ include "kardinal-promoter.zapLogLevel" . }}
             - --metrics-bind-address={{ .Values.metricsBindAddress }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+            - --ui-listen-address=:{{ .Values.service.uiPort }}
+            - --webhook-bind-address=:{{ .Values.service.webhookPort }}
             - --graph-service-account={{ .Values.graph.serviceAccountName }}
             - --graph-applier-clusterrole={{ include "kardinal-promoter.graphApplierRole" . }}
             - --graph-reader-clusterrole={{ include "kardinal-promoter.graphReaderRole" . }}
+            {{- with include "kardinal-promoter.policyNamespaces" . }}
+            - --policy-namespaces={{ . }}
+            {{- end }}
+            {{- with .Values.controller.watchNamespace }}
+            - --watch-namespace={{ . }}
+            {{- end }}
+            {{- with .Values.controller.shard }}
+            - --shard={{ . }}
+            {{- end }}
+            {{- with .Values.scm.provider }}
+            - --scm-provider={{ . }}
+            {{- end }}
+            {{- with .Values.scm.apiURL }}
+            - --scm-api-url={{ . }}
+            {{- end }}
+            {{- if .Values.ui.auth.tokenReview }}
+            - --ui-tokenreview-auth=true
+            {{- end }}
+            {{- with .Values.ui.corsAllowedOrigins }}
+            - --cors-allowed-origins={{ join "," . }}
+            {{- end }}
+            {{- range .Values.controller.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
           env:
-            {{- if .Values.github.token }}
-            - name: GITHUB_TOKEN
-              value: {{ .Values.github.token | quote }}
-            {{- else if .Values.github.secretRef.name }}
+            # Namespace for the leader-election Lease, the kardinal-version
+            # ConfigMap and the default SCM token Secret namespace.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- with include "kardinal-promoter.githubSecretName" . }}
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.github.secretRef.name }}
-                  key: {{ .Values.github.secretRef.key | default "token" }}
-            {{- end }}
-            {{- if .Values.github.secretRef.name }}
-            {{- /* Zero-downtime credential rotation: when secretRef is set, also configure
-                   the SecretWatcher so the controller reloads on token change. */}}
+                  name: {{ . }}
+                  key: {{ include "kardinal-promoter.githubSecretKey" $ }}
+            # The controller watches this Secret and reloads the SCM provider
+            # when the token changes (no restart).
             - name: KARDINAL_SCM_TOKEN_SECRET_NAME
-              value: {{ .Values.github.secretRef.name | quote }}
+              value: {{ . | quote }}
             - name: KARDINAL_SCM_TOKEN_SECRET_NAMESPACE
-              value: {{ .Values.github.secretRef.namespace | default .Release.Namespace | quote }}
+              value: {{ $.Release.Namespace | quote }}
             - name: KARDINAL_SCM_TOKEN_SECRET_KEY
-              value: {{ .Values.github.secretRef.key | default "token" | quote }}
+              value: {{ include "kardinal-promoter.githubSecretKey" $ | quote }}
             {{- end }}
-            {{- if .Values.controller.tlsCertFile }}
+            {{- with .Values.webhook.secretRef.name }}
+            - name: KARDINAL_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.webhook.secretRef.key | default "secret" }}
+            {{- end }}
+            {{- with .Values.bundleAPI.tokenSecretRef.name }}
+            - name: KARDINAL_BUNDLE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.bundleAPI.tokenSecretRef.key | default "token" }}
+            {{- end }}
+            {{- with .Values.ui.auth.tokenSecretRef.name }}
+            - name: KARDINAL_UI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.ui.auth.tokenSecretRef.key | default "token" }}
+            {{- end }}
+            {{- with .Values.controller.tlsCertFile }}
             - name: KARDINAL_TLS_CERT_FILE
-              value: {{ .Values.controller.tlsCertFile | quote }}
+              value: {{ . | quote }}
             {{- end }}
-            {{- if .Values.controller.tlsKeyFile }}
+            {{- with .Values.controller.tlsKeyFile }}
             - name: KARDINAL_TLS_KEY_FILE
-              value: {{ .Values.controller.tlsKeyFile | quote }}
+              value: {{ . | quote }}
             {{- end }}
-            {{- if .Values.controller.watchNamespace }}
-            - name: KARDINAL_WATCH_NAMESPACE
-              value: {{ .Values.controller.watchNamespace | quote }}
+            {{- with .Values.controller.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
             - name: metrics
@@ -84,6 +133,12 @@ spec:
               protocol: TCP
             - name: health
               containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+            - name: ui
+              containerPort: {{ .Values.service.uiPort }}
+              protocol: TCP
+            - name: webhook
+              containerPort: {{ .Values.service.webhookPort }}
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -102,9 +157,15 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- with .Values.controller.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- with .Values.controller.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
