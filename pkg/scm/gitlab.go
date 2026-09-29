@@ -57,7 +57,7 @@ func NewGitLabProvider(token, apiURL, webhookSecret string) *GitLabProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuit:       NewCircuitBreaker(),
-		client:        &http.Client{},
+		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
 
@@ -105,7 +105,7 @@ func (g *GitLabProvider) findExistingMR(ctx context.Context, repo, sourceBranch 
 		State        string `json:"state"`
 	}
 	if err := g.do(ctx, http.MethodGet,
-		fmt.Sprintf("/api/v4/projects/%s/merge_requests?state=opened&per_page=100", projectID),
+		fmt.Sprintf("/api/v4/projects/%s/merge_requests?state=opened&per_page=100&source_branch=%s", projectID, url.QueryEscape(sourceBranch)),
 		nil, &mrs); err != nil {
 		return "", 0, fmt.Errorf("list MRs to find existing %s: %w", sourceBranch, err)
 	}
@@ -162,7 +162,9 @@ func (g *GitLabProvider) GetPRStatus(ctx context.Context, repo string, prNumber 
 		return false, false, fmt.Errorf("get MR status %s!%d: %w", repo, prNumber, err)
 	}
 	merged := result.State == "merged"
-	open := result.State == "opened"
+	// "locked" is the transient state while GitLab performs the merge; it
+	// is still open, not closed without merge (C06-scm-health-19).
+	open := result.State == "opened" || result.State == "locked"
 	return merged, open, nil
 }
 
@@ -213,25 +215,27 @@ func (g *GitLabProvider) ParseWebhookEvent(payload []byte, signature string) (We
 		return WebhookEvent{}, fmt.Errorf("parse GitLab webhook payload: %w", err)
 	}
 
-	merged := raw.ObjectAttr.State == "merged"
+	if raw.ObjectKind == "merge_request" && (raw.ObjectAttr.Action == "merge" || raw.ObjectAttr.State == "merged") {
+		return mergedPREvent(raw.Project.PathWithNamespace, raw.ObjectAttr.IID), nil
+	}
 	return WebhookEvent{
 		EventType:    raw.ObjectKind,
 		PRNumber:     raw.ObjectAttr.IID,
 		RepoFullName: raw.Project.PathWithNamespace,
-		Merged:       merged,
 		Action:       raw.ObjectAttr.Action,
 	}, nil
 }
 
-// AddLabelsToPR applies labels to the merge request by updating the MR with the
-// comma-separated label list.
+// AddLabelsToPR adds labels to the merge request. It uses add_labels, which
+// appends; labels replaces the whole set and would remove labels that others
+// added (C06-scm-health-22).
 func (g *GitLabProvider) AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error {
 	if len(labels) == 0 {
 		return nil
 	}
 	projectID := encodeProjectID(repo)
 	payload := map[string]string{
-		"labels": strings.Join(labels, ","),
+		"add_labels": strings.Join(labels, ","),
 	}
 	if err := g.do(ctx, http.MethodPut,
 		fmt.Sprintf("/api/v4/projects/%s/merge_requests/%d", projectID, prNumber), payload, nil); err != nil {
@@ -273,12 +277,7 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		if IsRateLimitError(resp.StatusCode) {
-			retryAfter := RetryAfterFromResponse(resp)
-			g.circuit.RecordFailure(retryAfter)
-		} else {
-			g.circuit.RecordSuccess()
-		}
+		g.circuit.RecordResponse(resp)
 		return fmt.Errorf("GitLab API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 

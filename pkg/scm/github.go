@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -57,7 +58,7 @@ func NewGitHubProvider(token, apiURL, webhookSecret string) *GitHubProvider {
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuit:       NewCircuitBreaker(),
-		client:        &http.Client{},
+		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
 
@@ -95,8 +96,11 @@ func (g *GitHubProvider) findExistingPR(ctx context.Context, repo, head string) 
 			Ref string `json:"ref"`
 		} `json:"head"`
 	}
+	// Filter on the server by head branch: in a busy repository the PR may
+	// not be on the first page of all open PRs (C06-scm-health-15).
+	owner, _, _ := strings.Cut(repo, "/")
 	if err := g.do(ctx, http.MethodGet,
-		fmt.Sprintf("/repos/%s/pulls?state=open&per_page=100", repo), nil, &prs); err != nil {
+		fmt.Sprintf("/repos/%s/pulls?state=open&per_page=100&head=%s", repo, url.QueryEscape(owner+":"+head)), nil, &prs); err != nil {
 		return "", 0, fmt.Errorf("list PRs to find existing %s: %w", head, err)
 	}
 	for _, pr := range prs {
@@ -114,7 +118,7 @@ func isExistingPRErr(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return containsStr(msg, "422") && (containsStr(msg, "already exists") || containsStr(msg, "A pull request"))
+	return strings.Contains(msg, "422") && (strings.Contains(msg, "already exists") || strings.Contains(msg, "A pull request"))
 }
 
 // ClosePR closes the pull request without merging.
@@ -157,15 +161,25 @@ func (g *GitHubProvider) GetPRStatus(ctx context.Context, repo string, prNumber 
 // The GitHub Reviews API returns all reviews in submission order; we process
 // them chronologically so the last review from each user wins.
 func (g *GitHubProvider) GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (bool, int, error) {
-	var reviews []struct {
+	type review struct {
 		User struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		State string `json:"state"`
 	}
-	if err := g.do(ctx, http.MethodGet,
-		fmt.Sprintf("/repos/%s/pulls/%d/reviews", repo, prNumber), nil, &reviews); err != nil {
-		return false, 0, fmt.Errorf("get PR reviews %s#%d: %w", repo, prNumber, err)
+	// Read every page: a CHANGES_REQUESTED after the first page must still
+	// block (C06-scm-health-16).
+	var reviews []review
+	for page := 1; page <= maxListPages; page++ {
+		var batch []review
+		if err := g.do(ctx, http.MethodGet,
+			fmt.Sprintf("/repos/%s/pulls/%d/reviews?per_page=%d&page=%d", repo, prNumber, githubPageSize, page), nil, &batch); err != nil {
+			return false, 0, fmt.Errorf("get PR reviews %s#%d: %w", repo, prNumber, err)
+		}
+		reviews = append(reviews, batch...)
+		if len(batch) < githubPageSize {
+			break
+		}
 	}
 
 	// Track the most recent state per reviewer login.
@@ -309,20 +323,7 @@ func isAlreadyExistsErr(err error) bool {
 	}
 	// GitHub returns HTTP 422 with "already_exists" when creating a duplicate label.
 	msg := err.Error()
-	return containsStr(msg, "422") && containsStr(msg, "already_exists")
-}
-
-// containsStr returns true if s contains substr.
-func containsStr(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(msg, "422") && strings.Contains(msg, "already_exists")
 }
 
 // do executes an authenticated GitHub API request.
@@ -362,13 +363,7 @@ func (g *GitHubProvider) do(ctx context.Context, method, path string, body, resu
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		if IsRateLimitError(resp.StatusCode) {
-			retryAfter := RetryAfterFromResponse(resp)
-			g.circuit.RecordFailure(retryAfter)
-		} else {
-			// Non-transient error (4xx) — record success to keep circuit closed.
-			g.circuit.RecordSuccess()
-		}
+		g.circuit.RecordResponse(resp)
 		return fmt.Errorf("GitHub API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 

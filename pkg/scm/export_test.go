@@ -13,7 +13,11 @@
 
 package scm
 
-import gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+import (
+	"time"
+
+	gogithttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+)
 
 // HTTPAuthUsernameForTest exposes the basic-auth username httpAuth picks, or
 // "" when httpAuth sends no credentials.
@@ -23,4 +27,21 @@ func HTTPAuthUsernameForTest(remoteURL, token string) string {
 		return ""
 	}
 	return a.Username
+}
+
+// HTTPClientTimeoutForTest returns the timeout of a provider's HTTP client.
+func HTTPClientTimeoutForTest(p SCMProvider) time.Duration {
+	switch v := p.(type) {
+	case *GitHubProvider:
+		return v.client.Timeout
+	case *GitLabProvider:
+		return v.client.Timeout
+	case *ForgejoProvider:
+		return v.client.Timeout
+	case *BitbucketProvider:
+		return v.client.Timeout
+	case *AzureDevOpsProvider:
+		return v.client.Timeout
+	}
+	return -1
 }

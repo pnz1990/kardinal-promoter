@@ -69,7 +69,7 @@ func NewAzureDevOpsProvider(token, apiURL, webhookSecret string) *AzureDevOpsPro
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuit:       NewCircuitBreaker(),
-		client:        &http.Client{},
+		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
 
@@ -124,14 +124,17 @@ func (a *AzureDevOpsProvider) OpenPR(ctx context.Context, repo, title, body, hea
 		return "", 0, fmt.Errorf("open Azure DevOps PR %s: %w", repo, err)
 	}
 
-	// ADO PR URL is repo.webUrl + "/pullrequest/" + id
-	prURL := fmt.Sprintf("%s/_git/%s/pullrequest/%d", result.Repository.WebURL, repoName, result.PullRequestID)
-	if result.Repository.WebURL == "" {
-		// Fallback: construct from APIURL
-		prURL = fmt.Sprintf("%s/%s/%s/_git/%s/pullrequest/%d",
-			a.APIURL, org, project, repoName, result.PullRequestID)
+	return a.prWebURL(result.Repository.WebURL, org, project, repoName, result.PullRequestID), result.PullRequestID, nil
+}
+
+// prWebURL returns the web URL of an Azure DevOps pull request. repository.webUrl
+// is already ".../{org}/{project}/_git/{repo}", so only "/pullrequest/{id}" is
+// appended (C06-scm-health-06). Without a webUrl the URL is built from APIURL.
+func (a *AzureDevOpsProvider) prWebURL(webURL, org, project, repoName string, id int) string {
+	if webURL != "" {
+		return fmt.Sprintf("%s/pullrequest/%d", strings.TrimSuffix(webURL, "/"), id)
 	}
-	return prURL, result.PullRequestID, nil
+	return fmt.Sprintf("%s/%s/%s/_git/%s/pullrequest/%d", a.APIURL, org, project, repoName, id)
 }
 
 // findExistingPR returns the open PR for the given source ref name.
@@ -155,12 +158,7 @@ func (a *AzureDevOpsProvider) findExistingPR(ctx context.Context, org, project, 
 		return "", 0, fmt.Errorf("ADO PR already exists for branch %s but could not find it in active PRs", head)
 	}
 	pr := result.Value[0]
-	prURL := fmt.Sprintf("%s/_git/%s/pullrequest/%d", pr.Repository.WebURL, repoName, pr.PullRequestID)
-	if pr.Repository.WebURL == "" {
-		prURL = fmt.Sprintf("%s/%s/%s/_git/%s/pullrequest/%d",
-			a.APIURL, org, project, repoName, pr.PullRequestID)
-	}
-	return prURL, pr.PullRequestID, nil
+	return a.prWebURL(pr.Repository.WebURL, org, project, repoName, pr.PullRequestID), pr.PullRequestID, nil
 }
 
 // isADOExistingPRErr returns true when ADO rejected PR creation because one already exists.
@@ -236,31 +234,36 @@ func (a *AzureDevOpsProvider) GetPRStatus(ctx context.Context, repo string, prNu
 // GetPRReviewStatus returns reviewer approval state for an Azure DevOps pull request.
 // ADO uses numeric vote values: 10 = approved, 5 = approved with suggestions,
 // 0 = no vote, -5 = waiting for author, -10 = rejected.
-// approved is true when at least one reviewer has vote >= 10 and no reviewer has vote <= -10.
+// approved is true when at least one reviewer approved (vote >= 5) and no
+// reviewer is waiting for the author or rejected (vote <= -5). The count is
+// the number of approving reviewers.
 func (a *AzureDevOpsProvider) GetPRReviewStatus(ctx context.Context, repo string, prNumber int) (bool, int, error) {
 	org, project, repoName, err := splitADORepo(repo)
 	if err != nil {
 		return false, 0, err
 	}
-	var reviewers []struct {
-		Vote int `json:"vote"`
+	// ADO list APIs wrap the items in a {"count": N, "value": [...]} envelope
+	// (C06-scm-health-05).
+	var reviewers struct {
+		Value []struct {
+			Vote int `json:"vote"`
+		} `json:"value"`
 	}
 	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullrequests/%d/reviewers?api-version=%s",
 		org, project, repoName, prNumber, azureDevOpsAPIVersion)
 	if err := a.do(ctx, http.MethodGet, path, nil, &reviewers); err != nil {
 		return false, 0, fmt.Errorf("get ADO PR reviewers %s#%d: %w", repo, prNumber, err)
 	}
-	approved := 0
-	for _, r := range reviewers {
-		if r.Vote <= -10 {
-			// Any rejection → not approved
-			return false, 0, nil
-		}
-		if r.Vote >= 10 {
+	approved, blocked := 0, false
+	for _, r := range reviewers.Value {
+		switch {
+		case r.Vote <= -5:
+			blocked = true
+		case r.Vote >= 5:
 			approved++
 		}
 	}
-	return approved > 0, approved, nil
+	return approved > 0 && !blocked, approved, nil
 }
 
 // ParseWebhookEvent parses an Azure DevOps service hook payload and validates
@@ -295,27 +298,47 @@ func (a *AzureDevOpsProvider) ParseWebhookEvent(payload []byte, signature string
 		return WebhookEvent{}, fmt.Errorf("parse Azure DevOps webhook payload: %w", err)
 	}
 
-	// Construct repoFullName from project/repo.
-	repoFullName := raw.Resource.Repository.Project.Name + "/" + raw.Resource.Repository.Name
+	// The provider APIs take "org/project/repo"; the organization is only in
+	// the remote URL. Without one, fall back to "project/repo", which will
+	// not match a PRStatus but still identifies the event in logs.
+	repoFullName, repoErr := RepoFromURL(raw.Resource.Repository.RemoteURL)
+	if repoErr != nil {
+		repoFullName = raw.Resource.Repository.Project.Name + "/" + raw.Resource.Repository.Name
+	}
 
-	// ADO event types: "git.pullrequest.created", "git.pullrequest.updated",
-	// "git.pullrequest.merged" (completed), "git.pullrequest.merged" (abandoned)
-	merged := raw.Resource.Status == "completed"
-	action := raw.Resource.Status
-
+	// ADO event types: "git.pullrequest.created", "git.pullrequest.updated"
+	// (also sent when a PR is completed or abandoned) and
+	// "git.pullrequest.merged" ("merge attempted"). Only status "completed"
+	// means the PR was merged into the target branch.
+	if raw.Resource.Status == "completed" {
+		return mergedPREvent(repoFullName, raw.Resource.PullRequestID), nil
+	}
 	return WebhookEvent{
 		EventType:    raw.EventType,
 		PRNumber:     raw.Resource.PullRequestID,
 		RepoFullName: repoFullName,
-		Merged:       merged,
-		Action:       action,
+		Action:       raw.Resource.Status,
 	}, nil
 }
 
-// AddLabelsToPR is not supported by Azure DevOps Pull Requests natively.
-// ADO does not have a PR label concept equivalent to GitHub labels.
-// This method is a no-op that returns nil to avoid breaking the promotion step.
-func (a *AzureDevOpsProvider) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
+// AddLabelsToPR adds labels (ADO "tags") to the pull request with the
+// Pull Request Labels - Create API, one call per label. Adding a label that is
+// already on the PR is not an error.
+func (a *AzureDevOpsProvider) AddLabelsToPR(ctx context.Context, repo string, prNumber int, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	org, project, repoName, err := splitADORepo(repo)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullRequests/%d/labels?api-version=%s",
+		org, project, repoName, prNumber, azureDevOpsAPIVersion)
+	for _, l := range labels {
+		if err := a.do(ctx, http.MethodPost, path, map[string]string{"name": l}, nil); err != nil {
+			return fmt.Errorf("add label %q to ADO PR %s#%d: %w", l, repo, prNumber, err)
+		}
+	}
 	return nil
 }
 
@@ -353,12 +376,7 @@ func (a *AzureDevOpsProvider) do(ctx context.Context, method, path string, body,
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		if IsRateLimitError(resp.StatusCode) {
-			retryAfter := RetryAfterFromResponse(resp)
-			a.circuit.RecordFailure(retryAfter)
-		} else {
-			a.circuit.RecordSuccess()
-		}
+		a.circuit.RecordResponse(resp)
 		return fmt.Errorf("azuredevops API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 

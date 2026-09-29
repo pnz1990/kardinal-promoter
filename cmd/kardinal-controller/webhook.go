@@ -85,7 +85,8 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 			return
 		}
 
-		signature := r.Header.Get("X-Hub-Signature-256")
+		// Each provider signs with its own header; the provider validates the value.
+		signature := scm.WebhookSignature(r.Header)
 		event, err := s.scm.ParseWebhookEvent(body, signature)
 		if err != nil {
 			s.log.Warn().Err(err).Msg("webhook signature invalid or parse error")

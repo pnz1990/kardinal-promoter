@@ -1,0 +1,463 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package scm_test
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+)
+
+func hmacHex(secret string, payload []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// TestParseWebhookEvent_MergedNormalised signs a merge event the way each
+// SCM does, reads the signature the way the webhook handler does
+// (scm.WebhookSignature) and checks every provider reports the same merged
+// pull_request event with the base repository in API format
+// (C06-scm-health-12, C07-controller-04).
+func TestParseWebhookEvent_MergedNormalised(t *testing.T) {
+	const secret = "s3cret"
+	tests := []struct {
+		name     string
+		provider scm.SCMProvider
+		payload  string
+		header   func(payload []byte) (string, string)
+		wantRepo string
+		wantPR   int
+	}{
+		{
+			name:     "github",
+			provider: scm.NewGitHubProvider("t", "", secret),
+			payload:  `{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"o/r"}}`,
+			header:   func(p []byte) (string, string) { return "X-Hub-Signature-256", "sha256=" + hmacHex(secret, p) },
+			wantRepo: "o/r", wantPR: 7,
+		},
+		{
+			name:     "gitlab merge in a subgroup",
+			provider: scm.NewGitLabProvider("t", "", secret),
+			payload:  `{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge"},"project":{"path_with_namespace":"group/sub/proj"}}`,
+			header:   func([]byte) (string, string) { return "X-Gitlab-Token", secret },
+			wantRepo: "group/sub/proj", wantPR: 8,
+		},
+		{
+			name:     "bitbucket from a fork reports the destination repo",
+			provider: scm.NewBitbucketProvider("t", "", secret),
+			payload:  `{"pullrequest":{"id":9,"state":"MERGED","source":{"repository":{"full_name":"fork/r"}},"destination":{"repository":{"full_name":"ws/r"}}},"repository":{"full_name":"ws/r"}}`,
+			header:   func(p []byte) (string, string) { return "X-Hub-Signature", "sha256=" + hmacHex(secret, p) },
+			wantRepo: "ws/r", wantPR: 9,
+		},
+		{
+			name:     "bitbucket without a top-level repository",
+			provider: scm.NewBitbucketProvider("t", "", secret),
+			payload:  `{"pullrequest":{"id":9,"state":"MERGED","source":{"repository":{"full_name":"fork/r"}},"destination":{"repository":{"full_name":"ws/r"}}}}`,
+			header:   func(p []byte) (string, string) { return "X-Hub-Signature", "sha256=" + hmacHex(secret, p) },
+			wantRepo: "ws/r", wantPR: 9,
+		},
+		{
+			name:     "forgejo bare hex X-Gitea-Signature",
+			provider: scm.NewForgejoProvider("t", "", secret),
+			payload:  `{"action":"closed","number":10,"pull_request":{"merged":true},"repository":{"full_name":"o/r"}}`,
+			header:   func(p []byte) (string, string) { return "X-Gitea-Signature", hmacHex(secret, p) },
+			wantRepo: "o/r", wantPR: 10,
+		},
+		{
+			name:     "forgejo X-Forgejo-Signature",
+			provider: scm.NewForgejoProvider("t", "", secret),
+			payload:  `{"action":"closed","number":10,"pull_request":{"merged":true},"repository":{"full_name":"o/r"}}`,
+			header:   func(p []byte) (string, string) { return "X-Forgejo-Signature", hmacHex(secret, p) },
+			wantRepo: "o/r", wantPR: 10,
+		},
+		{
+			name:     "gitea sha256= prefixed X-Hub-Signature-256",
+			provider: scm.NewForgejoProvider("t", "", secret),
+			payload:  `{"action":"closed","number":10,"pull_request":{"merged":true},"repository":{"full_name":"o/r"}}`,
+			header:   func(p []byte) (string, string) { return "X-Hub-Signature-256", "sha256=" + hmacHex(secret, p) },
+			wantRepo: "o/r", wantPR: 10,
+		},
+		{
+			name:     "azure devops completed PR",
+			provider: scm.NewAzureDevOpsProvider("t", "", secret),
+			payload:  `{"eventType":"git.pullrequest.updated","resource":{"pullRequestId":11,"status":"completed","repository":{"name":"repo","project":{"name":"proj"},"remoteUrl":"https://org@dev.azure.com/org/proj/_git/repo"}}}`,
+			header:   func([]byte) (string, string) { return "X-AzureDevOps-Token", secret },
+			wantRepo: "org/proj/repo", wantPR: 11,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(tc.payload)
+			name, value := tc.header(payload)
+			h := http.Header{}
+			h.Set(name, value)
+
+			ev, err := tc.provider.ParseWebhookEvent(payload, scm.WebhookSignature(h))
+			require.NoError(t, err)
+			assert.Equal(t, "pull_request", ev.EventType)
+			assert.Equal(t, "closed", ev.Action)
+			assert.True(t, ev.Merged)
+			assert.Equal(t, tc.wantRepo, ev.RepoFullName)
+			assert.Equal(t, tc.wantPR, ev.PRNumber)
+
+			_, err = tc.provider.ParseWebhookEvent(payload, "sha256="+hmacHex("wrong", payload))
+			require.Error(t, err, "a wrong signature must still be rejected")
+		})
+	}
+}
+
+// TestParseWebhookEvent_NotMerged proves events that are not a completed
+// merge are not reported as merged.
+func TestParseWebhookEvent_NotMerged(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider scm.SCMProvider
+		payload  string
+	}{
+		{"gitlab opened", scm.NewGitLabProvider("t", "", ""),
+			`{"object_kind":"merge_request","object_attributes":{"iid":1,"state":"opened","action":"open"},"project":{"path_with_namespace":"g/p"}}`},
+		{"gitlab closed", scm.NewGitLabProvider("t", "", ""),
+			`{"object_kind":"merge_request","object_attributes":{"iid":1,"state":"closed","action":"close"},"project":{"path_with_namespace":"g/p"}}`},
+		{"bitbucket declined", scm.NewBitbucketProvider("t", "", ""),
+			`{"pullrequest":{"id":1,"state":"DECLINED"},"repository":{"full_name":"ws/r"}}`},
+		{"forgejo closed without merge", scm.NewForgejoProvider("t", "", ""),
+			`{"action":"closed","number":1,"pull_request":{"merged":false},"repository":{"full_name":"o/r"}}`},
+		{"azure devops merge attempted on an active PR", scm.NewAzureDevOpsProvider("t", "", ""),
+			`{"eventType":"git.pullrequest.merged","resource":{"pullRequestId":1,"status":"active","mergeStatus":"succeeded","repository":{"remoteUrl":"https://dev.azure.com/org/proj/_git/repo"}}}`},
+		{"azure devops abandoned", scm.NewAzureDevOpsProvider("t", "", ""),
+			`{"eventType":"git.pullrequest.updated","resource":{"pullRequestId":1,"status":"abandoned","repository":{"remoteUrl":"https://dev.azure.com/org/proj/_git/repo"}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), "")
+			require.NoError(t, err)
+			assert.False(t, ev.Merged)
+			assert.False(t, ev.EventType == "pull_request" && ev.Action == "closed" && ev.Merged)
+		})
+	}
+}
+
+// TestAzureDevOpsProvider_GetPRReviewStatus_Envelope decodes the
+// {"count","value"} envelope and applies the vote rules (C06-scm-health-05).
+func TestAzureDevOpsProvider_GetPRReviewStatus_Envelope(t *testing.T) {
+	tests := []struct {
+		name         string
+		votes        []int
+		wantApproved bool
+		wantCount    int
+	}{
+		{"approved", []int{10}, true, 1},
+		{"approved with suggestions", []int{5}, true, 1},
+		{"two approvals", []int{10, 5, 0}, true, 2},
+		{"waiting for author blocks", []int{10, -5}, false, 1},
+		{"rejected blocks", []int{10, -10}, false, 1},
+		{"no vote", []int{0}, false, 0},
+		{"no reviewers", nil, false, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Contains(t, r.URL.Path, "/org/proj/_apis/git/repositories/repo/pullrequests/7/reviewers")
+				value := make([]map[string]int, 0, len(tc.votes))
+				for _, v := range tc.votes {
+					value = append(value, map[string]int{"vote": v})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": len(value), "value": value})
+			}))
+			defer srv.Close()
+
+			approved, count, err := scm.NewAzureDevOpsProvider("pat", srv.URL, "").GetPRReviewStatus(context.Background(), "org/proj/repo", 7)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantApproved, approved)
+			assert.Equal(t, tc.wantCount, count)
+		})
+	}
+}
+
+// TestAzureDevOpsProvider_PRURL checks the PR web URL on both the create
+// and the already-exists paths (C06-scm-health-06).
+func TestAzureDevOpsProvider_PRURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		exists  bool
+		webURL  string
+		wantURL string
+	}{
+		{"created", false, "https://dev.azure.com/org/proj/_git/repo", "https://dev.azure.com/org/proj/_git/repo/pullrequest/7"},
+		{"created, trailing slash", false, "https://dev.azure.com/org/proj/_git/repo/", "https://dev.azure.com/org/proj/_git/repo/pullrequest/7"},
+		{"already exists", true, "https://dev.azure.com/org/proj/_git/repo", "https://dev.azure.com/org/proj/_git/repo/pullrequest/7"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				pr := map[string]interface{}{"pullRequestId": 7, "repository": map[string]string{"webUrl": tc.webURL}}
+				switch {
+				case r.Method == http.MethodPost && tc.exists:
+					w.WriteHeader(http.StatusConflict)
+					_, _ = w.Write([]byte(`{"message":"TF401179: An active pull request for the source and target branch already exists."}`))
+				case r.Method == http.MethodPost:
+					w.WriteHeader(http.StatusCreated)
+					_ = json.NewEncoder(w).Encode(pr)
+				default:
+					assert.Equal(t, "refs/heads/kardinal/b/prod", r.URL.Query().Get("searchCriteria.sourceRefName"))
+					_ = json.NewEncoder(w).Encode(map[string]interface{}{"count": 1, "value": []interface{}{pr}})
+				}
+			}))
+			defer srv.Close()
+
+			prURL, n, err := scm.NewAzureDevOpsProvider("pat", srv.URL, "").OpenPR(context.Background(), "org/proj/repo", "t", "b", "kardinal/b/prod", "main")
+			require.NoError(t, err)
+			assert.Equal(t, 7, n)
+			assert.Equal(t, tc.wantURL, prURL)
+
+			repo, num, err := scm.ParsePRURL(prURL)
+			require.NoError(t, err)
+			assert.Equal(t, "org/proj/repo", repo)
+			assert.Equal(t, 7, num)
+		})
+	}
+}
+
+// TestAzureDevOpsProvider_AddLabelsToPR posts each label to the PR labels
+// API instead of silently doing nothing (C06-scm-health-21).
+func TestAzureDevOpsProvider_AddLabelsToPR(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/org/proj/_apis/git/repositories/repo/pullRequests/7/labels", r.URL.Path)
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		mu.Lock()
+		got = append(got, body["name"])
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	p := scm.NewAzureDevOpsProvider("pat", srv.URL, "")
+	require.NoError(t, p.AddLabelsToPR(context.Background(), "org/proj/repo", 7, []string{"kardinal", "kardinal/rollback"}))
+	assert.Equal(t, []string{"kardinal", "kardinal/rollback"}, got)
+}
+
+// TestGetPRStatusAndReviews_EdgeCases covers GitLab's locked state
+// (C06-scm-health-19), Bitbucket changes requested (C06-scm-health-20) and
+// Forgejo dismissed reviews (C06-scm-health-23).
+func TestGetPRStatusAndReviews_EdgeCases(t *testing.T) {
+	t.Run("gitlab locked is still open", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"state":"locked"}`))
+		}))
+		defer srv.Close()
+		merged, open, err := scm.NewGitLabProvider("t", srv.URL, "").GetPRStatus(context.Background(), "g/p", 1)
+		require.NoError(t, err)
+		assert.False(t, merged)
+		assert.True(t, open)
+	})
+	t.Run("bitbucket changes requested blocks", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"participants":[{"approved":true,"state":"approved"},{"approved":false,"state":"changes_requested"}]}`))
+		}))
+		defer srv.Close()
+		approved, count, err := scm.NewBitbucketProvider("t", srv.URL, "").GetPRReviewStatus(context.Background(), "ws/r", 1)
+		require.NoError(t, err)
+		assert.False(t, approved)
+		assert.Equal(t, 1, count)
+	})
+	t.Run("forgejo dismissed approval does not count", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`[{"user":{"login":"alice"},"state":"APPROVED","dismissed":true}]`))
+		}))
+		defer srv.Close()
+		approved, count, err := scm.NewForgejoProvider("t", srv.URL, "").GetPRReviewStatus(context.Background(), "o/r", 1)
+		require.NoError(t, err)
+		assert.False(t, approved)
+		assert.Equal(t, 0, count)
+	})
+}
+
+// TestGitHubProvider_GetPRReviewStatus_Paginated proves a CHANGES_REQUESTED
+// on the second page blocks the approval (C06-scm-health-16).
+func TestGitHubProvider_GetPRReviewStatus_Paginated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "100", r.URL.Query().Get("per_page"))
+		var reviews []map[string]interface{}
+		switch r.URL.Query().Get("page") {
+		case "1":
+			for i := 0; i < 100; i++ {
+				reviews = append(reviews, map[string]interface{}{"user": map[string]string{"login": fmt.Sprintf("u%d", i)}, "state": "COMMENTED"})
+			}
+			reviews[0]["state"] = "APPROVED"
+		case "2":
+			reviews = append(reviews, map[string]interface{}{"user": map[string]string{"login": "bob"}, "state": "CHANGES_REQUESTED"})
+		}
+		_ = json.NewEncoder(w).Encode(reviews)
+	}))
+	defer srv.Close()
+
+	approved, count, err := scm.NewGitHubProvider("t", srv.URL, "").GetPRReviewStatus(context.Background(), "o/r", 1)
+	require.NoError(t, err)
+	assert.False(t, approved)
+	assert.Equal(t, 1, count)
+}
+
+// TestFindExistingPR_FiltersByBranch proves the already-exists lookup finds
+// the PR when it is not on the first page of all open PRs
+// (C06-scm-health-15), and that a Bitbucket 400 that is not a duplicate
+// surfaces the real error (C06-scm-health-14).
+func TestFindExistingPR_FiltersByBranch(t *testing.T) {
+	const head = "kardinal/b/prod"
+	t.Run("github filters by head", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"message":"A pull request already exists for o:kardinal/b/prod."}`))
+				return
+			}
+			if r.URL.Query().Get("head") != "o:"+head {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"number":3,"html_url":"https://github.com/o/r/pull/3","head":{"ref":"kardinal/b/prod"}}]`))
+		}))
+		defer srv.Close()
+		u, n, err := scm.NewGitHubProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+		require.NoError(t, err)
+		assert.Equal(t, 3, n)
+		assert.Equal(t, "https://github.com/o/r/pull/3", u)
+	})
+	t.Run("gitlab filters by source branch", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":["Another open merge request already exists for this source branch"]}`))
+				return
+			}
+			if r.URL.Query().Get("source_branch") != head {
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"iid":4,"web_url":"https://gitlab.com/g/p/-/merge_requests/4","source_branch":"kardinal/b/prod"}]`))
+		}))
+		defer srv.Close()
+		_, n, err := scm.NewGitLabProvider("t", srv.URL, "").OpenPR(context.Background(), "g/p", "t", "b", head, "main")
+		require.NoError(t, err)
+		assert.Equal(t, 4, n)
+	})
+	t.Run("bitbucket filters by source branch", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"message":"There are already open pull requests for this branch"}}`))
+				return
+			}
+			if !strings.Contains(r.URL.Query().Get("q"), `source.branch.name="kardinal/b/prod"`) {
+				_, _ = w.Write([]byte(`{"values":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"values":[{"id":5,"source":{"branch":{"name":"kardinal/b/prod"}},"links":{"html":{"href":"https://bitbucket.org/ws/r/pull-requests/5"}}}]}`))
+		}))
+		defer srv.Close()
+		_, n, err := scm.NewBitbucketProvider("t", srv.URL, "").OpenPR(context.Background(), "ws/r", "t", "b", head, "main")
+		require.NoError(t, err)
+		assert.Equal(t, 5, n)
+	})
+	t.Run("bitbucket other 400 is the real error", func(t *testing.T) {
+		lists := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"message":"source: branch not found: kardinal/b/prod"}}`))
+				return
+			}
+			lists++
+			_, _ = w.Write([]byte(`{"values":[]}`))
+		}))
+		defer srv.Close()
+		_, _, err := scm.NewBitbucketProvider("t", srv.URL, "").OpenPR(context.Background(), "ws/r", "t", "b", head, "main")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "branch not found")
+		assert.Equal(t, 0, lists)
+	})
+	t.Run("forgejo reads the next page", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":"pull request already exists for these targets"}`))
+				return
+			}
+			var prs []map[string]interface{}
+			if r.URL.Query().Get("page") == "1" {
+				for i := 0; i < 50; i++ {
+					prs = append(prs, map[string]interface{}{"number": 100 + i, "head": map[string]string{"ref": fmt.Sprintf("renovate/%d", i)}})
+				}
+			} else {
+				prs = append(prs, map[string]interface{}{"number": 6, "html_url": "https://f.example/o/r/pulls/6", "head": map[string]string{"ref": head, "label": head}})
+			}
+			_ = json.NewEncoder(w).Encode(prs)
+		}))
+		defer srv.Close()
+		_, n, err := scm.NewForgejoProvider("t", srv.URL, "").OpenPR(context.Background(), "o/r", "t", "b", head, "main")
+		require.NoError(t, err)
+		assert.Equal(t, 6, n)
+	})
+}
+
+// TestProviders_HTTPTimeout proves no provider can hang a reconcile worker
+// on a stalled SCM endpoint (C06-scm-health-30).
+func TestProviders_HTTPTimeout(t *testing.T) {
+	for _, name := range []string{"github", "gitlab", "forgejo", "bitbucket", "azuredevops"} {
+		p, err := scm.NewProvider(name, "t", "", "")
+		require.NoError(t, err)
+		timeout := scm.HTTPClientTimeoutForTest(p)
+		assert.Positive(t, timeout, name)
+	}
+}
+
+// TestGitHub403RateLimit_OpensCircuit proves a rate-limited controller stops
+// calling GitHub (C06-scm-health-17).
+func TestGitHub403RateLimit_OpensCircuit(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer srv.Close()
+
+	p := scm.NewGitHubProvider("t", srv.URL, "")
+	for i := 0; i < 10; i++ {
+		_, _, err := p.GetPRStatus(context.Background(), "o/r", 1)
+		require.Error(t, err)
+	}
+	assert.LessOrEqual(t, hits, 5)
+}

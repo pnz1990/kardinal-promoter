@@ -494,11 +494,12 @@ func TestGitLabProvider_ParseWebhookEvent_ValidToken(t *testing.T) {
 	p := scm.NewGitLabProvider("token", "", secret)
 	event, err := p.ParseWebhookEvent(payload, secret)
 	require.NoError(t, err)
-	assert.Equal(t, "merge_request", event.EventType)
+	// A merged MR is normalised to the merged pull_request event.
+	assert.Equal(t, "pull_request", event.EventType)
 	assert.Equal(t, 42, event.PRNumber)
 	assert.True(t, event.Merged)
 	assert.Equal(t, "owner/repo", event.RepoFullName)
-	assert.Equal(t, "merge", event.Action)
+	assert.Equal(t, "closed", event.Action)
 }
 
 func TestGitLabProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {
@@ -529,7 +530,8 @@ func TestGitLabProvider_AddLabelsToPR(t *testing.T) {
 		assert.Contains(t, r.URL.Path, "merge_requests/42")
 		var payload map[string]string
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-		capturedLabels = payload["labels"]
+		capturedLabels = payload["add_labels"]
+		assert.NotContains(t, payload, "labels", "labels replaces the MR's label set")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -538,7 +540,7 @@ func TestGitLabProvider_AddLabelsToPR(t *testing.T) {
 	p := scm.NewGitLabProvider("glpat-test-token", server.URL, "")
 	err := p.AddLabelsToPR(context.Background(), "owner/repo", 42, []string{"kardinal", "kardinal/promotion"})
 	require.NoError(t, err)
-	assert.Contains(t, capturedLabels, "kardinal")
+	assert.Equal(t, "kardinal,kardinal/promotion", capturedLabels)
 }
 
 func TestGitLabProvider_AddLabelsToPR_Empty(t *testing.T) {
@@ -1135,7 +1137,7 @@ func TestAzureDevOpsProvider_OpenPR(t *testing.T) {
 	url, num, err := p.OpenPR(context.Background(), "myorg/myproject/myrepo", "Test PR", "body", "feature", "main")
 	require.NoError(t, err)
 	assert.Equal(t, 99, num)
-	assert.Contains(t, url, "pullrequest/99")
+	assert.Equal(t, "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest/99", url)
 }
 
 func TestAzureDevOpsProvider_ClosePR(t *testing.T) {
@@ -1204,8 +1206,9 @@ func TestAzureDevOpsProvider_ParseWebhookEvent_ValidToken(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 99, evt.PRNumber)
 	assert.True(t, evt.Merged)
-	assert.Equal(t, "myproject/myrepo", evt.RepoFullName)
-	assert.Equal(t, "git.pullrequest.merged", evt.EventType)
+	assert.Equal(t, "myorg/myproject/myrepo", evt.RepoFullName)
+	assert.Equal(t, "pull_request", evt.EventType)
+	assert.Equal(t, "closed", evt.Action)
 }
 
 func TestAzureDevOpsProvider_ParseWebhookEvent_InvalidToken(t *testing.T) {

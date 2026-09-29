@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -64,7 +65,7 @@ func NewBitbucketProvider(token, apiURL, webhookSecret string) *BitbucketProvide
 		APIURL:        strings.TrimRight(apiURL, "/"),
 		WebhookSecret: webhookSecret,
 		circuit:       NewCircuitBreaker(),
-		client:        &http.Client{},
+		client:        &http.Client{Timeout: providerHTTPTimeout},
 	}
 }
 
@@ -136,7 +137,9 @@ func (b *BitbucketProvider) findExistingPR(ctx context.Context, workspace, repoS
 			} `json:"links"`
 		} `json:"values"`
 	}
-	path := fmt.Sprintf("/2.0/repositories/%s/%s/pullrequests?state=OPEN&pagelen=50", workspace, repoSlug)
+	// Filter on the server by source branch (C06-scm-health-15).
+	q := fmt.Sprintf(`source.branch.name="%s" AND state="OPEN"`, strings.ReplaceAll(sourceBranch, `"`, `\"`))
+	path := fmt.Sprintf("/2.0/repositories/%s/%s/pullrequests?pagelen=50&q=%s", workspace, repoSlug, url.QueryEscape(q))
 	if err := b.do(ctx, http.MethodGet, path, nil, &result); err != nil {
 		return "", 0, fmt.Errorf("list Bitbucket PRs for %s/%s: %w", workspace, repoSlug, err)
 	}
@@ -154,11 +157,10 @@ func isBitbucketExistingPRErr(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Only the duplicate message: any other 400 (missing branch, validation
+	// error) must surface as the real error (C06-scm-health-14).
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "already") ||
-		strings.Contains(msg, "open pull request") ||
-		// Bitbucket returns 400 for duplicate PRs
-		strings.Contains(msg, "status 400")
+	return strings.Contains(msg, "already") && strings.Contains(msg, "pull request")
 }
 
 // ClosePR declines (closes) the pull request without merging.
@@ -221,19 +223,23 @@ func (b *BitbucketProvider) GetPRReviewStatus(ctx context.Context, repo string, 
 		Participants []struct {
 			Role     string `json:"role"`
 			Approved bool   `json:"approved"`
+			State    string `json:"state"`
 		} `json:"participants"`
 	}
 	path := fmt.Sprintf("/2.0/repositories/%s/%s/pullrequests/%d", workspace, repoSlug, prNumber)
 	if err := b.do(ctx, http.MethodGet, path, nil, &result); err != nil {
 		return false, 0, fmt.Errorf("get Bitbucket PR reviewers %s#%d: %w", repo, prNumber, err)
 	}
-	approveCount := 0
+	approveCount, changesRequested := 0, false
 	for _, p := range result.Participants {
+		if p.State == "changes_requested" {
+			changesRequested = true
+		}
 		if p.Approved {
 			approveCount++
 		}
 	}
-	return approveCount > 0, approveCount, nil
+	return approveCount > 0 && !changesRequested, approveCount, nil
 }
 
 // ParseWebhookEvent parses a Bitbucket webhook payload and validates the
@@ -255,36 +261,38 @@ func (b *BitbucketProvider) ParseWebhookEvent(payload []byte, signature string) 
 		// Bitbucket sends the event key in X-Event-Key header; the JSON body uses
 		// {"pullrequest": {...}} structure.
 		PullRequest struct {
-			ID     int    `json:"id"`
-			State  string `json:"state"`
-			Source struct {
+			ID          int    `json:"id"`
+			State       string `json:"state"`
+			Destination struct {
 				Repository struct {
 					FullName string `json:"full_name"`
 				} `json:"repository"`
-			} `json:"source"`
-			Links struct {
-				HTML struct {
-					Href string `json:"href"`
-				} `json:"html"`
-			} `json:"links"`
+			} `json:"destination"`
 		} `json:"pullrequest"`
+		// Repository is the repository the webhook belongs to: the PR's
+		// destination, never the fork it comes from.
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return WebhookEvent{}, fmt.Errorf("parse Bitbucket webhook payload: %w", err)
 	}
 
 	pr := raw.PullRequest
-	merged := pr.State == "MERGED"
-
-	// Determine action from state (Bitbucket doesn't embed an "action" in body).
-	action := strings.ToLower(pr.State)
-
+	repo := raw.Repository.FullName
+	if repo == "" {
+		repo = pr.Destination.Repository.FullName
+	}
+	if pr.State == "MERGED" {
+		return mergedPREvent(repo, pr.ID), nil
+	}
+	// Bitbucket doesn't embed an "action" in the body; report the state.
 	return WebhookEvent{
 		EventType:    "pullrequest",
 		PRNumber:     pr.ID,
-		RepoFullName: pr.Source.Repository.FullName,
-		Merged:       merged,
-		Action:       action,
+		RepoFullName: repo,
+		Action:       strings.ToLower(pr.State),
 	}, nil
 }
 
@@ -328,12 +336,7 @@ func (b *BitbucketProvider) do(ctx context.Context, method, path string, body, r
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
-		if IsRateLimitError(resp.StatusCode) {
-			retryAfter := RetryAfterFromResponse(resp)
-			b.circuit.RecordFailure(retryAfter)
-		} else {
-			b.circuit.RecordSuccess()
-		}
+		b.circuit.RecordResponse(resp)
 		return fmt.Errorf("bitbucket API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
 	}
 
