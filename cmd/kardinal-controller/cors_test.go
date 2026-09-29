@@ -21,8 +21,9 @@ import (
 )
 
 // TestCORS_Middleware verifies the CORS and Host policy for /api/v1/ui/*:
-//   - requests with no Origin pass, except writes to an unknown Host while UI
-//     auth is off;
+//   - while UI auth is off, every /api/ request to an unknown Host gets 403,
+//     reads and requests without Origin included;
+//   - other requests with no Origin pass;
 //   - same-origin requests (Origin names the Host) pass only when the Host is
 //     loopback or in --ui-allowed-hosts;
 //   - cross-origin requests pass only when allow-listed (or "*");
@@ -87,7 +88,17 @@ func TestCORS_Middleware(t *testing.T) {
 		{name: "unknown host, POST without Origin, auth on", auth: true, method: http.MethodPost,
 			path: "/api/v1/ui/pause", host: "evil.example:8082", wantCode: http.StatusOK, wantCalled: true},
 		{name: "unknown host, GET without Origin, auth off", method: http.MethodGet, path: "/api/v1/ui/pipelines",
-			host: "evil.example:8082", wantCode: http.StatusOK, wantCalled: true},
+			host: "evil.example:8082", wantCode: http.StatusForbidden},
+		{name: "unknown host, HEAD without Origin, auth off", method: http.MethodHead, path: "/api/v1/ui/pipelines",
+			host: "evil.example:8082", wantCode: http.StatusForbidden},
+		{name: "unknown host, OPTIONS, auth off", method: http.MethodOptions, path: "/api/v1/ui/pipelines",
+			host: "evil.example:8082", origin: "http://evil.example:8082", wantCode: http.StatusForbidden},
+		{name: "unknown host, other /api/ path, auth off", method: http.MethodGet, path: "/api/v1/bundles",
+			host: "evil.example:8082", wantCode: http.StatusForbidden},
+		{name: "unknown host, GET without Origin, auth on", auth: true, method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", host: "evil.example:8082", wantCode: http.StatusOK, wantCalled: true},
+		{name: "allowed host, GET without Origin, auth off", hosts: "k.example", method: http.MethodGet,
+			path: "/api/v1/ui/pipelines", host: "k.example:8082", wantCode: http.StatusOK, wantCalled: true},
 
 		{name: "cross origin, default policy", method: http.MethodPost, path: "/api/v1/ui/pause", host: "localhost:8082",
 			origin: "https://evil.example", wantCode: http.StatusForbidden},
@@ -108,12 +119,12 @@ func TestCORS_Middleware(t *testing.T) {
 			wantCode: http.StatusOK, wantACAO: "https://dash.example", wantCalled: true},
 		{name: "cross origin, not in allow-list", allowed: "https://dash.example", method: http.MethodPost,
 			path: "/api/v1/ui/pause", host: "localhost:8082", origin: "https://evil.example", wantCode: http.StatusForbidden},
-		{name: "cross origin preflight, allow-listed", allowed: "https://dash.example", method: http.MethodOptions,
-			path: "/api/v1/ui/pause", host: "k.example:8082", origin: "https://dash.example",
+		{name: "cross origin preflight, allow-listed", allowed: "https://dash.example", hosts: "k.example",
+			method: http.MethodOptions, path: "/api/v1/ui/pause", host: "k.example:8082", origin: "https://dash.example",
 			wantCode: http.StatusOK, wantACAO: "https://dash.example"},
 		{name: "wildcard", allowed: "*", method: http.MethodPost, path: "/api/v1/ui/pause", host: "localhost:8082",
 			origin: "https://any.example", wantCode: http.StatusOK, wantACAO: "https://any.example", wantCalled: true},
-		{name: "non-UI path is not filtered", method: http.MethodGet, path: "/ui/index.html", host: "evil.example:8082",
+		{name: "static assets are not filtered", method: http.MethodGet, path: "/ui/index.html", host: "evil.example:8082",
 			origin: "https://evil.example", wantCode: http.StatusOK, wantCalled: true},
 	}
 	for _, tt := range tests {
@@ -197,4 +208,38 @@ func TestUIHandler_DNSRebinding(t *testing.T) {
 	var pl v1alpha1.Pipeline
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "app"}, &pl))
 	assert.False(t, pl.Spec.Paused, "a rebound page must not pause the pipeline")
+}
+
+// TestUIHandler_DNSRebindingReads covers the read side of DNS rebinding: with
+// UI auth off, a rebound page's same-origin GET carries no Origin header, so
+// only the Host check stands between it and pipeline state. A rebound Host
+// gets 403; the same GET on localhost is served.
+func TestUIHandler_DNSRebindingReads(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"}},
+	).Build()
+	h := newUIHandler(c, nil, uiAuthConfig{}, "", nil, zerolog.Nop())
+
+	tests := []struct {
+		name     string
+		host     string
+		wantCode int
+		wantBody string
+	}{
+		{name: "rebound host", host: "evil.example:8082", wantCode: http.StatusForbidden,
+			wantBody: "--ui-allowed-hosts"},
+		{name: "localhost", host: "localhost:8082", wantCode: http.StatusOK, wantBody: `"app"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/v1/ui/pipelines", nil)
+			req.Host = tt.host
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantCode, rec.Code, rec.Body.String())
+			assert.Contains(t, rec.Body.String(), tt.wantBody)
+			assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
+		})
+	}
 }

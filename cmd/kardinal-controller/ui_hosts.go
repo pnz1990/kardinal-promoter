@@ -6,13 +6,17 @@ package main
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"strings"
 )
 
 // loopbackUIHosts are always allowed: kubectl port-forward and a browser on
 // the same machine reach the UI through them.
 var loopbackUIHosts = map[string]struct{}{"localhost": {}, "127.0.0.1": {}, "::1": {}}
+
+// uiHostNotAllowedMsg is the 403 body for an /api/ request whose Host is not
+// on the allowlist while UI auth is off.
+const uiHostNotAllowedMsg = "UI API: host not allowed; add it to --ui-allowed-hosts " +
+	"(Helm value ui.allowedHosts)"
 
 // uiHostAllowlist is the set of Host header names the UI server accepts as
 // its own name, on top of loopbackUIHosts (--ui-allowed-hosts).
@@ -78,14 +82,4 @@ func normalizeUIHost(hostport string) string {
 	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
 	h = strings.TrimSuffix(h, ".")
 	return strings.ToLower(h)
-}
-
-// isSafeMethod reports whether an HTTP method is read-only (RFC 9110 §9.2.1).
-// Every other method is treated as a write.
-func isSafeMethod(method string) bool {
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return true
-	}
-	return false
 }

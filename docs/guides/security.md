@@ -553,15 +553,20 @@ headers match. To stop this:
 
 - A request to any other `Host` never gets a same-origin grant. It is handled as
   cross-origin and needs `--cors-allowed-origins`.
-- While UI auth is off, the controller also rejects writes to any other `Host` with
-  `403`: every method except `GET`, `HEAD` and `OPTIONS`, even with no `Origin` header.
-  This blocks a rebound page's plain form post.
-- Reads with no `Origin` are not blocked. Browsers do not send `Origin` on a
-  same-origin `GET`, so a rebound page can still read pipeline state while UI auth is
-  off. Turn on one of the auth modes above to close that too.
+- While UI auth is off, the controller answers every `/api/` request to any other
+  `Host` with `403`, reads included and with or without an `Origin` header. A rebound
+  page cannot read pipeline state or send a plain form post. Browsers send no `Origin`
+  on a same-origin `GET`, so only the `Host` check stops those.
+- Static assets under `/ui/` are not checked. They are the same for everyone and hold
+  no pipeline data.
+- While UI auth is on, a request to another `Host` without an `Origin` is served,
+  because the token protects it.
 
-If the UI loads but its actions fail with `host not allowed`, add the host name you
-browse to to `ui.allowedHosts`.
+This is the same defense Jupyter and webpack-dev-server use.
+
+If the UI page loads but shows no data and its API calls fail with `403` and
+`host not allowed; add it to --ui-allowed-hosts (Helm value ui.allowedHosts)`, add the
+host name you browse to to `ui.allowedHosts`.
 
 ### Accessing the UI securely (before TLS is configured)
 

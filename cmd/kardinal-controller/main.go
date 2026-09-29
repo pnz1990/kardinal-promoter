@@ -142,7 +142,8 @@ func main() {
 		"Comma-separated host names (no scheme; a port is ignored) the UI server answers to, "+
 			"on top of localhost, 127.0.0.1 and ::1: the controller Service DNS names and any Ingress host. "+
 			"A request counts as same-origin only when its Host header is one of these, and while UI auth is "+
-			"off, writes to /api/v1/ui/* with any other Host are rejected with 403 (DNS rebinding protection). "+
+			"off, every /api/ request with any other Host is rejected with 403, reads included (DNS rebinding "+
+			"protection). Static /ui/ assets are not checked. Chart value: ui.allowedHosts. "+
 			"Also readable from KARDINAL_UI_ALLOWED_HOSTS environment variable.")
 
 	// --ui-tokenreview-auth enables Kubernetes TokenReview-based authentication for
@@ -726,12 +727,13 @@ func ptr[T any](v T) *T { return &v }
 // A request is same-origin only when its Host is in hosts (loopback plus
 // --ui-allowed-hosts) and its Origin names that Host: under DNS rebinding a
 // hostile page sends matching Origin and Host headers for its own name. While
-// UI auth is off (authEnabled false), writes (any method but GET, HEAD and
-// OPTIONS) with a Host outside hosts are rejected even without an Origin, so a
-// rebound page cannot use a plain form post either.
+// UI auth is off (authEnabled false), every /api/ request with a Host outside
+// hosts is rejected, with or without an Origin and reads included: a rebound
+// page's same-origin GET or form post carries no Origin, and no credential
+// stands in its way. With auth on, the credential protects such requests.
 //
-// CORS headers are only written for /api/v1/ui/* paths. Static /ui/* assets and
-// webhook routes are not affected.
+// CORS headers are only written for /api/v1/ui/* paths. Static /ui/* assets
+// (the same for everyone) and webhook routes are not affected.
 func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, hosts uiHostAllowlist, authEnabled bool, log zerolog.Logger) http.Handler {
 	// Parse allow-list once at startup.
 	allowAll := allowedOriginsCSV == "*"
@@ -761,16 +763,16 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, hosts uiHo
 		Msg("UI API: Host names accepted as same-origin, on top of localhost, 127.0.0.1 and ::1 (--ui-allowed-hosts)")
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only apply CORS logic to UI API routes.
-		if !strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
-			next.ServeHTTP(w, r)
+		hostAllowed := hosts.allows(r.Host)
+		if !authEnabled && !hostAllowed && strings.HasPrefix(r.URL.Path, "/api/") {
+			// No credential stands between a rebound page and this request.
+			http.Error(w, uiHostNotAllowedMsg, http.StatusForbidden)
 			return
 		}
 
-		hostAllowed := hosts.allows(r.Host)
-		if !authEnabled && !hostAllowed && !isSafeMethod(r.Method) {
-			// No credential stands between a rebound page and this write.
-			http.Error(w, "UI API: host not allowed; add it to --ui-allowed-hosts", http.StatusForbidden)
+		// Only apply CORS logic to UI API routes.
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/ui/") {
+			next.ServeHTTP(w, r)
 			return
 		}
 

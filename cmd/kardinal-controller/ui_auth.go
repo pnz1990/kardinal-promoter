@@ -88,7 +88,7 @@ func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowe
 
 	// Same-origin requests to an allowed Host pass; cross-origin requests pass
 	// only when listed in --cors-allowed-origins ("*" allows all). With auth
-	// off, writes to any other Host are refused (DNS rebinding).
+	// off, every /api/ request to any other Host is refused (DNS rebinding).
 	authEnabled := auth.staticToken != "" || tokenReview
 	return applyCORSMiddleware(handler, corsAllowedOrigins, hosts, authEnabled, log)
 }
