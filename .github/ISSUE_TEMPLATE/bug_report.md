@@ -2,7 +2,7 @@
 name: Bug Report
 about: Report a bug or unexpected behavior in kardinal-promoter
 title: "[BUG] "
-labels: bug
+labels: kind/bug
 assignees: pnz1990
 ---
 
