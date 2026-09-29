@@ -65,9 +65,9 @@ spec:
           spec:
             description: |-
               AuditEventSpec defines the immutable record of a single promotion event.
-              AuditEvents are written by the PromotionStep reconciler at key lifecycle
-              transitions (started, succeeded, failed). They are append-only — the
-              spec is set at creation and never mutated.
+              AuditEvents are created by the PromotionStep and PolicyGate reconcilers at
+              key lifecycle transitions (started, succeeded, failed). The spec is set at
+              creation; the CRD rejects any later change to it.
             properties:
               action:
                 description: |-
@@ -133,6 +133,9 @@ spec:
             - pipelineName
             - timestamp
             type: object
+            x-kubernetes-validations:
+            - message: AuditEvent spec is immutable
+              rule: self == oldSelf
         type: object
     served: true
     storage: true

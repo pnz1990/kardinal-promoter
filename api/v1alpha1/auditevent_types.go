@@ -6,9 +6,10 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // AuditEventSpec defines the immutable record of a single promotion event.
-// AuditEvents are written by the PromotionStep reconciler at key lifecycle
-// transitions (started, succeeded, failed). They are append-only — the
-// spec is set at creation and never mutated.
+// AuditEvents are created by the PromotionStep and PolicyGate reconcilers at
+// key lifecycle transitions (started, succeeded, failed). The spec is set at
+// creation; the CRD rejects any later change to it.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="AuditEvent spec is immutable"
 type AuditEventSpec struct {
 	// Timestamp is when the event occurred (RFC 3339 format).
 	// +kubebuilder:validation:Format=date-time

@@ -108,6 +108,7 @@ func validateCR(t *testing.T, crds map[string]loadedCRD, obj map[string]interfac
 // celRuleErrors evaluates every x-kubernetes-validations rule in s against the
 // matching node of obj. It covers what our rules use (self, has, in); the API
 // server's environment adds more library functions and a cost check.
+// Transition rules (those using oldSelf) are skipped, as on create.
 func celRuleErrors(t *testing.T, s *structuralschema.Structural, obj interface{}, path string) []string {
 	t.Helper()
 	if s == nil || obj == nil {
@@ -115,6 +116,9 @@ func celRuleErrors(t *testing.T, s *structuralschema.Structural, obj interface{}
 	}
 	var errs []string
 	for _, r := range s.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			continue
+		}
 		env, err := cel.NewEnv(cel.Variable("self", cel.DynType))
 		require.NoError(t, err)
 		ast, iss := env.Compile(r.Rule)
@@ -368,6 +372,43 @@ func TestCRDSchemaCoversRemovedVAPRules(t *testing.T) {
 	}
 	for name, obj := range accepted {
 		assert.Empty(t, validateCR(t, crds, obj), "%s must be accepted", name)
+	}
+}
+
+// ── C08-api-config-26: AuditEvent spec is immutable ──────────────────────────
+
+// TestCRDAuditEventSpecImmutable: AuditEvents are an append-only audit trail,
+// so an update that changes spec must be rejected (a status-free kind has no
+// other field to update, and metadata edits stay allowed).
+func TestCRDAuditEventSpecImmutable(t *testing.T) {
+	spec := loadCRDs(t)["AuditEvent"].structural.Properties["spec"]
+	var rule string
+	for _, r := range spec.XValidations {
+		if strings.Contains(r.Rule, "oldSelf") {
+			rule = r.Rule
+		}
+	}
+	require.NotEmpty(t, rule, "AuditEvent spec needs a transition rule")
+	env, err := cel.NewEnv(cel.Variable("self", cel.DynType), cel.Variable("oldSelf", cel.DynType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(rule)
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+	old := map[string]interface{}{"bundleName": "b1", "pipelineName": "p", "action": "PromotionStarted", "outcome": "Success"}
+	cases := []struct {
+		name  string
+		new   map[string]interface{}
+		allow bool
+	}{
+		{"unchanged", map[string]interface{}{"bundleName": "b1", "pipelineName": "p", "action": "PromotionStarted", "outcome": "Success"}, true},
+		{"outcome rewritten", map[string]interface{}{"bundleName": "b1", "pipelineName": "p", "action": "PromotionStarted", "outcome": "Failure"}, false},
+		{"field removed", map[string]interface{}{"bundleName": "b1", "pipelineName": "p", "action": "PromotionStarted"}, false},
+	}
+	for _, c := range cases {
+		out, _, err := prg.Eval(map[string]interface{}{"self": c.new, "oldSelf": old})
+		require.NoError(t, err, c.name)
+		assert.Equal(t, c.allow, out.Value(), c.name)
 	}
 }
 
