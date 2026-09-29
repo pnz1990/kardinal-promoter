@@ -96,7 +96,7 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 				assert.Equal(t, "https://github.com/org/config", git.cloneAtURL)
 				assert.Equal(t, "abc123", git.cloneAtSHA)
 				assert.Equal(t, parentsteps.ConfigSourceDir(state.WorkDir), git.cloneAtDir)
-				assert.Equal(t, "tok", git.cloneAtToken, "same host: the pipeline token is used")
+				assert.Equal(t, "tok", git.cloneAtToken, "same origin: the pipeline token is used")
 				assert.Equal(t, git.cloneAtDir, res.Outputs["configSourceDir"])
 			},
 		},
@@ -105,6 +105,30 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
 				state.Bundle.Type = "config"
 				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://evil.example/org/config", CommitSHA: "abc123"}
+			},
+			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, _ parentsteps.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, 1, git.cloneAtCalls)
+				assert.Empty(t, git.cloneAtToken)
+			},
+		},
+		{
+			name: "config source over plain http gets no token",
+			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
+				state.Bundle.Type = "config"
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "http://github.com/owner/config", CommitSHA: "abc123"}
+			},
+			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, _ parentsteps.StepResult, err error) {
+				require.NoError(t, err)
+				assert.Equal(t, 1, git.cloneAtCalls)
+				assert.Empty(t, git.cloneAtToken)
+			},
+		},
+		{
+			name: "config source on another port gets no token",
+			setup: func(state *parentsteps.StepState, _ *mockGitClient) {
+				state.Bundle.Type = "config"
+				state.Bundle.ConfigRef = &v1alpha1.ConfigRef{GitRepo: "https://github.com:8443/owner/config", CommitSHA: "abc123"}
 			},
 			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, _ parentsteps.StepResult, err error) {
 				require.NoError(t, err)
@@ -129,7 +153,7 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 				state.Environment.Layout = "branch"
 			},
 			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, res parentsteps.StepResult, err error) {
-				require.NoError(t, err)
+				assert.ErrorIs(t, err, parentsteps.ErrPermanent)
 				assert.Equal(t, parentsteps.StepFailed, res.Status)
 				assert.Contains(t, res.Message, "layout: branch is not implemented")
 				assert.Equal(t, 0, git.cloneCalls)
@@ -141,7 +165,7 @@ func TestGitCloneStep_Hardening(t *testing.T) {
 				state.Pipeline.Git.Layout = "branch"
 			},
 			check: func(t *testing.T, _ *parentsteps.StepState, git *mockGitClient, res parentsteps.StepResult, err error) {
-				require.NoError(t, err)
+				assert.ErrorIs(t, err, parentsteps.ErrPermanent)
 				assert.Equal(t, parentsteps.StepFailed, res.Status)
 				assert.Equal(t, 0, git.cloneCalls)
 			},
@@ -222,7 +246,7 @@ func TestGitPushStep_Modes(t *testing.T) {
 		{name: "nothing changed: no push", approval: "auto", noChanges: "true", wantStatus: parentsteps.StepSuccess,
 			wantPushes: 0, wantMsg: "nothing to push"},
 		{name: "layout branch: no push", approval: "auto", layout: "branch", wantStatus: parentsteps.StepFailed,
-			wantPushes: 0, wantMsg: "not implemented"},
+			wantErr: true, wantPushes: 0, wantMsg: "not implemented"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -356,6 +380,55 @@ func TestWaitForMergeStep_Transient(t *testing.T) {
 			if tc.wantAfter > 0 {
 				assert.Equal(t, tc.wantAfter, res.RequeueAfter)
 			}
+		})
+	}
+}
+
+// TestWaitForMergeStep_PermanentSCMErrors: a rejected token, a token without
+// access or a missing repository or PR cannot be fixed by polling again, so
+// the step fails at once with a permanent error that says why. Rate limits,
+// 5xx, network errors and an open circuit breaker stay Pending.
+func TestWaitForMergeStep_PermanentSCMErrors(t *testing.T) {
+	apiErr := func(status int, transient bool) error {
+		return fmt.Errorf("get PR status owner/repo#42: %w", &scm.APIError{Provider: "GitHub", Method: "GET",
+			Path: "/repos/owner/repo/pulls/42", StatusCode: status, Body: `{"message":"x"}`, Transient: transient})
+	}
+	tests := []struct {
+		name     string
+		getPRErr error
+		wantMsg  string // empty: the step stays Pending
+	}{
+		{name: "401 token rejected", getPRErr: apiErr(401, false), wantMsg: "HTTP 401: the SCM token was rejected"},
+		{name: "403 token lacks access", getPRErr: apiErr(403, false), wantMsg: "HTTP 403: the SCM token has no access"},
+		{name: "404 not found", getPRErr: apiErr(404, false), wantMsg: "HTTP 404: the repository or PR does not exist"},
+		{name: "410 gone", getPRErr: apiErr(410, false), wantMsg: "HTTP 410: the repository or PR does not exist"},
+		{name: "403 rate limit", getPRErr: apiErr(403, true)},
+		{name: "429", getPRErr: apiErr(429, true)},
+		{name: "500", getPRErr: apiErr(500, true)},
+		{name: "502", getPRErr: apiErr(502, true)},
+		{name: "timeout", getPRErr: fmt.Errorf("execute request: %w", context.DeadlineExceeded)},
+		{name: "circuit open", getPRErr: fmt.Errorf("github scm: %w", &scm.ErrCircuitOpen{RetryAfter: time.Now().Add(time.Minute)})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			state := makeState(t, &mockGitClient{}, &mockSCMProvider{open: true, getPRErr: tc.getPRErr})
+			state.Pipeline.Git.URL = "https://github.com/owner/repo"
+			state.Outputs["prNumber"] = "42"
+
+			res, err := runStep(t, "wait-for-merge", state)
+			if tc.wantMsg == "" {
+				require.NoError(t, err)
+				assert.Equal(t, parentsteps.StepPending, res.Status)
+				assert.Equal(t, 30*time.Second, res.RequeueAfter)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, parentsteps.ErrPermanent)
+			assert.ErrorIs(t, err, tc.getPRErr, "the SCM error stays in the chain")
+			assert.Equal(t, parentsteps.StepFailed, res.Status)
+			assert.Contains(t, res.Message, "PR #42")
+			assert.Contains(t, res.Message, tc.wantMsg)
+			assert.Contains(t, err.Error(), tc.wantMsg)
 		})
 	}
 }

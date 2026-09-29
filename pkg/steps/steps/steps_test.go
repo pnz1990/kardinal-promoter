@@ -812,11 +812,8 @@ func TestConfigMerge_RejectsUnsafeSource(t *testing.T) {
 		mutate  func(s *parentsteps.StepState)
 		wantMsg string
 	}{
-		{"no configSourceDir", func(s *parentsteps.StepState) { delete(s.Outputs, "configSourceDir") }, "configSourceDir not set"},
-		{"source is the work tree", func(s *parentsteps.StepState) { s.Outputs["configSourceDir"] = workDir }, "must not be the working tree"},
-		{"source inside the work tree", func(s *parentsteps.StepState) {
-			s.Outputs["configSourceDir"] = filepath.Join(workDir, "environments")
-		}, "must not be the working tree"},
+		{"config source not checked out", func(s *parentsteps.StepState) { s.WorkDir = filepath.Join(workDir, "environments") },
+			"git-clone must run before config-merge"},
 		{"env path climbs out", func(s *parentsteps.StepState) { s.Environment.Path = "../escape" }, "must stay inside"},
 		{"absolute env path", func(s *parentsteps.StepState) { s.Environment.Path = "/etc" }, "must be relative"},
 		{"env subtree missing in commit", func(s *parentsteps.StepState) { s.Environment.Name = "uat" }, "has no directory environments/uat"},
@@ -848,6 +845,47 @@ func TestConfigMerge_RejectsUnsafeSource(t *testing.T) {
 		_, statErr := os.Lstat(filepath.Join(workDir, "environments", "prod", "leak.yaml"))
 		assert.True(t, os.IsNotExist(statErr))
 	})
+}
+
+// TestConfigMerge_IgnoresStatusSourceDir proves the config source path is
+// derived from the work dir, never read from Outputs["configSourceDir"]:
+// outputs are restored from PromotionStep status, which the step must not
+// trust as a filesystem path (C05-steps-03).
+func TestConfigMerge_IgnoresStatusSourceDir(t *testing.T) {
+	foreign := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(foreign, "environments", "prod"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(foreign, "environments", "prod", "evil.yaml"), []byte("evil: true"), 0o644))
+
+	tests := []struct {
+		name   string
+		output func(workDir string) (string, bool)
+	}{
+		{"output not set", func(string) (string, bool) { return "", false }},
+		{"output points at a foreign directory", func(string) (string, bool) { return foreign, true }},
+		{"output points at the work tree", func(wd string) (string, bool) { return wd, true }},
+		{"output points inside the work tree", func(wd string) (string, bool) { return filepath.Join(wd, "environments"), true }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir, _ := configMergeFixture(t)
+			state := configMergeState(workDir, "")
+			delete(state.Outputs, "configSourceDir")
+			if v, ok := tc.output(workDir); ok {
+				state.Outputs["configSourceDir"] = v
+			}
+			step, err := parentsteps.Lookup("config-merge")
+			require.NoError(t, err)
+			result, execErr := step.Execute(context.Background(), state)
+			require.NoError(t, execErr)
+			assert.Equal(t, parentsteps.StepSuccess, result.Status)
+			assert.Equal(t, "2", result.Outputs["mergedFiles"])
+
+			data, err := os.ReadFile(filepath.Join(workDir, "environments", "prod", "configmap.yaml"))
+			require.NoError(t, err)
+			assert.Contains(t, string(data), "new-value", "copied from ConfigSourceDir(workDir)")
+			assert.NoFileExists(t, filepath.Join(workDir, "environments", "prod", "evil.yaml"))
+		})
+	}
 }
 
 // TestConfigMerge_NoConfigRef verifies that config-merge is a no-op when

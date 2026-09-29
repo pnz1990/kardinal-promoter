@@ -72,21 +72,34 @@ func TestRepoFromURL(t *testing.T) {
 	}
 }
 
-// TestSameHost guards the config-source clone: the pipeline token is only
-// sent to the pipeline's own git host (C05-steps-03, C05-steps-08).
-func TestSameHost(t *testing.T) {
+// TestSameOrigin guards the config-source clone: the pipeline token is only
+// sent to the pipeline's own origin (scheme, host and port), so it is never
+// sent over plain http or to another port (C05-steps-03, C05-steps-08).
+func TestSameOrigin(t *testing.T) {
 	cases := []struct {
+		name string
 		a, b string
 		want bool
 	}{
-		{"https://github.com/o/r", "https://github.com/o/other.git", true},
-		{"https://GitHub.com/o/r", "git@github.com:o/r.git", true},
-		{"https://github.com/o/r", "https://evil.example/o/r", false},
-		{"https://github.com/o/r", "", false},
-		{"", "", false},
+		{"same https host", "https://github.com/o/r", "https://github.com/o/other.git", true},
+		{"host is case-insensitive", "https://GitHub.com/o/r", "https://github.com/o/r", true},
+		{"default port is explicit", "https://github.com/o/r", "https://github.com:443/o/r", true},
+		{"userinfo is ignored", "https://github.com/o/r", "https://x-access-token@github.com/o/r", true},
+		{"same http origin", "http://gitea.local:3000/o/r", "http://gitea.local:3000/o/c", true},
+		{"https to http downgrade", "https://github.com/o/r", "http://github.com/o/r", false},
+		{"http to https", "http://github.com/o/r", "https://github.com/o/r", false},
+		{"other port", "https://github.com/o/r", "https://github.com:8443/o/r", false},
+		{"ssh remote", "https://github.com/o/r", "git@github.com:o/r.git", false},
+		{"ssh scheme", "https://github.com/o/r", "ssh://git@github.com/o/r.git", false},
+		{"other host", "https://github.com/o/r", "https://evil.example/o/r", false},
+		{"suffix host", "https://github.com/o/r", "https://github.com.evil.example/o/r", false},
+		{"empty", "https://github.com/o/r", "", false},
+		{"both empty", "", "", false},
 	}
 	for _, tc := range cases {
-		assert.Equal(t, tc.want, scm.SameHost(tc.a, tc.b), "%q vs %q", tc.a, tc.b)
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, scm.SameOrigin(tc.a, tc.b), "%q vs %q", tc.a, tc.b)
+		})
 	}
 }
 

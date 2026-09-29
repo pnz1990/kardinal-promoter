@@ -113,10 +113,25 @@ func TestKustomizeSetImage_Matching(t *testing.T) {
 			want:    "images:\n- name: ghcr.io/myorg/myapp\n  newTag: v2\n",
 		},
 		{
-			name:    "short-name placeholder gets newName",
+			name:    "short-name placeholder gets newName and a full-name entry is added",
 			initial: "images:\n- name: myapp\n  newTag: v1\n",
 			images:  []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/myapp", Tag: "v2"}},
-			want:    "images:\n- name: myapp\n  newTag: v2\n  newName: ghcr.io/myorg/myapp\n",
+			want:    "images:\n- name: myapp\n  newTag: v2\n  newName: ghcr.io/myorg/myapp\n- name: ghcr.io/myorg/myapp\n  newTag: v2\n",
+		},
+		{
+			name:    "legacy kardinal entry is kept and a full-name entry is added",
+			initial: "images:\n- name: myapp\n  newName: ghcr.io/myorg/myapp\n  newTag: v1\n",
+			images:  []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/myapp", Tag: "v2"}},
+			want:    "images:\n- name: myapp\n  newName: ghcr.io/myorg/myapp\n  newTag: v2\n- name: ghcr.io/myorg/myapp\n  newTag: v2\n",
+		},
+		{
+			name:    "short-name entry shared by two Bundle images is left alone",
+			initial: "images:\n- name: app\n  newTag: v1\n",
+			images: []v1alpha1.ImageRef{
+				{Repository: "ghcr.io/a/app", Tag: "1"},
+				{Repository: "ghcr.io/b/app", Tag: "2"},
+			},
+			want: "images:\n- name: app\n  newTag: v1\n- name: ghcr.io/a/app\n  newTag: \"1\"\n- name: ghcr.io/b/app\n  newTag: \"2\"\n",
 		},
 		{
 			name:    "same short name, two repositories",

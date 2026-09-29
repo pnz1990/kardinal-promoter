@@ -15,7 +15,9 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -32,8 +34,11 @@ const scmRetryInterval = 30 * time.Second
 
 // waitForMergeStep polls the SCM provider to check if the PR has been merged.
 // It returns StepPending until the PR is merged, and StepSuccess once merged.
-// An SCM API error (a 5xx, a rate limit) is transient: the step stays Pending
-// and is retried after scmRetryInterval.
+// An SCM API error (a 5xx, a rate limit, a network error) is transient: the
+// step stays Pending and is retried after scmRetryInterval. A rejected token
+// (401), a token without access (403) or a missing repository or PR (404,
+// 410) cannot be fixed by polling, so the step fails with a permanent error
+// that names the cause.
 // It is idempotent: re-running after a crash rechecks the PR status.
 type waitForMergeStep struct{}
 
@@ -64,6 +69,11 @@ func (s *waitForMergeStep) Execute(ctx context.Context, state *parentsteps.StepS
 	}
 
 	merged, open, err := state.SCM.GetPRStatus(ctx, repo, prNum)
+	if err != nil && scm.IsPermanentError(err) {
+		msg := fmt.Sprintf("PR #%d: get PR status failed: %s", prNum, permanentSCMReason(err))
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("%s: %v", msg, err)},
+			parentsteps.Permanent(fmt.Errorf("wait-for-merge: %s: %w", msg, err))
+	}
 	if err != nil {
 		return parentsteps.StepResult{
 			Status:       parentsteps.StepPending,
@@ -91,4 +101,21 @@ func (s *waitForMergeStep) Execute(ctx context.Context, state *parentsteps.StepS
 		Status:  parentsteps.StepPending,
 		Message: fmt.Sprintf("PR #%d is open, waiting for merge", prNum),
 	}, nil
+}
+
+// permanentSCMReason explains a permanent SCM API error (scm.IsPermanentError)
+// in terms of what the user has to fix.
+func permanentSCMReason(err error) string {
+	var apiErr *scm.APIError
+	if !errors.As(err, &apiErr) {
+		return "permanent SCM error"
+	}
+	switch apiErr.StatusCode {
+	case http.StatusUnauthorized:
+		return "HTTP 401: the SCM token was rejected; check the token in the SCM Secret"
+	case http.StatusForbidden:
+		return "HTTP 403: the SCM token has no access to the repository or its pull requests"
+	default:
+		return fmt.Sprintf("HTTP %d: the repository or PR does not exist, or the SCM token cannot see it", apiErr.StatusCode)
+	}
 }

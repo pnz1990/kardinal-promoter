@@ -16,6 +16,7 @@ package steps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -61,13 +62,14 @@ const argoCDPRReviewRejected = "argocd-set-image: update.strategy argocd patches
 func (s *argoCDSetImageStep) Name() string { return "argocd-set-image" }
 
 func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.StepState) (parentsteps.StepResult, error) {
+	// A spec the strategy refuses is a permanent error: retrying cannot fix it.
 	if state.Environment.Approval == "pr-review" {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: argoCDPRReviewRejected},
-			fmt.Errorf("%s", argoCDPRReviewRejected)
+			parentsteps.Permanent(errors.New(argoCDPRReviewRejected))
 	}
 	if state.Bundle.Type == "config" {
 		msg := "argocd-set-image: config Bundles are not supported by update.strategy argocd"
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, fmt.Errorf("%s", msg)
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
 	}
 	// O4: K8sClient is required.
 	if state.K8sClient == nil {
@@ -89,7 +91,7 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepFailed,
 			Message: "argocd-set-image: argocd.application input is required",
-		}, fmt.Errorf("argocd-set-image: argocd.application input is required")
+		}, parentsteps.Permanent(fmt.Errorf("argocd-set-image: argocd.application input is required"))
 	}
 
 	namespace := state.Inputs["argocd.namespace"]

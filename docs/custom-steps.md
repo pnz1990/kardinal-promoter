@@ -118,15 +118,24 @@ If `steps:` is not set, the default sequence is used (see
 | `git-commit` | Commit changes to a promotion branch |
 | `git-push` | Push the promotion branch |
 | `open-pr` | Open a pull request |
-| `wait-for-merge` | Poll until the PR is merged |
+| `wait-for-merge` | Poll until the PR is merged; fails at once if the SCM API rejects the token (401), denies access (403) or cannot find the PR (404) |
 | `health-check` | Marks the end of the sequence; the PromotionStep reconciler then checks health with the configured adapter |
 
-`kustomize-set-image` writes a new `images` entry with the full repository as
-`name` (for example `ghcr.io/org/app`), because kustomize matches `name` against the
-full image in the manifests. It updates an existing entry whose `name` or `newName`
-is the repository. An older entry that uses the short name (`name: app`) is still
-updated when it is the only one with that name and has no `newName`; kustomize applies
-such an entry only if the manifests also use the short image name.
+kustomize matches an `images` entry on its `name` only, against the image name in
+the manifests. So `kustomize-set-image` always writes, or updates, an entry whose
+`name` is the full repository (for example `name: ghcr.io/org/app`), as
+`kustomize edit set image` does. That entry rewrites manifests that use
+`image: ghcr.io/org/app`.
+
+Entries that point at the repository under another name get the same tag or digest,
+so manifests that use that name keep promoting:
+
+- an entry whose `newName` is the repository (for example `name: app`,
+  `newName: ghcr.io/org/app`, as older kardinal versions wrote it);
+- an older short-name entry (`name: app`, no `newName`), when only one Bundle image
+  has that short name. It also gets `newName: ghcr.io/org/app`.
+
+A short-name entry whose `newName` points at another repository is left alone.
 
 ## Authentication
 

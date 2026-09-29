@@ -15,6 +15,7 @@ package steps
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,11 +29,13 @@ import (
 // The path must stay inside the checkout: absolute paths and paths that climb
 // out with ".." are rejected (C05-steps-13). Symlinks are handled by opening
 // the checkout with openCheckout and doing all file IO through the os.Root.
+// Every error is permanent (parentsteps.Permanent): it comes from the
+// Pipeline spec, so retrying cannot fix it.
 func envSubdir(state *parentsteps.StepState) (string, error) {
 	p := state.Environment.Path
 	if p == "" {
 		if state.Environment.Name == "" {
-			return "", fmt.Errorf("environment has no name and no path")
+			return "", parentsteps.Permanent(fmt.Errorf("environment has no name and no path"))
 		}
 		p = filepath.Join("environments", state.Environment.Name)
 	}
@@ -44,19 +47,59 @@ func envSubdir(state *parentsteps.StepState) (string, error) {
 }
 
 // confinedRel cleans p and returns it when it is a relative path that stays
-// inside its root.
+// inside its root. A rejected path is a permanent error.
 func confinedRel(p string) (string, error) {
 	if p == "" {
-		return "", fmt.Errorf("path is empty")
+		return "", parentsteps.Permanent(fmt.Errorf("path is empty"))
 	}
 	if filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`) {
-		return "", fmt.Errorf("path %q must be relative to the repository root", p)
+		return "", parentsteps.Permanent(fmt.Errorf("path %q must be relative to the repository root", p))
 	}
 	c := filepath.Clean(filepath.FromSlash(p))
 	if c == ".." || strings.HasPrefix(c, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q must stay inside the repository", p)
+		return "", parentsteps.Permanent(fmt.Errorf("path %q must stay inside the repository", p))
 	}
 	return c, nil
+}
+
+// rootEscapeMessage is the message of the error an os.Root returns for a path
+// that leaves the root, for example through a symlink. The os package does
+// not export that error value.
+const rootEscapeMessage = "path escapes from parent"
+
+// permanentIfEscape marks err permanent when an os.Root refused a path that
+// leaves the checkout: the repository content makes the step escape, so
+// retrying cannot fix it. Any other error is returned unchanged.
+func permanentIfEscape(err error) error {
+	if isRootEscape(err) {
+		return parentsteps.Permanent(err)
+	}
+	return err
+}
+
+// isRootEscape reports whether err's chain holds an *fs.PathError for a path
+// an os.Root refused. The refusal can be nested, as in
+// "mkdirat a: statat a: path escapes from parent".
+func isRootEscape(err error) bool {
+	for err != nil {
+		if pathErr, ok := err.(*fs.PathError); ok && pathErr.Err != nil && pathErr.Err.Error() == rootEscapeMessage {
+			return true
+		}
+		switch u := err.(type) {
+		case interface{ Unwrap() []error }:
+			for _, e := range u.Unwrap() {
+				if isRootEscape(e) {
+					return true
+				}
+			}
+			return false
+		case interface{ Unwrap() error }:
+			err = u.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // openCheckout opens the git working directory as an os.Root. Every read and

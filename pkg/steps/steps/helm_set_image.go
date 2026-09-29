@@ -51,7 +51,7 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 	}
 	fail := func(err error) (parentsteps.StepResult, error) {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("helm-set-image: %v", err)},
-			fmt.Errorf("helm-set-image: %w", err)
+			permanentIfEscape(fmt.Errorf("helm-set-image: %w", err))
 	}
 
 	valuesFile := "values.yaml"
@@ -65,14 +65,15 @@ func (s *helmSetImageStep) Execute(_ context.Context, state *parentsteps.StepSta
 		}
 	}
 
+	// A Bundle or template the step cannot express is refused for good.
 	value, err := helmImageValue(state.Bundle.Images)
 	if err != nil {
-		return fail(err)
+		return fail(parentsteps.Permanent(err))
 	}
 	keys := strings.Split(strings.TrimPrefix(pathTemplate, "."), ".")
 	for _, k := range keys {
 		if k == "" {
-			return fail(fmt.Errorf("invalid imagePathTemplate %q", pathTemplate))
+			return fail(parentsteps.Permanent(fmt.Errorf("invalid imagePathTemplate %q", pathTemplate)))
 		}
 	}
 

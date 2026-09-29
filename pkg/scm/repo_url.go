@@ -118,12 +118,34 @@ func RepoFromURL(raw string) (string, error) {
 	return strings.Join(segs, "/"), nil
 }
 
-// SameHost reports whether two git remote URLs point at the same host. It is
-// used to decide whether a credential for one URL may be sent to the other.
-func SameHost(a, b string) bool {
-	ha, _, errA := splitRemoteURL(a)
-	hb, _, errB := splitRemoteURL(b)
-	return errA == nil && errB == nil && ha != "" && ha == hb
+// SameOrigin reports whether two http(s) git remote URLs have the same
+// origin: scheme, host and port (default ports made explicit). It decides
+// whether the credential for a may be sent to b, so a token for an https
+// remote is never sent over plain http or to another port. ssh and scp-like
+// remotes never match: the token is only used for http(s) basic auth.
+func SameOrigin(a, b string) bool {
+	oa, okA := httpOrigin(a)
+	ob, okB := httpOrigin(b)
+	return okA && okB && oa == ob
+}
+
+// httpOrigin returns "scheme://host:port" for an http or https URL.
+func httpOrigin(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	switch {
+	case scheme == "https" && port == "":
+		port = "443"
+	case scheme == "http" && port == "":
+		port = "80"
+	case scheme != "https" && scheme != "http":
+		return "", false
+	}
+	return scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port, true
 }
 
 // prURLMarkers are the PR path markers of the supported providers, most

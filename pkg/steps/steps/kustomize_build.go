@@ -82,7 +82,7 @@ func (s *kustomizeBuildStep) Execute(ctx context.Context, state *parentsteps.Ste
 	}
 	outputName := fmt.Sprintf("rendered-%s.yaml", state.Environment.Name)
 	if _, err := confinedRel(outputName); err != nil || strings.ContainsAny(state.Environment.Name, `/\`) {
-		err = fmt.Errorf("environment name %q is not a valid file name", state.Environment.Name)
+		err = parentsteps.Permanent(fmt.Errorf("environment name %q is not a valid file name", state.Environment.Name))
 		return fail(err.Error(), err)
 	}
 
@@ -118,7 +118,7 @@ func confinedRealPath(root, rel string) (string, error) {
 	}
 	r, err := filepath.Rel(realRoot, real)
 	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("environment path %s resolves outside the repository", filepath.ToSlash(rel))
+		return "", parentsteps.Permanent(fmt.Errorf("environment path %s resolves outside the repository", filepath.ToSlash(rel)))
 	}
 	return real, nil
 }

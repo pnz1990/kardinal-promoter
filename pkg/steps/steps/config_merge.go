@@ -15,12 +15,12 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
@@ -32,8 +32,10 @@ func init() {
 // configMergeStep applies a config Bundle's configRef commit to the
 // environment directory.
 //
-// git-clone checks the configRef commit out into a directory next to the
-// working tree and sets Outputs["configSourceDir"]. config-merge copies only
+// git-clone checks the configRef commit out into
+// parentsteps.ConfigSourceDir(WorkDir), a directory next to the working tree.
+// config-merge reads it from that same derived path, never from
+// Outputs["configSourceDir"] (which is informational). It copies only
 // the environment's own subtree (environments[].path, or
 // environments/<name>) from that commit over the same path in the working
 // tree. .git and everything outside the subtree are never copied, so the
@@ -52,42 +54,50 @@ func (s *configMergeStep) Execute(_ context.Context, state *parentsteps.StepStat
 			Message: "no config ref — nothing to merge",
 		}, nil
 	}
+	// fail refuses the promotion for good (parentsteps.Permanent): an unsafe
+	// environment path, or a config source that is missing or has no
+	// directory for this environment, does not change on retry.
 	fail := func(format string, args ...any) (parentsteps.StepResult, error) {
 		msg := fmt.Sprintf(format, args...)
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg},
-			fmt.Errorf("config-merge: %s", msg)
+			parentsteps.Permanent(fmt.Errorf("config-merge: %s", msg))
+	}
+	// ioFail reports a file system error, which is retried unless the checkout
+	// refused a path that escapes it.
+	ioFail := func(what string, err error) (parentsteps.StepResult, error) {
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("%s: %v", what, err)},
+			permanentIfEscape(fmt.Errorf("config-merge: %s: %w", what, err))
 	}
 
-	srcDir := state.Outputs["configSourceDir"]
-	if srcDir == "" {
-		return fail("configSourceDir not set: git-clone must run before config-merge to check out the configRef commit")
-	}
-	if rel, err := filepath.Rel(filepath.Clean(state.WorkDir), filepath.Clean(srcDir)); err != nil ||
-		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-		return fail("config source %s must not be the working tree or inside it", srcDir)
-	}
 	envRel, err := envSubdir(state)
 	if err != nil {
 		return fail("%v", err)
 	}
-
-	src, err := os.OpenRoot(srcDir)
-	if err != nil {
-		return fail("open config source: %v", err)
-	}
-	defer func() { _ = src.Close() }()
 	dst, err := openCheckout(state)
 	if err != nil {
-		return fail("%v", err)
+		return ioFail("open checkout", err)
 	}
 	defer func() { _ = dst.Close() }()
+
+	// The source path is derived from the work dir, never read from
+	// Outputs["configSourceDir"]: outputs are restored from PromotionStep
+	// status, which is not trusted as a filesystem path.
+	srcDir := parentsteps.ConfigSourceDir(state.WorkDir)
+	src, err := os.OpenRoot(srcDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fail("config source not checked out at %s: git-clone must run before config-merge to check out the configRef commit", srcDir)
+	}
+	if err != nil {
+		return ioFail("open config source", err)
+	}
+	defer func() { _ = src.Close() }()
 
 	fsRel := filepath.ToSlash(envRel)
 	if info, statErr := src.Stat(envRel); statErr != nil || !info.IsDir() {
 		return fail("config commit %s has no directory %s", shortSHA(state.Bundle.ConfigRef.CommitSHA), fsRel)
 	}
 	if err := dst.MkdirAll(envRel, 0o755); err != nil {
-		return fail("mkdir %s: %v", fsRel, err)
+		return ioFail("mkdir "+fsRel, err)
 	}
 
 	var merged, skipped int
@@ -116,7 +126,7 @@ func (s *configMergeStep) Execute(_ context.Context, state *parentsteps.StepStat
 		return nil
 	})
 	if walkErr != nil {
-		return fail("copy %s: %v", path.Clean(fsRel), walkErr)
+		return ioFail("copy "+path.Clean(fsRel), walkErr)
 	}
 
 	msg := fmt.Sprintf("merged %d files into %s from config commit %s", merged, fsRel, shortSHA(state.Bundle.ConfigRef.CommitSHA))

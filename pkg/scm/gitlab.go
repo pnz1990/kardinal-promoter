@@ -278,7 +278,7 @@ func (g *GitLabProvider) do(ctx context.Context, method, path string, body, resu
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		g.circuit.RecordResponse(resp)
-		return fmt.Errorf("GitLab API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
+		return newAPIError("GitLab", method, path, resp, raw)
 	}
 
 	g.circuit.RecordSuccess()

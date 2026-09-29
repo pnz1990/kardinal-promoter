@@ -389,7 +389,7 @@ func (f *ForgejoProvider) do(ctx context.Context, method, path string, body, res
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
 		f.circuit.RecordResponse(resp)
-		return fmt.Errorf("forgejo API %s %s: status %d: %s", method, path, resp.StatusCode, string(raw))
+		return newAPIError("forgejo", method, path, resp, raw)
 	}
 
 	f.circuit.RecordSuccess()

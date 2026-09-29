@@ -17,6 +17,7 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -63,7 +64,8 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: "WorkDir not set"}, nil
 	}
 	if layoutBranch(state) {
-		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: layoutBranchNotImplemented}, nil
+		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: layoutBranchNotImplemented},
+			parentsteps.Permanent(errors.New(layoutBranchNotImplemented))
 	}
 
 	repoURL := scm.RedactURL(state.Git.URL)
@@ -89,9 +91,10 @@ func (s *gitCloneStep) Execute(ctx context.Context, state *parentsteps.StepState
 			return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("clean config source dir: %v", err)},
 				fmt.Errorf("git-clone: clean config source dir: %w", err)
 		}
-		// Only send the pipeline token to the host it belongs to.
+		// Only send the pipeline token to the origin (scheme, host and port)
+		// it belongs to: never over plain http or to another port.
 		srcToken := ""
-		if scm.SameHost(srcURL, state.Git.URL) {
+		if scm.SameOrigin(state.Git.URL, srcURL) {
 			srcToken = state.Git.Token
 		}
 		if err := state.GitClient.CloneAt(ctx, srcURL, ref.CommitSHA, srcDir, srcToken); err != nil {

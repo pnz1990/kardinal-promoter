@@ -44,12 +44,16 @@ func init() {
 //	  newTag: v1.2.3                 # tag override
 //	  digest: sha256:abc123          # digest override (takes precedence over tag)
 //
-// kustomize matches `name` against the full image name in the manifests, so a
-// new entry is written with the full repository as `name`, exactly as
-// `kustomize edit set image` does. An existing entry is updated when its
-// `name` or `newName` is the repository, or, when neither exists, when it is
-// the only entry whose `name` is the repository's short name (C05-steps-09,
-// C05-steps-15).
+// kustomize matches an entry on `name` only, against the image name in the
+// manifests. So for every Bundle image the step always writes (or updates) an
+// entry whose `name` is the full repository, as `kustomize edit set image`
+// does; that is the entry that rewrites manifests using `image: <repository>`.
+// Entries that alias the repository are updated with the same tag or digest
+// too, so manifests that use their name keep promoting: an entry whose
+// `newName` is the repository, and an older short-name entry (`name: app`, no
+// `newName`) when exactly one Bundle image has that short name. The latter
+// gets `newName: <repository>`. A short-name entry whose `newName` points at
+// another repository is left alone (C05-steps-09, C05-steps-15).
 //
 // The file is edited through the YAML node API, so comments and key order are
 // kept (C05-steps-31). kustomization.yaml, kustomization.yml and Kustomization
@@ -65,7 +69,7 @@ func (s *kustomizeSetImageStep) Execute(_ context.Context, state *parentsteps.St
 
 	fail := func(err error) (parentsteps.StepResult, error) {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("kustomize-set-image: %v", err)},
-			fmt.Errorf("kustomize-set-image: %w", err)
+			permanentIfEscape(fmt.Errorf("kustomize-set-image: %w", err))
 	}
 	envRel, err := envSubdir(state)
 	if err != nil {
@@ -139,6 +143,13 @@ func setImagesInKustomization(root *os.Root, dir string, images []v1alpha1.Image
 		return "", 0, fmt.Errorf("%s: images is not a list", filepath.ToSlash(file))
 	}
 
+	shortNames := map[string]int{}
+	for _, img := range images {
+		if img.Repository != "" {
+			shortNames[imageShortName(img.Repository)]++
+		}
+	}
+
 	updated := 0
 	for _, img := range images {
 		if img.Repository == "" {
@@ -147,16 +158,20 @@ func setImagesInKustomization(root *os.Root, dir string, images []v1alpha1.Image
 		if img.Tag == "" && img.Digest == "" {
 			return "", 0, fmt.Errorf("image %s has neither a tag nor a digest", img.Repository)
 		}
-		entry := findImageEntry(list, img.Repository)
-		if entry == nil {
-			entry = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-			setMapScalar(entry, "name", img.Repository)
-			list.Content = append(list.Content, entry)
-		} else if scalarValue(entry, "name") != img.Repository {
-			setMapScalar(entry, "newName", img.Repository)
+		aliases := imageAliasEntries(list, img.Repository, shortNames[imageShortName(img.Repository)] == 1)
+		full := imageEntryByName(list, img.Repository)
+		if full == nil {
+			full = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			setMapScalar(full, "name", img.Repository)
+			list.Content = append(list.Content, full)
 		}
-		setOrDelete(entry, "newTag", img.Tag)
-		setOrDelete(entry, "digest", img.Digest)
+		for _, entry := range append(aliases, full) {
+			if entry != full && scalarValue(entry, "newName") == "" {
+				setMapScalar(entry, "newName", img.Repository)
+			}
+			setOrDelete(entry, "newTag", img.Tag)
+			setOrDelete(entry, "digest", img.Digest)
+		}
 		updated++
 	}
 	if updated == 0 {
@@ -173,32 +188,38 @@ func setImagesInKustomization(root *os.Root, dir string, images []v1alpha1.Image
 	return file, updated, nil
 }
 
-// findImageEntry returns the images entry to update for repository: one whose
-// name or newName is the repository, else the only entry whose name is the
-// repository's short name and that does not already point elsewhere. It
-// returns nil when a new entry must be added.
-func findImageEntry(list *yaml.Node, repository string) *yaml.Node {
+// imageEntryByName returns the images entry whose name is repository, or nil.
+func imageEntryByName(list *yaml.Node, repository string) *yaml.Node {
 	for _, e := range list.Content {
-		if e.Kind == yaml.MappingNode &&
-			(scalarValue(e, "name") == repository || scalarValue(e, "newName") == repository) {
+		if e.Kind == yaml.MappingNode && scalarValue(e, "name") == repository {
 			return e
 		}
 	}
+	return nil
+}
+
+// imageAliasEntries returns the entries, other than the full-name one, that
+// resolve to repository: those whose newName is the repository and, when
+// shortUnique, those whose name is the repository's short name and that have
+// no newName. kustomize applies them to manifests that use their name.
+func imageAliasEntries(list *yaml.Node, repository string, shortUnique bool) []*yaml.Node {
 	short := imageShortName(repository)
-	if short == repository {
-		return nil
-	}
-	var match *yaml.Node
+	var out []*yaml.Node
 	for _, e := range list.Content {
-		if e.Kind != yaml.MappingNode || scalarValue(e, "name") != short || scalarValue(e, "newName") != "" {
+		if e.Kind != yaml.MappingNode {
 			continue
 		}
-		if match != nil {
-			return nil // ambiguous: add a full-name entry instead
+		name, newName := scalarValue(e, "name"), scalarValue(e, "newName")
+		switch {
+		case name == repository:
+			// The full-name entry, handled by the caller.
+		case newName == repository:
+			out = append(out, e)
+		case shortUnique && short != repository && name == short && newName == "":
+			out = append(out, e)
 		}
-		match = e
 	}
-	return match
+	return out
 }
 
 // setOrDelete sets key to value, or removes key when value is empty.
