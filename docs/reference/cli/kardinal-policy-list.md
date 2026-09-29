@@ -21,7 +21,7 @@ kardinal policy list [flags]
 ```
   -h, --help                        help for list
       --pipeline string             Show only the gates attached to this pipeline
-      --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces takes precedence (default [platform-policies])
+      --policy-namespaces strings   Namespaces the controller reads org PolicyGates from (its --policy-namespaces flag); a Pipeline's spec.policyNamespaces and its own namespace are read as well (default [platform-policies])
 ```
 
 ### Options inherited from parent commands

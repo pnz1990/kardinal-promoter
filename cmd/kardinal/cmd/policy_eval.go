@@ -142,14 +142,16 @@ func celSyntaxCheck(ctx context.Context, expr string) (string, bool, error) {
 
 // gatesForEnv builds the Graph the controller would build for bundle and returns
 // the PolicyGate instances it stamps for env, and the environments promoted
-// before env (its upstream path).
+// before env (its upstream path). policyNS is the controller's
+// --policy-namespaces list: only skip-permission gates there let a Bundle skip
+// an org-gated environment, as in the controller.
 func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
-	templates []v1alpha1.PolicyGate, env string) ([]v1alpha1.PolicyGate, []string, error) {
+	templates []v1alpha1.PolicyGate, policyNS []string, env string) ([]v1alpha1.PolicyGate, []string, error) {
 	// Target env so the Graph holds exactly env and the environments before it.
 	targeted := bundle.DeepCopy()
 	targeted.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: env}
 	res, err := graph.NewBuilder().Build(graph.BuildInput{
-		Pipeline: pipe, Bundle: targeted, PolicyGates: templates,
+		Pipeline: pipe, Bundle: targeted, PolicyGates: templates, PolicyNamespaces: policyNS,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("build graph: %w", err)
