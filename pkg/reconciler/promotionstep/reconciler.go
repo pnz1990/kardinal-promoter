@@ -263,6 +263,9 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
+	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
+	}
 
 	// K-02: Check pre-deploy gates before starting any git operations.
 	// Required gates are listed in ps.Spec.RequiredGates (set by the Graph controller).
@@ -344,6 +347,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
+	}
+	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
 	}
 	bundle, err := r.loadBundle(ctx, ps)
 	if err != nil {
@@ -902,7 +908,8 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 // Called when health fails with policy=fail-on-alarm (from handleBake) or
 // when health fails without bake and onHealthFailure is configured.
 //
-// "rollback": creates a rollback Bundle, transitions step to RollingBack.
+// "rollback": creates a rollback Bundle to the Bundle verified before this one
+// and transitions step to RollingBack; AbortedByAlarm when there is none.
 // "abort":    transitions step to AbortedByAlarm (human intervention required).
 // "none":     transitions step to Failed (existing behavior).
 //
@@ -917,7 +924,7 @@ func (r *Reconciler) applyHealthFailurePolicy(
 	adapterName, reason string,
 	patch client.Patch,
 ) (ctrl.Result, error) {
-	_ = pipeline // reserved for future use (finding previous bundle version)
+	_ = pipeline // createAutoRollback reads the environment history itself
 
 	switch env.OnHealthFailure {
 	case "abort":
@@ -932,19 +939,33 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		return ctrl.Result{}, nil
 
 	case "rollback":
-		// Create a rollback Bundle at the previous version.
-		// The rollback Bundle travels the full pipeline, restoring the prior state.
-		rollbackBundle := r.buildRollbackBundle(ps)
-		if createErr := r.Create(ctx, rollbackBundle); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
-			return ctrl.Result{}, fmt.Errorf("create rollback bundle: %w", createErr)
+		// Roll the environment back to the Bundle verified before the failing
+		// one (createAutoRollback, the planner the CLI and UI use). The rollback
+		// Bundle targets only this environment. RollingBack is terminal for this
+		// step: the rollback Bundle carries the environment from here.
+		rollbackName, refusal, rbErr := r.createAutoRollback(ctx, ps)
+		if rbErr != nil {
+			return ctrl.Result{}, rbErr
+		}
+		if refusal != nil {
+			ps.Status.State = StateAbortedByAlarm
+			ps.Status.Message = fmt.Sprintf(
+				"health alarm via %s (onHealthFailure=rollback): %s — no automatic rollback (%v); human intervention required",
+				adapterName, reason, refusal)
+			log.Warn().Err(refusal).Str("env", ps.Spec.Environment).
+				Msg("health failure: nothing safe to roll back to, AbortedByAlarm")
+			if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("patch abort (no rollback target): %w", patchErr)
+			}
+			return ctrl.Result{}, nil
 		}
 		ps.Status.State = StateRollingBack
 		ps.Status.Message = fmt.Sprintf(
 			"health alarm via %s (onHealthFailure=rollback): rollback Bundle %s created",
-			adapterName, rollbackBundle.Name)
+			adapterName, rollbackName)
 		log.Info().
 			Str("env", ps.Spec.Environment).
-			Str("rollbackBundle", rollbackBundle.Name).
+			Str("rollbackBundle", rollbackName).
 			Msg("health failure: rollback Bundle created, state=RollingBack")
 		if patchErr := r.Status().Patch(ctx, ps, patch); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch rolling-back: %w", patchErr)
@@ -952,7 +973,7 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		// Audit: rollback started.
 		writeAuditEvent(ctx, r.Client, ps,
 			AuditActionRollbackStarted, AuditOutcomePending,
-			fmt.Sprintf("health alarm via %s: rollback Bundle %s created", adapterName, rollbackBundle.Name))
+			fmt.Sprintf("health alarm via %s: rollback Bundle %s created", adapterName, rollbackName))
 		return ctrl.Result{}, nil
 
 	default: // "none" or unset
@@ -965,29 +986,6 @@ func (r *Reconciler) applyHealthFailurePolicy(
 		}
 		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		return ctrl.Result{}, nil
-	}
-}
-
-// buildRollbackBundle creates a rollback Bundle for K-03.
-// The bundle is annotated with the original bundle name for audit trail.
-func (r *Reconciler) buildRollbackBundle(ps *v1alpha1.PromotionStep) *v1alpha1.Bundle {
-	rollbackName := ps.Spec.BundleName + "-rollback-alarm"
-	return &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rollbackName,
-			Namespace: ps.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/rollback": "true",
-				"kardinal.io/reason":   "AutoRollback",
-			},
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     "image",
-			Pipeline: ps.Spec.PipelineName,
-			Provenance: &v1alpha1.BundleProvenance{
-				RollbackOf: ps.Spec.BundleName,
-			},
-		},
 	}
 }
 
