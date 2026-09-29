@@ -74,8 +74,8 @@ spec:
                       type: string
                     autoRollback:
                       description: |-
-                        AutoRollback configures automatic rollback when health checks fail repeatedly.
-                        When not set, automatic rollback is disabled.
+                        AutoRollback is reserved and rejected by the API server: consecutive-failure
+                        auto-rollback is not implemented. See OnHealthFailure.
                       properties:
                         failureThreshold:
                           default: 3
@@ -408,6 +408,11 @@ spec:
                   required:
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: environments[].autoRollback is not implemented; remove
+                      it (automatic rollback is configured with onHealthFailure, see
+                      docs/rollback.md)
+                    rule: '!has(self.autoRollback)'
                 minItems: 1
                 type: array
               git:

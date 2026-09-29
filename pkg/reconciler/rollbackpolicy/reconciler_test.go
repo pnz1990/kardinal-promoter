@@ -63,8 +63,14 @@ func makeRollbackPolicy(name, pipelineName, environment, bundleRef string, thres
 	}
 }
 
-// makePromotionStep creates a PromotionStep with the given health failure count.
+// makePromotionStep creates a PromotionStep of bundle-1 with the given health failure count.
 func makePromotionStep(name, pipelineName, environment string, failures int) *v1alpha1.PromotionStep {
+	return makeBundleStep(name, pipelineName, environment, "bundle-1", failures)
+}
+
+// makeBundleStep creates a PromotionStep for the given Bundle, labelled the way
+// the Graph builder labels it (pipeline, bundle, environment).
+func makeBundleStep(name, pipelineName, environment, bundleName string, failures int) *v1alpha1.PromotionStep {
 	return &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -72,11 +78,12 @@ func makePromotionStep(name, pipelineName, environment string, failures int) *v1
 			Labels: map[string]string{
 				"kardinal.io/pipeline":    pipelineName,
 				"kardinal.io/environment": environment,
+				"kardinal.io/bundle":      bundleName,
 			},
 		},
 		Spec: v1alpha1.PromotionStepSpec{
 			PipelineName: pipelineName,
-			BundleName:   "bundle-1",
+			BundleName:   bundleName,
 			Environment:  environment,
 			StepType:     "health-check",
 		},
@@ -319,4 +326,71 @@ func TestReconciler_DefaultThreshold(t *testing.T) {
 	var updated v1alpha1.RollbackPolicy
 	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &updated))
 	assert.True(t, updated.Status.ShouldRollback, "default threshold of 3 should trigger at 3 failures")
+}
+
+// TestReconciler_ReadsStepsOfBundleRef verifies that the policy reads only the
+// PromotionSteps of spec.bundleRef (C04-gates-05). Before the fix it used
+// Items[0] of every step in the pipeline and environment, so an older Bundle's
+// failing step could roll back a healthy Bundle, or hide a failing one.
+func TestReconciler_ReadsStepsOfBundleRef(t *testing.T) {
+	tests := []struct {
+		name         string
+		steps        []*v1alpha1.PromotionStep
+		wantFailures int
+		wantRollback bool
+		wantRequeue  bool
+	}{
+		{
+			name: "old bundle failing, bundleRef healthy: no rollback",
+			steps: []*v1alpha1.PromotionStep{
+				makeBundleStep("a-old", "nginx-demo", "prod", "bundle-0", 5),
+				makeBundleStep("b-new", "nginx-demo", "prod", "bundle-1", 0),
+			},
+			wantFailures: 0,
+		},
+		{
+			name: "old bundle healthy, bundleRef failing: rollback",
+			steps: []*v1alpha1.PromotionStep{
+				makeBundleStep("a-old", "nginx-demo", "prod", "bundle-0", 0),
+				makeBundleStep("b-new", "nginx-demo", "prod", "bundle-1", 3),
+			},
+			wantFailures: 3,
+			wantRollback: true,
+		},
+		{
+			name: "multi-region: the worst region counts",
+			steps: []*v1alpha1.PromotionStep{
+				makeBundleStep("b-new-eu", "nginx-demo", "prod", "bundle-1", 1),
+				makeBundleStep("b-new-us", "nginx-demo", "prod", "bundle-1", 4),
+			},
+			wantFailures: 4,
+			wantRollback: true,
+		},
+		{
+			name: "only another bundle's step exists: wait",
+			steps: []*v1alpha1.PromotionStep{
+				makeBundleStep("a-old", "nginx-demo", "prod", "bundle-0", 9),
+			},
+			wantRequeue: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := []interface{ DeepCopyObject() runtime.Object }{
+				makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3),
+				makeBundle("bundle-1", "nginx-demo"),
+			}
+			for _, st := range tt.steps {
+				objs = append(objs, st)
+			}
+			updated, result, err := reconcileOnce(t, objs...)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFailures, updated.Status.ConsecutiveFailures)
+			assert.Equal(t, tt.wantRollback, updated.Status.ShouldRollback)
+			if tt.wantRequeue {
+				assert.Nil(t, updated.Status.LastEvaluatedAt, "no status is written before the bundle's step exists")
+				assert.Equal(t, 30*time.Second, result.RequeueAfter)
+			}
+		})
+	}
 }

@@ -154,8 +154,9 @@ Resume with `kardinal resume <pipeline>`.
 Rollbacks are triggered:
 
 1. **Manual**: `kardinal rollback <pipeline> --env prod` — opens a rollback PR
-2. **Automatic**: If `spec.autoRollback.enabled: true` in a `RollbackPolicy` CRD and
-   the health check fails after merge beyond the configured failure threshold
+2. **Automatic**: If the environment sets `onHealthFailure: rollback` and a health check
+   fails during a `bake` window with `policy: fail-on-alarm`. See [Rollback](rollback.md#automatic-rollback).
+   (`environments[].autoRollback` is not implemented and is rejected by the API server.)
 
 A rollback is a forward promotion of the previously-verified Bundle image through the
 same pipeline, same gates, same audit trail.

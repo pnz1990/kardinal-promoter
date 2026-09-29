@@ -95,13 +95,19 @@ Tracks GitHub pull request state (open, merged, closed).
 
 ### RollbackPolicy
 
-Auto-rollback configuration for a Pipeline.
+Creates a rollback Bundle when one Bundle's PromotionSteps in one environment reach a
+consecutive health-failure threshold. Nothing creates RollbackPolicies automatically; see
+[Rollback](../rollback.md#autorollback-is-not-implemented).
 
 | Field | Type | Description |
 |---|---|---|
-| `spec.pipeline` | `string` | Target pipeline |
-| `spec.autoRollback.enabled` | `bool` | Enable auto-rollback |
-| `spec.autoRollback.failureThreshold` | `int` | Consecutive health failures before rollback |
+| `spec.pipelineName` | `string` | Pipeline to monitor |
+| `spec.environment` | `string` | Environment to monitor |
+| `spec.bundleRef` | `string` | Bundle whose PromotionSteps are read |
+| `spec.failureThreshold` | `int` | Consecutive health failures before rollback (default 3) |
+| `status.consecutiveFailures` | `int` | Highest observed count across the Bundle's steps |
+| `status.shouldRollback` | `bool` | Threshold reached |
+| `status.rollbackBundleName` | `string` | Rollback Bundle that was created |
 
 ---
 

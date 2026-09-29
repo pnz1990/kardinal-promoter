@@ -36,8 +36,13 @@ import (
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -48,6 +53,10 @@ const (
 
 	// requeueInterval is how often to recheck when the PromotionStep is not found.
 	requeueInterval = 30 * time.Second
+
+	labelPipeline    = "kardinal.io/pipeline"
+	labelEnvironment = "kardinal.io/environment"
+	labelBundle      = "kardinal.io/bundle"
 )
 
 // Reconciler monitors a RollbackPolicy and triggers auto-rollback when the
@@ -82,29 +91,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	// Find the associated PromotionStep by pipeline+environment labels.
-	var stepList v1alpha1.PromotionStepList
-	if err := r.List(ctx, &stepList,
-		client.InNamespace(req.Namespace),
-		client.MatchingLabels{
-			"kardinal.io/pipeline":    rp.Spec.PipelineName,
-			"kardinal.io/environment": rp.Spec.Environment,
-		},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list promotionsteps: %w", err)
+	// Find the PromotionStep(s) of spec.bundleRef in this environment. Steps are
+	// per Bundle, so the bundle label is required: matching on pipeline and
+	// environment alone would read another Bundle's step (C04-gates-05).
+	failures, stepCount, err := r.bundleStepFailures(ctx, &rp)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	if len(stepList.Items) == 0 {
+	if stepCount == 0 {
 		log.Debug().
 			Str("pipeline", rp.Spec.PipelineName).
 			Str("environment", rp.Spec.Environment).
-			Msg("no PromotionStep found yet, requeueing")
+			Str("bundle", rp.Spec.BundleRef).
+			Msg("no PromotionStep found yet for the bundle, requeueing")
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
-
-	// Use the first matching PromotionStep (there should be at most one per env/pipeline).
-	step := &stepList.Items[0]
-	failures := step.Status.ConsecutiveHealthFailures
 
 	threshold := rp.Spec.FailureThreshold
 	if threshold <= 0 {
@@ -145,6 +146,37 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Not yet triggered — requeue to re-check.
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
+}
+
+// bundleStepFailures returns the highest status.consecutiveHealthFailures across
+// the PromotionSteps of spec.bundleRef in spec.environment, and how many such
+// steps exist. A multi-region environment has one step per region; any region
+// reaching the threshold triggers the rollback.
+func (r *Reconciler) bundleStepFailures(ctx context.Context, rp *v1alpha1.RollbackPolicy) (int, int, error) {
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList,
+		client.InNamespace(rp.Namespace),
+		client.MatchingLabels{
+			labelPipeline:    rp.Spec.PipelineName,
+			labelEnvironment: rp.Spec.Environment,
+			labelBundle:      rp.Spec.BundleRef,
+		},
+	); err != nil {
+		return 0, 0, fmt.Errorf("list promotionsteps for bundle %s: %w", rp.Spec.BundleRef, err)
+	}
+	maxFailures, count := 0, 0
+	for i := range stepList.Items {
+		step := &stepList.Items[i]
+		// Defence in depth: the label and spec must agree on the Bundle.
+		if step.Spec.BundleName != "" && step.Spec.BundleName != rp.Spec.BundleRef {
+			continue
+		}
+		count++
+		if step.Status.ConsecutiveHealthFailures > maxFailures {
+			maxFailures = step.Status.ConsecutiveHealthFailures
+		}
+	}
+	return maxFailures, count, nil
 }
 
 // ensureRollbackBundle creates a rollback Bundle if one doesn't already exist.
@@ -226,8 +258,40 @@ func (r *Reconciler) now() time.Time {
 }
 
 // SetupWithManager registers the RollbackPolicyReconciler with controller-runtime.
+//
+// It watches PromotionStep so a threshold crossing is acted on when the step's
+// status changes, not only on the 30s requeue. Only spec changes of the
+// RollbackPolicy itself trigger a reconcile: its own status writes do not.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.RollbackPolicy{}).
+		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep)).
 		Complete(r)
+}
+
+// policiesForStep maps a PromotionStep to the RollbackPolicies that monitor its
+// Bundle in its environment.
+func (r *Reconciler) policiesForStep(ctx context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	bundle := labels[labelBundle]
+	if bundle == "" {
+		return nil
+	}
+	var list v1alpha1.RollbackPolicyList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("promotionstep", obj.GetName()).
+			Msg("failed to list RollbackPolicies for PromotionStep event; relying on requeue")
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, rp := range list.Items {
+		if rp.Spec.BundleRef == bundle &&
+			rp.Spec.PipelineName == labels[labelPipeline] &&
+			rp.Spec.Environment == labels[labelEnvironment] {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: rp.Name, Namespace: rp.Namespace},
+			})
+		}
+	}
+	return reqs
 }
