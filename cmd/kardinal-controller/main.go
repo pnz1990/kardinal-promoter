@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -804,6 +805,14 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 			return
 		}
 
+		// Same-origin request: browsers send Origin on every POST, including
+		// the embedded UI's own. Origin host:port equal to the Host header is the
+		// same origin (a single port cannot serve two schemes), so pass through.
+		if isSameOrigin(origin, r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Cross-origin request: check allow-list.
 		allowed := allowAll
 		if !allowed {
@@ -830,6 +839,16 @@ func applyCORSMiddleware(next http.Handler, allowedOriginsCSV string, log zerolo
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isSameOrigin reports whether the Origin header names the host:port the
+// request was sent to.
+func isSameOrigin(origin, host string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
 }
 
 // listenAndServeWithTLS starts an HTTP or HTTPS server depending on whether
