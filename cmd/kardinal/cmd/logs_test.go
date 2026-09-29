@@ -18,6 +18,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -160,11 +162,56 @@ func TestLogsStaticOutput(t *testing.T) {
 		Build()
 
 	var buf bytes.Buffer
-	err := LogsFnForTest(&buf, client, "default", "static-pipeline", "", "")
+	err := logsFn(&buf, client, "default", "static-pipeline", "", "")
 	require.NoError(t, err)
 
 	out := buf.String()
 	assert.Contains(t, out, "static-pipeline/prod")
 	assert.Contains(t, out, "Verified")
 	assert.Contains(t, out, "all done")
+}
+
+// C09b-cli-17: --follow prints each state change once: a step with sub-steps
+// prints its transition, and a terminal step next to a running one does not
+// repeat on every poll.
+func TestLogsFollow_StateChangesPrintedOnce(t *testing.T) {
+	created := policyTestNow.Add(-time.Hour)
+	verified := explainStep("demo", "b1", "test", "Verified", "", created)
+	verified.Status.Steps = []v1alpha1.StepStatus{
+		{Name: "git-clone", State: "Completed", DurationMs: 1200},
+		{Name: "health-check", State: "Completed", DurationMs: 3000},
+	}
+	var out bytes.Buffer
+	require.NoError(t, logsFollowFn(context.Background(), &out, policyClient(t, verified), "default", "demo", "", ""))
+	assert.Contains(t, out.String(), "[demo/test] git-clone")
+	assert.Contains(t, out.String(), "[demo/test] → Verified\n")
+
+	bare := explainStep("demo", "b1", "uat", "Verified", "", created)
+	running := explainStep("demo", "b1", "prod", "Promoting", "", created)
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	out.Reset()
+	require.NoError(t, logsFollowFn(ctx, &out, policyClient(t, bare, running), "default", "demo", "", ""))
+	assert.Equal(t, 1, strings.Count(out.String(), "[demo/uat] → Verified"), out.String())
+	assert.Equal(t, 1, strings.Count(out.String(), "[demo/prod] → Promoting"), out.String())
+}
+
+// C09b-cli-25: truncation counts runes, so it never splits a UTF-8 character.
+func TestTruncateRunes(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"exactly10!", 10, "exactly10!"},
+		{"abcdefghijk", 10, "abcdefg..."},
+		{"déploiement échoué", 10, "déploie..."},
+		{"日本語のメッセージです", 6, "日本語..."},
+	}
+	for _, tc := range cases {
+		got := truncateRunes(tc.in, tc.n)
+		assert.Equal(t, tc.want, got)
+		assert.True(t, utf8.ValidString(got))
+	}
 }

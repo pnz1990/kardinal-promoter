@@ -6,9 +6,11 @@ Force re-reconciliation of a Pipeline (Kargo parity)
 
 Force the controller to re-reconcile a Pipeline immediately.
 
-Adds a kardinal.io/refresh annotation to the Pipeline, which triggers the
-controller to run a reconciliation cycle. Useful when you need to re-evaluate
-PolicyGates, re-check health adapters, or force a retry after a transient error.
+Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
+The change requeues the Pipeline reconciler and the reconcilers of the
+Pipeline's Bundles. PolicyGates and PromotionSteps do not watch Pipelines, so
+this does not re-evaluate gates or re-run health checks; they re-check on their
+own intervals.
 
 Example:
   kardinal refresh nginx-demo
@@ -29,7 +31,7 @@ kardinal refresh <pipeline> [flags]
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO

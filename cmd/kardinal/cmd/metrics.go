@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -28,11 +29,19 @@ func newMetricsCmd() *cobra.Command {
 		Short: "Show promotion metrics (DORA-style) for a pipeline",
 		Long: `Show promotion performance metrics for a pipeline.
 
-Metrics shown:
-  DEPLOYMENT_FREQ   — bundles promoted to the target environment per day
-  LEAD_TIME         — average time from bundle creation to prod verification
-  FAIL_RATE         — percentage of bundles that reached Failed state
-  ROLLBACK_COUNT    — number of rollback bundles in the period
+With --env and --days set, the metrics are computed from the Bundles created
+in the last --days days and their PromotionSteps in --env:
+  bundles_total          Bundles created in the window
+  deployment_frequency   steps Verified in --env per day
+  lead_time_avg          mean time from Bundle creation to Verified in --env
+  change_fail_rate       Failed Bundles / bundles_total
+  rollback_count         rollback Bundles in the window
+
+With the defaults (--env is the pipeline's last environment, --days 30) the
+controller's metrics from Pipeline.status.deploymentMetrics are shown instead
+when present: rollouts_last_30d, p50/p90_commit_to_prod,
+auto_rollback_rate, operator_intervention_rate and stale_prod_days, over
+the last 30 Bundles Verified in the last environment.
 
 Example:
   kardinal metrics --pipeline nginx-demo --env prod --days 30`,
@@ -41,33 +50,51 @@ Example:
 			if err != nil {
 				return fmt.Errorf("metrics: %w", err)
 			}
-			return metricsFn(cmd.OutOrStdout(), c, ns, pipelineFlag, envFlag, daysFlag)
+			return metricsFn(cmd.OutOrStdout(), c, ns, pipelineFlag, envFlag, daysFlag, time.Now().UTC())
 		},
 	}
 
 	cmd.Flags().StringVar(&pipelineFlag, "pipeline", "", "Pipeline name (required)")
-	cmd.Flags().StringVar(&envFlag, "env", "prod", "Target environment for lead time calculation")
+	cmd.Flags().StringVar(&envFlag, "env", "", "Target environment (default: the pipeline's last environment)")
 	cmd.Flags().IntVar(&daysFlag, "days", 30, "Lookback period in days")
 	_ = cmd.MarkFlagRequired("pipeline")
 
 	return cmd
 }
 
-// metricsFn is the testable implementation.
-func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, env string, days int) error {
+// metricsFn is the testable implementation. env "" means the pipeline's last
+// environment.
+func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline, env string,
+	days int, now time.Time) error {
 	ctx := context.Background()
-
-	// Prefer Pipeline.status.deploymentMetrics when available — avoids N+1 list queries
-	// and provides pre-computed p50/p90 percentiles from the PipelineReconciler.
-	var p v1alpha1.Pipeline
-	if getErr := c.Get(ctx, sigs_client.ObjectKey{Name: pipeline, Namespace: ns}, &p); getErr == nil {
-		if dm := p.Status.DeploymentMetrics; dm != nil && dm.SampleSize > 0 {
-			return renderFromCRD(w, pipeline, env, dm)
-		}
+	if days <= 0 {
+		return fmt.Errorf("--days must be positive, got %d", days)
 	}
 
-	// Fallback: compute in-memory from Bundle + PromotionStep CRD reads.
-	cutoff := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	var p v1alpha1.Pipeline
+	if err := c.Get(ctx, sigs_client.ObjectKey{Name: pipeline, Namespace: ns}, &p); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("pipeline %q not found in namespace %q", pipeline, ns)
+		}
+		return fmt.Errorf("get pipeline %q: %w", pipeline, err)
+	}
+	finalEnv := ""
+	if n := len(p.Spec.Environments); n > 0 {
+		finalEnv = p.Spec.Environments[n-1].Name
+	}
+	if env == "" {
+		env = finalEnv
+	}
+
+	// The controller's Pipeline.status.deploymentMetrics cover the last
+	// environment over its own 30-day/30-Bundle window: use them only when
+	// that is what was asked for.
+	if dm := p.Status.DeploymentMetrics; dm != nil && dm.SampleSize > 0 && env == finalEnv && days == 30 {
+		return renderFromCRD(w, pipeline, env, dm, now)
+	}
+
+	// Compute from Bundle + PromotionStep CRD reads.
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
 
 	// List all bundles for this pipeline.
 	var bundleList v1alpha1.BundleList
@@ -161,10 +188,7 @@ func metricsFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, 
 	}
 
 	// Deployment frequency: deployments / lookback days
-	deployFreq := 0.0
-	if days > 0 {
-		deployFreq = float64(deployCount) / float64(days)
-	}
+	deployFreq := float64(deployCount) / float64(days)
 
 	// Fail rate
 	failRate := 0.0
@@ -218,10 +242,11 @@ func formatDuration(d time.Duration) string {
 // renderFromCRD renders the pre-computed PipelineDeploymentMetrics from CRD status.
 // Used when Pipeline.status.deploymentMetrics is populated by the PipelineReconciler.
 func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env string,
-	dm *v1alpha1.PipelineDeploymentMetrics) error {
+	dm *v1alpha1.PipelineDeploymentMetrics, now time.Time) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 3, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "METRIC\tVALUE\tNOTES\n")
-	_, _ = fmt.Fprintf(tw, "pipeline\t%s\t(sample=%d bundles)\n", pipelineName, dm.SampleSize)
+	_, _ = fmt.Fprintf(tw, "pipeline\t%s\t(controller: last %d bundles verified in %s)\n",
+		pipelineName, dm.SampleSize, env)
 	_, _ = fmt.Fprintf(tw, "target_env\t%s\t\n", env)
 	_, _ = fmt.Fprintf(tw, "rollouts_last_30d\t%d\t\n", dm.RolloutsLast30Days)
 	_, _ = fmt.Fprintf(tw, "p50_commit_to_prod\t%dm\t\n", dm.P50CommitToProdMinutes)
@@ -233,7 +258,7 @@ func renderFromCRD(w interface{ Write([]byte) (int, error) }, pipelineName, env 
 	_, _ = fmt.Fprintf(tw, "stale_prod_days\t%d\t\n", dm.StaleProdDays)
 	if dm.ComputedAt != nil {
 		_, _ = fmt.Fprintf(tw, "metrics_age\t%s\t(last computed by controller)\n",
-			formatDuration(time.Since(dm.ComputedAt.Time)))
+			formatDuration(now.Sub(dm.ComputedAt.Time)))
 	}
 	return tw.Flush()
 }

@@ -23,6 +23,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -30,7 +31,11 @@ import (
 
 // HumanAge returns a human-readable age string for the given creation time.
 func HumanAge(t time.Time) string {
-	d := time.Since(t)
+	return humanDuration(time.Since(t))
+}
+
+// humanDuration renders d in its largest whole unit: 45s, 4m, 3h, 2d.
+func humanDuration(d time.Duration) string {
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
@@ -43,19 +48,40 @@ func HumanAge(t time.Time) string {
 	}
 }
 
+// orDash returns s, or "-" when s is empty.
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+// truncateRunes shortens s to n runes, the last three being "...", without
+// splitting a UTF-8 character.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-3]) + "..."
+}
+
 // stepStatePriority returns a sort priority for a PromotionStep state.
-// Higher priority = displayed first. Used by FormatPipelineTable and FormatStepsTable.
-// Active states (Promoting/WaitingForMerge/HealthChecking) take precedence,
-// then Pending (step queued but not started), then Verified (success),
-// then Failed (terminal error). This ensures in-flight promotions are
+// Higher priority = displayed first. Used by the pipeline, steps and explain views.
+// Active states (Promoting/WaitingForMerge/HealthChecking/RollingBack) take
+// precedence, then Pending (step queued but not started), then Verified and
+// AbortedByAlarm, then Failed. AbortedByAlarm ranks with Verified because the
+// alarm fires after merge: the environment runs that bundle, so the newer of
+// the two is what is deployed. Failed ranks lowest because most failures
+// happen before merge. This ensures in-flight promotions and rollbacks are
 // shown over older terminal-state bundles (#260).
 func stepStatePriority(state string) int {
 	switch state {
-	case "Promoting", "WaitingForMerge", "HealthChecking":
+	case "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
 		return 4
 	case "Pending":
 		return 3
-	case "Verified":
+	case "Verified", "AbortedByAlarm":
 		return 2
 	case "Failed":
 		return 1
@@ -64,44 +90,29 @@ func stepStatePriority(state string) int {
 	}
 }
 
-// FormatPipelineTable writes a tabwriter-formatted table of pipelines to w.
-// steps is the list of PromotionSteps in the same namespace; it is used to
-// derive per-environment status and the active bundle version for each pipeline.
-// If steps is nil or empty the environment columns will show "-".
-func FormatPipelineTable(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep) error {
-	return FormatPipelineTableWithOptions(w, pipelines, steps, false)
-}
-
-// FormatPipelineTableFull is like FormatPipelineTableWithOptions but also accepts
-// a Subscription list. When subscriptions are non-nil, a SUB column is appended
-// showing the count of actively-watching Subscriptions per pipeline.
-// Pass nil subs to omit the SUB column entirely.
+// FormatPipelineTableFull writes a table of pipelines to w. steps (any
+// namespaces) give the per-environment state and the active bundle. When subs
+// is non-nil a SUB column counts the Watching Subscriptions per pipeline.
+// showNamespace prepends a NAMESPACE column (--all-namespaces).
 func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
 	var subCount map[string]int
 	if subs != nil {
-		// Build a map: pipelineName → count of active Subscriptions (Phase=="Watching").
+		// namespace/pipeline → count of active Subscriptions (Phase=="Watching").
 		subCount = make(map[string]int)
 		for _, s := range subs {
 			if s.Spec.Pipeline == "" {
 				continue
 			}
 			if s.Status.Phase == "Watching" {
-				subCount[s.Spec.Pipeline]++
+				subCount[s.Namespace+"/"+s.Spec.Pipeline]++
 			}
 		}
 	}
 	return formatPipelineTableInternal(w, pipelines, steps, subCount, showNamespace)
 }
 
-// FormatPipelineTableWithOptions is like FormatPipelineTable but supports an additional
-// showNamespace parameter. When showNamespace is true, a NAMESPACE column is prepended
-// to each row (used by --all-namespaces flag).
-func FormatPipelineTableWithOptions(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, showNamespace bool) error {
-	return formatPipelineTableInternal(w, pipelines, steps, nil, showNamespace)
-}
-
-// formatPipelineTableInternal is the shared implementation for all pipeline table variants.
-// subCount maps pipeline name → active subscription count; nil means no SUB column.
+// formatPipelineTableInternal renders the pipeline table. subCount maps
+// namespace/pipeline → active subscription count; nil means no SUB column.
 func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, subCount map[string]int, showNamespace bool) error {
 	if len(pipelines) == 0 {
 		_, _ = fmt.Fprintln(w, "No pipelines found.")
@@ -119,14 +130,14 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, ste
 		priority   int
 		createdAt  time.Time
 	}
-	// pipelineEnvMap[pipelineName][envName] = envState
+	// pipelineEnvMap[namespace/pipelineName][envName] = envState
 	pipelineEnvMap := make(map[string]map[string]envState)
 	for _, s := range steps {
-		pipe := s.Spec.PipelineName
 		env := s.Spec.Environment
-		if pipe == "" || env == "" {
+		if s.Spec.PipelineName == "" || env == "" {
 			continue
 		}
+		pipe := s.Namespace + "/" + s.Spec.PipelineName
 		if _, ok := pipelineEnvMap[pipe]; !ok {
 			pipelineEnvMap[pipe] = make(map[string]envState)
 		}
@@ -190,11 +201,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, ste
 		bundleDisplay := "-"
 		var bestPriority int
 		var bestCreatedAt time.Time
-		// Use pipeline name scoped to namespace for multi-namespace step lookup.
-		pipelineKey := p.Name
-		if showNamespace {
-			pipelineKey = p.Name // step lookup uses pipelineName label (same across namespaces)
-		}
+		pipelineKey := p.Namespace + "/" + p.Name
 		if envMap, ok := pipelineEnvMap[pipelineKey]; ok {
 			for _, est := range envMap {
 				if est.bundleName == "" {
@@ -222,7 +229,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, ste
 		}
 		for _, env := range envOrder {
 			state := "-"
-			if envMap, ok := pipelineEnvMap[p.Name]; ok {
+			if envMap, ok := pipelineEnvMap[pipelineKey]; ok {
 				if est, ok := envMap[env]; ok {
 					state = est.state
 				}
@@ -230,7 +237,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, ste
 			row += "\t" + state
 		}
 		if subCount != nil {
-			row += "\t" + fmt.Sprintf("%d", subCount[p.Name])
+			row += "\t" + fmt.Sprintf("%d", subCount[pipelineKey])
 		}
 		row += "\t" + HumanAge(p.CreationTimestamp.Time)
 
@@ -262,76 +269,64 @@ func PolicyGatePhase(g v1alpha1.PolicyGate) string {
 	return "Pending"
 }
 
-// FormatBundleErrors writes a plain-text error notice for each Bundle in
-// the Failed phase. The notice is printed after the pipeline table so the
-// root cause of a silent "Phase: Error" is immediately visible to the operator
-// without requiring `kubectl describe graph`.
+// FormatBundleErrors writes a plain-text error notice for the most recent
+// Failed Bundle of each pipeline. The notice is printed after the pipeline
+// table so the root cause of a silent "Phase: Error" is visible without
+// `kubectl describe graph`.
 //
-// Output format (one line per Failed bundle):
+// Output format (one line per pipeline, sorted by pipeline):
 //
-//	ERROR: pipeline <pipeline>: <condition-message>
+//	ERROR: pipeline [<namespace>/]<pipeline>: <condition-message>
 //
-// Conditions with reason TranslationError or CircularDependency are preferred
-// (they contain the exact root cause). If no such condition exists, the raw
-// phase is reported as a fallback.
-//
-// When no Failed bundles are present, nothing is written (no empty section).
-// On write error, the error is returned; the caller may choose to log and continue.
-func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle) error {
-	// Collect the best error message per pipeline (deduplicate multiple Failed bundles
-	// for the same pipeline — prefer the most recently created one).
-	type pipelineError struct {
-		pipeline string
-		message  string
+// The message is the True condition with reason CircularDependency, else
+// TranslationError, else the first True condition, else a describe hint.
+// showNamespace prefixes the pipeline with its namespace (--all-namespaces).
+// When no Failed bundles are present, nothing is written.
+func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bool) error {
+	sorted := make([]v1alpha1.Bundle, 0, len(bundles))
+	for _, b := range bundles {
+		if b.Status.Phase == "Failed" {
+			sorted = append(sorted, b)
+		}
 	}
-	// Use a slice to preserve stable order (sorted by pipeline name below).
+	// Newest first, so the first Failed bundle seen per pipeline is the current one.
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp.Time)
+	})
+
+	reasonRank := map[string]int{"CircularDependency": 2, "TranslationError": 1}
+	type pipelineError struct{ pipeline, message string }
 	seen := make(map[string]bool)
 	var errs []pipelineError
-
-	// Ordered reason preference: CircularDependency is more specific; TranslationError is generic.
-	preferredReasons := map[string]bool{
-		"CircularDependency": true,
-		"TranslationError":   true,
-	}
-
-	for _, b := range bundles {
-		if b.Status.Phase != "Failed" {
-			continue
-		}
+	for _, b := range sorted {
 		pipeline := b.Spec.Pipeline
 		if pipeline == "" {
 			pipeline = b.Name // fallback: use bundle name if pipeline ref missing
 		}
-		if seen[pipeline] {
-			continue // deduplicate per pipeline
+		if showNamespace && b.Namespace != "" {
+			pipeline = b.Namespace + "/" + pipeline
 		}
-		seen[pipeline] = true
+		key := b.Namespace + "/" + pipeline
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 
-		// Search conditions for the best error message.
-		msg := ""
+		msg, rank := "", -1
 		for _, cond := range b.Status.Conditions {
-			// metav1.ConditionTrue is the string "True"
-			if string(cond.Status) != "True" {
+			if cond.Status != metav1.ConditionTrue {
 				continue
 			}
-			if preferredReasons[cond.Reason] {
-				msg = cond.Message
-				break
-			}
-			if msg == "" {
-				msg = cond.Message // accept any True condition as a fallback
+			if r := reasonRank[cond.Reason]; r > rank {
+				msg, rank = cond.Message, r
 			}
 		}
 		if msg == "" {
 			msg = "promotion failed — run `kubectl describe bundle " + b.Name + "` for details"
 		}
-
 		errs = append(errs, pipelineError{pipeline: pipeline, message: msg})
 	}
-
-	if len(errs) == 0 {
-		return nil
-	}
+	sort.SliceStable(errs, func(i, j int) bool { return errs[i].pipeline < errs[j].pipeline })
 
 	for _, e := range errs {
 		if _, err := fmt.Fprintf(w, "ERROR: pipeline %s: %s\n", e.pipeline, e.message); err != nil {
@@ -370,11 +365,11 @@ func FormatBundleTable(w io.Writer, bundles []v1alpha1.Bundle) error {
 // FormatStepsTable writes a tabwriter-formatted table of promotion steps to w.
 // When multiple bundles have steps for the same environment (e.g. after rapid
 // successive deploys), only the most-active step per environment is shown using
-// the same priority logic as FormatPipelineTable: active states (Promoting,
+// the same priority logic as the pipeline table: active states (Promoting,
 // WaitingForMerge, HealthChecking) take precedence over terminal states (Verified,
 // Failed). Within same priority, the most recently created step wins.
 func FormatStepsTable(w io.Writer, steps []v1alpha1.PromotionStep) error {
-	// Filter to the best step per environment (same priority as FormatPipelineTable).
+	// Filter to the best step per environment (same priority as the pipeline table).
 	type stepKey struct{ env string }
 	type bestEntry struct {
 		step     v1alpha1.PromotionStep

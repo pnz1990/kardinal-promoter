@@ -2,6 +2,10 @@
 
 Audit log commands — view and summarize promotion events
 
+```
+kardinal audit [flags]
+```
+
 ### Options
 
 ```
@@ -14,11 +18,11 @@ Audit log commands — view and summarize promotion events
       --context string      Kubeconfig context override
       --kubeconfig string   Path to kubeconfig file (default "~/.kube/config")
   -n, --namespace string    Kubernetes namespace (default: current context namespace)
-  -o, --output string       Output format: table (default), json, yaml
+  -o, --output string       Output format: table (default), json, yaml (json and yaml: get bundles, pipelines, steps, subscriptions)
 ```
 
 ### SEE ALSO
 
 * [kardinal](kardinal.md)	 - kardinal manages promotion pipelines on Kubernetes
-* [kardinal audit summary](kardinal_audit_summary.md)	 - Aggregate promotion metrics from AuditEvent records
+* [kardinal audit summary](kardinal-audit-summary.md)	 - Aggregate promotion metrics from AuditEvent records
 
