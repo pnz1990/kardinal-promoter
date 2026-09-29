@@ -19,6 +19,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -459,6 +460,23 @@ func (s *uiAPIServer) handleBundleSubresource(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// findBundle returns the Bundle called name and the namespace its steps and
+// gates live in. namespace (the optional ?namespace= query parameter) narrows
+// the lookup when bundle names repeat across namespaces. When no Bundle
+// matches, the Bundle is nil and the namespace is returned as given.
+func (s *uiAPIServer) findBundle(ctx context.Context, name, namespace string) (*v1alpha1.Bundle, string, error) {
+	var bl v1alpha1.BundleList
+	if err := s.client.List(ctx, &bl, client.InNamespace(namespace)); err != nil {
+		return nil, "", fmt.Errorf("list bundles: %w", err)
+	}
+	for i := range bl.Items {
+		if bl.Items[i].Name == name {
+			return &bl.Items[i], bl.Items[i].Namespace, nil
+		}
+	}
+	return nil, namespace, nil
+}
+
 // handleBundleGraph builds the DAG for a single Bundle:
 //   - one PromotionStep node per environment (synthetic "NotStarted" when the
 //     step does not exist yet);
@@ -478,19 +496,10 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// 1. Find the Bundle; its namespace scopes the steps, gates and Pipeline.
-	namespace := r.URL.Query().Get("namespace")
-	var bl v1alpha1.BundleList
-	if err := s.client.List(ctx, &bl, client.InNamespace(namespace)); err != nil {
+	bundle, namespace, err := s.findBundle(ctx, bundleName, r.URL.Query().Get("namespace"))
+	if err != nil {
 		fail(err, "list bundles")
 		return
-	}
-	var bundle *v1alpha1.Bundle
-	for i := range bl.Items {
-		if bl.Items[i].Name == bundleName {
-			bundle = &bl.Items[i]
-			namespace = bundle.Namespace
-			break
-		}
 	}
 	byBundle := client.MatchingLabels{"kardinal.io/bundle": bundleName}
 	var psList v1alpha1.PromotionStepList
@@ -679,9 +688,18 @@ func linearEnvDeps(order []string) map[string][]string {
 	return deps
 }
 
+// handleBundleSteps handles GET /api/v1/ui/bundles/{name}/steps[?namespace=].
+// Steps are read from the Bundle's namespace only (see findBundle).
 func (s *uiAPIServer) handleBundleSteps(w http.ResponseWriter, r *http.Request, bundleName string) {
+	_, namespace, err := s.findBundle(r.Context(), bundleName, r.URL.Query().Get("namespace"))
+	if err != nil {
+		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle steps: list bundles")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	var list v1alpha1.PromotionStepList
-	if err := s.client.List(r.Context(), &list); err != nil {
+	if err := s.client.List(r.Context(), &list, client.InNamespace(namespace)); err != nil {
+		s.log.Error().Err(err).Str("bundle", bundleName).Msg("ui: bundle steps: list promotion steps")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

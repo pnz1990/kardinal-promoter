@@ -205,6 +205,44 @@ func TestUIAPI_BundleGraph_ScopedToBundleNamespace(t *testing.T) {
 	assert.ElementsMatch(t, []string{"a-test", "step-prod"}, ids)
 }
 
+// TestUIAPI_BundleSteps_ScopedToBundleNamespace covers the steps half of
+// C07-controller-15: /bundles/{name}/steps returned the steps of every
+// same-named bundle in every namespace.
+func TestUIAPI_BundleSteps_ScopedToBundleNamespace(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
+		&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "team-a"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app"}},
+		&v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "team-b"},
+			Spec: v1alpha1.BundleSpec{Pipeline: "app"}},
+		uiStep("team-a", "a-test", "app-v1", "test", "Verified"),
+		uiStep("team-b", "b-test", "app-v1", "test", "Failed"),
+		uiStep("team-b", "b-prod", "app-v1", "prod", "Failed"),
+	).Build()
+
+	tests := []struct {
+		path  string
+		steps []string
+	}{
+		{path: "/api/v1/ui/bundles/app-v1/steps?namespace=team-a", steps: []string{"team-a/a-test"}},
+		{path: "/api/v1/ui/bundles/app-v1/steps?namespace=team-b", steps: []string{"team-b/b-prod", "team-b/b-test"}},
+		{path: "/api/v1/ui/bundles/app-v1/steps", steps: []string{"team-a/a-test"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := uiGet(t, c, tt.path)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var resp []uiStepResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			got := make([]string, 0, len(resp))
+			for _, st := range resp {
+				got = append(got, st.Namespace+"/"+st.Name)
+			}
+			sort.Strings(got)
+			assert.Equal(t, tt.steps, got)
+		})
+	}
+}
+
 // TestUIAPI_ReadHandlersReportListErrors covers the swallowed List errors of
 // C07-controller-31: the UI showed "no bundle" during an API or RBAC outage.
 func TestUIAPI_ReadHandlersReportListErrors(t *testing.T) {
@@ -219,6 +257,8 @@ func TestUIAPI_ReadHandlersReportListErrors(t *testing.T) {
 		{name: "graph: bundles", fail: &v1alpha1.BundleList{}, path: "/api/v1/ui/bundles/app-v1/graph"},
 		{name: "graph: gates", fail: &v1alpha1.PolicyGateList{}, path: "/api/v1/ui/bundles/app-v1/graph"},
 		{name: "graph: steps", fail: &v1alpha1.PromotionStepList{}, path: "/api/v1/ui/bundles/app-v1/graph"},
+		{name: "bundle steps: bundles", fail: &v1alpha1.BundleList{}, path: "/api/v1/ui/bundles/app-v1/steps"},
+		{name: "bundle steps: steps", fail: &v1alpha1.PromotionStepList{}, path: "/api/v1/ui/bundles/app-v1/steps"},
 		{name: "step events", fail: &corev1.EventList{}, path: "/api/v1/ui/steps/default/app-v1-test/events"},
 	}
 	for _, tt := range tests {
