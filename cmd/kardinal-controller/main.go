@@ -468,13 +468,23 @@ func main() {
 	// Start webhook server in a goroutine.
 	go func() {
 		webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
+		if webhookSecret == "" {
+			logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
+		}
 		bundleAPIToken := bundleToken
 		mux := http.NewServeMux()
 		mux.HandleFunc("/webhook/scm", webhookSrv.Handler())
 		mux.HandleFunc("/webhook/scm/health", webhookSrv.HealthHandler())
 		// Bundle API endpoint — only mounted if a token is configured.
 		if bundleAPIToken != "" {
-			bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, "default", logger)
+			// Default to the watched namespace; in namespace-scoped mode it is
+			// also the only namespace Bundles may be created in.
+			bundleNS := "default"
+			if watchNamespace != "" {
+				bundleNS = watchNamespace
+			}
+			bundleAPI := newBundleAPIServerWithLogger(mgr.GetClient(), bundleAPIToken, bundleNS, logger)
+			bundleAPI.onlyNamespace = watchNamespace
 			mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
 			logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
 		}

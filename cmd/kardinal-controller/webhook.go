@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -49,17 +50,10 @@ type webhookServer struct {
 	webhookConfigured bool
 }
 
-// newWebhookServer constructs a webhookServer with the given SCM provider and k8s client.
-func newWebhookServer(scmProvider scm.SCMProvider, k8s client.Client, log zerolog.Logger) *webhookServer {
-	return &webhookServer{
-		scm:    scmProvider,
-		client: k8s,
-		log:    log,
-	}
-}
-
 // newWebhookServerWithConfig constructs a webhookServer and records whether a webhook
-// secret is configured (for the /webhook/scm/health response).
+// secret is configured. Without a secret the server rejects every event (fail closed):
+// an HMAC with an empty key proves nothing, and PRStatus polling keeps promotions
+// moving without webhooks.
 func newWebhookServerWithConfig(scmProvider scm.SCMProvider, k8s client.Client, log zerolog.Logger, webhookConfigured bool) *webhookServer {
 	return &webhookServer{
 		scm:               scmProvider,
@@ -75,6 +69,14 @@ func (s *webhookServer) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Fail closed: without a shared secret no request can be authenticated,
+		// so every event is rejected. main.go logs once at startup that SCM
+		// webhooks are disabled.
+		if !s.webhookConfigured {
+			http.Error(w, "webhook secret not configured", http.StatusUnauthorized)
 			return
 		}
 
@@ -150,6 +152,12 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 // This is the pure version of the old reconcileMergedPR — the webhook now only
 // writes to its own CRD (PRStatus) and does not touch PromotionStep status.
 func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.WebhookEvent) error {
+	if event.PRNumber <= 0 || event.RepoFullName == "" {
+		s.log.Warn().Int("pr", event.PRNumber).Str("repo", event.RepoFullName).
+			Msg("merged webhook event has no PR number or repo; ignoring")
+		return nil
+	}
+
 	var prsList v1alpha1.PRStatusList
 	if err := s.client.List(ctx, &prsList); err != nil {
 		return fmt.Errorf("list prstatuses: %w", err)
@@ -159,13 +167,13 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 	for i := range prsList.Items {
 		prs := &prsList.Items[i]
 
-		// Match by PR number.
+		// Match by PR number and repo. Both are required: a PRStatus without a PR
+		// number or repo is a placeholder whose PR is not open yet, and an event
+		// without them cannot be scoped to one PR.
 		if prs.Spec.PRNumber != event.PRNumber {
 			continue
 		}
-
-		// Match by repo if available.
-		if event.RepoFullName != "" && prs.Spec.Repo != "" && prs.Spec.Repo != event.RepoFullName {
+		if prs.Spec.Repo == "" || !strings.EqualFold(prs.Spec.Repo, event.RepoFullName) {
 			continue
 		}
 

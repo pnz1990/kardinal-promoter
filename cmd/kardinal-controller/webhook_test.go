@@ -18,8 +18,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -28,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -101,7 +106,7 @@ func TestWebhook_MarksPRStatusMerged_OnMerge(t *testing.T) {
 		},
 	}
 
-	server := newWebhookServer(mockSCM, c, zerolog.Nop())
+	server := newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true)
 	handler := server.Handler()
 
 	body := []byte(`{"action":"closed","pull_request":{"number":42,"merged":true},"repository":{"full_name":"owner/repo"}}`)
@@ -130,7 +135,7 @@ func TestWebhook_RejectsInvalidSignature(t *testing.T) {
 		err: assert.AnError, // simulate signature validation failure
 	}
 
-	server := newWebhookServer(mockSCM, c, zerolog.Nop())
+	server := newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true)
 	handler := server.Handler()
 
 	body := []byte(`{"action":"closed","pull_request":{"number":1,"merged":true}}`)
@@ -167,7 +172,7 @@ func TestWebhook_IgnoresNonMergeEvents(t *testing.T) {
 		},
 	}
 
-	server := newWebhookServer(mockSCM, c, zerolog.Nop())
+	server := newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true)
 	handler := server.Handler()
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`)))
@@ -218,4 +223,132 @@ func TestWebhookHealth_ReflectsWebhookUnconfigured(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"webhookConfigured":false`)
+}
+
+func webhookPRS(name, ns, repo string, pr int) *v1alpha1.PRStatus {
+	return &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       v1alpha1.PRStatusSpec{PRNumber: pr, Repo: repo},
+		Status:     v1alpha1.PRStatusStatus{Open: pr > 0},
+	}
+}
+
+func webhookMerged(t *testing.T, c client.Client, name, ns string) bool {
+	t.Helper()
+	var p v1alpha1.PRStatus
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, &p))
+	return p.Status.Merged
+}
+
+// TestWebhook_FailsClosed verifies that the SCM webhook uses the real GitHub
+// provider to reject forged merge events: with no secret configured every
+// request is rejected, and with a secret only a valid HMAC is accepted.
+// Regression test for C07-controller-01, C06-scm-health-01 and E2E-17.
+func TestWebhook_FailsClosed(t *testing.T) {
+	const secret = "test-secret"
+	forged := `{"action":"closed","pull_request":{"number":7,"merged":true},"repository":{"full_name":"org/app"}}`
+	noNumber := `{"action":"closed","pull_request":{"merged":true}}`
+	sign := func(key, body string) string {
+		m := hmac.New(sha256.New, []byte(key))
+		m.Write([]byte(body))
+		return "sha256=" + hex.EncodeToString(m.Sum(nil))
+	}
+	tests := []struct {
+		name       string
+		secret     string
+		body       string
+		signature  string
+		wantCode   int
+		wantMerged bool
+	}{
+		{name: "no secret, unsigned", secret: "", body: forged, wantCode: http.StatusUnauthorized},
+		{name: "no secret, unsigned, no PR number", secret: "", body: noNumber, wantCode: http.StatusUnauthorized},
+		{name: "no secret, empty-key HMAC", secret: "", body: forged, signature: sign("", forged), wantCode: http.StatusUnauthorized},
+		{name: "secret, unsigned", secret: secret, body: forged, wantCode: http.StatusUnauthorized},
+		{name: "secret, wrong key", secret: secret, body: forged, signature: sign("other", forged), wantCode: http.StatusUnauthorized},
+		{name: "secret, valid signature", secret: secret, body: forged, signature: sign(secret, forged), wantCode: http.StatusNoContent, wantMerged: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := scm.NewProvider("github", "", "", tt.secret)
+			require.NoError(t, err)
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(webhookPRS("prs", "default", "org/app", 7), webhookPRS("placeholder", "default", "", 0)).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			srv := newWebhookServerWithConfig(p, c, zerolog.Nop(), tt.secret != "")
+
+			req := httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(tt.body))
+			if tt.signature != "" {
+				req.Header.Set("X-Hub-Signature-256", tt.signature)
+			}
+			w := httptest.NewRecorder()
+			srv.Handler()(w, req)
+
+			assert.Equal(t, tt.wantCode, w.Code)
+			assert.Equal(t, tt.wantMerged, webhookMerged(t, c, "prs", "default"))
+			assert.False(t, webhookMerged(t, c, "placeholder", "default"), "placeholder PRStatus must never be marked merged")
+		})
+	}
+}
+
+// TestWebhook_MergeEventScoping verifies that an authenticated merge event only
+// marks the PRStatus whose PR number and repo both match. Events without a PR
+// number or repo, and placeholder PRStatus objects (PR not open yet), are never
+// matched. Regression test for C07-controller-01 and E2E-17.
+func TestWebhook_MergeEventScoping(t *testing.T) {
+	tests := []struct {
+		name       string
+		event      scm.WebhookEvent
+		wantMerged map[string]bool
+	}{
+		{
+			name:       "matching number and repo",
+			event:      scm.WebhookEvent{PRNumber: 7, RepoFullName: "org/app"},
+			wantMerged: map[string]bool{"app-7": true, "svc-7": false, "placeholder": false, "norepo-7": false},
+		},
+		{
+			name:       "repo compared case-insensitively",
+			event:      scm.WebhookEvent{PRNumber: 7, RepoFullName: "Org/App"},
+			wantMerged: map[string]bool{"app-7": true, "svc-7": false, "placeholder": false, "norepo-7": false},
+		},
+		{
+			name:       "event without repo matches nothing",
+			event:      scm.WebhookEvent{PRNumber: 7},
+			wantMerged: map[string]bool{"app-7": false, "svc-7": false, "placeholder": false, "norepo-7": false},
+		},
+		{
+			name:       "event without PR number matches nothing",
+			event:      scm.WebhookEvent{RepoFullName: "org/app"},
+			wantMerged: map[string]bool{"app-7": false, "svc-7": false, "placeholder": false, "norepo-7": false},
+		},
+		{
+			name:       "event without PR number or repo matches nothing",
+			event:      scm.WebhookEvent{},
+			wantMerged: map[string]bool{"app-7": false, "svc-7": false, "placeholder": false, "norepo-7": false},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(
+					webhookPRS("app-7", "team-a", "org/app", 7),
+					webhookPRS("svc-7", "team-b", "other/svc", 7),
+					webhookPRS("placeholder", "team-c", "", 0),
+					webhookPRS("norepo-7", "team-d", "", 7),
+				).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).Build()
+			ev := tt.event
+			ev.EventType, ev.Action, ev.Merged = "pull_request", "closed", true
+			srv := newWebhookServerWithConfig(&mockSCMProvider{event: ev}, c, zerolog.Nop(), true)
+
+			w := httptest.NewRecorder()
+			srv.Handler()(w, httptest.NewRequest(http.MethodPost, "/webhook/scm", strings.NewReader(`{}`)))
+			require.Equal(t, http.StatusNoContent, w.Code)
+
+			ns := map[string]string{"app-7": "team-a", "svc-7": "team-b", "placeholder": "team-c", "norepo-7": "team-d"}
+			for name, want := range tt.wantMerged {
+				assert.Equal(t, want, webhookMerged(t, c, name, ns[name]), name)
+			}
+		})
+	}
 }
