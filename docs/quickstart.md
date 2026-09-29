@@ -72,7 +72,14 @@ graph LR
 
 ## Install kardinal-promoter
 
-Starting with v0.6.0, kardinal-promoter bundles the krocodile Graph controller directly in the Helm chart. A single `helm install` installs everything — no separate krocodile step needed.
+kardinal-promoter runs on the upstream [kro](https://github.com/kubernetes-sigs/kro) Graph controller. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate first:
+
+```bash
+# From a kardinal-promoter checkout
+bash hack/install-kro.sh
+```
+
+Then install kardinal-promoter:
 
 ```bash
 # Option A: reference an existing Secret (recommended for production)

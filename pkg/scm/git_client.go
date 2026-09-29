@@ -125,9 +125,17 @@ func (c *GoGitClient) Push(ctx context.Context, dir, remote, branch, token strin
 		return fmt.Errorf("open repo at %s: %w", dir, err)
 	}
 
+	// go-git does not resolve a symbolic "HEAD" source in a refspec: it matches
+	// no local hash reference, the push sends nothing and reports
+	// NoErrAlreadyUpToDate. Push the resolved commit hash instead.
+	head, err := repo.Head()
+	if err != nil {
+		return fmt.Errorf("resolve HEAD in %s: %w", dir, err)
+	}
+
 	pushOpts := &gogit.PushOptions{
 		RemoteName: remote,
-		RefSpecs:   []config.RefSpec{config.RefSpec("HEAD:refs/heads/" + branch)},
+		RefSpecs:   []config.RefSpec{config.RefSpec(head.Hash().String() + ":refs/heads/" + branch)},
 		Force:      false,
 	}
 	if token != "" {

@@ -6,9 +6,12 @@ package translator
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -24,6 +27,14 @@ type Translator struct {
 	k8s         client.Reader // for listing PolicyGates
 	policyNS    []string      // namespaces to scan for org-level PolicyGates
 	log         zerolog.Logger
+
+	// identity provisions the ServiceAccount kro impersonates for the Graph.
+	// Nil skips provisioning (unit tests, or an operator-managed identity).
+	identity *graph.IdentityProvisioner
+	// mapper, when set, drops health ref nodes whose kind is not served by
+	// the cluster. kro resolves the CRD schema of every static-GVK node when
+	// it compiles a Graph, so one missing CRD would reject the whole Graph.
+	mapper meta.RESTMapper
 }
 
 // New creates a new Translator.
@@ -46,6 +57,20 @@ func New(
 		policyNS:    policyNS,
 		log:         log,
 	}
+}
+
+// WithIdentity sets the provisioner that ensures the Graph ServiceAccount
+// and its RoleBindings exist before each Graph is created.
+func (t *Translator) WithIdentity(p *graph.IdentityProvisioner) *Translator {
+	t.identity = p
+	return t
+}
+
+// WithRESTMapper sets the mapper used to skip health ref nodes for kinds the
+// cluster does not serve (for example Argo CD Applications without Argo CD).
+func (t *Translator) WithRESTMapper(m meta.RESTMapper) *Translator {
+	t.mapper = m
+	return t
 }
 
 // Translate translates a Pipeline+Bundle pair to a Graph CR and creates it.
@@ -100,24 +125,23 @@ func (t *Translator) Translate(ctx context.Context,
 		Str("graph", result.Graph.Name).
 		Msg("graph spec built")
 
-	// Inject health Watch nodes for each environment that has health.type configured.
+	// Inject health ref nodes for each environment that has health.type configured.
 	// HE-1, HE-2, HE-3 from docs/design/11-graph-purity-tech-debt.md:
-	// The translator emits krocodile Watch-reference nodes (identity-only template:
-	// apiVersion+kind+metadata.name) for health verification so the Graph can
-	// observe real K8s resource health without the PromotionStep reconciler
-	// calling health adapters on the hot path.
-	//
-	// Each health Watch node:
-	//   - Has an identity-only template → krocodile auto-detects it as a Watch reference
-	//   - Has a readyWhen expression evaluating the K8s resource's health status
-	//   - Updates the companion PromotionStep node's readyWhen to surface
-	//     real-resource health in the Graph's UI signal
-	if injected, injErr := injectHealthWatchNodes(pipeline, result.Graph); injErr != nil {
+	// The translator emits read-only ref nodes for health verification so the
+	// Graph can observe real K8s resource health. Each node's readyWhen feeds
+	// the Graph's Ready condition and the UI.
+	if injected, injErr := injectHealthNodes(pipeline, result.Graph, t.servedKind); injErr != nil {
 		// Non-fatal: log and continue without Watch nodes rather than failing the promotion.
 		// The PromotionStep reconciler's Go adapter path remains as a fallback.
 		log.Warn().Err(injErr).Msg("health Watch node injection failed — continuing without Watch nodes")
 	} else if injected > 0 {
 		log.Debug().Int("healthNodes", injected).Msg("health Watch nodes injected into Graph")
+	}
+
+	// kro applies the Graph as spec.serviceAccountName; it must exist and be
+	// bound before kro's first reconcile or every apply is forbidden.
+	if err := t.identity.Ensure(ctx, result.Graph); err != nil {
+		return "", fmt.Errorf("translator.Translate: graph identity: %w", err)
 	}
 
 	// Create the Graph CR
@@ -128,47 +152,55 @@ func (t *Translator) Translate(ctx context.Context,
 	log.Info().
 		Str("graph", result.Graph.Name).
 		Int("nodes", result.NodeCount).
-		Msg("translation complete: graph created")
+		Msg("translation complete: graph applied")
 
 	return result.Graph.Name, nil
 }
 
-// injectHealthWatchNodes post-processes the Graph spec to add krocodile Watch-reference
-// nodes for each environment with a configured health.type.
+// servedKind reports whether the cluster serves apiVersion/kind. Without a
+// mapper every kind is assumed served.
+func (t *Translator) servedKind(apiVersion, kind string) bool {
+	if t.mapper == nil {
+		return true
+	}
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil {
+		return false
+	}
+	_, err = t.mapper.RESTMapping(gv.WithKind(kind).GroupKind(), gv.Version)
+	return err == nil
+}
+
+// injectHealthWatchNodes adds health ref nodes assuming every health kind is
+// served by the cluster. See injectHealthNodes.
+func injectHealthWatchNodes(pipeline *kardinalv1alpha1.Pipeline, g *graph.Graph) (int, error) {
+	return injectHealthNodes(pipeline, g, nil)
+}
+
+// injectHealthNodes post-processes the Graph spec to add read-only ref nodes
+// for each environment with a configured health.type.
 //
 // This is the translator-layer implementation of HE-1, HE-2, HE-3 from
-// docs/design/11-graph-purity-tech-debt.md. Watch-reference nodes are auto-detected
-// by krocodile (e082fe9+, Reference=Watch) when a node template contains only
-// apiVersion, kind, and metadata.name/namespace.
+// docs/design/11-graph-purity-tech-debt.md.
 //
 // For each environment env with health.type set:
 //  1. Build a WatchNodeSpec from pkg/health.WatchNodeTemplate
 //  2. Build the Graph node ID: "health<EnvSlug>" (camelCase via celSafeSlug)
-//  3. Append a Watch-reference node to the Graph spec
-//  4. Update the PromotionStep node's readyWhen to include the health condition
-//     (UI signal: the Graph shows the step as "ready" only when the K8s resource
-//     is also healthy — not just when the reconciler set state=Verified)
+//  3. Append a ref node: metadata.name for a single object, metadata.selector
+//     for a collection
 //
-// Returns the count of injected Watch nodes.
-func injectHealthWatchNodes(
+// The health condition is not added to the PromotionStep node's readyWhen:
+// kro only lets readyWhen reference the node itself (ledger gap G3).
+//
+// served, when non-nil, filters out kinds the cluster does not serve (ledger
+// gap G4). Returns the count of injected nodes.
+func injectHealthNodes(
 	pipeline *kardinalv1alpha1.Pipeline,
 	g *graph.Graph,
+	served func(apiVersion, kind string) bool,
 ) (int, error) {
 	if pipeline == nil || g == nil {
 		return 0, nil
-	}
-
-	// Build a name→spec index for fast PromotionStep node lookup.
-	// Node IDs for PromotionStep nodes follow the celSafeSlug(envName) convention
-	// used by builder.go. We match them by ID prefix.
-	stepNodeByEnv := make(map[string]int, len(pipeline.Spec.Environments))
-	for i, node := range g.Spec.Nodes {
-		for _, env := range pipeline.Spec.Environments {
-			if node.ID == celSafeSlug(env.Name) {
-				stepNodeByEnv[env.Name] = i
-				break
-			}
-		}
 	}
 
 	injected := 0
@@ -187,46 +219,41 @@ func injectHealthWatchNodes(
 			// Unknown health type — skip this env rather than failing the whole promotion.
 			continue
 		}
+		if served != nil && !served(spec.APIVersion, spec.Kind) {
+			continue
+		}
 
 		// Node ID: "health" + TitleCase(celSafeSlug(env.Name))
 		// e.g. "prod-eu" → celSafeSlug → "prodEu" → "healthProdEu"
-		// The "health" prefix + TitleCase produces a camelCase ID with no underscores,
-		// satisfying both CEL identifier rules and DNS label rules.
+		// The "health" prefix + TitleCase keeps the ID a valid kro node ID
+		// ([A-Za-z][A-Za-z0-9]*).
 		envSlug := celSafeSlug(env.Name)
 		if len(envSlug) > 0 {
 			envSlug = strings.ToUpper(envSlug[:1]) + envSlug[1:]
 		}
 		nodeID := "health" + envSlug
 
-		// Substitute the "healthNode" placeholder in ReadyWhen with the actual node ID.
-		readyWhen := strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID)
-
-		// Build the Graph node.
-		// krocodile ≥ 05db829 (explicit-keyword schema):
-		//   - ref:   → dereference a single named object (by-name, read-only)
-		//   - watch: → observe a collection by selector (read-only)
-		// The old "template:" key with identity-only body is no longer valid for
-		// read-only nodes — it means Own (Graph creates the resource) in the new schema.
-		var watchNode graph.GraphNode
+		var healthNode graph.GraphNode
 		if spec.UseWatchKind {
-			// WatchKind → watch: keyword. selector at top level, namespace in metadata.
-			// krocodile ≥ 81c5a03: namespace from watch["metadata"]["namespace"]
-			// (absent = cluster-wide). Include namespace for env scoping.
-			watchNode = graph.GraphNode{
+			// Collection ref: metadata.selector. kro evaluates readyWhen per
+			// element with the element bound to "each".
+			healthNode = graph.GraphNode{
 				ID: nodeID,
-				Watch: map[string]interface{}{
+				Ref: map[string]interface{}{
 					"apiVersion": spec.APIVersion,
 					"kind":       spec.Kind,
-					"selector":   spec.LabelSelector,
 					"metadata": map[string]interface{}{
 						"namespace": spec.Namespace,
+						"selector": map[string]interface{}{
+							"matchLabels": stringMapToInterface(spec.LabelSelector),
+						},
 					},
 				},
-				ReadyWhen: []string{readyWhen},
+				ReadyWhen: []string{"${" + strings.ReplaceAll(spec.ReadyWhen, "healthNode", "each") + "}"},
 			}
 		} else {
-			// Single-named Watch → ref: keyword (by-name dereference).
-			watchNode = graph.GraphNode{
+			// Single named ref.
+			healthNode = graph.GraphNode{
 				ID: nodeID,
 				Ref: map[string]interface{}{
 					"apiVersion": spec.APIVersion,
@@ -236,28 +263,21 @@ func injectHealthWatchNodes(
 						"namespace": spec.Namespace,
 					},
 				},
-				ReadyWhen: []string{readyWhen},
+				ReadyWhen: []string{"${" + strings.ReplaceAll(spec.ReadyWhen, "healthNode", nodeID) + "}"},
 			}
 		}
-		g.Spec.Nodes = append(g.Spec.Nodes, watchNode)
-
-		// Update the companion PromotionStep node's readyWhen to also include the
-		// health Watch node condition. This makes the Graph's UI signal reflect the
-		// real K8s resource health, not only the reconciler's state field.
-		//
-		// Note: propagateWhen is intentionally left unchanged — the PromotionStep
-		// reconciler still gates downstream via state==Verified. The Watch node
-		// readyWhen is a UI signal only (Graph UI shows amber vs green).
-		if idx, ok := stepNodeByEnv[env.Name]; ok {
-			g.Spec.Nodes[idx].ReadyWhen = append(
-				g.Spec.Nodes[idx].ReadyWhen,
-				readyWhen,
-			)
-		}
-
+		g.Spec.Nodes = append(g.Spec.Nodes, healthNode)
 		injected++
 	}
 	return injected, nil
+}
+
+func stringMapToInterface(in map[string]string) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // healthOptsForEnv builds the health.CheckOptions for a given environment using
@@ -312,11 +332,11 @@ func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec)
 }
 
 // celSafeSlug produces an identifier safe for use as both a CEL variable name
-// and as a krocodile graph node ID. Mirrors graph.celSafeSlug exactly — must
+// and as a kro Graph node ID. Mirrors graph.celSafeSlug exactly — must
 // be kept in sync with pkg/graph/builder.go.
 //
 // See graph.celSafeSlug for full documentation. Summary: produces camelCase so
-// the result is valid as a CEL identifier AND as a DNS label after strings.ToLower().
+// the result matches kro's node ID pattern [A-Za-z][A-Za-z0-9]*.
 func celSafeSlug(s string) string {
 	var b strings.Builder
 	upperNext := false
@@ -355,8 +375,9 @@ func celSafeSlug(s string) string {
 	return b.String()
 }
 
-// collectGates lists PolicyGates from all policy namespaces and the pipeline's namespace.
-// De-duplicates by name+namespace.
+// collectGates lists PolicyGate templates from all policy namespaces and the
+// pipeline's namespace. De-duplicates by name+namespace and skips gate
+// instances (labelled kardinal.io/gate-template).
 //
 // Policy namespace resolution (TR-2 elimination — docs/design/11-graph-purity-tech-debt.md):
 // If pipeline.spec.policyNamespaces is set, use those namespaces instead of the
@@ -393,6 +414,12 @@ func (t *Translator) collectGates(ctx context.Context,
 			return nil, fmt.Errorf("list policy gates in %s: %w", ns, err)
 		}
 		for _, g := range list.Items {
+			// Skip gate instances a Graph stamped from a template. They live in
+			// the pipeline namespace and would otherwise be re-stamped as
+			// templates for the next Bundle.
+			if _, isInstance := g.Labels["kardinal.io/gate-template"]; isInstance {
+				continue
+			}
 			key := g.Namespace + "/" + g.Name
 			if !seen[key] {
 				seen[key] = true
@@ -401,5 +428,14 @@ func (t *Translator) collectGates(ctx context.Context,
 		}
 	}
 
+	// The cached List comes back in map order. Sort so the rendered Graph is
+	// identical between translations and a no-op Pipeline change does not
+	// produce a spurious Graph update.
+	sort.Slice(gates, func(i, j int) bool {
+		if gates[i].Namespace != gates[j].Namespace {
+			return gates[i].Namespace < gates[j].Namespace
+		}
+		return gates[i].Name < gates[j].Name
+	})
 	return gates, nil
 }

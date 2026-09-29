@@ -10,33 +10,39 @@ This spec defines how kardinal-promoter integrates with kro's Graph primitive. E
 
 ## Graph Primitive Reference
 
-Source: [ellistarn/kro/tree/krocodile](https://github.com/ellistarn/kro/tree/krocodile/experimental)
+Source: [kubernetes-sigs/kro](https://github.com/kubernetes-sigs/kro) v0.10.0-rc.0, Graph kind
+enabled by the `GraphKind` feature gate. Docs: [Graph overview](https://kro.run/next/docs/concepts/graph/overview/).
+The pinned version lives in `hack/install-kro.sh`. Gaps between what kardinal needs and what the
+Graph provides are tracked in [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
-> **Important — track this branch actively.** krocodile/experimental is under rapid development
-> (20+ commits/day as of 2026-04-09). Before implementing any Graph integration, read the current
-> design docs and git log. API and semantics are changing. See Section 17 in design-v2.1.md for
-> the contribution and tracking policy.
+> **History.** Until 2026-09 kardinal targeted the pre-upstream Graph controller fork, which used
+> a separate API group, a `propagateWhen` keyword and a `watch:` node shape. None of these exist
+> upstream. The sections below describe the upstream semantics.
 
-The Graph CRD (`experimental.kro.run/v1alpha1/Graph`) is namespace-scoped. It defines:
+The Graph CRD (`kro.run/v1alpha1/Graph`) is namespace-scoped. It defines:
 
-> **API group update (krocodile commit `48224264`, 2026-04-10)**: Graph CRD moved from `kro.run`
-> to `experimental.kro.run` to eliminate CRD conflicts with upstream kro. All GVK/GVR references
-> in this project use `experimental.kro.run`. The `GraphGVK` and `GraphGVR` constants in
-> `pkg/graph/types.go` are authoritative.
-
-
-- **nodes**: A list of resource templates with IDs. Each node has a Kubernetes resource template with `${...}` CEL expressions.
-- **readyWhen**: Per-node CEL expressions that are a **health signal only**. They feed the Graph's aggregated `Ready` condition and the `.ready()` function. **They do NOT gate downstream execution.**
-- **propagateWhen**: Per-node CEL expressions that **gate data flow to dependents**. When unsatisfied, dependents retain their previous state and are not re-evaluated. **This is what blocks downstream nodes.**
-- **includeWhen**: Per-node CEL expressions that conditionally include or exclude a node from the DAG.
-- **forEach**: Stamp out one node per item in a collection.
-- **finalizes**: Teardown hooks executed in reverse dependency order during Graph deletion.
+- **nodes**: A list of nodes with IDs matching `^[A-Za-z][A-Za-z0-9]*$`. Each node sets exactly one of:
+  - **template**: a Kubernetes resource with `${...}` CEL expressions; kro creates and owns it.
+  - **ref**: an existing object (`metadata.name`) or collection (`metadata.selector.matchLabels`)
+    read into scope; kro does not own it.
+- **readyWhen**: Per-node CEL over the node itself only (`each` for collections), wrapped in `${}`.
+  Feeds the Graph's `Ready` condition. **On a standalone Graph it does not hold back dependents**
+  (ledger G1, G3).
+- **includeWhen**: Per-node CEL that conditionally includes the node. A false result also
+  excludes every node that depends on it (ledger G2).
+- **forEach**: Expands a node into a collection, e.g. `forEach: [{region: "${[...]}"}]`.
+- **spec.serviceAccountName**: The identity kro impersonates to apply the Graph's children
+  (ledger G5).
 
 **Critical distinction for kardinal-promoter:**
 - `readyWhen` = health signal (UI, `kubectl get graph`) — does NOT block downstream
-- `propagateWhen` = data-flow gate — DOES block downstream when unsatisfied
+- Resolvability = the gate. A dependent's template references an expression that does not resolve
+  until the upstream condition holds, so kro cannot render the dependent before then:
+  - upstream: `${["Verified"].filter(x_, up.status.state == "Verified")[0]}`
+  - gate: `${[g.metadata.name].filter(x_, g.status.ready == true)[0]}`
 
-PolicyGate blocking uses `propagateWhen`, not `readyWhen`. See design-v2.1.md Section 3.5.
+PolicyGate blocking uses resolvability gating, not `readyWhen`. See `resolvableWhen` in
+`pkg/graph/builder.go`.
 
 ## Go Package Structure
 
@@ -49,40 +55,35 @@ pkg/
     testing.go         # Test helpers (create Graph, wait for node creation)
 ```
 
-The `graph` package does not import any kro Go module directly. It works with the Graph CRD via the Kubernetes dynamic client (`k8s.io/client-go/dynamic`). This avoids a compile-time dependency on the experimental kro codebase, which may change. The Graph CRD schema is defined in `types.go` as Go structs matching the YAML structure.
+The `graph` package does not import any kro Go module directly. It works with the Graph CRD via the Kubernetes dynamic client (`k8s.io/client-go/dynamic`). This avoids a compile-time dependency on kro controller packages. The Graph CRD schema is defined in `types.go` as Go structs matching the YAML structure.
 
 ## Graph CRD Schema (as used by kardinal-promoter)
 
 ```go
 type GraphSpec struct {
-    Nodes []GraphNode `json:"nodes"`
+    Nodes              []GraphNode `json:"nodes,omitempty"`
+    ServiceAccountName string      `json:"serviceAccountName,omitempty"` // default kardinal-graph
 }
 
 type GraphNode struct {
-    ID            string               `json:"id"`
-    Template      runtime.RawExtension `json:"template"`
-    ReadyWhen     []string             `json:"readyWhen,omitempty"`
-    PropagateWhen []string             `json:"propagateWhen,omitempty"`
-    IncludeWhen   []string             `json:"includeWhen,omitempty"`
-    ForEach       string               `json:"forEach,omitempty"`
+    ID          string                 `json:"id"`
+    Template    map[string]interface{} `json:"template,omitempty"` // exactly one of
+    Ref         map[string]interface{} `json:"ref,omitempty"`      // template / ref
+    ReadyWhen   []string               `json:"readyWhen,omitempty"`   // self-only health signal
+    IncludeWhen []string               `json:"includeWhen,omitempty"`
+    ForEach     []map[string]string    `json:"forEach,omitempty"`     // [{iterator: "${list}"}]
 }
 
-// PropagateWhen usage:
+// Gating dependents:
 //
-//   ReadyWhen   = health signal only. Feeds the Graph's aggregated Ready condition
-//                 and the UI. Does NOT block downstream nodes.
-//   PropagateWhen = data-flow gate. When unsatisfied, downstream nodes do not receive
-//                   updated data and are not re-evaluated. This is the field that
-//                   gates PolicyGate blocking. See design-v2.1.md §3.5.
+//   ReadyWhen does NOT block downstream nodes on a standalone Graph (ledger G1).
+//   The builder instead embeds a resolvability expression in the dependent's
+//   template that only resolves once the upstream condition holds:
 //
-// For PromotionStep nodes: use PropagateWhen to block downstream when not Verified.
-//   propagateWhen: ["${dev.status.state == \"Verified\"}"]
-//
-// For PolicyGate nodes: use PropagateWhen to block downstream when gate not ready.
-//   propagateWhen: ["${noWeekendDeploys.status.ready == true}"]
+//   PromotionStep upstream: ${["Verified"].filter(x_, dev.status.state == "Verified")[0]}
+//   PolicyGate upstream:    ${[noWeekendDeploys.metadata.name].filter(x_, noWeekendDeploys.status.ready == true)[0]}
 //
 // ReadyWhen on PolicyGate nodes is only the UI health signal (shows pass/fail colour).
-// The actual blocking is done by PropagateWhen on the upstream PolicyGate node.
 
 type GraphStatus struct {
     Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -104,7 +105,7 @@ The kardinal-controller creates a Graph CR using the dynamic client:
 
 ```go
 func (c *GraphClient) Create(ctx context.Context, graph *Graph) error {
-    // GraphGVR is defined in pkg/graph/types.go (experimental.kro.run/v1alpha1/graphs)
+    // GraphGVR is defined in pkg/graph/types.go (kro.run/v1alpha1/graphs)
     unstructured := toUnstructured(graph)
     _, err := c.dynamic.Resource(GraphGVR).Namespace(graph.Namespace).Create(ctx, unstructured, metav1.CreateOptions{})
     return err
@@ -227,13 +228,13 @@ The Graph API is experimental. To detect breaking changes:
 
 ## Present
 
-✅ krocodile pinned to `cdc4bb9` (2026-04-17): schema-aware CEL, forEach data-loss fix,
+✅ Graph controller fork pinned to `cdc4bb9` (2026-04-17): schema-aware CEL, forEach data-loss fix,
    NodeTypeOwn→NodeTypeTemplate cosmetic rename (PR merged before #789 tracking)
 
-✅ krocodile upgraded to `3376810` (2026-04-18, PR #789): propagation trigger on self-state
-   refresh — fixes J1 blocker where UAT PromotionStep never started because krocodile
+✅ Graph controller fork upgraded to `3376810` (2026-04-18, PR #789): propagation trigger on self-state
+   refresh — fixes J1 blocker where UAT PromotionStep never started because the fork's
    Path 2 dispatch did not mark dependents as `propagationTriggered`.
-   Root cause: krocodile commit `3bcbe92` (correctness: propagation trigger on self-state
+   Root cause: fork commit `3bcbe92` (correctness: propagation trigger on self-state
    refresh + cycle error format).
 
 ✅ ensurePipelineSpecCurrent empty-hash guard (2026-04-18, PR #789): Bundles promoted before
@@ -242,13 +243,18 @@ The Graph API is experimental. To detect breaking changes:
    Previously the empty hash was misinterpreted as "spec has changed", causing a spurious
    Graph deletion that reset all PromotionSteps to empty status.
 
-✅ krocodile upgraded to `d6cbc54` (2026-04-19, PR #803): 5 additive commits — forEach
+✅ Graph controller fork upgraded to `d6cbc54` (2026-04-19, PR #803): 5 additive commits — forEach
    incremental O(K) diff, WatchManager canonical Kind caching fix, context-aware hashing.
    No breaking changes to kardinal integration. No source changes required.
 
-✅ krocodile upgrade cadence (ongoing): COORD §1c checks for new commits every batch per
-   AGENTS.md protocol. If ≥5 commits behind HEAD krocodile, an upgrade item is queued
-   automatically. No separate code component — the cadence lives in the agent loop.
+✅ Graph controller upgrade cadence (ongoing): COORD checks for new kro releases per the
+   AGENTS.md protocol; the pin lives in `hack/install-kro.sh`. No separate code component —
+   the cadence lives in the agent loop.
+
+✅ Migrated to upstream kro v0.10.0-rc.0 Graph (`kro.run/v1alpha1`, `GraphKind` gate, 2026-09):
+   resolvability gating replaces `propagateWhen`, `ref` nodes replace `watch:`, per-Graph
+   `spec.serviceAccountName` identity provisioned by the controller. kro is a separate install.
+   Remaining gaps: [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
 ## Future
 

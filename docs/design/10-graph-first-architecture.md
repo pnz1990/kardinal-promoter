@@ -10,7 +10,7 @@
 
 ## Decision
 
-**Everything in kardinal-promoter is a derivation of the krocodile Graph primitive.**
+**Everything in kardinal-promoter is a derivation of the kro Graph primitive.**
 
 The world is a DAG. Every promotion step, every policy gate, every health check,
 every metric condition, every external approval — all of it is expressed as a node
@@ -18,7 +18,8 @@ in a kro Graph. This is not an aspiration. It is the governing constraint on eve
 implementation decision in this codebase.
 
 If a feature cannot be expressed as a Graph node, that is a signal that either:
-1. krocodile is missing a primitive that should be contributed upstream, or
+1. kro is missing a primitive that should be contributed upstream (log it in
+   [16-graph-capability-ledger.md](16-graph-capability-ledger.md)), or
 2. The feature is being designed incorrectly.
 
 In neither case does the correct response involve implementing logic outside the
@@ -30,10 +31,10 @@ gap before implementing**.
 ## The Layer Model
 
 ```
-L1: krocodile Graph API
+L1: kro Graph API (kro.run/v1alpha1, GraphKind feature gate)
     — The universal DAG primitive
     — Creates, reconciles, and tears down Kubernetes resources in dependency order
-    — Evaluates CEL expressions for readyWhen, propagateWhen, includeWhen
+    — Evaluates CEL expressions for templates, readyWhen, includeWhen, forEach
     — Knows only about Kubernetes resource objects — nothing else
 
 L2: kardinal APIs (built on Graph)
@@ -96,7 +97,7 @@ Graph's CEL environment via `WithCustomDeclarations`. This is appropriate for
 > `schedule.dayOfWeek` are **NOT yet implemented as CEL library extensions**.
 > They are plain map variables injected into the PolicyGate CEL context by the
 > PolicyGate reconciler. They are available in PolicyGate expressions only — they
-> do NOT work in krocodile Graph `readyWhen`/`propagateWhen` expressions.
+> do NOT work in kro Graph `readyWhen` or template expressions.
 > Registering them as a proper Q3 CEL library on the Graph DefaultEnvironment is
 > tracked in `docs/design/11-graph-purity-tech-debt.md` §ScheduleClock Implementation
 > (design goal, not yet shipped).
@@ -113,7 +114,7 @@ This is **not** appropriate for:
 ## CEL Evaluation: Where It Lives
 
 There is exactly one place CEL expressions are evaluated for Graph-level semantics:
-**inside the krocodile Graph controller**, during the DAG walk. All other CEL
+**inside the kro Graph controller**, during the DAG walk. All other CEL
 evaluation in kardinal is either:
 
 1. A **reconciler that computes a result and writes it to a CRD status** (so Graph
@@ -137,14 +138,15 @@ must be eliminated by migrating to one of the patterns above.
 
 ## Upstream Contribution Policy
 
-One capability is currently missing from krocodile that would eliminate an existing
-workaround. A second was resolved via the `ScheduleClock` pattern.
+One capability is currently missing from kro that would eliminate an existing
+workaround. A second was resolved via the `ScheduleClock` pattern. The full list of
+Graph gaps is [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
 ### ~~Contribution 1: `recheckAfter`~~ — RESOLVED via ScheduleClock pattern (#641)
 
 > **Status: Superseded.** The `ScheduleClock` CRD (PR #484) provides watch-driven
-> re-evaluation without a krocodile-native `recheckAfter` primitive. This contribution
-> is now **nice-to-have** for the broader krocodile ecosystem, not a kardinal prerequisite.
+> re-evaluation without a Graph-native `recheckAfter` primitive. This contribution
+> is now **nice-to-have** for the broader kro ecosystem, not a kardinal prerequisite.
 > See `docs/design/11-graph-purity-tech-debt.md §ScheduleClock Implementation` and
 > §Pending Upstream Contributions for context.
 
@@ -156,8 +158,8 @@ The kardinal solution: `ScheduleClock` is an Owned node reconciler that writes
 PolicyGate nodes that need periodic re-evaluation Watch the `ScheduleClock` object —
 no `recheckAfter` primitive required.
 
-If contributing upstream to krocodile is desired, the target is
-`experimental/docs/design/` in the krocodile branch. It is not blocking any kardinal work.
+If contributing upstream is desired, the target is
+[kubernetes-sigs/kro](https://github.com/kubernetes-sigs/kro). It is not blocking any kardinal work.
 
 ### Contribution 2: `dependsOn` (explicit edges)
 
@@ -193,8 +195,8 @@ need for a separate recheckAfter primitive.
 reconciler to evaluate policy expressions.
 
 **Why it existed:**
-1. krocodile's `propagateWhen` only has access to the node's own Kubernetes object state.
-2. krocodile had no `recheckAfter` primitive (now replaced by ScheduleClock pattern).
+1. The Graph controller's node conditions only have access to the node's own Kubernetes object state.
+2. The Graph controller had no `recheckAfter` primitive (now replaced by ScheduleClock pattern).
 
 **Resolution path taken:**
 1. ScheduleClock CRD provides watch-driven re-evaluation (PR #484 — closes the recheckAfter gap).
@@ -203,7 +205,7 @@ reconciler to evaluate policy expressions.
 
 **Remaining work**: None. pkg/cel is now library-only. The library package imports are allowed.
 
-**Resolution target:** `recheckAfter` contribution to krocodile + migration sprint.
+**Resolution target:** `recheckAfter` contribution to kro + migration sprint.
 
 **Current status:** Accepted transitional workaround. Must not grow. Must not be
 referenced by any new code. New gate types must use the Watch node or Owned node
@@ -217,7 +219,7 @@ These are violations that **QA must block** and **engineers must not implement**
 
 | Anti-pattern | Why it's wrong | Correct approach |
 |---|---|---|
-| Business logic evaluated outside a Graph node or reconciler that writes to CRD status | Violates Graph-first — logic becomes invisible to the DAG | Express as readyWhen/propagateWhen on a Watch or Owned node |
+| Business logic evaluated outside a Graph node or reconciler that writes to CRD status | Violates Graph-first — logic becomes invisible to the DAG | Express as readyWhen on a `ref` node, or resolvability gating on an owned (`template`) node |
 | New usage of `pkg/cel` in any package other than `pkg/reconciler/policygate` | Spreads the transitional workaround | Use Graph CEL extensions or Watch nodes |
 | Reconciler that makes decisions based on fields NOT in a CRD status it owns | Hidden state outside the Graph's observable layer | Write all decisions to CRD status; Graph reads status |
 | CEL expression that calls external HTTP API inside a `FunctionBinding` | Blocks the Graph controller reconcile loop; no retry/backoff | Use a dedicated reconciler + CRD status pattern |
@@ -229,9 +231,13 @@ These are violations that **QA must block** and **engineers must not implement**
 ## Decision Log
 
 **2026-04-10 — Initial decision.**
-After thorough research into krocodile's architecture and CEL extension mechanisms,
+After thorough research into the Graph controller's architecture and CEL extension mechanisms,
 the team concluded that the world-is-a-DAG principle is architecturally correct and
 that `pkg/cel` is a known transitional workaround pending the `recheckAfter`
 upstream contribution. This design doc governs all future implementation decisions.
 
 Human approved. Agents must treat this as a hard architectural constraint.
+
+**2026-09 — Upstream kro.** kardinal moved from the pre-upstream Graph controller fork to
+upstream kro v0.10.0-rc.0. The principle is unchanged; gaps are tracked in
+[16-graph-capability-ledger.md](16-graph-capability-ledger.md).

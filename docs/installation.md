@@ -12,14 +12,31 @@ This guide covers installing kardinal-promoter in a Kubernetes cluster using Hel
 | kubectl | ≥ 1.28 | Matches your cluster version |
 | Helm | ≥ 3.12 | `brew install helm` |
 | GitHub token | — | Personal access token with `repo` scope |
+| kro | ≥ 0.10.0-rc.0 | Graph controller with the `GraphKind` feature gate — see [Install kro](#install-kro) |
 
 !!! tip "Trying it out locally?"
     Use [kind](https://kind.sigs.k8s.io/) for a single-node local cluster.
     See the [Quickstart](quickstart.md) for the fast path.
 
-!!! info "krocodile is bundled"
-    kardinal-promoter bundles the krocodile Graph controller as part of its Helm chart.
-    **No separate krocodile install is required.** A single `helm install` installs both controllers.
+---
+
+## Install kro
+
+kardinal-promoter renders one kro [Graph](https://kro.run/next/docs/concepts/graph/overview/)
+(`kro.run/v1alpha1`) per Bundle. [kro](https://github.com/kubernetes-sigs/kro) is a separate
+prerequisite; the kardinal-promoter chart does not bundle it.
+
+```bash
+# From a kardinal-promoter checkout
+bash hack/install-kro.sh
+```
+
+The script installs the kro Helm chart (`oci://registry.k8s.io/kro/charts/kro`) into `kro-system`
+with `config.featureGates.GraphKind=true` and `rbac.mode=aggregation`, then server-side applies the
+kro CRDs. Override the version with `KRO_VERSION=<version>`.
+
+!!! warning "Version compatibility"
+    The kro version kardinal-promoter is tested against is pinned in `hack/install-kro.sh`.
 
 ---
 
@@ -47,10 +64,8 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --set github.secretRef.name=github-token
 ```
 
-This single command installs:
-
-- The **kardinal-promoter controller** in the `kardinal-system` namespace
-- The **krocodile Graph controller** in the `kro-system` namespace (unless `--set krocodile.enabled=false`)
+This installs the **kardinal-promoter controller** in the `kardinal-system` namespace and the
+ClusterRoles bound to the Graph identity (`kardinal-graph-applier`, `kardinal-graph-reader`).
 
 Verify both controllers are running:
 
@@ -61,27 +76,8 @@ kubectl get pods -n kardinal-system
 
 kubectl get pods -n kro-system
 # NAME                              READY   STATUS    RESTARTS   AGE
-# graph-controller-7d4b8f9f5-xk2pq  1/1     Running   0          30s
+# kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 ```
-
----
-
-## Bring your own krocodile
-
-If you already run krocodile independently in your cluster, disable the bundled installation:
-
-```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-  --namespace kardinal-system \
-  --create-namespace \
-  --set github.secretRef.name=github-token \
-  --set krocodile.enabled=false
-```
-
-!!! warning "Version compatibility"
-    When running your own krocodile, ensure it is at a compatible commit.
-    The required minimum is documented in `hack/install-krocodile.sh`.
-    The bundled version is pinned per release and tested together.
 
 ---
 
@@ -109,17 +105,13 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
 | `affinity` | `{}` | Pod affinity |
 | `validatingAdmissionPolicy.enabled` | `true` | Deploy `ValidatingAdmissionPolicy` (requires Kubernetes ≥ 1.28) |
 
-### krocodile Graph controller
+### kro Graph integration
 
 | Key | Default | Description |
 |---|---|---|
-| `krocodile.enabled` | `true` | Install bundled krocodile controller |
-| `krocodile.image.repository` | `ghcr.io/pnz1990/kardinal-promoter/krocodile` | krocodile image |
-| `krocodile.image.tag` | `krocodile.pinnedCommit` | Image tag (defaults to pinned commit SHA) |
-| `krocodile.pinnedCommit` | See `Chart.yaml` annotations | Source commit bundled with this release |
-| `krocodile.namespace` | `kro-system` | Namespace for krocodile controller |
-| `krocodile.replicaCount` | `1` | Number of krocodile replicas |
-| `krocodile.resources.limits.memory` | `512Mi` | Memory limit |
+| `graph.serviceAccountName` | `kardinal-graph` | ServiceAccount kro impersonates to apply each Graph's children (`spec.serviceAccountName`) |
+| `graph.kroNamespace` | `kro-system` | Namespace kro runs in (NetworkPolicy egress) |
+| `graph.aggregateToKro` | `true` | Ship a ClusterRole aggregated into kro's controller role (kro with `rbac.mode=aggregation`) |
 
 ---
 
@@ -182,8 +174,8 @@ To adjust the timeout:
 terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take >30s
 ```
 
-This upgrades both the kardinal-promoter controller and the bundled krocodile controller
-to the versions pinned in the new chart version.
+`helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
+re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 
 !!! note
     kardinal-promoter is backwards-compatible across patch versions.
@@ -206,12 +198,12 @@ kubectl delete crd \
   prstatuses.kardinal.io \
   rollbackpolicies.kardinal.io
 
-# Optional: remove krocodile CRDs (only if you don't use krocodile elsewhere)
+# Optional: remove kro and its CRDs (only if nothing else uses kro)
+helm uninstall kro -n kro-system
 kubectl delete crd \
-  graphs.experimental.kro.run \
-  graphrevisions.experimental.kro.run
-
-# Optional: remove krocodile namespace
+  graphs.kro.run \
+  graphrevisions.internal.kro.run \
+  resourcegraphdefinitions.kro.run
 kubectl delete namespace kro-system
 ```
 
@@ -224,15 +216,20 @@ The kardinal-promoter controller's `ServiceAccount` requires:
 | Resource | Verbs |
 |---|---|
 | `pipelines`, `bundles`, `promotionsteps`, `policygates`, `prstatuses`, `rollbackpolicies` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
-| `graphs.experimental.kro.run` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+| `graphs.kro.run` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
+| `serviceaccounts` | `get`, `create` (Graph identity) |
+| `rolebindings` | `get`, `create`, `update` (Graph identity) |
+| `clusterroles` | `bind`, limited to `kardinal-graph-applier` and `kardinal-graph-reader` |
 | `deployments`, `services`, `pods` | `get`, `list`, `watch` |
 | `secrets` | `get` (GitHub token secret only) |
 | `events` | `create`, `patch` |
 | `configmaps` | `get`, `create`, `update` (leader election + version ConfigMap) |
 
-The krocodile controller's `ServiceAccount` requires full cluster-level access to manage
-arbitrary resources as directed by Graph specs. This is inherent to its design as a general-purpose
-DAG engine — it applies resources of any type that appear in Graph node templates.
+kro does not apply a Graph's children with its own identity. It impersonates the Graph's
+`spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
+controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-graph-applier`
+(in the Graph namespace) and `kardinal-graph-reader` (in each namespace a health `ref` node reads).
+See G5 in the [Graph capability ledger](design/16-graph-capability-ledger.md).
 
 Both `ClusterRole` and `ClusterRoleBinding` resources are created automatically by the Helm chart.
 

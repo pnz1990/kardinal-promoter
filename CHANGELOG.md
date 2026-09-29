@@ -4,6 +4,7 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 
 ## [Unreleased]
 
+- **Upstream kro Graph** — kardinal now runs on upstream kro `kro.run/v1alpha1` Graph (v0.10.0-rc.0, `GraphKind` feature gate) instead of the forked Graph controller. The chart no longer bundles a Graph controller; install kro with `hack/install-kro.sh`. Pipeline changes update the Graph in place instead of re-running Verified environments. See [Graph Coverage](docs/graph-coverage.md)
 - feat(scripts): add session-complete-marker.sh — detect truncated sessions (#1199)
 - fix(scripts): preserve state.json when zero-pr-detect.sh writes _state (#1197)
 - feat(scripts): add gitops-promoter-gap-check.sh for competitive parity analysis (#1185)
@@ -133,7 +134,7 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 - feat(cli): `kardinal audit summary` — aggregate promotion metrics (#685, #686)
 - feat(cli): improve error messages — actionable hints for common failures (#688, #689)
 - feat(api): admission webhook for Pipeline and Bundle validation (#573, #670)
-- chore(graph): upgrade krocodile pin 81c5a03 → 05db829 — explicit-keyword schema (#677)
+- chore(graph): upgrade Graph controller fork pin 81c5a03 → 05db829 — explicit-keyword schema (#677)
 
 ## [v0.7.0] — 2026-04-16
 
@@ -141,7 +142,7 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 - fix(ui): fix Playwright E2E tests — 32/32 pass (#632, #650)
 - feat(docs): Kargo migration guide — concept mapping, side-by-side YAML, 7-step guide (#640)
 - fix(controller): add Watch on PRStatus and PolicyGate in PromotionStep reconciler (#644, #655)
-- chore(graph): upgrade krocodile pin 745998f → 81c5a03 with compat fixes (#646, #654)
+- chore(graph): upgrade Graph controller fork pin 745998f → 81c5a03 with compat fixes (#646, #654)
 - refactor(graph): replace upstreamVerifiedN fields with upstreamStates list (#625, #660)
 - docs(health): document health.labelSelector WatchKind mode (#656, #659)
 - feat(helm): Helm chart with multi-cluster and RBAC support (#664)
@@ -178,7 +179,7 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 - fix(steps): persist workDir to PromotionStep.status and cleanup on terminal state (#195)
 - feat(translator): inject health Watch nodes for HE-1/HE-2/HE-3 (#194)
 - fix(graph-purity): eliminate PS-2/BU-1/BU-2/BU-4/PG-3 logic leaks (#193)
-- feat(health): add WatchNodeTemplate for krocodile ShapeWatch node generation (#191)
+- feat(health): add WatchNodeTemplate for Graph health node generation (#191)
 - feat(ui): add 5s polling, bundle history panel (#170)
 - fix(cli): extract policyGatePhase helper
 

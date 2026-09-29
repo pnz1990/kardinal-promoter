@@ -16,7 +16,7 @@ Both tools automate Kubernetes promotion pipelines. The key differences:
 | Policy gates | CEL expressions with kro library (json, maps, schedule, etc.) | Basic approval-only gates |
 | GitOps engine | Any (ArgoCD, Flux, raw K8s) | ArgoCD only |
 | PR evidence | Structured body with image digest, CI run, gate results | None |
-| Architecture | Graph-first (krocodile DAG) | Reconciler-first |
+| Architecture | Graph-first (kro Graph DAG) | Reconciler-first |
 
 For a full feature comparison, see [Comparison](comparison.md).
 
@@ -50,7 +50,7 @@ overlays.
 ### What are the minimum cluster requirements?
 
 - Kubernetes 1.28+
-- The [krocodile Graph controller](installation.md#install-krocodile) installed
+- [kro](installation.md#install-kro) v0.10.0-rc.0+ with the Graph controller (`GraphKind` feature gate)
 - A GitHub (or GitLab) personal access token with `repo` write scope
 
 ### What permissions does the controller need?
@@ -58,7 +58,7 @@ overlays.
 The Helm chart creates the necessary `ClusterRole`. The minimum permissions are:
 
 - `get/list/watch/create/update/patch/delete` on all `kardinal.io` CRDs
-- `get/list/watch/create/update/patch/delete` on `graphs.experimental.kro.run`
+- `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
 - `get/list/watch` on `deployments`, `pods`, `services`
 - `get` on `secrets` (GitHub token secret only)
 - `create/patch` on `events`
@@ -206,9 +206,9 @@ kardinal policy test --file my-gate.yaml
 
 ## Architecture
 
-### Why does kardinal need krocodile?
+### Why does kardinal need kro?
 
-The Graph controller (krocodile) handles the complex part of DAG orchestration:
+The kro Graph controller handles the complex part of DAG orchestration:
 creating owned resources in dependency order, watching `readyWhen` conditions,
 and stopping the graph on failure. kardinal reuses this instead of reimplementing it.
 This keeps the kardinal controller focused on promotion-specific concerns.

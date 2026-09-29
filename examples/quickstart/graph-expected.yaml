@@ -7,115 +7,190 @@
 # This is documentation/test evidence — it is NOT applied to a cluster directly.
 # The actual Graph is created by the BundleReconciler via the translator.
 #
-# API group: experimental.kro.run (updated in krocodile commit 48224264, 2026-04-10)
+# API: kro.run/v1alpha1 Graph (kro >= v0.10.0, GraphKind feature gate).
 #
 # Pipeline: kardinal-test-app (namespace: default)
 # Bundle:   kardinal-test-app-v1-29-0 (namespace: default)
 # Gates:    no-weekend-deploys (namespace: platform-policies, applies-to: prod)
+#
+# How ordering works (docs/design/16-graph-capability-ledger.md G1):
+#   readyWhen does not hold back dependents on a standalone Graph, so each
+#   downstream field is written as ${[value].filter(x_, <condition>)[0]}.
+#   The expression has no value until the condition holds, and kro does not
+#   create a node until all of its expressions resolve. So uat is created only
+#   after test is Verified, and prod only after uat is Verified and every
+#   required PolicyGate has status.ready == true.
+#
+# Health nodes (healthTest/healthUat/healthProd) are ref nodes: kro reads the
+# Argo CD Applications, it does not create them. serviceAccountName is the
+# identity kro impersonates; the controller provisions it (pkg/graph/identity.go).
 
-apiVersion: experimental.kro.run/v1alpha1
+apiVersion: kro.run/v1alpha1
 kind: Graph
 metadata:
+  labels:
+    kardinal.io/bundle: kardinal-test-app-v1-29-0
+    kardinal.io/pipeline: kardinal-test-app
   name: kardinal-test-app-kardinal-test-app-v1-29-0
   namespace: default
-  labels:
-    kardinal.io/pipeline: kardinal-test-app
-    kardinal.io/bundle: kardinal-test-app-v1-29-0
   ownerReferences:
-    - apiVersion: kardinal.io/v1alpha1
-      kind: Bundle
-      name: kardinal-test-app-v1-29-0
-      controller: true
-      # uid: <set at creation time from Bundle.metadata.uid>
-
+  - apiVersion: kardinal.io/v1alpha1
+    controller: true
+    kind: Bundle
+    name: kardinal-test-app-v1-29-0
+    uid: <bundle-uid>
 spec:
   nodes:
-
-    # === Node 1: test environment (first in pipeline, no upstream) ===
-    - id: test
-      readyWhen:
-        - ${test.status.state == "Verified"}
-      propagateWhen:
-        - ${test.status.state == "Verified"}
-      template:
-        apiVersion: kardinal.io/v1alpha1
-        kind: PromotionStep
-        metadata:
-          name: kardinal-test-app-kardinal-test-app-v1-29-0-test
-          labels:
-            kardinal.io/pipeline: kardinal-test-app
-            kardinal.io/bundle: kardinal-test-app-v1-29-0
-            kardinal.io/environment: test
-        spec:
-          pipelineName: kardinal-test-app
-          bundleName: kardinal-test-app-v1-29-0
-          environment: test
-          stepType: kustomize-set-image
-
-    # === Node 2: uat environment (depends on test via upstreamVerified) ===
-    - id: uat
-      readyWhen:
-        - ${uat.status.state == "Verified"}
-      propagateWhen:
-        - ${uat.status.state == "Verified"}
-      template:
-        apiVersion: kardinal.io/v1alpha1
-        kind: PromotionStep
-        metadata:
-          name: kardinal-test-app-kardinal-test-app-v1-29-0-uat
-          labels:
-            kardinal.io/pipeline: kardinal-test-app
-            kardinal.io/bundle: kardinal-test-app-v1-29-0
-            kardinal.io/environment: uat
-        spec:
-          pipelineName: kardinal-test-app
-          bundleName: kardinal-test-app-v1-29-0
-          environment: uat
-          stepType: kustomize-set-image
-          upstreamVerified: ${test.status.state}  # creates DAG edge: test → uat
-
-    # === Node 3: PolicyGate — no-weekend-deploys for prod ===
-    # This gate blocks prod promotion on weekends.
-    # propagateWhen: gates data flow to prod PromotionStep.
-    # readyWhen:     health signal for UI (shows pass/fail color).
-    - id: no-weekend-deploys--platform-policies--prod--kardinal-test-app-v1-29-0
-      readyWhen:
-        - ${no-weekend-deploys--platform-policies--prod--kardinal-test-app-v1-29-0.status.ready == true}
-      propagateWhen:
-        - ${no-weekend-deploys--platform-policies--prod--kardinal-test-app-v1-29-0.status.ready == true}
-      template:
-        apiVersion: kardinal.io/v1alpha1
-        kind: PolicyGate
-        metadata:
-          name: no-weekend-deploys--platform-policies--prod--kardinal-test-app-v1-29-0
-          labels:
-            kardinal.io/gate-template: no-weekend-deploys
-        spec:
-          expression: "!schedule.isWeekend"
-          message: "Production deployments are blocked on weekends"
-          recheckInterval: 5m
-          upstreamEnvironment: ${uat.status.state}  # creates DAG edge: uat → gate
-
-    # === Node 4: prod environment (depends on gate via requiredGates) ===
-    - id: prod
-      readyWhen:
-        - ${prod.status.state == "Verified"}
-      propagateWhen:
-        - ${prod.status.state == "Verified"}
-      template:
-        apiVersion: kardinal.io/v1alpha1
-        kind: PromotionStep
-        metadata:
-          name: kardinal-test-app-kardinal-test-app-v1-29-0-prod
-          labels:
-            kardinal.io/pipeline: kardinal-test-app
-            kardinal.io/bundle: kardinal-test-app-v1-29-0
-            kardinal.io/environment: prod
-        spec:
-          pipelineName: kardinal-test-app
-          bundleName: kardinal-test-app-v1-29-0
-          environment: prod
-          stepType: kustomize-set-image
-          upstreamVerified: ${uat.status.state}   # sequential edge: uat → prod
-          requiredGates:
-            - ${no-weekend-deploys--platform-policies--prod--kardinal-test-app-v1-29-0.metadata.name}
+  - id: bundle
+    ref:
+      apiVersion: kardinal.io/v1alpha1
+      kind: Bundle
+      metadata:
+        name: kardinal-test-app-v1-29-0
+        namespace: default
+  - id: prstatus0kardinalTestAppV12900test
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PRStatus
+      metadata:
+        labels:
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: test
+          kardinal.io/pipeline: kardinal-test-app
+        name: prstatus-kardinal-test-app-v1-29-0-test
+  - id: test
+    readyWhen:
+    - ${test.status.state == "Verified"}
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PromotionStep
+      metadata:
+        labels:
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: test
+          kardinal.io/pipeline: kardinal-test-app
+        name: kardinal-test-app-kardinal-test-app-v1-29-0-test
+      spec:
+        bundleName: ${bundle.metadata.name}
+        environment: test
+        pipelineName: kardinal-test-app
+        prStatusRef: ${prstatus0kardinalTestAppV12900test.metadata.name}
+        stepType: kustomize-set-image
+  - id: prstatus0kardinalTestAppV12900uat
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PRStatus
+      metadata:
+        labels:
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: uat
+          kardinal.io/pipeline: kardinal-test-app
+        name: prstatus-kardinal-test-app-v1-29-0-uat
+  - id: uat
+    readyWhen:
+    - ${uat.status.state == "Verified"}
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PromotionStep
+      metadata:
+        labels:
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: uat
+          kardinal.io/pipeline: kardinal-test-app
+        name: kardinal-test-app-kardinal-test-app-v1-29-0-uat
+      spec:
+        bundleName: ${bundle.metadata.name}
+        environment: uat
+        pipelineName: kardinal-test-app
+        prStatusRef: ${prstatus0kardinalTestAppV12900uat.metadata.name}
+        stepType: kustomize-set-image
+        upstreamStates:
+        - ${["Verified"].filter(x_, test.status.state == "Verified")[0]}
+  - id: noWeekendDeploys0platformPolicies0prod00kardinalTestAppV1290
+    readyWhen:
+    - ${noWeekendDeploys0platformPolicies0prod00kardinalTestAppV1290.status.ready
+      == true}
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PolicyGate
+      metadata:
+        labels:
+          kardinal.io/applies-to: prod
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: prod
+          kardinal.io/gate-name: no-weekend-deploys
+          kardinal.io/gate-template: no-weekend-deploys
+          kardinal.io/pipeline: kardinal-test-app
+          kardinal.io/scope: org
+        name: no-weekend-deploys-platform-policies-prod--kardinal-test-app-v1-29-0
+      spec:
+        expression: '!schedule.isWeekend'
+        message: Production deployments are blocked on weekends
+        recheckInterval: 5m
+  - id: prstatus0kardinalTestAppV12900prod
+    readyWhen:
+    - ${prstatus0kardinalTestAppV12900prod.status.merged == true}
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PRStatus
+      metadata:
+        labels:
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: prod
+          kardinal.io/pipeline: kardinal-test-app
+        name: prstatus-kardinal-test-app-v1-29-0-prod
+  - id: prod
+    readyWhen:
+    - ${prod.status.state == "Verified"}
+    template:
+      apiVersion: kardinal.io/v1alpha1
+      kind: PromotionStep
+      metadata:
+        labels:
+          kardinal.io/bundle: kardinal-test-app-v1-29-0
+          kardinal.io/environment: prod
+          kardinal.io/pipeline: kardinal-test-app
+        name: kardinal-test-app-kardinal-test-app-v1-29-0-prod
+      spec:
+        bundleName: ${bundle.metadata.name}
+        environment: prod
+        pipelineName: kardinal-test-app
+        prStatusRef: ${prstatus0kardinalTestAppV12900prod.metadata.name}
+        requiredGates:
+        - ${[noWeekendDeploys0platformPolicies0prod00kardinalTestAppV1290.metadata.name].filter(x_,
+          noWeekendDeploys0platformPolicies0prod00kardinalTestAppV1290.status.ready
+          == true)[0]}
+        stepType: kustomize-set-image
+        upstreamStates:
+        - ${["Verified"].filter(x_, uat.status.state == "Verified")[0]}
+  - id: healthTest
+    readyWhen:
+    - ${healthTest.status.health.status == 'Healthy' && healthTest.status.sync.status
+      == 'Synced'}
+    ref:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: kardinal-test-app-test
+        namespace: argocd
+  - id: healthUat
+    readyWhen:
+    - ${healthUat.status.health.status == 'Healthy' && healthUat.status.sync.status
+      == 'Synced'}
+    ref:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: kardinal-test-app-uat
+        namespace: argocd
+  - id: healthProd
+    readyWhen:
+    - ${healthProd.status.health.status == 'Healthy' && healthProd.status.sync.status
+      == 'Synced'}
+    ref:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: kardinal-test-app-prod
+        namespace: argocd
+  serviceAccountName: kardinal-graph

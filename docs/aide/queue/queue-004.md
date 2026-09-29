@@ -14,7 +14,7 @@ Item 008 is a blocking pre-queue fix that must merge before any Stage 3 items.
 
 Two bugs were discovered during the PM spec gate for Stage 3:
 1. `PropagateWhen` missing from `GraphNode` (PolicyGates would silently bypass)
-2. kro Graph API group changed from `kro.run` to `experimental.kro.run` (krocodile commit `48224264`)
+2. kro Graph API group changed in the pre-upstream Graph controller fork (since moved back to upstream `kro.run`)
 
 Stage 3 items cannot be assigned until item 008 is merged.
 

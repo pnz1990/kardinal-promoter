@@ -8,7 +8,7 @@
 #
 #   Cluster 1 — kardinal-control  (kind)
 #     • kardinal-promoter controller
-#     • krocodile Graph controller
+#     • kro Graph controller
 #     • ArgoCD managing all environments
 #     • The "control plane" — watches for Bundles, drives promotions
 #
@@ -245,10 +245,12 @@ kubectl create secret generic github-token \
 # Create platform-policies namespace for org-level PolicyGates
 kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
 
+# kro (the Graph controller) is a prerequisite of kardinal-promoter.
+KUBE_CONTEXT="kind-${CONTROL_CLUSTER}" bash "${REPO_ROOT}/hack/install-kro.sh"
+
 # Install from OCI registry — use last known-good published tag.
 # Use --wait=false for the install, then wait for the controller pod
-# separately — the Helm wait includes all chart resources (krocodile,
-# CRDs, etc.) and can timeout on slow CI runners; the controller pod
+# separately — the Helm wait includes all chart resources and can timeout on slow CI runners; the controller pod
 # itself comes up quickly once the image is pulled.
 helm upgrade --install kardinal-promoter \
   oci://ghcr.io/pnz1990/charts/kardinal-promoter \
@@ -266,8 +268,6 @@ helm upgrade --install kardinal-promoter \
 
 # Wait for the controller pod to be Ready (up to 3 min)
 kubectl rollout status deployment -n kardinal-system --timeout=180s 2>/dev/null || true
-# Also wait for kro-system if present
-kubectl rollout status deployment -n kro-system --timeout=60s 2>/dev/null || true
 
 success "[3/7] kardinal-promoter installed"
 

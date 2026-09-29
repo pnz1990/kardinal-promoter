@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/rs/zerolog"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
@@ -29,30 +30,66 @@ func NewGraphClient(dyn dynamic.Interface, log zerolog.Logger) *GraphClient {
 	}
 }
 
-// Create creates a Graph CR in the given namespace.
-// Idempotent: returns nil if the Graph already exists (AlreadyExists).
+// Create creates a Graph CR in the given namespace, or updates the spec,
+// labels and ownerReferences of an existing one in place.
+//
+// kro reconciles an updated Graph by applying the new desired state and
+// pruning only the resources whose nodes were removed, so PromotionSteps that
+// are already Verified keep their status. Deleting and recreating the Graph
+// would instead remove every child and restart the promotion
+// (docs/design/16-graph-capability-ledger.md G6).
 func (c *GraphClient) Create(ctx context.Context, g *Graph) error {
 	u, err := toUnstructured(g)
 	if err != nil {
 		return fmt.Errorf("graph.Create: marshal: %w", err)
 	}
 	ns := g.Namespace
-	_, createErr := c.dynamic.Resource(GraphGVR).Namespace(ns).Create(ctx, u, metav1.CreateOptions{})
-	if createErr != nil {
-		if isAlreadyExists(createErr) {
-			zerolog.Ctx(ctx).Debug().
-				Str("graph", g.Name).
-				Str("namespace", ns).
-				Msg("graph already exists, skipping create")
-			return nil
-		}
+	res := c.dynamic.Resource(GraphGVR).Namespace(ns)
+	_, createErr := res.Create(ctx, u, metav1.CreateOptions{})
+	if createErr == nil {
+		zerolog.Ctx(ctx).Info().
+			Str("graph", g.Name).
+			Str("namespace", ns).
+			Int("nodes", len(g.Spec.Nodes)).
+			Msg("graph created")
+		return nil
+	}
+	if !isAlreadyExists(createErr) {
 		return fmt.Errorf("graph.Create %s/%s: %w", ns, g.Name, createErr)
+	}
+
+	existing, err := res.Get(ctx, g.Name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("graph.Create %s/%s: get existing: %w", ns, g.Name, err)
+	}
+	// Merge labels so labels other controllers set on the Graph survive.
+	labels := existing.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	for k, v := range u.GetLabels() {
+		labels[k] = v
+	}
+	if equality.Semantic.DeepEqual(existing.Object["spec"], u.Object["spec"]) &&
+		equality.Semantic.DeepEqual(existing.GetLabels(), labels) &&
+		equality.Semantic.DeepEqual(existing.GetOwnerReferences(), u.GetOwnerReferences()) {
+		zerolog.Ctx(ctx).Debug().
+			Str("graph", g.Name).
+			Str("namespace", ns).
+			Msg("graph already up to date")
+		return nil
+	}
+	existing.Object["spec"] = u.Object["spec"]
+	existing.SetLabels(labels)
+	existing.SetOwnerReferences(u.GetOwnerReferences())
+	if _, err := res.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("graph.Create %s/%s: update: %w", ns, g.Name, err)
 	}
 	zerolog.Ctx(ctx).Info().
 		Str("graph", g.Name).
 		Str("namespace", ns).
 		Int("nodes", len(g.Spec.Nodes)).
-		Msg("graph created")
+		Msg("graph updated in place")
 	return nil
 }
 
@@ -97,13 +134,6 @@ func (c *GraphClient) Delete(ctx context.Context, namespace, name string) error 
 		Str("namespace", namespace).
 		Msg("graph deleted")
 	return nil
-}
-
-// DeleteGraph deletes a Graph CR by namespace and name, returning nil if not found.
-// This is the same as Delete; provided so GraphClient satisfies the bundle.GraphChecker
-// interface without requiring a type assertion (#626).
-func (c *GraphClient) DeleteGraph(ctx context.Context, namespace, name string) error {
-	return c.Delete(ctx, namespace, name)
 }
 
 // List lists all Graph CRs in a namespace matching the given labels.

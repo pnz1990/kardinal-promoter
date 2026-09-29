@@ -5,7 +5,7 @@ This directory contains everything needed to create a **complete, working demo e
 ## What You Get
 
 ```
-kind-kardinal-control   ← kardinal controller + krocodile + ArgoCD
+kind-kardinal-control   ← kardinal controller + kro + ArgoCD
 kind-kardinal-dev       ← test + uat environments (kardinal-test-app)
 kind-kardinal-prod      ← prod environment  (kind locally, or EKS with --eks)
 ```

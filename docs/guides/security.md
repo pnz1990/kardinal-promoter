@@ -42,10 +42,24 @@ rules:
       - promotionsteps/finalizers
     verbs: ["update"]
 
-  # krocodile Graph CRDs
-  - apiGroups: ["experimental.kro.run"]
+  # kro Graph CRDs
+  - apiGroups: ["kro.run"]
     resources: ["graphs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Graph applier identity: kro applies each Graph as its
+  # spec.serviceAccountName (default kardinal-graph). The controller creates
+  # that ServiceAccount and binds it to the two Graph ClusterRoles.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: ["kardinal-graph-applier", "kardinal-graph-reader"]
+    verbs: ["bind"]
 
   # Read workload status (health checks)
   - apiGroups: ["apps"]
@@ -380,7 +394,7 @@ helm upgrade kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
 
 The policy allows:
 - **Ingress**: kubelet health probes (port 8081) and Prometheus scraping (port 8080)
-- **Egress**: Kubernetes API server (`:443`, `:6443`), DNS (`:53`), HTTPS for SCM providers and go-git operations (`:443`), and traffic to `kro-system` for krocodile communication
+- **Egress**: Kubernetes API server (`:443`, `:6443`), DNS (`:53`), HTTPS for SCM providers and go-git operations (`:443`), and traffic to `kro-system` for kro Graph controller communication
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 

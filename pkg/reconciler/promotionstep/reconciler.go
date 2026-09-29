@@ -173,9 +173,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 		// Supersession guard: if parent bundle is Superseded, close any open PR and
 		// move active steps to Failed so they don't linger (#310).
+		// Pending counts as active: the superseded Bundle's Graph stays in place
+		// and still creates downstream steps once their gates open, and those
+		// must not start a git push or open a PR.
 		// Graph-first: we write only to our OWN status (PromotionStep), and close
 		// the PR via the SCM provider (external I/O scoped to this reconciler's step).
-		isActiveState := ps.Status.State == StateWaitingForMerge || ps.Status.State == StatePromoting
+		isActiveState := ps.Status.State == StateWaitingForMerge || ps.Status.State == StatePromoting ||
+			ps.Status.State == StatePending || ps.Status.State == StatePendingExplicit
 		if parentBundle.Status.Phase == "Superseded" && isActiveState {
 			log.Info().
 				Str("bundle", ps.Spec.BundleName).
@@ -397,10 +401,12 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			AuthorName:  "kardinal-promoter",
 			AuthorEmail: "kardinal@kardinal.io",
 		},
-		SCM:                r.SCM,
-		GitClient:          r.GitClient,
-		K8sClient:          r.Client,
-		StepTimeoutSeconds: env.StepTimeoutSeconds,
+		SCM:                  r.SCM,
+		GitClient:            r.GitClient,
+		K8sClient:            r.Client,
+		StepTimeoutSeconds:   env.StepTimeoutSeconds,
+		GateResults:          r.collectGateResults(ctx, log, ps),
+		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
 	}
 
 	nextIdx, result, execErr := eng.ExecuteFrom(ctx, state, ps.Status.CurrentStepIndex)
@@ -1532,4 +1538,57 @@ func updateStepStatuses(ps *v1alpha1.PromotionStep, stepNames []string, currentI
 			}
 		}
 	}
+}
+
+// collectGateResults reads the PolicyGate instances named in spec.requiredGates
+// so the PR body can show what was evaluated. Best effort: a gate that cannot
+// be read is logged and skipped, it never blocks the promotion.
+func (r *Reconciler) collectGateResults(ctx context.Context, log zerolog.Logger,
+	ps *v1alpha1.PromotionStep) []v1alpha1.GateResult {
+	if len(ps.Spec.RequiredGates) == 0 {
+		return nil
+	}
+	out := make([]v1alpha1.GateResult, 0, len(ps.Spec.RequiredGates))
+	for _, name := range ps.Spec.RequiredGates {
+		var g v1alpha1.PolicyGate
+		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ps.Namespace}, &g); err != nil {
+			log.Warn().Err(err).Str("gate", name).Msg("could not read gate for PR body")
+			continue
+		}
+		gr := v1alpha1.GateResult{
+			GateName:      name,
+			GateNamespace: g.Namespace,
+			Result:        "Fail",
+			Reason:        g.Status.Reason,
+		}
+		// Prefer the template's name over the generated instance name.
+		if tmpl := g.Labels["kardinal.io/gate-name"]; tmpl != "" {
+			gr.GateName = tmpl
+		}
+		if g.Status.Ready {
+			gr.Result = "Pass"
+		}
+		if g.Status.LastEvaluatedAt != nil {
+			gr.EvaluatedAt = *g.Status.LastEvaluatedAt
+		} else {
+			gr.EvaluatedAt = metav1.Now()
+		}
+		out = append(out, gr)
+	}
+	return out
+}
+
+// upstreamEnvironments returns the Bundle's environment evidence for every
+// environment other than env, for the PR body's upstream verification table.
+func upstreamEnvironments(bundle *v1alpha1.Bundle, env string) []v1alpha1.EnvironmentStatus {
+	if bundle == nil {
+		return nil
+	}
+	var out []v1alpha1.EnvironmentStatus
+	for _, e := range bundle.Status.Environments {
+		if e.Name != env {
+			out = append(out, e)
+		}
+	}
+	return out
 }

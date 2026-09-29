@@ -18,7 +18,7 @@ All of the following are implemented and shipped:
 - Bundle CRD with image and config artifact types
 - PolicyGate CRD with CEL expressions (kro library: schedule, soak, metrics, upstream, changewindow)
 - PromotionStep reconciler — full git-clone → kustomize/helm → commit → PR → merge → health loop
-- Graph-first architecture via krocodile
+- Graph-first architecture via kro Graph (see [Graph Coverage](graph-coverage.md) for what is not on the Graph yet)
 
 **Manifest update strategies**
 - `kustomize` — `kustomize edit set-image`
@@ -123,7 +123,7 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 
 **`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh. (#629)
 
-**`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, krocodile, RBAC, and GitHub token. (#607)
+**`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, the kro Graph controller, RBAC, and GitHub token. (#607)
 
 **Shell completion** — bash, zsh, fish, and PowerShell completion via `kardinal completion <shell>`. (#606)
 

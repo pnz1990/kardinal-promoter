@@ -87,7 +87,7 @@ fi
 BLAST_SCORE=0
 BLAST_NOTE=""
 BLAST_AREAS=""
-if echo "$TITLE$BODY" | grep -qiE 'reconciler|controller|crd|graph|krocodile|cel|schedule|policygate'; then
+if echo "$TITLE$BODY" | grep -qiE 'reconciler|controller|crd|graph|kro|cel|schedule|policygate'; then
   BLAST_SCORE=1
   BLAST_AREAS="controller/reconciler path"
 fi

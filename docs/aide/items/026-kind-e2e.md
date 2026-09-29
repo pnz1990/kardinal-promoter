@@ -30,7 +30,7 @@ the expected state.
 - `.github/workflows/e2e.yml` workflow:
   - Sets up kind cluster (using `helm/kind-action` or `kubernetes-sigs/setup-kind`)
   - Builds and loads the controller image
-  - Installs kro (Graph controller) from krocodile pinned commit `1b0ce353`
+  - Installs kro (Graph controller) — now kro v0.10.0-rc.0 via `hack/install-kro.sh`
   - Installs kardinal-promoter via Helm
   - Applies `examples/quickstart/pipeline.yaml`
   - Creates a Bundle via `kardinal create bundle nginx-demo --image ghcr.io/nginx/nginx:1.29.0 --dry-run` (no real GitHub calls)
@@ -53,7 +53,7 @@ the expected state.
 ## Tasks
 
 - [ ] T001 Create `.github/workflows/e2e.yml` with kind setup, image build, helm install
-- [ ] T002 Add kro/krocodile installation step (pinned commit `1b0ce353`)
+- [ ] T002 Add kro Graph controller installation step (`hack/install-kro.sh`)
 - [ ] T003 Create `hack/e2e-setup.sh` and `hack/e2e-teardown.sh`
 - [ ] T004 Add `test/e2e/kind_test.go` with TestJourney1_KindCluster (skips without KUBECONFIG)
 - [ ] T005 Add `make test-e2e-journey-1` target

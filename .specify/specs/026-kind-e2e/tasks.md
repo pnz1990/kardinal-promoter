@@ -20,12 +20,12 @@
 ## Phase 3: Implementation
 
 - [ ] T006 Implement dry-run mode in `pkg/scm/github.go`: check `DRY_RUN` env var, return mock PR URL without calling GitHub API — file: `pkg/scm/github.go`
-- [ ] T007 Update `.github/workflows/e2e.yml`: add `DRY_RUN=true` env var, ensure krocodile install step runs via `hack/install-krocodile.sh`, add cluster cleanup step — file: `.github/workflows/e2e.yml`
+- [ ] T007 Update `.github/workflows/e2e.yml`: add `DRY_RUN=true` env var, ensure kro install step runs via `hack/install-kro.sh`, add cluster cleanup step — file: `.github/workflows/e2e.yml`
 - [ ] T008 [P] Remove `t.Skip` from `TestJourney1Quickstart` and `TestJourney3PolicyGovernance` in journeys_test.go — file: `test/e2e/journeys_test.go`
 - [ ] T009 Update `Makefile` `test-e2e` target to set `DRY_RUN=true` when `KIND_CLUSTER` env var is set — file: `Makefile`
 
 ## Phase 4: Validation
 
-- [ ] T010 Run `go test ./test/e2e/... -race -run TestInfrastructure` locally against a kind cluster to verify krocodile CRDs are present — file: `test/e2e/e2e_test.go`
+- [ ] T010 Run `go test ./test/e2e/... -race -run TestInfrastructure` locally against a kind cluster to verify the kro Graph CRD is present — file: `test/e2e/e2e_test.go`
 - [ ] T011 Run `go test ./test/e2e/... -race -run TestJourney1` with `DRY_RUN=true` to verify fake-client path passes — file: `test/e2e/journeys_test.go`
 - [ ] T012 Run /speckit.verify-tasks.run to confirm no phantom completions

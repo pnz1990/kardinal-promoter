@@ -8,15 +8,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// GraphGVK is the GroupVersionKind for the kro Graph resource.
-// Graph is a kro CRD — we interact with it via the dynamic client,
-// not via generated types. This stub provides the GVK reference.
-//
-// API group updated to experimental.kro.run per krocodile commit 48224264
-// (2026-04-10): Graph CRD moved from kro.run to experimental.kro.run to
-// eliminate hard CRD conflicts with upstream kro.
+// GraphGVK is the GroupVersionKind for the kro Graph resource
+// (kro v0.10.0+, feature gate GraphKind). Graph is a kro CRD — we interact
+// with it via the dynamic client, not via generated types.
+// See: https://kro.run/next/docs/concepts/graph/overview/
 var GraphGVK = schema.GroupVersionKind{
-	Group:   "experimental.kro.run",
+	Group:   "kro.run",
 	Version: "v1alpha1",
 	Kind:    "Graph",
 }
@@ -24,23 +21,28 @@ var GraphGVK = schema.GroupVersionKind{
 // GraphGVR is the GroupVersionResource for the kro Graph resource.
 // Used with the dynamic client for CRUD operations.
 var GraphGVR = schema.GroupVersionResource{
-	Group:    "experimental.kro.run",
+	Group:    "kro.run",
 	Version:  "v1alpha1",
 	Resource: "graphs",
 }
 
 // GraphSpec is a minimal Go representation of the kro Graph spec.
 // Used for constructing and reading Graph objects via the dynamic client.
-// Fields map to the krocodile/experimental Graph CRD schema.
-// See: https://github.com/ellistarn/kro/tree/krocodile/experimental
+// Fields map to kro's api/v1alpha1 GraphSpec.
 type GraphSpec struct {
-	// Nodes is the ordered list of resource nodes in the Graph.
-	// (Renamed from Resources in krocodile April 2026.)
+	// Nodes is the list of resource nodes in the Graph. kro derives the
+	// execution order from the CEL references between nodes.
 	Nodes []GraphNode `json:"nodes,omitempty"`
+
+	// ServiceAccountName is the ServiceAccount (in the Graph's namespace) that
+	// kro impersonates when it reads and applies the Graph's resources.
+	// Empty means the namespace's "default" ServiceAccount.
+	ServiceAccountName string `json:"serviceAccountName,omitempty"`
 }
 
 // DeepCopyInto copies all fields of GraphSpec into out.
 func (in *GraphSpec) DeepCopyInto(out *GraphSpec) {
+	out.ServiceAccountName = in.ServiceAccountName
 	if in.Nodes != nil {
 		out.Nodes = make([]GraphNode, len(in.Nodes))
 		for i := range in.Nodes {
@@ -59,71 +61,50 @@ func (in *GraphSpec) DeepCopy() *GraphSpec {
 	return out
 }
 
-// GraphNode represents one resource node in the kro Graph.
+// GraphNode represents one node in the kro Graph.
 //
-// ReadyWhen vs PropagateWhen:
+// Exactly one of Template or Ref is set:
 //
-//	ReadyWhen   = health signal only. Feeds the Graph's aggregated Ready condition
-//	              and the UI. Does NOT block downstream nodes.
-//	PropagateWhen = data-flow gate. When unsatisfied, downstream nodes do not receive
-//	                updated data and are not re-evaluated. This is the field that
-//	                gates PolicyGate blocking. See design-v2.1.md §3.5.
+//	Template = kro creates and owns the object (server-side apply).
+//	Ref      = kro reads an existing object (metadata.name) or a collection
+//	           (metadata.selector) into scope without owning it.
 //
-// For PromotionStep nodes: use PropagateWhen to block downstream when not Verified.
-//
-//	propagateWhen: ["${dev.status.state == \"Verified\"}"]
-//
-// For PolicyGate nodes: use PropagateWhen to block downstream when gate not ready.
-//
-//	propagateWhen: ["${noWeekendDeploys.status.ready == true}"]
-//
-// ReadyWhen on PolicyGate nodes is only the UI health signal (shows pass/fail colour).
-// The actual blocking is done by PropagateWhen on the upstream PolicyGate node.
+// ReadyWhen feeds the Graph's Ready condition only. On a standalone Graph it
+// does NOT hold back dependent nodes, so kardinal gates dependents with
+// resolvability expressions instead (see resolvableWhen in builder.go and
+// docs/design/16-graph-capability-ledger.md, gap G1).
 type GraphNode struct {
-	// ID is the unique node identifier within the Graph.
+	// ID is the unique node identifier within the Graph. Must match
+	// ^[A-Za-z][A-Za-z0-9]*$ because other nodes reference it in CEL.
 	ID string `json:"id"`
 
-	// Template is the raw resource template for this node.
+	// Template is the resource body for a node kro creates and owns.
 	// Stored as a map to allow arbitrary Kubernetes resource shapes.
-	// Template is the node body for an Own node (Graph creates the resource).
-	// Serialized as "template:" key — krocodile ≥ 05db829 (explicit-keyword schema).
-	// Previous name for this concept: "template" was also used for Watch/WatchKind,
-	// but those now use Ref/Watch fields.
 	Template map[string]interface{} `json:"template,omitempty"`
 
-	// Ref is the identity for a Ref node (dereference a single named object into scope).
-	// Serialized as "ref:" key — krocodile ≥ 05db829 (explicit-keyword schema).
-	// Replaces the old "template: {apiVersion, kind, metadata.name}" identity-only form.
+	// Ref identifies an existing object or collection:
+	//
+	//	{apiVersion, kind, metadata: {name | selector, namespace}}
 	Ref map[string]interface{} `json:"ref,omitempty"`
 
-	// Watch is the selector for a Watch node (observe a collection by selector).
-	// Serialized as "watch:" key — krocodile ≥ 05db829 (explicit-keyword schema).
-	// Replaces the old "template: {apiVersion, kind, selector}" WatchKind form.
-	Watch map[string]interface{} `json:"watch,omitempty"`
-
-	// ReadyWhen holds CEL expressions that are a health signal only.
-	// They feed the Graph's aggregated Ready condition and the UI.
-	// They do NOT block downstream node execution.
+	// ReadyWhen holds CEL expressions over the node itself (or "each" for a
+	// forEach collection). They feed the Graph's Ready condition and the UI.
 	ReadyWhen []string `json:"readyWhen,omitempty"`
 
-	// PropagateWhen holds CEL expressions that gate data flow to dependents.
-	// When any expression is unsatisfied, downstream nodes do not receive
-	// updated data and are not re-evaluated. This is the correct mechanism
-	// for PolicyGate blocking. See design-v2.1.md §3.5.
-	PropagateWhen []string `json:"propagateWhen,omitempty"`
-
 	// IncludeWhen holds CEL expressions that conditionally include this node.
-	// When any expression is false, the node is excluded from the DAG.
+	// When any expression is false the node AND every node that depends on it
+	// are excluded (and pruned if previously applied).
 	IncludeWhen []string `json:"includeWhen,omitempty"`
 
-	// ForEach is a CEL expression that stamps out one node per collection item.
-	ForEach string `json:"forEach,omitempty"`
+	// ForEach expands the node into a collection. Each entry holds exactly one
+	// iterator name mapped to a CEL expression that yields a list, for example
+	// {"region": "${[\"us-east-1\",\"eu-west-1\"]}"}.
+	ForEach []map[string]string `json:"forEach,omitempty"`
 }
 
 // DeepCopyInto copies all fields of GraphNode into out.
 func (in *GraphNode) DeepCopyInto(out *GraphNode) {
 	out.ID = in.ID
-	out.ForEach = in.ForEach
 	if in.Template != nil {
 		out.Template = make(map[string]interface{}, len(in.Template))
 		for k, v := range in.Template {
@@ -136,19 +117,8 @@ func (in *GraphNode) DeepCopyInto(out *GraphNode) {
 			out.Ref[k] = v
 		}
 	}
-	if in.Watch != nil {
-		out.Watch = make(map[string]interface{}, len(in.Watch))
-		for k, v := range in.Watch {
-			out.Watch[k] = v
-		}
-	}
 	if in.ReadyWhen != nil {
 		in, out := &in.ReadyWhen, &out.ReadyWhen
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	if in.PropagateWhen != nil {
-		in, out := &in.PropagateWhen, &out.PropagateWhen
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
@@ -156,6 +126,15 @@ func (in *GraphNode) DeepCopyInto(out *GraphNode) {
 		in, out := &in.IncludeWhen, &out.IncludeWhen
 		*out = make([]string, len(*in))
 		copy(*out, *in)
+	}
+	if in.ForEach != nil {
+		out.ForEach = make([]map[string]string, len(in.ForEach))
+		for i, dim := range in.ForEach {
+			out.ForEach[i] = make(map[string]string, len(dim))
+			for k, v := range dim {
+				out.ForEach[i][k] = v
+			}
+		}
 	}
 }
 
@@ -171,15 +150,14 @@ func (in *GraphNode) DeepCopy() *GraphNode {
 
 // GraphStatus is a minimal representation of the kro Graph status.
 type GraphStatus struct {
-	// Phase is the overall Graph execution phase.
-	Phase string `json:"phase,omitempty"`
-
-	// Conditions holds Graph-level status conditions.
-	// krocodile e082fe9+ emits two condition types:
-	//   "Compiled" — graph spec parsed and CEL programs compiled (was "Accepted" ≤9c18aa34).
-	//   "Ready"    — all nodes have converged.
-	// Do not check for "Accepted"; use "Compiled" for spec validation status.
+	// Conditions holds Graph-level status conditions. kro emits:
+	//   "Accepted"           — spec compiled (reason "Compiled") or rejected ("InvalidGraph").
+	//   "ResourcesConverged" — every included node applied and ready.
+	//   "Ready"              — Accepted and ResourcesConverged are both True.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// AppliedServiceAccount is the identity kro impersonated on the last apply.
+	AppliedServiceAccount string `json:"appliedServiceAccount,omitempty"`
 }
 
 // Graph is the in-memory representation of a kro Graph resource.

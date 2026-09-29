@@ -12,14 +12,15 @@
 
 ### Milestone v0.2.1: COMPLETE
 
-All 41 krocodile-independent logic leaks have been eliminated (issues #131–#155 resolved).
+All 41 Graph-independent logic leaks have been eliminated (issues #131–#155 resolved).
 The v0.2.1 queue is closed. Do not re-open these items.
 
 ### What to work on now
 
 Active open items are tracked in GitHub issues. Check the current open issue list.
 The remaining logic leaks require either:
-1. krocodile upstream changes (labeled `blocked-on-krocodile`) — do not workaround
+1. kro upstream changes (labeled `blocked-on-upstream`; gaps logged in
+   [16-graph-capability-ledger.md](16-graph-capability-ledger.md)) — do not workaround
 2. Large architectural work: go-git migration (#495, complete), kustomize library migration (#494, complete)
 
 **Note:** Flat DAG compilation (#496) was evaluated and closed as architecturally unsound.
@@ -38,10 +39,10 @@ QA must block such PRs with `[NEEDS HUMAN]`. Engineers must not implement them. 
 In a perfectly pure architecture, kardinal-promoter is **pure YAML** from the user's perspective. No custom Go logic exists except:
 
 1. **Owned node reconcilers** that compute a value and write it to `status.ready` — visible to the Graph
-2. **CEL library extensions** on krocodile's Graph environment — stateless, synchronous, pure functions
+2. **CEL library extensions** on kro's Graph environment — stateless, synchronous, pure functions
 3. **CLI** that reads CRDs and creates CRDs — no business logic, no API calls
 
-Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, conditional inclusion, and teardown. All business rules are expressed as `readyWhen` / `propagateWhen` / `includeWhen` CEL expressions on Graph nodes.
+Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, conditional inclusion, and teardown. All business rules are expressed as `readyWhen` / `includeWhen` / template CEL expressions on Graph nodes.
 
 **The world is a DAG. Everything is a Graph node.**
 
@@ -49,11 +50,11 @@ Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, con
 
 ## One Permitted Exception (Transitional)
 
-`pkg/cel/` is a documented transitional workaround. See `docs/design/10-graph-first-architecture.md` §Known Exceptions. It must not grow. It will be deleted once `recheckAfter` lands in krocodile.
+`pkg/cel/` is a documented transitional workaround. See `docs/design/10-graph-first-architecture.md` §Known Exceptions. It must not grow. It will be deleted once `recheckAfter` lands in kro.
 
 ---
 
-## Fixable Without Krocodile (Milestone v0.2.1 — COMPLETE)
+## Fixable Without Graph Changes (Milestone v0.2.1 — COMPLETE)
 
 All 41 fixable leaks below were resolved in v0.2.1. Issues #131–#155 are closed.
 This section is preserved for historical reference.
@@ -104,15 +105,16 @@ This section is preserved for historical reference.
 
 ---
 
-## Blocked on Krocodile
+## Blocked on Upstream Graph
 
-**Nothing is currently blocked on krocodile.** All previously blocked issues have implementation
+**Nothing in this catalog is currently blocked upstream.** Graph gaps found during the move to
+upstream kro are in [16-graph-capability-ledger.md](16-graph-capability-ledger.md). All previously blocked issues have implementation
 paths that require only kardinal changes. See §Previously Blocked — Now Unblocked below.
 
-`recheckAfter` as a krocodile primitive is still desirable for the general case and should
+`recheckAfter` as a Graph primitive is still desirable for the general case and should
 be contributed upstream — but kardinal no longer requires it as a prerequisite for any feature.
 
-| ID | Issue | Desired krocodile contribution | Priority |
+| ID | Issue | Desired Graph contribution | Priority |
 |---|---|---|---|
 | PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Nice-to-have — superseded by `ScheduleClock` pattern |
 | GB-5 | #138 | Explicit `dependsOn` edges | Nice-to-have — positional workaround is correct today |
@@ -124,15 +126,15 @@ be contributed upstream — but kardinal no longer requires it as a prerequisite
 
 ### #138 (recheckAfter): unblocked via ScheduleClock pattern
 
-**Ellis Tarn (krocodile author) suggested using `propagateWhen` with a time-based trigger node.**
+**The pre-upstream Graph controller's author suggested gating on a time-based trigger node.**
 
 The `ScheduleClock` CRD is an Owned node whose sole job is writing `status.tick = time.Now()`
 on a configurable interval. This fires a real Kubernetes watch event. PolicyGate nodes that
-reference `clock` in their dependency scope re-evaluate their `propagateWhen` expressions on
+reference `clock` in their dependency scope re-evaluate their gating expressions on
 every tick — including `schedule.isWeekend()` and `schedule.hour()` functions.
 
 Register `schedule.*` as CEL library extensions on the Graph's `DefaultEnvironment` (Q3 — 
-stateless, cheap, synchronous). No `recheckAfter` krocodile primitive required.
+stateless, cheap, synchronous). No `recheckAfter` Graph primitive required.
 
 See §ScheduleClock Implementation below for the full spec.
 
@@ -155,13 +157,13 @@ was deleted in #701 and the CEL environment construction moved to
 The schedule.* CEL library extension (Part 2 of the ScheduleClock design) was tracked in
 issue #616, which is now **closed**. The `schedule.*` functions were NOT promoted to a CEL
 library during that work — they remain as plain map variables injected by the PolicyGate
-reconciler. The blocking condition has changed: this is now unblocked (no krocodile change
+reconciler. The blocking condition has changed: this is now unblocked (no Graph change
 required) but untriaged. If schedule.* as a proper Graph CEL library function is still desired,
 open a new issue — see #645 for context.
 
 ### #400 (Journey 2 multi-cluster): unblocked via Stage 14 implementation
 
-Was labeled blocked via Stage 14 → #132 → krocodile. Since #132 is unblocked, Stage 14 is
+Was labeled blocked via Stage 14 → #132 → the Graph controller. Since #132 is unblocked, Stage 14 is
 a kardinal implementation task. Journey 2 test can be written once Stage 14 ships.
 
 ---
@@ -174,7 +176,7 @@ a kardinal implementation task. Journey 2 test can be written once Stage 14 ship
 > **not CEL library functions on the Graph DefaultEnvironment. See issue #616.**
 >
 > Closes: #138, #130, #68 (eliminates `pkg/cel` entirely) — pending Part 2
-> Suggested by: Ellis Tarn (krocodile author)
+> Suggested by: the pre-upstream Graph controller's author
 > Architecture: ✅ Pure — Q2 (Owned node) + Q3 (CEL library extension)
 
 ### Problem
@@ -282,12 +284,12 @@ sub-minute precision.
 ### The original claim (incorrect)
 
 That each promotion step (git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge,
-health-check) could become a separate krocodile Graph node — a `PromotionStepTask` CRD — and
+health-check) could become a separate Graph node — a `PromotionStepTask` CRD — and
 the Graph controller would sequence them via `readyWhen` expressions.
 
 ### Why it does not work
 
-krocodile Graph nodes communicate **exclusively through Kubernetes resource fields written to
+Graph nodes communicate **exclusively through Kubernetes resource fields written to
 etcd**. A node manages a CR, the CR signals ready via its `status`, the Graph advances.
 That is the entire inter-node contract.
 
@@ -309,7 +311,7 @@ Workarounds all make things worse:
   does not work with multiple controller replicas
 - Encode the whole working tree in CRD fields: absurd — you would be storing git repos in etcd
 
-**krocodile nested Graphs do not help.** A child Graph is independently reconciled in its own
+**Nested Graphs do not help.** A child Graph is independently reconciled in its own
 loop. You cannot pipe ephemeral local state from one reconcile loop to another. Nesting adds
 scopes, not shared memory.
 
@@ -331,24 +333,24 @@ status is a small delta that gives full observability without any structural cha
 
 ---
 
-## Aggregated API — Future Migration Path (ellistarn/kro#80 Closed Without Merging)
+## Aggregated API — Future Migration Path (Upstream Proposal Closed Without Merging)
 
-> **Status: No upstream implementation.** `ellistarn/kro#80` was closed as a design
-> document without code changes on 2026-04-16 (state: closed, merged_at: null).
-> There is no aggregated API provider in krocodile. See #643 for the audit finding.
+> **Status: No upstream implementation.** The aggregated-API proposal (PR #80 on the pre-upstream
+> Graph controller fork) was closed as a design document without code changes on 2026-04-16.
+> There is no aggregated API provider in kro. See #643 for the audit finding.
 >
 > The PRStatus CRD workaround (#133) was implemented as planned and is in production.
 > Do not block any SCM-related work on the aggregated API — it has no current timeline.
 
-This section describes the migration path **if and when** a krocodile aggregated API
+This section describes the migration path **if and when** a kro aggregated API
 provider is contributed. It is a future design, not an imminent dependency.
 
 ### What the aggregated API design described
 
-A design by the krocodile author for serving external system state as native Kubernetes
+A design by the pre-upstream Graph controller's author for serving external system state as native Kubernetes
 resources via the Kubernetes API Aggregation Layer. The first provider was to be GitHub (`api.github.com`),
 exposing `GithubArtifact` and `GithubAuthentication` resources. Graphs would consume these through
-existing Watch semantics — no new krocodile primitives required.
+existing `ref` semantics — no new Graph primitives required.
 
 Key properties described:
 - **No CRD sync drift** — state is served live via aggregated apiserver, not copied into CRDs
@@ -359,7 +361,7 @@ Key properties described:
 
 ### What this would eliminate in kardinal
 
-If an aggregated API provider for GitHub were contributed to krocodile, kardinal could refactor:
+If an aggregated API provider for GitHub were contributed to kro, kardinal could refactor:
 
 | Logic leak | Current (purity violation) | With aggregated API (pure) |
 |---|---|---|
@@ -375,7 +377,7 @@ and unblock the Subscription CRD implementation as a clean Watch node.
 
 ### Future migration path
 
-If `ellistarn/kro#80` or equivalent is ever contributed to krocodile mainline:
+If that proposal or an equivalent is ever contributed to [kro](https://github.com/kubernetes-sigs/kro):
 
 1. Deploy the `github-provider` aggregated API server alongside the kardinal controller
    (ship as an optional component in the kardinal Helm chart — off by default, enabled via
@@ -396,10 +398,11 @@ SCM provider (`pkg/scm/gitlab.go`) would be replaced the same way.
 
 ---
 
-## Pending Upstream Contributions to krocodile
+## Pending Upstream Contributions to kro
 
 These are no longer blocking kardinal — all have in-project alternatives — but worth
-contributing upstream for the benefit of the broader krocodile ecosystem.
+contributing upstream for the benefit of the broader kro ecosystem. New Graph gaps go in
+[16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
 | Contribution | Kardinal alternative | Tracked |
 |---|---|---|
@@ -408,4 +411,4 @@ contributing upstream for the benefit of the broader krocodile ecosystem.
 | `ShapeWatch` for external K8s resources | Aggregated API provider (#456) | #131 |
 | CEL schedule library in DefaultEnvironment | `pkg/cel/schedule` registered via `WithCustomDeclarations` | #126 |
 | `startAfterMinutes` on Graph edges | Sequential waves (deferred) | #454 |
-| Aggregated API provider (GitHub) | `PRStatus` CRD workaround (#133) until landed | ellistarn/kro#80 (#456) |
+| Aggregated API provider (GitHub) | `PRStatus` CRD workaround (#133) until landed | #456 |

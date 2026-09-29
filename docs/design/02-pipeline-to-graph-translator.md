@@ -16,7 +16,7 @@ The Pipeline-to-Graph translator is the core logic that reads a Pipeline CRD, a 
 - `PolicyGate` CRDs (from `--policy-namespaces` + Pipeline namespace)
 
 **Output:**
-- A `Graph` CRD spec (`experimental.kro.run/v1alpha1/Graph`) with:
+- A `Graph` CRD spec (`kro.run/v1alpha1/Graph`) with:
   - One node per environment (PromotionStep template)
   - One node per matching PolicyGate per gated environment (PolicyGate instance template)
   - Correct CEL reference edges between nodes
@@ -152,7 +152,7 @@ The `upstreamVerified` field references the upstream environment's status. For t
       upstreamEnvironment: ${<upstream-env>.status.state}  # creates dependency edge
 ```
 
-> **`propagateWhen` is how PolicyGates block promotion.** Per krocodile/experimental design docs,
+> **`propagateWhen` is how PolicyGates block promotion.** Per the pre-upstream Graph controller design docs,
 > `readyWhen` is a health signal that does not gate downstream execution. `propagateWhen` controls
 > when a node's data flows to dependents. When `propagateWhen` is unsatisfied on a PolicyGate node,
 > the downstream PromotionStep retains its Pending state. See design-v2.1.md Section 3.5.
@@ -233,11 +233,11 @@ Test cases for `translator.go`:
 
 ## Present
 
-✅ Multi-region fan-out via krocodile `forEach` (PR #612, 2026-04-22):
+✅ Multi-region fan-out via Graph `forEach` (PR #612, 2026-04-22):
    `EnvironmentSpec.Regions []string` — when ≥2 regions are set, the translator emits
-   a `forEach` Graph node. krocodile stamps out one PromotionStep per region; each
+   a `forEach` Graph node. The Graph controller stamps out one PromotionStep per region; each
    instance receives `spec.region = "${item}"`. `PromotionStepSpec.Region string` carries
-   the current region. Per-item `propagateWhen` (krocodile ≥ `745998f`) ensures all
+   the current region. Per-item `propagateWhen` (pre-upstream fork ≥ `745998f`) ensures all
    regional instances must be Verified before downstream environments proceed.
 
 ## Future

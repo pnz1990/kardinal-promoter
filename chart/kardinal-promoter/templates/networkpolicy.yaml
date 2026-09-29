@@ -12,7 +12,7 @@ When enabled, the controller:
     - Kubernetes API server (HTTPS :443 and :6443) — required for CRD reconciliation
     - DNS (UDP/TCP :53) — required for SCM provider hostname resolution
     - HTTPS (:443) — required for GitHub/GitLab/Forgejo API calls and git push
-    - Any pod in kro-system namespace — required to communicate with krocodile
+    - Any pod in the kro namespace (graph.kroNamespace)
 
 Disabled by default — requires a CNI that supports NetworkPolicy (Calico, Cilium, etc.).
 Enable with: --set networkPolicy.enabled=true
@@ -61,8 +61,8 @@ spec:
     - ports:
         - port: 443
           protocol: TCP
-    # krocodile Graph controller (kro-system namespace)
+    # kro Graph controller
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: kro-system
+          kubernetes.io/metadata.name: {{ .Values.graph.kroNamespace }}
 {{- end }}

@@ -182,7 +182,7 @@ In standalone mode (single binary), the shard field is ignored and all Promotion
 
 ### How it works under the hood
 
-When a Bundle is created, the kardinal-controller generates a [kro Graph](https://github.com/ellistarn/kro/tree/krocodile/experimental) from the Pipeline CRD. The Graph controller executes the DAG, creating PromotionStep and PolicyGate CRs in dependency order. You do not need to know about Graphs to use kardinal-promoter. The Pipeline CRD is the interface.
+When a Bundle is created, the kardinal-controller generates a [kro Graph](https://kro.run/next/docs/concepts/graph/overview/) from the Pipeline CRD. The Graph controller executes the DAG, creating PromotionStep and PolicyGate CRs in dependency order. You do not need to know about Graphs to use kardinal-promoter. The Pipeline CRD is the interface.
 
 ### Approval modes
 

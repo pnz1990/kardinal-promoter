@@ -8,6 +8,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **Upstream kro Graph** — kardinal now runs on upstream kro `kro.run/v1alpha1` Graph (v0.10.0-rc.0, `GraphKind` feature gate) instead of the forked Graph controller. The chart no longer bundles a Graph controller; install kro with `hack/install-kro.sh`. Pipeline changes update the Graph in place instead of re-running Verified environments. See [Graph Coverage](graph-coverage.md)
 - feat(loop): prediction vs actual delta in SM batch report (#1064)
 - feat(loop): skills library growth rate in SM batch report (#1063)
 - feat(loop): housekeeping_streak counter for LOOP STALL detection (#1062)
@@ -61,20 +62,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
 - **UI WCAG color contrast** — all theme colors now meet WCAG 2.1 AA 4.5:1 minimum contrast ratio in both dark and light modes (#760)
-- **krocodile upgraded to `3376810`** — correctness fix: propagation trigger on self-state refresh. Without this, UAT PromotionStep was never created after test reached Verified. Also includes NodeState sync guard and ForEach typed binding (#789)
-- **krocodile upgraded to `d6cbc54`** — additive forEach incremental diff optimization (O(K) vs O(N) rehash), WatchManager canonical Kind caching fix. No breaking changes (#803)
+- **Graph controller fork upgraded to `3376810`** — correctness fix: propagation trigger on self-state refresh. Without this, UAT PromotionStep was never created after test reached Verified. Also includes NodeState sync guard and ForEach typed binding (#789)
+- **Graph controller fork upgraded to `d6cbc54`** — additive forEach incremental diff optimization (O(K) vs O(N) rehash), WatchManager canonical Kind caching fix. No breaking changes (#803)
 
 ### Fixed
 
 - **Demo Validate nightly workflow** — missing `issues: write` permission caused `GraphQL: Resource not accessible by integration (addComment)` on every scheduled run; fixed and improved to post to the current daily report issue instead of hard-coded #1 (#801)
-- **UAT never starting after test Verified** — krocodile Path 2 (self-state refresh) now correctly marks dependents as `propagationTriggered`; UAT PromotionStep is created once test PS writes `status.state=Verified` (#789)
+- **UAT never starting after test Verified** — Graph controller Path 2 (self-state refresh) now correctly marks dependents as `propagationTriggered`; UAT PromotionStep is created once test PS writes `status.state=Verified` (#789)
 - **AbortedByAlarm / RollingBack cycling** — PromotionStep reconciler now handles `AbortedByAlarm` and `RollingBack` as explicit terminal/managed cases, preventing fall-through to `default` which incorrectly reset state to Pending (#789)
 
 ---
 
 ## [v0.8.1] — 2026-04-17
 
-**Security release: supply chain hardening — trivy, cosign, SBOM, SLSA, krocodile scan**
+**Security release: supply chain hardening — trivy, cosign, SBOM, SLSA, Graph controller image scan**
 
 ---
 
@@ -86,13 +87,13 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [v0.7.0] — 2026-04-17
 
-**WatchKind O(1) health checks, krocodile 81c5a03 upgrade, reactive PromotionStep reconciler, graph-first cleanup**
+**WatchKind O(1) health checks, Graph controller fork 81c5a03 upgrade, reactive PromotionStep reconciler, graph-first cleanup**
 
 ### Added
 
-- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires krocodile `745998f`+ (#652)
+- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires Graph controller fork `745998f`+ (#652)
 - **Kargo migration guide** — concept mapping, side-by-side Pipeline vs Kargo YAML, 7-step migration walkthrough in `docs/guides/` (#640)
-- **Operations runbook expanded** — PolicyGate debugging, SCM failure modes, RBAC issues, krocodile restarts, performance tuning added (#639)
+- **Operations runbook expanded** — PolicyGate debugging, SCM failure modes, RBAC issues, Graph controller restarts, performance tuning added (#639)
 - **Bundle image diff in NodeDetail** — UI compares the current bundle's image against the previous bundle for that environment; closes a Kargo parity gap (#638)
 - **Per-step progress observability** — `PromotionStep.status.steps[]` exposes each step with individual state, start time, and duration (#630)
 - **`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh (#629)
@@ -100,7 +101,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **UI: conditions summary and reason** — NodeDetail shows Kubernetes Conditions table with reason column; improved empty-state onboarding (#529, #530)
 - **UI: Kubernetes events stream** — timestamped event history per PromotionStep in NodeDetail (#560)
 - **UI: cross-environment error aggregation** — groups PromotionStep failures by type across environments; shows affected count (#564)
-- **krocodile upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
+- **Graph controller fork upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
 
 ### Fixed
 
@@ -108,10 +109,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Subscription deduplication under HA** — uses label selector (`kardinal.io/source-digest`) instead of status field comparison; safe under concurrent reconciles and multiple controller replicas (#636)
 - **CEL documentation accuracy** — corrected false claims about `pkg/cel/NewCELEnvironment()` (does not exist) and `schedule.*` (map variable, not CEL library function) in design docs and code comments (#631)
 - **Shell completion** — bash, zsh, fish, and PowerShell completion scripts via `kardinal completion <shell>` (#606)
-- **`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, krocodile, RBAC, and GitHub token before first use (#607)
+- **`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, the Graph controller, RBAC, and GitHub token before first use (#607)
 - **Graceful shutdown** — controller drains in-flight reconcile loops on SIGTERM; no promotion steps interrupted by pod restarts (#605)
 - **PodDisruptionBudget + topology spread** — minAvailable: 1 PDB and `topologySpreadConstraints` in Helm chart for HA deployments (#598)
-- **krocodile bundled in Helm chart** — single `helm install` now installs both kardinal-promoter and the krocodile Graph controller; no separate `hack/install-krocodile.sh` step needed (#590)
+- **Graph controller bundled in Helm chart** — single `helm install` installed both kardinal-promoter and the pre-upstream Graph controller fork (#590; reverted when kardinal moved to upstream kro, which is installed separately)
 - **Library-based git operations** — replaced `exec.Command("git")` with `go-git` library (`#517`). Controller no longer requires a `git` binary. Improves portability (distroless images) and performance.
 - Controller `/tmp` mount — `emptyDir` volume added for git-clone with `readOnlyRootFilesystem: true` (#609)
 - `policy simulate` now searches all namespaces — org-level gates in `platform-policies` were never found
@@ -130,7 +131,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **OCI + Git source watchers** — `OCIWatcher` and `GitWatcher` Subscription reconcilers poll registries and Git branches, creating Bundles on new images/commits (#491, #493)
 - **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498)
 - **`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates (#506)
-- **krocodile upgraded to `948ad6c`** — DNS-1123 node ID validation, drift timers (30 min), propagation hash includes `propagateWhen` state
+- **Graph controller fork upgraded to `948ad6c`** — DNS-1123 node ID validation, drift timers (30 min), propagation hash includes `propagateWhen` state
 - **Cardinal logo** — added across docs site, UI sidebar, and README
 
 ### Fixed
@@ -143,7 +144,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [v0.5.0] — 2026-04-13
 
-**Pipeline Expressiveness (K-Series), Enterprise UI Control Plane, krocodile upgrade**
+**Pipeline Expressiveness (K-Series), Enterprise UI Control Plane, Graph controller upgrade**
 
 ### Added
 
@@ -161,7 +162,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- krocodile upgraded to `948ad6c` — DNS-1123 node ID validation, drift timers, propagation hash improvements
+- Graph controller fork upgraded to `948ad6c` — DNS-1123 node ID validation, drift timers, propagation hash improvements
 - `changewindow.isAllowed()` / `changewindow.isBlocked()` CEL helpers added alongside the map-style access
 
 ---
@@ -177,7 +178,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **GitLab + Forgejo/Gitea SCM providers** — `scm.provider: gitlab` and `scm.provider: forgejo` in Pipeline spec
 - **PRStatus CRD** — makes PR merge/close signal observable by the Graph (eliminates 6 GitHub API call paths from the reconciler hot path)
 - **RollbackPolicy CRD** — auto-rollback threshold comparison moved to dedicated reconciler
-- **Graph purity milestone** — all 41 krocodile-independent logic leaks eliminated (see `docs/design/11-graph-purity-tech-debt.md`)
+- **Graph purity milestone** — all 41 Graph-independent logic leaks eliminated (see `docs/design/11-graph-purity-tech-debt.md`)
 - **K-01–K-11** — all Pipeline Expressiveness features (see v0.5.0 above for full list; initial implementation in this release)
 
 ### Fixed
@@ -212,7 +213,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [v0.2.1] — 2026-04-12
 
-**Graph Purity: all krocodile-independent logic leaks eliminated**
+**Graph Purity: all Graph-independent logic leaks eliminated**
 
 ### Added
 
@@ -251,7 +252,7 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ### Fixed
 
-- kind E2E infrastructure (`make setup-e2e-env`) sets up krocodile + ArgoCD + test/uat/prod namespaces
+- kind E2E infrastructure (`make setup-e2e-env`) sets up the Graph controller + ArgoCD + test/uat/prod namespaces
 - `kardinal get pipelines` shows per-environment status columns
 - `kardinal explain` shows active PolicyGates with CEL expression and current value
 

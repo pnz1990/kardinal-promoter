@@ -34,7 +34,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,11 +52,8 @@ type BundleTranslator interface {
 }
 
 // GraphChecker checks whether a kro Graph exists by name in a given namespace.
-// Also supports Graph deletion for pipeline spec change handling (#626).
 type GraphChecker interface {
 	GraphExists(ctx context.Context, namespace, name string) (bool, error)
-	// DeleteGraph deletes the Graph CR. Returns nil if the Graph does not exist.
-	DeleteGraph(ctx context.Context, namespace, name string) error
 }
 
 // Reconciler watches Bundle objects, sets Available phase, triggers translation,
@@ -227,8 +223,7 @@ func (r *Reconciler) ensureGraphExists(ctx context.Context, log zerolog.Logger,
 }
 
 // ensurePipelineSpecCurrent detects when a Pipeline spec has changed since the Graph
-// was last created, and deletes the Graph so ensureGraphExists recreates it with the
-// updated spec.
+// was last built, and re-translates the Graph in place.
 //
 // This fixes issue #626: Pipeline spec changes (new environments, changed policyNamespaces,
 // updated git config) were invisible to in-flight Bundles because the Graph spec is
@@ -237,13 +232,14 @@ func (r *Reconciler) ensureGraphExists(ctx context.Context, log zerolog.Logger,
 // Mechanism:
 //  1. Hash the current Pipeline spec.
 //  2. Compare to Bundle.status.pipelineSpecHash (set when the Graph was created).
-//  3. If different: delete the Graph. ensureGraphExists runs next and recreates it.
+//  3. If different: re-run the translator, which updates the existing Graph's spec.
+//     kro applies the new nodes and prunes only the removed ones, so environments
+//     that are already Verified are not promoted again. Deleting the Graph instead
+//     would delete every PromotionStep with it (ledger G6).
 //  4. Update Bundle.status.pipelineSpecHash to the new hash.
 //
-// Graph-first: we only write to our own CRD status (pipelineSpecHash). We delete
-// the Graph because the Bundle is the ownerReference — we own the Graph lifecycle.
-// Cross-CRD mutation rule: deleting the Graph (which we own) is permitted by the
-// ownerReference relationship; it is not "writing to CRD B's status."
+// Graph-first: we only write to our own CRD status (pipelineSpecHash) and to the
+// Graph the Bundle owns.
 func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) error {
 	if r.Translator == nil || r.GraphChecker == nil {
@@ -281,21 +277,15 @@ func (r *Reconciler) ensurePipelineSpecCurrent(ctx context.Context, log zerolog.
 		return nil // no change
 	}
 
-	// Pipeline spec changed. Delete the existing Graph so ensureGraphExists recreates it.
-	graphName := b.Status.GraphRef
-	if graphName == "" {
-		graphName = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
-	}
-
+	// Pipeline spec changed. Re-translate; the translator updates the Graph in place.
 	log.Info().
-		Str("graph", graphName).
+		Str("graph", b.Status.GraphRef).
 		Str("oldHash", b.Status.PipelineSpecHash).
 		Str("newHash", currentHash).
-		Msg("pipeline spec changed — deleting Graph for regeneration")
-
-	if delErr := r.GraphChecker.DeleteGraph(ctx, b.Namespace, graphName); delErr != nil {
-		// Non-fatal: log and return nil so ensureGraphExists can still try to recreate.
-		log.Warn().Err(delErr).Str("graph", graphName).Msg("failed to delete stale Graph (non-fatal)")
+		Msg("pipeline spec changed — updating Graph in place")
+	if _, err := r.Translator.Translate(ctx, &pipeline, b); err != nil {
+		// Keep the stored hash so the update is retried on the next reconcile.
+		return fmt.Errorf("ensurePipelineSpecCurrent: update graph: %w", err)
 	}
 
 	// Update the stored hash so we don't re-trigger on the next reconcile.
@@ -677,7 +667,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		// K-05: even when no PromotionSteps exist, compute metrics if all environments
 		// in status are already Verified (this happens on re-reconcile after Graph deletion).
 		if b.Status.Metrics == nil && len(b.Status.Environments) > 0 {
-			if metrics := computeBundleMetrics(b, b.Status.Environments); metrics != nil {
+			if metrics := computeBundleMetrics(b, b.Status.Environments, r.expectedEnvironments(ctx, b)); metrics != nil {
 				patch := client.MergeFrom(b.DeepCopy())
 				b.Status.Metrics = metrics
 				if patchErr := r.Status().Patch(ctx, b, patch); patchErr != nil {
@@ -745,7 +735,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 
 	if !changed {
 		log.Debug().Msg("bundle evidence already up to date")
-		return ctrl.Result{}, nil
+		return soakRequeue(b), nil
 	}
 
 	// Rebuild the environments slice from the updated map.
@@ -754,18 +744,21 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 		envs = append(envs, env)
 	}
 
+	// Take the patch base before any status field is written, otherwise the
+	// merge patch omits it and the write is silently lost.
+	patch := client.MergeFrom(b.DeepCopy())
+
 	// K-05: Compute deployment metrics when all environments are Verified.
 	// Only runs once (when metrics is nil and all envs just reached Verified).
 	metricsJustComputed := false
 	if b.Status.Metrics == nil {
-		metrics := computeBundleMetrics(b, envs)
+		metrics := computeBundleMetrics(b, envs, r.expectedEnvironments(ctx, b))
 		if metrics != nil {
 			b.Status.Metrics = metrics
 			metricsJustComputed = true
 		}
 	}
 
-	patch := client.MergeFrom(b.DeepCopy())
 	b.Status.Environments = envs
 	// Update Ready condition based on overall bundle state.
 	// When all environments are Verified: Ready=True (enables kubectl wait --for=condition=Ready).
@@ -785,24 +778,83 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	log.Info().Int("environments", len(envs)).Msg("bundle evidence synced from PromotionStep status")
-	return ctrl.Result{}, nil
+	return soakRequeue(b), nil
+}
+
+// soakRequeue keeps status.environments[*].soakMinutes ticking while a
+// Promoting Bundle has a Verified environment. Once the PromotionSteps settle
+// nothing else re-triggers this reconcile, so a soak-based gate such as
+// bundle.upstreamSoakMinutes >= 30 would never see the time pass.
+func soakRequeue(b *kardinalv1alpha1.Bundle) ctrl.Result {
+	if b.Status.Phase != "Promoting" || b.Status.Metrics != nil {
+		return ctrl.Result{}
+	}
+	for _, env := range b.Status.Environments {
+		if env.HealthCheckedAt != nil {
+			return ctrl.Result{RequeueAfter: time.Minute}
+		}
+	}
+	return ctrl.Result{}
+}
+
+// expectedEnvironments returns the environment names the Bundle has to verify:
+// the Pipeline's environments minus spec.intent.skipEnvironments. It returns nil
+// when the Pipeline cannot be read, and callers then fall back to the
+// environments already present in status.
+func (r *Reconciler) expectedEnvironments(ctx context.Context, b *kardinalv1alpha1.Bundle) []string {
+	if b.Spec.Pipeline == "" {
+		return nil
+	}
+	var pipeline kardinalv1alpha1.Pipeline
+	if err := r.Get(ctx, client.ObjectKey{Name: b.Spec.Pipeline, Namespace: b.Namespace}, &pipeline); err != nil {
+		return nil
+	}
+	skip := map[string]bool{}
+	if b.Spec.Intent != nil {
+		for _, name := range b.Spec.Intent.SkipEnvironments {
+			skip[name] = true
+		}
+	}
+	var out []string
+	for _, env := range pipeline.Spec.Environments {
+		if !skip[env.Name] {
+			out = append(out, env.Name)
+		}
+	}
+	return out
 }
 
 // computeBundleMetrics derives deployment efficiency metrics from a Bundle's
-// environments slice. Returns nil if not all environments are Verified yet.
+// environments slice. Returns nil until every expected environment is Verified.
+// Environments that have no PromotionStep yet are absent from envs, so the
+// check runs against expected (the Pipeline's environments), not against envs
+// alone; otherwise a Bundle looks finished as soon as its first environments
+// verify and the soak clock for the later ones stops.
 //
 // K-05: commitToProductionMinutes is the elapsed time from Bundle creation to the
 // last environment reaching HealthCheckedAt (the final verification timestamp).
 // Graph-first: reads from CRD status only; time.Now() is used only to write the
 // Metrics field as a CRD status update.
-func computeBundleMetrics(b *kardinalv1alpha1.Bundle, envs []kardinalv1alpha1.EnvironmentStatus) *kardinalv1alpha1.BundleMetrics {
-	// Only compute when all environments have reached Verified (have HealthCheckedAt set).
-	var latestHealthCheck *time.Time
+func computeBundleMetrics(b *kardinalv1alpha1.Bundle, envs []kardinalv1alpha1.EnvironmentStatus,
+	expected []string) *kardinalv1alpha1.BundleMetrics {
+	verifiedAt := make(map[string]time.Time, len(envs))
 	for i := range envs {
 		if envs[i].HealthCheckedAt == nil {
 			return nil // not all verified yet
 		}
-		t := envs[i].HealthCheckedAt.Time
+		verifiedAt[envs[i].Name] = envs[i].HealthCheckedAt.Time
+	}
+	if expected == nil {
+		for name := range verifiedAt {
+			expected = append(expected, name)
+		}
+	}
+	var latestHealthCheck *time.Time
+	for _, name := range expected {
+		t, ok := verifiedAt[name]
+		if !ok {
+			return nil // no PromotionStep for this environment yet
+		}
 		if latestHealthCheck == nil || t.After(*latestHealthCheck) {
 			latestHealthCheck = &t
 		}
@@ -922,11 +974,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// graphObject is an unstructured placeholder for the kro Graph CRD.
 	// We use unstructured to avoid a compile-time dependency on the kro module.
 	graphObject := &unstructured.Unstructured{}
-	graphObject.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "experimental.kro.run",
-		Version: "v1alpha1",
-		Kind:    "Graph",
-	})
+	graphObject.SetGroupVersionKind(graph.GraphGVK)
 
 	// pipelineMapper maps a Pipeline change event to reconcile requests for all
 	// Bundles that reference that Pipeline. When a Pipeline spec changes, each

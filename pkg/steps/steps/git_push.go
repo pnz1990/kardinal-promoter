@@ -24,8 +24,12 @@ func init() {
 	parentsteps.Register(&gitPushStep{})
 }
 
-// gitPushStep pushes the promotion branch to the remote.
-// It is idempotent: pushing an already-pushed branch is a no-op.
+// gitPushStep pushes the promotion commit to the remote.
+//
+// A pr-review environment pushes a promotion branch (kardinal/<bundle>/<env>)
+// for open-pr. An auto environment with the directory layout pushes straight
+// to the base branch, so the change reaches what the GitOps tool syncs.
+// It is idempotent: pushing an already-pushed commit is a no-op.
 type gitPushStep struct{}
 
 func (s *gitPushStep) Name() string { return "git-push" }
@@ -37,6 +41,12 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 
 	// Promotion branch name: kardinal/<bundle>/<env>
 	branch := fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
+	if state.Environment.Approval != "pr-review" && state.Environment.Layout != "branch" {
+		branch = state.Git.Branch
+		if branch == "" {
+			branch = "main"
+		}
+	}
 
 	if err := state.GitClient.Push(ctx, state.WorkDir, "origin", branch, state.Git.Token); err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("push failed: %v", err)},

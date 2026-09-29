@@ -241,7 +241,7 @@ func TestWatchNodeTemplate_ResourceWatchKind(t *testing.T) {
 		"app":                  "nginx",
 		"kardinal.io/pipeline": "nginx-demo",
 	}, spec.LabelSelector)
-	assert.Contains(t, spec.ReadyWhen, "healthNode.all(")
+	assert.Contains(t, spec.ReadyWhen, "healthNode.status.conditions.exists(")
 	assert.Contains(t, spec.ReadyWhen, "Available")
 	assert.Equal(t, "resource", spec.HealthType)
 }
@@ -279,11 +279,11 @@ func TestWatchNodeTemplate_ResourceNoLabelSelector(t *testing.T) {
 	assert.Contains(t, spec.ReadyWhen, "healthNode.status.conditions.exists(")
 }
 
-// TestWatchNodeTemplate_WatchKindReadyWhenUsesAllPredicate verifies that the WatchKind
-// readyWhen expression uses list.all() to check all items in the collection.
-// This is required because the krocodile CEL scope variable for a WatchKind node
-// is a list (not a single object).
-func TestWatchNodeTemplate_WatchKindReadyWhenUsesAllPredicate(t *testing.T) {
+// TestWatchNodeTemplate_WatchKindReadyWhenIsPerElement verifies that the
+// collection readyWhen is written for a single element. kro evaluates a
+// collection node's readyWhen once per element with the element bound to
+// "each", and the translator substitutes "each" for the healthNode placeholder.
+func TestWatchNodeTemplate_WatchKindReadyWhenIsPerElement(t *testing.T) {
 	spec, err := health.WatchNodeTemplate("resource", health.CheckOptions{
 		Resource: health.ResourceConfig{
 			Namespace:     "prod",
@@ -293,9 +293,8 @@ func TestWatchNodeTemplate_WatchKindReadyWhenUsesAllPredicate(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, spec.UseWatchKind)
-	// Must use the CEL list predicate form: healthNode.all(d, <condition>)
-	// so that ALL Deployments in the collection must be healthy.
-	assert.Contains(t, spec.ReadyWhen, ".all(", "WatchKind readyWhen must use .all() list predicate")
-	assert.NotContains(t, spec.ReadyWhen, "healthNode.status",
-		"WatchKind readyWhen must not use single-object path — it is a list")
+	assert.Contains(t, spec.ReadyWhen, "healthNode.status.conditions.exists(",
+		"collection readyWhen must be a per-element expression")
+	assert.NotContains(t, spec.ReadyWhen, ".all(",
+		"collection readyWhen must not wrap a list predicate — kro binds each element")
 }

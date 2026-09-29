@@ -69,7 +69,7 @@
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
-| 008 | Add PropagateWhen + fix Graph API group (experimental.kro.run) | ✅ Complete | #27 merged | GraphNode.PropagateWhen, GraphGVK/GVR updated, design docs updated |
+| 008 | Add PropagateWhen + fix Graph API group (pre-upstream fork group) | ✅ Complete | #27 merged | GraphNode.PropagateWhen, GraphGVK/GVR updated, design docs updated |
 | 009 | Graph Builder, GraphClient, Translator, BundleReconciler extension | ✅ Complete | #29 merged | Full translation algorithm, 27 builder tests, 7 reconciler tests |
 
 ---
@@ -194,7 +194,7 @@
 | 032 | Workshop 1 execution on live kind cluster | ✅ Complete | All pass criteria met. 12 bugs fixed. PROD Verified. v0.2.0 released. |
 | fix | OpenPR 422 when PR already exists | ✅ Complete | commit 9a54ea0 |
 | fix | Helm chart missing GITHUB_TOKEN | ✅ Complete | commit 9a54ea0 |
-| fix | krocodile hash precision | ✅ Complete | commit 9a54ea0 (pinned to 9c18aa34) |
+| fix | Graph controller fork pin hash precision | ✅ Complete | commit 9a54ea0 (pinned to 9c18aa34) |
 
 ---
 
@@ -275,7 +275,7 @@
 
 | Spec | Title | Status | Notes |
 |---|---|---|---|
-| 001 | Graph Integration Layer | ✅ Complete | PRs #25, #27. GraphNode types, PropagateWhen, experimental.kro.run API group, GraphClient |
+| 001 | Graph Integration Layer | ✅ Complete | PRs #25, #27. GraphNode types, PropagateWhen, pre-upstream fork API group, GraphClient |
 | 002 | Pipeline-to-Graph Translator | ✅ Complete | PR #29. Full translation algorithm Steps 1-7, 27 unit tests |
 | 003 | PromotionStep Reconciler | ✅ Complete | PR #58. Full state machine, Bundle supersession, webhook endpoint, evidence copy. |
 | 004 | PolicyGate Reconciler | ✅ Complete | PR #31. CEL environment, evaluator, PolicyGate reconciler, time-based/soak gates. |
@@ -291,7 +291,7 @@
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
-| 901 | WatchKind health nodes for O(1) incremental cache | ✅ Complete | #652 merged | health.labelSelector → krocodile WatchKind; 6 new tests; docs MISS fixed |
+| 901 | WatchKind health nodes for O(1) incremental cache | ✅ Complete | #652 merged | health.labelSelector → WatchKind (pre-upstream fork); 6 new tests; docs MISS fixed |
 
 ---
 
@@ -327,7 +327,7 @@
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
 | 573-admission-webhook | feat(api): Pipeline/Bundle VAP extension | ✅ Complete | #670 merged | 2 new VAP policies |
-| 617-definition-nodes | feat(graph): Definition nodes for naming | ⛔ NEEDS HUMAN | — | False premise: Go strings not in krocodile CEL scope |
+| 617-definition-nodes | feat(graph): Definition nodes for naming | ⛔ NEEDS HUMAN | — | False premise: Go strings not in Graph CEL scope |
 
 ---
 
@@ -335,7 +335,7 @@
 
 | Item | Title | Status | PR | Notes |
 |---|---|---|---|---|
-| 646-krocodile-upgrade-2 | chore(graph): upgrade krocodile to 05db829 | ✅ Complete | #677 merged | BREAKING: explicit-keyword schema; ref:/watch: compat fixes |
+| 646-graph-fork-upgrade-2 | chore(graph): upgrade Graph controller fork to 05db829 | ✅ Complete | #677 merged | BREAKING: explicit-keyword schema; ref:/watch: compat fixes |
 
 ---
 

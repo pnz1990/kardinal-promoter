@@ -16,8 +16,8 @@
 // Checks:
 //   1. Controller reachable  — reads kardinal-version ConfigMap
 //   2. CRDs installed        — uses discovery API to list kardinal.io resources
-//   3. krocodile running     — looks for graph-controller pod in kro-system
-//   4. krocodile CRDs        — uses discovery API to find experimental.kro.run
+//   3. kro running           — looks for the kro controller pod in kro-system
+//   4. kro Graph CRD         — uses discovery API to find kro.run/v1alpha1 graphs
 //   5. GitHub token          — checks github-token secret in kardinal-system
 //   6. Pipeline health       — optional via --pipeline flag
 
@@ -60,8 +60,8 @@ func newDoctorCmd() *cobra.Command {
 
   ✅ Controller reachable      version ConfigMap found
   ✅ CRDs installed            kardinal.io resource groups registered
-  ✅ krocodile running         graph-controller pod in kro-system
-  ✅ krocodile CRDs installed  experimental.kro.run groups registered
+  ✅ kro running               kro controller pod in kro-system
+  ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
   ✅ GitHub token              github-token secret present
 
 Use 'kardinal doctor' as the first troubleshooting step.`,
@@ -111,10 +111,10 @@ func runDoctor(w io.Writer, pipeline string) error {
 	// 2. CRDs installed (kardinal.io)
 	results = append(results, checkKardinalCRDs(disco))
 
-	// 3. krocodile running
-	results = append(results, checkKrocodile(ctx, client))
+	// 3. kro running
+	results = append(results, checkKroController(ctx, client))
 
-	// 4. krocodile CRDs (experimental.kro.run)
+	// 4. kro Graph CRD (kro.run/v1alpha1 graphs)
 	results = append(results, checkKroCRDs(disco))
 
 	// 5. GitHub token
@@ -221,62 +221,63 @@ func checkKardinalCRDs(disco *discovery.DiscoveryClient) doctorResult {
 	return r
 }
 
-func checkKrocodile(ctx context.Context, client sigs_client.Client) doctorResult {
-	r := doctorResult{label: "krocodile running"}
+const kroInstallHint = "Install kro v0.10.0-rc.0 with the Graph feature gate: bash hack/install-kro.sh"
+
+func checkKroController(ctx context.Context, client sigs_client.Client) doctorResult {
+	r := doctorResult{label: "kro running"}
 	var podList corev1.PodList
 	if err := client.List(ctx, &podList, sigs_client.InNamespace("kro-system")); err != nil {
 		r.icon = doctorWarn
 		r.detail = "could not list pods in kro-system (no namespace or insufficient RBAC)"
-		r.hint = "Install: KROCODILE_COMMIT=948ad6c bash hack/install-krocodile.sh"
+		r.hint = kroInstallHint
 		r.warned = true
 		return r
 	}
 	for _, pod := range podList.Items {
-		name := pod.Name
-		if strings.Contains(name, "graph-controller") || strings.Contains(name, "kro") {
-			if pod.Status.Phase == corev1.PodRunning {
-				ver := ""
-				for _, c := range pod.Spec.Containers {
-					if idx := strings.LastIndex(c.Image, ":"); idx >= 0 {
-						ver = c.Image[idx+1:]
-					}
-				}
-				if ver != "" {
-					r.detail = fmt.Sprintf("graph-controller %s in kro-system", ver)
-				} else {
-					r.detail = "graph-controller in kro-system"
-				}
-				r.icon = doctorPass
-				return r
+		if !strings.Contains(pod.Name, "kro") || pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		ver := ""
+		for _, c := range pod.Spec.Containers {
+			if idx := strings.LastIndex(c.Image, ":"); idx >= 0 {
+				ver = c.Image[idx+1:]
 			}
 		}
+		if ver != "" {
+			r.detail = fmt.Sprintf("kro %s in kro-system", ver)
+		} else {
+			r.detail = "kro in kro-system"
+		}
+		r.icon = doctorPass
+		return r
 	}
 	r.icon = doctorFail
-	r.detail = "graph-controller pod not running in kro-system"
-	r.hint = "Install: KROCODILE_COMMIT=948ad6c bash hack/install-krocodile.sh"
+	r.detail = "kro controller pod not running in kro-system"
+	r.hint = kroInstallHint
 	r.failed = true
 	return r
 }
 
 func checkKroCRDs(disco *discovery.DiscoveryClient) doctorResult {
-	r := doctorResult{label: "krocodile CRDs installed"}
-	groups, err := disco.ServerGroups()
+	r := doctorResult{label: "kro Graph CRD installed"}
+	resources, err := disco.ServerResourcesForGroupVersion("kro.run/v1alpha1")
 	if err != nil {
-		r.icon = doctorWarn
-		r.detail = "could not query API groups"
-		r.warned = true
+		r.icon = doctorFail
+		r.detail = "kro.run/v1alpha1 not served"
+		r.hint = kroInstallHint
+		r.failed = true
 		return r
 	}
-	for _, g := range groups.Groups {
-		if strings.Contains(g.Name, "kro.run") {
+	for _, res := range resources.APIResources {
+		if res.Name == "graphs" {
 			r.icon = doctorPass
-			r.detail = fmt.Sprintf("group %s registered", g.Name)
+			r.detail = "kro.run/v1alpha1 graphs registered"
 			return r
 		}
 	}
 	r.icon = doctorFail
-	r.detail = "no *.kro.run API group found"
-	r.hint = "Install krocodile: KROCODILE_COMMIT=948ad6c bash hack/install-krocodile.sh"
+	r.detail = "kro.run/v1alpha1 has no graphs resource (GraphKind feature gate off?)"
+	r.hint = kroInstallHint
 	r.failed = true
 	return r
 }

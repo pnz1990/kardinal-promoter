@@ -59,9 +59,9 @@ health:
 - When you deploy multiple Deployments per environment and need all of them healthy before advancing
 - When you want to match Deployments by label rather than by exact name
 
-**How it works:** Uses krocodile's O(1) incremental cache (WatchKind reference type). The Graph node's `readyWhen` expression uses `list.all()` to require all matched Deployments to have `Available=True`. A change to any matched Deployment triggers immediate re-evaluation.
+**How it works:** The Graph gets a kro collection `ref` node (`metadata.selector.matchLabels`). Its `readyWhen` is evaluated per element (`each.status.conditions.exists(...)`), so every matched Deployment must have `Available=True`. A change to any matched Deployment triggers re-evaluation.
 
-**Requirement:** krocodile `81c5a03`+ (already bundled in kardinal-promoter Helm chart).
+**Requirement:** kro v0.10.0-rc.0+ with the `GraphKind` feature gate (`bash hack/install-kro.sh`). An empty match set is vacuously ready — see [ledger](design/16-graph-capability-ledger.md).
 
 > **Note:** `labelSelector` is only supported for `health.type: resource`. For `argocd`, `flux`, `argoRollouts`, and `flagger`, the adapter always watches a single named resource and `labelSelector` is ignored.
 

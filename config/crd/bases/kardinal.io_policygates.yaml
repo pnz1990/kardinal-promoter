@@ -253,7 +253,7 @@ spec:
                 default: false
                 description: |-
                   Ready indicates whether the gate is currently allowing promotion.
-                  The Graph propagateWhen expression evaluates status.ready == true.
+                  The kro Graph gates downstream nodes on status.ready == true.
                 type: boolean
               reason:
                 description: Reason explains the current ready state in human-readable

@@ -37,7 +37,7 @@ configuration problems:
 kardinal doctor
 ```
 
-This checks: controller reachability, CRDs, krocodile, and the GitHub token secret.
+This checks: controller reachability, CRDs, the kro Graph controller, and the GitHub token secret.
 If any check fails, the output includes a remediation hint.
 
 For a specific pipeline: `kardinal doctor --pipeline my-app`
@@ -439,7 +439,7 @@ kubectl get rolebinding -A | grep policygate
 
 ---
 
-## krocodile / Graph controller issues
+## kro Graph controller issues
 
 ### Symptom: Graph shows "GraphRevision: Error" with "CEL compile error"
 
@@ -449,7 +449,7 @@ The Graph spec contains an invalid CEL expression in a `readyWhen` or `propagate
 # Check the Graph status
 kubectl get graph -l kardinal.io/bundle=my-app-v1 -o yaml | grep -A20 conditions
 
-# Check krocodile logs
+# Check kro logs
 kubectl logs -n kro-system -l app=kro-controller --tail=100 | grep -i error
 ```
 
@@ -464,11 +464,11 @@ kubectl get graphrevisions -l kardinal.io/pipeline=my-app 2>/dev/null
 # Check for CRD schema issues
 kubectl get crd policygates.kardinal.io -o jsonpath='{.status.conditions}' | python3 -m json.tool
 
-# Verify krocodile is running
+# Verify kro is running
 kubectl get pods -n kro-system
 ```
 
-If krocodile is in CrashLoopBackOff:
+If kro is in CrashLoopBackOff:
 ```bash
 kubectl describe pod -n kro-system -l app=kro-controller
 kubectl logs -n kro-system -l app=kro-controller --previous

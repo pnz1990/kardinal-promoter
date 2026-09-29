@@ -9,7 +9,7 @@ Last updated: 2026-04-22 (PR #1068)
 |---|---|---|---|
 | agent-coding-discipline | `~/.otherness/agents/skills/agent-coding-discipline.md` | code, implement, write, test, bug, fix | Discipline for writing and modifying code: what to touch, what to leave alone, how to test. |
 | agent-responsibility | `~/.otherness/agents/skills/agent-responsibility.md` | spec, task, responsibility, scope, ownership | Defines agent responsibility boundaries before starting any non-trivial task. |
-| architectural-audit | `~/.otherness/agents/skills/architectural-audit.md` | arch, architecture, audit, design, graph, crd, krocodile | Methodology for running an architectural audit of a codebase or feature. |
+| architectural-audit | `~/.otherness/agents/skills/architectural-audit.md` | arch, architecture, audit, design, graph, crd, kro | Methodology for running an architectural audit of a codebase or feature. |
 | autonomous-workflow-patterns | `~/.otherness/agents/skills/autonomous-workflow-patterns.md` | workflow, autonomous, loop, pattern, agent, coord, sm | Patterns for implementing features across the agent workflow (COORD → ENG → QA → SM). |
 | contribution-hygiene | `~/.otherness/agents/skills/contribution-hygiene.md` | commit, pr, push, diff, staged, branch, merge | Standards for clean PRs and commit messages. |
 | declaring-designs | `~/.otherness/agents/skills/declaring-designs.md` | spec, design, doc, obligation, zone, three-zone | How to write a spec.md with correct Zone 1/2/3 structure. |

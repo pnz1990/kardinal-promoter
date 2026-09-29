@@ -66,11 +66,11 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-krocodile image reference.
-Uses krocodile.image.tag if set, otherwise falls back to krocodile.pinnedCommit.
-This ensures the bundled krocodile version is always deterministic.
+ClusterRoles bound to the Graph ServiceAccount (templates/graph-rbac.yaml).
 */}}
-{{- define "krocodile.image" -}}
-{{- $tag := .Values.krocodile.image.tag | default .Values.krocodile.pinnedCommit -}}
-{{- printf "%s:%s" .Values.krocodile.image.repository $tag -}}
+{{- define "kardinal-promoter.graphApplierRole" -}}
+{{- printf "%s-graph-applier" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end }}
+{{- define "kardinal-promoter.graphReaderRole" -}}
+{{- printf "%s-graph-reader" (include "kardinal-promoter.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end }}

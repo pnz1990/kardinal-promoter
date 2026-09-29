@@ -229,6 +229,20 @@ func main() {
 			"instead of a ClusterRole/ClusterRoleBinding. "+
 			"Also readable from KARDINAL_WATCH_NAMESPACE environment variable.")
 
+	// Graph identity: kro applies each Graph as this ServiceAccount in the
+	// Pipeline's namespace. The controller creates it and binds it to the two
+	// ClusterRoles the chart ships (templates/graph-rbac.yaml).
+	graphIdentity := graphpkg.IdentityProvisioner{}
+	flag.StringVar(&graphIdentity.ServiceAccountName, "graph-service-account",
+		graphpkg.DefaultGraphServiceAccount,
+		"ServiceAccount (created in each Pipeline namespace) that kro impersonates to apply Graphs.")
+	flag.StringVar(&graphIdentity.ApplierClusterRole, "graph-applier-clusterrole",
+		graphpkg.DefaultApplierClusterRole,
+		"ClusterRole bound to the Graph ServiceAccount in the Pipeline namespace.")
+	flag.StringVar(&graphIdentity.ReaderClusterRole, "graph-reader-clusterrole",
+		graphpkg.DefaultReaderClusterRole,
+		"ClusterRole bound to the Graph ServiceAccount in namespaces its health checks read.")
+
 	// controller-runtime uses its own flag set; parse standard flags here
 	opts := czap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -241,6 +255,10 @@ func main() {
 	}
 	zerolog.SetGlobalLevel(level)
 	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	// Reconcilers log through zerolog.Ctx(ctx). controller-runtime does not put a
+	// zerolog logger in the reconcile context, so without this default every
+	// reconciler line, errors included, goes to a disabled logger.
+	zerolog.DefaultContextLogger = &logger
 
 	if shard != "" {
 		logger.Info().Str("shard", shard).Msg("controller started in distributed mode")
@@ -333,7 +351,7 @@ func main() {
 
 	if err := (&bundlereconciler.Reconciler{
 		Client:       mgr.GetClient(),
-		Translator:   newTranslator(mgr.GetConfig(), mgr.GetClient(), splitCSV(policyNamespaces), logger),
+		Translator:   newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
 		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
 		Recorder:     mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
@@ -676,16 +694,22 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 	return healthpkg.NewAutoDetector(k8s, dynClient)
 }
 
-// newTranslator constructs the Translator wired with a GraphClient and Builder.
-func newTranslator(cfg *rest.Config, k8s sigs_client.Reader,
+// newTranslator constructs the Translator wired with a GraphClient, Builder,
+// and the Graph identity provisioner.
+func newTranslator(mgr ctrl.Manager, identity graphpkg.IdentityProvisioner,
 	policyNS []string, log zerolog.Logger) *translator.Translator {
-	dynClient, err := dynamic.NewForConfig(cfg)
+	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
 		log.Fatal().Err(err).Msg("unable to create dynamic client for graph")
 	}
 	graphClient := graphpkg.NewGraphClient(dynClient, log)
 	builder := graphpkg.NewBuilder()
-	return translator.New(graphClient, builder, k8s, policyNS, log)
+	builder.ServiceAccountName = identity.ServiceAccountName
+	identity.Writer = mgr.GetClient()
+	identity.Reader = mgr.GetAPIReader()
+	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
+		WithIdentity(&identity).
+		WithRESTMapper(mgr.GetRESTMapper())
 }
 
 // newGraphClient constructs a GraphClient for use as a GraphChecker in the Bundle reconciler.

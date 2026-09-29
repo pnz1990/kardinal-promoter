@@ -102,7 +102,7 @@ only the project-specific context.
 
 ## XII. Graph-First: No Logic Outside the DAG
 
-**Everything in this project is a derivation of the krocodile Graph primitive.
+**Everything in this project is a derivation of the kro Graph primitive.
 This is an absolute constraint. No exceptions without explicit human approval.**
 
 The correct architecture:
@@ -121,7 +121,7 @@ The correct architecture:
 **The only permitted exception is `pkg/cel/`** — a transitional workaround documented
 in `docs/design/10-graph-first-architecture.md`. It must not grow. New code must not
 reference it outside `pkg/reconciler/policygate`. It will be deleted after the
-`recheckAfter` upstream contribution to krocodile lands.
+`recheckAfter` upstream contribution to kro lands.
 
 Any agent that implements logic outside the Graph layer without prior human approval
 is in violation of this constitution. QA must block such PRs regardless of whether
@@ -138,8 +138,8 @@ Every design proposal must be evaluated against the actual constraints of the sy
 
 The flat DAG compilation idea (#496) was treated as a valid architectural direction
 for months — embedded in the graph-purity tech debt doc, roadmap, and vision — without
-anyone verifying that krocodile's inter-node communication model could support it. When
-finally evaluated against krocodile's actual execution model (nodes communicate through
+anyone verifying that the Graph controller's inter-node communication model could support it. When
+finally evaluated against the Graph controller's actual execution model (nodes communicate through
 etcd-backed CRD fields, not shared memory or filesystem), it was immediately obvious the
 approach was unworkable. The evaluation took 10 minutes. The idea persisted for months
 because no one did it.
@@ -152,9 +152,9 @@ Before a design proposal is written into any spec, doc, issue, or roadmap:
    field X to CRD Y; node B reads field X via `${Y.spec.X}` in its template." If you
    cannot specify the exact mechanism, the proposal is not ready.
 
-2. **Check it against the actual implementation.** Read the source. For krocodile
-   proposals: read `experimental/docs/design/`, `experimental/controller/types.go`,
-   `experimental/controller/dag.go`. For Go reconciler proposals: read the actual
+2. **Check it against the actual implementation.** Read the source. For Graph
+   proposals: read kro's Graph docs and `pkg/graphengine/` (compiler, executor) in
+   kubernetes-sigs/kro. For Go reconciler proposals: read the actual
    reconciler. Never accept "it should work" without verifying.
 
 3. **Identify what it cannot do.** Every approach has limits. State them explicitly.

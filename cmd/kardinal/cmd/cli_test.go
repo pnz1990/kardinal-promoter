@@ -675,8 +675,6 @@ func TestPolicyList_FiltersGraphInstances(t *testing.T) {
 		Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 	}
 	// Graph instance with kardinal.io/bundle label — must be filtered out.
-	// (krocodile e082fe9+ no longer stamps internal.kro.run/graph-name; the
-	// kardinal.io/bundle label is the sole filter guard.)
 	instanceGate := &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "no-weekend-deploys--nginx-demo-v1",
