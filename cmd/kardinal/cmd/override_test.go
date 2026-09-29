@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -35,11 +36,14 @@ func newOverrideTestScheme() *runtime.Scheme {
 	return s
 }
 
+// makeTestGate returns a gate instance (it carries kardinal.io/bundle), named
+// directly by the tests below.
 func makeTestGate(name, ns string) *v1alpha1.PolicyGate {
 	return &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
+			Labels:    map[string]string{"kardinal.io/bundle": "my-app-x7k2m"},
 		},
 		Spec: v1alpha1.PolicyGateSpec{
 			Expression: "!schedule.isWeekend",
@@ -157,4 +161,75 @@ func TestOverrideFn_EmptyStageAppliesGlobally(t *testing.T) {
 
 	require.Len(t, updatedGate.Spec.Overrides, 1)
 	assert.Equal(t, "", updatedGate.Spec.Overrides[0].Stage)
+}
+
+// gateInstance returns an instance of template for pipeline and env, as a
+// Graph stamps it.
+func gateInstance(name, template, pipeline, env string) *v1alpha1.PolicyGate {
+	g := makeTestGate(name, "default")
+	g.Labels["kardinal.io/pipeline"] = pipeline
+	g.Labels["kardinal.io/environment"] = env
+	g.Labels["kardinal.io/gate-template"] = template
+	return g
+}
+
+// TestOverrideFn_TemplateName verifies that the documented form, --gate with
+// the gate template name, records the override on the instances the
+// PolicyGate reconciler evaluates, and never on the template (C01-graph-05,
+// C09b-cli-05, C12-examples-demo-03, E2E-20).
+func TestOverrideFn_TemplateName(t *testing.T) {
+	tests := []struct {
+		name      string
+		stage     string
+		want      []string // instances that get the override
+		wantErr   string
+		instances bool
+	}{
+		{name: "stage", stage: "prod", instances: true, want: []string{"no-weekend-deploy-prod-b1"}},
+		{name: "every stage", instances: true, want: []string{"no-weekend-deploy-prod-b1", "no-weekend-deploy-uat-b1"}},
+		{name: "stage without instance", stage: "test", instances: true, wantErr: "is a template"},
+		{name: "no instances", stage: "prod", wantErr: "is a template"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			template := &v1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: "no-weekend-deploy", Namespace: "default",
+					Labels: map[string]string{"kardinal.io/applies-to": "prod,uat"}},
+				Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+			}
+			objs := []sigs_client.Object{template,
+				// Another pipeline's instance of the same template.
+				gateInstance("no-weekend-deploy-prod-other", "no-weekend-deploy", "other-app", "prod")}
+			if tt.instances {
+				objs = append(objs,
+					gateInstance("no-weekend-deploy-prod-b1", "no-weekend-deploy", "my-app", "prod"),
+					gateInstance("no-weekend-deploy-uat-b1", "no-weekend-deploy", "my-app", "uat"))
+			}
+			fc := fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).WithObjects(objs...).Build()
+
+			var buf bytes.Buffer
+			err := cmd.ExportedOverrideFn(&buf, fc, "default", "my-app", tt.stage, "no-weekend-deploy",
+				"P0 hotfix", "1h")
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+
+			var list v1alpha1.PolicyGateList
+			require.NoError(t, fc.List(context.Background(), &list))
+			var got []string
+			for _, g := range list.Items {
+				if len(g.Spec.Overrides) > 0 {
+					got = append(got, g.Name)
+					assert.Equal(t, tt.stage, g.Spec.Overrides[0].Stage)
+				}
+			}
+			assert.ElementsMatch(t, tt.want, got)
+			for _, name := range tt.want {
+				assert.Contains(t, buf.String(), "gate="+name)
+			}
+		})
+	}
 }
