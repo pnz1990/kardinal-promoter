@@ -124,7 +124,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: dev

@@ -107,6 +107,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if len(filteredEnvs) == 0 {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
+	if err := validateBundleStrategy(input.Pipeline, input.Bundle, filteredEnvs); err != nil {
+		return nil, err
+	}
 
 	// Step 3: validate skip permissions. The error reaches Bundle.status
 	// through the Translate error (phase Failed, reason TranslationError).

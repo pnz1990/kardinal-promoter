@@ -405,8 +405,8 @@ func TestExplain_GateStates(t *testing.T) {
 			require.NoError(t, err)
 			var state string
 			for _, l := range strings.Split(out, "\n") {
-				if f := strings.Fields(l); len(f) > 3 && f[1] == "PolicyGate" {
-					state = f[3]
+				if f := strings.Fields(l); len(f) > 4 && f[2] == "PolicyGate" {
+					state = f[4]
 				}
 			}
 			assert.Equal(t, tt.want, state, "gate STATE:\n%s", out)
@@ -482,13 +482,19 @@ func TestExplain_WaitingBundleSkipGate(t *testing.T) {
 	out, err := runExplain(t, c, "demo", "prod", false)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	require.Len(t, lines, 3, out)
+	require.Len(t, lines, 5, out)
 	assert.Contains(t, lines[1], "gapa-allow-stage-skip", "the not-ready gate comes first:\n%s", out)
 	assert.Contains(t, lines[1], "Block")
 	assert.Contains(t, lines[1], `bundle.version == "sha-9349a3f" = false`)
 	assert.Contains(t, lines[2], "a-predeploy-freeze")
 	assert.Contains(t, lines[2], "Pass")
-	assert.NotContains(t, out, "gkvb2")
+	for _, l := range lines[1:3] {
+		assert.Contains(t, l, "gapa-e2e2-wbptb", "every row names its Bundle")
+	}
+	assert.NotContains(t, strings.Join(lines[:3], "\n"), "gkvb2", "the older Bundle's rows are not shown")
+	// The Bundle has not reached prod, so explain says what runs there.
+	assert.Empty(t, lines[3])
+	assert.Regexp(t, `^prod +deployed: gapa-e2e2-gkvb2$`, lines[4])
 }
 
 // C09a-cli-14: an unknown env or pipeline is an error; a valid idle env is not.

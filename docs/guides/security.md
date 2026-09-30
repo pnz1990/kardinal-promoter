@@ -262,10 +262,11 @@ ISO 27001, and FedRAMP audit trail requirements.
 | `spec.bundleName` | Name of the Bundle being promoted |
 | `spec.environment` | Environment name (e.g. `prod`) |
 | `spec.action` | One of the action values in the table above |
-| `spec.actor` | Author from Bundle provenance, or controller service account |
 | `spec.outcome` | `Success`, `Failure`, or `Pending` |
 | `spec.message` | Human-readable description |
-| `spec.bundleImage` | Container image tag, when applicable |
+
+An AuditEvent does not record who acted. For that, read the Bundle's
+`spec.provenance.author` and the Kubernetes API server audit log.
 
 ### Querying audit events
 
@@ -301,7 +302,6 @@ kubectl get auditevents -n kardinal-system -o json \
       bundle: .spec.bundleName,
       env: .spec.environment,
       action: .spec.action,
-      actor: .spec.actor,
       outcome: .spec.outcome,
       message: .spec.message
     }'

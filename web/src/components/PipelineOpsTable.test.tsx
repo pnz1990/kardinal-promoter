@@ -27,7 +27,6 @@ function makePipeline(overrides: Partial<Pipeline> = {}): Pipeline {
     failedStepCount: 0,
     inventoryAgeDays: 2,
     lastMergedAt: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
-    cdLevel: 'full-cd',
     ...overrides,
   }
 }
@@ -46,7 +45,8 @@ describe('PipelineOpsTable', () => {
     expect(screen.getByText('Failed Steps')).toBeTruthy()
     expect(screen.getByText('Inventory Age')).toBeTruthy()
     expect(screen.getByText('Last Merge')).toBeTruthy()
-    expect(screen.getByText('CD Level')).toBeTruthy()
+    // #1269: CD Level counted spec.policyGates, which gates nothing.
+    expect(screen.queryByText('CD Level')).toBeNull()
   })
 
   it('renders pipeline name and bundle', () => {
@@ -224,25 +224,5 @@ describe('PipelineOpsTable', () => {
   it('renders error state', () => {
     render(<PipelineOpsTable pipelines={[]} onSelect={() => {}} error="connection refused" />)
     expect(screen.getByText(/connection refused/)).toBeTruthy()
-  })
-
-  it('shows Full CD badge for full-cd pipeline', () => {
-    render(
-      <PipelineOpsTable
-        pipelines={[makePipeline({ cdLevel: 'full-cd' })]}
-        onSelect={() => {}}
-      />
-    )
-    expect(screen.getByText('Full CD')).toBeTruthy()
-  })
-
-  it('shows Manual badge for manual pipeline', () => {
-    render(
-      <PipelineOpsTable
-        pipelines={[makePipeline({ cdLevel: 'manual' })]}
-        onSelect={() => {}}
-      />
-    )
-    expect(screen.getByText('Manual')).toBeTruthy()
   })
 })

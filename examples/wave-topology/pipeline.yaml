@@ -10,7 +10,6 @@ spec:
     url: https://github.com/myorg/gitops-repo
     branch: main
     layout: directory
-    provider: github
     secretRef:
       name: github-token
 

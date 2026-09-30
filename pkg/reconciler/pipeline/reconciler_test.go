@@ -232,6 +232,46 @@ func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
 	}
 }
 
+// TestPipelineReconciler_ArgoCDPRReviewInvalid: a Pipeline stored before the
+// CRD rule with update.strategy argocd and approval: pr-review is
+// Ready=False/ValidationFailed, because argocd cannot open a PR to review
+// (#1281). argocd with auto approval stays valid.
+func TestPipelineReconciler_ArgoCDPRReviewInvalid(t *testing.T) {
+	tests := []struct {
+		name       string
+		approval   string
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{name: "pr-review", approval: "pr-review", wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed",
+			wantMsg: `environment "prod": update.strategy argocd patches the Application directly and cannot honour approval: pr-review`},
+		{name: "auto", approval: "auto", wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod", DependsOn: []string{"test"}, Approval: tc.approval,
+					Update: kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+						ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-prod"}}},
+			})
+			c := newClientWithIndex(newScheme(), p)
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.wantStatus, cond.Status)
+			assert.Equal(t, tc.wantReason, cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+		})
+	}
+}
+
 // TestPipelineReconciler_Idempotent verifies that if a Pipeline already has the
 // correct Valid condition, reconcile is a no-op and keeps lastTransitionTime.
 func TestPipelineReconciler_Idempotent(t *testing.T) {

@@ -50,8 +50,8 @@ func init() {
 // No git operations are performed — the entire promotion is a single Kubernetes patch.
 //
 // Because nothing is reviewed, the step refuses to run for an environment
-// with approval: pr-review (C05-steps-11), and for config Bundles, which it
-// cannot apply.
+// with approval: pr-review (C05-steps-11), and for config and mixed Bundles,
+// whose Git config change it cannot apply (#1281).
 type argoCDSetImageStep struct{}
 
 // argoCDPRReviewRejected is the failure message for argocd + pr-review.
@@ -67,8 +67,8 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: argoCDPRReviewRejected},
 			parentsteps.Permanent(errors.New(argoCDPRReviewRejected))
 	}
-	if state.Bundle.Type == "config" {
-		msg := "argocd-set-image: config Bundles are not supported by update.strategy argocd"
+	if state.Bundle.Type == "config" || state.Bundle.Type == "mixed" {
+		msg := "argocd-set-image: " + state.Bundle.Type + " Bundles are not supported by update.strategy argocd"
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
 	}
 	// O4: K8sClient is required.

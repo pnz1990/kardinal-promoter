@@ -350,6 +350,11 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	if err := graph.ValidateSecretRef(p); err != nil {
 		return invalid(err.Error())
 	}
+	// argocd + pr-review is refused by the CRD at apply time; a Pipeline
+	// stored before that rule is caught here (#1281).
+	if err := graph.ValidateUpdateStrategy(p); err != nil {
+		return invalid(err.Error())
+	}
 
 	if msgs := graph.UnimplementedFields(p); len(msgs) > 0 {
 		return metav1.Condition{

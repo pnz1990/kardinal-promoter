@@ -36,8 +36,6 @@ AuditEvent is an immutable record of a single promotion event. It is written onc
 |---|---|---|---|
 | `spec` | object |  | AuditEventSpec defines the immutable record of a single promotion event. AuditEvents are created by the PromotionStep and PolicyGate reconcilers at key lifecycle transitions (started, succeeded, failed). The spec is set at creation; the CRD rejects any later change to it. |
 | `spec.action` | string | yes | Action is a short verb describing what happened. Valid values: "PromotionStarted", "PromotionSucceeded", "PromotionFailed", "PromotionSuperseded", "RollbackStarted", "RollbackSucceeded", "HealthCheckFailed", "GateBlocked", "GateEvaluated". One of: `PromotionStarted`, `PromotionSucceeded`, `PromotionFailed`, `PromotionSuperseded`, `RollbackStarted`, `RollbackSucceeded`, `HealthCheckFailed`, `GateBlocked`, `GateEvaluated`. |
-| `spec.actor` | string |  | Actor is the identity that triggered the action. For automated promotions this is the controller service account. For human-initiated actions (rollback, override) this is the author from Bundle provenance. |
-| `spec.bundleImage` | string |  | BundleImage is the container image tag being promoted, if applicable. |
 | `spec.bundleName` | string | yes | BundleName is the name of the Bundle being promoted. |
 | `spec.environment` | string | yes | Environment is the environment name where the event occurred. |
 | `spec.message` | string |  | Message is a human-readable description of the event. |
@@ -270,7 +268,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.git` | object | yes | Git holds the shared GitOps repository configuration for all environments in this pipeline. |
 | `spec.git.branch` | string |  | Branch is the default base branch for this repository. |
 | `spec.git.layout` | string |  | Layout controls how environment paths are organized in the repository. "directory": environments as subdirectories on one branch (default). "branch": environments as separate branches. One of: `directory`, `branch`. Default: `directory`. |
-| `spec.git.provider` | string |  | Provider is the SCM provider. One of: `github`, `gitlab`. Default: `github`. |
+| `spec.git.provider` | string |  | Provider is ignored. One controller serves one SCM, chosen with its --scm-provider flag. Deprecated: ignored; the controller's --scm-provider flag selects the provider. One of: `github`, `gitlab`. |
 | `spec.git.secretRef` | object |  | SecretRef references a Kubernetes Secret containing the SCM token. |
 | `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
 | `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
@@ -278,7 +276,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.historyLimit` | integer |  | HistoryLimit is the number of completed Bundle promotions to retain. When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded) beyond this limit are deleted oldest-first on each new Bundle creation. Default: `50`. |
 | `spec.maxConcurrentPromotions` | integer |  | MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this pipeline at any given time. When 0 or unset (default), there is no cap and all Available Bundles are promoted concurrently. When set to a positive value, Bundles that exceed the cap are requeued until a promotion slot becomes available. This prevents promotion storms (e.g. a CI burst creating 50 Bundles simultaneously) from saturating git hosts, exhausting GitHub API rate limits, or creating merge conflicts in the GitOps repository. Example: maxConcurrentPromotions: 2 allows at most 2 active promotions at once. Additional Available Bundles wait in a 30-second polling loop. Default: `0`. |
 | `spec.paused` | boolean |  | Paused suspends all promotions in this pipeline when true. Default: `false`. |
-| `spec.policyGates` | []object |  | PolicyGates lists org- or team-level PolicyGate references that apply to every promotion in this pipeline. |
+| `spec.policyGates` | []object |  | PolicyGates is not implemented, and the API server rejects a non-empty list. Org gates apply through the kardinal.io/applies-to label. Deprecated: remove the field; label org PolicyGates with kardinal.io/applies-to instead. |
 | `spec.policyGates[].name` | string | yes | Name is the PolicyGate resource name. |
 | `spec.policyGates[].namespace` | string |  | Namespace is the PolicyGate resource namespace. |
 | `spec.policyNamespaces` | []string |  | PolicyNamespaces lists extra namespaces to read PolicyGates from. It only adds to the list: the controller's org policy namespaces (--policy-namespaces, default "platform-policies") and the pipeline's own namespace are always read, so a Pipeline cannot opt out of org gates. Gates found only through this field are team gates: they never count as org gates and never grant a skip. |
@@ -319,7 +317,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
 | `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). The minimum is 10s: a smaller value is raised to 10s, and "0" or an invalid value means the default. Default: `5m`. |
-| `spec.selector` | object |  | Selector is a label selector for org-level auto-injection: this gate is automatically applied to any Pipeline whose labels match the selector. |
+| `spec.selector` | object |  | Selector is not implemented: nothing reads it, and the API server rejects a PolicyGate that sets it. An org gate applies to the environments named in its kardinal.io/applies-to label. Deprecated: remove the field; use the kardinal.io/applies-to label. |
 | `spec.selector.matchExpressions` | []object |  | matchExpressions is a list of label selector requirements. The requirements are ANDed. |
 | `spec.selector.matchExpressions[].key` | string | yes | key is the label key that the selector applies to. |
 | `spec.selector.matchExpressions[].operator` | string | yes | operator represents a key's relationship to a set of values. Valid operators are In, NotIn, Exists and DoesNotExist. |

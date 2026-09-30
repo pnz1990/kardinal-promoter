@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -51,7 +52,16 @@ every Bundle there is Superseded, the newest one with a PromotionStep there is
 shown. Gates include org
 gates from the policy namespaces and skip-permission gates: they are the
 instances the Graph created for that Bundle, with the controller's latest
-evaluation. Gates that are not ready are listed first.
+evaluation. Gates that are not ready are listed first. BUNDLE names the
+Bundle each row belongs to.
+
+An environment where that Bundle's change has not landed yet (it has not
+reached the environment, or its PR is not merged) also gets a line after the
+table with the Bundle deployed there now: the one whose change landed last,
+as kardinal rollback judges it, with its image tags or config commit.
+"deployed: none" means no change has landed there yet.
+
+    prod   deployed: app-v1 (sha-1a2b3c4)
 
 A gate's STATE is the one the UI shows, the first that applies:
 
@@ -150,6 +160,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 
 	type explainRow struct {
 		environment string
+		bundle      string
 		kind        string // "PolicyGate" or "Step"
 		name        string
 		state       string
@@ -180,6 +191,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		}
 		rows = append(rows, explainRow{
 			environment: env,
+			bundle:      s.Spec.BundleName,
 			kind:        "Step",
 			name:        s.Spec.StepType,
 			state:       stepState(s),
@@ -207,6 +219,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		}
 		rows = append(rows, explainRow{
 			environment: env,
+			bundle:      bundle,
 			kind:        "PolicyGate",
 			name:        gateDisplayName(g),
 			state:       graph.GateState(pipe, bundleByName[bundle], &g, steps.Items),
@@ -246,12 +259,12 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	// color only the STATE cell of each row.
 	var tableBuf strings.Builder
 	tw := tabwriter.NewWriter(&tableBuf, 0, 0, 3, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ENVIRONMENT\tBUNDLE\tTYPE\tNAME\tSTATE\tEXPRESSION\tREASON"); err != nil {
 		return fmt.Errorf("write explain header: %w", err)
 	}
 	for _, row := range rows {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			row.environment, row.kind, row.name, row.state, row.expression, row.reason,
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			row.environment, row.bundle, row.kind, row.name, row.state, row.expression, row.reason,
 		); err != nil {
 			return fmt.Errorf("write explain row: %w", err)
 		}
@@ -263,7 +276,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	output := tableBuf.String()
 	if cr := newColorizer(w, forceColor); cr.enabled {
 		lines := strings.SplitAfter(output, "\n")
-		// Environment, type and name are Kubernetes names (ASCII), so the
+		// Environment, bundle, type and name are Kubernetes names (ASCII), so the
 		// header's byte offset of STATE is the cell's offset on every row.
 		col := strings.Index(lines[0], "STATE")
 		for i, row := range rows {
@@ -276,6 +289,36 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 	}
 	if _, err := fmt.Fprint(w, output); err != nil {
 		return fmt.Errorf("write explain output: %w", err)
+	}
+	return writeExplainDeployed(w, pipeline, envNames, envFilter, current, steps.Items, bundleByName)
+}
+
+// writeExplainDeployed prints, for each environment with a current Bundle
+// whose change has not landed there, the Bundle deployed there now.
+func writeExplainDeployed(w io.Writer, pipeline string, envNames []string, envFilter string,
+	current map[string]string, steps []v1alpha1.PromotionStep, byName map[string]*v1alpha1.Bundle) error {
+	envs := slices.Sorted(slices.Values(envNames)) // the table's order
+	deployed := deployedBundles(steps, pipeline, envs)
+	var buf strings.Builder
+	tw := tabwriter.NewWriter(&buf, 0, 0, 3, ' ', 0)
+	n := 0
+	for _, env := range envs {
+		if (envFilter != "" && env != envFilter) || current[env] == "" || deployed[env] == current[env] {
+			continue
+		}
+		if _, err := fmt.Fprintf(tw, "%s\tdeployed: %s\n", env, deployedLabel(deployed[env], byName)); err != nil {
+			return fmt.Errorf("write deployed bundle: %w", err)
+		}
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("flush deployed bundles: %w", err)
+	}
+	if _, err := fmt.Fprint(w, "\n"+buf.String()); err != nil {
+		return fmt.Errorf("write deployed bundles: %w", err)
 	}
 	return nil
 }

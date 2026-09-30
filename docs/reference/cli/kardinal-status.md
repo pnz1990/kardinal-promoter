@@ -14,7 +14,10 @@ When called with a pipeline name: shows in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps
-(one row per region, active steps marked), the PolicyGates holding it back
+(one row per region, active steps marked, with the Bundle each row belongs
+to), the Bundle deployed in every environment (the one whose change landed
+there last, as kardinal rollback judges it, with its image tags or config
+commit; "none" when no change has landed yet), the PolicyGates holding it back
 (with CEL expression and current reason), and open PR URLs. A gate is listed
 as blocking only while it holds the bundle back: it is not ready and either
 every upstream environment is Verified for that bundle and the bundle has no

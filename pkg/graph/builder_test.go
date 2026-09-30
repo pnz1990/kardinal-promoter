@@ -1038,14 +1038,10 @@ func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
 			Environments: []kardinalv1alpha1.EnvironmentSpec{
 				{Name: "kardinal-test-app-prod"},
 			},
-			// Gates at pipeline level with a long name in a named namespace.
-			PolicyGates: []kardinalv1alpha1.PipelinePolicyGateRef{
-				{Name: "no-weekend-deploys", Namespace: "platform-policies"},
-				{Name: "require-uat-soak-30m", Namespace: "platform-policies"},
-			},
 		},
 	}
 	bundle := makeBundle("my-application-abc123456", "my-application")
+	// Org gates with long names in a named namespace.
 	gates := []kardinalv1alpha1.PolicyGate{
 		makePolicyGate("no-weekend-deploys", "platform-policies", "kardinal-test-app-prod", "true"),
 		makePolicyGate("require-uat-soak-30m", "platform-policies", "kardinal-test-app-prod", "true"),

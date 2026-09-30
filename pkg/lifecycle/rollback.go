@@ -279,14 +279,7 @@ func loadEnvHistory(ctx context.Context, c client.Reader, ns, pipeline, env stri
 	if err := c.List(ctx, &steps, client.InNamespace(ns), client.MatchingLabels{LabelPipeline: pipeline}); err != nil {
 		return nil, fmt.Errorf("list promotion steps of pipeline %s: %w", pipeline, err)
 	}
-	h := &envHistory{byBundle: map[string][]v1alpha1.PromotionStep{}}
-	for _, s := range steps.Items {
-		if s.Spec.PipelineName != pipeline || s.Spec.Environment != env || s.Spec.BundleName == "" {
-			continue
-		}
-		h.byBundle[s.Spec.BundleName] = append(h.byBundle[s.Spec.BundleName], s)
-	}
-	return h, nil
+	return historyOf(steps.Items, pipeline, env), nil
 }
 
 // deployed returns the Bundle whose change landed last in the environment: the

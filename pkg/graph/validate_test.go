@@ -528,3 +528,86 @@ func TestValidateCIRunURL(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateUpdateStrategy: update.strategy argocd with approval: pr-review
+// is a validation error (#1281). It feeds the Pipeline Ready condition and
+// "kardinal validate" for Pipelines stored before the CRD rule.
+func TestValidateUpdateStrategy(t *testing.T) {
+	argocd := func(approval string) kardinalv1alpha1.EnvironmentSpec {
+		return kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: approval,
+			Update: kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+				ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-prod"}}}
+	}
+	tests := []struct {
+		name    string
+		env     kardinalv1alpha1.EnvironmentSpec
+		wantErr string
+	}{
+		{name: "argocd with pr-review", env: argocd("pr-review"),
+			wantErr: `environment "prod": update.strategy argocd patches the Application directly and cannot honour approval: pr-review`},
+		{name: "argocd with auto", env: argocd("auto")},
+		{name: "argocd with default approval", env: argocd("")},
+		{name: "kustomize with pr-review", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review",
+			Update: kardinalv1alpha1.UpdateConfig{Strategy: "kustomize"}}},
+		{name: "default strategy with pr-review", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := graph.ValidateUpdateStrategy(pipelineOf("app", kardinalv1alpha1.EnvironmentSpec{Name: "test"}, tc.env))
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestBuild_RejectsArgoCDForConfigAndMixed: argocd sets only the image in the
+// Argo CD Application, so a config or mixed Bundle fails at build when any
+// environment it promotes uses argocd, even a later one (#1281). An image
+// Bundle, or an argocd environment the Bundle does not reach, still builds.
+func TestBuild_RejectsArgoCDForConfigAndMixed(t *testing.T) {
+	pipeline := func() *kardinalv1alpha1.Pipeline {
+		p := makeLinearPipeline("app", "test", "staging", "prod")
+		p.Spec.Environments[2].Update = kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+			ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-prod"}}
+		return p
+	}
+	bundle := func(typ, target string) *kardinalv1alpha1.Bundle {
+		b := makeBundle("app-x7k2m", "app")
+		b.Spec.Type = typ
+		if typ != "image" {
+			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{CommitSHA: "abc123"}
+		}
+		if target != "" {
+			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{TargetEnvironment: target}
+		}
+		return b
+	}
+	tests := []struct {
+		name    string
+		bundle  *kardinalv1alpha1.Bundle
+		wantErr string
+	}{
+		{name: "config", bundle: bundle("config", ""),
+			wantErr: `build: environment "prod" uses update.strategy argocd, which does not support config Bundles`},
+		{name: "mixed", bundle: bundle("mixed", ""),
+			wantErr: `build: environment "prod" uses update.strategy argocd, which does not support mixed Bundles`},
+		{name: "image", bundle: bundle("image", "")},
+		{name: "config stopping before the argocd environment", bundle: bundle("config", "staging")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline(), Bundle: tc.bundle})
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}

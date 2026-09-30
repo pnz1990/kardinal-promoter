@@ -13,7 +13,6 @@ spec:
     url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
-    provider: github
     secretRef:
       name: github-token
 

@@ -38,8 +38,12 @@ type PolicyGateSpec struct {
 	// +optional
 	SkipPermission bool `json:"skipPermission,omitempty"`
 
-	// Selector is a label selector for org-level auto-injection: this gate is
-	// automatically applied to any Pipeline whose labels match the selector.
+	// Selector is not implemented: nothing reads it, and the API server rejects
+	// a PolicyGate that sets it. An org gate applies to the environments named
+	// in its kardinal.io/applies-to label.
+	//
+	// Deprecated: remove the field; use the kardinal.io/applies-to label.
+	// +kubebuilder:validation:XValidation:rule="false",message="spec.selector is not implemented; use the kardinal.io/applies-to label"
 	// +optional
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 

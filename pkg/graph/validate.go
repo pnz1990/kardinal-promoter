@@ -259,6 +259,47 @@ func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
 	return nil
 }
 
+// ValidateUpdateStrategy refuses update.strategy argocd with approval
+// pr-review (#1281): argocd patches the Argo CD Application directly, with no
+// Git commit and so no PR to review. The Pipeline CRD rejects the combination
+// at apply time; this check covers Pipelines stored before that rule. The
+// Pipeline reconciler sets Ready=False/ValidationFailed and "kardinal
+// validate" reports it. The argocd-set-image step refuses it too.
+func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
+	for _, e := range p.Spec.Environments {
+		if e.Update.Strategy == "argocd" && e.Approval == "pr-review" {
+			return fmt.Errorf("environment %q: update.strategy argocd patches the Application directly and "+
+				"cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based "+
+				"strategy (kustomize or helm) for a reviewed promotion", e.Name)
+		}
+	}
+	return nil
+}
+
+// validateBundleStrategy fails a config or mixed Bundle when an environment it
+// promotes uses update.strategy argocd (#1281). argocd only sets the image in
+// the Argo CD Application, so the Bundle's Git config change would be
+// skipped. Failing at build stops the Bundle before its first environment,
+// even when only a later one uses argocd.
+func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle, envs []string) error {
+	if bundle.Spec.Type != "config" && bundle.Spec.Type != "mixed" {
+		return nil
+	}
+	promoted := make(map[string]bool, len(envs))
+	for _, name := range envs {
+		promoted[name] = true
+	}
+	for _, e := range pipeline.Spec.Environments {
+		if promoted[e.Name] && e.Update.Strategy == "argocd" {
+			return fmt.Errorf("build: environment %q uses update.strategy argocd, which does not support %s "+
+				"Bundles: it sets only the image in the Argo CD Application and would skip the config change; "+
+				"use a git-based strategy (kustomize or helm) for that environment, or skip it with "+
+				"intent.skipEnvironments", e.Name, bundle.Spec.Type)
+		}
+	}
+	return nil
+}
+
 // ValidateCIRunURL checks a Bundle's spec.provenance.ciRunURL, which CI sets
 // and the PR body and the UI render as a link. It must be empty or an absolute
 // http or https URL with a host, without user info (credentials would be
