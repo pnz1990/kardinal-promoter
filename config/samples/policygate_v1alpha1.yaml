@@ -12,6 +12,3 @@ spec:
   message: "Production deployments are blocked on weekends"
   recheckInterval: "5m"
   skipPermission: false
-  selector:
-    matchLabels:
-      policy/scope: org

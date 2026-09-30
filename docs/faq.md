@@ -34,14 +34,16 @@ See [Health Adapters](health-adapters.md) for configuration.
 
 ### Does it work with GitLab?
 
-Yes, GitLab SCM support is in beta. Set `spec.git.provider: gitlab` in the Pipeline.
-See [SCM Providers](scm-providers.md).
+Yes, GitLab SCM support is in beta. Start the controller with `--scm-provider gitlab`
+(Helm value `scm.provider: gitlab`). One controller serves one SCM for every Pipeline;
+`spec.git.provider` is deprecated and ignored. See [SCM Providers](scm-providers.md).
 
 ### Can I use it with Helm?
 
 Yes. Set `update: {strategy: helm}` on the Pipeline environment. kardinal
 will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
-overlays.
+overlays. It writes one image per Bundle: a Bundle with more than one tagged image
+fails the step. Use one Bundle per chart image, or kustomize.
 
 ---
 

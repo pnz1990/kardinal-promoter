@@ -86,16 +86,6 @@ spec:
                 - GateBlocked
                 - GateEvaluated
                 type: string
-              actor:
-                description: |-
-                  Actor is the identity that triggered the action.
-                  For automated promotions this is the controller service account.
-                  For human-initiated actions (rollback, override) this is the author from Bundle provenance.
-                type: string
-              bundleImage:
-                description: BundleImage is the container image tag being promoted,
-                  if applicable.
-                type: string
               bundleName:
                 description: BundleName is the name of the Bundle being promoted.
                 minLength: 1

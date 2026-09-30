@@ -27,8 +27,12 @@ type PipelineSpec struct {
 	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`
 
-	// PolicyGates lists org- or team-level PolicyGate references that apply to
-	// every promotion in this pipeline.
+	// PolicyGates is not implemented, and the API server rejects a non-empty
+	// list. Org gates apply through the kardinal.io/applies-to label.
+	//
+	// Deprecated: remove the field; label org PolicyGates with
+	// kardinal.io/applies-to instead.
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0",message="spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)"
 	// +optional
 	PolicyGates []PipelinePolicyGateRef `json:"policyGates,omitempty"`
 
@@ -88,9 +92,11 @@ type PipelineGit struct {
 	// +optional
 	Layout string `json:"layout,omitempty"`
 
-	// Provider is the SCM provider.
+	// Provider is ignored. One controller serves one SCM, chosen with its
+	// --scm-provider flag.
+	//
+	// Deprecated: ignored; the controller's --scm-provider flag selects the provider.
 	// +kubebuilder:validation:Enum=github;gitlab
-	// +kubebuilder:default=github
 	// +optional
 	Provider string `json:"provider,omitempty"`
 
@@ -115,6 +121,7 @@ type SecretRef struct {
 }
 
 // EnvironmentSpec defines one environment in a Pipeline.
+// +kubebuilder:validation:XValidation:rule="!(has(self.update) && has(self.update.strategy) && self.update.strategy == 'argocd' && has(self.approval) && self.approval == 'pr-review')",message="environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion"
 // +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
 // +kubebuilder:validation:XValidation:rule="!has(self.steps) || size(self.steps) == 0",message="environments[].steps is not supported: kardinal has no custom step engine and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is not supported: the PromotionTemplate CRD was removed and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"

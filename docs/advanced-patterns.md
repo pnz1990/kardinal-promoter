@@ -147,7 +147,6 @@ metadata:
 spec:
   git:
     url: {{ .Values.gitRepo }}
-    provider: github
     secretRef:
       name: github-token
   environments:

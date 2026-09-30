@@ -275,9 +275,9 @@ func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
 
 	assert.Contains(t, out, "Active bundle(s): b2\n")
 	assert.Contains(t, out, "REGION")
-	assert.Regexp(t, `\n  prod +eu-west-1 +Verified`, out)
-	assert.Regexp(t, `\n▶ prod +us-east-1 +Promoting`, out)
-	assert.Regexp(t, `\n  test +- +Verified`, out)
+	assert.Regexp(t, `\n  prod +eu-west-1 +b2 +Verified`, out)
+	assert.Regexp(t, `\n▶ prod +us-east-1 +b2 +Promoting`, out)
+	assert.Regexp(t, `\n  test +- +b2 +Verified`, out)
 	assert.Equal(t, 3, strings.Count(out, "\n  prod")+strings.Count(out, "\n▶ prod")+strings.Count(out, "\n  test"),
 		"b1's steps are not listed:\n%s", out)
 }
@@ -303,9 +303,9 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 			explainGateInstance("demo", "kardinal-test-app-9tptr", "prod", "require-uat-soak", "true", true, true, "x"),
 		)
 		assert.Contains(t, out, "Active bundle(s): kardinal-test-app-9tptr\n")
-		assert.Regexp(t, `\n  prod +- +Verified`, out)
-		assert.Regexp(t, `\n  uat +- +Verified`, out)
-		assert.Regexp(t, `\n  test +- +Verified`, out)
+		assert.Regexp(t, `\n  prod +- +kardinal-test-app-9tptr +Verified`, out)
+		assert.Regexp(t, `\n  uat +- +kardinal-test-app-9tptr +Verified`, out)
+		assert.Regexp(t, `\n  test +- +kardinal-test-app-9tptr +Verified`, out)
 	})
 
 	// The Graph creates every gate instance when the Bundle starts: b2 failed
@@ -323,9 +323,9 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 				"!schedule.isWeekend = false"),
 		)
 		assert.Contains(t, out, "Active bundle(s): b1, b2\n")
-		assert.Regexp(t, `\n  test +- +Failed`, out)
-		assert.Regexp(t, `\n  uat +- +Verified`, out)
-		assert.Regexp(t, `\n  prod +- +Verified`, out)
+		assert.Regexp(t, `\n  test +- +b2 +Failed`, out)
+		assert.Regexp(t, `\n  uat +- +b1 +Verified`, out)
+		assert.Regexp(t, `\n  prod +- +b1 +Verified`, out)
 		assert.NotContains(t, out, "Blocking Policy Gates")
 		assert.NotContains(t, out, "no-weekend-deploys")
 	})

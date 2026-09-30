@@ -139,6 +139,22 @@ func TestValidate_Documents(t *testing.T) {
 			content: secretRefDoc("", "team-a"),
 			wantOut: []string{"✓ f.yaml is valid"},
 		},
+		// #1281: argocd cannot open a PR, so approval: pr-review is refused,
+		// as the Pipeline's Ready=False/ValidationFailed condition does.
+		{
+			name: "argocd with pr-review",
+			content: validPipelineDoc + "    approval: pr-review\n    update:\n      strategy: argocd\n" +
+				"      argocd:\n        application: web-prod\n",
+			wantOut: []string{"✗ f.yaml is invalid:",
+				`environment "prod": update.strategy argocd patches the Application directly and cannot honour approval: pr-review`},
+			wantErr: true,
+		},
+		{
+			name: "argocd with auto approval",
+			content: validPipelineDoc + "    approval: auto\n    update:\n      strategy: argocd\n" +
+				"      argocd:\n        application: web-prod\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
 		{
 			name:    "steps are reported once",
 			content: validPipelineDoc + "    steps:\n    - uses: git-clone\n",

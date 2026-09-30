@@ -14,7 +14,6 @@
 // components/FleetHealthBar.tsx — Fleet-wide health summary bar (#467).
 // FR-505-01: Aggregate pipeline health across the fleet.
 // FR-505-02: Clickable filter badges that drive the pipeline list filter.
-// FR-505-03: Full-CD counter (pipelines with cdLevel=full-cd).
 // FR-505-04: Empty state when zero pipelines loaded.
 import type { Pipeline } from '../types'
 
@@ -27,8 +26,6 @@ export interface FleetHealthSummary {
   blocked: number
   /** Pipelines with failedStepCount > 0. */
   ciRed: number
-  /** Pipelines with cdLevel = 'full-cd'. */
-  fullCD: number
   /** Pipelines with at least one environment in flight (see isPromoting). */
   promoting: number
 }
@@ -59,14 +56,12 @@ export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
   let healthy = 0
   let blocked = 0
   let ciRed = 0
-  let fullCD = 0
   let promoting = 0
 
   for (const p of pipelines) {
     if (isHealthy(p)) healthy++
     if ((p.blockerCount ?? 0) > 0) blocked++
     if ((p.failedStepCount ?? 0) > 0) ciRed++
-    if (p.cdLevel === 'full-cd') fullCD++
     if (isPromoting(p)) promoting++
   }
 
@@ -75,13 +70,12 @@ export function computeFleetHealth(pipelines: Pipeline[]): FleetHealthSummary {
     healthy,
     blocked,
     ciRed,
-    fullCD,
     promoting,
   }
 }
 
 /** Filter category that maps to a UI badge. */
-export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'full-cd' | 'promoting'
+export type FleetFilter = 'all' | 'healthy' | 'blocked' | 'ci-red' | 'promoting'
 
 /**
  * Filter a pipeline list by the given fleet filter.
@@ -100,8 +94,6 @@ export function filterPipelines(
       return pipelines.filter(p => (p.blockerCount ?? 0) > 0)
     case 'ci-red':
       return pipelines.filter(p => (p.failedStepCount ?? 0) > 0)
-    case 'full-cd':
-      return pipelines.filter(p => p.cdLevel === 'full-cd')
     case 'promoting':
       return pipelines.filter(isPromoting)
   }
@@ -271,16 +263,6 @@ export function FleetHealthBar({ pipelines, activeFilter, onFilterChange }: Flee
         active={activeFilter === 'promoting'}
         onClick={toggle('promoting')}
         aria-label={`${s.promoting} pipelines currently promoting`}
-      />
-      <SummaryBadge
-        label="Full CD"
-        count={s.fullCD}
-        color="var(--color-accent)"
-        bgColor="var(--color-accent-bg)"
-        borderColor="var(--color-accent)"
-        active={activeFilter === 'full-cd'}
-        onClick={toggle('full-cd')}
-        aria-label={`${s.fullCD} fully automated pipelines`}
       />
     </div>
   )

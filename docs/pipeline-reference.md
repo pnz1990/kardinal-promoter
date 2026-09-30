@@ -15,7 +15,7 @@ spec:
     url: <string>                       # GitOps repo URL (HTTPS)
     branch: <string>                    # Base branch (default: "main")
     layout: <string>                    # "directory" (default); "branch" is not implemented (promotions fail)
-    provider: <string>                  # Not read; the controller's --scm-provider flag selects the SCM
+    provider: <string>                  # Deprecated and ignored; the controller's --scm-provider flag selects the SCM
     secretRef:
       name: <string>                    # Secret containing the Git token
 
@@ -95,7 +95,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR (`approval: pr-review` fails the step); see [Argo CD native promotion](argocd-native-promotion.md). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
@@ -337,7 +337,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: dev
@@ -358,7 +357,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: test
@@ -401,7 +399,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: dev
