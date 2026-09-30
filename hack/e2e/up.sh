@@ -55,6 +55,7 @@ if ! kind get clusters 2>/dev/null | grep -qx "$KIND_CLUSTER"; then
     ${NODE_IMAGE:+--image "$NODE_IMAGE"} --wait 120s
 fi
 target_cluster
+trap 'rc=$?; [ "$rc" -eq 0 ] || dump_setup_diagnostics; exit "$rc"' EXIT
 if [ -n "$NODE_IMAGE" ]; then
   have=$("${KUBECTL[@]}" version -o json | python3 -c 'import json,sys; v=json.load(sys.stdin)["serverVersion"]; print(v["major"]+"."+v["minor"].rstrip("+"))')
   [ "$have" = "$KIND_K8S" ] || die "$KIND_CLUSTER runs Kubernetes $have, not $KIND_K8S; make e2e-down SUITE=$SUITE first"

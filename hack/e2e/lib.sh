@@ -60,7 +60,7 @@ nodeport() {
 wait_http() {
   local url=$1 timeout=$2 waited=0
   shift 2
-  until curl -fsS -o /dev/null -m 5 "$@" "$url"; do
+  until curl -fs -o /dev/null -m 5 "$@" "$url"; do
     waited=$((waited + 2))
     [ "$waited" -ge "$timeout" ] && return 1
     sleep 2
@@ -96,6 +96,24 @@ load_image() {
   if ! kind load docker-image "$img" --name "$KIND_CLUSTER" >/dev/null 2>&1; then
     docker save "$img" | docker exec -i "$node" ctr -n k8s.io images import - >/dev/null
   fi
+}
+
+# dump_setup_diagnostics writes what a failed setup left behind to
+# E2E_OUT/diagnostics/setup (CI uploads it) and prints the pods that are not
+# ready. Logs are only of those pods; describe and events show no secret values.
+dump_setup_diagnostics() {
+  local dir="$E2E_OUT/diagnostics/setup" ns pod
+  mkdir -p "$dir"
+  "${KUBECTL[@]}" get pods -A -o wide >"$dir/pods.txt" 2>&1 || true
+  "${KUBECTL[@]}" get events -A --sort-by=.lastTimestamp >"$dir/events.txt" 2>&1 || true
+  log "setup failed; pods not ready (full state in $dir):"
+  "${KUBECTL[@]}" get pods -A --no-headers 2>/dev/null |
+    awk '{split($3, r, "/"); if (r[1] != r[2] && $4 != "Completed") print $1, $2}' |
+    while read -r ns pod; do
+      "${KUBECTL[@]}" -n "$ns" get pod "$pod" --no-headers >&2 || true
+      "${KUBECTL[@]}" -n "$ns" describe pod "$pod" >"$dir/$ns.$pod.describe.txt" 2>&1 || true
+      "${KUBECTL[@]}" -n "$ns" logs "$pod" --all-containers --tail=200 >"$dir/$ns.$pod.log" 2>&1 || true
+    done
 }
 
 # env_set KEY VALUE records KEY=VALUE in the env file the tests source.

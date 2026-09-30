@@ -15,14 +15,16 @@ target_cluster
 
 NS=argocd
 "${KUBECTL[@]}" create namespace "$NS" --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
+# The controllers read the reconciliation settings at start, so they go in
+# before the install. Their own field manager keeps the install's apply (whose
+# argocd-cm has no data) from removing them.
+"${KUBECTL[@]}" -n "$NS" create configmap argocd-cm \
+  --from-literal=timeout.reconciliation=10s --from-literal=timeout.reconciliation.jitter=0s \
+  --dry-run=client -o yaml | "${KUBECTL[@]}" apply --server-side --field-manager=kardinal-e2e -f - >/dev/null
 # Server-side: the Application CRD is too large for client-side apply.
 "${KUBECTL[@]}" -n "$NS" apply --server-side --force-conflicts \
   -f "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_RELEASE/manifests/install.yaml" >/dev/null
-"${KUBECTL[@]}" -n "$NS" patch configmap argocd-cm --type merge \
-  -p '{"data":{"timeout.reconciliation":"10s","timeout.reconciliation.jitter":"0s"}}' >/dev/null
 "${KUBECTL[@]}" -n "$NS" scale deploy/argocd-dex-server --replicas=0 >/dev/null
-# The controllers read the reconciliation settings at start.
-"${KUBECTL[@]}" -n "$NS" rollout restart statefulset/argocd-application-controller deploy/argocd-repo-server >/dev/null
 "${KUBECTL[@]}" -n "$NS" rollout status statefulset/argocd-application-controller --timeout=300s >/dev/null
 for d in argocd-repo-server argocd-server argocd-redis; do
   "${KUBECTL[@]}" -n "$NS" rollout status "deploy/$d" --timeout=300s >/dev/null
