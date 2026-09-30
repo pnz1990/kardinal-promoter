@@ -41,7 +41,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Artifact discovery** | Bundle created by CI/CLI; Subscription CRD with OCI + Git watchers | Warehouse (automatic OCI/git scanning) | Git commit-based |
 | **Multi-artifact bundle** | Yes (image + config in one Bundle) | Yes (Freight) | No |
 | **Architecture** | Graph-first (kro Graph DAG) | Stage/controller | Controller |
-| **Maturity** | v0.8.1, active development | v1.10.x, production-grade | v0.27.x, experimental |
+| **Maturity** | v0.9.0-rc.1 (release candidate), active development | v1.10.x, production-grade | v0.27.x, experimental |
 | **License** | Apache 2.0 | Apache 2.0 | Apache 2.0 |
 
 ---
@@ -163,7 +163,7 @@ If your constraint is that every promotion artefact must be a git commit with no
 Kubernetes-side state, kardinal is not the right model.
 
 **You need a larger community and commercial support today.**
-kardinal-promoter is at v0.8.1 with active development. Kargo has a longer production
+kardinal-promoter is at v0.9.0-rc.1 with active development. Kargo has a longer production
 track record and commercial backing from Akuity. If your organisation requires vendor
 support or a larger existing community before adopting, that is a legitimate constraint.
 

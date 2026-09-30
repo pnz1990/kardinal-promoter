@@ -20,7 +20,7 @@ test → uat → prod automatically, with a PR opened for prod that they review 
 ```bash
 # 1. Install kro (Graph controller), then kardinal-promoter
 bash hack/install-kro.sh
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace
 
 # 2. Verify

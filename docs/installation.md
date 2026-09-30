@@ -86,6 +86,21 @@ kubectl get pods -n kro-system
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 ```
 
+### 3. Install the CLI
+
+Download the `kardinal` binary of the same release. Builds: `kardinal-linux-amd64`,
+`kardinal-linux-arm64`, `kardinal-darwin-amd64`, `kardinal-darwin-arm64` and
+`kardinal-windows-amd64.exe`.
+
+```bash
+curl -Lo kardinal https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0-rc.1/kardinal-linux-amd64
+chmod +x kardinal && sudo mv kardinal /usr/local/bin/
+kardinal version
+# CLI:        v0.9.0-rc.1
+# Controller: v0.9.0-rc.1
+# Graph:      kro v0.10.0-rc.0
+```
+
 ---
 
 ## Helm values reference
