@@ -283,7 +283,7 @@ The following capabilities are implemented and shipped as of v0.8.x:
 
 ## Future (🔲)
 
-The following capabilities are declared in `docs/aide/vision.md` §F8 but not yet implemented:
+The following capabilities are declared in `docs/aide/vision.md` §F7 (kardinal-ui) but not yet implemented:
 
 *All epic #587 items are now complete.*
 

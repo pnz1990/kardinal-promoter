@@ -102,15 +102,19 @@ kardinal-controller:
 All state in etcd. kubectl is sufficient.
 ```
 
+A PromotionStep starts only when every gate in its `spec.requiredGates` exists, is ready, and
+was evaluated at or after the step's creationTimestamp (`checkRequiredGates`,
+pkg/reconciler/promotionstep); the PolicyGate reconciler re-evaluates a new step's gates at once.
+PolicyGate `spec.when` is deprecated and ignored: pre-deploy and post-deploy behave the same, and
+`kardinal validate` warns when it is set. Do not set `when:` in examples or docs.
+
 ## Package Layout
 
 ```
 cmd/
   kardinal/                 # CLI
-  kardinal-agent/           # distributed agent binary (not shipped; #1263)
   kardinal-controller/      # controller binary
 pkg/
-  admission/                # Pipeline validating webhook (cycles, cross-namespace secretRef)
   cel/                      # CEL library adapted from kro (library/, conversion/); PolicyGate only
   graph/                    # Graph builder + client (Pipeline + Bundle → kro Graph)
   health/                   # health Watch nodes (resource, Argo CD, Flux, Argo Rollouts, Flagger)
@@ -138,6 +142,10 @@ web/
    environment differ. Read it before you write or document an expression.
    - Variables: bundle.* (including labels, intent.targetEnvironment, upstreamSoakMinutes, pr[...]),
      schedule.*, environment.name, metrics.*, upstream.<env>.soakMinutes, changewindow.<name>.
+   - `metrics.<name>.value` (string), `.result` ("Pass", "Fail" or "Stale") and `.stale` (bool).
+     A MetricCheck result past its `status.validUntil` is stale: `.result` is "Stale", `.value` is
+     "" and `.stale` is true. Write `metrics["x"].result == "Pass"`, not `!= "Fail"`, which
+     passes on a stale result.
    - Functions: cel-go string extensions; json.marshal / json.unmarshal; `m1.merge(m2)` (member
      form only; there is no global maps.merge); lists.setAtIndex / insertAtIndex / removeAtIndex;
      random.seededInt / random.seededString; changewindow.isAllowed / isBlocked.
@@ -419,7 +427,7 @@ and workflows run with repo secrets. The `agent instructions guard` check
 
 A journey counts as passing only with live-cluster evidence: a PDCA workflow run (pdca.yml;
 results are in the job summary) or a `[LIVE CLUSTER VALIDATED]` comment on the PR or release
-issue. The comment gives the commands, their output, the kind or EKS version and the
+issue. The comment gives the commands, their output, the kind version and the
 kardinal-test-app image SHA. Record the run or comment link in docs/aide/definition-of-done.md
 §Journey Status. TestJourneyN (fake client) is a unit test, not evidence.
 

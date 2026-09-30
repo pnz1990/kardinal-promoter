@@ -111,7 +111,7 @@ CEL-powered policy checks represented as nodes in the promotion Graph. Platform 
 
 The CEL context (bundle, schedule, environment, metrics, upstream soak time, change windows) is listed in `docs/reference/cel-context.md`.
 
-Re-evaluation via `recheckInterval` and ScheduleClock ticks for time-based gates. `lastEvaluatedAt` freshness prevents stale gate state.
+Re-evaluation via `recheckInterval` and ScheduleClock ticks for time-based gates. A PromotionStep starts only when every required gate is ready and was evaluated at or after the step was created. A started step is not stopped. `spec.when` is deprecated and has no effect.
 
 SkipPermission gates control whether `intent.skip` is allowed on gated environments.
 
@@ -119,9 +119,9 @@ SkipPermission gates control whether `intent.skip` is allowed on gated environme
 
 A fixed step sequence per environment, inferred from the update strategy and approval mode.
 
-Built-in steps: `git-clone`, `kustomize-set-image`, `helm-set-image`, `argocd-set-image`, `kustomize-build`, `config-merge`, `verify-image`, `git-commit`, `git-push`, `open-pr`, `wait-for-merge`, `health-check`.
+Built-in steps: `git-clone`, `kustomize-set-image`, `helm-set-image`, `argocd-set-image`, `kustomize-build`, `config-merge`, `git-commit`, `git-push`, `open-pr`, `wait-for-merge`, `health-check`.
 
-Custom steps (HTTP webhook steps and PromotionTemplate) are not shipped: a Pipeline cannot reach that code, and it is being removed (#1282).
+A Pipeline cannot define its own steps: `spec.environments[].steps` and `promotionTemplate` are rejected (#1282). An unregistered step name is an error.
 
 ### F5: Health Adapters
 
@@ -133,25 +133,21 @@ Health is read from the cluster the controller runs in. Remote-cluster health th
 
 For `pr-review` environments, the controller opens a PR with structured body: policy gate compliance table, artifact provenance with links, upstream verification timestamps, commit range diff. Labels for filtering (`kardinal`, `kardinal/promotion`, `kardinal/rollback`). Merge detection via webhook with startup reconciliation fallback.
 
-### F7: Distributed Architecture
-
-Not shipped (#1263). The design: the control plane (kardinal-controller) handles Pipeline reconciliation, Graph generation and PolicyGate evaluation; agents (kardinal-agent) run PromotionStep reconciliation per shard behind firewalls, and Git and health credentials stay in the agent clusters. Today the controller runs everything as one binary.
-
-### F8: kardinal-ui
+### F7: kardinal-ui
 
 Embedded React UI served by the controller binary via `go:embed`. Renders the promotion DAG with per-node state (PromotionStep: green/amber/red; PolicyGate: pass/fail/pending). Shows Bundle provenance, PR links, policy evaluation details and history. Backend API at `/api/v1/ui/` reads and writes CRDs through the Kubernetes API server.
 
 The UI is not read-only. It can create a Bundle, promote, pause, resume and roll back. With `ui.auth.tokenReview` on, the UI API authenticates each user's bearer token (TokenReview) and checks every object it reads or writes for that user with a SubjectAccessReview, so a user cannot do more through the UI than through kubectl. Auth is off by default. The UI API also has a gate-approve endpoint that the web UI does not use; gate override is CLI-only.
 
-### F9: CLI
+### F8: CLI
 
 Single static Go binary. Commands include `init`, `get pipelines/steps/bundles/subscriptions/auditevents`, `create bundle`, `promote`, `explain` (with `--watch`), `rollback`, `pause`, `resume`, `override`, `history`, `policy list/test/simulate`, `diff`, `validate`, `doctor`, `version`. All commands create or read CRDs. `rollback --emergency` is being deprecated (#1288).
 
-### F10: Config-Only Promotions
+### F9: Config-Only Promotions
 
 Bundle `type: config` references a Git commit SHA. The `config-merge` step applies changes via cherry-pick or overlay. Config Bundles go through the same Pipeline, PolicyGates, and PR flow. Config and image Bundles coexist independently (different types do not supersede each other).
 
-### F11: Subscription CRD
+### F10: Subscription CRD
 
 Declarative registry and Git watcher. Image subscriptions watch OCI registries for new tags. Git subscriptions watch repositories for config changes. Auto-creates Bundles when new artifacts are discovered.
 
@@ -183,7 +179,6 @@ Declarative registry and Git watcher. Image subscriptions watch OCI registries f
 | NotificationHook | Yes (optional) | Outbound notifications on promotion events |
 | Subscription | Yes (optional) | Registry/Git watcher that creates Bundles |
 | AuditEvent | No (created by reconcilers) | Append-only record of promotion events |
-| PromotionTemplate | Yes (unused) | Custom step templates; being removed (#1282) |
 | Graph | No (created by controller) | kro DAG spec (generated per Bundle) |
 
 ### Pluggable Interfaces
@@ -231,7 +226,7 @@ Per-Bundle Graph lifecycle: created on Bundle promotion start, owned by Bundle v
 - Pod security: runAsNonRoot, readOnlyRootFilesystem, drop ALL capabilities
 - RBAC: minimum required verbs per CRD, org PolicyGates protected by namespace RBAC
 - Webhook auth: X-Hub-Signature-256 HMAC (SCM webhooks); Bearer token with a 60 requests/minute limit (Bundle API)
-- UI API: optional static token, or TokenReview with a per-user SubjectAccessReview (F8); separate port via `--ui-listen-address`
+- UI API: optional static token, or TokenReview with a per-user SubjectAccessReview (F7); separate port via `--ui-listen-address`
 - Tenancy: the namespace is the tenancy unit (`docs/guides/security.md`)
 
 ### Reliability

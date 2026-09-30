@@ -73,15 +73,16 @@ kardinal get pipelines
 
 ---
 
-## Journey 2: Multi-Cluster Fleet — Parallel Prod with Argo Rollouts
+## Journey 2: Multi-Cluster Fleet — Parallel Prod Through an Argo CD Hub
 
 **Source**: `examples/multi-cluster-fleet/`, AWS workshops:
 - https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo
 - https://github.com/aws-samples/fleet-management-on-amazon-eks-workshop/tree/mainline/patterns/kro-eks-cluster-mgmt#promote-the-application-to-prod-clusters
 
 **The user story**: A platform engineer promotes `rollouts-demo` through test → pre-prod → [prod-eu, prod-us] in parallel.
-Prod environments use Argo Rollouts canary. Argo CD hub-spoke manages 4 clusters.
-Two PRs are opened in parallel for prod-eu and prod-us.
+Argo CD in the hub manages Applications for 4 workload clusters; the prod clusters run an Argo
+Rollouts canary. kardinal checks each environment's Argo CD Application in the hub
+(`health.type: argocd`), not the Rollout. Two PRs are opened in parallel for prod-eu and prod-us.
 
 ### Exact steps that must work
 
@@ -107,10 +108,10 @@ kardinal get pipelines
 # 6. Both prod PRs are opened simultaneously (parallel fan-out)
 # Two PRs must exist concurrently, both labeled kardinal
 
-# 7. After merging both PRs, Argo Rollouts canary runs in each cluster
+# 7. After merging both PRs, Argo Rollouts canary runs in each prod cluster
 kardinal get steps rollouts-demo
-# prod-eu: HealthChecking (delegated to argoRollouts)
-# prod-us: HealthChecking (delegated to argoRollouts)
+# prod-eu: HealthChecking (waits for the hub's rollouts-demo-prod-eu Application)
+# prod-us: HealthChecking (waits for the hub's rollouts-demo-prod-us Application)
 
 # 8. When rollouts complete
 kardinal get pipelines
@@ -123,7 +124,8 @@ kardinal get pipelines
 - [ ] Two PRs opened in parallel, both with evidence and policy compliance
 - [ ] `kardinal explain rollouts-demo --env prod-eu` shows gate states correctly
 - [ ] Health adapter reads Argo CD Application status from hub cluster
-- [ ] Argo Rollouts delegation: health type `argoRollouts` waits for Rollout.status.phase=Healthy
+- [ ] Each prod step stays HealthChecking until its hub Application is Healthy and Synced, which
+      Argo CD reports only after the canary finishes
 - [ ] Both prod regions reach Verified independently
 
 ---
