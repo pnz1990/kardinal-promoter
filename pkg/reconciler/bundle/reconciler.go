@@ -40,7 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,6 +52,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -132,9 +133,9 @@ type Reconciler struct {
 	// GraphChecker detects whether the Graph CR still exists.
 	// When nil, graph recreation is skipped (backward-compatible).
 	GraphChecker GraphChecker
-	// Recorder emits Kubernetes Events for Bundle phase transitions.
+	// Recorder emits events.k8s.io/v1 Events for Bundle phase transitions.
 	// When nil, event emission is skipped (backward-compatible).
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // Reconcile is called whenever a Bundle is created or updated, and whenever a
@@ -1065,11 +1066,29 @@ func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status meta
 	})
 }
 
-// event emits a Kubernetes Event when a Recorder is configured.
+// eventActions maps each Bundle Event reason to the events.k8s.io/v1 action,
+// which says what the controller did. The API requires an action.
+var eventActions = map[string]string{
+	"Available":        "Accept",
+	"Superseded":       "Supersede",
+	"PipelineNotFound": "ResolvePipeline",
+	"TranslationError": "CreateGraph",
+	"Promoting":        "Promote",
+	"Failed":           "Promote",
+	"Retrying":         "Retry",
+	"GraphDeleted":     "SyncGraph",
+	"GraphSyncFailed":  "SyncGraph",
+	"Verified":         "Verify",
+	"Recovered":        "Promote",
+}
+
+// event emits an Event when a Recorder is configured.
 func (r *Reconciler) event(b *kardinalv1alpha1.Bundle, eventType, reason, message string) {
-	if r.Recorder != nil {
-		r.Recorder.Event(b, eventType, reason, message)
+	action, ok := eventActions[reason]
+	if !ok {
+		action = "Reconcile"
 	}
+	kubeevent.Emit(r.Recorder, b, eventType, reason, action, message)
 }
 
 // failedState reports whether a PromotionStep state is a failure.

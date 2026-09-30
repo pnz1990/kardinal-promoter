@@ -321,6 +321,20 @@ prometheusRule:
   # -- Namespace to deploy the PrometheusRule into. Defaults to Release.Namespace.
   namespace: ""
 
+# -- ServiceMonitor for Prometheus Operator.
+# Scrapes the controller's metrics port (plain HTTP) through the chart's Service.
+# The job label is the Service name, which is what the PrometheusRule alerts match.
+# Requires the Prometheus Operator CRD (monitoring.coreos.com/v1/ServiceMonitor).
+# Disabled by default — enable when using kube-prometheus-stack or similar.
+serviceMonitor:
+  # -- Create the ServiceMonitor resource. Requires Prometheus Operator CRD.
+  enabled: false
+  # -- Scrape interval, for example "30s". Empty uses the Prometheus default.
+  interval: ""
+  # -- Additional labels on the ServiceMonitor (for Prometheus selector matching).
+  # Example: { "release": "kube-prometheus-stack" }
+  labels: {}
+
 # -- Grafana dashboard ConfigMap for Grafana sidecar auto-discovery.
 # When enabled, creates a ConfigMap containing the kardinal-promoter Grafana dashboard JSON.
 # Designed for use with the Grafana sidecar (grafana.sidecar.dashboards.enabled=true in
