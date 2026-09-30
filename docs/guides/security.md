@@ -464,7 +464,7 @@ kubectl create secret generic kardinal-ui-token -n kardinal-system \
   --from-literal=token="$(openssl rand -hex 32)"
 
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  -n kardinal-system --reuse-values \
+  -n kardinal-system --reset-then-reuse-values \
   --set ui.auth.tokenSecretRef.name=kardinal-ui-token
 ```
 
@@ -482,7 +482,7 @@ there is no per-user authorization in this mode.
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  -n kardinal-system --reuse-values \
+  -n kardinal-system --reset-then-reuse-values \
   --set ui.auth.tokenReview=true
 ```
 
@@ -586,7 +586,7 @@ way are not local, so they also need a UI auth mode (see above):
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  -n kardinal-system --reuse-values \
+  -n kardinal-system --reset-then-reuse-values \
   --set 'ui.allowedHosts={kardinal.example.com}'
 ```
 

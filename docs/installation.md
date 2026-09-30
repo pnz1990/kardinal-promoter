@@ -8,9 +8,9 @@ This guide covers installing kardinal-promoter in a Kubernetes cluster using Hel
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Kubernetes | ≥ 1.30 | kind, EKS, GKE, or any conformant cluster. kro's Graph CRD does not install on 1.29 or older; CI tests 1.35, 1.36 and 1.37 |
-| kubectl | ≥ 1.30 | Within one minor of your cluster |
-| Helm | ≥ 3.12 | `brew install helm` |
+| Kubernetes | ≥ 1.29 | kind, EKS, GKE, or any conformant cluster. CI tests 1.35, 1.36 and 1.37; the upgrade was tested on 1.29 and 1.33. Older than 1.30: see [Kubernetes < 1.30](#kubernetes-130) |
+| kubectl | ≥ 1.29 | Within one minor of your cluster |
+| Helm | ≥ 3.14 | `brew install helm`. 3.14 adds `--reset-then-reuse-values`, used by [Upgrade](#upgrade) |
 | GitHub token | — | Personal access token with `repo` scope |
 | kro | ≥ 0.10.0-rc.0 | Graph controller with the `GraphKind` feature gate — see [Install kro](#install-kro) |
 
@@ -222,35 +222,262 @@ Then upgrade the release:
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
-  --reuse-values
+  --reset-then-reuse-values
 ```
 
-### Upgrading from v0.8.x: custom steps and PromotionTemplate removed
+`--reset-then-reuse-values` (Helm 3.14 or later) keeps the values you set and takes every other
+value from the new chart. `--reuse-values` also keeps the old chart's defaults: a new default is
+never applied, and a key the new chart removed fails its schema.
 
-The API server now rejects a Pipeline that sets `spec.environments[].steps` (a non-empty list)
-or `promotionTemplate`. Neither field ever changed the step sequence: the controller always ran
-the default one (see [Promotion Steps](pipeline-reference.md#promotion-steps)).
+`helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
+re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 
-1. **On Kubernetes older than 1.30, first** remove `steps` and `promotionTemplate` from every
-   stored Pipeline, then apply the new CRDs. These clusters do not ratchet CRD validation, so
-   after the new CRDs are applied, every update to a Pipeline that still sets either field fails,
-   status writes by the controller included. On 1.30 and later, an unchanged environment keeps
-   passing, but remove the fields anyway.
+### Upgrading from v0.8.1
+
+v0.8.1 ran its own Graph controller (krocodile, `experimental.kro.run`) from the kardinal chart. This release runs on upstream kro (`kro.run`), which you install separately. `helm upgrade --reuse-values` fails. A `helm upgrade` that gets past the values check deletes the `kro-system` namespace. Follow the steps below instead.
+
+Tested on kind with Kubernetes 1.33 and 1.29, Helm 3.14, and Argo CD health checks with GitHub PRs. Promotions pause for about one minute (from step 3 until the new controller holds its leader lease). No Pipeline, Bundle, PromotionStep, PRStatus or PolicyGate is lost.
+
+You need:
+
+- Helm 3.14 or later, for `--reset-then-reuse-values`.
+- `kubectl`, `jq`, `yq` and the new `kardinal` CLI.
+- A checkout of kardinal-promoter at this release, for `hack/install-kro.sh`.
+
+Check your Kubernetes version first:
+
+```bash
+kubectl version | grep Server
+```
+
+#### Steps
+
+**1. Find stored objects the new CRDs reject.** This is required on Kubernetes < 1.30 (see [Kubernetes < 1.30](#kubernetes-130)); do it on every version. The command prints one line per problem, and nothing when the cluster is clean.
+
+```bash
+kubectl get pipelines -A -o json | jq -r '
+  ["api-version","kind","metadata","namespace","spec","status","graph","graphengine","kro","each","item","items","object","self","this","context","true","false","null","in","as","break","const","continue","else","for","function","if","import","let","loop","package","return","var","void","while","bundle"] as $reserved
+  | .items[] | "pipeline \(.metadata.namespace)/\(.metadata.name)" as $p
+  | ( (select((.spec.policyGates // []) | length > 0) | "\($p): spec.policyGates"),
+      ((.spec.environments // []) | group_by(.name)[] | select(length > 1) | "\($p): duplicate environment name \(.[0].name)"),
+      ((.spec.environments // [])[] |
+        (select((.steps // []) | length > 0) | "\($p) env \(.name): steps"),
+        (select(.promotionTemplate != null) | "\($p) env \(.name): promotionTemplate"),
+        (select(.autoRollback != null) | "\($p) env \(.name): autoRollback"),
+        (select((.shard // "") != "") | "\($p) env \(.name): shard"),
+        (select(.name as $n | ($reserved | index($n)) != null or ($n | test("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$") | not) or ($n | length) > 63) | "\($p) env \(.name): invalid or reserved name")) )'
+kubectl get policygates -A -o json | jq -r '.items[] | "policygate \(.metadata.namespace)/\(.metadata.name)" as $g
+  | (select(.spec.selector != null) | "\($g): spec.selector"),
+    (select((.metadata.name | length) > 63 and (.metadata.name | contains("--") | not) and (.metadata.name | startswith("freeze-") | not)) | "\($g): name longer than 63 characters")'
+```
+
+Fix each line it prints. In the commands below, `<i>` is the environment's position in `spec.environments`, counting from 0.
+
+| Finding | Fix |
+|---|---|
+| `steps` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/steps"}]'`. Every environment runs the default step sequence. |
+| `autoRollback` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/autoRollback"}]'`. Use `onHealthFailure` instead (see [Rollback](rollback.md)). |
+| `shard` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/environments/<i>/shard"}]'`. Distributed mode was removed. |
+| `spec.policyGates` | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"remove","path":"/spec/policyGates"}]'`. Label org gates with `kardinal.io/applies-to`. |
+| PolicyGate `spec.selector` | `kubectl -n <ns> patch policygate <name> --type json -p '[{"op":"remove","path":"/spec/selector"}]'`. Use the `kardinal.io/applies-to` label. |
+| Invalid, reserved or duplicate environment name | `kubectl -n <ns> patch pipeline <name> --type json -p '[{"op":"replace","path":"/spec/environments/<i>/name","value":"<new-name>"}]'`. Renaming gives the environment new PromotionSteps and PR branches. Do it when the Pipeline has no Bundle in flight, and update any `dependsOn` that names it. |
+| PolicyGate name longer than 63 characters | Copy the gate under a shorter name, then delete the old one (command below). |
+
+```bash
+kubectl -n <ns> get policygate <long-name> -o yaml \
+  | yq 'del(.metadata.uid,.metadata.resourceVersion,.metadata.creationTimestamp,.metadata.generation,.metadata.managedFields,.metadata.annotations,.status) | .metadata.name = "<short-name>"' \
+  | kubectl apply -f - && kubectl -n <ns> delete policygate <long-name>
+```
+
+Run the finder again until it prints nothing.
+
+Editing a Pipeline's spec makes v0.8.1 rebuild that Pipeline's in-flight Bundles, which reruns their steps. If a Pipeline you need to fix has a Bundle in flight, make the fix after step 3.
+
+**2. Check your Helm values.**
+
+```bash
+helm get values kardinal-promoter -n kardinal-system -o yaml
+```
+
+The new chart has no `krocodile` key, and its schema rejects it. If your values contain `krocodile`, see [Helm values](#helm-values) before step 8.
+
+**3. Stop both v0.8.1 controllers.** Promotions pause from here until the end of step 8.
+
+```bash
+kubectl -n kardinal-system scale deploy/kardinal-promoter --replicas=0
+kubectl -n kro-system scale deploy/graph-controller --replicas=0
+kubectl -n kardinal-system wait --for=delete pod -l app.kubernetes.io/name=kardinal-promoter --timeout=90s
+kubectl -n kro-system wait --for=delete pod -l app=graph-controller --timeout=90s
+```
+
+If v0.8.1 is still running when step 7 applies the new CRDs, it sees the new defaults (`historyLimit: 50`, `maxConcurrentPromotions: 0`) as a Pipeline change. It then rebuilds every in-flight Bundle from the start.
+
+**4. Remove the krocodile finalizers from the old Graphs.**
+
+```bash
+kubectl get graphs.experimental.kro.run -A -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{"\n"}{end}' \
+  | while read ns n; do kubectl -n "$ns" patch graphs.experimental.kro.run "$n" --type merge -p '{"metadata":{"finalizers":null}}'; done
+```
+
+Step 8 deletes the `graphs.experimental.kro.run` CRD. The finalizer `experimental.kro.run/graph-controller` can only be cleared by krocodile, which is stopped, so without this step the CRD stays `Terminating`. Removing it doesn't touch any kardinal object, because PromotionSteps, PRStatuses and gate instances are not owned by these Graphs. GraphRevisions have no finalizer.
+
+**5. Keep the `kro-system` namespace.** The v0.8.1 chart created `kro-system`. The new chart doesn't, so `helm upgrade` would delete the namespace, and kro with it.
+
+```bash
+kubectl annotate namespace kro-system helm.sh/resource-policy=keep
+```
+
+**6. Install kro.** Run this from a checkout of kardinal-promoter at this release. It installs kro v0.10.0-rc.0 into `kro-system` as the Helm release `kro`, together with the CRDs `graphs.kro.run`, `graphrevisions.internal.kro.run` and `resourcegraphdefinitions.kro.run`.
+
+```bash
+KUBE_CONTEXT=<your-context> bash hack/install-kro.sh
+```
+
+On Kubernetes 1.29 the script exits 1, but kro works (see [Kubernetes < 1.30](#kubernetes-130)).
+
+**7. Apply the new kardinal CRDs.** The v0.8.1 chart shipped no CRDs, and Helm never upgrades CRDs, so apply all 12 by hand. This adds the new `notificationhooks.kardinal.io` CRD. Apply them before the new controller starts.
+
+```bash
+helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 | kubectl apply --server-side -f -
+```
+
+If this reports field-manager conflicts, add `--force-conflicts`.
+
+**8. Upgrade the chart.** Use `--reset-then-reuse-values`, not `--reuse-values`. With `--reuse-values`, the v0.8.1 `krocodile` default is carried over and fails the new schema.
+
+```bash
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
+  --namespace kardinal-system --reset-then-reuse-values --wait --timeout 3m
+```
+
+Helm deletes the objects that only v0.8.1 needed:
+
+- the `graph-controller` Deployment and ServiceAccount in `kro-system`;
+- the `kardinal-graph-controller` ClusterRole and ClusterRoleBinding;
+- the CRDs `graphs.experimental.kro.run` and `graphrevisions.experimental.kro.run`.
+
+It adds:
+
+- the ClusterRoles `kardinal-promoter-graph-applier`, `-graph-reader` and `-kro-watch`;
+- a leader-election Role and RoleBinding.
+
+**9. Check the result.**
+
+```bash
+kardinal doctor
+kubectl get graphs.kro.run -A
+kubectl get bundles
+kubectl -n kardinal-system logs deploy/kardinal-promoter | grep -E '"level":"(warn|error)"'
+```
+
+What to expect:
+
+- `kardinal doctor` passes every check.
+- There is one `graphs.kro.run` Graph for each Bundle that was Promoting. The controller logs `graph created` for each.
+- The logs show only two warnings: SCM webhooks are disabled without `--webhook-secret`, and UI API authentication is off (see [Other notes](#other-notes)).
+
+**10. Tidy up.**
+
+```bash
+kubectl annotate namespace kro-system helm.sh/resource-policy- meta.helm.sh/release-name- meta.helm.sh/release-namespace-
+kubectl label namespace kro-system app.kubernetes.io/managed-by- app.kubernetes.io/component-
+kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
+```
+
+- The first two commands remove the v0.8.1 release labels and annotations from `kro-system`, which still say `component: krocodile`.
+- v0.8.1 has no `promotiontemplates.kardinal.io` CRD, so the delete is a no-op. It matters only on clusters that ran a build from `main`.
+
+**11. Paused Pipelines and leftover children.**
+
+- **Paused Pipelines.** A paused Pipeline stays paused: the new controller creates a `freeze-<pipeline>` PolicyGate for it. List them, and resume each one when you want it to continue:
 
     ```bash
-    # Pipelines that still set either field
-    kubectl get pipelines -A -o json | jq -r '.items[]
-      | select(any(.spec.environments // [] | .[]; (.steps // [] | length > 0) or .promotionTemplate != null))
-      | "\(.metadata.namespace)/\(.metadata.name)"'
+    kubectl get pipelines -A -o custom-columns=NAME:.metadata.name,PAUSED:.spec.paused
+    kardinal -n <ns> resume <pipeline>
     ```
 
-2. The `PromotionTemplate` CRD was removed. No release shipped it, but a cluster that ran a
-   build from `main` may have it. Helm does not delete CRDs, so delete it yourself. This also
-   deletes every stored PromotionTemplate object; nothing reads them.
+- **Leftover children.** Bundles that were Superseded or finished at upgrade time get no new Graph. When such a Bundle is deleted later, its PromotionSteps, PRStatuses and gate instances stay behind. After you delete old Bundles, remove what they left with this command. It matches only objects labelled with a Bundle that no longer exists; PolicyGate templates carry no `kardinal.io/bundle` label and are never touched.
 
     ```bash
-    kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
+    kubectl get promotionsteps,prstatuses,policygates -A -l kardinal.io/bundle \
+      -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.labels.kardinal\.io/bundle}{"\n"}{end}' | sort -u |
+    while read ns b; do
+      kubectl -n "$ns" get bundle "$b" >/dev/null 2>&1 && continue
+      echo "Bundle $ns/$b is gone:"
+      kubectl -n "$ns" delete promotionsteps,prstatuses,policygates -l "kardinal.io/bundle=$b"
+    done
     ```
+
+#### What happens to in-flight Bundles
+
+- **Promoting Bundles continue.** The new controller builds a `kro.run` Graph for each one and takes over its existing PromotionSteps, PRStatuses and gate instances. The objects keep the same name, uid and creationTimestamp.
+    - Verified environments stay Verified.
+    - A step held by a gate keeps waiting.
+    - Once the gate passes, the step opens its PR, and the Bundle finishes after the merge.
+- **Superseded and finished Bundles** are left as they are. They get no new Graph (see step 11 for their children).
+- **Gate instances keep their old expression.** A Bundle's gate instances are copied from the PolicyGate templates when the controller builds the Bundle's Graph, so editing a template after the upgrade doesn't change the instances of Bundles already in flight. To release a Bundle held by such a gate, override it:
+
+    ```bash
+    kardinal override <pipeline> --stage <env> --gate <gate> --reason "<why>" --expires-in 1h
+    ```
+
+- **Check that Verified environments have the image.** In our v0.8.1 run, v0.8.1 reported test and uat Verified without writing a commit, so the environments kept the old image. If an environment branch has no kardinal commit for a Bundle that v0.8.1 reported Verified, create a new Bundle for the same image after the upgrade. In our run, the new Bundle wrote the commits and reached prod in 90 seconds.
+- **Bundles rebuilt from the start** only if the new CRDs were applied while v0.8.1 was running (see step 3). Nothing is lost, but steps that had already run are run again.
+
+#### Kubernetes < 1.30
+
+Kubernetes before 1.30 has no CRD validation ratcheting. Once the new CRDs are applied, the API server rejects every write to a stored object the new schema doesn't accept, including the controller's status writes, pause and labels. On 1.29, such Pipelines stayed `Initializing` and the controller retried the failing status write on every reconcile. Step 1 before step 7 prevents this.
+
+What each finding blocks:
+
+| Stored value | Kubernetes 1.29 | Kubernetes 1.30+ (tested on 1.33) |
+|---|---|---|
+| env `steps` / `autoRollback` | every write fails | only edits to that environment fail |
+| reserved environment name (e.g. `graph`) | every write fails | only edits to that environment fail |
+| `spec.policyGates`, PolicyGate `spec.selector` | every write fails | writes succeed; the next edit must remove the field |
+| environment name that is not a DNS label (e.g. `Test`) | spec writes fail; status writes succeed and the Pipeline reports Valid | writes succeed |
+| PolicyGate name longer than 63 characters | every write fails | **every write fails**, including labels and status |
+| duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` | same |
+| `shard` | writes succeed; Pipeline `Ready=False` `NotImplemented` | same |
+
+If you already applied the CRDs, run the fixes from step 1 now. The patches and the gate copy still succeed on 1.29, and the objects recover.
+
+`hack/install-kro.sh` exits 1 on 1.29. The server-side apply of `graphrevisions.internal.kro.run` fails with `.spec.versions[0].selectableFields: field not declared in schema`. The kro Helm release is installed and kro runs and reconciles Graphs, but the script stops before its final wait. Check the kro pod with `kubectl -n kro-system get pods`. 1.30 was not tested.
+
+Among the v0.8.1 examples, `custom-step` and `integration-test` set `steps`, and `multi-cluster-fleet` sets `shard`. Pipelines copied from them need step 1.
+
+#### Helm values
+
+- **`krocodile`.** Remove it. If `helm get values` in step 2 shows it, you set it yourself, and `--reset-then-reuse-values` keeps the values you set, so the schema rejects it again. Pass your values file without the key instead, with `-f values-new.yaml` in place of `--reset-then-reuse-values` in step 8:
+
+    ```bash
+    yq 'del(.krocodile)' values.yaml > values-new.yaml
+    ```
+
+- **`validatingAdmissionPolicy.*`.** Deprecated, with no effect. The chart ships no ValidatingAdmissionPolicy; the CRD schemas validate these fields.
+- **`rbac.integrationTestJobs`.** Deprecated, with no effect, and removed in v0.10. The chart no longer grants `batch/jobs`.
+- **`--reuse-values`** fails with `Additional property krocodile is not allowed`, even when you never set `krocodile`. Use `--reset-then-reuse-values`.
+
+#### Other notes
+
+- **Custom RBAC.** If you manage the controller's RBAC yourself, allow `create` and `patch` on `events.k8s.io` events.
+- **UI.** With no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name` if the UI is reached another way.
+- **Notes that don't apply to v0.8.1:**
+    - `promotionTemplate`, `PromotionStep.spec.inputs` and the `promotiontemplates` CRD don't exist in v0.8.1.
+    - The `update.strategy: argocd` with `approval: pr-review` note doesn't apply: v0.8.1 allows only `kustomize` and `helm`.
+    - The renamed examples (flux, flagger, argo-rollouts, github) are not in v0.8.1.
+
+#### If something goes wrong
+
+- **`helm upgrade` fails with `Additional property krocodile is not allowed`.** Nothing was changed. Rerun step 8 with `--reset-then-reuse-values`, or with `-f` and a values file without `krocodile`.
+- **`kro-system` was deleted** (step 5 skipped). kro was deleted with it. Rerun `KUBE_CONTEXT=<your-context> bash hack/install-kro.sh`. The Graphs are in the Bundles' namespaces and survive; kro picks them up again.
+- **`graphs.experimental.kro.run` is stuck `Terminating`** (step 4 skipped). Run the step 4 command. The CRD then finishes deleting (`kubectl wait --for=delete crd/graphs.experimental.kro.run --timeout=60s`), and no kardinal object is lost.
+- **Steps ran again after the upgrade.** The CRDs were applied while v0.8.1 was running. Nothing is lost, and the Bundles finish.
+- **`... is invalid` errors in the controller log on Kubernetes < 1.30.** Run the step 1 finder and fixes now.
+- **Old PromotionSteps, PRStatuses or gates without a Bundle.** Run the step 11 command.
+- **Rolling back to v0.8.1** was not tested.
+
+---
 
 ## Graceful shutdown
 
@@ -269,14 +496,6 @@ To adjust the timeout:
 # values.yaml
 terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take >30s
 ```
-
-`helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
-re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
-
-!!! note
-    kardinal-promoter is backwards-compatible across patch versions.
-    Minor version upgrades may introduce new CRD fields — apply updated CRDs
-    with `kubectl apply -f config/crd/bases/` before upgrading the controller.
 
 ---
 

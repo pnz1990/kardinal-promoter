@@ -1224,7 +1224,37 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)).
 		Watches(&v1alpha1.PRStatus{}, handler.EnqueueRequestsFromMapFunc(r.prStatusMapper)).
 		Watches(&v1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(r.policyGateMapper)).
+		Watches(&v1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(r.bundleMapper),
+			builderutil.WithPredicates(predicate.NewPredicateFuncs(isSuperseded))).
 		Complete(r)
+}
+
+// isSuperseded passes Bundle events of superseded Bundles.
+func isSuperseded(obj client.Object) bool {
+	b, ok := obj.(*v1alpha1.Bundle)
+	return ok && b.Status.Phase == "Superseded"
+}
+
+// bundleMapper wakes the unfinished PromotionSteps of a superseded Bundle so
+// the supersession guard closes their PRs at once. Without it a step in
+// WaitingForMerge saw the new phase only at its next poll
+// (requeueWaitForMerge), and the superseded PR stayed open, and mergeable,
+// until then.
+func (r *Reconciler) bundleMapper(ctx context.Context, obj client.Object) []reconcile.Request {
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, step := range stepList.Items {
+		if step.Spec.BundleName != obj.GetName() || !isCancellable(step.Status.State) {
+			continue
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: step.Name, Namespace: step.Namespace},
+		})
+	}
+	return reqs
 }
 
 // prStatusMapper re-enqueues the PromotionStep that owns the changed PRStatus.

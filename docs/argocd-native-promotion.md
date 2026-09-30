@@ -114,7 +114,7 @@ grants read access by default; enable `patch` with:
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  --namespace kardinal-system --reuse-values \
+  --namespace kardinal-system --reset-then-reuse-values \
   --set rbac.argocdApplicationsWrite=true
 ```
 

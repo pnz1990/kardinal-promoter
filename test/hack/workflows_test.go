@@ -111,7 +111,7 @@ func TestKindClustersUseOneSupportedNodeImage(t *testing.T) {
 			require.Len(t, images, 1, "kind-config.yaml must set exactly one node image")
 			minor, err := strconv.Atoi(images[0][1])
 			require.NoError(t, err)
-			assert.GreaterOrEqual(t, minor, 30, "kro's graphs.kro.run CRD needs Kubernetes 1.30 or newer: %s", images[0][0])
+			assert.GreaterOrEqual(t, minor, 30, "hack/install-kro.sh needs Kubernetes 1.30 or newer (kro's graphrevisions CRD uses selectableFields): %s", images[0][0])
 			assert.NotEmpty(t, images[0][2], "pin the node image by digest, as the kind release notes list it: %s", images[0][0])
 		} else {
 			for _, img := range images {
@@ -229,7 +229,7 @@ func TestKindNodeMatrixIsPinned(t *testing.T) {
 		assert.NotEmpty(t, img[2], "%s=%s: pin the image by digest", k, v)
 		minor, err := strconv.Atoi(img[1])
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, minor, 30, "%s: kro's graphs.kro.run CRD needs Kubernetes 1.30 or newer", k)
+		assert.GreaterOrEqual(t, minor, 30, "%s: hack/install-kro.sh needs Kubernetes 1.30 or newer (kro's graphrevisions CRD uses selectableFields)", k)
 		assert.LessOrEqual(t, abs(minor-kubectlMinor), 1, "%s: KUBECTL_VERSION %s is more than one minor away", k, tv["KUBECTL_VERSION"])
 	}
 	assert.GreaterOrEqual(t, len(images), 3, "the live e2e matrix runs on three Kubernetes minors")
