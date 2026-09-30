@@ -486,6 +486,14 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 # kardinal-clock   1m         2026-04-14T12:00:00Z         5m
 ```
 
+### Editing a gate
+
+Each Bundle's gate instances are copied from the PolicyGate templates when the controller builds
+the Bundle's Graph. Editing a template, for example to fix its expression, does not change the
+instances of Bundles already in flight; Bundles created after the edit use the new expression. To
+release an in-flight Bundle that the old expression holds, use
+[`kardinal override`](#emergency-overrides-k-09) or create a new Bundle.
+
 ### Gates of finished Bundles
 
 The gate instances of a finished Bundle keep their last result: they are not evaluated or written

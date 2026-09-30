@@ -306,7 +306,7 @@ restart in static mode.
 When `github.secretRef.name` or `github.token` is set in the Helm chart, these three environment
 variables are injected into the controller Deployment automatically. With `github.token` the
 Secret is the chart-managed `<release>-github-token`; rotate it with
-`helm upgrade --reuse-values --set github.token=<NEW_TOKEN>`.
+the `helm upgrade` in [Upgrade](installation.md#upgrade) with `--set github.token=<NEW_TOKEN>` added.
 
 ### Rotating a PAT (zero-downtime procedure)
 

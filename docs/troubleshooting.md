@@ -467,7 +467,7 @@ kubectl logs -n kardinal-system deploy/kardinal-promoter | grep -i "forbidden\|p
 The Helm chart installs a ClusterRole with all required permissions. If you customized RBAC or installed in a restricted namespace, re-apply the Helm chart:
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  --namespace kardinal-system --reuse-values
+  --namespace kardinal-system --reset-then-reuse-values
 ```
 
 ### Symptom: Team cannot create PolicyGates in another team's namespace
@@ -559,7 +559,7 @@ there is no flag to change it.
 re-evaluation. The chart owns the `kardinal-clock` ScheduleClock, so set it through Helm:
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
-  -n kardinal-system --reuse-values --set scheduleClock.interval=5m
+  -n kardinal-system --reset-then-reuse-values --set scheduleClock.interval=5m
 ```
 
 **4. Bundle history** — finished Bundles are garbage-collected per Pipeline. Set

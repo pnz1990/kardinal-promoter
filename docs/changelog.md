@@ -18,13 +18,17 @@ Pin the version: without `--version 0.9.0-rc.1`, `helm install` and `helm upgrad
 
 ### Before you upgrade
 
-1. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate (`hack/install-kro.sh`). The chart no longer bundles a Graph controller.
-2. On Kubernetes older than 1.30, first remove the fields the API server now rejects from stored objects (list below). These clusters do not ratchet CRD validation, so every update to such an object fails, the controller's status writes included.
-3. Apply the new CRDs by hand, before the controller: Helm never updates CRDs. Without them, new status fields are dropped on save.
-4. Remove `controller.shard` from your values file, even if it is empty. The chart rejects it.
-5. Check the controller's UI exposure: with no UI auth mode set, the UI API answers only `kubectl port-forward` clients.
+Follow the tested steps in [Upgrading from v0.8.1](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v081). A plain `helm upgrade` does not work. In short:
 
-The API server now rejects: `spec.environments[].steps` (non-empty), `promotionTemplate`, `autoRollback`, `update.strategy: argocd` with `approval: pr-review`, a reserved environment name (such as `kind`, `spec` or `bundle`), a non-empty `spec.policyGates`, a PolicyGate `spec.selector`, and a PolicyGate name over 63 characters. The fields were ignored or failed only at promotion time; a reserved name clashes with kro Graph node IDs.
+1. Find and fix the stored objects the new CRDs reject (list below). This is required on Kubernetes older than 1.30, which does not ratchet CRD validation. A PolicyGate name over 63 characters blocks every write on any version.
+2. Stop the v0.8.1 controller and its bundled Graph controller (krocodile), and remove the krocodile finalizers from the old `graphs.experimental.kro.run` Graphs.
+3. Annotate the `kro-system` namespace with `helm.sh/resource-policy=keep`. The v0.8.1 chart created it, and `helm upgrade` would delete it, with kro in it.
+4. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate (`hack/install-kro.sh`).
+5. Apply the new CRDs by hand. Helm never updates CRDs, and the v0.8.1 chart shipped none.
+6. Upgrade with `--reset-then-reuse-values` (Helm 3.14 or later). `--reuse-values` keeps the v0.8.1 `krocodile` default, which the new chart rejects.
+7. Check the controller's UI exposure: with no UI auth mode set, the UI API answers only `kubectl port-forward` clients.
+
+The API server now rejects: `spec.environments[].steps` (non-empty), `promotionTemplate`, `autoRollback`, `update.strategy: argocd` with `approval: pr-review`, a reserved environment name (such as `kind`, `spec` or `bundle`), an environment name that is not a lowercase DNS label of at most 63 characters, a non-empty `spec.policyGates`, a PolicyGate `spec.selector`, and a PolicyGate name over 63 characters. The fields were ignored or failed only at promotion time; a reserved name clashes with kro Graph node IDs.
 
 ### Changed
 
@@ -51,7 +55,7 @@ The API server now rejects: `spec.environments[].steps` (non-empty), `promotionT
 
 ### Removed
 
-- **Distributed mode** — `kardinal-agent`, `--shard` / `KARDINAL_SHARD` and the chart value `controller.shard`. The controller reconciles every PromotionStep. `shard` on an environment sets the Pipeline `Ready=False`
+- **Distributed mode** — `kardinal-agent` and `--shard` / `KARDINAL_SHARD`. The controller reconciles every PromotionStep. `shard` on an environment sets the Pipeline `Ready=False`
 - **Per-region fan-out** — `regions` and `PromotionStep.spec.region` are deprecated. Two or more regions fail at Graph build; declare one environment per region and use `wave`
 - **The Pipeline admission webhook** (`--pipeline-admission-webhook`, `POST /webhook/validate/pipeline`). The controller exits at startup when it is set: remove the setting and delete your ValidatingWebhookConfiguration. Invalid Pipelines are marked `Ready=False` instead
 - **The PromotionTemplate CRD and `PromotionStep.spec.inputs`**, and the custom `webhook`, `verify-image` and `integration-test` steps. No Pipeline could run them. Helm does not delete CRDs: run `kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found` (only clusters that ran a build from `main` have it). For image signatures, use admission-time verification; for tests, Argo CD PostSync hooks or MetricCheck gates. See [Image signatures and tests](https://pnz1990.github.io/kardinal-promoter/pipeline-reference/#image-signatures-and-tests)

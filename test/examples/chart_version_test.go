@@ -29,7 +29,9 @@ var cliDownload = regexp.MustCompile(`github\.com/pnz1990/kardinal-promoter/rele
 // picks the newest final chart, so a user of a release candidate would
 // install, or upgrade down to, an older release. All pins name the same
 // version (or the <version> placeholder), so a release changes them together,
-// and every documented CLI download names the same release.
+// and every documented CLI download names the same release. No command uses
+// --reuse-values: it keeps the old chart's defaults, so an upgrade never gets
+// a new default and fails the schema on a key the new chart removed.
 func TestDocumentedChartCommandsPinVersion(t *testing.T) {
 	root := repoRoot(t)
 	files := []string{"README.md", "chart/kardinal-promoter/values.yaml"}
@@ -69,6 +71,7 @@ func TestDocumentedChartCommandsPinVersion(t *testing.T) {
 				cmd += "\n" + lines[j+1]
 			}
 			where := fmt.Sprintf("%s:%d", rel, i+1)
+			assert.NotContains(t, cmd, "--reuse-values", "%s: use --reset-then-reuse-values; --reuse-values keeps the old chart's defaults", where)
 			m := chartVersionFlag.FindStringSubmatch(cmd)
 			if !assert.NotNil(t, m, "%s: helm command on %s has no --version", where, chartURL) {
 				continue
