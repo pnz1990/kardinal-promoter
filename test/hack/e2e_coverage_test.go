@@ -1,0 +1,86 @@
+// Copyright 2026 The kardinal-promoter Authors.
+// Licensed under the Apache License, Version 2.0
+
+package hack
+
+import (
+	"sort"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/coverage"
+)
+
+// TestE2ECoverage keeps test/e2e/coverage.tsv honest: a row is "covered" if
+// and only if a test's doc comment names it, live and deprecated rows are
+// covered only by live tests, and every live test names its rows and runs in
+// some suite.
+func TestE2ECoverage(t *testing.T) {
+	root := repoRoot(t)
+	rows, err := coverage.Rows(root)
+	require.NoError(t, err)
+	byID := map[string]coverage.Row{}
+	for _, r := range rows {
+		assert.Regexp(t, coverage.ID, r.ID)
+		assert.NotContains(t, byID, r.ID, "duplicate row")
+		byID[r.ID] = r
+		assert.Contains(t, []string{"live", "contract", "deprecated"}, r.Tier, r.ID)
+		assert.Contains(t, []string{"covered", "todo"}, r.Status, r.ID)
+		assert.NotEmpty(t, r.Suite, r.ID)
+		assert.NotEmpty(t, r.Feature, r.ID)
+		assert.NotEmpty(t, r.Source, r.ID)
+	}
+
+	tests, err := coverage.Tests(root)
+	require.NoError(t, err)
+	runs, err := coverage.SuiteRuns(root)
+	require.NoError(t, err)
+	coveredBy := map[string][]string{}
+	for _, ct := range tests {
+		name := ct.File + ":" + ct.Name
+		if ct.Live {
+			assert.NotEmpty(t, ct.IDs, "%s: a live test's doc comment says which rows it covers: \"Covers ID, ID.\"", name)
+			inSuite := false
+			for _, re := range runs {
+				inSuite = inSuite || re.MatchString(ct.Name)
+			}
+			assert.True(t, inSuite, "%s: no suite in hack/e2e/up.sh runs it", name)
+		}
+		for _, id := range ct.IDs {
+			row, ok := byID[id]
+			if !assert.True(t, ok, "%s covers %s, which is not in %s", name, id, coverage.File) {
+				continue
+			}
+			if row.Tier != "contract" {
+				assert.True(t, ct.Live, "%s covers %s row %s; only a test in %s can", name, row.Tier, id, coverage.LiveDir)
+			}
+			coveredBy[id] = append(coveredBy[id], name)
+		}
+	}
+
+	counts := map[string][2]int{}
+	for _, r := range rows {
+		_, has := coveredBy[r.ID]
+		if r.Status == "covered" {
+			assert.True(t, has, "%s is marked covered but no test covers it", r.ID)
+		} else {
+			assert.False(t, has, "%s is marked todo but %v covers it; mark it covered", r.ID, coveredBy[r.ID])
+		}
+		c := counts[r.Tier]
+		c[1]++
+		if has {
+			c[0]++
+		}
+		counts[r.Tier] = c
+	}
+	tiers := make([]string, 0, len(counts))
+	for tier := range counts {
+		tiers = append(tiers, tier)
+	}
+	sort.Strings(tiers)
+	for _, tier := range tiers {
+		t.Logf("%s: %d of %d rows covered", tier, counts[tier][0], counts[tier][1])
+	}
+}

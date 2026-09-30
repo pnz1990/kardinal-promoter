@@ -4,7 +4,8 @@
 # Runs SUITE's live tests against the cluster hack/e2e/up.sh set up, with
 # the env file it wrote. The output goes through test/e2e/report, which
 # fails the run when a test fails or skips, or when no test ran. The raw
-# `go test -json` stream is kept in test/e2e/results/<cluster>/test.json.
+# `go test -json` stream is kept in test/e2e/results/<cluster>/test.json and
+# the results, for test/e2e/proof, in summary.json next to it.
 #
 # Env:
 #   COUNT         go test -count (default 1; the weekly flake job uses more)
@@ -30,4 +31,4 @@ target_cluster
 cd "$REPO_ROOT"
 go build -o "$E2E_OUT/bin/report" ./test/e2e/report
 go test -tags e2e ./test/e2e/live -run "${RUN:-$KARDINAL_E2E_RUN}" -count="${COUNT:-1}" -timeout 90m -json 2>&1 |
-  tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE"
+  tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"

@@ -23,7 +23,7 @@ import (
 // TestCore_PromoteThroughEnvironments is the quickstart journey (J1): a
 // Bundle auto-promotes through test and uat, waits on a PR for prod, and
 // reaches prod when the PR merges. Each step must change git and then the
-// running Deployment, in that order.
+// running Deployment, in that order. Covers STEP-AUTO-01.
 func TestCore_PromoteThroughEnvironments(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -79,7 +79,7 @@ const closedGrace = 5 * time.Minute
 // TestCore_ClosedPRFailsStep checks the documented close path: a promotion PR
 // closed without merging keeps the step waiting for closedGrace, then kardinal
 // comments once that it stopped tracking the PR and fails the step. The
-// environment stays on its old version.
+// environment stays on its old version. Covers SCM-CLOSED-01.
 func TestCore_ClosedPRFailsStep(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -118,7 +118,7 @@ func TestCore_ClosedPRFailsStep(t *testing.T) {
 
 // TestCore_ReopenedPRContinues checks the other half of the close path: a PR
 // reopened within closedGrace keeps the step waiting, and merging it then
-// promotes as usual.
+// promotes as usual. Covers SCM-REOPEN-01.
 func TestCore_ReopenedPRContinues(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -157,6 +157,7 @@ func TestCore_ReopenedPRContinues(t *testing.T) {
 // TestCore_NewerBundleSupersedes checks J6 supersession: a second Bundle
 // created while the first waits on its prod PR supersedes it. kardinal closes
 // the older PR with a comment, and only the newer version reaches prod.
+// Covers BUNDLE-SUPERSEDE-02.
 func TestCore_NewerBundleSupersedes(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
