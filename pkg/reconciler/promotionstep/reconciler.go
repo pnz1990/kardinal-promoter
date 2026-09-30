@@ -75,6 +75,10 @@ const (
 
 	// requeueWaitForMerge is how often to requeue while waiting for a PR merge.
 	requeueWaitForMerge = 30 * time.Second
+	// requeueGateWait is the fallback requeue while a required gate holds a
+	// Pending step. The gate's status write normally wakes the step first
+	// (policyGateMapper).
+	requeueGateWait = 30 * time.Second
 	// requeueHealthCheck is how often to requeue during health checking. It is
 	// also the minimum interval between two health checks of one step, however
 	// many events arrive (C03-promotionstep-12).
@@ -361,8 +365,10 @@ func retryDelay(n int) time.Duration {
 }
 
 // handlePending initializes the step sequence and transitions to Promoting.
-// Before transitioning, checks all required pre-deploy PolicyGates (K-02).
-// If any pre-deploy gate is not ready, stays in Pending and requeues.
+// Before transitioning, it re-checks every PolicyGate in spec.requiredGates
+// (checkRequiredGates): each must exist, be ready, and have been evaluated at
+// or after the step was created. Otherwise the step stays in Pending and
+// requeues; nothing is pushed and no PR is opened.
 func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	base := ps.DeepCopy()
 	pipeline, err := r.loadPipeline(ctx, ps)
@@ -376,28 +382,31 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
-	// K-02: Check pre-deploy gates before starting any git operations.
-	// Required gates are listed in ps.Spec.RequiredGates (set by the Graph controller).
-	// Only gates with spec.when == "pre-deploy" block the Pending → Promoting transition.
+	// Re-check every required gate before any git or Argo CD write (#1300,
+	// #1323). The Graph created this step when every gate was ready, but that
+	// result can be older than the step, and a gate can turn false before the
+	// step starts. The PolicyGate reconciler re-evaluates a new step's gates
+	// at once (it watches PromotionStep creates), and its status write wakes
+	// this step (policyGateMapper). spec.when has no effect.
 	if len(ps.Spec.RequiredGates) > 0 {
-		blocked, blockingGate, checkErr := r.checkPreDeployGates(ctx, ps)
+		msg, checkErr := r.checkRequiredGates(ctx, ps)
 		if checkErr != nil {
-			log.Warn().Err(checkErr).Msg("failed to check pre-deploy gates — will retry")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			log.Warn().Err(checkErr).Msg("failed to check required gates — will retry")
+			return ctrl.Result{RequeueAfter: requeueGateWait}, nil
 		}
-		if blocked {
+		if msg != "" {
 			log.Info().
-				Str("gate", blockingGate).
 				Str("env", ps.Spec.Environment).
-				Msg("pre-deploy gate not ready — step stays in Pending")
+				Str("reason", msg).
+				Msg("required gate holds the step — step stays in Pending")
 			// Update message for visibility but do NOT change state.
-			if msg := fmt.Sprintf("waiting for pre-deploy gate: %s", blockingGate); ps.Status.Message != msg {
+			if ps.Status.Message != msg {
 				ps.Status.Message = msg
 				if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
-					log.Warn().Err(patchErr).Msg("failed to patch pre-deploy wait message (non-fatal)")
+					log.Warn().Err(patchErr).Msg("failed to patch gate wait message (non-fatal)")
 				}
 			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: requeueGateWait}, nil
 		}
 	}
 
@@ -1058,25 +1067,38 @@ func isRollbackBundle(b *v1alpha1.Bundle) bool {
 	return b.Labels[lifecycle.LabelRollback] == "true" || (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "")
 }
 
-// checkPreDeployGates looks up all gates in ps.Spec.RequiredGates and returns
-// true + the first blocking gate name if any pre-deploy gate is not ready.
-// Returns (false, "", nil) when all pre-deploy gates are ready (or there are none).
-// Graph-first: reads CRD status fields only — no external calls.
-func (r *Reconciler) checkPreDeployGates(ctx context.Context, ps *v1alpha1.PromotionStep) (blocked bool, blockingGate string, err error) {
+// checkRequiredGates returns why a Pending step may not start yet, or "" when
+// every gate in ps.Spec.RequiredGates allows it. A gate holds the step when
+// it is missing, not ready, or its result is older than the step: nil
+// status.lastEvaluatedAt, or lastEvaluatedAt before ps.CreationTimestamp.
+//
+// A result written at or after the step's creation was computed after the
+// Graph decided to create the step, so it is fresh for this step. The check
+// compares two stored times (the PolicyGate reconciler's status write and the
+// API server's creationTimestamp, both with one-second precision); it does not
+// read the clock. spec.when is not read: every gate is re-checked (#1323).
+//
+// Graph-first: reads CRD fields only — no external calls. The step writes
+// only its own status.message. kro cannot hold a step that already exists
+// without pruning it (docs/design/11-graph-purity-tech-debt.md, Accepted).
+func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.PromotionStep) (string, error) {
 	for _, gateName := range ps.Spec.RequiredGates {
 		var gate v1alpha1.PolicyGate
 		if getErr := r.Get(ctx, types.NamespacedName{Name: gateName, Namespace: ps.Namespace}, &gate); getErr != nil {
 			if apierrors.IsNotFound(getErr) {
-				// Gate not yet created by the Graph — treat as not ready.
-				return true, gateName, nil
+				// Gate not (yet) created by the Graph, or deleted — not ready.
+				return fmt.Sprintf("waiting for gate %s", gateName), nil
 			}
-			return false, "", fmt.Errorf("get policy gate %s: %w", gateName, getErr)
+			return "", fmt.Errorf("get policy gate %s: %w", gateName, getErr)
 		}
-		if gate.Spec.When == "pre-deploy" && !gate.Status.Ready {
-			return true, gateName, nil
+		if !gate.Status.Ready {
+			return fmt.Sprintf("waiting for gate %s", gateName), nil
+		}
+		if gate.Status.LastEvaluatedAt == nil || gate.Status.LastEvaluatedAt.Before(&ps.CreationTimestamp) {
+			return fmt.Sprintf("waiting for gate %s to be re-evaluated", gateName), nil
 		}
 	}
-	return false, "", nil
+	return "", nil
 }
 
 // handleBake implements the K-01 contiguous-healthy soak window.
@@ -1182,7 +1204,8 @@ func (r *Reconciler) handleBake(
 //     Without this Watch, a step in WaitingForMerge would only react after
 //     requeueWaitForMerge, defeating the purpose of the PRStatus CRD.
 //   - PolicyGate: re-enqueue the unfinished PromotionSteps that require the
-//     gate, reducing latency for pre-deploy gate advancement.
+//     gate, so a Pending step starts as soon as its gates are re-evaluated
+//     (checkRequiredGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(

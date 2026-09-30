@@ -35,6 +35,7 @@ writes its result to its own CRD status, because kro has no primitive for it (le
 | — (not catalogued) | The PRStatus reconciler polls the SCM API every 30 s (`requeuePollInterval`); SCM webhooks only shorten the wait. | Accepted |
 | — (not catalogued) | Reconcilers make external HTTP calls: NotificationHook (webhook delivery), Subscription (registry and Git Smart HTTP reads in `pkg/source`), MetricCheck (Prometheus). Each writes the result to its own status. | Accepted |
 | — (not catalogued) | The `verify-image` step ran the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Done: step removed (#1278, #1282); signatures are verified at admission in the target cluster |
+| PS-2 / BU-2, #1300, #1313 | The PromotionStep reconciler reads the freeze gate and its required gates before it starts git work (`holdIfPaused`, `checkRequiredGates`). A required gate must be ready and evaluated at or after the step was created; the check compares two stored times and does not read the clock. The step writes only its own `status.message`. It stays in the reconciler because the Graph cannot hold a step that already exists: `readyWhen` does not hold dependents in a standalone Graph (only the RGD instance controller turns on `GateReadiness`); a resolve error such as kardinal's `resolvableWhen` makes the node Unresolved, so kro stops updating the existing step but neither holds nor deletes it; `includeWhen: false` prunes the existing step; and a ref to a missing object (the freeze gate exists only while the Pipeline is paused) holds the Graph, the inverse of a pause. Ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph). | Accepted |
 
 ### What to work on now
 
@@ -95,7 +96,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | ID | Issue | Description | Fix Approach |
 |---|---|---|---|
 | PG-3 | #133 | `buildUpstreamContext()` soakMinutes via `time.Since` | Add `status.soakMinutes` to PromotionStep; Watch node reads it |
-| PS-2 / BU-2 | #139 | `Pipeline.Spec.Paused` in two reconcilers | Single freeze-gate pattern (already exists); remove Go checks |
+| PS-2 / BU-2 | #139 | `Pipeline.Spec.Paused` in two reconcilers | Done: no reconciler reads `spec.paused`; the step holds on the freeze gate (Accepted in the current status table) |
 | PS-5 | #140 | Health check timeout via `time.Since` | Add `status.healthCheckExpiry` to PromotionStep |
 | PS-9 | #141 | `copyEvidenceToBundle()` cross-CRD mutation | Invert: Bundle reconciler reads PromotionStep status |
 | HE-4 | #143 | `AutoDetector` CRD probing at runtime | Remove AutoDetector; require explicit `health.type` |
