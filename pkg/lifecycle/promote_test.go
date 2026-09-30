@@ -162,3 +162,50 @@ func TestPlanPromote(t *testing.T) {
 		require.ErrorIs(t, err, lifecycle.ErrNotFound)
 	})
 }
+
+// TestPlan_CopiesOnlyValidCIRunURL: promote and rollback copy the source
+// Bundle's ciRunURL only when it passes graph.ValidateCIRunURL. A Bundle
+// created before that check may hold any string, and the bundle admission
+// webhook would refuse to create the copy.
+func TestPlan_CopiesOnlyValidCIRunURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{name: "https", url: "https://github.com/o/r/actions/runs/1", want: "https://github.com/o/r/actions/runs/1"},
+		{name: "empty", url: "", want: ""},
+		{name: "javascript", url: "javascript:alert(1)", want: ""},
+		{name: "relative", url: "/runs/1", want: ""},
+		{name: "whitespace", url: "https://ci.example.com/1 | x", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withURL := func(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+				b.Spec.Provenance.CIRunURL = tt.url
+				return b
+			}
+			// v1 is Verified in test and failed in prod: promote copies it.
+			c := newClient(t, pipeline("app", "test", "prod"), withURL(bundle("v1", "app", "1", 0)),
+				step("v1", "app", "test", "Verified", 1), step("v1", "app", "prod", "Failed", 2))
+			promote, err := lifecycle.PlanPromote(context.Background(), c, lifecycle.PromoteRequest{
+				Namespace: ns, Pipeline: "app", Environment: "prod",
+			})
+			require.NoError(t, err)
+			require.Equal(t, "v1", promote.Source.Name)
+			assert.Equal(t, tt.want, promote.Bundle.Spec.Provenance.CIRunURL, "promote")
+			assert.Equal(t, "sha-1", promote.Bundle.Spec.Provenance.CommitSHA, "the rest of the provenance is kept")
+
+			// v1 was Verified in prod, v2 is deployed there now: rollback restores v1.
+			c = newClient(t, pipeline("app", "prod"), withURL(bundle("v1", "app", "1", 0)), bundle("v2", "app", "2", 10),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "HealthChecking", 11))
+			rollback, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
+				Namespace: ns, Pipeline: "app", Environment: "prod",
+			})
+			require.NoError(t, err)
+			require.Equal(t, "v1", rollback.Target.Name)
+			assert.Equal(t, tt.want, rollback.Bundle.Spec.Provenance.CIRunURL, "rollback")
+			assert.Equal(t, "sha-1", rollback.Bundle.Spec.Provenance.CommitSHA, "the rest of the provenance is kept")
+		})
+	}
+}

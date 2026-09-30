@@ -212,8 +212,8 @@ func TestRenderPRBody(t *testing.T) {
 
 // TestRenderPRBody_CIRunLink covers E2E-R22: the CI Run cell of the provenance
 // table, in the promotion and the rollback body. The link is rendered only
-// for an absolute http(s) ciRunURL, never as an empty "[CI run]()"; a ciRunURL
-// cannot add a cell, end the row or inject markup.
+// for a ciRunURL that passes graph.ValidateCIRunURL, never as an empty
+// "[CI run]()"; a ciRunURL cannot add a cell, end the row or inject markup.
 func TestRenderPRBody_CIRunLink(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -244,14 +244,24 @@ func TestRenderPRBody_CIRunLink(t *testing.T) {
 			wantCI:     "[CI run](http://jenkins.local:8080/job/app/7/)", wantCommit: "abc123", wantAuthor: "ci-bot",
 		},
 		{
-			name:       "parenthesis, pipe and space are encoded",
-			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run(1)|x y", CommitSHA: "abc123", Author: "ci-bot"},
-			wantCI:     "[CI run](https://ci.example.com/run%281%29%7Cx%20y)", wantCommit: "abc123", wantAuthor: "ci-bot",
+			name:       "parenthesis and pipe are encoded",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run(1)|x", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "[CI run](https://ci.example.com/run%281%29%7Cx)", wantCommit: "abc123", wantAuthor: "ci-bot",
 		},
 		{
 			name:       "markup after the link is encoded",
-			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/1) **x** <img src=`a`>", CommitSHA: "abc123", Author: "ci-bot"},
-			wantCI:     "[CI run](https://ci.example.com/1%29%20**x**%20%3Cimg%20src=%60a%60%3E)", wantCommit: "abc123", wantAuthor: "ci-bot",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/1)**x**<img/src=`a`>", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "[CI run](https://ci.example.com/1%29**x**%3Cimg/src=%60a%60%3E)", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "space is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/1) [x](y)", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "user info is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://github.com@evil.example/1", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
 		},
 		{
 			name:       "newline is not linked",

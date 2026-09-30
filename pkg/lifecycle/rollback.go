@@ -224,7 +224,7 @@ func buildRollbackBundle(req RollbackRequest, plan *RollbackPlan) *v1alpha1.Bund
 	prov := &v1alpha1.BundleProvenance{}
 	if plan.Target.Spec.Provenance != nil {
 		prov.CommitSHA = plan.Target.Spec.Provenance.CommitSHA
-		prov.CIRunURL = plan.Target.Spec.Provenance.CIRunURL
+		prov.CIRunURL = copyableCIRunURL(plan.Target.Spec.Provenance.CIRunURL)
 		prov.Author = plan.Target.Spec.Provenance.Author
 		prov.Timestamp = plan.Target.Spec.Provenance.Timestamp
 	}

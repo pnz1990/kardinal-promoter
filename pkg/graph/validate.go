@@ -6,9 +6,11 @@ package graph
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
@@ -253,6 +255,38 @@ func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
 	if ref := p.Spec.Git.SecretRef; ref != nil && ref.Namespace != "" && ref.Namespace != p.Namespace {
 		return fmt.Errorf("git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q",
 			ref.Namespace, p.Namespace)
+	}
+	return nil
+}
+
+// ValidateCIRunURL checks a Bundle's spec.provenance.ciRunURL, which CI sets
+// and the PR body and the UI render as a link. It must be empty or an absolute
+// http or https URL with a host, without user info (credentials would be
+// published in every PR body) and without whitespace or control characters.
+// The bundle API and the Bundle admission webhook refuse to create a Bundle
+// that fails it; they do not check updates, so existing Bundles keep working.
+// Promote and rollback drop such a URL when they copy provenance, and the PR
+// body does not link one. Errors do not echo the URL.
+func ValidateCIRunURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	if strings.IndexFunc(raw, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+		return fmt.Errorf("provenance.ciRunURL must not contain whitespace or control characters")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err // url.Error repeats the whole URL
+		}
+		return fmt.Errorf("provenance.ciRunURL is not a valid URL: %w", err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("provenance.ciRunURL must be an absolute http or https URL")
+	}
+	if u.User != nil {
+		return fmt.Errorf("provenance.ciRunURL must not contain user info")
 	}
 	return nil
 }

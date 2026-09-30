@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -288,6 +289,12 @@ func validateBundleCreateRequest(req *bundleCreateRequest) string {
 	}
 	if needConfig && (req.ConfigRef == nil || req.ConfigRef.CommitSHA == "") {
 		return fmt.Sprintf("type %q requires configRef.commitSHA", req.Type)
+	}
+	if req.Provenance != nil {
+		// The PR body and the UI link it (E2E-R22).
+		if err := graphpkg.ValidateCIRunURL(req.Provenance.CIRunURL); err != nil {
+			return err.Error()
+		}
 	}
 	return ""
 }

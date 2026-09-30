@@ -264,9 +264,24 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | Field | Description | Example |
 |---|---|---|
 | `commitSHA` | The Git commit that triggered the build | `abc123def456` |
-| `ciRunURL` | URL of the CI run | `https://github.com/.../runs/12345` |
+| `ciRunURL` | URL of the CI run: an absolute `http://` or `https://` URL | `https://github.com/.../runs/12345` |
 | `author` | Who or what triggered the build | `engineer-name`, `dependabot[bot]` |
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
+
+The PR body and the UI link `ciRunURL`, so it is checked when a Bundle is created. It must be
+empty or an absolute `http://` or `https://` URL with a host, without user info
+(`https://user@host/...`), spaces or control characters.
+
+- The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value.
+- Bundles created directly (`kubectl apply`, your own client) are checked only
+  when the Bundle admission webhook is enabled: start the controller with
+  `--bundle-admission-webhook` (or `KARDINAL_BUNDLE_ADMISSION_WEBHOOK=true`), then install a
+  `ValidatingWebhookConfiguration` for `bundles.kardinal.io`, operation `CREATE`, that calls
+  `POST /webhook/validate/bundle` on the webhook port (`8083`, served over TLS with
+  `--tls-cert-file`). The chart does not create it.
+- Existing Bundles are not checked, and updating them is always allowed. If an existing Bundle's
+  `ciRunURL` fails the check, the PR body shows `—` and the UI shows it as plain text. Promote
+  and rollback (CLI, UI and automatic) leave it out of the Bundle they create.
 
 ## Multi-Image Bundles
 
@@ -359,7 +374,7 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required) |
-| `provenance` | No | `commitSHA`, `ciRunURL`, `author`, `timestamp` (set to now if empty) |
+| `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 
 The body is limited to 1 MiB.

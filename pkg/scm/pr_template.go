@@ -16,7 +16,6 @@ package scm
 import (
 	"bytes"
 	"fmt"
-	"net/url"
 	"strings"
 	"text/template"
 	"time"
@@ -24,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // PRBodyUpstreamEnv holds per-environment upstream verification evidence for the
@@ -97,14 +97,15 @@ type PRBody struct {
 var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r", " ")
 
 // ciRunLink renders the CI Run cell of the provenance table: a link when raw
-// is an absolute http(s) URL, "—" otherwise. The Bundle's ciRunURL comes from
-// CI unvalidated: an empty one must not render an empty "[CI run]()" link, a
-// ")", "|", "<" or space must not end the link or the cell early, and another
-// scheme (javascript:, a relative path) is not linked at all.
+// passes graph.ValidateCIRunURL (an absolute http(s) URL), "—" otherwise. The
+// bundle API and the admission webhook check new Bundles, but a Bundle created
+// before, or with the webhook off, may hold anything: an empty ciRunURL must
+// not render an empty "[CI run]()" link, another scheme (javascript:, a
+// relative path) is not linked, and the characters of a valid URL that could
+// end the link or the table cell (")", "|", "<", a backtick) are
+// percent-encoded.
 func ciRunLink(raw string) string {
-	raw = strings.TrimSpace(raw)
-	u, err := url.Parse(raw) // rejects control characters, newlines included
-	if raw == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if raw == "" || graph.ValidateCIRunURL(raw) != nil {
 		return "—"
 	}
 	var b strings.Builder

@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // Labels and annotations written by lifecycle actions.
@@ -172,6 +173,16 @@ func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 		ref := *src.Spec.ConfigRef
 		dst.ConfigRef = &ref
 	}
+}
+
+// copyableCIRunURL is the ciRunURL a Bundle copied from src may carry: src's,
+// unless it fails graph.ValidateCIRunURL. src may predate that check, and the
+// bundle admission webhook would refuse to create the copy (E2E-R22).
+func copyableCIRunURL(raw string) string {
+	if graph.ValidateCIRunURL(raw) != nil {
+		return ""
+	}
+	return raw
 }
 
 func hasEnvironment(p *v1alpha1.Pipeline, env string) bool {

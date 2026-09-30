@@ -41,6 +41,13 @@ const maxAdmissionBody = 1 << 20 // 1 MB
 //
 // Design ref: docs/design/15-production-readiness.md §Lens 4 O1–O9
 func PipelineWebhookHandler(log zerolog.Logger) http.HandlerFunc {
+	return reviewHandler(log, validatePipeline)
+}
+
+// reviewHandler decodes an AdmissionReview, answers it with validate's
+// response and the request's UID, and rejects bodies over 1 MB with 413.
+func reviewHandler(log zerolog.Logger,
+	validate func(*admissionv1.AdmissionRequest, zerolog.Logger) *admissionv1.AdmissionResponse) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -72,7 +79,7 @@ func PipelineWebhookHandler(log zerolog.Logger) http.HandlerFunc {
 			return
 		}
 
-		resp := validatePipeline(review.Request, log)
+		resp := validate(review.Request, log)
 		resp.UID = review.Request.UID
 
 		out := admissionv1.AdmissionReview{
