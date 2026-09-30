@@ -35,7 +35,7 @@ kardinal init [flags]
       --gitops-dir string   Directory for the GitOps scaffold (default ".gitops")
   -h, --help                help for init
       --scaffold-gitops     Create GitOps repo structure (environments/<env>/kustomization.yaml)
-      --stdout              Print to stdout instead of writing a file
+      --stdout              Print the Pipeline YAML to stdout instead of writing a file (a scaffold still writes its files)
 ```
 
 ### Options inherited from parent commands
