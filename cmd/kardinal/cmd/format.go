@@ -27,6 +27,7 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // HumanAge returns a human-readable age string for the given creation time.
@@ -292,9 +293,10 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 			sorted = append(sorted, b)
 		}
 	}
-	// Newest first, so the first bundle seen per pipeline is the current one.
+	// Newest first (lifecycle.CompareCreation, the order supersession uses),
+	// so the first bundle seen per pipeline is the current one.
 	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp.Time)
+		return lifecycle.CompareCreation(&sorted[i], &sorted[j]) > 0
 	})
 
 	typeRank := map[string]int{"InvalidSpec": 20, "Failed": 10}

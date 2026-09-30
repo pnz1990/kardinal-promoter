@@ -28,6 +28,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // explainStep is a PromotionStep shaped like the ones the Graph creates.
@@ -77,6 +78,13 @@ func explainBundle(name, phase string, created time.Time) *v1alpha1.Bundle {
 		Spec:       v1alpha1.BundleSpec{Pipeline: "demo", Type: "image"},
 	}
 	b.Status.Phase = phase
+	return b
+}
+
+// withCreatedAt stamps b with the kardinal.io/created-at annotation the
+// controller writes, which orders Bundles created in the same second.
+func withCreatedAt(b *v1alpha1.Bundle, at time.Time) *v1alpha1.Bundle {
+	lifecycle.StampCreatedAt(b, at)
 	return b
 }
 
@@ -196,6 +204,51 @@ func TestExplain_Rows(t *testing.T) {
 			},
 			contains: []string{"Failed", "PR #8 closed"},
 			excludes: []string{"b1 verified"},
+		},
+		{
+			// The Graph creates every gate instance when the Bundle starts,
+			// so a Bundle that failed at test has gate instances in uat and
+			// prod without ever reaching them.
+			name: "a newer failed bundle is not current where it never arrived",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainBundle("b2", "Failed", recent),
+				explainStep("demo", "b1", "test", "Verified", "b1 test", old),
+				explainStep("demo", "b1", "uat", "Verified", "b1 uat", old),
+				explainStep("demo", "b1", "prod", "Verified", "b1 prod", old),
+				explainGateInstance("demo", "b1", "prod", "b1-gate", "true", true, true, "ok"),
+				explainStep("demo", "b2", "test", "Failed", "PR #9 closed", recent),
+				explainGateInstance("demo", "b2", "uat", "b2-uat-gate", "true", false, false, ""),
+				explainGateInstance("demo", "b2", "prod", "b2-prod-gate", "false", false, true, "x"),
+			},
+			contains: []string{"PR #9 closed", "b1 uat", "b1 prod", "b1-gate"},
+			excludes: []string{"b1 test", "b2-uat-gate", "b2-prod-gate"},
+		},
+		{
+			name: "same-second bundles are ordered by the created-at annotation",
+			objs: []sigs_client.Object{
+				withCreatedAt(explainBundle("b-z", "Verified", recent), recent),
+				withCreatedAt(explainBundle("b-a", "Promoting", recent), recent.Add(300*time.Millisecond)),
+				explainStep("demo", "b-z", "prod", "Verified", "b-z step", recent),
+				explainStep("demo", "b-a", "prod", "Promoting", "b-a step", recent),
+			},
+			contains: []string{"b-a step"},
+			excludes: []string{"b-z step"},
+		},
+		{
+			name: "when every bundle is superseded the newest one with a step is shown",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Superseded", old),
+				explainBundle("b2", "Superseded", recent),
+				explainBundle("b3", "Superseded", policyTestNow),
+				explainStep("demo", "b1", "prod", "Promoting", "b1 step", old),
+				explainStep("demo", "b2", "prod", "WaitingForMerge", "b2 step", recent),
+				explainGateInstance("demo", "b2", "prod", "b2-gate", "true", true, true, "ok"),
+				explainStep("demo", "b3", "test", "Verified", "b3 test", policyTestNow),
+				explainGateInstance("demo", "b3", "prod", "b3-gate", "false", false, true, "x"),
+			},
+			contains: []string{"b2 step", "b2-gate", "b3 test"},
+			excludes: []string{"b1 step", "b3-gate"},
 		},
 		{
 			name: "gates before the step is created",

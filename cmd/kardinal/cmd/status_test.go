@@ -196,6 +196,28 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 		assert.Regexp(t, `\n  test +- +Verified`, out)
 	})
 
+	// The Graph creates every gate instance when the Bundle starts: b2 failed
+	// at test but has a gate instance in prod that will never pass.
+	t.Run("newer bundle failed upstream", func(t *testing.T) {
+		out := runStatusPipeline(t,
+			policyPipeline("demo", "test", "uat", "prod"),
+			explainBundle("b1", "Verified", old),
+			explainBundle("b2", "Failed", recent),
+			explainStep("demo", "b1", "test", "Verified", "", old),
+			explainStep("demo", "b1", "uat", "Verified", "", old),
+			explainStep("demo", "b1", "prod", "Verified", "", old),
+			explainStep("demo", "b2", "test", "Failed", "", recent),
+			explainGateInstance("demo", "b2", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
+				"!schedule.isWeekend = false"),
+		)
+		assert.Contains(t, out, "Active bundle(s): b1, b2\n")
+		assert.Regexp(t, `\n  test +- +Failed`, out)
+		assert.Regexp(t, `\n  uat +- +Verified`, out)
+		assert.Regexp(t, `\n  prod +- +Verified`, out)
+		assert.NotContains(t, out, "Blocking Policy Gates")
+		assert.NotContains(t, out, "no-weekend-deploys")
+	})
+
 	t.Run("skip-permission gate", func(t *testing.T) {
 		skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
 			`bundle.version == "sha-9349a3f"`, false, true, `bundle.version == "sha-9349a3f" = false`)

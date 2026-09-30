@@ -17,9 +17,10 @@ the override window (default: 1h).
 override is recorded on the instances of that gate that the Pipeline's
 in-progress Bundles have for --stage (every stage when --stage is not set),
 so run it while the Bundle waits on the gate. Instances of Verified, Failed
-and Superseded Bundles are left alone: they are never evaluated again. The
-name of one gate instance, as kubectl get policygates shows it, is also
-accepted; that instance alone gets the override.
+and Superseded Bundles are left alone, because no promotion waits on them; if
+a Failed Bundle resumes, run the override again. The name of one gate
+instance, as kubectl get policygates shows it, is also accepted; that instance
+alone gets the override.
 
 Example:
   kardinal override my-app --stage prod --gate no-weekend-deploy \

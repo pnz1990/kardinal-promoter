@@ -15,49 +15,61 @@ package cmd
 
 import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // currentBundleByEnv returns, per environment, the Bundle that explain and
-// status describe there: the newest Bundle (by creation time) that is not
-// Superseded and has a PromotionStep or a gate instance in that environment.
-// Ties go to the greater name. A step or gate instance whose Bundle is not in
-// bundles (being deleted) is ignored, and so are gate templates, which have
-// no bundle label.
+// status describe there: the newest Bundle that is not Superseded and is in
+// that environment. A Bundle is in an environment when it has a PromotionStep
+// there, or a gate instance there and it has not failed. Newest is
+// lifecycle.CompareCreation, the order supersession uses. An environment
+// where every Bundle is Superseded falls back to the newest Superseded Bundle
+// with a PromotionStep there, as the UI falls back to the newest Superseded
+// Bundle. A step or gate instance whose Bundle is not in bundles (being
+// deleted) is ignored, and so are gate templates, which have no bundle label.
 //
-// The rule reads only Bundle.status.phase and the objects that exist, so it
-// holds for every path a Bundle takes: a Bundle that skips an environment, one
-// waiting at a gate before its step exists, and one that has finished. The
-// Graph stamps every gate instance of a Bundle when the Bundle starts, so an
-// environment the newest Bundle has not reached yet shows that Bundle's gates
-// (E2E-R02, E2E-R11).
+// The Graph creates every gate instance of a Bundle when the Bundle starts
+// (gate nodes have no dependencies), so a gate instance shows only that a
+// Bundle may still come. A Bundle waiting at a gate before its step exists
+// is current there (E2E-R02, E2E-R11). A Failed or Superseded Bundle never
+// will come, so its gate instances alone do not make it current: an
+// environment it never reached keeps the Bundle deployed there.
 func currentBundleByEnv(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep,
 	gates []v1alpha1.PolicyGate) map[string]string {
 	byName := make(map[string]*v1alpha1.Bundle, len(bundles))
 	for i := range bundles {
-		if bundles[i].Status.Phase != "Superseded" {
-			byName[bundles[i].Name] = &bundles[i]
-		}
+		byName[bundles[i].Name] = &bundles[i]
 	}
 	current := make(map[string]*v1alpha1.Bundle)
-	offer := func(env, bundle string) {
+	superseded := make(map[string]*v1alpha1.Bundle)
+	offer := func(env, bundle string, gateOnly bool) {
 		b, ok := byName[bundle]
 		if env == "" || !ok {
 			return
 		}
-		cur, ok := current[env]
-		if !ok || cur.CreationTimestamp.Before(&b.CreationTimestamp) ||
-			(cur.CreationTimestamp.Equal(&b.CreationTimestamp) && b.Name > cur.Name) {
-			current[env] = b
+		phase := b.Status.Phase
+		if gateOnly && (phase == "Failed" || phase == "Superseded") {
+			return
+		}
+		best := current
+		if phase == "Superseded" {
+			best = superseded
+		}
+		if cur, ok := best[env]; !ok || lifecycle.CompareCreation(b, cur) > 0 {
+			best[env] = b
 		}
 	}
 	for i := range steps {
-		offer(steps[i].Spec.Environment, steps[i].Spec.BundleName)
+		offer(steps[i].Spec.Environment, steps[i].Spec.BundleName, false)
 	}
 	for i := range gates {
-		offer(gates[i].Labels["kardinal.io/environment"], gates[i].Labels["kardinal.io/bundle"])
+		offer(gates[i].Labels["kardinal.io/environment"], gates[i].Labels["kardinal.io/bundle"], true)
 	}
 
-	out := make(map[string]string, len(current))
+	out := make(map[string]string, len(current)+len(superseded))
+	for env, b := range superseded {
+		out[env] = b.Name
+	}
 	for env, b := range current {
 		out[env] = b.Name
 	}

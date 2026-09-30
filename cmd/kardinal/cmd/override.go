@@ -55,9 +55,10 @@ the override window (default: 1h).
 override is recorded on the instances of that gate that the Pipeline's
 in-progress Bundles have for --stage (every stage when --stage is not set),
 so run it while the Bundle waits on the gate. Instances of Verified, Failed
-and Superseded Bundles are left alone: they are never evaluated again. The
-name of one gate instance, as kubectl get policygates shows it, is also
-accepted; that instance alone gets the override.
+and Superseded Bundles are left alone, because no promotion waits on them; if
+a Failed Bundle resumes, run the override again. The name of one gate
+instance, as kubectl get policygates shows it, is also accepted; that instance
+alone gets the override.
 
 Example:
   kardinal override my-app --stage prod --gate no-weekend-deploy \
@@ -167,8 +168,9 @@ func overrideFn(
 // usually longer than the 63 characters a label value may have, so a name
 // that is an instance is read directly and never used in a label selector
 // (E2E-R08). A template name is resolved to the instances of the Bundles
-// still in progress: those of a Verified, Failed or Superseded Bundle are
-// never evaluated again, so an override on them changes nothing.
+// still in progress. The PolicyGate reconciler keeps evaluating the
+// instances of a Verified, Failed or Superseded Bundle, but no promotion
+// waits on them, so they are left alone.
 func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, stage, gateName string) (
 	[]v1alpha1.PolicyGate, error) {
 	var gate v1alpha1.PolicyGate
@@ -232,14 +234,16 @@ func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, st
 		return targets, nil
 	}
 
-	if getErr != nil {
+	// An org gate's template is in a policy namespace, so the Get above does
+	// not find it; its instances are still here.
+	if getErr != nil && len(instances.Items) == 0 {
 		return nil, fmt.Errorf("get policygate %s: no gate instance or template of that name for pipeline %s "+
 			"in namespace %s: %w", gateName, pipeline, ns, getErr)
 	}
-	return nil, fmt.Errorf("policygate %s/%s is a template, and no in-progress Bundle of pipeline %s has an "+
-		"instance of it (stage %q; %d instance(s) of finished Bundles); an override applies to the instances "+
-		"a promoting Bundle creates, so run it while the Bundle waits on the gate",
-		ns, gateName, pipeline, stage, len(instances.Items))
+	return nil, fmt.Errorf("no in-progress Bundle of pipeline %s has an instance of gate %s in namespace %s "+
+		"(stage %q; %d instance(s) of finished Bundles); an override applies to the instances a promoting "+
+		"Bundle creates, so run it while the Bundle waits on the gate",
+		pipeline, gateName, ns, stage, len(instances.Items))
 }
 
 // appendOverride appends override to gate's spec.overrides. A merge patch

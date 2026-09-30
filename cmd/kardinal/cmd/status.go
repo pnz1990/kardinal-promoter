@@ -42,7 +42,8 @@ any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
 When called with a pipeline name: shows in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
-Superseded and has a PromotionStep or gate instance there), its PromotionSteps
+Superseded and has a PromotionStep there, or a gate instance there and has not
+failed; see kardinal explain), its PromotionSteps
 (one row per region, active steps marked), the PolicyGates holding it back
 (with CEL expression and current reason), and open PR URLs. This is the first
 command to run when a promotion is stuck.

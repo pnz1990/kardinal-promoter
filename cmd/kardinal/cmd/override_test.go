@@ -204,11 +204,11 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 		{name: "every stage", phase: "Promoting", instances: true,
 			want: []string{"no-weekend-deploy-prod-b1", "no-weekend-deploy-uat-b1"}},
 		{name: "new bundle", stage: "prod", instances: true, want: []string{"no-weekend-deploy-prod-b1"}},
-		{name: "stage without instance", stage: "test", phase: "Promoting", instances: true, wantErr: "is a template"},
-		{name: "no instances", stage: "prod", phase: "Promoting", wantErr: "is a template"},
-		{name: "verified bundle", stage: "prod", phase: "Verified", instances: true, wantErr: "is a template"},
-		{name: "superseded bundle", stage: "prod", phase: "Superseded", instances: true, wantErr: "is a template"},
-		{name: "failed bundle", stage: "prod", phase: "Failed", instances: true, wantErr: "is a template"},
+		{name: "stage without instance", stage: "test", phase: "Promoting", instances: true, wantErr: "no in-progress Bundle"},
+		{name: "no instances", stage: "prod", phase: "Promoting", wantErr: "no in-progress Bundle"},
+		{name: "verified bundle", stage: "prod", phase: "Verified", instances: true, wantErr: "no in-progress Bundle"},
+		{name: "superseded bundle", stage: "prod", phase: "Superseded", instances: true, wantErr: "no in-progress Bundle"},
+		{name: "failed bundle", stage: "prod", phase: "Failed", instances: true, wantErr: "no in-progress Bundle"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -322,11 +322,12 @@ func TestOverrideFn_LongInstanceNames(t *testing.T) {
 	}
 	require.Greater(t, len(prefix+current), 63)
 	tests := []struct {
-		name    string
-		gate    string
-		stage   string
-		want    []string
-		wantErr string
+		name         string
+		gate         string
+		stage        string
+		currentPhase string // phase of Bundle current; Promoting when empty
+		want         []string
+		wantErr      string
 	}{
 		{name: "template name", gate: "require-uat-soak", stage: "prod", want: []string{prefix + current}},
 		{name: "instance name", gate: prefix + current, stage: "prod", want: []string{prefix + current}},
@@ -337,6 +338,12 @@ func TestOverrideFn_LongInstanceNames(t *testing.T) {
 			wantErr: "is the instance for stage prod, not uat"},
 		{name: "unknown long name", gate: prefix + "kardinal-test-app-zzzzz", stage: "prod",
 			wantErr: "no gate instance of that name"},
+		// An org gate's template lives in platform-policies, so it is not
+		// found in the Pipeline namespace; the instances still are.
+		{name: "org template with only finished bundles", gate: "require-uat-soak", stage: "prod",
+			currentPhase: "Verified", wantErr: "2 instance(s) of finished Bundles"},
+		{name: "org template without instances", gate: "require-uat-soak", stage: "uat",
+			wantErr: "no gate instance or template of that name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -344,8 +351,12 @@ func TestOverrideFn_LongInstanceNames(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "require-uat-soak", Namespace: "platform-policies"},
 				Spec:       v1alpha1.PolicyGateSpec{Expression: "bundle.upstreamSoakMinutes >= 30"},
 			}
+			phase := tt.currentPhase
+			if phase == "" {
+				phase = "Promoting"
+			}
 			c := selectorCheckingClient(t, template,
-				overrideBundle(current, "kardinal-test-app", "Promoting"),
+				overrideBundle(current, "kardinal-test-app", phase),
 				overrideBundle(verified, "kardinal-test-app", "Verified"),
 				long(current, "prod"), long(verified, "prod"))
 

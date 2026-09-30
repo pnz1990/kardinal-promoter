@@ -25,6 +25,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func TestFormatPipelineTable(t *testing.T) {
@@ -919,6 +920,15 @@ func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
 		return b
 	}
 	failed := bundle("default", "kardinal-test-app", "kardinal-test-app-rollback-bkgwk", "Failed", 13*time.Minute)
+	lifecycle.StampCreatedAt(&failed, failed.CreationTimestamp.Time)
+	// sameSecond is created in the same second as failed; the
+	// kardinal.io/created-at annotation orders the two (lifecycle.CompareCreation).
+	sameSecond := func(phase string, after time.Duration) v1alpha1.Bundle {
+		b := bundle("default", "kardinal-test-app", "kardinal-test-app-9smn4", phase, 0)
+		b.CreationTimestamp = failed.CreationTimestamp
+		lifecycle.StampCreatedAt(&b, failed.CreationTimestamp.Add(after))
+		return b
+	}
 	const wantErr = "ERROR: pipeline kardinal-test-app: environment prod: PR #28 was closed without merging\n"
 	cases := []struct {
 		name  string
@@ -932,6 +942,8 @@ func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
 		{"older verified bundle", bundle("default", "kardinal-test-app", "kardinal-test-app-9tptr", "Verified", time.Hour), wantErr},
 		{"newer bundle of another pipeline", bundle("default", "other", "other-9smn4", "Verified", 3*time.Minute), wantErr},
 		{"newer bundle in another namespace", bundle("team-b", "kardinal-test-app", "kardinal-test-app-9smn4", "Verified", 3*time.Minute), wantErr},
+		{"newer bundle in the same second", sameSecond("Verified", 400*time.Millisecond), ""},
+		{"older bundle in the same second", sameSecond("Verified", -400*time.Millisecond), wantErr},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
