@@ -43,8 +43,8 @@
 //   - A PR closed without merging is polled for ClosedGracePeriod after the
 //     first poll that saw it closed, which records that time in
 //     status.closedAt. A reopen clears closedAt. Once the window has passed
-//     the reconciler comments on the PR once, sets status.closedFinal and
-//     stops polling; only then does the PromotionStep fail (#1306).
+//     the reconciler sets status.closedFinal, then comments on the PR once,
+//     and stops polling; only then does the PromotionStep fail (#1306).
 //   - Idempotent: a merged PR whose merge commit is known is a no-op, and so
 //     is a PR that is final-closed.
 //
@@ -203,11 +203,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// the grace window compares it with the stored status.closedAt.
 	now := metav1.NewTime(time.Now().UTC())
 	closedAt, closedFinal := closedState(&prs.Status, merged, open, now)
-	if closedFinal {
-		// Best-effort, before closedFinal is written: a crash in between
-		// can post the comment twice, never zero times.
-		r.commentStoppedTracking(ctx, log, &prs)
-	}
+	becameFinal := closedFinal && !prs.Status.ClosedFinal
 	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
 		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
 		mergeSHA != prs.Status.MergeCommitSHA || prs.Status.PollError != "" ||
@@ -228,6 +224,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.Status().Patch(ctx, &prs, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch prstatus %s: %w", req.Name, err)
 		}
+	}
+	if becameFinal {
+		// Only after closedFinal is saved: a final-closed PRStatus is never
+		// polled again, so a failed save cannot post the comment twice. A
+		// failed comment (or a crash before it) is not retried.
+		r.commentStoppedTracking(ctx, log, &prs)
 	}
 
 	switch {
@@ -284,8 +286,8 @@ func closedState(s *v1alpha1.PRStatusStatus, merged, open bool, now metav1.Time)
 }
 
 // commentStoppedTracking tells the PR's readers that kardinal no longer
-// tracks it. The comment is best-effort: a failure is logged and the PR is
-// final-closed anyway.
+// tracks it. It runs once, after status.closedFinal is saved. The comment is
+// best-effort: a failure is logged and not retried.
 func (r *Reconciler) commentStoppedTracking(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) {
 	env := prs.Labels[labelEnvironment]
 	if env == "" {

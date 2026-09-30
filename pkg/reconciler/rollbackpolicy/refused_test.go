@@ -99,6 +99,7 @@ func TestRollbackPolicy_RefusalIsVisible(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, cond.Status)
 			assert.Equal(t, tc.wantReason, cond.Reason)
 			assert.Contains(t, cond.Message, tc.wantMessage)
+			assert.NotContains(t, cond.Message, "--to", "no CLI hint on an automatic rollback")
 
 			evs := drain(rec)
 			require.Len(t, evs, tc.wantEvents)

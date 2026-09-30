@@ -81,8 +81,9 @@ type PRStatusStatus struct {
 	ClosedAt *metav1.Time `json:"closedAt,omitempty"`
 
 	// ClosedFinal is true once the PR was still closed 5 minutes after
-	// closedAt. The reconciler then commented on the PR and stopped polling
-	// it, and the PromotionStep waiting for it fails. A closed PRStatus
+	// closedAt. The reconciler then stops polling it and, once this is saved,
+	// comments on the PR (best-effort, not retried); the PromotionStep waiting
+	// for it fails. A closed PRStatus
 	// (open=false with lastCheckedAt set) that has no closedAt was written by
 	// an older release and counts as final too.
 	// +optional

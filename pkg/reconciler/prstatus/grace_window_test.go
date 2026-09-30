@@ -6,6 +6,7 @@ package prstatus_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,7 +15,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
@@ -180,6 +183,52 @@ func TestClosedGraceWindow(t *testing.T) {
 				assert.Equal(t, calls, s.calls, "a final-closed PR is not polled")
 				assert.Len(t, s.comments, tt.wantComments, "the comment is posted once")
 			}
+		})
+	}
+}
+
+// TestClosedGraceWindow_CommentOnceWhenSaveFails: the "stopped tracking"
+// comment is posted only after status.closedFinal is saved. A failed save
+// returns an error and the next reconcile polls again (lastCheckedAt was not
+// saved either), so commenting before the save posted one comment per failed
+// attempt.
+func TestClosedGraceWindow_CommentOnceWhenSaveFails(t *testing.T) {
+	for _, failures := range []int{0, 1, 3} {
+		t.Run(fmt.Sprintf("%d failed saves", failures), func(t *testing.T) {
+			pr := prAt(nil, v1alpha1.PRStatusStatus{LastCheckedAt: metaAgo(time.Minute), ClosedAt: metaAgo(6 * time.Minute)})
+			pr.Labels = map[string]string{"kardinal.io/environment": "prod"}
+			left := failures
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(pr).
+				WithStatusSubresource(&v1alpha1.PRStatus{}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
+						patch client.Patch, opts ...client.SubResourcePatchOption) error {
+						if left > 0 {
+							left--
+							return errors.New("etcdserver: request timed out")
+						}
+						return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					},
+				}).Build()
+			s := &commentSCM{}
+			r := &prstatus.Reconciler{Client: c, SCM: s}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "pr", Namespace: "default"}}
+
+			for i := 0; i < failures; i++ {
+				_, err := r.Reconcile(context.Background(), req)
+				require.Error(t, err, "attempt %d: the failed save is returned", i+1)
+				assert.Empty(t, s.comments, "attempt %d: no comment before closedFinal is saved", i+1)
+			}
+			_, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			_, err = r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.True(t, got.Status.ClosedFinal)
+			assert.Len(t, s.comments, 1, "exactly one comment")
+			assert.Equal(t, failures+1, s.calls, "polled once per attempt, not after closedFinal is saved")
 		})
 	}
 }
