@@ -46,8 +46,11 @@ Checks:
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set
     (steps, promotionTemplate, autoRollback, two or more regions,
-    layout: branch, health.cluster). The controller reports the same fields
-    as Ready=False/NotImplemented on the Pipeline.
+    layout: branch, health.cluster, a health.resource.kind other than
+    Deployment). The controller reports the same fields as
+    Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
+    a git.secretRef in another namespace is an error too (the controller
+    reports it as Ready=False/ValidationFailed).
   - PolicyGate: spec.expression set and compiles with the controller's
     PolicyGate CEL environment
 
@@ -159,9 +162,19 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		errs = append(errs, "spec.git.url is required")
 	}
 
-	// Reserved fields every Bundle fails on; the controller sets the Pipeline
-	// Ready=False/NotImplemented for the same list.
+	// Reserved fields a Bundle fails on when it reaches an environment that
+	// uses one; the controller sets the Pipeline Ready=False/NotImplemented for
+	// the same list.
 	errs = append(errs, graph.UnimplementedFields(&pipeline)...)
+
+	// A git.secretRef in another namespace is refused (ValidationFailed). A file
+	// without metadata.namespace gets its namespace at apply time, so it is not
+	// judged offline.
+	if pipeline.Namespace != "" {
+		if err := graph.ValidateSecretRef(&pipeline); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
 
 	// Dependency: no circular deps (uses the graph builder's topoSort).
 	if len(pipeline.Spec.Environments) > 0 && !hasUnnamedEnv(pipeline) {

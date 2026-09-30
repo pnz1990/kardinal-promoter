@@ -13,8 +13,9 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
-// E2E-R14: one list of the reserved fields that make every Bundle fail, shared
-// by the Pipeline reconciler and "kardinal validate".
+// E2E-R14: one list of the unimplemented fields that fail a Bundle, shared by
+// the Pipeline reconciler, "kardinal validate" and the admission warnings. It
+// covers every "not implemented" refusal of promotionstep/config_check.go.
 func TestUnimplementedFields(t *testing.T) {
 	tests := []struct {
 		name string
@@ -44,6 +45,16 @@ func TestUnimplementedFields(t *testing.T) {
 		{name: "health.cluster", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
 			Health: kardinalv1alpha1.HealthConfig{Cluster: "prod-eu"}},
 			want: []string{`environment "test": health.cluster is not supported`}},
+		{name: "health.resource.kind other than Deployment", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
+			Health: kardinalv1alpha1.HealthConfig{Resource: &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet", Name: "db"}}},
+			want: []string{`environment "test": health.resource.kind "StatefulSet" is not supported: only Deployment is checked`}},
+		{name: "health.resource.kind Deployment", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
+			Health: kardinalv1alpha1.HealthConfig{Resource: &kardinalv1alpha1.ResourceRef{Kind: "Deployment"}}}},
+		{name: "health.resource is not read by another health type", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
+			Health: kardinalv1alpha1.HealthConfig{Type: "argocd", Resource: &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}}}},
+		{name: "health.resource is not read under delivery.delegate", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
+			Delivery: kardinalv1alpha1.DeliveryConfig{Delegate: "argoRollouts"},
+			Health:   kardinalv1alpha1.HealthConfig{Resource: &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}}}},
 		{name: "every field is reported", git: kardinalv1alpha1.PipelineGit{Layout: "branch"},
 			env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Layout: "branch",
 				Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}, Regions: []string{"a", "b"}},

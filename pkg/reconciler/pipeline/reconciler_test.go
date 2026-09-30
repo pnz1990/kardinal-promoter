@@ -5,6 +5,7 @@ package pipeline_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestPipelineReconciler_DependsOnNonExistentEnv(t *testing.T) {
 
 // E2E-R14: a Pipeline that sets a reserved, unimplemented field gets
 // Ready=False/NotImplemented, the same answer as "kardinal validate", instead
-// of Ready=True/Valid while every Bundle of it fails.
+// of Ready=True/Valid while its Bundles fail.
 func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -159,6 +160,12 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
 			}},
+		{name: "health.cluster", wantMsg: `environment "test": health.cluster is not supported`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }},
+		{name: "health.resource.kind", wantMsg: `environment "test": health.resource.kind "StatefulSet" is not supported`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].Health.Resource = &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}
+			}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -177,6 +184,49 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			require.NotNil(t, cond)
 			assert.Equal(t, metav1.ConditionFalse, cond.Status)
 			assert.Equal(t, "NotImplemented", cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+			// Most fields fail a Bundle only in the environment that sets them.
+			assert.NotContains(t, cond.Message, "every Bundle")
+			assert.True(t, strings.HasPrefix(cond.Message, "not implemented, so a Bundle fails when it reaches "+
+				"an environment that uses one (steps and promotionTemplate fail it when its Graph is built): "),
+				cond.Message)
+		})
+	}
+}
+
+// TestPipelineReconciler_SecretRefNamespaceInvalid: a git.secretRef in another
+// namespace is refused on purpose (the controller would push another
+// namespace's token to a URL the Pipeline author controls), so the Pipeline is
+// Ready=False/ValidationFailed, not NotImplemented.
+func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
+	tests := []struct {
+		name       string
+		secretNS   string
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{name: "another namespace", secretNS: "kardinal-system", wantStatus: metav1.ConditionFalse,
+			wantReason: "ValidationFailed",
+			wantMsg:    `git.secretRef.namespace "kardinal-system" is not allowed: the Secret must be in the Pipeline's namespace "default"`},
+		{name: "the Pipeline's namespace", secretNS: "default", wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+		{name: "no namespace", wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: tc.secretNS}
+			c := newClientWithIndex(newScheme(), p)
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.wantStatus, cond.Status)
+			assert.Equal(t, tc.wantReason, cond.Reason)
 			assert.Contains(t, cond.Message, tc.wantMsg)
 		})
 	}

@@ -33,6 +33,14 @@ spec:
   - name: prod
 `
 
+// secretRefDoc is a Pipeline with metadata lines meta and a git Secret in
+// namespace secretNS.
+func secretRefDoc(meta, secretNS string) string {
+	return "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata:\n  name: web\n" + meta +
+		"spec:\n  git:\n    url: https://github.com/o/r\n    secretRef:\n      name: github-token\n" +
+		"      namespace: " + secretNS + "\n  environments:\n  - name: test\n"
+}
+
 // C09b-cli-15 / C09b-cli-16: validate rejects what the controller or the API
 // server rejects: an empty git.url, a CEL expression the PolicyGate
 // environment does not compile, and every document in the file is checked.
@@ -77,8 +85,8 @@ func TestValidate_Documents(t *testing.T) {
 			wantOut: []string{"- skipped Namespace/platform-policies"},
 			wantErr: true,
 		},
-		// E2E-R14: the fields every Bundle fails on are reported, like the
-		// Pipeline's Ready=False/NotImplemented condition.
+		// E2E-R14: the unimplemented fields that fail Bundles are reported,
+		// like the Pipeline's Ready=False/NotImplemented condition.
 		{
 			name:    "autoRollback",
 			content: validPipelineDoc + "    autoRollback:\n      failureThreshold: 2\n",
@@ -97,6 +105,32 @@ func TestValidate_Documents(t *testing.T) {
 				"spec:\n  git:\n    url: https://github.com/o/r\n    layout: branch\n  environments:\n  - name: test\n",
 			wantOut: []string{"✗ f.yaml is invalid:", "spec.git.layout: branch is not implemented"},
 			wantErr: true,
+		},
+		{
+			name:    "health.resource.kind other than Deployment",
+			content: validPipelineDoc + "    health:\n      resource:\n        kind: StatefulSet\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": health.resource.kind "StatefulSet" is not supported`},
+			wantErr: true,
+		},
+		// C03-promotionstep-18: a Secret in another namespace is refused (not
+		// "not implemented"); a file without metadata.namespace is not judged,
+		// since the namespace it lands in is not known offline.
+		{
+			name:    "git.secretRef in another namespace",
+			content: secretRefDoc("  namespace: team-a\n", "kardinal-system"),
+			wantOut: []string{"✗ f.yaml is invalid:",
+				`git.secretRef.namespace "kardinal-system" is not allowed: the Secret must be in the Pipeline's namespace "team-a"`},
+			wantErr: true,
+		},
+		{
+			name:    "git.secretRef in the Pipeline's namespace",
+			content: secretRefDoc("  namespace: team-a\n", "team-a"),
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		{
+			name:    "git.secretRef namespace without metadata.namespace",
+			content: secretRefDoc("", "team-a"),
+			wantOut: []string{"✓ f.yaml is valid"},
 		},
 		{
 			name:    "steps are reported once",

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 )
 
@@ -17,12 +18,10 @@ import (
 // namespace, honoured in an unsafe way. Failing the step with a clear message
 // is the only honest behaviour until the feature exists.
 func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) string {
-	if ref := pipeline.Spec.Git.SecretRef; ref != nil && ref.Namespace != "" && ref.Namespace != pipeline.Namespace {
-		// Confused deputy: the controller can read Secrets in every namespace and
-		// sends the token to spec.git.url, which the same author controls.
-		return fmt.Sprintf(
-			"git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q",
-			ref.Namespace, pipeline.Namespace)
+	// Confused deputy: refused on purpose. The Pipeline reconciler reports the
+	// same error as Ready=False/ValidationFailed.
+	if err := graph.ValidateSecretRef(pipeline); err != nil {
+		return err.Error()
 	}
 	if env.Health.Cluster != "" {
 		return "health.cluster is not supported: remote-cluster health checks are not implemented; " +

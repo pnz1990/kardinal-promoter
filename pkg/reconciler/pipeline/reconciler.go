@@ -34,7 +34,8 @@ const (
 	reasonValid            = "Valid"
 	reasonValidationFailed = "ValidationFailed"
 	// reasonNotImplemented: the spec sets a reserved field the controller
-	// does not implement (graph.UnimplementedFields), so every Bundle fails.
+	// does not implement (graph.UnimplementedFields), so a Bundle fails when
+	// it reaches an environment that uses one, or when its Graph is built.
 	reasonNotImplemented = "NotImplemented"
 )
 
@@ -344,10 +345,17 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 		return invalid(err.Error())
 	}
 
+	// A git.secretRef in another namespace is refused on purpose (confused
+	// deputy), so it is a validation error, not an unimplemented field.
+	if err := graph.ValidateSecretRef(p); err != nil {
+		return invalid(err.Error())
+	}
+
 	if msgs := graph.UnimplementedFields(p); len(msgs) > 0 {
 		return metav1.Condition{
 			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonNotImplemented,
-			Message:            "every Bundle of this Pipeline fails: " + strings.Join(msgs, "; "),
+			Message: "not implemented, so a Bundle fails when it reaches an environment that uses one " +
+				"(steps and promotionTemplate fail it when its Graph is built): " + strings.Join(msgs, "; "),
 			ObservedGeneration: p.Generation,
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 )
 
 // layoutBranchNotImplemented is the reason a layout: branch Pipeline cannot
@@ -16,16 +17,21 @@ const layoutBranchNotImplemented = "layout: branch is not implemented: kardinal 
 	"(see docs/rendered-manifests.md)"
 
 // UnimplementedFields returns one message per reserved Pipeline field that is
-// set but not implemented, or nil. Every Bundle of such a Pipeline fails:
-// Build rejects spec.environments[].steps and promotionTemplate; the
-// PromotionStep reconciler fails regions fan-out (two or more regions) and
-// health.cluster; the git-clone step fails layout: branch; and the API server
-// rejects autoRollback (CRD CEL), which is also listed so a file checked
-// offline gets the same answer.
+// set but not implemented, or nil. A Bundle fails where the field takes
+// effect: Build rejects spec.environments[].steps and promotionTemplate, so
+// every Bundle fails when its Graph is built; the PromotionStep reconciler
+// fails regions fan-out (two or more regions), health.cluster and a
+// health.resource.kind other than Deployment in that environment; the
+// git-clone step fails layout: branch in every environment it applies to; and
+// the API server rejects autoRollback (CRD CEL), which is also listed so a
+// file checked offline gets the same answer.
 //
-// The Pipeline reconciler (Ready=False, reason NotImplemented) and "kardinal
-// validate" both call it, so the Pipeline status and the CLI agree with what a
-// Bundle does.
+// A git.secretRef in another namespace is refused on purpose, not
+// unimplemented: see ValidateSecretRef.
+//
+// The Pipeline reconciler (Ready=False, reason NotImplemented), "kardinal
+// validate" and the admission warnings all call it, so the Pipeline status,
+// the CLI and the API server agree with what a Bundle does.
 func UnimplementedFields(p *kardinalv1alpha1.Pipeline) []string {
 	var msgs []string
 	if p.Spec.Git.Layout == "branch" {
@@ -52,6 +58,13 @@ func UnimplementedFields(p *kardinalv1alpha1.Pipeline) []string {
 			msgs = append(msgs, fmt.Sprintf("environment %q: health.cluster is not supported: remote-cluster "+
 				"health checks are not implemented; for a workload in another cluster, check its Argo CD "+
 				"Application in this cluster (health.type: argocd)", e.Name))
+		}
+		// As the PromotionStep reconciler checks it: only the resource adapter
+		// reads health.resource, and it fails the step after the change merged.
+		if res := e.Health.Resource; res != nil && res.Kind != "" && res.Kind != "Deployment" &&
+			health.EffectiveType(*e) == health.DefaultType {
+			msgs = append(msgs, fmt.Sprintf("environment %q: health.resource.kind %q is not supported: "+
+				"only Deployment is checked", e.Name, res.Kind))
 		}
 	}
 	return msgs

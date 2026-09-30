@@ -14,8 +14,11 @@ Checks:
     set, the environment dependencies form a valid graph (no cycles, no
     unknown dependsOn), and no reserved field that is not implemented is set
     (steps, promotionTemplate, autoRollback, two or more regions,
-    layout: branch, health.cluster). The controller reports the same fields
-    as Ready=False/NotImplemented on the Pipeline.
+    layout: branch, health.cluster, a health.resource.kind other than
+    Deployment). The controller reports the same fields as
+    Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
+    a git.secretRef in another namespace is an error too (the controller
+    reports it as Ready=False/ValidationFailed).
   - PolicyGate: spec.expression set and compiles with the controller's
     PolicyGate CEL environment
 

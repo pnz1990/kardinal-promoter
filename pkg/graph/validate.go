@@ -240,3 +240,19 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 	}
 	return nil
 }
+
+// ValidateSecretRef refuses a spec.git.secretRef in another namespace than the
+// Pipeline's (C03-promotionstep-18). This is deliberate, not a missing
+// feature: the controller can read Secrets in every namespace and sends the
+// token to spec.git.url, which the same author controls, so a Pipeline could
+// otherwise use another namespace's credentials. An empty Pipeline namespace
+// fails closed. The PromotionStep reconciler refuses the step with this error,
+// the Pipeline reconciler sets Ready=False/ValidationFailed, the admission
+// webhook denies the Pipeline and "kardinal validate" reports it.
+func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
+	if ref := p.Spec.Git.SecretRef; ref != nil && ref.Namespace != "" && ref.Namespace != p.Namespace {
+		return fmt.Errorf("git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q",
+			ref.Namespace, p.Namespace)
+	}
+	return nil
+}
