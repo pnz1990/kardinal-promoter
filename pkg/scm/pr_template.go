@@ -16,6 +16,7 @@ package scm
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"strings"
 	"text/template"
 	"time"
@@ -95,8 +96,33 @@ type PRBody struct {
 // uses "||") would start a new cell and a newline would end the row.
 var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r", " ")
 
+// ciRunLink renders the CI Run cell of the provenance table: a link when raw
+// is an absolute http(s) URL, "—" otherwise. The Bundle's ciRunURL comes from
+// CI unvalidated: an empty one must not render an empty "[CI run]()" link, a
+// ")", "|", "<" or space must not end the link or the cell early, and another
+// scheme (javascript:, a relative path) is not linked at all.
+func ciRunLink(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw) // rejects control characters, newlines included
+	if raw == "" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "—"
+	}
+	var b strings.Builder
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("-._~:/?#[]@!$&'*+,;=%", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return "[CI run](" + b.String() + ")"
+}
+
 var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMap{
 	"mdcell": mdCellReplacer.Replace,
+	"cirun":  ciRunLink,
 }).Parse(`<!-- kardinal-promoter auto-generated PR -->
 {{- if .RollbackOf}}
 ## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
@@ -114,7 +140,7 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 | Image | Tag | Digest | CI Run | Commit SHA | Author |
 |---|---|---|---|---|---|
 {{- range .Bundle.Images}}
-| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}[CI run]({{$.Bundle.Provenance.CIRunURL}}){{else}}—{{end}} | {{if $.Bundle.Provenance}}{{mdcell $.Bundle.Provenance.CommitSHA}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{mdcell $.Bundle.Provenance.Author}}{{else}}—{{end}} |
+| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{cirun $.Bundle.Provenance.CIRunURL}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.CommitSHA) "—"}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.Author) "—"}}{{else}}—{{end}} |
 {{- else}}
 | — | — | — | — | — | — |
 {{- end}}

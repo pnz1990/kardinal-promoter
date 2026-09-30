@@ -68,7 +68,8 @@ naming the Bundle whose state it restores (`spec.provenance.rollbackOf`).
 One row per image in the Bundle's `spec.images`:
 - **Image** and **Tag**: the image repository and tag
 - **Digest**: the image digest, when the Bundle has one
-- **CI Run**: a link to the CI run that built the image
+- **CI Run**: a link to the CI run that built the image; `—` when `spec.provenance.ciRunURL` is
+  empty or is not an absolute `http://` or `https://` URL
 - **Commit SHA**: the Git commit that triggered the CI build
 - **Author**: who or what triggered the build (human, dependabot, etc.)
 

@@ -210,6 +210,134 @@ func TestRenderPRBody(t *testing.T) {
 	assert.True(t, strings.Contains(body, "Upstream Verification"), "missing upstream table")
 }
 
+// TestRenderPRBody_CIRunLink covers E2E-R22: the CI Run cell of the provenance
+// table, in the promotion and the rollback body. The link is rendered only
+// for an absolute http(s) ciRunURL, never as an empty "[CI run]()"; a ciRunURL
+// cannot add a cell, end the row or inject markup.
+func TestRenderPRBody_CIRunLink(t *testing.T) {
+	tests := []struct {
+		name       string
+		provenance *v1alpha1.BundleProvenance
+		wantCI     string
+		wantCommit string
+		wantAuthor string
+	}{
+		{name: "no provenance", wantCI: "—", wantCommit: "—", wantAuthor: "—"},
+		{
+			name:       "provenance without ciRunURL",
+			provenance: &v1alpha1.BundleProvenance{CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "blank ciRunURL, no commit or author",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "  "},
+			wantCI:     "—", wantCommit: "—", wantAuthor: "—",
+		},
+		{
+			name:       "https URL",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://github.com/o/r/actions/runs/1?check=1#l2", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "[CI run](https://github.com/o/r/actions/runs/1?check=1#l2)", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "http URL",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "http://jenkins.local:8080/job/app/7/", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "[CI run](http://jenkins.local:8080/job/app/7/)", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "parenthesis, pipe and space are encoded",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/run(1)|x y", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "[CI run](https://ci.example.com/run%281%29%7Cx%20y)", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "markup after the link is encoded",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/1) **x** <img src=`a`>", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "[CI run](https://ci.example.com/1%29%20**x**%20%3Cimg%20src=%60a%60%3E)", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "newline is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "https://ci.example.com/1\n| injected | row |", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "javascript URL is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "javascript:alert(1)", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "relative URL is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "/o/r/actions/runs/1", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "URL without a scheme is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "ci.example.com/runs/1", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+		{
+			name:       "other scheme is not linked",
+			provenance: &v1alpha1.BundleProvenance{CIRunURL: "ftp://ci.example.com/1", CommitSHA: "abc123", Author: "ci-bot"},
+			wantCI:     "—", wantCommit: "abc123", wantAuthor: "ci-bot",
+		},
+	}
+	// cells splits a markdown table row on the "|" that are not escaped.
+	cells := func(row string) []string {
+		var out []string
+		var cell strings.Builder
+		for i := 0; i < len(row); i++ {
+			if row[i] == '|' && (i == 0 || row[i-1] != '\\') {
+				out = append(out, strings.TrimSpace(cell.String()))
+				cell.Reset()
+				continue
+			}
+			cell.WriteByte(row[i])
+		}
+		out = append(out, strings.TrimSpace(cell.String()))
+		return out[1 : len(out)-1] // drop the text before the first and after the last "|"
+	}
+	for _, rollbackOf := range []string{"", "demo-v1"} {
+		kind := "promotion"
+		if rollbackOf != "" {
+			kind = "rollback"
+		}
+		for _, tt := range tests {
+			t.Run(kind+"/"+tt.name, func(t *testing.T) {
+				body, err := scm.RenderPRBody(scm.PRBody{
+					PipelineName: "demo",
+					Environment:  "prod",
+					BundleName:   "demo-v2",
+					RollbackOf:   rollbackOf,
+					Bundle: v1alpha1.BundleSpec{
+						Type:       "image",
+						Images:     []v1alpha1.ImageRef{{Repository: "ghcr.io/o/app", Tag: "1.0.0"}},
+						Provenance: tt.provenance,
+					},
+				})
+				require.NoError(t, err)
+				assert.Equal(t, rollbackOf != "", strings.Contains(body, "## ROLLBACK:"), "body kind")
+				assert.NotContains(t, body, "[CI run]()")
+
+				lines := strings.Split(body, "\n")
+				var rows []string
+				for i, l := range lines {
+					if strings.HasPrefix(l, "| Image |") {
+						for _, r := range lines[i+2:] {
+							if !strings.HasPrefix(r, "|") {
+								break
+							}
+							rows = append(rows, r)
+						}
+					}
+				}
+				require.Len(t, rows, 1, "one provenance row per image:\n%s", body)
+				got := cells(rows[0])
+				require.Len(t, got, 6, "provenance row cells: %q", rows[0])
+				assert.Equal(t, []string{"ghcr.io/o/app", "1.0.0", "—", tt.wantCI, tt.wantCommit, tt.wantAuthor}, got)
+				assert.Contains(t, body, "### Policy Gate Compliance", "the rest of the body is intact")
+			})
+		}
+	}
+}
+
 func TestGitHubProvider_AddLabelsToPR(t *testing.T) {
 	var capturedLabels []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
