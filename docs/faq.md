@@ -34,12 +34,12 @@ See [Health Adapters](health-adapters.md) for configuration.
 
 ### Does it work with GitLab?
 
-Yes, GitLab SCM support is in beta. Set `scm.provider: gitlab` in the Pipeline spec.
+Yes, GitLab SCM support is in beta. Set `spec.git.provider: gitlab` in the Pipeline.
 See [SCM Providers](scm-providers.md).
 
 ### Can I use it with Helm?
 
-Yes. Set `updateStrategy: helm-set-image` in the Pipeline environment spec. kardinal
+Yes. Set `update: {strategy: helm}` on the Pipeline environment. kardinal
 will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
 overlays.
 

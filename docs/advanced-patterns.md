@@ -401,9 +401,12 @@ namespace.
 2. **Set historyLimit**: the default `historyLimit: 50` retains the last 50 finished Bundles.
    For high-frequency teams, reduce to `5` to limit CRD count.
 
-3. **Monitor CRD count**: the controller exposes `kardinal_bundles_total{phase}`
-   and `kardinal_steps_total{type}` Prometheus metrics. Alert if these exceed
-   expected levels.
+3. **Monitor CRD count**: count the objects themselves, for example
+   `kubectl get bundles,promotionsteps -A --no-headers | wc -l`, or a kube-state-metrics
+   custom-resource metric. The controller's `kardinal_bundles_total{phase}` and
+   `kardinal_steps_total` are counters of phase transitions and finished steps, not object
+   counts: they only grow, and deleting Bundles does not lower them. Use their `rate()` to
+   alert on unusual Bundle creation.
 
 4. **Resource quotas**: set `ResourceQuota` on team namespaces to prevent unbounded
    Bundle creation.
