@@ -3,7 +3,7 @@
 This page describes what is currently available in kardinal-promoter and what is planned for future releases.
 
 !!! info "Contributing"
-    Roadmap priorities shift based on user feedback. Open a [GitHub Discussion](https://github.com/pnz1990/kardinal-promoter/discussions) if a feature matters to your use case.
+    Roadmap priorities shift based on user feedback. Open a [GitHub issue](https://github.com/pnz1990/kardinal-promoter/issues) if a feature matters to your use case.
 
 ---
 

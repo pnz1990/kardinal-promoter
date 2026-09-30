@@ -283,4 +283,4 @@ kardinal policy test my-gate.yaml
 
 - [Policy Gates](../policy-gates.md) — PolicyGate CRD reference
 - [CLI Reference: policy simulate](cli/kardinal-policy-simulate.md) — simulate gate evaluation
-- [AGENTS.md CEL section](https://github.com/pnz1990/kardinal-promoter/blob/main/AGENTS.md) — kro library function catalog
+- [AGENTS.md CEL section](https://github.com/pnz1990/kardinal-promoter/blob/main/AGENTS.md) — which CEL context is which (PolicyGate vs. kro Graph)

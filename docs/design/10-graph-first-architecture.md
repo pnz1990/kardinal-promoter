@@ -138,8 +138,8 @@ evaluation in kardinal is either:
 > `pkg/reconciler/policygate/cel_evaluator.go:newEvaluator()` using `cel.NewEnv()`
 > directly, importing kardinal's own `pkg/cel/library` (a copy adapted from kro's
 > `pkg/cel/library`; kardinal does not import kro's module for CEL).
-> `pkg/cel/` contains only the library sub-package, conversion utilities, and
-> sentinels — it is not a facade with a constructor. Any new feature that needs CEL
+> `pkg/cel/` contains only the library sub-package and conversion utilities —
+> it is not a facade with a constructor. Any new feature that needs CEL
 > evaluation must call `cel.NewEnv(...)` directly with explicit library imports, as
 > done in `cel_evaluator.go`. The `pkg/cel/` directory must not grow.
 
@@ -198,8 +198,9 @@ are permitted without explicit human approval.**
 
 **Status: RESOLVED** — PR #487. The `pkg/cel/evaluator.go` and `pkg/cel/environment.go`
 files have been deleted. The CEL evaluator is now inline in `pkg/reconciler/policygate/`
-as a package-private implementation detail. `pkg/cel` now contains only the kro library
-extensions (library/, conversion/, sentinels/) which are explicitly allowed.
+as a package-private implementation detail. `pkg/cel` now contains only the library
+extensions adapted from kro (library/, conversion/). Their use by `pkg/reconciler/policygate`
+is an accepted exception (ledger G8); it must not grow.
 
 The ScheduleClock CRD (PR #484) provides watch-driven re-evaluation, eliminating the
 need for a separate recheckAfter primitive.
@@ -228,7 +229,7 @@ node or owned node pattern.
 
 ## Anti-Patterns — Hard Blocks
 
-These are violations that **QA must block** and **engineers must not implement**:
+These are violations that **review must block** and **engineers must not implement**:
 
 | Anti-pattern | Why it's wrong | Correct approach |
 |---|---|---|
@@ -247,7 +248,8 @@ These are violations that **QA must block** and **engineers must not implement**
 After thorough research into the Graph controller's architecture and CEL extension mechanisms,
 the team concluded that the world-is-a-DAG principle is architecturally correct and
 that `pkg/cel` is a known transitional workaround pending the `recheckAfter`
-upstream contribution. This design doc governs all future implementation decisions.
+upstream contribution. (Superseded: ScheduleClock closed the `recheckAfter` gap, and `pkg/cel`
+is now an accepted exception (ledger G8); it must not grow.) This design doc governs all future implementation decisions.
 
 Human approved. Agents must treat this as a hard architectural constraint.
 

@@ -58,12 +58,8 @@ jobs:
         run: |
           required=(
             "docs/aide/vision.md"
-            "docs/aide/roadmap.md"
-            "docs/aide/progress.md"
             "docs/aide/definition-of-done.md"
-            "docs/aide/team.yml"
             "AGENTS.md"
-            ".specify/memory/constitution.md"
           )
           missing=()
           for f in "${required[@]}"; do

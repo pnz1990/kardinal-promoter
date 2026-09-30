@@ -20,6 +20,7 @@ import (
 type workflowStep struct {
 	ID   string         `json:"id"`
 	Name string         `json:"name"`
+	Uses string         `json:"uses"`
 	Run  string         `json:"run"`
 	Env  map[string]any `json:"env"`
 }
@@ -127,17 +128,24 @@ func TestKindClustersUseOneSupportedNodeImage(t *testing.T) {
 	assert.Len(t, kindVersions, 1, "the workflows install different kind versions: %v", kindVersions)
 }
 
-// pdcaStep returns the pdca.yml step whose name starts with prefix
-// (case-insensitively).
-func pdcaStep(t *testing.T, prefix string) workflowStep {
+// workflowStepNamed returns the step of workflow rel whose name starts with
+// prefix (case-insensitively).
+func workflowStepNamed(t *testing.T, rel, prefix string) workflowStep {
 	t.Helper()
-	for _, s := range workflowSteps(t, ".github/workflows/pdca.yml") {
+	for _, s := range workflowSteps(t, rel) {
 		if strings.HasPrefix(strings.ToLower(s.Name), strings.ToLower(prefix)) {
 			return s
 		}
 	}
-	t.Fatalf("pdca.yml has no step named %q...", prefix)
+	t.Fatalf("%s has no step named %q...", rel, prefix)
 	return workflowStep{}
+}
+
+// pdcaStep returns the pdca.yml step whose name starts with prefix
+// (case-insensitively).
+func pdcaStep(t *testing.T, prefix string) workflowStep {
+	t.Helper()
+	return workflowStepNamed(t, ".github/workflows/pdca.yml", prefix)
 }
 
 // runPDCAScript runs a pdca.yml run: script the way Actions does (bash -e -o
@@ -267,17 +275,15 @@ func TestPDCAScenarioSelection(t *testing.T) {
 	}
 }
 
-// TestPDCAReportFailsUnlessEveryCheckPasses checks the report step: the job
-// is green only when checks ran, none failed, and no step stopped early.
+// TestPDCAReportFailsUnlessEveryCheckPasses runs the PDCA report step. It
+// writes the evidence to the job summary (Issue #1, where it used to post, is
+// closed), never calls gh, and fails the job unless every check passed.
 func TestPDCAReportFailsUnlessEveryCheckPasses(t *testing.T) {
-	report := pdcaStep(t, "Post PDCA evidence")
-	// The fake gh logs its arguments and the body it would post.
+	report := pdcaStep(t, "Write PDCA evidence to the job summary")
+	// Any gh call is a bug: the report no longer posts anywhere.
 	fakeGH := `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_LOG"
-while [ $# -gt 0 ]; do
-  if [ "$1" = --body-file ]; then cat "$2" >> "$FAKE_LOG"; fi
-  shift
-done
+exit 1
 `
 	tests := []struct {
 		name       string
@@ -304,8 +310,10 @@ done
 				require.NoError(t, os.WriteFile(results, []byte(tt.results), 0o600))
 			}
 			log := filepath.Join(dir, "gh.log")
+			summary := filepath.Join(dir, "summary.md")
 			out, err := runPDCAScript(t, report.Run, map[string]string{"gh": fakeGH},
 				"RESULTS_FILE="+results, "SCENARIO=all", "FAKE_LOG="+log,
+				"GITHUB_STEP_SUMMARY="+summary,
 				"SCENARIOS_OUTCOME="+tt.scenarios, "UI_OUTCOME="+tt.ui,
 				"GH_REPO=pnz1990/kardinal-promoter", "RUN_ID=1", "TRIGGER=schedule",
 				"TEST_IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-abc1234")
@@ -315,9 +323,227 @@ done
 				assert.Error(t, err, "the job must fail: %s", out)
 			}
 			assert.Contains(t, out, "Status: "+tt.wantStatus)
+			written, readErr := os.ReadFile(summary)
+			require.NoError(t, readErr, "the report must reach the job summary even when the job fails")
+			assert.Contains(t, string(written), "Status: "+tt.wantStatus)
+			assert.Contains(t, string(written), "https://github.com/pnz1990/kardinal-promoter/actions/runs/1")
+			for _, l := range strings.Split(strings.TrimSpace(tt.results), "\n") {
+				if l != "" {
+					assert.Contains(t, string(written), "- "+l)
+				}
+			}
+			_, statErr := os.Stat(log)
+			assert.True(t, os.IsNotExist(statErr), "the report must not call gh (no Issue comment)")
+		})
+	}
+
+	var wf struct {
+		Jobs map[string]struct {
+			Permissions map[string]string `json:"permissions"`
+		} `json:"jobs"`
+	}
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "pdca.yml"))
+	require.NoError(t, err)
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+	assert.Equal(t, map[string]string{"contents": "read"}, wf.Jobs["pdca"].Permissions,
+		"PDCA posts nothing, so it needs no issues: write")
+}
+
+// TestPDCAPreflightFailsWhenTheDemoTokenCannotRead runs the first pdca.yml
+// step. An expired or missing KARDINAL_DEMO_PAT fails it with one message
+// that names the fix, and the token never reaches the log, even when gh
+// prints it.
+func TestPDCAPreflightFailsWhenTheDemoTokenCannotRead(t *testing.T) {
+	steps := workflowSteps(t, ".github/workflows/pdca.yml")
+	require.NotEmpty(t, steps)
+	preflight := steps[0]
+	require.True(t, strings.HasPrefix(preflight.Name, "Preflight"), "the preflight must be the first step, before any setup: %q", preflight.Name)
+	assert.Equal(t, "${{ secrets.KARDINAL_DEMO_PAT }}", preflight.Env["DEMO_TOKEN"])
+
+	// The fake gh logs its arguments and the token it was given, and prints
+	// the token the way a careless tool might.
+	fakeGH := `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_LOG"
+printf '%s' "$GH_TOKEN" > "$FAKE_TOKEN_SEEN"
+echo "token $GH_TOKEN: HTTP $FAKE_STATUS" >&2
+[ "$FAKE_STATUS" = 200 ]
+`
+	const token = "github_pat_FAKE0123456789secret"
+	const msg = "KARDINAL_DEMO_PAT cannot read pnz1990/kardinal-demo: rotate it"
+	tests := []struct {
+		name      string
+		token     string
+		status    string
+		wantOK    bool
+		wantGHRun bool
+	}{
+		{"the token can read the repo", token, "200", true, true},
+		{"the token is expired or revoked", token, "401", false, true},
+		{"the secret is not set", "", "200", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "gh.log")
+			seen := filepath.Join(dir, "token")
+			out, err := runPDCAScript(t, preflight.Run, map[string]string{"gh": fakeGH},
+				"DEMO_TOKEN="+tt.token, "GITHUB_TOKEN=job-token-must-not-be-used",
+				"FAKE_LOG="+log, "FAKE_TOKEN_SEEN="+seen, "FAKE_STATUS="+tt.status)
+			if tt.wantOK {
+				require.NoError(t, err, out)
+				assert.NotContains(t, out, msg)
+			} else {
+				require.Error(t, err, out)
+				assert.Contains(t, out, "::error::"+msg)
+			}
+			assert.NotContains(t, out, token, "the step must never print the token")
 			calls, readErr := os.ReadFile(log)
-			require.NoError(t, readErr, "the report must be posted even when the job fails")
-			assert.Contains(t, string(calls), "Status: "+tt.wantStatus)
+			if !tt.wantGHRun {
+				assert.True(t, os.IsNotExist(readErr), "an empty token must fail before gh can fall back to GITHUB_TOKEN")
+				return
+			}
+			require.NoError(t, readErr)
+			assert.Contains(t, string(calls), "api repos/pnz1990/kardinal-demo")
+			used, readErr := os.ReadFile(seen)
+			require.NoError(t, readErr)
+			assert.Equal(t, tt.token, string(used), "gh must use KARDINAL_DEMO_PAT, not the job's GITHUB_TOKEN")
+		})
+	}
+}
+
+// TestAgentInstructionsGuardIsSafeForForks checks the shape that makes a
+// pull_request_target workflow safe: it runs the base branch's copy, never
+// checks out or runs PR code, has read-only permissions, and runs on every PR.
+func TestAgentInstructionsGuardIsSafeForForks(t *testing.T) {
+	const rel = ".github/workflows/agent-instructions-guard.yml"
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
+	require.NoError(t, err)
+	var wf map[string]any
+	require.NoError(t, yaml.Unmarshal(data, &wf))
+
+	// YAML 1.1 reads the key "on" as true.
+	on, ok := wf["on"]
+	if !ok {
+		on = wf["true"]
+	}
+	triggers, ok := on.(map[string]any)
+	require.True(t, ok, "on: must be a map of triggers: %v", on)
+	require.Len(t, triggers, 1, "pull_request_target must be the only trigger: %v", triggers)
+	prt, ok := triggers["pull_request_target"].(map[string]any)
+	require.True(t, ok, "the guard must run on pull_request_target so a PR cannot edit it: %v", triggers)
+	assert.Equal(t, []any{"opened", "synchronize", "reopened"}, prt["types"])
+	for _, filter := range []string{"paths", "paths-ignore", "branches", "branches-ignore"} {
+		assert.NotContains(t, prt, filter, "a required check must run on every PR")
+	}
+
+	assert.Equal(t, map[string]any{"pull-requests": "read", "contents": "read"}, wf["permissions"])
+	jobs, ok := wf["jobs"].(map[string]any)
+	require.True(t, ok)
+	require.Len(t, jobs, 1)
+	job, ok := jobs["guard"].(map[string]any)
+	require.True(t, ok, "jobs: %v", jobs)
+	assert.Equal(t, "agent instructions guard", job["name"], "branch protection requires this check by name")
+	assert.NotContains(t, job, "permissions", "the job must not widen the workflow's read-only permissions")
+
+	assert.NotContains(t, string(data), "actions/checkout")
+	for _, s := range workflowSteps(t, rel) {
+		assert.Empty(t, s.Uses, "step %q runs an action; the guard must only call the API", s.Name)
+		assert.NotContains(t, s.Run, "git ", "step %q must not fetch PR code", s.Name)
+	}
+}
+
+// TestAgentInstructionsGuard runs the guard's script with a fake gh that
+// applies the step's real --jq filter to a pulls/N/files response. A PR from
+// anyone but the owner or Dependabot fails when it touches agent
+// instructions, workflows or actions, including by renaming one away.
+func TestAgentInstructionsGuard(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is not installed")
+	}
+	guard := workflowStepNamed(t, ".github/workflows/agent-instructions-guard.yml", "Check who changes")
+	// The fake gh logs its arguments and runs the --jq filter over FAKE_FILES
+	// with jq, the way gh would over the API response.
+	fakeGH := `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_LOG"
+[ -n "$FAKE_FAIL" ] && { echo "gh: HTTP 502" >&2; exit 1; }
+while [ $# -gt 0 ]; do
+  if [ "$1" = --jq ]; then exec jq -r "$2" "$FAKE_FILES"; fi
+  shift
+done
+echo "gh: no --jq" >&2
+exit 1
+`
+	files := func(entries ...string) string {
+		var parts []string
+		for _, e := range entries {
+			if name, prev, renamed := strings.Cut(e, "<-"); renamed {
+				parts = append(parts, `{"filename":"`+name+`","status":"renamed","previous_filename":"`+prev+`"}`)
+			} else {
+				parts = append(parts, `{"filename":"`+e+`","status":"modified"}`)
+			}
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	}
+	const outsider = "someone-else"
+	tests := []struct {
+		name     string
+		author   string
+		json     string
+		changed  string
+		ghFails  bool
+		wantOK   bool
+		wantFile string
+		wantGH   bool
+	}{
+		{"outsider changes AGENTS.md", outsider, files("docs/a.md", "AGENTS.md"), "2", false, false, "AGENTS.md", true},
+		{"outsider changes CLAUDE.md", outsider, files("CLAUDE.md"), "1", false, false, "CLAUDE.md", true},
+		{"outsider changes a nested CLAUDE.md", outsider, files("pkg/graph/CLAUDE.md"), "1", false, false, "pkg/graph/CLAUDE.md", true},
+		{"outsider changes .claude/", outsider, files(".claude/settings.json"), "1", false, false, ".claude/settings.json", true},
+		{"outsider changes a workflow", outsider, files(".github/workflows/ci.yml"), "1", false, false, ".github/workflows/ci.yml", true},
+		{"outsider changes an action", outsider, files(".github/actions/create-bundle/action.yml"), "1", false, false, ".github/actions/create-bundle/action.yml", true},
+		{"outsider renames AGENTS.md away", outsider, files("docs/old-agents.md<-AGENTS.md"), "1", false, false, "AGENTS.md", true},
+		{"a line break in a file name cannot inject a workflow command", outsider, files(`.claude/x\n::warning::injected`), "1", false, false, ".claude/x?::warning::injected", true},
+		{"outsider changes only docs and code", outsider, files("docs/quickstart.md", "pkg/graph/builder.go", "AGENTS.md.txt"), "3", false, true, "", true},
+		{"owner changes AGENTS.md", "pnz1990", files("AGENTS.md", ".github/workflows/ci.yml"), "2", false, true, "", false},
+		{"Dependabot bumps a workflow action", "dependabot[bot]", files(".github/workflows/ci.yml"), "1", false, true, "", false},
+		{"too many files to list", outsider, files("docs/a.md"), "3001", false, false, "", false},
+		{"the files API fails", outsider, files("docs/a.md"), "1", true, false, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			log := filepath.Join(dir, "gh.log")
+			resp := filepath.Join(dir, "files.json")
+			require.NoError(t, os.WriteFile(resp, []byte(tt.json), 0o600))
+			fail := ""
+			if tt.ghFails {
+				fail = "1"
+			}
+			out, err := runPDCAScript(t, guard.Run, map[string]string{"gh": fakeGH},
+				"REPO=pnz1990/kardinal-promoter", "PR_NUMBER=7", "AUTHOR="+tt.author,
+				"CHANGED_FILES="+tt.changed, "GH_TOKEN=fake", "FAKE_LOG="+log,
+				"FAKE_FILES="+resp, "FAKE_FAIL="+fail)
+			if tt.wantOK {
+				require.NoError(t, err, out)
+			} else {
+				require.Error(t, err, "the guard must fail: %s", out)
+			}
+			if tt.wantFile != "" {
+				assert.Contains(t, out, "::error::")
+				assert.Contains(t, out, "  "+tt.wantFile+"\n", "the log must name the guarded file")
+				assert.Contains(t, out, "::stop-commands::", "PR file names must be printed with workflow commands stopped")
+			}
+			for _, l := range strings.Split(out, "\n") {
+				assert.False(t, strings.HasPrefix(l, "::warning::"), "a PR file name became a workflow command: %q", l)
+			}
+			calls, readErr := os.ReadFile(log)
+			if !tt.wantGH {
+				assert.True(t, os.IsNotExist(readErr), "gh must not be called: %s", calls)
+				return
+			}
+			require.NoError(t, readErr)
+			assert.Equal(t, "api --paginate repos/pnz1990/kardinal-promoter/pulls/7/files?per_page=100", strings.SplitN(string(calls), " --jq", 2)[0],
+				"the guard reads only the PR's file list")
 		})
 	}
 }

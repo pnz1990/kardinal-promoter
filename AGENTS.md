@@ -1,42 +1,13 @@
-# kardinal-promoter — Project Agent Context
+# kardinal-promoter — agent context
 
-## What This Is
+A Kubernetes-native promotion controller: Go 1.26+ backend and a React 19 UI embedded with
+go:embed. All state is in Kubernetes CRDs; there is no external database.
 
-A Kubernetes-native promotion controller. Go 1.23+ backend + React 19 frontend,
-embedded via `go:embed`. All state in Kubernetes CRDs. No external database.
+Status: v0.8.1 is the latest release (it bundles the old forked Graph controller). main is
+v0.9.0-dev and runs on upstream kro's `kro.run/v1alpha1` Graph (kro v0.10.0-rc.0, GraphKind
+feature gate). Journey status: docs/aide/definition-of-done.md §Journey Status.
 
-**Status**: Active development. v0.6.0 released. All 7 journeys passing.
-
----
-
-## UI/CLI Inspiration Source — kro-ui
-
-When working on `web/src/` or `cmd/kardinal/`, read the kro-ui project at
-`../kro-ui/` for UI patterns and inspiration. kro-ui is a production React
-dashboard for kro (our underlying DAG engine) and contains directly applicable
-patterns for kardinal's embedded UI:
-
-**Highly applicable kro-ui features to adapt for kardinal:**
-- **DAG visualization** (`web/src/components/`) — interactive node graph with
-  per-node health states (alive/reconciling/degraded/error/pending). Adapt for
-  the promotion DAG (each node = one environment promotion step).
-- **6-state health chips** — Ready/Degraded/Reconciling/Pending/Error/Unknown
-  with color coding. Adapt for Bundle.status and PromotionStep.status display.
-- **CEL expression display** — YAML tab shows CEL expressions highlighted.
-  Adapt for `kardinal explain` and the PolicyGate detail panel.
-- **Live polling with "refreshed X ago"** — 5s polling with staleness indicator.
-  Already partially in kardinal's `usePolling.ts` — compare against kro-ui's
-  implementation for improvements.
-- **Instance spec diff** — compare two instances field-by-field. Adapt for
-  comparing two Bundle versions or two PromotionStep states.
-- **Error aggregation** — cross-instance error grouping with affected count.
-  Adapt for surfacing recurring promotion failures across environments.
-- **Compile-error banner** — count of errors with one-click filter. Adapt for
-  showing PolicyGates that are blocking prod with a one-click "show blocked" filter.
-
-**Do not copy kro-ui code verbatim** — adapt the patterns. kardinal's domain
-is promotions/bundles/gates, not RGDs/instances/RBAC. Read kro-ui for ideas,
-implement for kardinal's concepts.
+Claude Code sessions load this file as instructions. It changes only through a reviewed PR.
 
 ---
 
@@ -97,122 +68,18 @@ a form of technical debt.
 
 ---
 
-## SDLC Process
+## Working on this repo
 
-The team process lives in `.specify/memory/sdlc.md` — read it.
-This file contains only project-specific context that specializes the generic process.
-
----
-
-## Agent Identities
-
-All sessions share GitHub account pnz1990. Every GitHub comment, issue, and PR
-review MUST start with the agent's badge.
-
-| Session | Role | Badge | AGENT_ID |
-|---|---|---|---|
-| 1 | Coordinator | `[🎯 COORDINATOR]` | `COORDINATOR` |
-| 2 | Engineer 1 | `[🔨 ENGINEER-1]` | `ENGINEER-1` |
-| 3 | Engineer 2 | `[🔨 ENGINEER-2]` | `ENGINEER-2` |
-| 4 | Engineer 3 | `[🔨 ENGINEER-3]` | `ENGINEER-3` |
-| 5 | QA | `[🔍 QA]` | `QA` |
-| 6 | Scrum Master | `[🔄 SCRUM-MASTER]` | `SCRUM-MASTER` |
-| 7 | Product Manager | `[📋 PM]` | `PM` |
-
-```bash
-export AGENT_ID="COORDINATOR"  # change per session
-```
-
----
-
-## Project Config (fills the generic SDLC placeholders)
-
-```yaml
-PROJECT_NAME:   kardinal-promoter
-CLI_BINARY:     kardinal
-PR_LABEL:       kardinal
-REPORT_ISSUE:   892
-REPORT_URL:     https://github.com/pnz1990/kardinal-promoter/issues/892
-BOARD_URL:      https://github.com/users/pnz1990/projects/1
-BUILD_COMMAND:  go build ./...
-TEST_COMMAND:   go test ./... -race -count=1 -timeout 120s
-LINT_COMMAND:   go vet ./...
-VULN_COMMAND:   govulncheck ./...
-```
-
----
-
-## Scrum Master — Project Context
-
-The SM knows the minimum about kardinal-promoter needed to review the SDLC:
-- It is a Go project. Build: `go build ./...`. Test: `go test ./... -race`. Lint: `go vet ./...`.
-- Engineers use git worktrees at `../kardinal-promoter.<branch>`.
-- The coordinator spawns the SM after every `[BATCH COMPLETE]` report on Issue #1.
-- Competitor for process health reference: how do Kargo and GitOps Promoter teams operate?
-  (they both have active GitHub communities — check issue/PR velocity as a benchmark)
-
-SM must NOT know about: CRD design, kro Graph, PolicyGates, promotion algorithms, CEL.
-
-## Product Manager — Project Context
-
-The PM knows the full product:
-- kardinal-promoter is a Kubernetes promotion controller competing with Kargo and GitOps Promoter.
-- Primary differentiators: DAG pipelines, visible policy gates, PR evidence, GitOps-agnostic.
-- The definition-of-done has 5 journeys. J1 (Quickstart) and J3 (Policies) are the most critical for initial adoption.
-- Key user docs to keep fresh: `docs/quickstart.md`, `docs/concepts.md`, `docs/policy-gates.md`.
-- Competitors to monitor:
-  - Kargo: https://github.com/akuity/kargo/releases (monthly releases)
-  - GitOps Promoter: https://github.com/argoproj-labs/gitops-promoter/releases (weekly releases)
-  - Argo Rollouts: https://github.com/argoproj/argo-rollouts/releases
-  - Flux: https://github.com/fluxcd/flux2/releases
-- Community to monitor for feature requests and pain points:
-  - https://github.com/akuity/kargo/issues (what Kargo users are asking for that we don't have)
-  - https://github.com/argoproj-labs/gitops-promoter/issues
-
-**Public website audit — every batch:**
-
-The public docs site is https://pnz1990.github.io/kardinal-promoter/. Every batch the PM
-must audit it against the actual codebase. This is mandatory, not optional.
-
-The four pages most likely to drift:
-1. `/roadmap/` — "Currently Available" version number and feature list; "Near-Term" items
-   must not describe features that are already shipped; "Planned" must not describe features
-   from milestones with 0 open issues.
-2. `/comparison/` — maturity row version number (must match latest git tag); feature matrix
-   rows (a shipped feature showing ❌ for kardinal is a competitive mis-statement).
-3. `/` (home page) — feature table rows; any inline version numbers.
-4. `/changelog/` — must have an entry for every git tag. Missing entries confuse adopters.
-
-Ground truth, checked in this order:
-```bash
-# 1. What is the latest released version?
-git tag --list "v*" | sort -V | tail -1
-
-# 2. What milestones are done (0 open issues)?
-gh api repos/pnz1990/kardinal-promoter/milestones \
-  --jq '.[] | "\(.title): open=\(.open_issues) closed=\(.closed_issues)"'
-
-# 3. What features merged since the last tag?
-git log $(git tag --list "v*" | sort -V | tail -1)..HEAD --oneline \
-  | grep -E "feat|fix" | grep -v "state:\|chore(coord)"
-
-# 4. Is a claimed feature actually implemented (not a stub)?
-grep -rn "<feature-keyword>" pkg/ cmd/ | grep -v "_test\|//"
-```
-
-Common failure patterns to look for:
-- Version still says v0.X when v0.X+1 is tagged
-- Feature listed as "Planned (v0.X)" when that milestone has 0 open issues
-- Feature listed as "Near-Term" when the implementation is already in pkg/
-- Feature described as "coming soon" but code + tests exist
-- Changelog has no entry for a released tag
-- A "stub" warning on a feature that was actually completed (check the `Watch()` return value)
-
-When you find a discrepancy: fix and push immediately. Do not accumulate fixes.
-Docs CI deploys automatically on push to main (workflow: docs.yml, ~2 min).
-Verify the deploy: `gh run list --repo pnz1990/kardinal-promoter --workflow=docs.yml --limit 1`
-
-PM must NOT know about: SDLC process, team.yml, sdlc.md, templates, otherness-config.
+- One owner (pnz1990) and Claude Code sessions. Every session uses the owner's GitHub account.
+- Build `go build ./...` · test `go test ./... -race -count=1 -timeout 120s` · lint `go vet ./...`
+  and golangci-lint · vulns `govulncheck ./...` · UI `cd web && npm ci && npm run build && npm test`.
+- Work on a branch or a worktree at ../kardinal-promoter.<branch>; one PR per change; squash merge.
+- GitHub comments, issues and reviews written by a session start with a badge:
+  `[🎯 COORDINATOR]` for the lead session, `[🔨 ENGINEER]` for a fix session.
+- Work is tracked in GitHub issues with the labels below. There is no queue, state file, report
+  issue or batch cadence.
+- When something needs the owner, stop and ask in the session, or label the issue `needs-human`
+  with one comment. Do not work around it.
 
 ---
 
@@ -224,12 +91,13 @@ CI creates:  Bundle CRD (via POST /api/v1/bundles)
 
 kardinal-controller:
   Bundle → translator generates kro Graph (per-Bundle, tailored to intent)
-  Graph controller creates PromotionStep + PolicyGate CRs in DAG order
+  kro's Graph controller creates PromotionStep + PolicyGate CRs in DAG order
   PromotionStep reconciler: git-clone → kustomize-set-image →
                             git-commit → open-pr → wait-for-merge → health-check
   PolicyGate reconciler: evaluates CEL → status.ready + lastEvaluatedAt
   Graph advances on readyWhen satisfied
-  Failure → Graph stops downstream → rollback PR opened
+  Failure → the Graph does not advance past the Failed step; `onHealthFailure: rollback`
+            or a RollbackPolicy promotes the previous Bundle (docs/rollback.md)
 
 All state in etcd. kubectl is sufficient.
 ```
@@ -237,132 +105,82 @@ All state in etcd. kubectl is sufficient.
 ## Package Layout
 
 ```
-cmd/kardinal-controller/    # controller binary
-cmd/kardinal/               # CLI binary
+cmd/
+  kardinal/                 # CLI
+  kardinal-agent/           # distributed agent binary (not shipped; #1263)
+  kardinal-controller/      # controller binary
 pkg/
-  graph/                    # Graph CRD client + builder (spec 001)
-  translator/               # Pipeline → Graph translation (spec 002)
+  admission/                # Pipeline validating webhook (cycles, cross-namespace secretRef)
+  cel/                      # CEL library adapted from kro (library/, conversion/); PolicyGate only
+  graph/                    # Graph builder + client (Pipeline + Bundle → kro Graph)
+  health/                   # health Watch nodes (resource, Argo CD, Flux, Argo Rollouts, Flagger)
+  lifecycle/                # pause/resume, rollback, promote (shared by CLI, UI API, reconcilers)
   reconciler/
-    promotionstep/          # state machine + evidence (spec 003)
-    policygate/             # CEL evaluation + timer recheck (spec 004)
-  health/                   # Deployment/ArgoCD/Flux adapters (spec 005)
-  steps/                    # Step engine + 10 built-ins (spec 008)
-  scm/                      # GitHub SCM provider
-  update/                   # kustomize/helm update strategies
-  cel/                      # shared CEL environment
+    bundle/  changewindow/  eventfilter/  metriccheck/  notificationhook/  observability/
+    pipeline/  policygate/  promotionstep/  prstatus/  rollbackpolicy/  scheduleclock/
+    subscription/
+  scm/                      # GitHub, GitLab, Bitbucket, Azure DevOps, Forgejo providers
+  source/                   # Subscription watchers (OCI registry, Git)
+  steps/                    # step engine + built-in steps
+  translator/               # Bundle → Graph translation
+  uiauth/                   # UI TokenReview + SubjectAccessReview
 web/
   embed.go                  # go:embed all:dist
-  src/                      # React 19 UI (spec 006)
+  src/                      # React 19 UI
 ```
 
-## CEL Expressions — kro Library (READ BEFORE WRITING ANY CEL)
+## CEL — two contexts; do not mix them
 
-kardinal uses `github.com/kubernetes-sigs/kro/pkg/cel/library` for CEL evaluation in
-the PolicyGate reconciler. The kro library functions are available in **two distinct
-contexts** that you must not confuse:
+1. PolicyGate `spec.expression` — evaluated by the PolicyGate reconciler
+   (pkg/reconciler/policygate/cel_evaluator.go, newEvaluator) and by `kardinal policy simulate`
+   (cmd/kardinal/cmd/policy_eval.go, the same package). The full list of variables and functions
+   is docs/reference/cel-context.md; TestDocumentedCELContext fails when the doc and the
+   environment differ. Read it before you write or document an expression.
+   - Variables: bundle.* (including labels, intent.targetEnvironment, upstreamSoakMinutes, pr[...]),
+     schedule.*, environment.name, metrics.*, upstream.<env>.soakMinutes, changewindow.<name>.
+   - Functions: cel-go string extensions; json.marshal / json.unmarshal; `m1.merge(m2)` (member
+     form only; there is no global maps.merge); lists.setAtIndex / insertAtIndex / removeAtIndex;
+     random.seededInt / random.seededString; changewindow.isAllowed / isBlocked.
+   - They come from kardinal's pkg/cel/library, adapted from kro's library. kardinal imports no
+     github.com/kubernetes-sigs/kro Go module; do not add one. `omit()` is not available here.
+2. kro Graph CEL (node templates, readyWhen, includeWhen, forEach) — evaluated by kro (kro
+   pkg/cel/environment.go). Variables are the node IDs in scope. kro adds hash and omit; omit is
+   rejected in readyWhen, includeWhen and forEach. schedule.*, metrics.* and changewindow.* do
+   not exist here.
 
-### Context 1: PolicyGate CEL (pkg/reconciler/policygate/cel_evaluator.go)
+ScheduleClock is not a Graph node. The PolicyGate reconciler watches ScheduleClock objects and
+re-evaluates gate instances on every status.tick; Graph nodes see only the gate's status.ready.
 
-The PolicyGate reconciler evaluates `spec.expression` using a CEL environment built
-in `newEvaluator()`. This environment includes the kro library extensions AND a set of
-**context map variables** injected at evaluation time.
-
-To add CEL evaluation in any new code: construct a `cel.NewEnv()` with explicit library
-imports following the pattern in `pkg/reconciler/policygate/cel_evaluator.go:newEvaluator()`.
-There is **no shared `pkg/cel/NewCELEnvironment()` function** — do not look for one.
-
-**kro library functions available in PolicyGate expressions:**
-
-```
-# JSON
-json.marshal(value)                    → string   (any value to JSON string)
-json.unmarshal(jsonString)             → dyn      (JSON string to value)
-
-# Maps
-maps.merge(map1, map2)                 → map      (m2 keys overwrite m1)
-
-# Lists (all pure — return new list)
-lists.setAtIndex(list, index, value)   → list
-lists.insertAtIndex(list, index, value)→ list
-lists.removeAtIndex(list, index)       → list
-
-# Random (deterministic from seed — use for consistent soak calculations)
-random.seededInt(min, max, seed)       → int
-
-# Standard string extensions (standard cel-go/ext, NOT kro-specific)
-string.format(args)                    → string
-string.lowerAscii()                    → string
-```
-
-**PolicyGate context variables** (injected as map variables, NOT CEL functions):
+Valid PolicyGate examples:
 
 ```
-bundle.type, bundle.version, bundle.provenance.{author,commitSHA,ciRunURL}
-schedule.isWeekend    → bool   (true if Saturday or Sunday UTC)
-schedule.hour         → int    (current UTC hour, 0-23)
-schedule.dayOfWeek    → string (e.g. "Monday")
-environment.name      → string
-metrics.<name>.value  → string (from MetricCheck status)
-metrics.<name>.result → string ("Pass" or "Fail")
-upstream.<env>.soakMinutes → int64
-changewindow.<name>   → bool   (true when window is active/blocking)
-```
-
-**IMPORTANT:** `schedule.*` variables are **PolicyGate reconciler context only**. They are
-NOT available in kro Graph `readyWhen` or template expressions. Do NOT use
-`!schedule.isWeekend` in a Graph node template — it will fail kro CEL compilation.
-In a Graph node, use a ScheduleClock Watch node and reference `clock.status.tick` to
-trigger re-evaluation; schedule logic stays in the PolicyGate reconciler.
-
-See issue #616 for the planned path to making `schedule.*` available in Graph CEL.
-(Issue #616 is closed; if this work is desired, open a new tracking issue.)
-
-### Context 2: kro Graph CEL (template / readyWhen / includeWhen / forEach)
-
-kro Graph expressions use the kro library functions via the Graph controller's
-built-in DefaultEnvironment. The same json/maps/lists/random functions are available.
-Context variables are the node IDs in scope (the Kubernetes objects each node manages).
-
-**Example PolicyGate expressions (PolicyGate reconciler context):**
-
-```
-# Time gate (schedule.* is PolicyGate-only)
 !schedule.isWeekend && schedule.hour >= 9 && schedule.hour < 17
-
-# Bundle metadata check
 bundle.provenance.author != "dependabot[bot]"
-
-# Upstream soak gate
 upstream.uat.soakMinutes >= 30
-
-# Metric gate
 metrics["error-rate"].result == "Pass"
-
-# Using json/maps functions
-json.unmarshal(bundle.provenance.commitSHA).releaseType == 'hotfix'
-maps.merge(environment.labels, bundle.labels)['env'] != 'prod'
+!("release-type" in bundle.labels) || bundle.labels["release-type"] != "hotfix"
 ```
 
 ## E2E Testing Infrastructure
 
-See `docs/aide/vision.md §PDCA Architecture` for the full validation loop.
+The live validation loop is `.github/workflows/pdca.yml` (see §Product Validation Scenarios).
 
 **Single-cluster setup** (kind, all environments):
 ```bash
-make setup-e2e-env       # kind + kro + ArgoCD + test/uat/prod
+make e2e-setup           # kind + kro + kardinal built from this checkout + quickstart fixtures
+make test-e2e-kind       # cluster e2e tests (build tag e2e) against that kind cluster
+make setup-e2e-env       # kind + kro + Argo CD + test/uat/prod
+make kind-down           # delete the kind cluster
 ```
 
-**Multi-cluster setup** (kind pre-prod + EKS prod):
-```bash
-make eks-up                    # create EKS cluster kardinal-e2e-prod in us-east-2 (Terraform)
-make setup-multi-cluster-env   # kind (test+uat) + EKS kardinal-e2e-prod (prod)
-```
+**Multi-cluster (J2):** there is no live multi-cluster setup in this repo. J2 evidence is
+tracked in #1293.
 
 **Test application**: `github.com/pnz1990/kardinal-test-app`
 - Image: `ghcr.io/pnz1990/kardinal-test-app:sha-<7chars>`
 - Get latest SHA: `gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'`
 
-## Go Standards (project-specific, referenced by QA checklist in team.yml)
+## Go Standards
 
 ```go
 // Copyright 2026 The kardinal-promoter Authors.
@@ -376,13 +194,13 @@ make setup-multi-cluster-env   # kind (test+uat) + EKS kardinal-e2e-prod (prod)
 - No `util.go`, `helpers.go`, `common.go` (CI enforces)
 - Every reconciler: idempotent, safe to re-run after crash
 
-## Banned Filenames (CI + QA enforce)
+## Banned Filenames (CI enforces)
 
 `util.go`, `helpers.go`, `common.go`
 
 ## Label Taxonomy
 
-All issues must have labels from each of these groups (read by otherness agents from this file):
+All issues must have labels from each of these groups:
 
 | Group | Labels | Applied to |
 |---|---|---|
@@ -391,36 +209,43 @@ All issues must have labels from each of these groups (read by otherness agents 
 | Priority | `priority/critical`, `priority/high`, `priority/medium`, `priority/low` | All issues |
 | Size | `size/xs`, `size/s`, `size/m`, `size/l`, `size/xl` | Item issues |
 | Type | `epic` | Epic issues only |
-| Workflow | `kardinal` (PR_LABEL), `needs-human`, `blocked` | Set by agents |
+| Workflow | `needs-human`, `blocked`, `blocked-on-upstream` | Set by sessions |
 
-## Anti-Patterns (QA blocks PRs containing these)
+## Anti-Patterns (review blocks PRs containing these)
 
 | Pattern | Caught by |
 |---|---|
-| Task `[x]` without implementation | QA adversarial review |
-| Mutating Deployments/Services directly | QA |
-| **kro controller packages in go.mod** — importing `kro/pkg/reconciler`, `kro/cmd`, `kro/api`, etc. | CI + QA |
-| **`github.com/kubernetes-sigs/kro/pkg/cel/library` is ALLOWED and encouraged** — use it for all CEL evaluation | — |
-| Missing Apache 2.0 header | CI + QA |
-| Banned filenames | CI + QA |
-| No idempotency test on reconciler | QA |
-| Feature not in user docs | QA |
+| An issue or checklist item marked done without an implementation | review |
+| Mutating Deployments/Services directly | review |
+| **Any `github.com/kubernetes-sigs/kro` Go module in go.mod** | review |
+| Missing Apache 2.0 header | review |
+| Banned filenames | CI |
+| No idempotency test on reconciler | review |
+| Feature not in user docs | review |
 | go.mod not tidy | CI |
-| **Business logic evaluated outside a Graph node or reconciler that writes to CRD status** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **New usage of `pkg/cel` outside `pkg/reconciler/policygate`** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **Reconciler that makes decisions based on fields not written to its own CRD status** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **CEL FunctionBinding that makes HTTP calls or external I/O** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **Dependency between components expressed as in-memory state, not CRD fields** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **Bypassing Graph for "simple" promotion cases** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **`time.Now()` or `time.Since()` called outside a CRD status write** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **External HTTP call (GitHub API, Prometheus, webhook) in reconciler hot path** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **Cross-CRD status mutation (reconciler for CRD A writing to CRD B's status)** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **`exec.Command()` or subprocess in reconciler** | **QA — Graph-first violation → NEEDS HUMAN** |
-| **In-memory struct passing state between reconcile iterations** | **QA — Graph-first violation → NEEDS HUMAN** |
+| **Business logic evaluated outside a Graph node or reconciler that writes to CRD status** | **review — Graph-first violation → stop and ask the owner** |
+| **New usage of `pkg/cel` outside `pkg/reconciler/policygate`** | **review — Graph-first violation → stop and ask the owner** |
+| **Reconciler that makes decisions based on fields not written to its own CRD status** | **review — Graph-first violation → stop and ask the owner** |
+| **CEL FunctionBinding that makes HTTP calls or external I/O** | **review — Graph-first violation → stop and ask the owner** |
+| **Dependency between components expressed as in-memory state, not CRD fields** | **review — Graph-first violation → stop and ask the owner** |
+| **Bypassing Graph for "simple" promotion cases** | **review — Graph-first violation → stop and ask the owner** |
+| **`time.Now()` or `time.Since()` called outside a CRD status write** | **review — Graph-first violation → stop and ask the owner** |
+| **External HTTP call (GitHub API, Prometheus, webhook) in reconciler hot path** | **review — Graph-first violation → stop and ask the owner** |
+| **Cross-CRD status mutation (reconciler for CRD A writing to CRD B's status)** | **review — Graph-first violation → stop and ask the owner** |
+| **`exec.Command()` or subprocess in reconciler** | **review — Graph-first violation → stop and ask the owner** |
+| **In-memory struct passing state between reconcile iterations** | **review — Graph-first violation → stop and ask the owner** |
 
 **Complete logic leak catalog with GitHub issues**: `docs/design/11-graph-purity-tech-debt.md`
 This document lists every known place where business logic leaks outside the Graph layer,
 categorized by severity and elimination path. Every new feature must not introduce new leaks.
+
+### Graph-first
+
+The Graph is the only place promotion order and gating are decided. A node becomes ready
+through `readyWhen`; a node is created only when `includeWhen` holds and every expression it
+references resolves (resolvability gating: a node that references a field not yet written
+waits). There is no `propagateWhen`. Reconcilers write their decisions to their own CRD
+status, and the Graph reads that status.
 
 **Before implementing ANY new feature, answer these questions in order:**
 
@@ -428,11 +253,12 @@ categorized by severity and elimination path. Every new feature must not introdu
 2. Can this be an **Owned node** whose reconciler writes `status.ready`? (Graph watches the status)
 3. Can this be a **CEL library extension** on the Graph environment? (Stateless, cheap, synchronous only)
 
-If none apply: **STOP. Post `[NEEDS HUMAN]` with the architectural question.**
-Do not implement a workaround. Do not reference `pkg/cel` in new code.
+If none apply: **STOP and ask the owner** (in the session, or `needs-human` on the issue) with
+the architectural question. Do not implement a workaround. Do not reference `pkg/cel` in new
+code.
 
-The only permitted exception is `pkg/cel/` in `pkg/reconciler/policygate` — documented as a
-transitional workaround in `docs/design/10-graph-first-architecture.md`. It must not grow.
+The accepted exception (ledger G8, docs/design/10) is `pkg/cel` used only by
+`pkg/reconciler/policygate` and the CLI simulate path through that package; it must not grow.
 
 ---
 
@@ -451,9 +277,10 @@ kro is installed separately — the kardinal chart does not bundle it. `KRO_VERS
 3. Run compat checks (see upgrade protocol)
 4. Open a PR
 
-### Every batch: check for new releases
+### When to check for new releases
 
-Before generating any work queue, the coordinator runs:
+At the start of any session that touches pkg/graph or pkg/translator, and before every
+release, run:
 
 ```bash
 PINNED=$(grep 'KRO_VERSION:-' hack/install-kro.sh | grep -o '[0-9][0-9a-z.-]*' | head -1)
@@ -461,10 +288,11 @@ LATEST=$(gh api 'repos/kubernetes-sigs/kro/releases?per_page=1' --jq '.[0].tag_n
 echo "Pinned v$PINNED, latest $LATEST"
 ```
 
-**If `$LATEST` is newer than the pin**: add a `chore(graph): review and upgrade kro` item to
-the queue. This is mandatory, not optional. See the upgrade protocol below.
+**If `$LATEST` is newer than the pin**: open a `chore(graph): review and upgrade kro` issue,
+or do the upgrade if it is in scope for the session. This is mandatory, not optional. See the
+upgrade protocol below.
 
-### Upgrade protocol (when assigned)
+### Upgrade protocol (when you upgrade)
 
 ```bash
 # 1. Clone kro and read the log since our pin
@@ -554,130 +382,99 @@ gh pr create --repo kubernetes-sigs/kro --title "fix: ..." --body "..."
 After opening: cross-link the kro issue/PR in the kardinal issue that motivated it and in the
 ledger entry. Label the kardinal issue `blocked-on-upstream` if we must wait for upstream.
 When the upstream change lands: upgrade our pin, remove the workaround, close the
-kardinal issue, update the ledger and the history table in `docs/aide/vision.md §Upstream Issue
-and PR Protocol`.
-
-## Branch Policy — What May Go Directly to main
-
-Branch protection enforces `enforce_admins: true`. **No push bypasses the PR requirement,
-including the agent account.** The only exception is the state branch `_state`.
-
-| Allowed direct to `main` | Must go through PR |
-|---|---|
-| `state: …` commits to `_state` branch | All code changes |
-| — | All docs changes |
-| — | All workflow changes |
-| — | All coordinator queue/state updates |
-| — | Everything else |
-
-The agent process generates many housekeeping commits (queue generation, docs audits,
-state updates). These are not exempt. They must be squash-merged via PR like everything
-else. There is no "trivial docs fix" exception.
-
-**Consequence**: if you find yourself tempted to push directly to main, that is a sign
-the task is too small to warrant tracking and should be batched into the next PR that
-touches the same area.
+kardinal issue, and update the ledger.
 
 ---
 
-## Journey Validation Standard
+## Branch policy
 
-**A journey is NOT done until there is live-cluster evidence.** Fake-client tests
-(`fake.NewClientBuilder()`) are unit tests, not E2E validation. They prove reconciler
-logic; they do not prove the full stack works on a real cluster with real images.
+main is protected: a PR is required, the required status checks must pass, and enforce_admins is
+on. It needs 0 approvals because every session uses the owner's account, and GitHub does not let
+an account approve its own PR. PRs are squash-merged; merge commits and rebase merges are not
+used. There are no exceptions: no direct push to main, no `gh pr merge --admin`, and no change
+to branch protection or rulesets.
 
-### What counts as evidence
+Merge a green PR with `gh pr merge <n> --squash --delete-branch` only when the owner has
+authorized merging in this session, and only if pnz1990 or dependabot[bot] opened it. Never merge
+a PR from anyone else that touches AGENTS.md, CLAUDE.md, .claude/, .github/workflows/ or
+.github/actions/; leave it for the owner. The next session loads AGENTS.md as its instructions,
+and workflows run with repo secrets. The `agent instructions guard` check
+(.github/workflows/agent-instructions-guard.yml) fails on such PRs.
 
-A journey is marked ✅ in `docs/aide/definition-of-done.md` only when **one** of:
+## Releases
 
-1. The `PDCA Validation` GitHub Actions workflow posts `[PDCA AUTOMATED]` to Issue #1
-   with PASS for that scenario (uses a live kind cluster + real `kardinal-test-app` image).
-2. A human or agent posts `[LIVE CLUSTER VALIDATED]` to Issue #1 with:
-   - The exact commands run
-   - The exact terminal output
-   - The kind/EKS cluster version
-   - The `kardinal-test-app` image SHA used
+- Tag only a commit on main, and never move or delete a published tag. release.yml does not
+  check the tagged commit yet; until it does, check it yourself
+  (`git merge-base --is-ancestor <sha> origin/main`).
+- Prereleases are vX.Y.Z-rc.N. helm skips them unless you pass --version, so the docs pin the
+  chart version.
+- Before tagging: docs/changelog.md has the section with upgrade notes; README.md, docs/quickstart.md
+  and docs/installation.md show the new version; the kro pin (hack/install-kro.sh, the Chart.yaml
+  kro.version annotation, the release notes text in release.yml) matches kro's latest release;
+  J1–J6 have live kind evidence on the tagged commit.
+- After tagging, check the pages that drift: /roadmap/, /comparison/ (maturity row), / and
+  /changelog/ on https://pnz1990.github.io/kardinal-promoter/.
 
-### What does NOT count as evidence
+## Journey validation
 
-- `TestJourneyN` passing in CI (fake client — proves logic, not cluster integration)
-- A comment like "all tests pass" without output
-- Marking the checkbox based on PR merge alone
-
-### Triggering live validation
+A journey counts as passing only with live-cluster evidence: a PDCA workflow run (pdca.yml;
+results are in the job summary) or a `[LIVE CLUSTER VALIDATED]` comment on the PR or release
+issue. The comment gives the commands, their output, the kind or EKS version and the
+kardinal-test-app image SHA. Record the run or comment link in docs/aide/definition-of-done.md
+§Journey Status. TestJourneyN (fake client) is a unit test, not evidence.
 
 ```bash
-# Trigger the PDCA workflow manually for a specific scenario
-gh workflow run pdca.yml --repo pnz1990/kardinal-promoter \
-  -f scenario=1   # or 2, 3, 4, 5, 6, or all
-
-# Check the result
+# Trigger the PDCA workflow for one scenario (1-6) or all of them
+gh workflow run pdca.yml --repo pnz1990/kardinal-promoter -f scenario=1
 gh run list --repo pnz1990/kardinal-promoter --workflow=pdca.yml --limit 3
 ```
 
----
+PDCA's first step checks that the `KARDINAL_DEMO_PAT` secret can read pnz1990/kardinal-demo.
+When it fails with "rotate it", the owner replaces the PAT; a session cannot.
 
-## Journey Self-Validation Commands (Engineer step 3)
+## Journey Self-Validation Commands
 
-Engineer reads definition-of-done.md and runs the relevant journey steps:
+Read docs/aide/definition-of-done.md and run the relevant journey steps on a kind cluster
+(`make e2e-setup`, or by hand: `bash hack/install-kro.sh`, then install the chart):
 
 ```bash
 # Journey 1 (Quickstart)
 kubectl apply -f examples/quickstart/pipeline.yaml
 kardinal get pipelines
-kardinal explain nginx-demo --env prod
+kardinal explain kardinal-test-app --env prod
 
-# Journey 2 (Multi-cluster)
-kubectl apply -f examples/multi-cluster-fleet/pipeline.yaml
-kardinal get pipelines  # must show prod-eu and prod-us
+# Journey 2 (Multi-cluster) — no live setup yet; evidence is tracked in #1293
 
 # Journey 3 (Policies)
-kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm"
 # must return: RESULT: BLOCKED
 
 # Journey 4 (Rollback)
-kardinal rollback nginx-demo --env prod
+kardinal rollback kardinal-test-app --env prod
 # must open PR with kardinal/rollback label
 
 # Journey 5 (CLI)
 kardinal version
 kardinal get pipelines
-kardinal explain nginx-demo --env prod
+kardinal explain kardinal-test-app --env prod
 # all must match output format in docs/cli-reference.md
 ```
 
-## Reporting (project-specific values for generic team.yml)
+## Product invariants
 
-```bash
-# Post to report issue
-gh issue comment 1 --body "[BADGE] ## [TYPE] ..."
-```
-
-## SPECIFY_FEATURE
-
-When running outside a git branch:
-```bash
-export SPECIFY_FEATURE=001-graph-integration
-```
-
-## Files Agents Must Not Modify
-
-- `docs/aide/vision.md`
-- `docs/aide/roadmap.md`
-- `AGENTS.md`
-- `.specify/memory/constitution.md`
-- `.specify/memory/sdlc.md`
-- `docs/aide/team.yml`
+- Kubernetes is the control plane: every object is a CRD and kubectl is enough; CLI, UI and
+  webhooks only create and read CRDs.
+- The controller never writes workload resources (Deployments, Services, routes); changes go
+  through Git.
+- The PR is the approval surface; its body carries the evidence.
+- Promotions move versioned artifacts with provenance, not opaque diffs.
+- A rollback is a forward promotion of an earlier Bundle through the same gates and audit trail.
 
 ## Product Validation Scenarios
 
-The standalone agent runs these scenarios during product validation (every `product_validation_cycles`
-cycles). This requires a running kind cluster — use `make setup-e2e-env` to create one.
-The agent uses kardinal as a customer would. It does NOT mock anything.
-
-For multi-cluster scenarios (J2): use `make eks-up` to create the `kardinal-e2e-prod` EKS
-cluster in us-east-2 (Terraform, `terraform/eks-e2e/`), then `make setup-multi-cluster-env`
-which sets up kind for pre-prod and the EKS cluster for prod.
+`.github/workflows/pdca.yml` runs these scenarios nightly and on demand on a kind cluster
+(`make setup-e2e-env` gives you the same setup by hand). Use kardinal as a customer would.
+Do not mock anything.
 
 ### CRITICAL: Use the real test repos, not nginx
 
@@ -693,26 +490,22 @@ which sets up kind for pre-prod and the EKS cluster for prod.
 LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 echo "Using image: $TEST_IMAGE"
-
-# Pipeline must reference kardinal-demo as the git repo
-# The pipeline.yaml repoURL should point to https://github.com/pnz1990/kardinal-demo
 ```
 
-If you find yourself using `nginx` or any other placeholder image in tests, STOP and switch to `kardinal-test-app`. The point is to validate with a real application that reflects real-world usage.
+If you find yourself using `nginx` or any other placeholder image in tests, STOP and switch to
+`kardinal-test-app`. The point is to validate with a real application that reflects real-world
+usage.
 
 ### Setup (before running scenarios)
 
 ```bash
-# Ensure E2E environment is running
 make setup-e2e-env
 
-# Get a real image SHA from the test app CI
 LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
-# Apply Pipeline and PolicyGates
-# IMPORTANT: pipeline.yaml repoURL must point to https://github.com/pnz1990/kardinal-demo
-# kardinal-demo has the environment branches (env/test, env/uat, env/prod)
+# examples/quickstart/pipeline.yaml points at https://github.com/pnz1990/kardinal-demo,
+# which has the environment branches (env/test, env/uat, env/prod).
 kubectl apply -f examples/quickstart/pipeline.yaml
 kubectl apply -f examples/quickstart/policy-gates.yaml
 kubectl create secret generic github-token \
@@ -723,7 +516,7 @@ kubectl create secret generic github-token \
 ### Scenario 1: Happy path promotion
 
 ```bash
-kardinal create bundle test-app --image $TEST_IMAGE
+kardinal create bundle kardinal-test-app --image $TEST_IMAGE
 sleep 30
 kardinal get pipelines
 # Expected: test=Verified, uat=Verified, prod=PR open
@@ -736,12 +529,12 @@ kubectl get deployment kardinal-test-app -n kardinal-test-app-test
 ### Scenario 2: Pause blocks in-flight promotion
 
 ```bash
-kardinal create bundle test-app --image $TEST_IMAGE
-kardinal pause test-app
+kardinal create bundle kardinal-test-app --image $TEST_IMAGE
+kardinal pause kardinal-test-app
 sleep 30
 kardinal get pipelines
 # Expected: PAUSED badge visible, bundle does not advance past test
-kardinal resume test-app
+kardinal resume kardinal-test-app
 ```
 
 **Pass criteria**: PAUSED badge appears; promotion halts; resumes after resume.
@@ -749,30 +542,31 @@ kardinal resume test-app
 ### Scenario 3: Weekend gate blocks prod
 
 ```bash
-kardinal policy simulate --pipeline test-app --env prod --time "Saturday 3pm"
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm" --soak-minutes 60
 # Expected: RESULT: BLOCKED
-kardinal policy simulate --pipeline test-app --env prod --time "Tuesday 10am"
-# Expected: RESULT: ALLOWED
+kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" --soak-minutes 60
+# Expected: RESULT: PASS
 ```
 
-**Pass criteria**: exact BLOCKED/ALLOWED strings returned.
+**Pass criteria**: exact BLOCKED/PASS strings returned. (Without `--soak-minutes`, the
+require-uat-soak gate also blocks.)
 
 ### Scenario 4: Explain shows gate details
 
 ```bash
-kardinal explain test-app --env prod
+kardinal explain kardinal-test-app --env prod
 # Expected: shows no-weekend-deploys gate with expression and current value
 ```
 
-**Pass criteria**: gate name, CEL expression (`!schedule.isWeekend()`), and result visible.
+**Pass criteria**: gate name, CEL expression (`!schedule.isWeekend`), and result visible.
 
 ### Scenario 5: Rollback opens a PR
 
 ```bash
 # Promote first
-kardinal create bundle test-app --image $TEST_IMAGE
+kardinal create bundle kardinal-test-app --image $TEST_IMAGE
 sleep 60  # wait for test+uat
-kardinal rollback test-app --env prod
+kardinal rollback kardinal-test-app --env prod
 # Expected: PR opened with kardinal/rollback label and evidence body
 ```
 
@@ -783,9 +577,9 @@ kardinal rollback test-app --env prod
 ```bash
 IMAGE_A="ghcr.io/pnz1990/kardinal-test-app:sha-aaa1111"
 IMAGE_B="ghcr.io/pnz1990/kardinal-test-app:sha-bbb2222"
-kardinal create bundle test-app --image $IMAGE_A
+kardinal create bundle kardinal-test-app --image $IMAGE_A
 sleep 5
-kardinal create bundle test-app --image $IMAGE_B
+kardinal create bundle kardinal-test-app --image $IMAGE_B
 sleep 30
 kardinal get pipelines
 # Expected: only IMAGE_B bundle is Promoting; IMAGE_A bundle is Superseded
@@ -798,5 +592,5 @@ kardinal get pipelines
 For each scenario: record PASS/FAIL + actual output.
 Open `kind/bug` issue if any scenario fails.
 Open `kind/docs` issue if output doesn't match `docs/cli-reference.md`.
-Update `docs/aide/definition-of-done.md` journey status table.
+Record the result in docs/aide/definition-of-done.md §Journey Status with the run URL.
 Tear down: `make kind-down` (or keep running for continuous validation).

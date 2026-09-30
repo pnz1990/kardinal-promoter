@@ -130,23 +130,39 @@ Configure the org policy namespace via the controller flag `--policy-namespaces 
 
 ### Multi-tenant isolation
 
-#### Current limitation
+The namespace is kardinal's tenancy unit. There is no Project CRD, and none is planned
+([#1187](https://github.com/pnz1990/kardinal-promoter/issues/1187)).
 
-kardinal does not have a Project CRD. All Pipelines and Bundles installed in a shared
-namespace use the same `ClusterRole`. This means:
+- Put each team's Pipelines, Bundles and PolicyGates in the team's namespace, and give the team
+  a `Role` and `RoleBinding` there on the `kardinal.io` resources. Kubernetes RBAC then keeps
+  Team A out of Team B's objects, through kubectl and the CLI alike.
+- `git.secretRef` must name a Secret in the Pipeline's own namespace. The admission webhook and
+  the PromotionStep reconciler refuse any other namespace, and the git steps read the token only
+  from there, so a team's Pipeline clones and pushes with that team's token.
+- With `ui.auth.tokenReview` on, the UI follows the same RBAC: every object the UI API reads or
+  writes for a user is checked with a `SubjectAccessReview` (see
+  [UI API Access Control](#ui-api-access-control)).
 
-- A platform team running kardinal for 20 application teams **cannot** grant Team A
-  write access to their Pipeline without also granting read access to Team B's Pipelines
-  and Bundles.
-- Kubernetes RBAC cannot distinguish between resources of the same kind in the same namespace
-  without label selectors — and kardinal's `ClusterRole` grants access to all kardinal CRDs.
+#### Known limit: the shared SCM token
 
-#### Recommended workaround: one install per team namespace
+Git clone and push use the Pipeline's `git.secretRef` token, but the controller opens, labels,
+comments on and closes PRs with its own SCM token (`github.token` or `github.secretRef`, the
+controller Pod's `GITHUB_TOKEN`). So anyone who can create a Pipeline, in any namespace, can have
+PRs opened in any repository that token can write to. Restricting the repositories is tracked in
+[#1332](https://github.com/pnz1990/kardinal-promoter/issues/1332) (`scm.allowedRepositories`).
+Until then:
 
-Until a Project CRD or namespace-scoped RBAC isolation is added, the only safe
-multi-tenant configuration is **one kardinal installation per application namespace**.
+1. Scope the controller's SCM token to the GitOps repositories kardinal manages, for example a
+   fine-grained PAT limited to those repositories.
+2. Give each team its own `git.secretRef` token in its namespace, scoped to that team's
+   repositories.
+3. Grant `create` on `pipelines.kardinal.io` only to people you trust with the controller
+   token's reach.
 
-This uses the `controller.watchNamespace` Helm value (added in v0.6.0) to limit each
+#### Stronger isolation: one install per team namespace
+
+When teams must not share a controller or its SCM token, run one kardinal installation per
+team namespace. This uses the `controller.watchNamespace` Helm value (added in v0.6.0) to limit each
 controller to a single namespace, with a `Role`/`RoleBinding` scoped to that namespace
 instead of a cluster-wide `ClusterRole`.
 

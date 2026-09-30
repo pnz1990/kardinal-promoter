@@ -7,76 +7,6 @@
 
 ---
 
-## ⚠️ IMMEDIATE FOCUS: Workshop 1 Parity Gate
-
-**Do not advance to new stages until Workshop 1 has been executed end-to-end on a live kind cluster.**
-
-The immediate goal of every agent is to make the following workshop executable, then execute it:
-
-> **AWS Platform Engineering on EKS — Production Deploy section**
-> https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo
-
-A user (or the agent itself) must be able to follow this workshop using kardinal-promoter
-instead of Kargo. Every step must produce the documented output. Every CLI command must work
-exactly as described in `docs/cli-reference.md`.
-
-**The standalone agent is responsible for executing the workshop once code is ready.**
-Not a human. The agent runs `make kind-up`, follows every step, records the output, and
-closes epic #123 with the results. Only then does work on Workshop 2 scope begin.
-
-### Workshop 1 Parity Checklist (code must pass before execution attempt)
-
-- [x] `kardinal get pipelines` shows per-environment status columns (PR #128)
-- [x] `kardinal explain <pipeline> --env <env>` shows active PolicyGates (PR #129)
-- [x] `kardinal explain` shows CEL expression and current value (PR #129)
-- [x] Item 026 merged — kind cluster E2E infrastructure in place
-- [x] `examples/quickstart/pipeline.yaml` applies cleanly (verified on kind cluster)
-
-### Workshop 1 Execution Gate (epic #123 / milestone `workshop-1-executed`)
-
-✅ **COMPLETE** — Workshop 1 executed end-to-end on live kind cluster (2026-04-11).
-
-1. ✅ Agent ran every step on a live kind cluster
-2. ✅ Agent posted full terminal output on issue #123
-3. ✅ Agent posted `[WORKSHOP 1 EXECUTED]` on Issue #1
-4. ✅ All pass criteria were met — v0.2.0 released
-
-**Epic #123 closed. Workshop 2 scope may now proceed.**
-
----
-
-## Graph Purity Gate (milestone v0.2.1)
-
-**After Workshop 1 executes, the team's sole objective is graph purity.** See `docs/design/11-graph-purity-tech-debt.md`.
-
-### Hard rule: no new logic leaks (enforced now, permanently)
-
-A PR introduces a logic leak if it contains ANY of:
-- `time.Now()` or `time.Since()` called outside a CRD status write
-- An external HTTP call (GitHub API, Prometheus, webhook) in a reconciler's hot path
-- A cross-CRD status mutation (reconciler for CRD A writing to CRD B's status)
-- A decision whose result is NOT written to the reconciler's own CRD status
-- `pkg/cel` imported outside `pkg/reconciler/policygate`
-- An in-memory struct passing state between reconcile iterations
-- `exec.Command()` or `os.Exec()` in a reconciler
-
-**QA must block such PRs immediately with `[NEEDS HUMAN]`.** The engineer must escalate and get explicit human approval before any such pattern is merged. This is not negotiable. There are no exceptions beyond the documented transitional workaround in `docs/design/10-graph-first-architecture.md`.
-
-### How to Use This Document
-
-**Engineers**: Before writing a single line of code, read the journey your feature contributes to.
-Understand what the user will type and what they expect to see. Build backwards from that.
-**Also read `docs/design/11-graph-purity-tech-debt.md`** — if your feature touches a package with known leaks, do not add new ones.
-
-**QA**: After every PR, ask: "Does this bring us closer to passing the journeys below?"
-If a PR passes unit tests but moves us away from a journey, it fails QA.
-**Also check: does this PR introduce any of the logic leak patterns listed above?** If yes: block.
-
-**Coordinator**: After each batch completes, verify which journeys now pass end-to-end.
-Update the journey status table at the bottom of this file.
-
----
-
 ## Journey 1: Quickstart — First Promotion in 15 Minutes
 
 **Source**: `docs/quickstart.md`, `examples/quickstart/`
@@ -88,13 +18,14 @@ test → uat → prod automatically, with a PR opened for prod that they review 
 ### Exact steps that must work
 
 ```bash
-# 1. Install
+# 1. Install kro (Graph controller), then kardinal-promoter
+bash hack/install-kro.sh
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace
 
 # 2. Verify
 kardinal version
-# must print: CLI: v0.1.x, Controller: v0.1.x
+# must print CLI: vX.Y.Z and Controller: vX.Y.Z (the installed release)
 
 # 3. Create git credentials
 kubectl create secret generic github-token \
@@ -504,48 +435,28 @@ kardinal get pipelines --all-namespaces
 ## Journey Status
 
 **Rule (Issue #418):** A journey is only marked ✅ when:
-1. A `[PDCA AUTOMATED]` comment on Issue #1 reports the journey's scenario as passed on a live
-   kind cluster with a real `kardinal-test-app` image, OR
-2. A `[LIVE CLUSTER VALIDATED]` comment on Issue #1 gives the commands, their output, the
-   cluster version and the image SHA (AGENTS.md §Journey Validation Standard)
+1. A PDCA workflow run (`.github/workflows/pdca.yml`; the result is in the run's job summary)
+   reports the journey's scenario as passed on a live kind cluster with a real
+   `kardinal-test-app` image, OR
+2. A `[LIVE CLUSTER VALIDATED]` comment on the PR or release issue gives the commands, their
+   output, the cluster version and the image SHA (AGENTS.md §Journey validation)
 
-and every code example in the relevant doc page runs without error.
+and every code example in the relevant doc page runs without error. Put the run or comment link
+in the Notes column.
 
 A passing `TestJourneyN` test is not evidence: those tests run the reconcilers against a fake
-Kubernetes client, without the translator, the kro Graph or a cluster. Manual coordinator
-comments alone do not count either.
+Kubernetes client, without the translator, the kro Graph or a cluster. A comment that only says
+the tests pass does not count either.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
 | 1: Quickstart | unverified | 2026-09-29 | Fake-client test only (`TestJourney1Quickstart`). The PDCA workflow has not reported scenario 1 as passed. |
-| 2: Multi-cluster fleet | unverified | 2026-09-29 | Fake-client test only (`TestJourney2MultiClusterFleet`). No multi-cluster run on record (#245). |
+| 2: Multi-cluster fleet | unverified | 2026-09-29 | Fake-client test only (`TestJourney2MultiClusterFleet`). No multi-cluster run on record; live J2 evidence is tracked in #1293. |
 | 3: Policy governance | unverified | 2026-09-29 | Fake-client test only (`TestJourney3PolicyGovernance`). |
 | 4: Rollback | unverified | 2026-09-29 | Fake-client test only (`TestJourney4Rollback`). |
 | 5: CLI workflow | unverified | 2026-09-29 | `TestJourney5CLI` runs `version`, `policy simulate` and `policy test` from the built CLI with no cluster, and skips if the binary is missing. |
 | 6: Rendered manifests | unverified | 2026-09-29 | `TestJourney6RenderedManifests` only checks `DefaultSequenceForBundle`; it builds no Graph and no Bundle. |
 | 7: Multi-tenant self-service | unverified | 2026-09-29 | Fake-client test only (`TestJourney7MultiTenantSelfService`); a fake client enforces no RBAC. |
-
----
-
-## How Journeys Map to Roadmap Stages
-
-| Stage | Journeys it enables |
-|---|---|
-| 0: Project Skeleton | All (prerequisites) |
-| 1: CRD Types | All (type system) |
-| 2: Bundle + Pipeline Reconcilers | All (basic flow) |
-| 3: Graph Generation | All (core engine) |
-| 4: PolicyGate CEL Evaluator | J1 partial, J3 full, J7 partial |
-| 5: Git Operations + GitHub PR | J1 full, J4 full, J6 partial |
-| 6: PromotionStep Reconciler | J1 full end-to-end, J6 full |
-| 7: Health Adapters | J1 with Argo CD, J2 partial |
-| 8: CLI | J5 full |
-| 9: kardinal-ui | UI visibility (bonus) |
-| 10: PR Evidence + Webhook | J1 PR quality, J4 rollback |
-| 11: GitHub Action + kardinal init | J1 CI integration |
-| 13: Rollback | J4 full |
-| 14: Distributed Mode | J2 full with agents |
-| 15: MetricCheck | J3 metrics gates |
 
 ---
 

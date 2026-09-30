@@ -1,4 +1,6 @@
 # CODEOWNERS
-# All PRs require review from pnz1990 (QA agent posts reviews as this user)
-# This ensures every PR gets the QA checklist applied before merge.
+# Routes review requests to the owner on outside contributors' PRs. It does not enforce review:
+# branch protection on main requires the status checks and 0 approvals, because the owner and
+# every agent session open PRs from the one owner account, and GitHub does not let an account
+# approve its own PR (AGENTS.md §Branch policy).
 * @pnz1990
