@@ -165,7 +165,8 @@ The `upstreamVerified` field references the upstream environment's status. For t
 > **`propagateWhen` is how PolicyGates block promotion.** Per the pre-upstream Graph controller design docs,
 > `readyWhen` is a health signal that does not gate downstream execution. `propagateWhen` controls
 > when a node's data flows to dependents. When `propagateWhen` is unsatisfied on a PolicyGate node,
-> the downstream PromotionStep retains its Pending state. See design-v2.1.md Section 3.5.
+> the downstream PromotionStep retains its Pending state. (Historical: kro has no `propagateWhen`;
+> see the banner above and [ledger G1](16-graph-capability-ledger.md#g1-readywhen-does-not-gate-dependents-in-a-standalone-graph).)
 
 ### Step 6: Wire gate edges
 
@@ -208,10 +209,11 @@ When a new Bundle is created for a Pipeline that already has an active (Promotin
 
 ## Pipeline Spec Changes Mid-Flight
 
-If the Pipeline CRD is updated while a Bundle is mid-flight:
-- The existing Graph is NOT updated. It was generated at Bundle processing time and is immutable for that promotion run.
-- The new Pipeline spec applies to all subsequent Bundles.
-- This is documented, intentional behavior (Section 3.5 of design-v2.1.md).
+If the Pipeline CRD is updated while a Bundle is mid-flight, the controller re-translates the
+Pipeline and updates the Bundle's Graph in place (same UID, new generation). Nodes that still
+exist keep their children, so Verified steps stay Verified; removed nodes are pruned. See
+[ledger G6](16-graph-capability-ledger.md#g6-spec-changes-are-handled-by-delete-and-recreate)
+and its E2E record.
 
 ## Edge Cases
 

@@ -24,7 +24,7 @@ Kubernetes-native promotion controller built on [kro's Graph primitive](https://
 3. The Graph controller creates **PromotionStep** CRs in dependency order.
 4. For each step, the kardinal-controller writes manifests to Git, opens a PR with promotion evidence (provenance, upstream metrics, policy compliance), and monitors health.
 5. PolicyGates block downstream steps until their CEL expressions evaluate to true. They are visible as nodes in the DAG.
-6. When all environments are verified, the promotion is complete. On failure, the Graph stops downstream nodes. A rollback PR is opened only when the environment sets `onHealthFailure: rollback` (the default is `none`).
+6. When all environments are verified, the promotion is complete. On failure, the Graph stops downstream nodes. Automatic rollback is opt-in: with `onHealthFailure: rollback` on the environment (the default is `none`), a health failure creates a rollback Bundle that is promoted like any other. [Rollback](docs/rollback.md) lists when `onHealthFailure` applies.
 
 All state lives in Kubernetes CRDs. There is no external database.
 
