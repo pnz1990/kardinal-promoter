@@ -115,7 +115,12 @@ func validatePipeline(req *admissionv1.AdmissionRequest, log zerolog.Logger) *ad
 	log.Debug().
 		Str("pipeline", pipeline.Name).
 		Msg("admission: Pipeline admitted — no cycle detected")
-	return allow()
+	resp := allow()
+	// The CRD accepts these reserved fields, so the Pipeline is admitted, but
+	// every Bundle of it fails: warn with the messages "kardinal validate" and
+	// the Pipeline's Ready=False/NotImplemented condition show.
+	resp.Warnings = graph.UnimplementedFields(&pipeline)
+	return resp
 }
 
 func allow() *admissionv1.AdmissionResponse {

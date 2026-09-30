@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -127,6 +128,58 @@ func TestPipelineReconciler_DependsOnNonExistentEnv(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, cond.Status)
 	assert.Equal(t, "ValidationFailed", cond.Reason)
 	assert.Contains(t, cond.Message, "staging")
+}
+
+// E2E-R14: a Pipeline that sets a reserved, unimplemented field gets
+// Ready=False/NotImplemented, the same answer as "kardinal validate", instead
+// of Ready=True/Valid while every Bundle of it fails.
+func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(p *kardinalv1alpha1.Pipeline)
+		wantMsg string
+	}{
+		{name: "steps", wantMsg: "spec.environments[].steps is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}
+			}},
+		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"}
+			}},
+		{name: "regions fan-out", wantMsg: "regions fan-out is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"}
+			}},
+		{name: "pipeline layout branch", wantMsg: "spec.git.layout: branch is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Git.Layout = "branch" }},
+		{name: "environment layout branch", wantMsg: `environment "test": layout: branch is not implemented`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Layout = "branch" }},
+		{name: "autoRollback", wantMsg: "autoRollback is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("reserved", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			tc.mutate(p)
+			c := newClientWithIndex(newScheme(), p)
+			r := &pipeline.Reconciler{Client: c}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "reserved", Namespace: "default"},
+			})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "reserved", Namespace: "default"}, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, "NotImplemented", cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+		})
+	}
 }
 
 // TestPipelineReconciler_Idempotent verifies that if a Pipeline already has the

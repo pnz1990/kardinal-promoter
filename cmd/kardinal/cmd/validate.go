@@ -37,12 +37,17 @@ func newValidateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "Validate Pipeline and PolicyGate YAML before applying to the cluster",
 		Long: `Validate Pipeline and PolicyGate YAML without connecting to the cluster.
-The file may hold several documents; each Pipeline and PolicyGate is checked.
+The file may hold several documents; each kardinal.io Pipeline and PolicyGate
+is checked. Other objects (a Namespace, another API group's Pipeline) are
+skipped with a note.
 
 Checks:
   - Pipeline: at least one environment, every environment named, spec.git.url
-    set, and the environment dependencies form a valid graph (no cycles, no
-    unknown dependsOn)
+    set, the environment dependencies form a valid graph (no cycles, no
+    unknown dependsOn), and no reserved field that is not implemented is set
+    (steps, promotionTemplate, autoRollback, two or more regions,
+    layout: branch, health.cluster). The controller reports the same fields
+    as Ready=False/NotImplemented on the Pipeline.
   - PolicyGate: spec.expression set and compiles with the controller's
     PolicyGate CEL environment
 
@@ -71,7 +76,7 @@ func runValidate(cmd *cobra.Command, file string) error {
 
 	out := cmd.OutOrStdout()
 	dec := k8syaml.NewYAMLOrJSONDecoder(strings.NewReader(string(data)), 4096)
-	docs, failed := 0, 0
+	docs, checked, failed := 0, 0, 0
 	for {
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
@@ -85,27 +90,44 @@ func runValidate(cmd *cobra.Command, file string) error {
 		}
 		docs++
 		var meta struct {
-			Kind string `json:"kind"`
+			APIVersion string `json:"apiVersion"`
+			Kind       string `json:"kind"`
+			Metadata   struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(raw, &meta); err != nil {
 			return fmt.Errorf("cannot parse %s as YAML: %w", file, err)
 		}
-		switch meta.Kind {
-		case "Pipeline":
-			err = validatePipeline(out, file, raw)
-		case "PolicyGate":
-			err = validatePolicyGate(out, file, raw)
-		case "":
+		if meta.Kind == "" {
 			return fmt.Errorf("%s: missing 'kind' field", file)
-		default:
-			return fmt.Errorf("%s: unsupported kind %q — only Pipeline and PolicyGate are supported", file, meta.Kind)
 		}
+		// A missing apiVersion is taken as kardinal.io, so a bare
+		// "kind: Pipeline" snippet is still checked.
+		group, _, _ := strings.Cut(meta.APIVersion, "/")
+		ours := meta.APIVersion == "" || group == kardinalv1alpha1.GroupVersion.Group
+		switch {
+		case ours && meta.Kind == "Pipeline":
+			err = validatePipeline(out, file, raw)
+		case ours && meta.Kind == "PolicyGate":
+			err = validatePolicyGate(out, file, raw)
+		default:
+			// kubectl apply takes the whole file; only the objects this
+			// command knows are checked (E2E-R01).
+			_, _ = fmt.Fprintf(out, "- skipped %s/%s: validate checks only kardinal.io Pipelines and PolicyGates\n",
+				meta.Kind, meta.Metadata.Name)
+			continue
+		}
+		checked++
 		if err != nil {
 			failed++
 		}
 	}
 	if docs == 0 {
 		return fmt.Errorf("%s: no documents found", file)
+	}
+	if checked == 0 {
+		return fmt.Errorf("%s: no kardinal.io Pipeline or PolicyGate found", file)
 	}
 	if failed > 0 {
 		return fmt.Errorf("validation failed")
@@ -137,13 +159,23 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		errs = append(errs, "spec.git.url is required")
 	}
 
+	// Reserved fields every Bundle fails on; the controller sets the Pipeline
+	// Ready=False/NotImplemented for the same list.
+	errs = append(errs, graph.UnimplementedFields(&pipeline)...)
+
 	// Dependency: no circular deps (uses the graph builder's topoSort).
 	if len(pipeline.Spec.Environments) > 0 && !hasUnnamedEnv(pipeline) {
 		b := graph.NewBuilder()
 		dummyBundle := &kardinalv1alpha1.Bundle{}
 		dummyBundle.Name = "validate-dummy"
 		dummyBundle.Namespace = "default"
-		if _, err := b.Build(graph.BuildInput{Pipeline: &pipeline, Bundle: dummyBundle}); err != nil {
+		// Build rejects custom steps too; they are reported above already.
+		buildable := pipeline.DeepCopy()
+		for i := range buildable.Spec.Environments {
+			buildable.Spec.Environments[i].Steps = nil
+			buildable.Spec.Environments[i].PromotionTemplate = nil
+		}
+		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: dummyBundle}); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}

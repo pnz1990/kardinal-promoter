@@ -2,8 +2,10 @@
 
 > **Not implemented yet.** `layout: branch` is accepted by the API, but the `git-clone`
 > step fails every promotion that uses it (`layout: branch is not implemented`), and
-> nothing writes to `env/<name>` branches. This example shows the planned design only;
-> applying it does not promote anything. See `docs/rendered-manifests.md`.
+> nothing writes to `env/<name>` branches. `kardinal validate -f pipeline.yaml` reports it,
+> and the applied Pipeline shows `Ready=False` with reason `NotImplemented`. This example
+> shows the planned design only; applying it does not promote anything. See
+> `docs/rendered-manifests.md`.
 
 This example shows the planned **rendered manifests** pattern with `layout: branch`.
 

@@ -30,6 +30,9 @@ import (
 const (
 	reasonValid            = "Valid"
 	reasonValidationFailed = "ValidationFailed"
+	// reasonNotImplemented: the spec sets a reserved field the controller
+	// does not implement (graph.UnimplementedFields), so every Bundle fails.
+	reasonNotImplemented = "NotImplemented"
 )
 
 // The Paused condition is set while spec.paused is true and removed when it is
@@ -250,7 +253,9 @@ func DerivePhase(steps []kardinalv1alpha1.PromotionStep) string {
 }
 
 // validate checks pipeline invariants and returns the desired Ready condition:
-// True/Valid, or False/ValidationFailed with the first problem found.
+// True/Valid, False/ValidationFailed with the first problem found, or
+// False/NotImplemented listing the reserved fields that are set but not
+// implemented (the same list "kardinal validate" reports).
 func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	invalid := func(msg string) metav1.Condition {
 		return metav1.Condition{
@@ -284,6 +289,14 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	// Bundle of a cyclic pipeline would fail with CircularDependency.
 	if err := graph.DetectCycle(p); err != nil {
 		return invalid(err.Error())
+	}
+
+	if msgs := graph.UnimplementedFields(p); len(msgs) > 0 {
+		return metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonNotImplemented,
+			Message:            "every Bundle of this Pipeline fails: " + strings.Join(msgs, "; "),
+			ObservedGeneration: p.Generation,
+		}
 	}
 
 	return metav1.Condition{

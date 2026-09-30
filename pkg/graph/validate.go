@@ -208,20 +208,10 @@ func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 			}
 			regions[r] = true
 		}
-		// The PromotionStep reconciler always runs the default step sequence
-		// (steps.DefaultSequenceForBundle); PromotionStepSpec has no field to
-		// carry a custom one. Refuse the Pipeline instead of silently ignoring
-		// the steps the author asked for.
-		if len(e.Steps) > 0 {
-			return fmt.Errorf("build: environment %q declares %d steps; spec.environments[].steps is "+
-				"not implemented yet (the controller always runs the default step sequence), so "+
-				"remove it; see docs/custom-steps.md", e.Name, len(e.Steps))
-		}
-		if e.PromotionTemplate != nil {
-			return fmt.Errorf("build: environment %q references PromotionTemplate %q; "+
-				"spec.environments[].promotionTemplate is not implemented yet (the controller always "+
-				"runs the default step sequence), so remove it; see docs/custom-steps.md",
-				e.Name, e.PromotionTemplate.Name)
+		// Refuse a custom step sequence instead of silently ignoring the steps
+		// the author asked for.
+		if msg := customStepsUnimplemented(&e); msg != "" {
+			return fmt.Errorf("build: %s", msg)
 		}
 	}
 	return nil

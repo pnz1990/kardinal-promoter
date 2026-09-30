@@ -113,6 +113,14 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
 | `regions` | No | (none) | **Not implemented** (#612). With two or more regions the translator stamps out one PromotionStep per region, but every region would edit the same path and push the same branch, so those PromotionSteps fail with `environments[].regions fan-out is not implemented`. Declare one environment per region instead (for example `prod-us` and `prod-eu`, with `dependsOn` or `wave`). With zero or one region the field has no effect. |
 
+**Reserved fields.** `steps`, `promotionTemplate`, `autoRollback`, `regions` with two or
+more entries, `layout: branch` (on `spec.git` or an environment) and `health.cluster` are
+not implemented, and every Bundle of a Pipeline that sets one fails. `kardinal validate`
+reports each of them, and the controller sets the Pipeline's `Ready` condition to `False`
+with reason `NotImplemented` and the same messages
+(`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The API server rejects
+`autoRollback` outright.
+
 ### spec.historyLimit
 
 Number of finished Bundles (Verified, Failed or Superseded) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
@@ -252,6 +260,7 @@ Promotion updates the image tag in the target directory and pushes (auto) or ope
 manifests pattern, where DRY Kustomize source lives on one branch and rendered plain YAML
 lives on per-environment branches (`env/<name>`). Today the `git-clone` step fails every
 promotion whose Pipeline or environment sets `layout: branch`, before it changes anything.
+`kardinal validate` reports it, and the Pipeline is `Ready=False` with reason `NotImplemented`.
 `sourceBranch`, `branchPrefix` and `renderManifests` are not Pipeline fields.
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.

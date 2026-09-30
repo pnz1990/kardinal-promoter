@@ -216,3 +216,29 @@ func TestPipelineWebhookHandler_OversizedBody(t *testing.T) {
 		httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(body)))
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
+
+// E2E-R14: the optional webhook admits a Pipeline that sets a reserved,
+// unimplemented field (the CRD accepts it) but warns with the same messages
+// as "kardinal validate" and the Pipeline's Ready=False/NotImplemented.
+func TestPipelineWebhookHandler_WarnsOnUnimplementedFields(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "reserved"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/org/repo", Layout: "branch"},
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test", Regions: []string{"us-east-1", "eu-west-1"}},
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(buildReview(t, pipeline)))
+	w := httptest.NewRecorder()
+	admission.PipelineWebhookHandler(zerolog.Nop())(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp admissionv1.AdmissionReview
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.True(t, resp.Response.Allowed)
+	require.Len(t, resp.Response.Warnings, 2)
+	assert.Contains(t, resp.Response.Warnings[0], "spec.git.layout: branch is not implemented")
+	assert.Contains(t, resp.Response.Warnings[1], "regions fan-out is not implemented")
+}
