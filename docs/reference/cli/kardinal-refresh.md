@@ -7,9 +7,11 @@ Force re-reconciliation of a Pipeline (Kargo parity)
 Force the controller to re-reconcile a Pipeline immediately.
 
 Sets the kardinal.io/refresh annotation on the Pipeline to the current time.
-The change requeues the Pipeline reconciler and the reconcilers of the
-Pipeline's Bundles. PolicyGates and PromotionSteps do not watch Pipelines, so
-this does not re-evaluate gates or re-run health checks; they re-check on their
+The change requeues the Pipeline reconciler, which re-derives the Pipeline's
+status (phase, Ready condition, deployment metrics) and its pause freeze gate.
+Bundle reconcilers follow Pipeline spec changes only, so this does not retry
+a Bundle. PolicyGates and PromotionSteps do not watch Pipelines, so this
+does not re-evaluate gates or re-run health checks; they re-check on their
 own intervals.
 
 Example:

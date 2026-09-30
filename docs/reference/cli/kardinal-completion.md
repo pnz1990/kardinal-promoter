@@ -6,6 +6,9 @@ Generate shell completion scripts
 
 Generate shell completion scripts for kardinal.
 
+The bash script needs the bash-completion package (it calls
+_get_comp_words_by_ref); install it with your OS package manager first.
+
 To load completions immediately in the current shell session:
 
   # Bash
