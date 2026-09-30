@@ -102,9 +102,9 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 		return explainGateInstance("demo", "b2", "prod", "require-uat-soak", "upstream.uat.soakMinutes >= 30",
 			false, true, "upstream.uat.soakMinutes >= 30 = false")
 	}
-	preDeploy := func() *v1alpha1.PolicyGate {
+	postDeploy := func() *v1alpha1.PolicyGate {
 		g := soak()
-		g.Spec.When = "pre-deploy"
+		g.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 		return g
 	}
 	// prodStep is the prod step waiting on the soak gate, the way the Graph
@@ -125,23 +125,25 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 		wantBlocking bool
 	}{
 		{
-			// checkPreDeployGates keeps the step Pending, before git.
-			name:         "pre-deploy gate holds the Pending prod step",
-			objs:         append(upstream(), prodStep("Pending"), preDeploy()),
+			// checkRequiredGates keeps the step Pending, before git.
+			name:         "gate holds the Pending prod step",
+			objs:         append(upstream(), prodStep("Pending"), soak()),
 			wantBlocking: true,
 		},
 		{
-			name:         "pre-deploy gate holds the new prod step",
-			objs:         append(upstream(), prodStep(""), preDeploy()),
+			name:         "gate holds the new prod step",
+			objs:         append(upstream(), prodStep(""), soak()),
 			wantBlocking: true,
 		},
 		{
-			name: "pre-deploy gate after the prod step started",
-			objs: append(upstream(), prodStep("Promoting"), preDeploy()),
+			name: "gate after the prod step started",
+			objs: append(upstream(), prodStep("Promoting"), soak()),
 		},
 		{
-			name: "post-deploy gate does not hold the Pending prod step",
-			objs: append(upstream(), prodStep("Pending"), soak()),
+			// #1323: spec.when has no effect.
+			name:         "post-deploy gate holds the Pending prod step",
+			objs:         append(upstream(), prodStep("Pending"), postDeploy()),
+			wantBlocking: true,
 		},
 		{
 			// j6-supersede.log: 7k9rk HealthChecking in test, the prod soak

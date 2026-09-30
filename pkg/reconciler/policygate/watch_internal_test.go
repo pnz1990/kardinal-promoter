@@ -85,3 +85,54 @@ func TestMetricCheckRequests(t *testing.T) {
 	assert.Equal(t, "default", reqs[0].Namespace)
 	assert.Equal(t, "app-v1-prod-error-rate", reqs[0].Name)
 }
+
+// TestUnstartedStepCreated covers #1300: a new PromotionStep that has not
+// started re-evaluates its required gates, since it starts only on results
+// evaluated at or after it was created. Nothing else about steps re-evaluates
+// a gate.
+func TestUnstartedStepCreated(t *testing.T) {
+	step := func(state string, gates ...string) *kardinalv1alpha1.PromotionStep {
+		return &kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod", Namespace: "default"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{RequiredGates: gates},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	tests := []struct {
+		name string
+		step *kardinalv1alpha1.PromotionStep
+		want bool
+	}{
+		{name: "new step with a gate", step: step("", "app-v1-prod-soak"), want: true},
+		{name: "Pending step with a gate", step: step("Pending", "app-v1-prod-soak"), want: true},
+		{name: "new step without gates", step: step(""), want: false},
+		{name: "started step (initial list at start)", step: step("Promoting", "app-v1-prod-soak"), want: false},
+		{name: "Verified step (initial list at start)", step: step("Verified", "app-v1-prod-soak"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, unstartedStepCreated.Create(event.CreateEvent{Object: tt.step}))
+		})
+	}
+	s := step("", "app-v1-prod-soak")
+	assert.False(t, unstartedStepCreated.Update(event.UpdateEvent{ObjectOld: s, ObjectNew: s}), "update")
+	assert.False(t, unstartedStepCreated.Delete(event.DeleteEvent{Object: s}), "delete")
+	assert.False(t, unstartedStepCreated.Generic(event.GenericEvent{Object: s}), "generic")
+	assert.False(t, unstartedStepCreated.Create(event.CreateEvent{Object: &kardinalv1alpha1.PolicyGate{}}), "not a step")
+}
+
+// TestStepRequiredGateRequests covers #1300: a step create enqueues each gate
+// in its spec.requiredGates, in the step's namespace.
+func TestStepRequiredGateRequests(t *testing.T) {
+	ps := &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod", Namespace: "team-a"},
+		Spec:       kardinalv1alpha1.PromotionStepSpec{RequiredGates: []string{"app-v1-prod-soak", "app-v1-prod-hours"}},
+	}
+	reqs := stepRequiredGateRequests(context.Background(), ps)
+	require.Len(t, reqs, 2)
+	assert.Equal(t, "team-a", reqs[0].Namespace)
+	assert.Equal(t, "app-v1-prod-soak", reqs[0].Name)
+	assert.Equal(t, "team-a", reqs[1].Namespace)
+	assert.Equal(t, "app-v1-prod-hours", reqs[1].Name)
+	assert.Empty(t, stepRequiredGateRequests(context.Background(), &kardinalv1alpha1.PolicyGate{}), "not a step")
+}

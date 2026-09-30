@@ -424,7 +424,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 // blockingGateCount counts the not-ready gate instances of bundle that hold it
 // back (E2E-R18), graph.GateHolds: the gate's environment has no step of
 // bundle yet and every upstream environment is Verified, or a Pending step
-// there waits on the gate as a pre-deploy gate. A gate of an environment the
+// there waits on the gate. A gate of an environment the
 // bundle has not reached is not the reason it is waiting, so it is not
 // counted, and neither is a gate of a Failed or Superseded bundle. kardinal
 // status lists the same gates as Blocking Policy Gates.
