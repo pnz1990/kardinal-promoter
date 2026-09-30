@@ -79,9 +79,16 @@ const (
 	condGraphAccepted = "GraphAccepted"
 	condGraphReady    = "GraphReady"
 	// condGraphSynced is False while re-translating or recreating the Graph
-	// fails. It is only written once a sync has failed.
+	// fails, or (reason GraphDeleted) while the Graph of a Bundle that failed
+	// promoting is missing. It is only written once a sync has failed.
 	condGraphSynced = "GraphSynced"
 )
+
+// errGraphDeletedAfterFailure is returned by syncGraph when the Graph of a
+// Bundle that failed promoting is missing. It is not recreated: recreating it
+// would promote the failed artifacts again from the first environment.
+var errGraphDeletedAfterFailure = errors.New("the Graph of this failed Bundle was deleted; it is not recreated, " +
+	"so the failed promotion does not run again. Create a new Bundle, or change the Pipeline to retry this one")
 
 // indexPipeline is the Bundle field index on spec.pipeline.
 const indexPipeline = "spec.pipeline"
@@ -234,6 +241,10 @@ func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 // The returned error is a failed re-translate or recreate; it wraps
 // graph.ErrInvalid when the Graph cannot be built (see handleSyncEvidence).
 // A successful re-translate or recreate clears InvalidSpec.
+//
+// The Graph of a Bundle that failed promoting (failedPromoting) is not
+// recreated: errGraphDeletedAfterFailure is returned instead. Only a Pipeline
+// change (the re-translate above) rebuilds it.
 func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.Pipeline) error {
 	if r.Translator == nil || r.GraphChecker == nil {
@@ -254,6 +265,10 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		return nil
 	}
 	if !exists {
+		if failedPromoting(b) {
+			log.Info().Str("graph", name).Msg("graph of a failed bundle deleted — not recreating")
+			return errGraphDeletedAfterFailure
+		}
 		log.Info().Str("graph", name).Msg("graph deleted externally — recreating")
 		graphName, tErr := r.Translator.Translate(ctx, pipeline, b)
 		if tErr != nil {
@@ -268,6 +283,16 @@ func (r *Reconciler) syncGraph(ctx context.Context, log zerolog.Logger,
 		mirrorGraphConditions(b, g)
 	}
 	return nil
+}
+
+// failedPromoting reports whether b is Failed because a step failed or kro
+// rejected its Graph (or failed before the Failed condition existed), rather
+// than only because its Graph could not be built (InvalidSpec). Re-running such
+// a Bundle from scratch would promote the failed artifacts again.
+func failedPromoting(b *kardinalv1alpha1.Bundle) bool {
+	return b.Status.Phase == phaseFailed &&
+		(meta.IsStatusConditionTrue(b.Status.Conditions, condFailed) ||
+			!meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec))
 }
 
 // readGraph returns the Graph when the GraphChecker can read it, or only
@@ -776,7 +801,10 @@ func (r *Reconciler) retryIfPipelineChanged(ctx context.Context, log zerolog.Log
 //     graph.ErrInvalid: the changed Pipeline or the gates cannot be built into
 //     a Graph, so a retry fails the same way;
 //   - Failed → Promoting when nothing is failing any more and the Graph builds
-//     (Superseded instead when a newer sibling is in flight or Verified).
+//     (Superseded instead when a newer sibling is in flight or Verified). A
+//     Bundle that failed promoting recovers only when it still has steps and
+//     its Graph: deleting the Graph deletes the steps, and their absence is
+//     not a recovery.
 //
 // before is b as read at the start of the reconcile; the status is patched
 // only when it changed, so an event with nothing new writes nothing.
@@ -799,7 +827,15 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 
 	var after []func()
 	invalidBuild := errors.Is(syncErr, graph.ErrInvalid)
+	graphDeleted := errors.Is(syncErr, errGraphDeletedAfterFailure)
 	switch {
+	case graphDeleted:
+		if setBundleCondition(b, condGraphSynced, metav1.ConditionFalse, "GraphDeleted", syncErr.Error()) {
+			msg := syncErr.Error()
+			after = append(after, func() {
+				r.event(b, corev1.EventTypeWarning, "GraphDeleted", msg)
+			})
+		}
 	case invalidBuild:
 		wasFailed := before.Status.Phase == phaseFailed
 		reason, msg, changed := setInvalid(b, pipeline, syncErr)
@@ -860,7 +896,9 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			}
 		}
 	case phaseFailed:
-		if failedEnv == nil && rejected == nil && !meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
+		stepsObserved := len(steps) > 0 || !failedPromoting(before)
+		if failedEnv == nil && rejected == nil && !graphDeleted && stepsObserved &&
+			!meta.IsStatusConditionTrue(b.Status.Conditions, condInvalidSpec) {
 			newer, err := r.hasNewerSibling(ctx, b, true)
 			switch {
 			case err != nil:
@@ -881,7 +919,7 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 	}
 
 	result := soakRequeue(b)
-	if syncErr != nil && !invalidBuild {
+	if syncErr != nil && !invalidBuild && !graphDeleted {
 		log.Error().Err(syncErr).Msg("graph sync failed — requeuing")
 		result = ctrl.Result{RequeueAfter: requeueSlow}
 	}

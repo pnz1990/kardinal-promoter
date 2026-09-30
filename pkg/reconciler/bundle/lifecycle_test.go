@@ -783,6 +783,96 @@ func TestLifecycle_MissingGraphRecreated(t *testing.T) {
 	assert.Equal(t, 1, tr.calls)
 }
 
+// graphCreatingTranslator records Translate calls and creates the Graph the
+// reader then finds, like the real translator.
+type graphCreatingTranslator struct {
+	reader *graphStatusReader
+	calls  int
+}
+
+func (m *graphCreatingTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
+	m.calls++
+	name := "app-" + b.Name
+	m.reader.g = &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: b.Namespace, Generation: 1}}
+	return name, nil
+}
+
+// Review item 5: a Failed Bundle is still active, so deleting its Graph used
+// to recreate the Graph (#490) and, with the steps gone, count as "nothing is
+// failing any more": the Bundle went back to Promoting and promoted the failed
+// image again from the first environment. The Graph of a Bundle that failed
+// promoting is no longer recreated and the Bundle stays Failed with
+// GraphSynced=False/GraphDeleted; a Pipeline change is the explicit retry.
+func TestLifecycle_FailedBundleGraphDeletedIsNotRecreated(t *testing.T) {
+	ctx := context.Background()
+	b := lcBundle("app-v1", "image", "Failed", time.Now().UTC())
+	b.Status.GraphRef = "app-app-v1"
+	b.Status.Conditions = []metav1.Condition{
+		{Type: "Ready", Status: metav1.ConditionFalse, Reason: "Failed", Message: "promotion failed", LastTransitionTime: metav1.Now()},
+		{Type: "Failed", Status: metav1.ConditionTrue, Reason: "StepFailed", Message: "environment test: health check failed", LastTransitionTime: metav1.Now()},
+	}
+	// The steps went with the Graph (owner references), so there are none.
+	c := lcClient(lcPipeline("app", lcEnvs("test", "prod")...), b)
+	reader := &graphStatusReader{}
+	tr := &graphCreatingTranslator{reader: reader}
+	r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: reader}
+
+	res := lcReconcile(t, r, "app-v1")
+	assert.Zero(t, res.RequeueAfter, "a deleted Graph is not a transient error to retry")
+	got := lcGet(t, c, "app-v1")
+	assert.Zero(t, tr.calls, "the Graph of a failed Bundle is not recreated")
+	assert.Equal(t, "Failed", got.Status.Phase, "missing steps are not a recovery")
+	synced := meta.FindStatusCondition(got.Status.Conditions, "GraphSynced")
+	require.NotNil(t, synced)
+	assert.Equal(t, metav1.ConditionFalse, synced.Status)
+	assert.Equal(t, "GraphDeleted", synced.Reason)
+	assert.Contains(t, synced.Message, "change the Pipeline")
+	assert.True(t, meta.IsStatusConditionTrue(got.Status.Conditions, "Failed"))
+
+	rv := got.ResourceVersion
+	lcReconcile(t, r, "app-v1")
+	got = lcGet(t, c, "app-v1")
+	assert.Zero(t, tr.calls)
+	assert.Equal(t, "Failed", got.Status.Phase)
+	assert.Equal(t, rv, got.ResourceVersion, "a second reconcile writes nothing")
+
+	// The explicit retry: a Pipeline change rebuilds the Graph in place.
+	var pl kardinalv1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: "app", Namespace: "default"}, &pl))
+	pl.Spec.Environments = lcEnvs("test", "uat", "prod")
+	require.NoError(t, c.Update(ctx, &pl))
+	lcReconcile(t, r, "app-v1")
+	got = lcGet(t, c, "app-v1")
+	assert.Equal(t, 1, tr.calls, "a Pipeline change rebuilds the Graph")
+	assert.Equal(t, "Failed", got.Status.Phase, "it recovers once kro has created the new steps")
+	assert.True(t, meta.IsStatusConditionTrue(got.Status.Conditions, "GraphSynced"))
+
+	require.NoError(t, c.Create(ctx, lcStep("app-v1", "test", "s-test", "Pending")))
+	lcReconcile(t, r, "app-v1")
+	got = lcGet(t, c, "app-v1")
+	assert.Equal(t, "Promoting", got.Status.Phase)
+	assert.Equal(t, 1, tr.calls)
+}
+
+// A Bundle that only failed to build its Graph (InvalidSpec, no step failed)
+// still has its deleted Graph recreated: that is how it retries.
+func TestLifecycle_InvalidSpecBundleGraphStillRecreated(t *testing.T) {
+	b := lcBundle("app-v1", "image", "Failed", time.Now().UTC())
+	b.Status.GraphRef = "app-app-v1"
+	b.Status.Conditions = []metav1.Condition{
+		{Type: "InvalidSpec", Status: metav1.ConditionTrue, Reason: "GraphBuildFailed", Message: "skip denied", LastTransitionTime: metav1.Now()},
+	}
+	c := lcClient(lcPipeline("app", lcEnvs("test")...), b)
+	reader := &graphStatusReader{}
+	tr := &graphCreatingTranslator{reader: reader}
+	r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: reader}
+	lcReconcile(t, r, "app-v1")
+	assert.Equal(t, 1, tr.calls)
+	got := lcGet(t, c, "app-v1")
+	assert.Equal(t, "Promoting", got.Status.Phase)
+	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "InvalidSpec"))
+}
+
 // --- missing Pipeline ---
 
 // C02-bundle-11: a Bundle whose Pipeline does not exist is kept and says so.
