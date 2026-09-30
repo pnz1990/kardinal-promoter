@@ -401,6 +401,46 @@ func TestPolicyGateMapper(t *testing.T) {
 	assert.Equal(t, []string{"new", "sharded", "waiting"}, got)
 }
 
+// TestBundleMapper verifies that a superseded Bundle wakes its own unfinished
+// steps, so their PRs close at once instead of at the next WaitingForMerge
+// poll, and that only Bundle events of superseded Bundles pass the watch.
+func TestBundleMapper(t *testing.T) {
+	step := func(name, ns, bundle, state string) *v1alpha1.PromotionStep {
+		return &v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec:       v1alpha1.PromotionStepSpec{BundleName: bundle},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	objs := []client.Object{
+		step("waiting", "default", "old", "WaitingForMerge"),
+		step("health", "default", "old", "HealthChecking"),
+		step("pending", "default", "old", "Pending"),
+		step("verified", "default", "old", "Verified"),
+		step("failed", "default", "old", "Failed"),
+		step("newer", "default", "new", "WaitingForMerge"),
+		step("other-ns", "other-ns", "old", "WaitingForMerge"),
+	}
+	c := fakeclient.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(objs...).Build()
+	old := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: "old", Namespace: "default"},
+		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
+	}
+
+	r := &Reconciler{Client: c}
+	var got []string
+	for _, req := range r.bundleMapper(context.Background(), old) {
+		assert.Equal(t, "default", req.Namespace)
+		got = append(got, req.Name)
+	}
+	sort.Strings(got)
+	assert.Equal(t, []string{"health", "pending", "waiting"}, got)
+
+	assert.True(t, isSuperseded(old))
+	assert.False(t, isSuperseded(&v1alpha1.Bundle{Status: v1alpha1.BundleStatus{Phase: "Promoting"}}))
+	assert.False(t, isSuperseded(&v1alpha1.PromotionStep{}))
+}
+
 // TestCollectGateResults verifies the PR body gets one row per required gate,
 // named after the template, with Pass/Fail from status.ready, and that an
 // unreadable gate is skipped rather than failing the step.
