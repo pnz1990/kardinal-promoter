@@ -628,6 +628,68 @@ func TestLifecycle_CapListErrorDoesNotSkipCap(t *testing.T) {
 	assert.Equal(t, "Available", lcGet(t, c, "app-v2").Status.Phase)
 }
 
+// #1310: the cap is counted with the uncached APIReader. Two Bundles arrive
+// at once with maxConcurrentPromotions 1. The first moves to Promoting; the
+// informer cache has not seen that patch yet when the second is reconciled.
+// The second still waits, because the count reads the API server. A Promoting
+// Bundle of another Pipeline in the namespace does not count.
+func TestLifecycle_CapCountedUncached(t *testing.T) {
+	ctx := context.Background()
+	p := lcPipeline("app", lcEnvs("test")...)
+	p.Spec.MaxConcurrentPromotions = 1
+	t0 := time.Now().UTC().Add(-time.Hour)
+	other := lcBundle("other-v1", "image", "Available", t0)
+	other.Spec.Pipeline = "other"
+	// Different types, so neither supersedes the other.
+	base := indexedBuilder(newScheme()).
+		WithObjects(p, lcPipeline("other", lcEnvs("test")...), other,
+			lcBundle("app-v1", "image", "Available", t0), lcBundle("app-v2", "config", "Available", t0.Add(time.Second))).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+		Build()
+	// The cache lags: a Bundle listed in lagging still shows Available.
+	lagging := map[string]bool{}
+	cached := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if bl, ok := list.(*kardinalv1alpha1.BundleList); ok {
+				for i := range bl.Items {
+					if lagging[bl.Items[i].Name] {
+						bl.Items[i].Status.Phase = "Available"
+					}
+				}
+			}
+			return nil
+		},
+	})
+	tr := &countingTranslator{}
+	r := &bundle.Reconciler{Client: cached, APIReader: base, Translator: tr}
+
+	lcReconcile(t, r, "other-v1")
+	require.Equal(t, "Promoting", lcGet(t, base, "other-v1").Status.Phase)
+	lcReconcile(t, r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, base, "app-v1").Status.Phase, "another Pipeline's Bundle holds no slot")
+	lagging["app-v1"] = true
+
+	var cachedList kardinalv1alpha1.BundleList
+	require.NoError(t, cached.List(ctx, &cachedList, client.InNamespace("default")))
+	for _, b := range cachedList.Items {
+		if b.Name == "app-v1" {
+			require.Equal(t, "Available", b.Status.Phase, "precondition: the cache has not seen the Promoting patch")
+		}
+	}
+
+	res := lcReconcile(t, r, "app-v2")
+	got := lcGet(t, base, "app-v2")
+	assert.Equal(t, "Available", got.Status.Phase, "the second Bundle waits for the slot")
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, "WaitingForSlot", ready.Reason)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter)
+	assert.Equal(t, 2, tr.calls, "no Graph is created for the second Bundle of app")
+}
+
 // C02-bundle-04: within the same second the created-at annotation, not the
 // name, decides which Bundle is newer.
 func TestLifecycle_SameSecondSupersessionUsesCreatedAt(t *testing.T) {
