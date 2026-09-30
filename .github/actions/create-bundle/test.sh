@@ -71,6 +71,16 @@ b = json.load(sys.stdin)
 print(b["pipeline"], b["type"], b["namespace"], b["images"][0]["tag"], b["provenance"]["commitSHA"],
       b["provenance"]["ciRunURL"], b["provenance"]["author"])')" \
   "my-app image default v1 abc123 https://github.com/myorg/myapp/actions/runs/42 engineer"
+check "no configRef without a config commit" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
+print("configRef" in json.load(sys.stdin))')" "False"
+BODY=$(build_body "my-app" "config" "default" '[]' "def456" "https://git.example.com/org/config")
+check "config commit and repo set configRef" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
+b = json.load(sys.stdin)
+print(b["type"], b["configRef"]["commitSHA"], b["configRef"]["gitRepo"], b["images"])')" \
+  "config def456 https://git.example.com/org/config []"
+BODY=$(build_body "my-app" "mixed" "default" '[{"repository":"ghcr.io/a","tag":"v1"}]' "def456" "")
+check "config repo left out when empty" "$(printf '%s' "$BODY" | python3 -c 'import json, sys
+print(json.load(sys.stdin)["configRef"])')" "{'commitSHA': 'def456'}"
 
 echo ""
 echo "--- Names and URLs ---"
@@ -118,6 +128,7 @@ run_action() {
   : >"$WORK/output"
   env PATH="$WORK/bin:$PATH" FAKE_DIR="$WORK" FAKE_CODES="$1" GITHUB_OUTPUT="$WORK/output" \
     CREATE_BUNDLE_RETRY_SLEEP_SECS=0 KARDINAL_TOKEN=test-token \
+    INPUT_TYPE="${RUN_TYPE:-image}" INPUT_CONFIG_COMMIT="${RUN_CONFIG_COMMIT:-}" \
     INPUT_PIPELINE="${2:-my-app}" INPUT_IMAGE="${3:-ghcr.io/myorg/app:v1}" \
     INPUT_KARDINAL_URL="https://kardinal.example.com/" INPUT_UI_URL="https://ui.example.com" \
     bash "$HERE/create-bundle.sh" >"$WORK/log" 2>&1
@@ -141,6 +152,13 @@ check "hostile image runs nothing" "$([ -e "$WORK/pwned" ] && echo ran || echo c
 
 if run_action 201 'my-app$(id)'; then check "hostile pipeline rejected" accepted rejected; else check "hostile pipeline rejected" rejected rejected; fi
 check "hostile pipeline makes no request" "$(calls)" 0
+
+if RUN_TYPE=config run_action 201; then check "config without config-commit rejected" accepted rejected; else check "config without config-commit rejected" rejected rejected; fi
+check "config without config-commit makes no request" "$(calls)" 0
+if RUN_TYPE=config RUN_CONFIG_COMMIT=def456 run_action 201; then check "config with config-commit succeeds" ok ok; else check "config with config-commit succeeds" failed ok; fi
+check "config Bundle sends configRef" \
+  "$(python3 -c 'import json, sys; b = json.load(open(sys.argv[1])); print(b["type"], b["configRef"]["commitSHA"])' "$WORK/sent.json")" \
+  "config def456"
 
 if run_action "503 201"; then check "503 then 201 succeeds" ok ok; else check "503 then 201 succeeds" failed ok; fi
 check "503 retried once" "$(calls)" 2

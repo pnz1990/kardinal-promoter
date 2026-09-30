@@ -59,13 +59,17 @@ build_images_json() {
   echo "[$items]"
 }
 
-# build_body <pipeline> <type> <namespace> <images_json> — prints the
-# POST /api/v1/bundles request body, with provenance from the GitHub Actions
-# environment.
+# build_body <pipeline> <type> <namespace> <images_json> [config_commit] [config_repo]
+# — prints the POST /api/v1/bundles request body, with provenance from the
+# GitHub Actions environment. A config commit adds configRef (config and
+# mixed Bundles need one); config_repo is its gitRepo, omitted when empty so
+# the controller uses the Pipeline repository.
 build_body() {
   python3 -c 'import json, os, sys
 pipeline, bundle_type, namespace, images = sys.argv[1:5]
-print(json.dumps({
+config_commit = sys.argv[5] if len(sys.argv) > 5 else ""
+config_repo = sys.argv[6] if len(sys.argv) > 6 else ""
+body = {
     "pipeline": pipeline,
     "type": bundle_type,
     "namespace": namespace,
@@ -78,7 +82,12 @@ print(json.dumps({
             os.environ.get("GITHUB_RUN_ID", "0")),
         "author": os.environ.get("GITHUB_ACTOR", ""),
     },
-}))' "$@"
+}
+if config_commit:
+    body["configRef"] = {"commitSHA": config_commit}
+    if config_repo:
+        body["configRef"]["gitRepo"] = config_repo
+print(json.dumps(body))' "$@"
 }
 
 # is_k8s_name <value> — true when value is a valid Kubernetes object name
