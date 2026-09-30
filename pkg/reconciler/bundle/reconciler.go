@@ -121,6 +121,11 @@ type graphReader interface {
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
 	client.Client
+	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
+	// maxConcurrentPromotions count reads through it, so a Bundle this
+	// reconciler moved to Promoting a moment ago counts even before the
+	// informer cache has it (#1310). When nil, Client is used (tests).
+	APIReader client.Reader
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
 	// May be nil in test environments where translation is not needed.
 	Translator BundleTranslator
@@ -717,14 +722,27 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 }
 
 // countPromoting counts the other Promoting Bundles of b's pipeline.
+//
+// It lists through the uncached APIReader (#1310). The Bundle controller runs
+// one reconcile at a time and only the leader reconciles, and the Promoting
+// status patch is accepted by the API server before the next reconcile starts,
+// so an uncached count always sees the previous admission. The spec.pipeline
+// field index exists only in the informer cache, so the namespace is listed
+// and filtered on spec.pipeline in memory. That is one API read per cap check,
+// and only for a Pipeline that sets maxConcurrentPromotions.
 func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bundle) (int, error) {
-	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
-	if err != nil {
-		return 0, err
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	var list kardinalv1alpha1.BundleList
+	if err := reader.List(ctx, &list, client.InNamespace(b.Namespace)); err != nil {
+		return 0, fmt.Errorf("list bundles of pipeline %s: %w", b.Spec.Pipeline, err)
 	}
 	n := 0
-	for i := range siblings {
-		if siblings[i].Name != b.Name && siblings[i].Status.Phase == phasePromoting {
+	for i := range list.Items {
+		s := &list.Items[i]
+		if s.Spec.Pipeline == b.Spec.Pipeline && s.Name != b.Name && s.Status.Phase == phasePromoting {
 			n++
 		}
 	}
