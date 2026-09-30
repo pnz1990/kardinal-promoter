@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,6 +24,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 )
 
 // healthTimeout is health.timeout for Pipelines whose test is not about the
@@ -484,4 +486,441 @@ func TestHealth_BakeFailOnAlarm(t *testing.T) {
 	require.NotNil(t, ps.Status.LastHealthCheckAt)
 	assert.Less(t, ps.Status.LastHealthCheckAt.Sub(started), 2*time.Minute, "failed inside the window")
 	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}
+
+// argoVerified is the Verified message of an argocd check that found the
+// promoted revision (or, with no revision to find, the Bundle images).
+const argoVerified = `health check passed via argocd: Healthy+Synced (opPhase="Succeeded")`
+
+// short is a commit as the argocd adapter prints it.
+func short(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
+// newHookedArgoApp is newArgoApp for one environment whose overlay also
+// deploys an Argo CD hook Job named hook (fixtures.WithHook).
+func newHookedArgoApp(t *testing.T, e *framework.Env, env, phase, script string) *app {
+	t.Helper()
+	ns := e.Namespace(t)
+	files := fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: []string{env}})
+	fixtures.WithHook(files, env, "hook", phase, script)
+	a := &app{e: e, ns: ns, envs: []string{env}, repo: e.Repo(t, ns, files)}
+	e.ArgoApp(t, a.argoApp(env), a.repo, fixtures.Path(env), ns)
+	e.WaitArgoApp(t, a.argoApp(env), syncTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload(env), fixtures.Image+":"+fixtures.V1, syncTimeout)
+	return a
+}
+
+// onlyV1 is a hook script that passes only on fixtures.V1: the hook image
+// follows the overlay's tag.
+var onlyV1 = fmt.Sprintf(`test "$(./podinfo --version)" = %q`, fixtures.V1)
+
+// TestHealth_ArgoVerified checks the argocd adapter's pass: the step is
+// Verified only once the Application is Healthy, Synced and its last
+// operation Succeeded on the commit the step pushed. Covers HEALTH-ARGO-01.
+func TestHealth_ArgoVerified(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	a.apply(t, a.pipeline(nil))
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	commit := ps.Status.Outputs["commitSHA"]
+	require.NotEmpty(t, commit, "an auto promotion records the commit it pushed")
+	app := a.argoApp("test")
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "sync", "revision"), "Argo CD synced the pushed commit")
+	assert.Equal(t, "Succeeded", e.ArgoField(t, app, "status", "operationState", "phase"))
+	assert.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml"), "newTag: "+fixtures.V2)
+	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+}
+
+// TestHealth_ArgoFailures checks the argocd adapter's two health failures,
+// each in its own app: a Degraded Application (the new pods never pull, so
+// the rollout passes its progress deadline) and a failed sync operation (a
+// PostSync hook that fails on the new version while the Deployment runs it;
+// Argo CD retries it once, so the operation is Failed within a minute).
+// Neither is terminal: each counts failures until health.timeout fails the
+// step. Covers HEALTH-ARGO-02.
+func TestHealth_ArgoFailures(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	degraded := newArgoApp(t, e, "test")
+	hooked := newHookedArgoApp(t, e, "test", "PostSync", onlyV1)
+	e.SetArgoSyncRetry(t, hooked.argoApp("test"), 1)
+	for a, timeout := range map[*app]string{degraded: "2m", hooked: "3m"} {
+		p := a.pipeline(nil)
+		envSpec(t, p, "test").Health.Timeout = timeout
+		a.apply(t, p)
+	}
+	broken := e.CreateBundle(t, degraded.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.BrokenTag)
+	failing := e.CreateBundle(t, hooked.ns, pipelineName, "--image", imageV2)
+
+	cases := []struct {
+		a       *app
+		bundle  string
+		state   string
+		timeout string
+	}{
+		{degraded, broken, "health=Degraded, sync=Synced, opPhase=Succeeded", "2m0s"},
+		{hooked, failing, "health=Healthy, sync=Synced, opPhase=Failed", "3m0s"},
+	}
+	for _, c := range cases {
+		unhealthy := "unhealthy via argocd: " + c.state
+		e.WaitStep(t, c.a.ns, pipelineName, c.bundle, "test", promoteTimeout, "an unhealthy check",
+			func(ps *v1alpha1.PromotionStep) bool {
+				return ps.Status.State == "HealthChecking" && ps.Status.Message == unhealthy && ps.Status.ConsecutiveHealthFailures >= 1
+			})
+	}
+	for _, c := range cases {
+		ps := e.WaitStepState(t, c.a.ns, pipelineName, c.bundle, "test", "Failed", 4*time.Minute)
+		assert.Equal(t, "health alarm via argocd (onHealthFailure=none): health check timeout after "+c.timeout+
+			"; last result: unhealthy via argocd: "+c.state, ps.Status.Message)
+		assert.GreaterOrEqual(t, ps.Status.ConsecutiveHealthFailures, 2)
+		e.WaitBundlePhase(t, c.a.ns, c.bundle, "Failed", time.Minute)
+	}
+	assert.Equal(t, "Degraded", e.ArgoField(t, degraded.argoApp("test"), "status", "health", "status"))
+	assert.Equal(t, "Failed", e.ArgoField(t, hooked.argoApp("test"), "status", "operationState", "phase"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, hooked.ns, fixtures.Workload("test")),
+		"the Deployment runs the new version; only the PostSync hook failed")
+}
+
+// TestHealth_ArgoWaitsForRevision checks that the argocd adapter does not
+// pass an Application that is Healthy and Synced on an older commit (pinned
+// to it), nor one whose sync is still running (a PreSync hook that takes 40s
+// on the new version). Both are waiting, not failures. Covers HEALTH-ARGO-03.
+func TestHealth_ArgoWaitsForRevision(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newHookedArgoApp(t, e, "test", "PreSync", onlyV1+" || sleep 40")
+	app := a.argoApp("test")
+	old := e.ArgoField(t, app, "status", "sync", "revision")
+	require.NotEmpty(t, old)
+	e.SetArgoTargetRevision(t, app, old)
+	p := a.pipeline(nil)
+	envSpec(t, p, "test").Health.Timeout = "5m"
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", promoteTimeout, "the pushed commit",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != ""
+		})
+	commit := ps.Status.Outputs["commitSHA"]
+	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=Synced, opPhase=Succeeded, revision=%s, waiting for %s",
+		short(old), short(commit))
+	e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "the older revision to hold the step",
+		func(ps *v1alpha1.PromotionStep) bool { return ps.Status.Message == waiting })
+	framework.Consistently(t, 20*time.Second, "an Application on an older commit does not pass", func(ctx context.Context) (bool, string) {
+		ps, _, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
+		if err != nil || ps == nil {
+			return false, "step lookup failed"
+		}
+		return ps.Status.State == "HealthChecking" && ps.Status.Message == waiting &&
+			ps.Status.ConsecutiveHealthFailures == 0, framework.DescribeStep(ps)
+	})
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+
+	e.SetArgoTargetRevision(t, app, a.repo.Branch)
+	ps = e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "a running sync to hold the step",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && strings.Contains(ps.Status.Message, "opPhase=Running")
+		})
+	assert.True(t, strings.HasPrefix(ps.Status.Message, "waiting for argocd: "), ps.Status.Message)
+	assert.Equal(t, 0, ps.Status.ConsecutiveHealthFailures, "a running sync is not a failure")
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")),
+		"the PreSync hook still runs")
+
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "sync", "revision"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+}
+
+// TestHealth_ArgoSharedBranch checks the shared-branch fallback: two
+// Pipelines push to one branch, and Argo CD (auto-sync off in test) never
+// syncs test's own commit, only the later one from the other Pipeline. The
+// adapter accepts that revision because the Application runs the Bundle
+// image, and says so. Covers HEALTH-ARGO-04.
+func TestHealth_ArgoSharedBranch(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test", "uat")
+	both := a.pipeline(nil)
+	test, uat := both.DeepCopy(), both.DeepCopy()
+	test.Spec.Environments = []v1alpha1.EnvironmentSpec{*envSpec(t, both, "test")}
+	uat.Name = pipelineName + "-uat"
+	uat.Spec.Environments = []v1alpha1.EnvironmentSpec{*envSpec(t, both, "uat")}
+	a.apply(t, test)
+	a.apply(t, uat)
+	e.SetArgoAutoSync(t, a.argoApp("test"), false)
+
+	first := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStep(t, a.ns, pipelineName, first, "test", promoteTimeout, "test's commit",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["commitSHA"] != ""
+		})
+	own := ps.Status.Outputs["commitSHA"]
+	second := e.CreateBundle(t, a.ns, uat.Name, "--image", imageV2)
+	later := e.WaitStepState(t, a.ns, uat.Name, second, "uat", "Verified", promoteTimeout).Status.Outputs["commitSHA"]
+	require.NotEmpty(t, later)
+	require.NotEqual(t, own, later)
+	assert.Equal(t, "HealthChecking", e.MustStep(t, a.ns, pipelineName, first, "test").Status.State,
+		"test waits while Argo CD does not sync it")
+
+	e.SetArgoAutoSync(t, a.argoApp("test"), true)
+	ps = e.WaitStepState(t, a.ns, pipelineName, first, "test", "Verified", promoteTimeout)
+	assert.Equal(t, fmt.Sprintf("%s (synced revision %s is not %s, but the Application runs the Bundle images)",
+		argoVerified, short(later), short(own)), ps.Status.Message)
+	assert.Equal(t, later, e.ArgoField(t, a.argoApp("test"), "status", "sync", "revision"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+}
+
+// TestHealth_ArgoMergeCommit checks that with approval: pr-review the argocd
+// adapter waits for the PR's merge commit: the step records it as
+// outputs.mergeCommitSHA (it pushed nothing to the branch itself), waits
+// while Argo CD is pinned to the commit before the merge, and passes once
+// Argo CD syncs the merge commit. Covers HEALTH-ARGO-05.
+func TestHealth_ArgoMergeCommit(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	app := a.argoApp("test")
+	old := e.ArgoField(t, app, "status", "sync", "revision")
+	require.NotEmpty(t, old)
+	e.SetArgoTargetRevision(t, app, old)
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "WaitingForMerge", promoteTimeout)
+	pr := e.WaitPR(t, a.repo, time.Minute, "the promotion PR", func(pr gitserver.PR) bool { return pr.State == "open" })
+	require.NoError(t, e.Git.MergePR(context.Background(), a.repo, pr.Number))
+
+	ps := e.WaitStep(t, a.ns, pipelineName, bundle, "test", 2*time.Minute, "the merge commit",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "HealthChecking" && ps.Status.Outputs["mergeCommitSHA"] != ""
+		})
+	merge := ps.Status.Outputs["mergeCommitSHA"]
+	assert.Empty(t, ps.Status.Outputs["commitSHA"], "a pr-review step pushes only its PR branch")
+	waiting := fmt.Sprintf("waiting for argocd: health=Healthy, sync=Synced, opPhase=Succeeded, revision=%s, waiting for %s",
+		short(old), short(merge))
+	e.WaitStep(t, a.ns, pipelineName, bundle, "test", time.Minute, "the merge commit to be awaited",
+		func(ps *v1alpha1.PromotionStep) bool { return ps.Status.Message == waiting })
+
+	e.SetArgoTargetRevision(t, app, a.repo.Branch)
+	ps = e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, merge, e.ArgoField(t, app, "status", "sync", "revision"), "the merge commit is the branch head Argo CD synced")
+	assert.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml"), "newTag: "+fixtures.V2)
+	assert.Equal(t, imageV2, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+}
+
+// argoStrategyApp is a test namespace with a HelmChartRepo and an Argo CD
+// Application that renders it with values, synced on fixtures.V1. It returns
+// the namespace, the repo and the Application name.
+func argoStrategyApp(t *testing.T, e *framework.Env, values map[string]interface{}) (string, gitserver.Repo, string) {
+	t.Helper()
+	ns := e.Namespace(t)
+	repo := e.Repo(t, ns, fixtures.HelmChartRepo(fixtures.Workload("test")))
+	app := ns + "-test"
+	e.ArgoHelmApp(t, app, repo, fixtures.ChartPath, ns, values)
+	e.WaitArgoApp(t, app, syncTimeout)
+	e.WaitDeploymentImage(t, ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V1, syncTimeout)
+	return ns, repo, app
+}
+
+// argoStrategyEnv is an environment that promotes by patching Argo CD
+// Application app (update.strategy argocd) and checks it with argocd health.
+func argoStrategyEnv(name, app, imageKey string) v1alpha1.EnvironmentSpec {
+	return v1alpha1.EnvironmentSpec{
+		Name:     name,
+		Approval: "auto",
+		Update: v1alpha1.UpdateConfig{Strategy: "argocd", ArgoCD: &v1alpha1.ArgoCDUpdateConfig{
+			Application: app, Namespace: framework.ArgoCDNamespace, ImageKey: imageKey}},
+		Health: v1alpha1.HealthConfig{Type: "argocd", Timeout: healthTimeout,
+			ArgoCD: &v1alpha1.HealthTargetRef{Name: app, Namespace: framework.ArgoCDNamespace}},
+	}
+}
+
+// argoStrategyPipeline is a Pipeline over repo with envs.
+func argoStrategyPipeline(ns string, repo gitserver.Repo, envs ...v1alpha1.EnvironmentSpec) *v1alpha1.Pipeline {
+	return &v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: pipelineName, Namespace: ns},
+		Spec: v1alpha1.PipelineSpec{
+			Git: v1alpha1.PipelineGit{URL: repo.CloneURL, Branch: repo.Branch,
+				SecretRef: &v1alpha1.SecretRef{Name: framework.GitSecretName}},
+			Environments: envs,
+		},
+	}
+}
+
+// valuesKey reads a dot path of the Application's spec.source.helm.valuesObject.
+func valuesKey(t *testing.T, e *framework.Env, app, key string) string {
+	t.Helper()
+	return e.ArgoField(t, app, append([]string{"spec", "source", "helm", "valuesObject"}, strings.Split(key, ".")...)...)
+}
+
+// assertNoGitChange checks that a promotion changed nothing in git: no PR,
+// the chart's values unchanged, and Argo CD still on commit.
+func assertNoGitChange(t *testing.T, e *framework.Env, repo gitserver.Repo, app, commit string) {
+	t.Helper()
+	prs, err := e.Git.PullRequests(context.Background(), repo)
+	require.NoError(t, err)
+	assert.Empty(t, prs, "the argocd strategy opens no PR")
+	assert.Equal(t, "image:\n  tag: "+fixtures.V1+"\n", e.ReadFile(t, repo, repo.Branch, fixtures.ChartPath+"/values.yaml"))
+	assert.Equal(t, commit, e.ArgoField(t, app, "status", "sync", "revision"), "no commit on the branch Argo CD tracks")
+}
+
+// TestHealth_ArgoStrategyPatchesApplication checks update.strategy argocd:
+// the step patches image.tag in the Application's
+// spec.source.helm.valuesObject, Argo CD rolls the Deployment out, and argocd
+// health (no commit to find, so it checks the Bundle image) verifies it. No
+// commit or PR is made. Covers ARGOSTRAT-01.
+func TestHealth_ArgoStrategyPatchesApplication(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}})
+	e.GrantArgoPatch(t, ns, app)
+	commit := e.ArgoField(t, app, "status", "sync", "revision")
+	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, ""))))
+
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	ps := e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, map[string]string{"argocdApplication": app, "argocdNamespace": framework.ArgoCDNamespace,
+		"imageKey": "image.tag", "imageTag": fixtures.V2}, ps.Status.Outputs, "no commitSHA: nothing was pushed")
+	require.Len(t, ps.Status.Steps, 2)
+	assert.Equal(t, "argocd-set-image", ps.Status.Steps[0].Name)
+	assert.Equal(t, "health-check", ps.Status.Steps[1].Name)
+	assert.Equal(t, fixtures.V2, valuesKey(t, e, app, "image.tag"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	assertNoGitChange(t, e, repo, app, commit)
+	e.WaitBundlePhase(t, ns, bundle, "Verified", time.Minute)
+}
+
+// TestHealth_ArgoStrategyImageKey checks update.argocd.imageKey and
+// multi-image Bundles: the tag goes to the nested key podinfo.image.tag,
+// whose maps the patch creates, and of three Bundle images the step uses the
+// first with a tag (the first has only a digest). Covers ARGOSTRAT-02.
+func TestHealth_ArgoStrategyImageKey(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}})
+	e.GrantArgoPatch(t, ns, app)
+	commit := e.ArgoField(t, app, "status", "sync", "revision")
+	require.Empty(t, valuesKey(t, e, app, "podinfo.image.tag"))
+	require.NoError(t, e.Client.Create(context.Background(),
+		argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, "podinfo.image.tag"))))
+
+	bundle := e.CreateBundle(t, ns, pipelineName,
+		"--image", "ghcr.io/kardinal-e2e/sidecar@sha256:"+strings.Repeat("a", 64),
+		"--image", imageV2,
+		"--image", "ghcr.io/kardinal-e2e/other:"+fixtures.V3)
+	ps := e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, "podinfo.image.tag", ps.Status.Outputs["imageKey"])
+	assert.Equal(t, fixtures.V2, ps.Status.Outputs["imageTag"], "the first Bundle image with a tag")
+	assert.Equal(t, fixtures.V2, valuesKey(t, e, app, "podinfo.image.tag"))
+	assert.Equal(t, fixtures.V1, valuesKey(t, e, app, "image.tag"), "only imageKey is patched")
+	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+	assertNoGitChange(t, e, repo, app, commit)
+}
+
+// TestHealth_ArgoStrategyRejectsConfigBundles checks that a config or mixed
+// Bundle fails at graph build when an environment it promotes uses the
+// argocd strategy, even a later one: test (kustomize) gets no PromotionStep,
+// and git, the Deployment and the Application stay as they were.
+// Covers ARGOSTRAT-03.
+func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test")
+	prodApp := a.ns + "-prod-helm"
+	p := a.pipeline(nil)
+	p.Spec.Environments = append(p.Spec.Environments, argoStrategyEnv("prod", prodApp, ""))
+	a.apply(t, p)
+	commit := e.ArgoField(t, a.argoApp("test"), "status", "sync", "revision")
+
+	for _, typ := range []string{"mixed", "config"} {
+		args := []string{"--type", typ, "--config-commit", commit}
+		if typ == "mixed" {
+			args = append(args, "--image", imageV2)
+		}
+		bundle := e.CreateBundle(t, a.ns, pipelineName, args...)
+		b := e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+		c := meta.FindStatusCondition(b.Status.Conditions, "InvalidSpec")
+		require.NotNil(t, c, "%s Bundle: InvalidSpec condition: %v", typ, b.Status.Conditions)
+		assert.Equal(t, metav1.ConditionTrue, c.Status)
+		assert.Equal(t, "GraphBuildFailed", c.Reason)
+		// The "translator.Translate: build: build:" prefix is what the
+		// controller writes today for every GraphBuildFailed message.
+		assert.Equal(t, fmt.Sprintf(`translator.Translate: build: build: environment "prod" uses update.strategy argocd, which does not support %s Bundles: `+
+			"it sets only the image in the Argo CD Application and would skip the config change; use a git-based strategy "+
+			"(kustomize or helm) for that environment, or skip it with intent.skipEnvironments — fix the Pipeline, Bundle "+
+			"or PolicyGate it names; a Pipeline change retries this Bundle", typ), c.Message)
+		var steps v1alpha1.PromotionStepList
+		require.NoError(t, e.Client.List(context.Background(), &steps, client.InNamespace(a.ns)))
+		assert.Empty(t, steps.Items, "%s Bundle: no environment started", typ)
+	}
+	assert.Contains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path("test")+"/kustomization.yaml"), "newTag: "+fixtures.V1)
+	assert.Equal(t, commit, e.ArgoField(t, a.argoApp("test"), "status", "sync", "revision"), "no commit")
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, a.ns, fixtures.Workload("test")))
+	prs, err := e.Git.PullRequests(context.Background(), a.repo)
+	require.NoError(t, err)
+	assert.Empty(t, prs)
+}
+
+// TestHealth_ArgoStrategyNeedsPatchRBAC checks the argocd strategy's RBAC.
+// The chart installed with defaults grants no patch on Applications, so the
+// step fails with the API server's forbidden error after its retries and
+// nothing changes. helm template shows rbac.argocdApplicationsWrite=true
+// adds patch to the chart's Applications rule; with that rule bound in the
+// Application namespace, the next Bundle promotes. Covers ARGOSTRAT-04,
+// CHART-ARGOCDWRITE-01.
+func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}})
+	require.False(t, e.ControllerCan(t, "patch"), "the chart's default RBAC grants no patch on Applications")
+	require.True(t, e.ControllerCan(t, "get"))
+	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, ""))))
+
+	denied := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	forbidden := fmt.Sprintf(`step argocd-set-image: argocd-set-image: patch Application: applications.argoproj.io %q is forbidden: `+
+		`User "system:serviceaccount:%s:%s" cannot patch resource "applications" in API group "argoproj.io" in the namespace %q`,
+		app, framework.ControllerNamespace, framework.ControllerServiceAccount, framework.ArgoCDNamespace)
+	e.WaitStep(t, ns, pipelineName, denied, "test", promoteTimeout, "the forbidden patch to be retried",
+		func(ps *v1alpha1.PromotionStep) bool {
+			return ps.Status.State == "Promoting" && ps.Status.Message == "retrying in 10s (1/5) after error: "+forbidden
+		})
+	// Retries back off 10s, 20s, 40s, 80s and 120s.
+	ps := e.WaitStepState(t, ns, pipelineName, denied, "test", "Failed", 7*time.Minute)
+	assert.Equal(t, forbidden+" (gave up after 5 retries)", ps.Status.Message)
+	e.WaitBundlePhase(t, ns, denied, "Failed", time.Minute)
+	assert.Equal(t, fixtures.V1, valuesKey(t, e, app, "image.tag"))
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
+
+	verbs := func(rules []rbacv1.PolicyRule) [][]string {
+		var out [][]string
+		for _, r := range rules {
+			out = append(out, r.Verbs)
+		}
+		return out
+	}
+	assert.Equal(t, [][]string{{"get", "list", "watch"}}, verbs(framework.ChartApplicationRules(t)))
+	write := framework.ChartApplicationRules(t, "rbac.argocdApplicationsWrite=true")
+	require.Equal(t, [][]string{{"get", "list", "watch", "patch"}}, verbs(write))
+	e.BindArgoRules(t, ns, write)
+	require.True(t, e.ControllerCan(t, "patch"))
+
+	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
+	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	assert.Equal(t, fixtures.V2, valuesKey(t, e, app, "image.tag"))
+	assert.Equal(t, imageV2, e.DeploymentImage(t, ns, fixtures.Workload("test")))
 }

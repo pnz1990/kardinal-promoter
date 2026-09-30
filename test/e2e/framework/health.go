@@ -72,6 +72,41 @@ func (e *Env) SetArgoAutoSync(t *testing.T, name string, on bool) {
 	}
 }
 
+// SetArgoSyncRetry sets how often Argo CD retries a failed automated sync of
+// the Application. Argo CD 3 retries 5 times by default, with a backoff from
+// 5s, so a failing sync stays Running for minutes before it is Failed.
+func (e *Env) SetArgoSyncRetry(t *testing.T, name string, limit int) {
+	t.Helper()
+	patch := fmt.Sprintf(`{"spec":{"syncPolicy":{"retry":{"limit":%d}}}}`, limit)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Patch(ctx, name,
+		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("set sync retry limit %d on Argo CD Application %s: %v", limit, name, err)
+	}
+}
+
+// SetArgoTargetRevision points the Argo CD Application at rev (a branch or a
+// commit). Pinned to a commit, it keeps running that commit while its branch
+// moves on.
+func (e *Env) SetArgoTargetRevision(t *testing.T, name, rev string) {
+	t.Helper()
+	patch := fmt.Sprintf(`{"spec":{"source":{"targetRevision":%q}}}`, rev)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Patch(ctx, name,
+		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("set targetRevision=%s on Argo CD Application %s: %v", rev, name, err)
+	}
+}
+
+// ArgoField returns a string field of the Argo CD Application, "" when unset.
+func (e *Env) ArgoField(t *testing.T, name string, fields ...string) string {
+	t.Helper()
+	v, _, _ := unstructured.NestedString(e.GetArgoApp(t, name).Object, fields...)
+	return v
+}
+
 // GetArgoApp returns the Argo CD Application.
 func (e *Env) GetArgoApp(t *testing.T, name string) *unstructured.Unstructured {
 	t.Helper()
