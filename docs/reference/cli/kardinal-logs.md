@@ -13,7 +13,8 @@ For each active PromotionStep, shows:
   - Conditions from the status
 
 Use --follow (-f) to stream step progress in real time, polling every 2 seconds
-until all steps reach a terminal state (Verified, Failed, or AbortedByAlarm).
+until all steps reach a terminal state (Verified, Failed, AbortedByAlarm or
+RollingBack).
 Each state change is printed once.
 
 Example:

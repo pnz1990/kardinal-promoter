@@ -50,9 +50,9 @@ supersede an in-flight `config` Bundle, and vice versa.
 
 ```bash
 kardinal get bundles my-app
-# BUNDLE     PHASE       ENV      AGE
-# v1.29.0    Superseded  uat      10m    (superseded by v1.30.0)
-# v1.30.0    Promoting   prod     3m
+# BUNDLE         TYPE    PHASE        AGE
+# my-app-7xk2p   image   Superseded   10m
+# my-app-9qd4s   image   Promoting    3m
 ```
 
 ### Bundle types

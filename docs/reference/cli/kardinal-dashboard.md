@@ -22,7 +22,7 @@ kardinal dashboard [flags]
 ### Options
 
 ```
-      --address string   Direct URL to the kardinal UI (skip auto-detection)
+      --address string   URL of the kardinal UI (default http://localhost:8082/ui/)
   -h, --help             help for dashboard
       --no-open          Print the URL without opening browser
 ```

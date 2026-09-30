@@ -93,7 +93,7 @@ Example:
 		},
 	}
 
-	cmd.Flags().StringVar(&uiAddress, "address", "", "Direct URL to the kardinal UI (skip auto-detection)")
+	cmd.Flags().StringVar(&uiAddress, "address", "", "URL of the kardinal UI (default http://localhost:8082/ui/)")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Print the URL without opening browser")
 
 	return cmd
