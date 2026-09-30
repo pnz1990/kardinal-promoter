@@ -118,7 +118,7 @@ func TestFormatPipelineTableFull_subColumn(t *testing.T) {
 		makeTestSubscription("other-watcher", "default", "other-pipeline", v1alpha1.SubscriptionTypeImage, "Watching", ""),
 	}
 	var buf bytes.Buffer
-	err := FormatPipelineTableFull(&buf, []v1alpha1.Pipeline{pipe}, nil, nil, nil, subs, false)
+	err := FormatPipelineTableFull(&buf, []v1alpha1.Pipeline{pipe}, nil, nil, subs, false)
 	require.NoError(t, err)
 	out := buf.String()
 	// Header must have SUB column
@@ -141,7 +141,7 @@ func TestFormatPipelineTableFull_noSubsShowsZero(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	err := FormatPipelineTableFull(&buf, []v1alpha1.Pipeline{pipe}, nil, nil, nil, nil, false)
+	err := FormatPipelineTableFull(&buf, []v1alpha1.Pipeline{pipe}, nil, nil, nil, false)
 	require.NoError(t, err)
 	out := buf.String()
 	// With nil subs: no SUB column

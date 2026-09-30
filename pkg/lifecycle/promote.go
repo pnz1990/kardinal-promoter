@@ -123,7 +123,7 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 	// source, or the source itself, which reaches the environment on its own.
 	for i := range bundles.Items {
 		o := &bundles.Items[i]
-		if o.Spec.Pipeline != req.Pipeline || o.Spec.Type != src.Spec.Type || !inFlightPhase(o.Status.Phase) {
+		if o.Spec.Pipeline != req.Pipeline || o.Spec.Type != src.Spec.Type || !InFlightPhase(o.Status.Phase) {
 			continue
 		}
 		if o.Name == src.Name || CompareCreation(o, src) > 0 {

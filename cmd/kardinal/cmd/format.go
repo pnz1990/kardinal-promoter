@@ -27,6 +27,7 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -91,16 +92,14 @@ func stepStatePriority(state string) int {
 	}
 }
 
-// FormatPipelineTableFull writes a table of pipelines to w. Each environment
-// column shows the state of that environment's current Bundle, the Bundle
-// explain and status describe there (currentBundleByEnv), and BUNDLE is the
-// newest of those Bundles. bundles, steps and gates may span namespaces and
-// pipelines. When subs is non-nil a SUB column counts the Watching
-// Subscriptions per pipeline. showNamespace prepends a NAMESPACE column
-// (--all-namespaces).
+// FormatPipelineTableFull writes a table of pipelines to w. BUNDLE is each
+// pipeline's current Bundle (lifecycle.CurrentBundle, the UI's
+// activeBundleName) and every environment column describes that Bundle
+// (pipelineEnvStates). bundles and steps may span namespaces and pipelines.
+// When subs is non-nil a SUB column counts the Watching Subscriptions per
+// pipeline. showNamespace prepends a NAMESPACE column (--all-namespaces).
 func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
-	steps []v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate, subs []v1alpha1.Subscription,
-	showNamespace bool) error {
+	steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
 	var subCount map[string]int
 	if subs != nil {
 		// namespace/pipeline → count of active Subscriptions (Phase=="Watching").
@@ -114,89 +113,63 @@ func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles
 			}
 		}
 	}
-	return formatPipelineTableInternal(w, pipelines, pipelineEnvStates(bundles, steps, gates), subCount, showNamespace)
+	return formatPipelineTableInternal(w, pipelines, pipelineEnvStates(pipelines, bundles, steps), subCount, showNamespace)
 }
 
 // pipelineRow is the table content of one pipeline: its current Bundle and
-// the state of each environment.
+// that Bundle's state in each environment.
 type pipelineRow struct {
 	bundle string
 	envs   map[string]string
 }
 
 // pipelineEnvStates returns, per namespace/pipeline, the BUNDLE and
-// per-environment states of the pipeline table (E2E-R17). An environment
-// shows its current Bundle's step state (the highest stepStatePriority over
-// the Bundle's region steps there; an unstarted step is Pending), or
-// "Waiting" when the current Bundle has no step there yet: it is held by a
-// gate or has not reached the environment, and another Bundle's state there
-// would describe a Bundle that is no longer current. BUNDLE is the newest
-// current Bundle over all environments (lifecycle.CompareCreation).
-func pipelineEnvStates(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep,
-	gates []v1alpha1.PolicyGate) map[string]pipelineRow {
-	type group struct {
-		bundles []v1alpha1.Bundle
-		steps   []v1alpha1.PromotionStep
-		gates   []v1alpha1.PolicyGate
-	}
-	groups := make(map[string]*group)
-	get := func(ns, pipeline string) *group {
-		key := ns + "/" + pipeline
-		if groups[key] == nil {
-			groups[key] = &group{}
-		}
-		return groups[key]
-	}
+// per-environment states of the pipeline table, all about one Bundle: the
+// pipeline's current Bundle, lifecycle.CurrentBundle (E2E-R17). An
+// environment shows that Bundle's step state there, the highest
+// stepStatePriority over its region steps (an unstarted step is Pending).
+// Without a step it shows "Waiting" while the Bundle is in flight and will
+// still come (held by a gate, or upstream not Verified yet), and nothing
+// ("-") when the Bundle is terminal or does not promote the environment
+// (skipped, or past its target). Another Bundle's state is never shown, so a
+// row cannot pair a Bundle with a state it does not have.
+func pipelineEnvStates(pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
+	steps []v1alpha1.PromotionStep) map[string]pipelineRow {
+	bundlesByPipeline := make(map[string][]v1alpha1.Bundle)
 	for i := range bundles {
 		if bundles[i].Spec.Pipeline != "" {
-			g := get(bundles[i].Namespace, bundles[i].Spec.Pipeline)
-			g.bundles = append(g.bundles, bundles[i])
-		}
-	}
-	for i := range steps {
-		if steps[i].Spec.PipelineName != "" {
-			g := get(steps[i].Namespace, steps[i].Spec.PipelineName)
-			g.steps = append(g.steps, steps[i])
-		}
-	}
-	for i := range gates {
-		if p := gates[i].Labels["kardinal.io/pipeline"]; p != "" {
-			g := get(gates[i].Namespace, p)
-			g.gates = append(g.gates, gates[i])
+			key := bundles[i].Namespace + "/" + bundles[i].Spec.Pipeline
+			bundlesByPipeline[key] = append(bundlesByPipeline[key], bundles[i])
 		}
 	}
 
-	out := make(map[string]pipelineRow, len(groups))
-	for key, g := range groups {
-		current := currentBundleByEnv(g.bundles, g.steps, g.gates)
-		if len(current) == 0 {
+	out := make(map[string]pipelineRow, len(pipelines))
+	for i := range pipelines {
+		p := &pipelines[i]
+		key := p.Namespace + "/" + p.Name
+		b := lifecycle.CurrentBundle(bundlesByPipeline[key])
+		if b == nil {
 			continue
 		}
-		byName := make(map[string]*v1alpha1.Bundle, len(g.bundles))
-		for i := range g.bundles {
-			byName[g.bundles[i].Name] = &g.bundles[i]
-		}
-		row := pipelineRow{envs: make(map[string]string, len(current))}
-		var newest *v1alpha1.Bundle
-		for env, name := range current {
-			row.envs[env] = "Waiting"
-			if b := byName[name]; newest == nil || lifecycle.CompareCreation(b, newest) > 0 {
-				newest = b
+		row := pipelineRow{bundle: b.Name, envs: make(map[string]string, len(p.Spec.Environments))}
+		if lifecycle.InFlightPhase(b.Status.Phase) {
+			for _, e := range p.Spec.Environments {
+				if _, err := graph.DirectUpstreams(p, b, e.Name); err == nil {
+					row.envs[e.Name] = "Waiting"
+				}
 			}
 		}
-		row.bundle = newest.Name
 		best := make(map[string]int)
-		for i := range g.steps {
-			s := &g.steps[i]
-			env := s.Spec.Environment
-			if name, ok := current[env]; !ok || s.Spec.BundleName != name {
+		for j := range steps {
+			s := &steps[j]
+			if s.Namespace != p.Namespace || s.Spec.PipelineName != p.Name || s.Spec.BundleName != b.Name {
 				continue
 			}
-			state := s.Status.State
+			env, state := s.Spec.Environment, s.Status.State
 			if state == "" {
 				state = "Pending"
 			}
-			if p, seen := best[env]; !seen || stepStatePriority(state) > p {
+			if prio, seen := best[env]; !seen || stepStatePriority(state) > prio {
 				best[env] = stepStatePriority(state)
 				row.envs[env] = state
 			}

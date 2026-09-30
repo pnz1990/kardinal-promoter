@@ -71,12 +71,16 @@ func newGetPipelinesCmd() *cobra.Command {
 		Short:       "List Pipelines",
 		Long: `List Pipelines and their per-environment promotion status.
 
-Each environment column shows the state of the current bundle there: the
-newest bundle that is not Superseded and has a PromotionStep there, or a gate
-instance there and has not failed (the bundle kardinal status and kardinal
-explain describe). Waiting means that bundle has no PromotionStep there yet:
-it is held by a PolicyGate or has not reached the environment. BUNDLE is the
-newest of those bundles. A dash means no bundle has been in the environment.
+BUNDLE is the pipeline's current bundle: the newest bundle that is not
+Superseded, whatever its phase (the newest one when all are Superseded), the
+same bundle the UI shows. Every environment column describes that bundle: its
+PromotionStep state there; Waiting when it has no PromotionStep there yet and
+is still promoting (held by a PolicyGate, or an upstream environment is not
+Verified yet); a dash when it has no PromotionStep there and has finished
+(Verified or Failed) or does not promote the environment. kardinal status and
+kardinal explain instead pick the current bundle per environment, so for an
+environment the newest bundle has not reached they describe the bundle that
+was there before.
 
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
 
@@ -148,10 +152,9 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		// The environment columns come from each environment's current
-		// Bundle, which needs the Bundles, their PromotionSteps and their
-		// gate instances; without any of them the table would show another
-		// Bundle's state, so a list failure is an error.
+		// BUNDLE and the environment columns come from each pipeline's
+		// current Bundle and its PromotionSteps; without either the table
+		// would show a wrong Bundle or state, so a list failure is an error.
 		var steps v1alpha1.PromotionStepList
 		if err := c.List(ctx, &steps, opts...); err != nil {
 			return fmt.Errorf("list promotion steps: %w", err)
@@ -160,10 +163,6 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		if err := c.List(ctx, &bundles, opts...); err != nil {
 			return fmt.Errorf("list bundles: %w", err)
 		}
-		var gates v1alpha1.PolicyGateList
-		if err := c.List(ctx, &gates, opts...); err != nil {
-			return fmt.Errorf("list policy gates: %w", err)
-		}
 		// Fetch Subscriptions for the SUB column. On error: pass nil to omit
 		// the column rather than showing misleading zeros.
 		var subsItems []v1alpha1.Subscription
@@ -171,7 +170,7 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		if err := c.List(ctx, &subsList, opts...); err == nil {
 			subsItems = subsList.Items
 		}
-		if err := FormatPipelineTableFull(w, items, bundles.Items, steps.Items, gates.Items, subsItems, allNamespaces); err != nil {
+		if err := FormatPipelineTableFull(w, items, bundles.Items, steps.Items, subsItems, allNamespaces); err != nil {
 			return err
 		}
 		// Bundle errors are listed for the shown pipelines only.

@@ -276,16 +276,15 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// Index: namespace/pipeline → current bundle. The current bundle is the
-	// newest non-Superseded bundle (lifecycle.CompareCreation: creationTimestamp,
-	// then the created-at annotation, then the name), whatever its phase, so a
-	// newer Failed bundle is never hidden behind an older Verified or Promoting
-	// one (E2E-R15). When every bundle is Superseded, the newest one is used.
-	// web/src/bundleSelection.ts pickDefaultBundle applies the same rule.
+	// Index: namespace/pipeline → current bundle, lifecycle.CurrentBundle's
+	// rule: the newest non-Superseded bundle (lifecycle.CompareCreation), whatever
+	// its phase, so a newer Failed bundle is never hidden behind an older
+	// Verified or Promoting one (E2E-R15). When every bundle is Superseded, the
+	// newest one is used. kardinal get pipelines and
+	// web/src/bundleSelection.ts pickDefaultBundle apply the same rule.
 	type activeBundleEntry struct {
 		bundle       *v1alpha1.Bundle
 		name         string
-		superseded   bool
 		envStates    map[string]string
 		createdAt    time.Time
 		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
@@ -297,10 +296,7 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		key := fmt.Sprintf("%s/%s", b.Namespace, b.Spec.Pipeline)
-		existing := activeBundles[key]
-		superseded := b.Status.Phase == "Superseded"
-		if existing == nil || (existing.superseded && !superseded) ||
-			(existing.superseded == superseded && lifecycle.CompareCreation(b, existing.bundle) > 0) {
+		if existing := activeBundles[key]; existing == nil || lifecycle.MoreCurrent(b, existing.bundle) {
 			envStates := make(map[string]string, len(b.Status.Environments))
 			var lastVerified time.Time
 			for _, env := range b.Status.Environments {
@@ -315,7 +311,6 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			activeBundles[key] = &activeBundleEntry{
 				bundle:       b,
 				name:         b.Name,
-				superseded:   superseded,
 				envStates:    envStates,
 				createdAt:    b.CreationTimestamp.Time,
 				lastVerified: lastVerified,
