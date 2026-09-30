@@ -134,17 +134,17 @@ SCM-GT-10	live	scm-gitea	todo	scm	Gitea: --scm-api-url points the controller at 
 SCM-GL-11	live	scm-gitlab	todo	scm	GitLab: project in a subgroup (group/sub/repo) resolves and gets MRs	docs/scm-providers.md:12
 SCM-GL-12	live	scm-gitlab	todo	scm	GitLab: fast-forward merge (no merge commit in webhook) falls back to the API for the merge commit	docs/pr-evidence.md:108-111
 SCM-FJ-11	live	scm-forgejo	todo	webhook	Forgejo/Gitea: X-Hub-Signature-256 is also accepted and takes precedence over X-Gitea/X-Forgejo-Signature	pkg/scm/repo_url.go:205-212; docs/scm-providers.md:13
-SCM-BB-01	contract	core	todo	scm	Bitbucket Cloud: open PR with Bearer access token on workspace/repo from spec.git.url	docs/scm-providers.md:193-205; pkg/scm/bitbucket.go:84
-SCM-BB-02	contract	core	todo	scm	Bitbucket Cloud: no PR labels (AddLabelsToPR is a no-op); rollback PRs found by title	docs/scm-providers.md:15; docs/scm-providers.md:21-23; pkg/scm/bitbucket.go:302
-SCM-BB-03	contract	core	todo	scm	Bitbucket Cloud: merge detected by polling; merge commit fetched from API	pkg/scm/bitbucket.go:196; pkg/scm/revision.go:90
-SCM-BB-04	contract	core	todo	webhook	Bitbucket Cloud: X-Hub-Signature sha256 HMAC verified; pullrequest.state MERGED marks merged; bad signature 401	docs/scm-providers.md:15; pkg/scm/bitbucket.go:246-287
-SCM-BB-05	contract	core	todo	scm	Bitbucket Cloud: approvals read, close PR, existing-PR reuse	pkg/scm/bitbucket.go:123; pkg/scm/bitbucket.go:167; pkg/scm/bitbucket.go:217
-SCM-BB-06	contract	core	todo	scm	Bitbucket Cloud: no startup token check, info line logged	docs/scm-providers.md:266
-SCM-ADO-01	contract	core	todo	scm	Azure DevOps: open PR with PAT on org/project/repo from dev.azure.com URL	docs/scm-providers.md:212-227; pkg/scm/azuredevops.go
-SCM-ADO-02	contract	core	todo	scm	Azure DevOps: labels applied as PR tags	docs/scm-providers.md:16
-SCM-ADO-03	contract	core	todo	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:226; pkg/scm/revision.go:43-114
-SCM-ADO-04	contract	core	todo	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
-SCM-ADO-05	contract	core	todo	scm	Azure DevOps: approvals read, close PR, existing-PR reuse	pkg/scm/azuredevops.go
+SCM-BB-01	contract	core	covered	scm	Bitbucket Cloud: open PR with Bearer access token on workspace/repo from spec.git.url	docs/scm-providers.md:193-205; pkg/scm/bitbucket.go:84
+SCM-BB-02	contract	core	covered	scm	Bitbucket Cloud: no PR labels (AddLabelsToPR is a no-op); rollback PRs found by title	docs/scm-providers.md:15; docs/scm-providers.md:21-23; pkg/scm/bitbucket.go:302
+SCM-BB-03	contract	core	covered	scm	Bitbucket Cloud: merge detected by polling; merge commit fetched from API	pkg/scm/bitbucket.go:196; pkg/scm/revision.go:90
+SCM-BB-04	contract	core	covered	webhook	Bitbucket Cloud: X-Hub-Signature sha256 HMAC verified; pullrequest.state MERGED marks merged; bad signature 401	docs/scm-providers.md:15; pkg/scm/bitbucket.go:246-287
+SCM-BB-05	contract	core	covered	scm	Bitbucket Cloud: approvals read, close PR, existing-PR reuse	pkg/scm/bitbucket.go:123; pkg/scm/bitbucket.go:167; pkg/scm/bitbucket.go:217
+SCM-BB-06	contract	core	covered	scm	Bitbucket Cloud: no startup token check, info line logged	docs/scm-providers.md:266
+SCM-ADO-01	contract	core	covered	scm	Azure DevOps: open PR with PAT on org/project/repo from dev.azure.com URL	docs/scm-providers.md:212-227; pkg/scm/azuredevops.go
+SCM-ADO-02	contract	core	covered	scm	Azure DevOps: labels applied as PR tags	docs/scm-providers.md:16
+SCM-ADO-03	contract	core	covered	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:226; pkg/scm/revision.go:43-114
+SCM-ADO-04	contract	core	covered	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
+SCM-ADO-05	contract	core	covered	scm	Azure DevOps: approvals read, close PR, existing-PR reuse	pkg/scm/azuredevops.go
 SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:50
 SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:50
 SCM-ROTATE-01	live	scm-forgejo	todo	scm	SCM token Secret change is picked up within about 30s without restart (log SCM credentials rotated)	docs/scm-providers.md:281-329; pkg/scm/secret_watcher.go:31
