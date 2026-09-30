@@ -71,7 +71,7 @@ func journeyScheme(t *testing.T) *runtime.Scheme {
 // A user applies a 3-environment Pipeline, creates a Bundle, and the system
 // promotes through test → uat → prod automatically.
 // In this test we use approvalMode: auto for all envs (the real PR flow is verified
-// in TestPromotionLoop_PRReview_ViaWebhook in promotion_loop_test.go).
+// in TestPromotionLoop_PRReview_ViaWebhook in cmd/kardinal-controller).
 //
 // Pipeline references pnz1990/kardinal-demo (the GitOps repo) and uses
 // ghcr.io/pnz1990/kardinal-test-app (the reference test application image).
