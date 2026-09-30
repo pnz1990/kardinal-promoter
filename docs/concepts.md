@@ -26,7 +26,7 @@ kubectl apply -f bundle.yaml
 | Available | Discovered, not yet promoted to any environment |
 | Promoting | Actively being promoted through the pipeline |
 | Verified | Successfully promoted to all target environments |
-| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle intent or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
+| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
 | Superseded | Replaced by a newer Bundle |
 
 ### Bundle supersession

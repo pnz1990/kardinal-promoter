@@ -216,56 +216,16 @@ spec:
                   description: EnvironmentStatus captures per-environment promotion
                     evidence for a Bundle.
                   properties:
-                    gateResults:
-                      description: |-
-                        GateResults holds the result of each PolicyGate evaluation for this
-                        environment.
-                      items:
-                        description: GateResult records the outcome of a single PolicyGate
-                          evaluation.
-                        properties:
-                          evaluatedAt:
-                            description: EvaluatedAt is when the gate was evaluated.
-                            format: date-time
-                            type: string
-                          gateName:
-                            description: GateName is the name of the PolicyGate.
-                            type: string
-                          gateNamespace:
-                            description: GateNamespace is the namespace of the PolicyGate.
-                            type: string
-                          reason:
-                            description: Reason is the human-readable explanation
-                              for the result.
-                            type: string
-                          result:
-                            description: 'Result is the evaluation outcome: "pass"
-                              or "block".'
-                            type: string
-                        required:
-                        - evaluatedAt
-                        - gateName
-                        - result
-                        type: object
-                      type: array
                     healthCheckedAt:
                       description: HealthCheckedAt is when the post-merge health check
                         completed.
                       format: date-time
-                      type: string
-                    mergedBy:
-                      description: MergedBy is the actor who merged the promotion
-                        PR.
                       type: string
                     name:
                       description: Name is the environment name.
                       type: string
                     phase:
                       description: Phase is the promotion phase for this environment.
-                      type: string
-                    prMergedAt:
-                      description: PRMergedAt is when the promotion PR was merged.
-                      format: date-time
                       type: string
                     prURL:
                       description: PRURL is the URL of the pull request opened for
@@ -298,11 +258,6 @@ spec:
                   Metrics holds deployment efficiency metrics for this Bundle (K-05).
                   Populated by the BundleReconciler when all environments reach Verified.
                 properties:
-                  autoRollbacks:
-                    description: |-
-                      AutoRollbacks is the number of environments that auto-rolled back during
-                      this Bundle's promotion.
-                    type: integer
                   bakeResets:
                     description: |-
                       BakeResets is the total number of bake timer resets across all environments.
@@ -316,8 +271,9 @@ spec:
                     type: integer
                   operatorInterventions:
                     description: |-
-                      OperatorInterventions is the number of PolicyGate overrides applied during
-                      this Bundle's promotion across all environments.
+                      OperatorInterventions is the number of PolicyGate overrides recorded on
+                      this Bundle's gate instances (kardinal override), counted when the Bundle
+                      becomes Verified.
                     type: integer
                 type: object
               phase:

@@ -31,7 +31,6 @@ const (
 	LabelPipeline    = "kardinal.io/pipeline"
 	LabelEnvironment = "kardinal.io/environment"
 	LabelRollback    = "kardinal.io/rollback"
-	LabelEmergency   = "kardinal.io/emergency"
 	LabelReason      = "kardinal.io/reason"
 	LabelScope       = "kardinal.io/scope"
 	LabelFreeze      = "kardinal.io/freeze"

@@ -57,9 +57,8 @@ func newCreateCmd() *cobra.Command {
 
 func newCreateBundleCmd() *cobra.Command {
 	var (
-		images     []string
-		bundleType string
-		dryRun     bool
+		opts   createBundleOptions
+		dryRun bool
 	)
 
 	cmd := &cobra.Command{
@@ -67,10 +66,21 @@ func newCreateBundleCmd() *cobra.Command {
 		Short: "Create a Bundle to trigger promotion through a Pipeline",
 		Long: `Create a Bundle to trigger promotion through a Pipeline.
 
-The pipeline name is a required positional argument.
-Specify one or more container images with --image.
+The pipeline name is a required positional argument; the Pipeline must exist.
+An image or mixed Bundle needs at least one --image. A config or mixed Bundle
+needs --config-commit, the commit of the config repository to promote;
+--config-repo names that repository and defaults to the Pipeline's git.url.
+
+--commit, --author and --ci-run-url set the Bundle's provenance, shown in the
+PR body and the UI. kardinal records them as given: they are what the caller
+asserts, as with the Bundle API.
+
+The Bundle API (POST /api/v1/bundles) applies the same checks.
 
 Use --dry-run to preview the promotion graph without creating any resources.`,
+		Example: `  kardinal create bundle my-app --image ghcr.io/org/my-app:sha-abc1234 \
+    --commit abc1234 --author "$GITHUB_ACTOR" --ci-run-url "$RUN_URL"
+  kardinal create bundle my-app --type config --config-commit 9f8e7d6`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
@@ -78,24 +88,80 @@ Use --dry-run to preview the promotion graph without creating any resources.`,
 				return fmt.Errorf("create bundle: %w", err)
 			}
 			if dryRun {
-				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], images, bundleType)
+				return createBundleDryRun(cmd.OutOrStdout(), c, ns, args[0], opts)
 			}
-			return createBundleFn(cmd.OutOrStdout(), c, ns, args[0], images, bundleType)
+			return createBundleFn(cmd.OutOrStdout(), c, ns, args[0], opts)
 		},
 	}
 
-	cmd.Flags().StringArrayVar(&images, "image", nil, "Container image reference (can be specified multiple times)")
-	cmd.Flags().StringVar(&bundleType, "type", "image", "Bundle type: image, config, or mixed")
+	cmd.Flags().StringArrayVar(&opts.Images, "image", nil,
+		"Container image reference (can be specified multiple times); required for image and mixed Bundles")
+	cmd.Flags().StringVar(&opts.Type, "type", "image", "Bundle type: image, config, or mixed")
+	cmd.Flags().StringVar(&opts.ConfigCommit, "config-commit", "",
+		"Commit SHA of the config repository to promote; required for config and mixed Bundles")
+	cmd.Flags().StringVar(&opts.ConfigRepo, "config-repo", "",
+		"Git URL of the config repository (default: the Pipeline's git.url)")
+	cmd.Flags().StringVar(&opts.Commit, "commit", "", "Source commit SHA that produced the Bundle (provenance)")
+	cmd.Flags().StringVar(&opts.Author, "author", "", "Author or CI actor of the build (provenance)")
+	cmd.Flags().StringVar(&opts.CIRunURL, "ci-run-url", "",
+		"Absolute http(s) URL of the CI run that built the Bundle (provenance)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false,
 		"Preview the promotion graph without creating any cluster resources")
 
 	return cmd
 }
 
-// createBundleFn is the testable implementation of create bundle.
-func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline string, images []string, bundleType string) error {
-	imageRefs, err := parseImageRefs(images)
+// createBundleOptions are the flags of kardinal create bundle.
+type createBundleOptions struct {
+	Images       []string
+	Type         string
+	ConfigRepo   string
+	ConfigCommit string
+	Commit       string
+	Author       string
+	CIRunURL     string
+}
+
+// bundleSpec turns the flags into a Bundle spec for pipeline and checks it
+// with lifecycle.ValidateNewBundle, the Bundle API's rules (#1285).
+func (o createBundleOptions) bundleSpec(pipeline string) (v1alpha1.BundleSpec, error) {
+	imageRefs, err := parseImageRefs(o.Images)
 	if err != nil {
+		return v1alpha1.BundleSpec{}, err
+	}
+	spec := v1alpha1.BundleSpec{Type: o.Type, Pipeline: pipeline, Images: imageRefs}
+	if o.ConfigRepo != "" || o.ConfigCommit != "" {
+		spec.ConfigRef = &v1alpha1.ConfigRef{GitRepo: o.ConfigRepo, CommitSHA: o.ConfigCommit}
+	}
+	if o.Commit != "" || o.Author != "" || o.CIRunURL != "" {
+		spec.Provenance = &v1alpha1.BundleProvenance{CommitSHA: o.Commit, Author: o.Author, CIRunURL: o.CIRunURL}
+	}
+	if err := lifecycle.ValidateNewBundle(&spec); err != nil {
+		return v1alpha1.BundleSpec{}, flagMessage(err)
+	}
+	return spec, nil
+}
+
+// flagMessage names the CLI flag in the shared validation messages, which
+// name the Bundle fields.
+func flagMessage(err error) error {
+	msg := strings.NewReplacer(
+		"at least one entry in images", "at least one --image",
+		"configRef.commitSHA", "--config-commit",
+		"provenance.ciRunURL", "--ci-run-url",
+	).Replace(err.Error())
+	return fmt.Errorf("create bundle: %s", msg)
+}
+
+// createBundleFn is the testable implementation of create bundle. It checks
+// the flags and that the Pipeline exists before it creates anything.
+func createBundleFn(w io.Writer, c sigs_client.Client, ns, pipeline string, opts createBundleOptions) error {
+	spec, err := opts.bundleSpec(pipeline)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if _, err := getPipeline(ctx, c, ns, pipeline); err != nil {
 		return err
 	}
 
@@ -104,17 +170,13 @@ func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 			GenerateName: pipeline + "-",
 			Namespace:    ns,
 		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     bundleType,
-			Pipeline: pipeline,
-			Images:   imageRefs,
-		},
+		Spec: spec,
 	}
 	// Record sub-second creation order so supersession picks the newer of two
 	// Bundles created in the same second.
 	lifecycle.StampCreatedAt(bundle, time.Now())
 
-	if err := c.Create(context.Background(), bundle); err != nil {
+	if err := c.Create(ctx, bundle); err != nil {
 		return fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
 	}
 
@@ -130,20 +192,21 @@ func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 }
 
 // createBundleDryRun previews the promotion graph that would be created for a Bundle,
-// without writing any resources to the cluster. It fetches the Pipeline CRD,
-// builds an in-memory Bundle, runs it through graph.Builder.Build, and prints
-// the resulting graph summary.
-func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName string, images []string, bundleType string) error {
-	imageRefs, err := parseImageRefs(images)
+// without writing any resources to the cluster. It checks the flags like
+// createBundleFn, fetches the Pipeline CRD, builds an in-memory Bundle, runs it
+// through graph.Builder.Build, and prints the resulting graph summary.
+func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName string, opts createBundleOptions) error {
+	spec, err := opts.bundleSpec(pipelineName)
 	if err != nil {
 		return err
 	}
 
 	// Fetch the Pipeline from the cluster (read-only — dry-run is cluster-aware but not cluster-mutating)
-	var pipe v1alpha1.Pipeline
-	if err := c.Get(context.Background(), sigs_client.ObjectKey{Namespace: ns, Name: pipelineName}, &pipe); err != nil {
-		return fmt.Errorf("dry-run: fetch pipeline %q: %w", pipelineName, err)
+	pipePtr, err := getPipeline(context.Background(), c, ns, pipelineName)
+	if err != nil {
+		return fmt.Errorf("dry-run: %w", err)
 	}
+	pipe := *pipePtr
 
 	// Build an in-memory Bundle (not created on cluster)
 	bundle := &v1alpha1.Bundle{
@@ -151,11 +214,7 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 			Name:      pipelineName + "-dry-run",
 			Namespace: ns,
 		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     bundleType,
-			Pipeline: pipelineName,
-			Images:   imageRefs,
-		},
+		Spec: spec,
 	}
 
 	// The gate templates the controller would pass to the builder (controller

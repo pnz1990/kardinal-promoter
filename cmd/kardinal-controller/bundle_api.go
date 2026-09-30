@@ -31,11 +31,9 @@ import (
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
@@ -174,8 +172,17 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("invalid request body: %v", err), http.StatusBadRequest)
 			return
 		}
-		if msg := validateBundleCreateRequest(&req); msg != "" {
-			http.Error(w, msg, http.StatusBadRequest)
+		spec := v1alpha1.BundleSpec{
+			Type:       req.Type,
+			Pipeline:   req.Pipeline,
+			Images:     req.Images,
+			ConfigRef:  req.ConfigRef,
+			Provenance: req.Provenance,
+			Intent:     req.Intent,
+		}
+		// The same rules as kardinal create bundle (#1285).
+		if err := lifecycle.ValidateNewBundle(&spec); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
@@ -204,11 +211,11 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 
 		// Set timestamp on provenance if not provided.
 		now := time.Now().UTC()
-		if req.Provenance == nil {
-			req.Provenance = &v1alpha1.BundleProvenance{}
+		if spec.Provenance == nil {
+			spec.Provenance = &v1alpha1.BundleProvenance{}
 		}
-		if req.Provenance.Timestamp.IsZero() {
-			req.Provenance.Timestamp = metav1.NewTime(now)
+		if spec.Provenance.Timestamp.IsZero() {
+			spec.Provenance.Timestamp = metav1.NewTime(now)
 		}
 
 		// Name: pipeline-YYYYMMDDHHMMSS-<random>. GenerateName makes the API
@@ -221,14 +228,7 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 					"kardinal.io/pipeline": req.Pipeline,
 				},
 			},
-			Spec: v1alpha1.BundleSpec{
-				Type:       req.Type,
-				Pipeline:   req.Pipeline,
-				Images:     req.Images,
-				ConfigRef:  req.ConfigRef,
-				Provenance: req.Provenance,
-				Intent:     req.Intent,
-			},
+			Spec: spec,
 		}
 		lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
@@ -259,44 +259,6 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 			s.log.Error().Err(encErr).Msg("failed to encode bundle create response")
 		}
 	}
-}
-
-// validateBundleCreateRequest checks the request and fills in defaults. It
-// returns a client-facing error message, or "" when the request is valid.
-func validateBundleCreateRequest(req *bundleCreateRequest) string {
-	if req.Pipeline == "" {
-		return "pipeline is required"
-	}
-	if len(validation.IsDNS1123Subdomain(req.Pipeline)) > 0 || len(validation.IsValidLabelValue(req.Pipeline)) > 0 {
-		return "pipeline must be a valid Kubernetes object name of at most 63 characters"
-	}
-	if req.Type == "" {
-		req.Type = "image"
-	}
-	needImages, needConfig := false, false
-	switch req.Type {
-	case "image":
-		needImages = true
-	case "config":
-		needConfig = true
-	case "mixed":
-		needImages, needConfig = true, true
-	default:
-		return fmt.Sprintf("type must be one of image, config, mixed (got %q)", req.Type)
-	}
-	if needImages && len(req.Images) == 0 {
-		return fmt.Sprintf("type %q requires at least one entry in images", req.Type)
-	}
-	if needConfig && (req.ConfigRef == nil || req.ConfigRef.CommitSHA == "") {
-		return fmt.Sprintf("type %q requires configRef.commitSHA", req.Type)
-	}
-	if req.Provenance != nil {
-		// The PR body and the UI link it (E2E-R22).
-		if err := graphpkg.ValidateCIRunURL(req.Provenance.CIRunURL); err != nil {
-			return err.Error()
-		}
-	}
-	return ""
 }
 
 // sanitizeName replaces characters not valid in Kubernetes names with hyphens.
