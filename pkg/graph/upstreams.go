@@ -92,11 +92,11 @@ func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 //   - the bundle has no PromotionStep in the environment and every upstream
 //     environment is Verified for it (UpstreamsVerified): the Graph creates
 //     the step only once the gate is ready; or
-//   - the gate is a pre-deploy gate (spec.when) that a step of the bundle in
-//     the environment lists in spec.requiredGates while that step is still
-//     Pending ("" or "Pending"): the PromotionStep reconciler
-//     (checkPreDeployGates, K-02) keeps such a step Pending, before any git
-//     operation, until the gate is ready.
+//   - a step of the bundle in the environment lists the gate in
+//     spec.requiredGates while that step is still Pending ("" or "Pending"):
+//     the PromotionStep reconciler (checkRequiredGates) keeps such a step
+//     Pending, before any git operation, until the gate is ready. spec.when
+//     makes no difference (#1323).
 //
 // A gate of an environment the bundle has not reached, or whose steps have
 // all left Pending, holds nothing. steps may hold PromotionSteps of any
@@ -118,7 +118,7 @@ func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bun
 		}
 		stepped = true
 		pending := s.Status.State == "" || s.Status.State == "Pending"
-		if gate.Spec.When == "pre-deploy" && pending && slices.Contains(s.Spec.RequiredGates, gate.Name) {
+		if pending && slices.Contains(s.Spec.RequiredGates, gate.Name) {
 			return true
 		}
 	}
