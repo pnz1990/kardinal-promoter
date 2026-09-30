@@ -24,7 +24,7 @@ export type HealthState =
   | 'Ready'         // Verified / Pass / Pipeline Ready — green
   | 'Reconciling'   // Promoting / WaitingForMerge / HealthChecking / RollingBack — amber
   | 'Error'         // Failed / AbortedByAlarm / Block — red
-  | 'Pending'       // Pending / Available / NotStarted — slate
+  | 'Pending'       // Pending / Available / NotStarted / gate Waiting — slate
   | 'Unknown'       // Superseded / unknown — gray
   | 'Degraded'      // Pipeline phase Degraded — orange
   | 'Paused'        // Pipeline paused (spec.paused=true) — indigo
@@ -40,7 +40,8 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       case 'Pass':   return 'Ready'
       case 'Block':
       case 'Fail':   return 'Error'
-      case 'Pending': return 'Pending'
+      case 'Pending':
+      case 'Waiting': return 'Pending' // not ready, not holding the bundle
       default:       return 'Unknown'
     }
   }

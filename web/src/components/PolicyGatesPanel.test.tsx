@@ -55,20 +55,20 @@ describe('PolicyGatesPanel — collapsed by default when all pass', () => {
 
 describe('PolicyGatesPanel — auto-expand when blocked (#524)', () => {
   it('starts expanded when any gate is blocked', () => {
-    const gates = [makeGate({ ready: false })]
+    const gates = [makeGate({ ready: false, holding: true })]
     render(<PolicyGatesPanel gates={gates} />)
     const btn = screen.getByRole('button', { name: /Policy Gates/i })
     expect(btn).toHaveAttribute('aria-expanded', 'true')
   })
 
   it('shows gate expression when auto-expanded due to block', () => {
-    const gates = [makeGate({ ready: false, expression: '!schedule.isWeekend' })]
+    const gates = [makeGate({ ready: false, holding: true, expression: '!schedule.isWeekend' })]
     render(<PolicyGatesPanel gates={gates} />)
     expect(screen.getByText('!schedule.isWeekend')).toBeInTheDocument()
   })
 
   it('shows block reason when gate is blocked', () => {
-    const gates = [makeGate({ ready: false, reason: 'It is Saturday' })]
+    const gates = [makeGate({ ready: false, holding: true, reason: 'It is Saturday' })]
     render(<PolicyGatesPanel gates={gates} />)
     expect(screen.getByText('It is Saturday')).toBeInTheDocument()
   })
@@ -87,7 +87,7 @@ describe('PolicyGatesPanel — toggle and content', () => {
 
   it('collapses when toggle button clicked again', async () => {
     const user = userEvent.setup()
-    const gates = [makeGate({ ready: false })]
+    const gates = [makeGate({ ready: false, holding: true })]
     render(<PolicyGatesPanel gates={gates} />)
     const btn = screen.getByRole('button', { name: /Policy Gates/i })
     // initially expanded (blocked gate)
@@ -102,7 +102,7 @@ describe('PolicyGatesPanel — toggle and content', () => {
   })
 
   it('shows "X blocked" in summary chip', () => {
-    const gates = [makeGate({ ready: false }), makeGate({ name: 'g2', ready: true })]
+    const gates = [makeGate({ ready: false, holding: true }), makeGate({ name: 'g2', ready: true })]
     render(<PolicyGatesPanel gates={gates} />)
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
@@ -111,5 +111,39 @@ describe('PolicyGatesPanel — toggle and content', () => {
     const gates = [makeGate(), makeGate({ name: 'gate-2' })]
     render(<PolicyGatesPanel gates={gates} />)
     expect(screen.getByText('2 passing')).toBeInTheDocument()
+  })
+})
+
+// E2E-R19: a gate that is not ready but does not hold the bundle (the bundle
+// has not reached its environment, or the bundle failed) is waiting, not blocked.
+describe('PolicyGatesPanel — waiting gates (E2E-R19)', () => {
+  it('counts a not-ready gate that does not hold the bundle as waiting, not blocked', () => {
+    const gates = [makeGate({ ready: false }), makeGate({ name: 'g2', ready: true })]
+    render(<PolicyGatesPanel gates={gates} />)
+    expect(screen.getByText('1 waiting')).toBeInTheDocument()
+    expect(screen.queryByText(/blocked/)).not.toBeInTheDocument()
+  })
+
+  it('does not auto-expand for a waiting gate', () => {
+    const gates = [makeGate({ ready: false, reason: 'soak 0m < 30m' })]
+    render(<PolicyGatesPanel gates={gates} />)
+    const btn = screen.getByRole('button', { name: /Policy Gates/i })
+    expect(btn).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('shows the waiting gate with a Waiting chip, not Block', async () => {
+    const user = userEvent.setup()
+    const gates = [makeGate({ ready: false, reason: 'soak 0m < 30m' })]
+    render(<PolicyGatesPanel gates={gates} />)
+    await user.click(screen.getByRole('button', { name: /Policy Gates/i }))
+    expect(screen.getByLabelText('Waiting — Pending')).toBeInTheDocument()
+    expect(screen.queryByText('Block')).not.toBeInTheDocument()
+    expect(screen.getByText('soak 0m < 30m')).toBeInTheDocument()
+  })
+
+  it('shows "X blocked" when one gate holds and another waits', () => {
+    const gates = [makeGate({ ready: false, holding: true }), makeGate({ name: 'g2', ready: false })]
+    render(<PolicyGatesPanel gates={gates} />)
+    expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
 })

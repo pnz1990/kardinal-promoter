@@ -108,6 +108,11 @@ export interface GraphNode {
   /** ISO timestamp when the PromotionStep was created — used for elapsed timers (#330).
    *  Set on PromotionStep nodes only. */
   startedAt?: string
+  /** PolicyGate nodes: true when the gate holds the bundle back, the rule the
+   *  pipeline's blockerCount uses (graph.GateHolds, decided by the UI API).
+   *  A gate evaluated not ready that does not hold the bundle has state
+   *  'Waiting', not 'Block' (E2E-R19). */
+  holding?: boolean
 }
 
 export interface GraphEdge {
@@ -174,6 +179,9 @@ export interface PolicyGate {
   environment?: string
   /** True for a PolicyGate template: never evaluated for a bundle, always ready=false. */
   template?: boolean
+  /** True when this gate instance holds its bundle back (graph.GateHolds, decided
+   *  by the UI API). A gate that is not ready and not holding is waiting. */
+  holding?: boolean
   /** #502: Override history from spec.overrides[]. */
   overrides?: PolicyGateOverride[]
 }

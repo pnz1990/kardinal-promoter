@@ -57,6 +57,7 @@ describe('kardinalStateToHealth', () => {
       ['Block', 'Error'],
       ['Fail', 'Error'],
       ['Pending', 'Pending'],
+      ['Waiting', 'Pending'], // E2E-R19: not ready, not holding the bundle
       ['SomeUnknown', 'Unknown'],
     ])('maps %s → %s', (state, expected) => {
       expect(kardinalStateToHealth(state, 'PolicyGate')).toBe(expected)

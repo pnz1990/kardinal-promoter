@@ -334,12 +334,14 @@ export function App() {
     ? 'var(--color-warning)'   // amber when stale > 15s
     : 'var(--color-text-secondary)'
 
-  // Compute blocked PolicyGate node IDs from the graph.
+  // PolicyGate nodes that hold the bundle back. The UI API decides (holding),
+  // with the rule the sidebar's blockerCount uses; a not-ready gate the bundle
+  // has not reached is Waiting and not counted (E2E-R19).
   const blockedGateIds = useMemo<Set<string>>(() => {
     if (!graph) return new Set()
     const ids = new Set<string>()
     for (const node of graph.nodes) {
-      if (node.type === 'PolicyGate' && (node.state === 'Block' || node.state === 'Fail')) {
+      if (node.type === 'PolicyGate' && node.holding) {
         ids.add(node.id)
       }
     }
