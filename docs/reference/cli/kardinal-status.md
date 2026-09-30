@@ -11,10 +11,11 @@ kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
 When called with a pipeline name: shows in-flight promotion details for that
-pipeline — the active bundle per environment, its PromotionSteps (one row per
-region, active steps marked), the PolicyGates holding it back (with CEL
-expression and current reason), and open PR URLs. This is the first command to
-run when a promotion is stuck.
+pipeline — the current bundle per environment (the newest bundle that is not
+Superseded and has a PromotionStep or gate instance there), its PromotionSteps
+(one row per region, active steps marked), the PolicyGates holding it back
+(with CEL expression and current reason), and open PR URLs. This is the first
+command to run when a promotion is stuck.
 
 Examples:
   # Cluster-level summary

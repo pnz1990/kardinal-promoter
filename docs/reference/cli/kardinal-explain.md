@@ -5,9 +5,13 @@ Explain the current state of a promotion pipeline
 ### Synopsis
 
 Explain displays, per environment, the PromotionStep and the PolicyGates of
-the Bundle currently promoting there (or last promoted). Gates include org
-gates from the policy namespaces: they are the instances the Graph created for
-that Bundle, with the controller's latest evaluation.
+the current Bundle there: the newest Bundle that is not Superseded and has a
+PromotionStep or a gate instance in that environment. The Graph creates a
+Bundle's gate instances when the Bundle starts, so an environment the newest
+Bundle has not reached yet shows the gates it will wait on. Gates include org
+gates from the policy namespaces and skip-permission gates: they are the
+instances the Graph created for that Bundle, with the controller's latest
+evaluation. Gates that are not ready are listed first.
 
 Use --env to filter to a specific environment.
 Use --watch to refresh every 3 seconds.

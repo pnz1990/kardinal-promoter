@@ -59,7 +59,8 @@ func TestStatusPipelineWriter_ActiveStep(t *testing.T) {
 		{Name: "git-clone", State: "Completed"},
 		{Name: "open-pr", State: "Running"},
 	}
-	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"), step)
+	out := runStatusPipeline(t, policyPipeline("demo", "test", "prod"),
+		explainBundle("bundle-abc", "Promoting", time.Now().Add(-5*time.Minute)), step)
 
 	assert.Contains(t, out, "Pipeline: demo")
 	assert.Contains(t, out, "Active bundle(s): bundle-abc")
@@ -78,6 +79,7 @@ func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
 		false, true, "!schedule.isWeekend = false")
 	out := runStatusPipeline(t,
 		policyPipeline("demo", "uat", "prod"),
+		explainBundle("bundle-abc", "Promoting", recent),
 		explainStep("demo", "bundle-abc", "uat", "Verified", "", recent),
 		gate,
 	)
@@ -103,8 +105,10 @@ func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
 		objs []sigs_client.Object
 	}{
 		{
-			name: "stale gate of a superseded bundle",
+			name: "stale gate of an older bundle",
 			objs: []sigs_client.Object{
+				explainBundle("demo-old", "Failed", old),
+				explainBundle("demo-new", "Verified", recent),
 				explainStep("demo", "demo-old", "prod", "Failed", "", old),
 				explainStep("demo", "demo-new", "prod", "Verified", "", recent),
 				explainGateInstance("demo", "demo-old", "prod", "no-weekend-deploys", "!schedule.isWeekend",
@@ -114,6 +118,7 @@ func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
 		{
 			name: "template without a bundle label",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Promoting", recent),
 				explainStep("demo", "b1", "prod", "Promoting", "", recent),
 				template,
 			},
@@ -121,6 +126,7 @@ func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
 		{
 			name: "step already created",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Promoting", recent),
 				explainStep("demo", "b1", "prod", "Promoting", "", recent),
 				explainGateInstance("demo", "b1", "prod", "g", "true", false, false, ""),
 			},
@@ -147,6 +153,8 @@ func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
 	west.Spec.Region = "eu-west-1"
 	out := runStatusPipeline(t,
 		policyPipeline("demo", "test", "prod"),
+		explainBundle("b1", "Verified", old),
+		explainBundle("b2", "Promoting", recent),
 		explainStep("demo", "b1", "prod", "Verified", "", old),
 		explainStep("demo", "b1", "test", "Verified", "", old),
 		explainStep("demo", "b2", "test", "Verified", "", recent),
@@ -162,11 +170,60 @@ func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
 		"b1's steps are not listed:\n%s", out)
 }
 
+// E2E-R02, E2E-R11: status describes the same current Bundle as explain. A
+// Superseded Bundle's gate instances never hide the newest Bundle's steps,
+// and a Bundle held at a skip-permission gate shows that gate as blocking.
+func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
+	old := time.Now().Add(-18 * time.Hour)
+	recent := time.Now().Add(-17 * time.Minute)
+
+	t.Run("superseded bundle", func(t *testing.T) {
+		out := runStatusPipeline(t,
+			policyPipeline("demo", "test", "uat", "prod"),
+			explainBundle("kardinal-test-app-7qvsr", "Superseded", old),
+			explainBundle("kardinal-test-app-9tptr", "Verified", recent),
+			explainStep("demo", "kardinal-test-app-7qvsr", "test", "Verified", "", old),
+			explainStep("demo", "kardinal-test-app-7qvsr", "uat", "Verified", "", old),
+			explainGateInstance("demo", "kardinal-test-app-7qvsr", "prod", "require-uat-soak", "true", true, true, "x"),
+			explainStep("demo", "kardinal-test-app-9tptr", "test", "Verified", "", recent),
+			explainStep("demo", "kardinal-test-app-9tptr", "uat", "Verified", "", recent),
+			explainStep("demo", "kardinal-test-app-9tptr", "prod", "Verified", "", recent),
+			explainGateInstance("demo", "kardinal-test-app-9tptr", "prod", "require-uat-soak", "true", true, true, "x"),
+		)
+		assert.Contains(t, out, "Active bundle(s): kardinal-test-app-9tptr\n")
+		assert.Regexp(t, `\n  prod +- +Verified`, out)
+		assert.Regexp(t, `\n  uat +- +Verified`, out)
+		assert.Regexp(t, `\n  test +- +Verified`, out)
+	})
+
+	t.Run("skip-permission gate", func(t *testing.T) {
+		skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
+			`bundle.version == "sha-9349a3f"`, false, true, `bundle.version == "sha-9349a3f" = false`)
+		skip.Labels["kardinal.io/type"] = "skip-permission"
+		out := runStatusPipeline(t,
+			policyPipeline("demo", "test", "uat", "prod"),
+			explainBundle("gapa-e2e2-gkvb2", "Verified", old),
+			explainBundle("gapa-e2e2-wbptb", "Promoting", recent),
+			explainStep("demo", "gapa-e2e2-gkvb2", "prod", "Verified", "", old),
+			explainStep("demo", "gapa-e2e2-wbptb", "test", "Verified", "", recent),
+			skip,
+			explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-predeploy-freeze", "true", true, true, "ok"),
+		)
+		assert.Contains(t, out, "Active bundle(s): gapa-e2e2-wbptb\n")
+		_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
+		require.True(t, found, out)
+		assert.Contains(t, gateSection, "gapa-allow-stage-skip")
+		assert.NotContains(t, gateSection, "gapa-predeploy-freeze", "a passing gate does not block")
+		assert.NotContains(t, out, "terminal state")
+	})
+}
+
 func TestStatusPipelineWriter_TerminalSteps(t *testing.T) {
 	for _, state := range []string{"Verified", "Failed", "AbortedByAlarm", "RollingBack"} {
 		t.Run(state, func(t *testing.T) {
 			out := runStatusPipeline(t,
 				policyPipeline("demo", "test", "prod"),
+				explainBundle("b1", "Promoting", time.Now().Add(-time.Hour)),
 				explainStep("demo", "b1", "prod", state, "", time.Now().Add(-time.Hour)),
 			)
 			assert.Contains(t, out, state)
@@ -175,6 +232,7 @@ func TestStatusPipelineWriter_TerminalSteps(t *testing.T) {
 	}
 	out := runStatusPipeline(t,
 		policyPipeline("demo", "test", "prod"),
+		explainBundle("b1", "Promoting", time.Now().Add(-time.Hour)),
 		explainStep("demo", "b1", "prod", "HealthChecking", "", time.Now().Add(-time.Hour)),
 	)
 	assert.NotContains(t, out, "terminal state")
