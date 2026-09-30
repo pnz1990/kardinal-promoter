@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
@@ -321,6 +322,110 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 	// Verify the source-digest label is set (sanitized: sha256: prefix stripped, truncated to 63)
 	assert.NotEmpty(t, bundleList.Items[0].Labels["kardinal.io/source-digest"],
 		"source-digest label must be set")
+}
+
+// e2eDigest is the digest from the live repro of E2E-R13 (gaps-sub.log:59).
+const e2eDigest = "sha256:34f9009520f4faa9bf1fcfc1d63a8d178e964e29d64019900abe41e4b613d04e"
+
+// TestSubscriptionReconciler_SourceDigestLabelIsDigestPrefix covers E2E-R13:
+// the kardinal.io/source-digest label kept the last 63 hex characters of a
+// sha256 digest, so it dropped the first one ("4f90..." for "34f90...") and
+// matched neither the digest nor the short form in the Bundle name.
+func TestSubscriptionReconciler_SourceDigestLabelIsDigestPrefix(t *testing.T) {
+	hex := strings.TrimPrefix(e2eDigest, "sha256:")
+	sub := makeImageSub("gaps-img2", "default", "gaps-sub-img", "ghcr.io/test/app")
+	sub.Status.LastSeenDigest = digestOf('0')
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	r := &subscription.Reconciler{
+		Client: c,
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+			return &changedWatcher{digest: e2eDigest, tag: "1.1.0"}, nil
+		},
+		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+
+	bundles := listBundles(t, c)
+	require.Len(t, bundles, 1)
+	assert.Equal(t, "gaps-img2-1-1-0-34f90095", bundles[0].Name)
+	label := bundles[0].Labels["kardinal.io/source-digest"]
+	assert.Equal(t, hex[:63], label, "the label is the first 63 hex characters of the digest")
+	assert.True(t, strings.HasSuffix(bundles[0].Name, label[:8]), "the Bundle name short form is a prefix of the label")
+
+	var found kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &found,
+		client.MatchingLabels{"kardinal.io/source-digest": hex[:63]}))
+	assert.Len(t, found.Items, 1, "a selector on the digest prefix finds the Bundle")
+}
+
+// TestSubscriptionReconciler_LegacyDigestLabelStillDedups verifies that a
+// Bundle labelled by a controller from before the E2E-R13 fix (the last 63 hex
+// characters of the digest) still dedups after an upgrade: the reconcile
+// reuses it instead of creating a duplicate Bundle or going to phase Error.
+func TestSubscriptionReconciler_LegacyDigestLabelStillDedups(t *testing.T) {
+	hex := strings.TrimPrefix(e2eDigest, "sha256:")
+	legacy := func(name string) *kardinalv1alpha1.Bundle {
+		return &kardinalv1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline":      "gaps-sub-img",
+				"kardinal.io/subscription":  "gaps-img2",
+				"kardinal.io/source-digest": hex[1:],
+			},
+		}}
+	}
+	// emptyBundleList makes every Bundle List return nothing, as a cache that
+	// has not seen the Bundle yet would, so the Create hits AlreadyExists.
+	emptyBundleList := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*kardinalv1alpha1.BundleList); ok {
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}
+	tests := []struct {
+		name      string
+		existing  string
+		staleList bool
+	}{
+		{name: "same generated name, found by the label lookup", existing: "gaps-img2-1-1-0-34f90095"},
+		{name: "other name, found by the label lookup", existing: "gaps-img2-20260413-095900"},
+		{name: "same generated name, lookup misses and Create hits AlreadyExists", existing: "gaps-img2-1-1-0-34f90095", staleList: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := makeImageSub("gaps-img2", "default", "gaps-sub-img", "ghcr.io/test/app")
+			base := fake.NewClientBuilder().WithScheme(newScheme()).
+				WithObjects(sub, legacy(tt.existing)).WithStatusSubresource(sub).Build()
+			var c client.Client = base
+			if tt.staleList {
+				c = interceptor.NewClient(base, emptyBundleList)
+			}
+			r := &subscription.Reconciler{
+				Client: c,
+				WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+					return &forcedChangeWatcher{digest: e2eDigest, tag: "1.1.0"}, nil
+				},
+				NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+			for i := 0; i < 2; i++ {
+				_, err := r.Reconcile(context.Background(), req)
+				require.NoErrorf(t, err, "reconcile %d", i)
+			}
+
+			var got kardinalv1alpha1.Subscription
+			require.NoError(t, base.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, "Watching", got.Status.Phase, got.Status.Message)
+			assert.Equal(t, tt.existing, got.Status.LastBundleCreated)
+			bundles := listBundles(t, base)
+			require.Len(t, bundles, 1, "no duplicate Bundle for a digest labelled the old way")
+			assert.Equal(t, tt.existing, bundles[0].Name)
+		})
+	}
 }
 
 // newReconcilerWithRealWatchers wires the production watchers exactly as
