@@ -514,12 +514,18 @@ func TestBitbucketCloudContract_ClosePR(t *testing.T) {
 }
 
 // TestBitbucketCloudContract_OpenPRReusesExisting checks that when Bitbucket
-// refuses a PR because one is already open for the branch, OpenPR returns that
-// PR, found with GET .../pullrequests?q=source.branch.name="<branch>" AND
-// state="OPEN". Any other refusal is returned as an error without a lookup.
-// Covers SCM-BB-05.
+// refuses a PR because one is already open from the branch into the same
+// destination, OpenPR returns that PR, found with GET
+// .../pullrequests?q=source.branch.name="<branch>" AND
+// destination.branch.name="<base>" AND state="OPEN". A PR from the branch into
+// another destination is not reused, and any other refusal is returned as an
+// error without a lookup. Covers SCM-BB-05.
 func TestBitbucketCloudContract_OpenPRReusesExisting(t *testing.T) {
 	duplicate := apiReply{http.StatusBadRequest, bbError("There are already open pull requests for this branch.")}
+	into := func(pr map[string]interface{}, dest string) map[string]interface{} {
+		pr["destination"].(map[string]interface{})["branch"] = map[string]string{"name": dest}
+		return pr
+	}
 	page := func(prs ...map[string]interface{}) apiReply {
 		return apiReply{http.StatusOK, mustJSON(t, map[string]interface{}{
 			"pagelen": 50, "size": len(prs), "page": 1, "values": prs,
@@ -538,15 +544,23 @@ func TestBitbucketCloudContract_OpenPRReusesExisting(t *testing.T) {
 		{
 			name:   "open PR for the branch is reused",
 			create: duplicate,
-			// A PR from a similarly named branch is never taken.
-			list:    page(bbPullRequest(5, "OPEN", bbBranch+"-canary", ""), bbPullRequest(6, "OPEN", bbBranch, "")),
+			// A PR from a similarly named branch, or from the branch into
+			// another destination, is never taken.
+			list: page(bbPullRequest(5, "OPEN", bbBranch+"-canary", ""),
+				into(bbPullRequest(4, "OPEN", bbBranch, ""), "release"), bbPullRequest(6, "OPEN", bbBranch, "")),
 			wantURL: "https://bitbucket.org/acme/web-app/pull-requests/6", wantN: 6, wantCalls: 2,
 		},
 		{
 			name:    "no open PR for the branch",
 			create:  duplicate,
 			list:    page(),
-			wantErr: "bitbucket PR exists for branch kardinal/web-app-v2/prod but could not find it in open PRs", wantCalls: 2,
+			wantErr: "bitbucket PR exists for branch kardinal/web-app-v2/prod into main but could not find it in open PRs", wantCalls: 2,
+		},
+		{
+			name:    "open PR from the branch into another destination is not reused",
+			create:  duplicate,
+			list:    page(into(bbPullRequest(4, "OPEN", bbBranch, ""), "release")),
+			wantErr: "bitbucket PR exists for branch kardinal/web-app-v2/prod into main but could not find it in open PRs", wantCalls: 2,
 		},
 		{
 			name:    "other refusal is not a duplicate",
@@ -575,7 +589,7 @@ func TestBitbucketCloudContract_OpenPRReusesExisting(t *testing.T) {
 			assert.Equal(t, bbPRPath, list.Path)
 			assert.Equal(t, url.Values{
 				"pagelen": {"50"},
-				"q":       {`source.branch.name="kardinal/web-app-v2/prod" AND state="OPEN"`},
+				"q":       {`source.branch.name="kardinal/web-app-v2/prod" AND destination.branch.name="main" AND state="OPEN"`},
 			}, list.Query)
 			assertBitbucketAuth(t, list)
 		})

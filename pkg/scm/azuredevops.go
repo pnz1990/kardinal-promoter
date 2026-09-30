@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -119,7 +120,7 @@ func (a *AzureDevOpsProvider) OpenPR(ctx context.Context, repo, title, body, hea
 		org, project, repoName, azureDevOpsAPIVersion)
 	if err := a.do(ctx, http.MethodPost, path, payload, &result); err != nil {
 		if isADOExistingPRErr(err) {
-			return a.findExistingPR(ctx, org, project, repoName, head)
+			return a.findExistingPR(ctx, org, project, repoName, head, base)
 		}
 		return "", 0, fmt.Errorf("open Azure DevOps PR %s: %w", repo, err)
 	}
@@ -137,11 +138,17 @@ func (a *AzureDevOpsProvider) prWebURL(webURL, org, project, repoName string, id
 	return fmt.Sprintf("%s/%s/%s/_git/%s/pullrequest/%d", a.APIURL, org, project, repoName, id)
 }
 
-// findExistingPR returns the open PR for the given source ref name.
-func (a *AzureDevOpsProvider) findExistingPR(ctx context.Context, org, project, repoName, head string) (string, int, error) {
-	sourceRef := "refs/heads/" + head
-	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullrequests?searchCriteria.sourceRefName=%s&searchCriteria.status=active&api-version=%s",
-		org, project, repoName, sourceRef, azureDevOpsAPIVersion)
+// findExistingPR returns the active PR from head into base. TF401179 refuses a
+// second PR for the same source and target branch; a PR from head into
+// another branch is not that one.
+func (a *AzureDevOpsProvider) findExistingPR(ctx context.Context, org, project, repoName, head, base string) (string, int, error) {
+	query := url.Values{
+		"searchCriteria.sourceRefName": {"refs/heads/" + head},
+		"searchCriteria.targetRefName": {"refs/heads/" + base},
+		"searchCriteria.status":        {"active"},
+		"api-version":                  {azureDevOpsAPIVersion},
+	}
+	path := fmt.Sprintf("/%s/%s/_apis/git/repositories/%s/pullrequests?%s", org, project, repoName, query.Encode())
 
 	var result struct {
 		Value []struct {
@@ -155,7 +162,7 @@ func (a *AzureDevOpsProvider) findExistingPR(ctx context.Context, org, project, 
 		return "", 0, fmt.Errorf("list ADO PRs to find existing for %s: %w", head, err)
 	}
 	if len(result.Value) == 0 {
-		return "", 0, fmt.Errorf("ADO PR already exists for branch %s but could not find it in active PRs", head)
+		return "", 0, fmt.Errorf("ADO PR already exists for branch %s into %s but could not find it in active PRs", head, base)
 	}
 	pr := result.Value[0]
 	return a.prWebURL(pr.Repository.WebURL, org, project, repoName, pr.PullRequestID), pr.PullRequestID, nil
