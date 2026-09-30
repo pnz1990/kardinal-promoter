@@ -197,8 +197,8 @@
 <a id=__codelineno-13-17 name=__codelineno-13-17 href=#__codelineno-13-17></a><span class=s>EOF</span>
 </code></pre></div> <h2 id=watch-the-promotion>Watch the promotion<a class=headerlink href=#watch-the-promotion title="Permanent link">&para;</a></h2> <p>The promotion starts immediately. kardinal-promoter generates a Graph and begins promoting through environments.</p> <div class=highlight><pre><span></span><code><a id=__codelineno-14-1 name=__codelineno-14-1 href=#__codelineno-14-1></a><span class=c1># Watch the pipeline status</span>
 <a id=__codelineno-14-2 name=__codelineno-14-2 href=#__codelineno-14-2></a>kardinal<span class=w> </span>get<span class=w> </span>pipelines
-<a id=__codelineno-14-3 name=__codelineno-14-3 href=#__codelineno-14-3></a><span class=c1># PIPELINE            BUNDLE                    TEST       UAT              PROD   SUB   AGE</span>
-<a id=__codelineno-14-4 name=__codelineno-14-4 href=#__codelineno-14-4></a><span class=c1># kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   -      0     2m</span>
+<a id=__codelineno-14-3 name=__codelineno-14-3 href=#__codelineno-14-3></a><span class=c1># PIPELINE            BUNDLE                    TEST       UAT              PROD      SUB   AGE</span>
+<a id=__codelineno-14-4 name=__codelineno-14-4 href=#__codelineno-14-4></a><span class=c1># kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   Waiting   0     2m</span>
 <a id=__codelineno-14-5 name=__codelineno-14-5 href=#__codelineno-14-5></a>
 <a id=__codelineno-14-6 name=__codelineno-14-6 href=#__codelineno-14-6></a><span class=c1># See the steps of the active Bundle</span>
 <a id=__codelineno-14-7 name=__codelineno-14-7 href=#__codelineno-14-7></a>kardinal<span class=w> </span>get<span class=w> </span>steps<span class=w> </span>kardinal-test-app
