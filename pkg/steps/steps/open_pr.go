@@ -58,14 +58,15 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		branch = fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
 	}
 
-	// Use a more descriptive PR title for rollback promotions.
+	// Use a more descriptive PR title for rollback promotions. rollbackOf is the
+	// Bundle whose state the rollback restores, not the one it rolls back from.
 	rollbackOf := ""
 	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
 		rollbackOf = state.Bundle.Provenance.RollbackOf
 	}
 	title := fmt.Sprintf("[kardinal] Promote %s to %s", state.BundleName, state.Environment.Name)
 	if rollbackOf != "" {
-		title = fmt.Sprintf("[kardinal] Rollback %s to %s (reverts %s)", state.Environment.Name, state.BundleName, rollbackOf)
+		title = fmt.Sprintf("[kardinal] Rollback %s to %s (restores %s)", state.Environment.Name, state.BundleName, rollbackOf)
 	}
 
 	body, err := scm.RenderPRBody(scm.PRBody{
@@ -95,10 +96,10 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 			fmt.Errorf("open-pr: %w", err)
 	}
 
-	// Apply standard kardinal labels to the PR.
-	// Include kardinal/rollback when this bundle is a rollback (Provenance.RollbackOf is set).
-	// This is required by issue #402 / docs/rollback.md — rollback PRs must have the
-	// kardinal/rollback label so operators can filter them from promotion PRs.
+	// Apply standard kardinal labels to the PR. Every PR gets kardinal/promotion
+	// (a rollback is a forward promotion). A rollback (Provenance.RollbackOf is set)
+	// also gets kardinal/rollback so operators can find rollback PRs (#402,
+	// docs/rollback.md, docs/pr-evidence.md).
 	baseLabels := []string{"kardinal", "kardinal/promotion"}
 	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
 		baseLabels = append(baseLabels, "kardinal/rollback")

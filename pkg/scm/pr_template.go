@@ -78,7 +78,7 @@ type PRBody struct {
 	// BundleName is the Bundle resource name.
 	BundleName string
 
-	// RollbackOf is the name of the Bundle this rollback reverts (if this is a rollback PR).
+	// RollbackOf is the name of the Bundle whose state this rollback restores (if this is a rollback PR).
 	// When non-empty, the PR body includes a rollback notice section (#402).
 	RollbackOf string
 
@@ -102,7 +102,7 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 ## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
 
 > **This is a rollback PR.** It reverts environment {{.Environment}} to the state of bundle {{.RollbackOf}}.
-> Rolling back FROM: the current (failed) bundle
+> Rolling back FROM: the bundle deployed in {{.Environment}} now
 > Rolling back TO: {{.BundleName}} (copy of {{.RollbackOf}})
 
 {{- else}}

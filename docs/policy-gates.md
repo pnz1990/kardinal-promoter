@@ -31,10 +31,17 @@ spec:
 
 ### `when` field (K-02)
 
-The `when` field controls at which point in the promotion lifecycle the gate is evaluated:
+Every gate on an environment holds that environment back: the Graph does not create the
+environment's PromotionStep until the gate reports ready, so nothing is pushed and no PR is opened
+while a gate blocks. This is true for both values of `when`:
 
-- `post-deploy` (default): gate is evaluated **after** the PR is merged and the deployment starts. This is the standard behavior for soak gates, error-rate checks, and other post-deployment conditions.
-- `pre-deploy`: gate is evaluated **before** git operations begin. If a `pre-deploy` gate is not ready, the PromotionStep stays in `Pending` and no `git-clone` starts. Use this to block deployments when upstream health is degraded.
+- `post-deploy` (default): no additional check. The gate is **not** evaluated again after the
+  deployment, so it cannot hold a step that is already deploying or baking. Use `bake` for
+  post-deployment soak and `health` for health checks.
+- `pre-deploy`: the PromotionStep reconciler also re-checks the gate right before git operations
+  begin. If it is not ready at that moment, the PromotionStep stays in `Pending` and no `git-clone`
+  starts. Use this for conditions that can turn false between the step being created and it starting,
+  such as upstream health.
 
 **Example: block prod deployments when staging error rate is high**
 

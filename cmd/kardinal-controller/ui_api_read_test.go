@@ -349,6 +349,110 @@ func TestUIAPI_Pipelines_ActiveBundleAndCounts(t *testing.T) {
 	assert.Equal(t, 1, byNS["team-b"].FailedStepCount)
 }
 
+// TestUIAPI_Pipelines_CurrentBundleIsNewestNotSuperseded covers E2E-R15: the
+// API preferred an older Verified bundle over a newer Failed one, so the
+// pipeline showed activeBundleName=<old Verified bundle>, no failedStepCount
+// and all environments Verified while its newest bundle had failed. The current
+// bundle is now the newest non-Superseded bundle by creationTimestamp, whatever
+// its phase; the counts and environment states come from that bundle.
+func TestUIAPI_Pipelines_CurrentBundleIsNewestNotSuperseded(t *testing.T) {
+	base := time.Now().Add(-1 * time.Hour)
+	at := func(min int) metav1.Time { return metav1.NewTime(base.Add(time.Duration(min) * time.Minute)) }
+	bundle := func(name, phase string, created metav1.Time, envs ...v1alpha1.EnvironmentStatus) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: created},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+			Status:     v1alpha1.BundleStatus{Phase: phase, Environments: envs},
+		}
+	}
+	env := func(name, phase string) v1alpha1.EnvironmentStatus {
+		return v1alpha1.EnvironmentStatus{Name: name, Phase: phase}
+	}
+	pipeline := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "pa"}, {Name: "pb"}}}}
+
+	tests := []struct {
+		name        string
+		objs        []client.Object
+		wantActive  string
+		wantFailed  int
+		wantBlocker int
+		wantStates  map[string]string
+	}{
+		{
+			// The live repro (ui-rerun.log:72): gapp-e2e2-hxklw Failed in pb,
+			// the two older bundles Verified.
+			name: "newer Failed bundle beats older Verified bundles",
+			objs: []client.Object{
+				bundle("app-only-pa", "Verified", at(0), env("pa", "Verified")),
+				bundle("app-kjkwt", "Verified", at(1), env("pa", "Verified"), env("pb", "Verified")),
+				bundle("app-hxklw", "Failed", at(7), env("pa", "Verified"), env("pb", "Failed")),
+				uiStep("default", "app-kjkwt-pb", "app-kjkwt", "pb", "Verified"),
+				uiStep("default", "app-hxklw-pa", "app-hxklw", "pa", "Verified"),
+				uiStep("default", "app-hxklw-pb", "app-hxklw", "pb", "Failed"),
+			},
+			wantActive: "app-hxklw",
+			wantFailed: 1,
+			wantStates: map[string]string{"pa": "Verified", "pb": "Failed"},
+		},
+		{
+			name: "newer Verified bundle beats an older Promoting bundle",
+			objs: []client.Object{
+				bundle("app-1", "Promoting", at(0), env("pa", "Promoting")),
+				bundle("app-2", "Verified", at(1), env("pa", "Verified")),
+				uiGateInstance("default", "g-old", "app-1", "no-weekend", "pa", false),
+			},
+			wantActive: "app-2",
+			wantStates: map[string]string{"pa": "Verified"},
+		},
+		{
+			name: "a newer Superseded bundle is skipped; blockers come from the current bundle",
+			objs: []client.Object{
+				bundle("app-1", "Promoting", at(0), env("pa", "WaitingForGate")),
+				bundle("app-2", "Superseded", at(1)),
+				uiGateInstance("default", "g1", "app-1", "no-weekend", "pa", false),
+				uiGateInstance("default", "g2", "app-2", "no-weekend", "pa", false),
+				uiGateInstance("default", "g3", "app-2", "freeze", "pa", false),
+			},
+			wantActive:  "app-1",
+			wantBlocker: 1,
+			wantStates:  map[string]string{"pa": "WaitingForGate"},
+		},
+		{
+			name: "only Superseded bundles: the newest is shown",
+			objs: []client.Object{
+				bundle("app-1", "Superseded", at(0)),
+				bundle("app-2", "Superseded", at(1)),
+			},
+			wantActive: "app-2",
+		},
+		{
+			name: "same creationTimestamp: the name breaks the tie, as in the web",
+			objs: []client.Object{
+				bundle("app-b", "Failed", at(0)),
+				bundle("app-a", "Promoting", at(0)),
+			},
+			wantActive: "app-b",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).
+				WithObjects(append([]client.Object{pipeline.DeepCopy()}, tt.objs...)...).Build()
+			rec := uiReadGet(t, c, "/api/v1/ui/pipelines")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var resp []uiPipelineResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.Len(t, resp, 1)
+			got := resp[0]
+			assert.Equal(t, tt.wantActive, got.ActiveBundleName)
+			assert.Equal(t, tt.wantFailed, got.FailedStepCount)
+			assert.Equal(t, tt.wantBlocker, got.BlockerCount)
+			assert.Equal(t, tt.wantStates, got.EnvironmentStates)
+		})
+	}
+}
+
 // TestUIAPI_StepEvents_OnlyPromotionStepEvents covers C07-controller-11: the
 // endpoint returned events for any object in any namespace, for example a
 // kube-system Pod, by name alone.
