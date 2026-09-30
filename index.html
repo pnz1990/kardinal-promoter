@@ -8,13 +8,19 @@
 <a id=__codelineno-0-8 name=__codelineno-0-8 href=#__codelineno-0-8></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span><span class=nv>$GITHUB_PAT</span>
 <a id=__codelineno-0-9 name=__codelineno-0-9 href=#__codelineno-0-9></a>
 <a id=__codelineno-0-10 name=__codelineno-0-10 href=#__codelineno-0-10></a><span class=c1># 2. Install kardinal-promoter</span>
-<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span><span class=se>\</span>
+<a id=__codelineno-0-11 name=__codelineno-0-11 href=#__codelineno-0-11></a>helm<span class=w> </span>install<span class=w> </span>kardinal-promoter<span class=w> </span>oci://ghcr.io/pnz1990/charts/kardinal-promoter<span class=w> </span>--version<span class=w> </span><span class=m>0</span>.9.0-rc.1<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-0-12 name=__codelineno-0-12 href=#__codelineno-0-12></a><span class=w>  </span>--namespace<span class=w> </span>kardinal-system<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-0-13 name=__codelineno-0-13 href=#__codelineno-0-13></a><span class=w>  </span>--create-namespace<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-0-14 name=__codelineno-0-14 href=#__codelineno-0-14></a><span class=w>  </span>--set<span class=w> </span>github.secretRef.name<span class=o>=</span>github-token
 <a id=__codelineno-0-15 name=__codelineno-0-15 href=#__codelineno-0-15></a>
-<a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a><span class=c1># 3. Verify</span>
-<a id=__codelineno-0-17 name=__codelineno-0-17 href=#__codelineno-0-17></a>kardinal<span class=w> </span>version
+<a id=__codelineno-0-16 name=__codelineno-0-16 href=#__codelineno-0-16></a><span class=c1># 3. Install the CLI</span>
+<a id=__codelineno-0-17 name=__codelineno-0-17 href=#__codelineno-0-17></a><span class=nv>OS</span><span class=o>=</span><span class=k>$(</span>uname<span class=w> </span>-s<span class=w> </span><span class=p>|</span><span class=w> </span>tr<span class=w> </span><span class=s1>'[:upper:]'</span><span class=w> </span><span class=s1>'[:lower:]'</span><span class=k>)</span>
+<a id=__codelineno-0-18 name=__codelineno-0-18 href=#__codelineno-0-18></a><span class=nv>ARCH</span><span class=o>=</span><span class=k>$(</span>uname<span class=w> </span>-m<span class=w> </span><span class=p>|</span><span class=w> </span>sed<span class=w> </span>-e<span class=w> </span><span class=s1>'s/x86_64/amd64/'</span><span class=w> </span>-e<span class=w> </span><span class=s1>'s/aarch64/arm64/'</span><span class=k>)</span>
+<a id=__codelineno-0-19 name=__codelineno-0-19 href=#__codelineno-0-19></a>curl<span class=w> </span>-Lo<span class=w> </span>kardinal<span class=w> </span><span class=s2>"https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0-rc.1/kardinal-</span><span class=si>${</span><span class=nv>OS</span><span class=si>}</span><span class=s2>-</span><span class=si>${</span><span class=nv>ARCH</span><span class=si>}</span><span class=s2>"</span>
+<a id=__codelineno-0-20 name=__codelineno-0-20 href=#__codelineno-0-20></a>chmod<span class=w> </span>+x<span class=w> </span>kardinal<span class=w> </span><span class=o>&amp;&amp;</span><span class=w> </span>sudo<span class=w> </span>mv<span class=w> </span>kardinal<span class=w> </span>/usr/local/bin/
+<a id=__codelineno-0-21 name=__codelineno-0-21 href=#__codelineno-0-21></a>
+<a id=__codelineno-0-22 name=__codelineno-0-22 href=#__codelineno-0-22></a><span class=c1># 4. Verify</span>
+<a id=__codelineno-0-23 name=__codelineno-0-23 href=#__codelineno-0-23></a>kardinal<span class=w> </span>version
 </code></pre></div> <p>See <a href=installation/ >Installation</a> for full prerequisites and configuration.</p> <h2 id=how-it-works>How it works<a class=headerlink href=#how-it-works title="Permanent link">&para;</a></h2> <pre class=mermaid><code>graph LR
     CI["CI pushes image"] --&gt; Bundle["Bundle CRD created"]
     Bundle --&gt; Graph["kro Graph\n(promotion DAG)"]
