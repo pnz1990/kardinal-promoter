@@ -305,18 +305,21 @@ spec:
                       type: string
                     promotionTemplate:
                       description: |-
-                        PromotionTemplate is reserved for a shared step sequence and is not
-                        implemented yet. A Pipeline that sets it is rejected when a Bundle is
-                        translated and by "kardinal validate". See docs/pipeline-reference.md#promotion-steps.
+                        PromotionTemplate is not supported, and the PromotionTemplate CRD was
+                        removed. The API server rejects a Pipeline that sets it, and so do Graph
+                        translation and "kardinal validate".
+
+                        Deprecated: remove it; every environment runs the default step sequence.
+                        See docs/pipeline-reference.md#promotion-steps.
                       properties:
                         name:
-                          description: Name is the PromotionTemplate resource name.
+                          description: Name is the name of a PromotionTemplate (the
+                            CRD was removed).
                           minLength: 1
                           type: string
                         namespace:
-                          description: |-
-                            Namespace is the namespace of the PromotionTemplate.
-                            If empty, the Pipeline's own namespace is used.
+                          description: Namespace is the namespace of the PromotionTemplate
+                            (the CRD was removed).
                           type: string
                       required:
                       - name
@@ -356,26 +359,25 @@ spec:
                       type: integer
                     steps:
                       description: |-
-                        Steps is reserved for a custom step sequence and is not implemented yet:
-                        the controller always runs the default sequence (see
-                        DefaultSequenceForBundle). A Pipeline that sets it is rejected when a
-                        Bundle is translated and by "kardinal validate", instead of silently
-                        running the default steps. See docs/pipeline-reference.md#promotion-steps.
+                        Steps is not supported. kardinal has no custom step engine: every
+                        environment runs the default step sequence (see DefaultSequenceForBundle).
+                        The API server rejects a Pipeline that sets it, and so do Graph
+                        translation and "kardinal validate".
+
+                        Deprecated: remove it; the step sequence follows the Bundle type,
+                        update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
                       items:
                         description: |-
-                          StepSpec declares a custom or built-in step override in a Pipeline environment.
-                          When Uses matches a built-in step name the built-in takes precedence.
-                          When Uses is an unknown name the Webhook config is required.
+                          StepSpec is the shape of the deprecated spec.environments[].steps field. A
+                          Pipeline that sets steps is rejected; see EnvironmentSpec.Steps.
                         properties:
                           uses:
-                            description: Uses identifies the step to execute (built-in
-                              name or custom name).
+                            description: Uses names a step.
                             minLength: 1
                             type: string
                           webhook:
-                            description: |-
-                              Webhook configures the HTTP endpoint for custom (non-built-in) steps.
-                              Required when Uses does not match any registered built-in step.
+                            description: Webhook was the endpoint of a custom webhook
+                              step, which was removed.
                             properties:
                               secretRef:
                                 description: |-
@@ -500,6 +502,14 @@ spec:
                       it (automatic rollback is configured with onHealthFailure, see
                       docs/rollback.md)
                     rule: '!has(self.autoRollback)'
+                  - message: 'environments[].steps is not supported: kardinal has
+                      no custom step engine and every environment runs the default
+                      step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
+                    rule: '!has(self.steps) || size(self.steps) == 0'
+                  - message: 'environments[].promotionTemplate is not supported: the
+                      PromotionTemplate CRD was removed and every environment runs
+                      the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
+                    rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
                       node ID; bundle, kro reserved IDs (spec, status, metadata, graph,
                       self, each, item, ...) and CEL keywords are not allowed'

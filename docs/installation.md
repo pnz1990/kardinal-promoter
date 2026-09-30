@@ -201,6 +201,33 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --reuse-values
 ```
 
+### Upgrading from v0.8.x: custom steps and PromotionTemplate removed
+
+The API server now rejects a Pipeline that sets `spec.environments[].steps` (a non-empty list)
+or `promotionTemplate`. Neither field ever changed the step sequence: the controller always ran
+the default one (see [Promotion Steps](pipeline-reference.md#promotion-steps)).
+
+1. **On Kubernetes older than 1.30, first** remove `steps` and `promotionTemplate` from every
+   stored Pipeline, then apply the new CRDs. These clusters do not ratchet CRD validation, so
+   after the new CRDs are applied, every update to a Pipeline that still sets either field fails,
+   status writes by the controller included. On 1.30 and later, an unchanged environment keeps
+   passing, but remove the fields anyway.
+
+    ```bash
+    # Pipelines that still set either field
+    kubectl get pipelines -A -o json | jq -r '.items[]
+      | select(any(.spec.environments // [] | .[]; (.steps // [] | length > 0) or .promotionTemplate != null))
+      | "\(.metadata.namespace)/\(.metadata.name)"'
+    ```
+
+2. The `PromotionTemplate` CRD was removed. No release shipped it, but a cluster that ran a
+   build from `main` may have it. Helm does not delete CRDs, so delete it yourself. This also
+   deletes every stored PromotionTemplate object; nothing reads them.
+
+    ```bash
+    kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
+    ```
+
 ## Graceful shutdown
 
 The controller handles `SIGTERM` gracefully: it stops accepting new reconcile requests
@@ -235,7 +262,8 @@ re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 helm uninstall kardinal-promoter -n kardinal-system
 
 # Optional: remove kardinal CRDs (deletes all Pipelines, Bundles, PolicyGates, etc.)
-kubectl delete crd \
+# promotiontemplates.kardinal.io exists only on clusters that ran a pre-release build from main.
+kubectl delete crd --ignore-not-found \
   pipelines.kardinal.io \
   bundles.kardinal.io \
   promotionsteps.kardinal.io \

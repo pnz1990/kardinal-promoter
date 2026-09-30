@@ -13,7 +13,10 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
+
+	"github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
 // crdSchema returns the openAPIV3Schema node at the given property path of the
@@ -109,4 +112,61 @@ func TestPipelineCRDRejectsAutoRollback(t *testing.T) {
 	})
 	require.Len(t, failed, 1)
 	assert.Contains(t, failed[0], "environments[].autoRollback is not implemented")
+}
+
+// TestPipelineCRDRejectsStepsAndPromotionTemplate verifies that the API server
+// rejects the deprecated environments[].steps and promotionTemplate fields
+// (#1282): kardinal has no custom step engine, and the PromotionTemplate CRD
+// was removed. An empty steps list is accepted, as Build accepts it, so a
+// stored Pipeline that never set the fields keeps updating.
+func TestPipelineCRDRejectsStepsAndPromotionTemplate(t *testing.T) {
+	env := crdSchema(t, "kardinal.io_pipelines.yaml", "spec", "environments", "[]")
+	tests := []struct {
+		name string
+		self map[string]interface{}
+		want string
+	}{
+		{name: "neither field", self: map[string]interface{}{"name": "prod", "approval": "pr-review"}},
+		{name: "empty steps", self: map[string]interface{}{"name": "prod", "steps": []interface{}{}}},
+		{name: "steps", self: map[string]interface{}{
+			"name": "prod", "steps": []interface{}{map[string]interface{}{"uses": "git-clone"}},
+		}, want: "environments[].steps is not supported"},
+		{name: "promotionTemplate", self: map[string]interface{}{
+			"name": "prod", "promotionTemplate": map[string]interface{}{"name": "standard"},
+		}, want: "environments[].promotionTemplate is not supported"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			failed := failingRules(t, env, tt.self)
+			if tt.want == "" {
+				assert.Empty(t, failed)
+				return
+			}
+			require.Len(t, failed, 1)
+			assert.Contains(t, failed[0], tt.want)
+			assert.Contains(t, failed[0], "docs/pipeline-reference.md#promotion-steps")
+		})
+	}
+}
+
+// TestPromotionTemplateAndStepInputsRemoved verifies that the PromotionTemplate
+// CRD and PromotionStep spec.inputs are gone (#1282): no CRD file in config or
+// the chart, no kind in the scheme, and no inputs property in the PromotionStep
+// schema, so the API server prunes the field.
+func TestPromotionTemplateAndStepInputsRemoved(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	for _, dir := range []string{"config/crd/bases", "chart/kardinal-promoter/crds"} {
+		_, err := os.Stat(filepath.Join(root, dir, "kardinal.io_promotiontemplates.yaml"))
+		assert.True(t, os.IsNotExist(err), "%s still has the PromotionTemplate CRD", dir)
+	}
+
+	scheme := k8sruntime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	assert.True(t, scheme.Recognizes(v1alpha1.GroupVersion.WithKind("PromotionStep")))
+	assert.False(t, scheme.Recognizes(v1alpha1.GroupVersion.WithKind("PromotionTemplate")))
+
+	spec := crdSchema(t, "kardinal.io_promotionsteps.yaml", "spec")
+	assert.NotContains(t, spec["properties"], "inputs")
 }

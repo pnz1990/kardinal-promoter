@@ -70,13 +70,6 @@ spec:
                 description: Environment is the environment this step promotes into.
                 minLength: 1
                 type: string
-              inputs:
-                additionalProperties:
-                  type: string
-                description: |-
-                  Inputs carries step-specific configuration values derived from the
-                  Pipeline and Bundle at graph generation time.
-                type: object
               pipelineName:
                 description: PipelineName is the Pipeline this step belongs to.
                 minLength: 1
@@ -107,7 +100,7 @@ spec:
                 type: array
               stepType:
                 description: |-
-                  StepType identifies the built-in or custom step to execute.
+                  StepType identifies the built-in step to execute.
                   Examples: git-clone, kustomize-set-image, git-commit, open-pr,
                             wait-for-merge, health-check.
                 minLength: 1

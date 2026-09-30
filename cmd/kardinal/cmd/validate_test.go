@@ -154,7 +154,7 @@ func TestValidate_Documents(t *testing.T) {
 		{
 			name:    "steps are reported once",
 			content: validPipelineDoc + "    steps:\n    - uses: git-clone\n",
-			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"prod\" declares 1 steps; spec.environments[].steps is not implemented"},
+			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"prod\" declares 1 steps; spec.environments[].steps is not supported"},
 			wantErr: true,
 		},
 	}

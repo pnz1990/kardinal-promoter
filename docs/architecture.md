@@ -107,8 +107,9 @@ Built-in step implementations:
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |
 
-There is no custom step engine: every environment runs one of these sequences, and a Pipeline
-that sets `spec.environments[].steps` or `promotionTemplate` is rejected. For image signature
+There is no custom step engine: every environment runs one of these sequences, and the API
+server rejects a Pipeline that sets the deprecated `spec.environments[].steps` or
+`promotionTemplate`. For image signature
 checks and tests, see [Pipeline Reference: Image signatures and tests](pipeline-reference.md#image-signatures-and-tests).
 
 ### PolicyGate Evaluator (`pkg/reconciler/policygate`)
@@ -214,7 +215,6 @@ All state is stored in Kubernetes CRDs:
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
 | `Subscription` | Watches OCI registries or Git repos; auto-creates Bundles on new artifacts |
-| `PromotionTemplate` | Reserved for a shared step sequence; `spec.environments[].promotionTemplate` is not implemented yet and is rejected |
 | `NotificationHook` | Sends promotion events to a webhook URL |
 | `AuditEvent` | Append-only record of promotion events (see [Security](guides/security.md#audit-logging)) |
 

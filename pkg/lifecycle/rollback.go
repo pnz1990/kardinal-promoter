@@ -213,8 +213,14 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			break
 		}
 		if plan.Target == nil {
-			return nil, fmt.Errorf("rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in %s (deployed now: %s); pick one with --to: %w",
-				req.Environment, plan.CurrentName, ErrConflict)
+			// The --to hint is for a person; an automatic rollback reports
+			// the refusal in a status condition or Event.
+			hint := "; pick one with --to"
+			if req.Automatic {
+				hint = ""
+			}
+			return nil, fmt.Errorf("rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in %s (deployed now: %s)%s: %w",
+				req.Environment, plan.CurrentName, hint, ErrConflict)
 		}
 	}
 

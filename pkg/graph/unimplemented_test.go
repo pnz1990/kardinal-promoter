@@ -27,7 +27,7 @@ func TestUnimplementedFields(t *testing.T) {
 		{name: "one region has no effect", env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Regions: []string{"us-east-1"}}},
 		{name: "steps", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
 			Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}},
-			want: []string{`environment "test" declares 1 steps; spec.environments[].steps is not implemented`}},
+			want: []string{`environment "test" declares 1 steps; spec.environments[].steps is not supported`}},
 		{name: "promotionTemplate", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
 			PromotionTemplate: &kardinalv1alpha1.PromotionTemplateRef{Name: "tmpl"}},
 			want: []string{`references PromotionTemplate "tmpl"`}},
@@ -62,7 +62,7 @@ func TestUnimplementedFields(t *testing.T) {
 		{name: "every field is reported", git: kardinalv1alpha1.PipelineGit{Layout: "branch"},
 			env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Layout: "branch",
 				Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}, Regions: []string{"a", "b"}, Shard: "eu"},
-			want: []string{"spec.git.layout", "steps is not implemented", "regions is not supported",
+			want: []string{"spec.git.layout", "steps is not supported", "regions is not supported",
 				"shard is not supported", `"test": layout: branch`}},
 	}
 	for _, tc := range tests {

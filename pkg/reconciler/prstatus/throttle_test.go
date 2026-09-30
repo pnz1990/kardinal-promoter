@@ -82,7 +82,8 @@ func TestPollThrottle(t *testing.T) {
 			wantRequeue: func(t *testing.T, d time.Duration) { assert.Equal(t, 30*time.Second, d) }},
 		{name: "changed poll patches", pr: prAt(ago(time.Minute), v1alpha1.PRStatusStatus{Open: true}),
 			scmOpen: false, wantCalls: 1, wantPatched: true,
-			wantRequeue: func(t *testing.T, d time.Duration) { assert.Zero(t, d) }},
+			// A closed PR is polled through its grace window (#1306).
+			wantRequeue: func(t *testing.T, d time.Duration) { assert.Equal(t, 30*time.Second, d) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
