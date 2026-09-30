@@ -8,7 +8,9 @@ name: PDCA Product Validation
 #
 # Every check either passes or fails; there is no "note" outcome. The job fails
 # when any check fails, when no check ran, or when a scenario step aborted, and
-# the [PDCA AUTOMATED] comment on Issue #1 says which.
+# the job summary says which. The first step checks that KARDINAL_DEMO_PAT can
+# read pnz1990/kardinal-demo, so an expired token fails in one step instead of
+# as a git-clone error deep in the scenarios.
 
 on:
   schedule:
@@ -29,13 +31,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
-      issues: write
       contents: read
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       SCENARIO: ${{ inputs.scenario || 'all' }}
       RESULTS_FILE: /tmp/pdca-results.txt
     steps:
+      # The promotion checks clone and push pnz1990/kardinal-demo with this
+      # token; GITHUB_TOKEN cannot (#558). gh prefers GH_TOKEN over the job's
+      # GITHUB_TOKEN, and an empty token is rejected first so gh cannot fall
+      # back to GITHUB_TOKEN. The token is never printed. kardinal-demo is
+      # public, so this catches an expired, revoked or malformed token (401),
+      # not a valid token that lacks write access.
+      - name: Preflight — KARDINAL_DEMO_PAT can read pnz1990/kardinal-demo
+        env:
+          DEMO_TOKEN: ${{ secrets.KARDINAL_DEMO_PAT }}
+        run: |
+          if [ -z "$DEMO_TOKEN" ] || ! GH_TOKEN="$DEMO_TOKEN" gh api repos/pnz1990/kardinal-demo --silent >/dev/null 2>&1; then
+            echo "::error::KARDINAL_DEMO_PAT cannot read pnz1990/kardinal-demo: rotate it"
+            exit 1
+          fi
+          echo "KARDINAL_DEMO_PAT can read pnz1990/kardinal-demo"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
@@ -124,16 +141,12 @@ jobs:
           kubectl create namespace platform-policies --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f examples/quickstart/pipeline.yaml
           kubectl apply -f examples/quickstart/policy-gates.yaml
-          # KARDINAL_DEMO_PAT is required for the promotion checks, which push to
-          # pnz1990/kardinal-demo. GITHUB_TOKEN cannot push there (#558), so
-          # without the PAT those checks fail rather than pass.
-          if [ -z "$KARDINAL_DEMO_PAT" ]; then
-            echo "::warning::KARDINAL_DEMO_PAT is not set; promotion checks will fail"
-          fi
-          # The token goes through a private file, never a command line.
+          # KARDINAL_DEMO_PAT pushes to pnz1990/kardinal-demo for the promotion
+          # checks; the preflight step has already checked it. The token goes
+          # through a private file, never a command line.
           TOKEN_FILE=$(mktemp)
           chmod 600 "$TOKEN_FILE"
-          printf '%s' "${KARDINAL_DEMO_PAT:-$GITHUB_TOKEN}" > "$TOKEN_FILE"
+          printf '%s' "$KARDINAL_DEMO_PAT" > "$TOKEN_FILE"
           kubectl create secret generic github-token \
             --from-file=token="$TOKEN_FILE" \
             --dry-run=client -o yaml | kubectl apply -f -
@@ -510,7 +523,7 @@ jobs:
           ui S26 "UI pipeline graph" 002-dag-node-click.spec.ts
           ui S27 "UI rollback button" 011-rollback-button.spec.ts
 
-      - name: Post PDCA evidence to Issue #1
+      - name: Write PDCA evidence to the job summary
         if: always()
         env:
           TEST_IMAGE: ${{ steps.image.outputs.image }}
@@ -541,27 +554,24 @@ jobs:
           else
             STATUS="ALL PASS"
           fi
-          PCT=0
-          if [ "$TOTAL" -gt 0 ]; then PCT=$((PASS_COUNT * 100 / TOTAL)); fi
           DATE=$(date -u '+%Y-%m-%d')
-          COMMENT_FILE=$(mktemp)
+          REPORT_FILE=$(mktemp)
           {
-            echo "PDCA AUTOMATED - Product Validation $DATE"
+            echo "## PDCA product validation $DATE"
             echo ""
-            echo "Status: $STATUS (PASS=$PASS_COUNT FAIL=$FAIL_COUNT, scenario=$SCENARIO)"
-            if [ -n "$INCOMPLETE" ]; then echo "Did not finish: $INCOMPLETE"; fi
-            echo "Image: $TEST_IMAGE"
-            echo "CI Run: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
-            echo "Trigger: $TRIGGER"
+            echo "- Status: $STATUS (PASS=$PASS_COUNT FAIL=$FAIL_COUNT, scenario=$SCENARIO)"
+            if [ -n "$INCOMPLETE" ]; then echo "- Did not finish: $INCOMPLETE"; fi
+            echo "- Image: $TEST_IMAGE"
+            echo "- Run: https://github.com/$GH_REPO/actions/runs/$RUN_ID"
+            echo "- Trigger: $TRIGGER"
             echo ""
-            echo "Scenario Results:"
-            cat "$RESULTS_FILE"
-          } > "$COMMENT_FILE"
-          cat "$COMMENT_FILE"
-          gh issue comment 1 --repo "$GH_REPO" --body-file "$COMMENT_FILE"
-          # Post structured anchor score line to Issue #1 for coverage tracking
-          gh issue comment 1 --repo "$GH_REPO" \
-            --body "[ANCHOR | kardinal-promoter | ${DATE}] coverage: ${PASS_COUNT}/${TOTAL} (${PCT}%) | PASS=${PASS_COUNT} FAIL=${FAIL_COUNT}"
+            echo "### Scenario results"
+            echo ""
+            sed 's/^/- /' "$RESULTS_FILE"
+          } > "$REPORT_FILE"
+          cat "$REPORT_FILE"
+          # This is the run's evidence (AGENTS.md §Journey validation).
+          cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
           if [ "$STATUS" != "ALL PASS" ]; then
             echo "::error::PDCA validation: $STATUS"
             exit 1

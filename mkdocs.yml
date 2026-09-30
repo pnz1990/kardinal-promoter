@@ -5,7 +5,7 @@ repo_url: https://github.com/pnz1990/kardinal-promoter
 repo_name: pnz1990/kardinal-promoter
 edit_uri: edit/main/docs/
 
-# docs/aide/ holds the project's agent process files; they are not user documentation.
+# docs/aide/ holds the contributor vision and journey definition of done; they are not user documentation.
 exclude_docs: |
   aide/
 

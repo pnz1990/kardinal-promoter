@@ -46,6 +46,3 @@ ITEM.md
 *.log
 .claude/agents/
 
-# otherness working-tree artifacts — stored on _state branch
-.otherness/handoff.md
-.otherness/state.json

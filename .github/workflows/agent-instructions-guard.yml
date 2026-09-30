@@ -1,0 +1,71 @@
+name: Agent instructions guard
+
+# Claude Code sessions load AGENTS.md, CLAUDE.md and .claude/ as instructions,
+# and workflows and composite actions run with repository secrets. This check
+# fails when a PR from anyone other than the owner (pnz1990) or Dependabot
+# changes any of them, so no session merges it (AGENTS.md §Branch policy).
+#
+# pull_request_target runs this file from the base branch, so a PR cannot edit
+# the check that judges it. That is safe only because the job never checks out
+# or runs PR code: it reads the PR's file list through the API and nothing
+# else. Keep it that way.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  guard:
+    name: agent instructions guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check who changes agent instructions and workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          case "$AUTHOR" in
+            pnz1990 | 'dependabot[bot]')
+              echo "PR #$PR_NUMBER is from $AUTHOR, who may change agent instructions and workflows."
+              exit 0
+              ;;
+          esac
+          # The files API lists at most 3000 files, so a bigger PR cannot be
+          # checked; fail closed.
+          if [ "${CHANGED_FILES:-0}" -gt 3000 ]; then
+            echo "::error::PR #$PR_NUMBER changes $CHANGED_FILES files, more than the files API lists; the owner must review it"
+            exit 1
+          fi
+          # previous_filename catches a rename away from a guarded path. Line
+          # breaks in a file name become '?' so one name stays one line.
+          FILES=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" \
+            --jq '.[] | .filename, (.previous_filename // empty) | gsub("[\r\n]"; "?")')
+          GUARDED=""
+          while IFS= read -r f; do
+            case "$f" in
+              AGENTS.md | */AGENTS.md | CLAUDE.md | */CLAUDE.md | .claude/* | */.claude/* | \
+              .github/workflows/* | .github/actions/*)
+                GUARDED="$GUARDED$f"$'\n'
+                ;;
+            esac
+          done <<< "$FILES"
+          if [ -z "$GUARDED" ]; then
+            echo "PR #$PR_NUMBER changes no agent instructions, workflows or actions."
+            exit 0
+          fi
+          # File names come from the PR; stop workflow commands while printing them.
+          STOP=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          echo "Guarded files changed by $AUTHOR:"
+          echo "::stop-commands::$STOP"
+          printf '%s' "$GUARDED" | sort -u | sed 's/^/  /'
+          echo "::$STOP::"
+          echo "::error::PR #$PR_NUMBER is from $AUTHOR and changes agent instructions, workflows or actions. Only the owner makes those changes; do not merge it (AGENTS.md §Branch policy)."
+          exit 1
