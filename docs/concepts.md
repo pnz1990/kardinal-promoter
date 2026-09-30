@@ -26,7 +26,7 @@ kubectl apply -f bundle.yaml
 | Available | Discovered, not yet promoted to any environment |
 | Promoting | Actively being promoted through the pipeline |
 | Verified | Successfully promoted to all target environments |
-| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle intent or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
+| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle (its intent, or no images or config commit for its type) or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
 | Superseded | Replaced by a newer Bundle |
 
 ### Bundle supersession
@@ -124,7 +124,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: dev
@@ -157,21 +156,13 @@ Both prod regions promote in parallel after staging is verified.
 
 Each environment runs the default promotion sequence (clone, update image, commit, push/PR, health check). The sequence is inferred from `update.strategy` and `approval`.
 
-> **Not implemented yet.** `spec.environments[].steps` is reserved for custom step sequences, but the controller cannot run them yet: a Pipeline that sets `steps` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. See [Custom Promotion Steps](custom-steps.md).
+kardinal has no custom step engine. The API server rejects a Pipeline that sets the deprecated `spec.environments[].steps` or `promotionTemplate`, and `kardinal validate` reports them. For image signature checks and tests, see [Pipeline Reference: Promotion Steps](pipeline-reference.md#promotion-steps).
 
-### Distributed mode and sharding
+### Multiple clusters
 
-For multi-cluster deployments where some clusters are behind firewalls, environments can be assigned to a `shard`. A kardinal-agent running in the target cluster reconciles PromotionSteps for that shard.
+kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. A spoke the hub cannot reach has no kardinal health check. See [Multi-Cluster](distributed-mode.md) and [Remote Clusters](health-adapters.md#remote-clusters).
 
-```yaml
-  environments:
-    - name: prod-eu
-      shard: eu-cluster              # handled by the agent in the EU cluster
-      dependsOn: [staging]
-      approval: pr-review
-```
-
-The `shard` value becomes the `kardinal.io/shard` label on the environment's PromotionSteps. The control-plane controller skips labelled steps, so an environment with a `shard` makes progress only while a kardinal-agent started with `--shard <value>` is running. Leave `shard` unset in standalone mode.
+Distributed mode (`shard` and `kardinal-agent`) was removed. A Pipeline environment that sets `shard` is rejected; remove it, and the controller reconciles every environment.
 
 ### How it works under the hood
 
@@ -196,10 +187,6 @@ Each PromotionStep tracks:
 - Promotion evidence (metrics, gate results, approver, timing)
 
 Use `kardinal get steps <pipeline>` to see all active PromotionSteps.
-
-## PromotionTemplate
-
-> **Not implemented yet.** The `PromotionTemplate` CRD is installed, and `spec.environments[].promotionTemplate` is reserved for referencing one, but the controller cannot run a template's steps yet. A Pipeline that sets `promotionTemplate` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. Every environment runs the default promotion sequence. See [Custom Promotion Steps](custom-steps.md).
 
 ## PolicyGate
 

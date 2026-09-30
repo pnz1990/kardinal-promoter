@@ -181,6 +181,95 @@ func TestLifecycle_MetricsSumBakeResets(t *testing.T) {
 	assert.Equal(t, 3, got.Status.Metrics.BakeResets)
 }
 
+// #1308: status.metrics.operatorInterventions counts the overrides recorded
+// on the Bundle's own gate instances, not always 0.
+func TestLifecycle_MetricsCountOperatorInterventions(t *testing.T) {
+	gate := func(name, bundleName string, overrides int) *kardinalv1alpha1.PolicyGate {
+		g := &kardinalv1alpha1.PolicyGate{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "default",
+				Labels:    map[string]string{"kardinal.io/bundle": bundleName, "kardinal.io/pipeline": "app"},
+			},
+			Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "false"},
+		}
+		for i := 0; i < overrides; i++ {
+			g.Spec.Overrides = append(g.Spec.Overrides, kardinalv1alpha1.PolicyGateOverride{
+				Reason:    fmt.Sprintf("hotfix %d", i),
+				ExpiresAt: metav1.NewTime(time.Now().UTC().Add(time.Hour)),
+			})
+		}
+		return g
+	}
+	tests := []struct {
+		name  string
+		gates []client.Object
+		want  int
+	}{
+		{name: "no gate instances", want: 0},
+		{name: "gate instances without overrides", gates: []client.Object{
+			gate("g-test", "app-v1", 0), gate("g-prod", "app-v1", 0),
+		}, want: 0},
+		{name: "two overrides on one gate", gates: []client.Object{
+			gate("g-test", "app-v1", 0), gate("g-prod", "app-v1", 2),
+		}, want: 2},
+		{name: "overrides on two gates add up", gates: []client.Object{
+			gate("g-test", "app-v1", 1), gate("g-prod", "app-v1", 2),
+		}, want: 3},
+		{name: "another Bundle's gates are not counted", gates: []client.Object{
+			gate("g-prod", "app-v1", 1), gate("g-prod-v0", "app-v0", 4), gate("g-other", "other-v1", 2),
+		}, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC().Add(-time.Hour))
+			objs := append([]client.Object{
+				lcPipeline("app", lcEnvs("test", "prod")...), b,
+				lcStep("app-v1", "test", "s-test", "Verified"),
+				lcStep("app-v1", "prod", "s-prod", "Verified"),
+			}, tt.gates...)
+			c := lcClient(objs...)
+			r := &bundle.Reconciler{Client: c}
+			lcReconcile(t, r, "app-v1")
+			lcReconcile(t, r, "app-v1")
+
+			got := lcGet(t, c, "app-v1")
+			require.Equal(t, "Verified", got.Status.Phase)
+			require.NotNil(t, got.Status.Metrics)
+			assert.Equal(t, tt.want, got.Status.Metrics.OperatorInterventions)
+		})
+	}
+}
+
+// #1308: a failed read of the gate instances is retried, not recorded as zero
+// interventions in metrics that are written only once.
+func TestLifecycle_MetricsNotWrittenWhenGateListFails(t *testing.T) {
+	b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC().Add(-time.Hour))
+	c := indexedBuilder(newScheme()).
+		WithObjects(lcPipeline("app", lcEnvs("test")...), b, lcStep("app-v1", "test", "s-test", "Verified")).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*kardinalv1alpha1.PolicyGateList); ok {
+					return apierrors.NewServiceUnavailable("etcd leader change")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"},
+	})
+	_, err2 := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"},
+	})
+	require.Error(t, errors.Join(err, err2), "a failed read of the gate instances is retried")
+
+	got := lcGet(t, c, "app-v1")
+	assert.Nil(t, got.Status.Metrics)
+	assert.NotEqual(t, "Verified", got.Status.Phase)
+}
+
 // C02-bundle-01: a Verified bundle stays Verified when a newer one arrives;
 // the history keeps the successful promotion.
 func TestLifecycle_VerifiedBundleIsNotSuperseded(t *testing.T) {
@@ -626,6 +715,68 @@ func TestLifecycle_CapListErrorDoesNotSkipCap(t *testing.T) {
 	require.Error(t, err, "a failed read is retried, not treated as a free slot")
 	assert.Equal(t, 0, tr.calls, "no Graph is created past the cap")
 	assert.Equal(t, "Available", lcGet(t, c, "app-v2").Status.Phase)
+}
+
+// #1310: the cap is counted with the uncached APIReader. Two Bundles arrive
+// at once with maxConcurrentPromotions 1. The first moves to Promoting; the
+// informer cache has not seen that patch yet when the second is reconciled.
+// The second still waits, because the count reads the API server. A Promoting
+// Bundle of another Pipeline in the namespace does not count.
+func TestLifecycle_CapCountedUncached(t *testing.T) {
+	ctx := context.Background()
+	p := lcPipeline("app", lcEnvs("test")...)
+	p.Spec.MaxConcurrentPromotions = 1
+	t0 := time.Now().UTC().Add(-time.Hour)
+	other := lcBundle("other-v1", "image", "Available", t0)
+	other.Spec.Pipeline = "other"
+	// Different types, so neither supersedes the other.
+	base := indexedBuilder(newScheme()).
+		WithObjects(p, lcPipeline("other", lcEnvs("test")...), other,
+			lcBundle("app-v1", "image", "Available", t0), lcBundle("app-v2", "config", "Available", t0.Add(time.Second))).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+		Build()
+	// The cache lags: a Bundle listed in lagging still shows Available.
+	lagging := map[string]bool{}
+	cached := interceptor.NewClient(base, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if bl, ok := list.(*kardinalv1alpha1.BundleList); ok {
+				for i := range bl.Items {
+					if lagging[bl.Items[i].Name] {
+						bl.Items[i].Status.Phase = "Available"
+					}
+				}
+			}
+			return nil
+		},
+	})
+	tr := &countingTranslator{}
+	r := &bundle.Reconciler{Client: cached, APIReader: base, Translator: tr}
+
+	lcReconcile(t, r, "other-v1")
+	require.Equal(t, "Promoting", lcGet(t, base, "other-v1").Status.Phase)
+	lcReconcile(t, r, "app-v1")
+	require.Equal(t, "Promoting", lcGet(t, base, "app-v1").Status.Phase, "another Pipeline's Bundle holds no slot")
+	lagging["app-v1"] = true
+
+	var cachedList kardinalv1alpha1.BundleList
+	require.NoError(t, cached.List(ctx, &cachedList, client.InNamespace("default")))
+	for _, b := range cachedList.Items {
+		if b.Name == "app-v1" {
+			require.Equal(t, "Available", b.Status.Phase, "precondition: the cache has not seen the Promoting patch")
+		}
+	}
+
+	res := lcReconcile(t, r, "app-v2")
+	got := lcGet(t, base, "app-v2")
+	assert.Equal(t, "Available", got.Status.Phase, "the second Bundle waits for the slot")
+	ready := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, "WaitingForSlot", ready.Reason)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter)
+	assert.Equal(t, 2, tr.calls, "no Graph is created for the second Bundle of app")
 }
 
 // C02-bundle-04: within the same second the created-at annotation, not the

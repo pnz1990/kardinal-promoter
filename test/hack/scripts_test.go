@@ -68,17 +68,18 @@ func repoRoot(t *testing.T) string {
 
 // runScript runs a hack/ script with fake tools and returns its combined
 // output, the recorded tool invocations, and its error.
-func runScript(t *testing.T, script string, env map[string]string) (string, []string, error) {
+func runScript(t *testing.T, script string, env map[string]string, args ...string) (string, []string, error) {
 	t.Helper()
 	bin := t.TempDir()
 	for name, body := range map[string]string{
 		"kubectl": fakeKubectl, "kind": fakeKind, "helm": fakeRecorder, "docker": fakeRecorder,
+		"terraform": fakeRecorder, "aws": fakeRecorder,
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755))
 	}
 	logPath := filepath.Join(t.TempDir(), "calls.log")
 
-	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "hack", script))
+	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot(t), "hack", script)}, args...)...)
 	cmd.Dir = repoRoot(t)
 	cmd.Env = []string{
 		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
@@ -198,4 +199,38 @@ func TestKindContextGuardRejectsNonKindName(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
 	assert.Contains(t, string(out), "not a kind-* context")
+}
+
+// TestDemoTeardownIgnoresRemovedEKSFlag: the demo's --eks mode and
+// terraform/eks-e2e were removed (#1293). teardown.sh --eks used to run
+// terraform destroy; now it warns, says how to destroy an old EKS cluster, and
+// only deletes the kind clusters. An unknown flag is reported instead of
+// ignored.
+func TestDemoTeardownIgnoresRemovedEKSFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantWarn []string
+	}{
+		{name: "--eks", args: []string{"--eks"},
+			wantWarn: []string{"--eks was removed", "terraform/eks-e2e/"}},
+		{name: "unknown flag", args: []string{"--bogus"},
+			wantWarn: []string{"unknown flag: --bogus"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// runScript resolves the script under hack/.
+			out, calls, err := runScript(t, filepath.Join("..", "demo", "scripts", "teardown.sh"),
+				map[string]string{"FAKE_KIND_CLUSTERS": "kardinal-control"}, tc.args...)
+			require.NoError(t, err, out)
+			for _, w := range tc.wantWarn {
+				assert.Contains(t, out, w)
+			}
+			assert.Contains(t, calls, "kind delete cluster --name kardinal-control")
+			for _, c := range calls {
+				assert.False(t, strings.HasPrefix(c, "terraform ") || strings.HasPrefix(c, "aws "),
+					"teardown must not call terraform or aws: %s", c)
+			}
+		})
+	}
 }

@@ -37,7 +37,6 @@ coverage.txt
 # also match the cmd/kardinal*/ source directories.
 /kardinal-controller
 /kardinal
-/kardinal-agent
 
 # Worktree artifacts that must not land in main repo root
 CLAIM
@@ -47,9 +46,3 @@ ITEM.md
 *.log
 .claude/agents/
 
-# Terraform
-terraform/.terraform/
-terraform/**/.terraform/
-terraform/eks-e2e/terraform.tfstate
-terraform/eks-e2e/terraform.tfstate.backup
-terraform/eks-e2e/terraform.tfvars

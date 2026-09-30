@@ -104,7 +104,6 @@ spec:
   git:
     url: https://github.com/myorg/gitops-repo
     branch: source       # DRY source branch where overlays live
-    provider: github
     secretRef: { name: github-token }
 
   environments:

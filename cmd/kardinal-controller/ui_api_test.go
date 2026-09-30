@@ -595,8 +595,9 @@ func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
 }
 
 // TestUIAPI_ListPipelines_OpsFields verifies that the operations table fields
-// (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt, cdLevel) are
+// (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt) are
 // populated correctly from active Bundle, PolicyGate, and PromotionStep CRDs (#462).
+// cdLevel is gone: it counted spec.policyGates, which gates nothing (#1269).
 func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	now := metav1.Now()
 	p := &v1alpha1.Pipeline{
@@ -607,11 +608,6 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 				{Name: "test"},
 				{Name: "prod-eu", DependsOn: []string{"test"}},
 				{Name: "prod-us", DependsOn: []string{"test"}},
-			},
-			// 2 pipeline-level gates → cdLevel = "mostly-cd"
-			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
-				{Name: "gate-1"},
-				{Name: "gate-2"},
 			},
 		},
 		Status: v1alpha1.PipelineStatus{Phase: "Ready"},
@@ -675,12 +671,12 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	var resp []uiPipelineResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Len(t, resp, 1)
+	assert.NotContains(t, w.Body.String(), "cdLevel", "cdLevel counted spec.policyGates and is removed (#1269)")
 
 	got := resp[0]
 	assert.Equal(t, "my-app", got.Name)
 	assert.Equal(t, 2, got.BlockerCount, "2 blocking PolicyGates")
 	assert.Equal(t, 1, got.FailedStepCount, "1 Failed PromotionStep")
-	assert.Equal(t, "mostly-cd", got.CDLevel, "2 pipeline-level gates → mostly-cd")
 	// InventoryAgeDays should be 0 (bundle just created)
 	require.NotNil(t, got.InventoryAgeDays, "just-created bundle → inventoryAgeDays is sent")
 	assert.Equal(t, 0, *got.InventoryAgeDays, "just-created bundle → 0 days inventory age")
@@ -973,6 +969,63 @@ func TestUIAPI_StepEvents_ReturnsSortedEvents(t *testing.T) {
 	assert.Contains(t, reasons, "StepStarted")
 	assert.Contains(t, reasons, "StepProgressing")
 	assert.NotContains(t, reasons, "OtherStep")
+}
+
+// TestUIAPI_StepEvents_EventsAPIFields: the reconcilers write Events through
+// events.k8s.io/v1 (#1265). Read through core/v1 those Events have no
+// firstTimestamp, lastTimestamp or count, only eventTime and series. The list
+// must sort them by when they happened, with the Events written through
+// core/v1 before the upgrade, and must fill the times and count from eventTime
+// and series.
+func TestUIAPI_StepEvents_EventsAPIFields(t *testing.T) {
+	const stepName = "step-new-api"
+	now := time.Now().UTC().Truncate(time.Second)
+	micro := func(d time.Duration) metav1.MicroTime { return metav1.NewMicroTime(now.Add(d)) }
+	ref := corev1.ObjectReference{Kind: "PromotionStep", Name: stepName, Namespace: "default"}
+	events := []corev1.Event{
+		{ // Written through core/v1 before the upgrade.
+			ObjectMeta: metav1.ObjectMeta{Name: "ev-core", Namespace: "default"}, InvolvedObject: ref,
+			Type: "Normal", Reason: "Promoting", Message: "old", Count: 2,
+			FirstTimestamp: metav1.NewTime(now.Add(-12 * time.Minute)),
+			LastTimestamp:  metav1.NewTime(now.Add(-10 * time.Minute)),
+		},
+		{ // events.k8s.io/v1, happened once.
+			ObjectMeta: metav1.ObjectMeta{Name: "ev-once", Namespace: "default"}, InvolvedObject: ref,
+			Type: "Normal", Reason: "WaitingForMerge", Message: "once",
+			EventTime: micro(-1 * time.Minute), ReportingController: "kardinal-controller", Action: "Promote",
+		},
+		{ // events.k8s.io/v1 series: first seen 20m ago, last seen 30s ago.
+			ObjectMeta: metav1.ObjectMeta{Name: "ev-series", Namespace: "default"}, InvolvedObject: ref,
+			Type: "Warning", Reason: "Blocked", Message: "series",
+			EventTime: micro(-20 * time.Minute), ReportingController: "kardinal-controller", Action: "Evaluate",
+			Series: &corev1.EventSeries{Count: 4, LastObservedTime: micro(-30 * time.Second)},
+		},
+	}
+	objs := []client.Object{&v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: stepName, Namespace: "default"}}}
+	for i := range events {
+		objs = append(objs, &events[i])
+	}
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+	srv := newUIAPIServer(c, zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/ui/steps/default/"+stepName+"/events", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp []uiEventResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp, 3)
+
+	rfc := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
+	assert.Equal(t, []uiEventResponse{
+		{Type: "Warning", Reason: "Blocked", Message: "series", Count: 4,
+			FirstTimestamp: rfc(-20 * time.Minute), LastTimestamp: rfc(-30 * time.Second)},
+		{Type: "Normal", Reason: "WaitingForMerge", Message: "once", Count: 1,
+			FirstTimestamp: rfc(-1 * time.Minute), LastTimestamp: rfc(-1 * time.Minute)},
+		{Type: "Normal", Reason: "Promoting", Message: "old", Count: 2,
+			FirstTimestamp: rfc(-12 * time.Minute), LastTimestamp: rfc(-10 * time.Minute)},
+	}, resp)
 }
 
 // TestUIAPI_StepEvents_EmptyWhenNoEvents returns an empty array (not 404) when the step has no events (#527).

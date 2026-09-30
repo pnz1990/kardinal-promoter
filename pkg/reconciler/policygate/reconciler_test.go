@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -254,7 +254,12 @@ func TestPolicyGateReconciler_Idempotent(t *testing.T) {
 	assert.True(t, got.Status.Ready)
 }
 
-// makeMetricCheck builds a MetricCheck with a given status result.
+// metricValidUntil keeps makeMetricCheck results fresh at the 2026-04-07
+// 10:00 UTC clock the metric tests use.
+var metricValidUntil = metav1.NewTime(time.Date(2026, 4, 7, 10, 3, 0, 0, time.UTC))
+
+// makeMetricCheck builds a MetricCheck with a given status result, fresh until
+// metricValidUntil.
 func makeMetricCheck(name, ns, lastValue, result string) *kardinalv1alpha1.MetricCheck {
 	return &kardinalv1alpha1.MetricCheck{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -265,8 +270,9 @@ func makeMetricCheck(name, ns, lastValue, result string) *kardinalv1alpha1.Metri
 			Threshold:     kardinalv1alpha1.MetricThreshold{Value: 0.01, Operator: "lt"},
 		},
 		Status: kardinalv1alpha1.MetricCheckStatus{
-			LastValue: lastValue,
-			Result:    result,
+			LastValue:  lastValue,
+			Result:     result,
+			ValidUntil: &metricValidUntil,
 		},
 	}
 }
@@ -1563,7 +1569,7 @@ func TestPolicyGateReconciler_EmitsBlockedEvent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 
-	fakeRecorder := record.NewFakeRecorder(10)
+	fakeRecorder := events.NewFakeRecorder(10)
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now

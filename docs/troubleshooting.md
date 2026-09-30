@@ -80,7 +80,13 @@ kubectl get promotionstep my-app-v1-29-0-prod -o jsonpath='{.status.prURL}'
 Common causes:
 - PR needs review (CODEOWNERS, required reviewers)
 - CI checks failing on the PR
-- PR was accidentally closed (controller will not reopen closed PRs)
+- The PR was closed without merging. The message then reads `PR #<n> is closed; the step fails 5m0s after closing unless it is reopened`. Reopen the PR within 5 minutes and the step keeps waiting for the merge. The controller never reopens a PR itself.
+
+After those 5 minutes the controller comments on the PR that it no longer tracks it and stops polling it. The step then fails with `PR #<n> was closed without merging and not reopened within 5m0s`. Reopening or merging the PR after that does not resume the promotion, and a merge changes the environment with no PromotionStep tracking it. To promote again, create a new Bundle. The PRStatus shows the state:
+
+```bash
+kubectl get prstatus -o custom-columns=NAME:.metadata.name,OPEN:.status.open,CLOSED_AT:.status.closedAt,FINAL:.status.closedFinal
+```
 
 **If the PR was merged but the step is still "WaitingForMerge"**: this can happen if the controller was down when the webhook arrived. On next controller restart, startup reconciliation automatically re-checks all in-flight PRs and advances any that were merged during downtime. You can also force a restart:
 

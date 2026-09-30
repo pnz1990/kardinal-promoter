@@ -3,5 +3,6 @@
 test-results/
 test/e2e/playwright-report/
 
-# TypeScript incremental build state (written by `tsc -b` in npm run build)
-tsconfig.tsbuildinfo
+# TypeScript incremental build state. `tsc -b` writes it under node_modules/.tmp;
+# older builds wrote tsconfig.tsbuildinfo here.
+*.tsbuildinfo

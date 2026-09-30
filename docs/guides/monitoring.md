@@ -17,25 +17,29 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
-If you use the Prometheus Operator:
+The Helm chart creates the Service with the `metrics` port (8080) automatically.
+
+### Prometheus Operator
+
+If you use the Prometheus Operator (for example kube-prometheus-stack), let the chart
+create a ServiceMonitor:
 
 ```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: kardinal-promoter
-  namespace: kardinal-system
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: kardinal-promoter
-  endpoints:
-    - port: metrics
-      path: /metrics
-      interval: 30s
+# values.yaml
+serviceMonitor:
+  enabled: true        # default false; needs the monitoring.coreos.com CRDs
+  interval: 30s        # optional; empty uses the Prometheus default
+  labels:              # optional; match your Prometheus serviceMonitorSelector
+    release: kube-prometheus-stack
 ```
 
-The Helm chart creates the Service with the `metrics` port (8080) automatically.
+The ServiceMonitor scrapes the chart Service's `metrics` port over plain HTTP, in the
+release namespace. Prometheus Operator sets the `job` label to the Service name, which
+is the chart's full name (`kardinal-promoter` for a release named `kardinal-promoter`).
+The alerts from `prometheusRule.enabled` select `job="<full name>"`, so they match this
+ServiceMonitor with no extra settings. If you scrape with your own ServiceMonitor or a
+static config instead, keep the job label equal to that Service name, or the
+`KardinalControllerDown` alert fires.
 
 ---
 
@@ -64,16 +68,6 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 | `workqueue_queue_duration_seconds` | Histogram | Time items spend in the queue before processing |
 | `workqueue_work_duration_seconds` | Histogram | Time spent processing each item |
 | `workqueue_retries_total` | Counter | Total retries per controller |
-
-### Webhook metrics
-
-| Metric | Type | Description |
-|---|---|---|
-| `controller_runtime_webhook_requests_total` | Counter | Admission webhook calls by `code` (only with `--pipeline-admission-webhook`) |
-| `controller_runtime_webhook_request_duration_seconds` | Histogram | Admission webhook latency (only with `--pipeline-admission-webhook`) |
-
-These are controller-runtime's admission webhook metrics. The Bundle API
-(`POST /api/v1/bundles`) and the SCM webhook (`/webhook/scm`) on port 8083 do not emit them.
 
 ---
 
@@ -168,14 +162,6 @@ histogram_quantile(0.99,
 
 ```promql
 workqueue_depth{name=~"bundle|promotionstep|policygate"}
-```
-
-### Admission webhook latency P95 (with `--pipeline-admission-webhook`)
-
-```promql
-histogram_quantile(0.95,
-  rate(controller_runtime_webhook_request_duration_seconds_bucket[5m])
-)
 ```
 
 ---

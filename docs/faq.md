@@ -34,14 +34,16 @@ See [Health Adapters](health-adapters.md) for configuration.
 
 ### Does it work with GitLab?
 
-Yes, GitLab SCM support is in beta. Set `spec.git.provider: gitlab` in the Pipeline.
-See [SCM Providers](scm-providers.md).
+Yes, GitLab SCM support is in beta. Start the controller with `--scm-provider gitlab`
+(Helm value `scm.provider: gitlab`). One controller serves one SCM for every Pipeline;
+`spec.git.provider` is deprecated and ignored. See [SCM Providers](scm-providers.md).
 
 ### Can I use it with Helm?
 
 Yes. Set `update: {strategy: helm}` on the Pipeline environment. kardinal
 will update the `image.tag` (or a custom path) in `values.yaml` instead of Kustomize
-overlays.
+overlays. It writes one image per Bundle: a Bundle with more than one tagged image
+fails the step. Use one Bundle per chart image, or kustomize.
 
 ---
 
@@ -61,7 +63,7 @@ The Helm chart creates the necessary `ClusterRole`. The minimum permissions are:
 - `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
 - `get/list/watch` on `deployments`, `pods`, `services`
 - `get` on `secrets` (GitHub token secret only)
-- `create/patch` on `events`
+- `create/patch` on `events.k8s.io` `events` (reconciler Events) and on core `events` (leader election)
 - `get/create/update` on `configmaps` (leader election)
 
 See [Security Guide](guides/security.md) for a full RBAC manifest.
@@ -131,8 +133,11 @@ Each reconciler is idempotent and safe to re-run after a crash.
 
 ### How do I manually approve a blocked bundle?
 
-Force-pass the blocking PolicyGate with `kardinal override`. It records who
-overrode the gate, why, and until when:
+Force-pass the blocking PolicyGate with `kardinal override`. It records the
+reason and expiry on the gate; the Kubernetes audit log records who made the
+change. (The override's `createdBy` is the local OS user name the CLI sends,
+and anyone who can edit the gate can set it to any value, so do not treat it as
+an identity.)
 
 ```bash
 kardinal override <pipeline> --stage prod --gate <gate-name> \

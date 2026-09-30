@@ -82,10 +82,7 @@ controller:
   # Empty keeps the controller default, platform-policies. Ignored in
   # namespace mode, which always uses watchNamespace.
   policyNamespaces: []
-  # -- Shard name (--shard). Empty = this controller reconciles every Pipeline.
-  # See docs/distributed-mode.md.
-  shard: ""
-  # -- Extra controller args, e.g. ["--pipeline-admission-webhook=true"].
+  # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
   extraEnv: []
@@ -184,6 +181,9 @@ ui:
   # included, gets 403 (DNS rebinding protection). Static /ui/ assets are not
   # checked. Host names only: no scheme, path or wildcard.
   allowedHosts: []
+  # With neither auth mode set, /api/ serves only clients connecting from
+  # loopback (kubectl port-forward); Ingress, NodePort, LoadBalancer, pod and
+  # service-mesh clients get 403. Set one mode to serve them.
   auth:
     # -- Static bearer token for /api/v1/ui/* (KARDINAL_UI_TOKEN).
     tokenSecretRef:
@@ -199,7 +199,9 @@ rbac:
   # -- patch on argoproj.io Applications, for the argocd update strategy
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
-  # -- batch Jobs create/delete, for the integration-test step.
+  # -- Deprecated, no effect, removed in v0.10. The integration-test step was
+  # removed, so the chart no longer grants batch Jobs access. Kept so existing
+  # --set rbac.integrationTestJobs=... keeps passing the values schema.
   integrationTestJobs: false
 
 # -- kro Graph integration.
@@ -318,6 +320,20 @@ prometheusRule:
   additionalLabels: {}
   # -- Namespace to deploy the PrometheusRule into. Defaults to Release.Namespace.
   namespace: ""
+
+# -- ServiceMonitor for Prometheus Operator.
+# Scrapes the controller's metrics port (plain HTTP) through the chart's Service.
+# The job label is the Service name, which is what the PrometheusRule alerts match.
+# Requires the Prometheus Operator CRD (monitoring.coreos.com/v1/ServiceMonitor).
+# Disabled by default — enable when using kube-prometheus-stack or similar.
+serviceMonitor:
+  # -- Create the ServiceMonitor resource. Requires Prometheus Operator CRD.
+  enabled: false
+  # -- Scrape interval, for example "30s". Empty uses the Prometheus default.
+  interval: ""
+  # -- Additional labels on the ServiceMonitor (for Prometheus selector matching).
+  # Example: { "release": "kube-prometheus-stack" }
+  labels: {}
 
 # -- Grafana dashboard ConfigMap for Grafana sidecar auto-discovery.
 # When enabled, creates a ConfigMap containing the kardinal-promoter Grafana dashboard JSON.

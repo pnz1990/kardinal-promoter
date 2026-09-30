@@ -103,9 +103,6 @@
             "type": "string"
           }
         },
-        "shard": {
-          "type": "string"
-        },
         "extraArgs": {
           "type": "array",
           "items": {
@@ -292,7 +289,8 @@
           "type": "boolean"
         },
         "integrationTestJobs": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Deprecated, no effect, removed in v0.10."
         }
       }
     },
@@ -436,6 +434,25 @@
         },
         "namespace": {
           "type": "string"
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^$|^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     },

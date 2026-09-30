@@ -159,6 +159,8 @@ var allFeatures = []string{
 	"--set", "replicaCount=2",
 	"--set", "ui.auth.tokenReview=true",
 	"--set", "rbac.argocdApplicationsWrite=true",
+	// Deprecated no-op (#1278): kept so the schema still accepts it and
+	// TestChartRBACLeastPrivilege proves it grants nothing.
 	"--set", "rbac.integrationTestJobs=true",
 }
 
@@ -382,7 +384,7 @@ type apiAccess struct {
 
 var kardinalNamespacedKinds = []string{
 	"pipelines", "bundles", "policygates", "rollbackpolicies", "subscriptions",
-	"promotiontemplates", "promotionsteps", "prstatuses", "metricchecks",
+	"promotionsteps", "prstatuses", "metricchecks",
 	"scheduleclocks", "notificationhooks",
 }
 
@@ -394,8 +396,9 @@ var readVerbs = []string{"get", "list", "watch"}
 // rule in templates/_rbac.tpl.
 func controllerAccess() []apiAccess {
 	acc := []apiAccess{
-		{"", "events", []string{"create", "patch"}, inWatched, "", "GetEventRecorderFor (main.go)"},
-		{"", "secrets", readVerbs, inWatched, "", "Pipeline git secret (promotionstep), SCM SecretWatcher (cached client)"},
+		{"events.k8s.io", "events", []string{"create", "patch"}, inWatched, "", "GetEventRecorder (main.go): reconciler Events"},
+		{"", "events", []string{"list", "create", "patch"}, inWatched, "", "UI step events list (ui_api.go); leader election Events (controller-runtime)"},
+		{"", "secrets", []string{"get"}, inWatched, "", "Pipeline git secret (promotionstep Get), SCM SecretWatcher (Get; Secrets are uncached)"},
 		{"", "configmaps", readVerbs, inWatched, "", "ensureVersionConfigMap cached Get (main.go)"},
 		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},
 		{"kro.run", "graphs", rwVerbs, inWatched, "", "pkg/graph client"},
@@ -434,9 +437,6 @@ var optionalAccess = []struct {
 	}},
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
-	}},
-	{"rbac.integrationTestJobs=true", []apiAccess{
-		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "steps integration_test_step.go"},
 	}},
 }
 
@@ -507,11 +507,68 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		{"", "kardinal.io", "changewindows", "create", ""},
 		{"", "kardinal.io", "changewindows", "delete", "freeze"},
 		{"team-a", "", "secrets", "create", ""},
+		// #1266: Secret reads are uncached Gets; list and watch would let the
+		// controller enumerate every Secret it can reach.
+		{"team-a", "", "secrets", "list", ""},
+		{"team-a", "", "secrets", "watch", ""},
+		{releaseNS, "", "secrets", "list", ""},
+		{releaseNS, "", "secrets", "watch", ""},
 		{"team-a", "rbac.authorization.k8s.io", "clusterroles", "bind", "cluster-admin"},
+		// The integration-test step was removed (#1278); rbac.integrationTestJobs
+		// is a no-op, so even with it set the controller gets no Job access.
+		{"team-a", "batch", "jobs", "create", ""},
+		{"team-a", "batch", "jobs", "delete", ""},
+		{releaseNS, "batch", "jobs", "create", ""},
 	}
 	for _, d := range denied {
 		assert.False(t, v.allowed(releaseNS, sa, d.ns, d.group, d.resource, d.verb, d.name),
 			"controller must not be allowed to %s %s/%s %q in %q", d.verb, d.group, d.resource, d.name, d.ns)
+	}
+}
+
+// TestChartRBACSCMTokenSecret covers #1266: the release-namespace Role gets a
+// get on the SCM token Secret, by name, so the SecretWatcher can reload a
+// rotated token whatever the namespaced rules cover. With no Secret name the
+// rule is not rendered: empty resourceNames would mean every Secret.
+func TestChartRBACSCMTokenSecret(t *testing.T) {
+	const role = releaseNS + "/kardinal-promoter-leader-election"
+	secretRules := func(v rbacView) []rbacv1.PolicyRule {
+		var out []rbacv1.PolicyRule
+		for _, r := range v.roles[role].Rules {
+			if has(r.Resources, "secrets") {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantName string
+	}{
+		{"no token configured", nil, ""},
+		{"existing Secret", []string{"--set", "github.secretRef.name=scm-token"}, "scm-token"},
+		{"chart-owned Secret", []string{"--set", "github.token=not-a-real-token"}, "kardinal-promoter-github-token"},
+		{"namespace mode", []string{"--set", "github.secretRef.name=scm-token", "--set", "controller.watchNamespace=" + releaseNS}, "scm-token"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := newRBACView(t, render(t, "kardinal-promoter", tt.args...))
+			require.Contains(t, v.roles, role)
+			rules := secretRules(v)
+			if tt.wantName == "" {
+				assert.Empty(t, rules)
+				return
+			}
+			require.Len(t, rules, 1)
+			assert.Equal(t, []string{"get"}, rules[0].Verbs)
+			assert.Equal(t, []string{tt.wantName}, rules[0].ResourceNames)
+			assert.True(t, v.allowed(releaseNS, "kardinal-promoter", releaseNS, "", "secrets", "get", tt.wantName))
+			for _, verb := range []string{"list", "watch", "update", "delete"} {
+				assert.False(t, v.allowed(releaseNS, "kardinal-promoter", releaseNS, "", "secrets", verb, tt.wantName), verb)
+			}
+		})
 	}
 }
 
@@ -643,7 +700,6 @@ func controllerEnvReads(t *testing.T) map[string]bool {
 
 // everyValue sets every value that renders a flag or env var.
 var everyValue = []string{
-	"--set", "controller.shard=eu",
 	"--set", "controller.tlsCertFile=/tls/tls.crt",
 	"--set", "controller.tlsKeyFile=/tls/tls.key",
 	"--set", "controller.policyNamespaces={platform-policies}",
@@ -681,7 +737,6 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"shard":                "eu",
 		"policy-namespaces":    "platform-policies",
 		"scm-provider":         "gitlab",
 		"scm-api-url":          "https://gitlab.example.com",
@@ -711,7 +766,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 
 	// extraArgs, extraEnv, extraVolumes and extraVolumeMounts pass through.
 	docs := render(t, "kardinal-promoter",
-		"--set", "controller.extraArgs={--pipeline-admission-webhook=true}",
+		"--set", "controller.extraArgs={--cors-allowed-origins=https://kardinal.example.com}",
 		"--set", "controller.extraEnv[0].name=HTTPS_PROXY",
 		"--set", "controller.extraEnv[0].value=http://proxy:3128",
 		"--set", "controller.extraVolumes[0].name=tls",
@@ -719,7 +774,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"--set", "controller.extraVolumeMounts[0].name=tls",
 		"--set", "controller.extraVolumeMounts[0].mountPath=/tls")
 	c = controllerContainer(t, docs)
-	assert.Contains(t, c.Args, "--pipeline-admission-webhook=true")
+	assert.Contains(t, c.Args, "--cors-allowed-origins=https://kardinal.example.com")
 	assert.Equal(t, "http://proxy:3128", envByName(c)["HTTPS_PROXY"].Value)
 	mounts := map[string]string{}
 	for _, m := range c.VolumeMounts {
@@ -730,9 +785,10 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 
 // TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
 // value names the docs used to give can no longer be silently ignored.
+// controller.shard was removed with distributed mode (#1321).
 func TestChartRejectsUnknownValues(t *testing.T) {
 	for _, set := range []string{
-		"controller.shardd=eu",
+		"controller.shard=eu",
 		"controller.github.token.secretName=github-token",
 		"controller.remoteKubeconfig.secretRef.name=kubeconfig",
 		"controller.uiAuthToken=abc",
@@ -758,7 +814,6 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 		"controller.watchNamespace=" + releaseNS,
 		"controller.tlsCertFile=/tls/tls.crt",
 		"controller.tlsKeyFile=/tls/tls.key",
-		"controller.shard=eu",
 		"prometheusRule.enabled=true",
 		"prometheusRule.additionalLabels.release=kube-prometheus-stack",
 		"grafanaDashboard.enabled=true",

@@ -32,15 +32,21 @@
 //     Transient errors (429, 5xx, network) are retried every 30 seconds.
 //   - The PromotionStep reconciler watches PRStatus and advances from
 //     WaitingForMerge when status.merged is true. The SCM webhook may set
-//     status.merged first; this reconciler then only fills in the merge commit.
+//     status.merged first, with status.mergeCommitSHA for GitHub and GitLab;
+//     this reconciler then only fills in a missing merge commit.
 //   - PolicyGate CEL reads the approval state as bundle.pr["<env>"].isApproved
 //     and bundle.pr["<env>"].approvalCount (K-08).
 //   - Polling is throttled: at most one poll per requeuePollInterval, and the
 //     status is patched only when a polled value changed or lastCheckedAt is
 //     older than lastCheckedRefresh. Each patch re-enqueues the object, so
 //     patching every poll made it poll in a tight loop (C03-promotionstep-20).
+//   - A PR closed without merging is polled for ClosedGracePeriod after the
+//     first poll that saw it closed, which records that time in
+//     status.closedAt. A reopen clears closedAt. Once the window has passed
+//     the reconciler sets status.closedFinal, then comments on the PR once,
+//     and stops polling; only then does the PromotionStep fail (#1306).
 //   - Idempotent: a merged PR whose merge commit is known is a no-op, and so
-//     is a PR closed without merging.
+//     is a PR that is final-closed.
 //
 // Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1.
 package prstatus
@@ -73,9 +79,34 @@ const (
 	// permanentErrorInterval is how often a PR whose last poll failed with a
 	// permanent SCM error (status.pollError) is polled again.
 	permanentErrorInterval = 5 * time.Minute
+	// labelEnvironment names the environment of the PRStatus; the Graph sets it.
+	labelEnvironment = "kardinal.io/environment"
 	// maxPollErrorLen bounds status.pollError; SCM error bodies can be pages long.
 	maxPollErrorLen = 512
+	// ClosedGracePeriod is how long a PR closed without merging is still
+	// polled, from status.closedAt, before it is final-closed. A reopen within
+	// the window keeps the promotion going.
+	ClosedGracePeriod = 5 * time.Minute
 )
+
+// IsClosed reports whether the PR is closed without merging: the reconciler
+// polled it (lastCheckedAt is set) and found it neither open nor merged. The
+// PR may still be in its grace window; see IsClosedFinal.
+func IsClosed(s *v1alpha1.PRStatusStatus) bool {
+	return !s.Merged && s.LastCheckedAt != nil && !s.Open
+}
+
+// IsClosedFinal reports whether the PR is closed without merging for good:
+// it stayed closed for ClosedGracePeriod (status.closedFinal), or it is
+// closed without a status.closedAt, which only a release before the grace
+// window wrote. The PRStatus is then no longer polled and the PromotionStep
+// waiting for it fails.
+func IsClosedFinal(s *v1alpha1.PRStatusStatus) bool {
+	if s.Merged {
+		return false
+	}
+	return s.ClosedFinal || (IsClosed(s) && s.ClosedAt == nil)
+}
 
 // Reconciler watches PRStatus objects and polls the SCM provider to update
 // status.merged / status.open.
@@ -110,8 +141,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.recordMergeCommit(ctx, log, &prs)
 	}
 
-	// Terminal: PR is closed (not open, not merged) — nothing to poll.
-	if prs.Status.LastCheckedAt != nil && !prs.Status.Open {
+	// Terminal: the PR stayed closed without merging for the grace window
+	// (or an older release recorded it closed) — nothing to poll.
+	if IsClosedFinal(&prs.Status) {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR is closed without merge, no-op")
 		return ctrl.Result{}, nil
 	}
@@ -167,10 +199,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		mergeSHA = r.fetchMergeCommit(ctx, log, &prs)
 	}
 
+	// now is written to status.lastCheckedAt whenever it decides something:
+	// the grace window compares it with the stored status.closedAt.
 	now := metav1.NewTime(time.Now().UTC())
+	closedAt, closedFinal := closedState(&prs.Status, merged, open, now)
+	becameFinal := closedFinal && !prs.Status.ClosedFinal
 	changed := merged != prs.Status.Merged || open != prs.Status.Open ||
 		approved != prs.Status.Approved || approvalCount != prs.Status.ApprovalCount ||
-		mergeSHA != prs.Status.MergeCommitSHA || prs.Status.PollError != ""
+		mergeSHA != prs.Status.MergeCommitSHA || prs.Status.PollError != "" ||
+		!closedAt.Equal(prs.Status.ClosedAt) || closedFinal != prs.Status.ClosedFinal
 	stale := prs.Status.LastCheckedAt == nil || now.Sub(prs.Status.LastCheckedAt.Time) >= lastCheckedRefresh
 	if changed || stale {
 		// This is the only CRD status this reconciler writes.
@@ -181,10 +218,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		prs.Status.ApprovalCount = approvalCount
 		prs.Status.MergeCommitSHA = mergeSHA
 		prs.Status.PollError = ""
+		prs.Status.ClosedAt = closedAt
+		prs.Status.ClosedFinal = closedFinal
 		prs.Status.LastCheckedAt = &now
 		if err := r.Status().Patch(ctx, &prs, patch); err != nil {
 			return ctrl.Result{}, fmt.Errorf("patch prstatus %s: %w", req.Name, err)
 		}
+	}
+	if becameFinal {
+		// Only after closedFinal is saved: a final-closed PRStatus is never
+		// polled again, so a failed save cannot post the comment twice. A
+		// failed comment (or a crash before it) is not retried.
+		r.commentStoppedTracking(ctx, log, &prs)
 	}
 
 	switch {
@@ -198,12 +243,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
 		}
 		return ctrl.Result{}, nil
-	case !open:
+	case closedFinal:
 		log.Info().
 			Str("prURL", prs.Spec.PRURL).
 			Int("prNumber", prs.Spec.PRNumber).
-			Msg("PR closed without merge — status updated")
+			Dur("grace", ClosedGracePeriod).
+			Msg("PR stayed closed without merge for the grace window — no longer tracked")
 		return ctrl.Result{}, nil
+	case !open:
+		remaining := closedAt.Add(ClosedGracePeriod).Sub(now.Time)
+		log.Info().
+			Str("prURL", prs.Spec.PRURL).
+			Int("prNumber", prs.Spec.PRNumber).
+			Dur("remaining", remaining).
+			Msg("PR closed without merge — polling until the grace window ends")
+		return ctrl.Result{RequeueAfter: min(requeuePollInterval, max(remaining, time.Second))}, nil
 	}
 
 	// Still open — requeue to poll again.
@@ -213,6 +267,41 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Dur("requeue", requeuePollInterval).
 		Msg("PR still open, requeueing")
 	return ctrl.Result{RequeueAfter: requeuePollInterval}, nil
+}
+
+// closedState returns status.closedAt and status.closedFinal after a poll
+// that found the PR merged or open or neither. The first poll that sees the
+// PR closed records now as closedAt; a poll that sees it open or merged
+// clears it; the PR is final-closed on the first poll at or after closedAt +
+// ClosedGracePeriod. now is the time this poll writes to lastCheckedAt.
+func closedState(s *v1alpha1.PRStatusStatus, merged, open bool, now metav1.Time) (*metav1.Time, bool) {
+	switch {
+	case merged || open:
+		return nil, false
+	case s.ClosedAt == nil:
+		return &now, false
+	default:
+		return s.ClosedAt, !now.Time.Before(s.ClosedAt.Add(ClosedGracePeriod))
+	}
+}
+
+// commentStoppedTracking tells the PR's readers that kardinal no longer
+// tracks it. It runs once, after status.closedFinal is saved. The comment is
+// best-effort: a failure is logged and not retried.
+func (r *Reconciler) commentStoppedTracking(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) {
+	env := prs.Labels[labelEnvironment]
+	if env == "" {
+		env = "the target environment"
+	}
+	// The reconciler cannot tell who closed the PR (a person, or kardinal
+	// when the step was superseded or timed out), so the text holds for both.
+	body := fmt.Sprintf("kardinal stopped tracking this PR: it has been closed without merging for %s. "+
+		"Merging it would change environment %s without a PromotionStep tracking it. "+
+		"To promote again, create a new Bundle.", ClosedGracePeriod, env)
+	if err := r.SCM.CommentOnPR(ctx, prs.Spec.Repo, prs.Spec.PRNumber, body); err != nil {
+		log.Warn().Err(err).Int("pr", prs.Spec.PRNumber).
+			Msg("could not comment on the closed PR (non-fatal)")
+	}
 }
 
 // recordPollError records a GetPRStatus error that polling again cannot fix
@@ -247,7 +336,7 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 // for mergeCommitWindow after the merge was recorded; after that, or when the
 // SCM provider cannot report merge commits, the argocd and resource health
 // checks fall back to checking the Bundle images; the flux check has no such
-// fallback and does not compare revisions (see docs/health-adapters.md).
+// fallback and waits until health.timeout (see docs/health-adapters.md).
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
 	if prs.Status.MergeCommitSHA != "" || prs.Spec.PRNumber == 0 || !r.canGetMergeCommit() {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")

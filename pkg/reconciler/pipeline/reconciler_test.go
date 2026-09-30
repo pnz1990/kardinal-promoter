@@ -140,18 +140,21 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 		mutate  func(p *kardinalv1alpha1.Pipeline)
 		wantMsg string
 	}{
-		{name: "steps", wantMsg: "spec.environments[].steps is not implemented",
+		{name: "steps", wantMsg: "spec.environments[].steps is not supported",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}
+				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}} //nolint:staticcheck // SA1019: the test sets the deprecated field
 			}},
-		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not implemented",
+		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not supported",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"}
+				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"} //nolint:staticcheck // SA1019: the test sets the deprecated field
 			}},
-		{name: "regions fan-out", wantMsg: "regions fan-out is not implemented",
+		{name: "two regions", wantMsg: `environment "test": regions is not supported; declare one environment per region`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"}
+				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
 			}},
+		// #1321: distributed mode was removed, so a shard is rejected.
+		{name: "shard", wantMsg: `environment "test": shard is not supported: distributed mode was removed`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "pipeline layout branch", wantMsg: "spec.git.layout: branch is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Git.Layout = "branch" }},
 		{name: "environment layout branch", wantMsg: `environment "test": layout: branch is not implemented`,
@@ -161,7 +164,7 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
 			}},
 		{name: "health.cluster", wantMsg: `environment "test": health.cluster is not supported`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }},
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "health.resource.kind", wantMsg: `environment "test": health.resource.kind "StatefulSet" is not supported`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].Health.Resource = &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}
@@ -187,8 +190,9 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			assert.Contains(t, cond.Message, tc.wantMsg)
 			// Most fields fail a Bundle only in the environment that sets them.
 			assert.NotContains(t, cond.Message, "every Bundle")
-			assert.True(t, strings.HasPrefix(cond.Message, "not implemented, so a Bundle fails when it reaches "+
-				"an environment that uses one (steps and promotionTemplate fail it when its Graph is built): "),
+			assert.True(t, strings.HasPrefix(cond.Message, "not implemented or not supported, so a Bundle fails "+
+				"when it reaches an environment that uses one (steps, promotionTemplate and two or more regions "+
+				"fail it when its Graph is built): "),
 				cond.Message)
 		})
 	}
@@ -216,6 +220,46 @@ func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
 			p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: tc.secretNS}
+			c := newClientWithIndex(newScheme(), p)
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.wantStatus, cond.Status)
+			assert.Equal(t, tc.wantReason, cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+		})
+	}
+}
+
+// TestPipelineReconciler_ArgoCDPRReviewInvalid: a Pipeline stored before the
+// CRD rule with update.strategy argocd and approval: pr-review is
+// Ready=False/ValidationFailed, because argocd cannot open a PR to review
+// (#1281). argocd with auto approval stays valid.
+func TestPipelineReconciler_ArgoCDPRReviewInvalid(t *testing.T) {
+	tests := []struct {
+		name       string
+		approval   string
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{name: "pr-review", approval: "pr-review", wantStatus: metav1.ConditionFalse, wantReason: "ValidationFailed",
+			wantMsg: `environment "prod": update.strategy argocd patches the Application directly and cannot honour approval: pr-review`},
+		{name: "auto", approval: "auto", wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod", DependsOn: []string{"test"}, Approval: tc.approval,
+					Update: kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+						ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-prod"}}},
+			})
 			c := newClientWithIndex(newScheme(), p)
 			key := types.NamespacedName{Name: "app", Namespace: "default"}
 			_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})

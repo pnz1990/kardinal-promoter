@@ -164,6 +164,40 @@ func TestParseWebhookEvent_NotMerged(t *testing.T) {
 	}
 }
 
+// TestParseWebhookEvent_MergeCommitSHA proves the GitHub and GitLab parsers
+// report the merge commit of a merged PR, so the webhook can record it with
+// status.merged (#1307). Before the merge GitHub's merge_commit_sha is the
+// test merge commit, which is not the promoted one.
+func TestParseWebhookEvent_MergeCommitSHA(t *testing.T) {
+	const sha = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	tests := []struct {
+		name     string
+		provider scm.SCMProvider
+		payload  string
+		want     string
+	}{
+		{"github merged", scm.NewGitHubProvider("t", "", ""),
+			`{"action":"closed","pull_request":{"number":7,"merged":true,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
+			sha},
+		{"github open with a test merge commit", scm.NewGitHubProvider("t", "", ""),
+			`{"action":"synchronize","pull_request":{"number":7,"merged":false,"merge_commit_sha":"` + sha + `"},"repository":{"full_name":"o/r"}}`,
+			""},
+		{"gitlab merged", scm.NewGitLabProvider("t", "", ""),
+			`{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":"` + sha + `"},"project":{"path_with_namespace":"g/p"}}`,
+			sha},
+		{"gitlab fast-forward merge", scm.NewGitLabProvider("t", "", ""),
+			`{"object_kind":"merge_request","object_attributes":{"iid":8,"state":"merged","action":"merge","merge_commit_sha":null},"project":{"path_with_namespace":"g/p"}}`,
+			""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, err := tc.provider.ParseWebhookEvent([]byte(tc.payload), "")
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, ev.MergeCommitSHA)
+		})
+	}
+}
+
 // TestAzureDevOpsProvider_GetPRReviewStatus_Envelope decodes the
 // {"count","value"} envelope and applies the vote rules (C06-scm-health-05).
 func TestAzureDevOpsProvider_GetPRReviewStatus_Envelope(t *testing.T) {

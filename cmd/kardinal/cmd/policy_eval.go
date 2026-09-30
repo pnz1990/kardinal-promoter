@@ -58,6 +58,10 @@ type gateEvaluator struct {
 	c   sigs_client.Client
 	r   *policygate.Reconciler
 	now time.Time
+	// metricsAt, when set, is the time MetricCheck results are checked for
+	// staleness against, instead of now: simulate keeps the cluster's metric
+	// results as they are at the real current time.
+	metricsAt time.Time
 }
 
 func newGateEvaluator(c sigs_client.Client) (*gateEvaluator, error) {
@@ -67,6 +71,12 @@ func newGateEvaluator(c sigs_client.Client) (*gateEvaluator, error) {
 	}
 	e := &gateEvaluator{c: c, r: r}
 	r.NowFn = func() time.Time { return e.now }
+	r.MetricsNowFn = func() time.Time {
+		if e.metricsAt.IsZero() {
+			return e.now
+		}
+		return e.metricsAt
+	}
 	return e, nil
 }
 
@@ -140,6 +150,24 @@ func celSyntaxCheck(ctx context.Context, expr string) (string, bool, error) {
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(reason, celSyntaxErrorPrefix), ":")), true, nil
 }
 
+// buildableBundle returns a copy of b that graph.Builder.Build accepts: a
+// placeholder image or config commit stands in for the ones b's type needs
+// and lacks. Build refuses a Bundle with nothing to promote (#1285), and the
+// simulated Bundle of policy simulate and the one of validate carry none. The
+// Graph's environments and gates do not depend on the artifacts, only on the
+// Pipeline, the gates, the type and the intent.
+func buildableBundle(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+	out := b.DeepCopy()
+	typ := out.Spec.Type
+	if (typ == "" || typ == "image" || typ == "mixed") && len(out.Spec.Images) == 0 {
+		out.Spec.Images = []v1alpha1.ImageRef{{Repository: "placeholder.invalid/image", Tag: "placeholder"}}
+	}
+	if (typ == "config" || typ == "mixed") && (out.Spec.ConfigRef == nil || out.Spec.ConfigRef.CommitSHA == "") {
+		out.Spec.ConfigRef = &v1alpha1.ConfigRef{CommitSHA: "placeholder"}
+	}
+	return out
+}
+
 // gatesForEnv builds the Graph the controller would build for bundle and returns
 // the PolicyGate instances it stamps for env, and the environments promoted
 // before env (its upstream path). policyNS is the controller's
@@ -148,7 +176,7 @@ func celSyntaxCheck(ctx context.Context, expr string) (string, bool, error) {
 func gatesForEnv(pipe *v1alpha1.Pipeline, bundle *v1alpha1.Bundle,
 	templates []v1alpha1.PolicyGate, policyNS []string, env string) ([]v1alpha1.PolicyGate, []string, error) {
 	// Target env so the Graph holds exactly env and the environments before it.
-	targeted := bundle.DeepCopy()
+	targeted := buildableBundle(bundle)
 	targeted.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: env}
 	res, err := graph.NewBuilder().Build(graph.BuildInput{
 		Pipeline: pipe, Bundle: targeted, PolicyGates: templates, PolicyNamespaces: policyNS,

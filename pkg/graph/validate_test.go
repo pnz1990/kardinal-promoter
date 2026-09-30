@@ -48,12 +48,11 @@ func TestBuild_RejectsCollidingEnvNodeIDs(t *testing.T) {
 }
 
 // TestBuild_RejectsReservedNodeIDs verifies that environment names whose node
-// ID kro reserves, or that collide with the Bundle ref node or the region
-// iterator, are rejected by Build (C01-graph-28).
+// ID kro reserves, or that collide with the Bundle ref node, are rejected by
+// Build (C01-graph-28).
 func TestBuild_RejectsReservedNodeIDs(t *testing.T) {
 	tests := []struct {
 		env     string
-		regions bool
 		wantErr string
 	}{
 		{env: "Status", wantErr: "reserves"},
@@ -63,14 +62,10 @@ func TestBuild_RejectsReservedNodeIDs(t *testing.T) {
 		{env: "self", wantErr: "reserves"},
 		{env: "for", wantErr: "reserves"},
 		{env: "bundle", wantErr: "same node id"},
-		{env: "region", regions: true, wantErr: "forEach iterator"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.env, func(t *testing.T) {
 			envs := []kardinalv1alpha1.EnvironmentSpec{{Name: tt.env}}
-			if tt.regions {
-				envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: "prod", Regions: []string{"eu", "us"}})
-			}
 			_, err := graph.NewBuilder().Build(graph.BuildInput{
 				Pipeline: pipelineOf("app", envs...), Bundle: makeBundle("app-x7k2m", "app"),
 			})
@@ -214,15 +209,13 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 		{"duplicate environment", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
 			p.Spec.Environments[1].Name = "test"
 		}, "declared twice"},
-		{"invalid region", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"US_EAST", "eu"}
-		}, `region "US_EAST"`},
-		{"duplicate region", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"eu", "eu"}
-		}, "listed twice"},
-		{"invalid shard", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Shard = "cluster/b"
-		}, `shard "cluster/b"`},
+		// #1304: two or more regions fail at Graph build, before any step.
+		{"two regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
+			p.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
+		}, `environment "prod": regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`},
+		{"two invalid regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
+			p.Spec.Environments[1].Regions = []string{"US_EAST", "US_EAST"} //nolint:staticcheck // SA1019: tests the rejection
+		}, "regions is not supported"},
 		{"unknown skipped environment", func(_ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) {
 			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"stagign"}}
 		}, "unknown environments [stagign]"},
@@ -238,6 +231,55 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 		})
 	}
 
+}
+
+// TestBuild_RejectsBundleWithoutItsArtifacts is #1285: a Bundle whose type
+// needs images and has none, or needs configRef.commitSHA and has none, fails
+// Build with ErrInvalid (InvalidSpec on the Bundle) before any environment is
+// promoted. Before, an empty image Bundle "succeeded" in every environment
+// with no images to update.
+func TestBuild_RejectsBundleWithoutItsArtifacts(t *testing.T) {
+	images := []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}}
+	commit := &kardinalv1alpha1.ConfigRef{CommitSHA: "abc123"}
+	tests := []struct {
+		name    string
+		spec    kardinalv1alpha1.BundleSpec
+		wantErr string
+	}{
+		{name: "image without images", spec: kardinalv1alpha1.BundleSpec{Type: "image"},
+			wantErr: `bundle "app-x7k2m": type "image" requires at least one entry in images`},
+		{name: "no type counts as image", spec: kardinalv1alpha1.BundleSpec{},
+			wantErr: `type "image" requires at least one entry in images`},
+		{name: "image with only a config commit", spec: kardinalv1alpha1.BundleSpec{Type: "image", ConfigRef: commit},
+			wantErr: `type "image" requires at least one entry in images`},
+		{name: "config without configRef", spec: kardinalv1alpha1.BundleSpec{Type: "config", Images: images},
+			wantErr: `type "config" requires configRef.commitSHA`},
+		{name: "config with a repo and no commit",
+			spec:    kardinalv1alpha1.BundleSpec{Type: "config", ConfigRef: &kardinalv1alpha1.ConfigRef{GitRepo: "https://g/cfg"}},
+			wantErr: `type "config" requires configRef.commitSHA`},
+		{name: "mixed without images", spec: kardinalv1alpha1.BundleSpec{Type: "mixed", ConfigRef: commit},
+			wantErr: `type "mixed" requires at least one entry in images`},
+		{name: "mixed without a commit", spec: kardinalv1alpha1.BundleSpec{Type: "mixed", Images: images},
+			wantErr: `type "mixed" requires configRef.commitSHA`},
+		{name: "image", spec: kardinalv1alpha1.BundleSpec{Type: "image", Images: images}},
+		{name: "config", spec: kardinalv1alpha1.BundleSpec{Type: "config", ConfigRef: commit}},
+		{name: "mixed", spec: kardinalv1alpha1.BundleSpec{Type: "mixed", Images: images, ConfigRef: commit}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := makeBundle("app-x7k2m", "app")
+			tt.spec.Pipeline = "app"
+			b.Spec = tt.spec
+			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "prod"), Bundle: b})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 // TestBuild_GateNameBackstop verifies that a gate whose name cannot go into
@@ -525,6 +567,89 @@ func TestValidateCIRunURL(t *testing.T) {
 			for _, secret := range []string{"s3cret", "evil.example", "ci.example.com", "runs", "zz", "::1"} {
 				assert.NotContains(t, err.Error(), secret, "the error must not echo the URL")
 			}
+		})
+	}
+}
+
+// TestValidateUpdateStrategy: update.strategy argocd with approval: pr-review
+// is a validation error (#1281). It feeds the Pipeline Ready condition and
+// "kardinal validate" for Pipelines stored before the CRD rule.
+func TestValidateUpdateStrategy(t *testing.T) {
+	argocd := func(approval string) kardinalv1alpha1.EnvironmentSpec {
+		return kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: approval,
+			Update: kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+				ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-prod"}}}
+	}
+	tests := []struct {
+		name    string
+		env     kardinalv1alpha1.EnvironmentSpec
+		wantErr string
+	}{
+		{name: "argocd with pr-review", env: argocd("pr-review"),
+			wantErr: `environment "prod": update.strategy argocd patches the Application directly and cannot honour approval: pr-review`},
+		{name: "argocd with auto", env: argocd("auto")},
+		{name: "argocd with default approval", env: argocd("")},
+		{name: "kustomize with pr-review", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review",
+			Update: kardinalv1alpha1.UpdateConfig{Strategy: "kustomize"}}},
+		{name: "default strategy with pr-review", env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := graph.ValidateUpdateStrategy(pipelineOf("app", kardinalv1alpha1.EnvironmentSpec{Name: "test"}, tc.env))
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestBuild_RejectsArgoCDForConfigAndMixed: argocd sets only the image in the
+// Argo CD Application, so a config or mixed Bundle fails at build when any
+// environment it promotes uses argocd, even a later one (#1281). An image
+// Bundle, or an argocd environment the Bundle does not reach, still builds.
+func TestBuild_RejectsArgoCDForConfigAndMixed(t *testing.T) {
+	pipeline := func() *kardinalv1alpha1.Pipeline {
+		p := makeLinearPipeline("app", "test", "staging", "prod")
+		p.Spec.Environments[2].Update = kardinalv1alpha1.UpdateConfig{Strategy: "argocd",
+			ArgoCD: &kardinalv1alpha1.ArgoCDUpdateConfig{Application: "app-prod"}}
+		return p
+	}
+	bundle := func(typ, target string) *kardinalv1alpha1.Bundle {
+		b := makeBundle("app-x7k2m", "app")
+		b.Spec.Type = typ
+		if typ != "image" {
+			b.Spec.ConfigRef = &kardinalv1alpha1.ConfigRef{CommitSHA: "abc123"}
+		}
+		if target != "" {
+			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{TargetEnvironment: target}
+		}
+		return b
+	}
+	tests := []struct {
+		name    string
+		bundle  *kardinalv1alpha1.Bundle
+		wantErr string
+	}{
+		{name: "config", bundle: bundle("config", ""),
+			wantErr: `build: environment "prod" uses update.strategy argocd, which does not support config Bundles`},
+		{name: "mixed", bundle: bundle("mixed", ""),
+			wantErr: `build: environment "prod" uses update.strategy argocd, which does not support mixed Bundles`},
+		{name: "image", bundle: bundle("image", "")},
+		{name: "config stopping before the argocd environment", bundle: bundle("config", "staging")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline(), Bundle: tc.bundle})
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
 }

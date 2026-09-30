@@ -194,7 +194,7 @@ func TestGitignoreDoesNotHideSources(t *testing.T) {
 	require.NoError(t, err, string(out))
 	assert.Empty(t, strings.TrimSpace(string(out)), "tracked files matched by .gitignore")
 
-	for _, p := range []string{"cmd/kardinal/cmd/new.go", "cmd/kardinal-controller/new.go", "cmd/kardinal-agent/new.go"} {
+	for _, p := range []string{"cmd/kardinal/cmd/new.go", "cmd/kardinal-controller/new.go"} {
 		ci := exec.Command("git", "check-ignore", "-v", "--no-index", p)
 		ci.Dir = root
 		out, err := ci.CombinedOutput()

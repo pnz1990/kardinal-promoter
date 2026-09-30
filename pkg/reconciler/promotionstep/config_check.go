@@ -16,20 +16,27 @@ import (
 //
 // Each case used to be accepted and then silently ignored or, for the Secret
 // namespace, honoured in an unsafe way. Failing the step with a clear message
-// is the only honest behaviour until the feature exists.
+// is the only honest behaviour.
 func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) string {
 	// Confused deputy: refused on purpose. The Pipeline reconciler reports the
 	// same error as Ready=False/ValidationFailed.
 	if err := graph.ValidateSecretRef(pipeline); err != nil {
 		return err.Error()
 	}
-	if env.Health.Cluster != "" {
-		return "health.cluster is not supported: remote-cluster health checks are not implemented; " +
-			"for a workload in another cluster, check its Argo CD Application in this cluster (health.type: argocd)"
+	// Distributed mode was removed. The Pipeline reconciler reports the same
+	// field as Ready=False/NotImplemented; this fails a step left over from a
+	// Graph built before the upgrade instead of leaving it Pending.
+	if env.Shard != "" { //nolint:staticcheck // SA1019: read to reject it
+		return graph.ShardNotSupported
 	}
-	if ps.Spec.Region != "" {
-		return "environments[].regions fan-out is not implemented: every region would push the same change " +
-			"to one branch; declare one environment per region (e.g. prod-us, prod-eu)"
+	if env.Health.Cluster != "" { //nolint:staticcheck // SA1019: read to reject it
+		return graph.HealthClusterNotSupported
+	}
+	// Build rejects two or more regions, but a Graph built before the upgrade
+	// is not rebuilt until the Pipeline spec changes, so its region steps can
+	// still run.
+	if ps.Spec.Region != "" { //nolint:staticcheck // SA1019: read to reject it
+		return graph.RegionsNotSupported
 	}
 	if res := env.Health.Resource; res != nil && res.Kind != "" && res.Kind != "Deployment" &&
 		health.EffectiveType(env) == health.DefaultType {

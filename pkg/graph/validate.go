@@ -130,8 +130,8 @@ func describeNode(n GraphNode) string {
 }
 
 // validateInput rejects Pipelines and Bundles whose names the Graph cannot
-// carry: every name ends up in a label value, and environment and region
-// names end up in object names. Gate names are checked by validateGateNames,
+// carry: every name ends up in a label value, and environment names end up
+// in object names. Gate names are checked by validateGateNames,
 // only for the gates this Graph uses.
 func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) error {
 	if errs := validation.IsValidLabelValue(pipeline.Name); len(errs) > 0 {
@@ -143,7 +143,33 @@ func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 		return fmt.Errorf("build: bundle name %q cannot be used as a label value: %s",
 			bundle.Name, strings.Join(errs, "; "))
 	}
+	if err := ValidateBundleArtifacts(&bundle.Spec); err != nil {
+		return fmt.Errorf("build: bundle %q: %w", bundle.Name, err)
+	}
 	return validateEnvironments(pipeline.Spec.Environments)
+}
+
+// ValidateBundleArtifacts checks that a Bundle carries what its type needs:
+// at least one image for image and mixed, and configRef.commitSHA for config
+// and mixed. An empty type counts as image, the default of the Bundle API and
+// kardinal create bundle. The Bundle API, the CLI (lifecycle.ValidateNewBundle)
+// and Build share this rule, so a Bundle with nothing to promote made with
+// kubectl fails before the first environment instead of "succeeding" in every
+// one with no images to update (#1285).
+func ValidateBundleArtifacts(spec *kardinalv1alpha1.BundleSpec) error {
+	typ := spec.Type
+	if typ == "" {
+		typ = "image"
+	}
+	needImages := typ == "image" || typ == "mixed"
+	needConfig := typ == "config" || typ == "mixed"
+	if needImages && len(spec.Images) == 0 {
+		return fmt.Errorf("type %q requires at least one entry in images", typ)
+	}
+	if needConfig && (spec.ConfigRef == nil || spec.ConfigRef.CommitSHA == "") {
+		return fmt.Errorf("type %q requires configRef.commitSHA", typ)
+	}
+	return nil
 }
 
 // validateGateNames rejects a gate this Graph instantiates whose name cannot
@@ -178,7 +204,7 @@ func validateGateNames(envs []string, gatesByEnv map[string][]kardinalv1alpha1.P
 	return nil
 }
 
-// validateEnvironments checks the environment names, regions, shards and steps.
+// validateEnvironments checks the environment names, regions and steps.
 func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 	names := make(map[string]bool, len(envs))
 	for _, e := range envs {
@@ -193,22 +219,10 @@ func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 			return fmt.Errorf("build: environment %q is declared twice", e.Name)
 		}
 		names[e.Name] = true
-		if e.Shard != "" {
-			if errs := validation.IsValidLabelValue(e.Shard); len(errs) > 0 {
-				return fmt.Errorf("build: environment %q: shard %q cannot be used as a label value: %s",
-					e.Name, e.Shard, strings.Join(errs, "; "))
-			}
-		}
-		regions := make(map[string]bool, len(e.Regions))
-		for _, r := range e.Regions {
-			if errs := validation.IsDNS1123Label(r); len(errs) > 0 {
-				return fmt.Errorf("build: environment %q: region %q must be a DNS-1123 label "+
-					"(it becomes part of the PromotionStep name): %s", e.Name, r, strings.Join(errs, "; "))
-			}
-			if regions[r] {
-				return fmt.Errorf("build: environment %q: region %q is listed twice", e.Name, r)
-			}
-			regions[r] = true
+		// One region names nothing Build uses; two or more would push the same
+		// change to the same branch once per region.
+		if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: read to reject it
+			return fmt.Errorf("build: environment %q: %s", e.Name, RegionsNotSupported)
 		}
 		// Refuse a custom step sequence instead of silently ignoring the steps
 		// the author asked for.
@@ -249,12 +263,53 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 // token to spec.git.url, which the same author controls, so a Pipeline could
 // otherwise use another namespace's credentials. An empty Pipeline namespace
 // fails closed. The PromotionStep reconciler refuses the step with this error,
-// the Pipeline reconciler sets Ready=False/ValidationFailed, the admission
-// webhook denies the Pipeline and "kardinal validate" reports it.
+// the Pipeline reconciler sets Ready=False/ValidationFailed and "kardinal
+// validate" reports it.
 func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
 	if ref := p.Spec.Git.SecretRef; ref != nil && ref.Namespace != "" && ref.Namespace != p.Namespace {
 		return fmt.Errorf("git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q",
 			ref.Namespace, p.Namespace)
+	}
+	return nil
+}
+
+// ValidateUpdateStrategy refuses update.strategy argocd with approval
+// pr-review (#1281): argocd patches the Argo CD Application directly, with no
+// Git commit and so no PR to review. The Pipeline CRD rejects the combination
+// at apply time; this check covers Pipelines stored before that rule. The
+// Pipeline reconciler sets Ready=False/ValidationFailed and "kardinal
+// validate" reports it. The argocd-set-image step refuses it too.
+func ValidateUpdateStrategy(p *kardinalv1alpha1.Pipeline) error {
+	for _, e := range p.Spec.Environments {
+		if e.Update.Strategy == "argocd" && e.Approval == "pr-review" {
+			return fmt.Errorf("environment %q: update.strategy argocd patches the Application directly and "+
+				"cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based "+
+				"strategy (kustomize or helm) for a reviewed promotion", e.Name)
+		}
+	}
+	return nil
+}
+
+// validateBundleStrategy fails a config or mixed Bundle when an environment it
+// promotes uses update.strategy argocd (#1281). argocd only sets the image in
+// the Argo CD Application, so the Bundle's Git config change would be
+// skipped. Failing at build stops the Bundle before its first environment,
+// even when only a later one uses argocd.
+func validateBundleStrategy(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle, envs []string) error {
+	if bundle.Spec.Type != "config" && bundle.Spec.Type != "mixed" {
+		return nil
+	}
+	promoted := make(map[string]bool, len(envs))
+	for _, name := range envs {
+		promoted[name] = true
+	}
+	for _, e := range pipeline.Spec.Environments {
+		if promoted[e.Name] && e.Update.Strategy == "argocd" {
+			return fmt.Errorf("build: environment %q uses update.strategy argocd, which does not support %s "+
+				"Bundles: it sets only the image in the Argo CD Application and would skip the config change; "+
+				"use a git-based strategy (kustomize or helm) for that environment, or skip it with "+
+				"intent.skipEnvironments", e.Name, bundle.Spec.Type)
+		}
 	}
 	return nil
 }

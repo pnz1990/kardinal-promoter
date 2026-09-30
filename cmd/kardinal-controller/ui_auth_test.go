@@ -55,8 +55,10 @@ func uiAuthDo(t *testing.T, h http.Handler, method, path, token, body string) *h
 	} else {
 		req = httptest.NewRequest(method, path, nil)
 	}
-	// The UI is reached through kubectl port-forward: a loopback Host.
+	// The UI is reached through kubectl port-forward: a loopback Host and a
+	// loopback peer.
 	req.Host = "localhost:8082"
+	req.RemoteAddr = "127.0.0.1:54321"
 	if token != "" {
 		req.Header.Set("Authorization", token)
 	}

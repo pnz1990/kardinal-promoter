@@ -79,19 +79,30 @@ There are no git operations. The `argocd-set-image` step:
 After the patch, ArgoCD's own reconciler picks up the spec change and syncs the application.
 The `health-check` step waits for the ArgoCD Application to reach a healthy sync state.
 
-### `approval: pr-review` is not supported
+### What the `argocd` strategy rejects
 
-The `argocd` strategy patches the Application directly, so there is no pull request to review.
-An environment with `approval: pr-review` and `update.strategy: argocd` fails the promotion
-at `argocd-set-image`, before the Application is patched, with:
+The `argocd` strategy patches the Application directly, so there is no pull request to review,
+and it sets only the image, so it cannot carry a config change. kardinal rejects both cases
+before any Application is patched:
 
-```
-argocd-set-image: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; ...
-```
+| Case | Where it is rejected | What you see |
+|---|---|---|
+| `approval: pr-review` with `update.strategy: argocd` | The API server, when you apply the Pipeline (CRD validation rule) | `kubectl apply` fails: `environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; ...` |
+| The same, on a Pipeline stored before the rule existed | The Pipeline reconciler | The Pipeline's `Ready` condition is `False` with reason `ValidationFailed` and the same message |
+| The same, in a file | `kardinal validate -f pipeline.yaml` | `✗ pipeline.yaml is invalid:` followed by the same message |
+| A config or mixed Bundle (`type: config` or `type: mixed`) when an environment it promotes uses `argocd` | Graph build, before the first environment | The Bundle is `Failed`, with an `InvalidSpec` condition, reason `GraphBuildFailed` |
 
-Use `approval: auto` with a PolicyGate to control when the patch happens, or use the `kustomize`
-or `helm` strategy for a reviewed promotion. Config Bundles (`type: config`) are also rejected by
-this strategy.
+The `argocd-set-image` step checks both cases again as a last guard. It fails without patching
+the Application if the approval is `pr-review` or the Bundle is config or mixed.
+
+The CRD rule applies only after the new CRDs are installed. Helm installs the chart's `crds/`
+directory on first install and never upgrades it, so apply the new CRDs as described in
+[Installation: Upgrade](installation.md#upgrade). Until you do, the API server accepts the
+combination, and the Pipeline reconciler, `kardinal validate` and the step still reject it.
+
+For a gated promotion, use `approval: auto` with a PolicyGate to control when the patch happens.
+For a reviewed promotion or a config Bundle, use the `kustomize` or `helm` strategy. To send a
+config Bundle past an `argocd` environment, list that environment in `intent.skipEnvironments`.
 
 ---
 
@@ -138,8 +149,8 @@ The step creates intermediate maps as needed if they do not exist.
 
 When a Bundle contains multiple images, the `argocd-set-image` step uses the **first image
 with a non-empty tag**. Setting different tags for different keys in one promotion is not
-supported: it would need a custom step sequence, and `spec.environments[].steps` is not
-implemented yet (a Pipeline that sets it is rejected; see [Custom Steps](custom-steps.md)).
+supported. kardinal has no custom step sequence to do it (a Pipeline that sets
+`spec.environments[].steps` is rejected; see [Promotion Steps](pipeline-reference.md#promotion-steps)).
 
 ---
 

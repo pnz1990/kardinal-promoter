@@ -107,7 +107,7 @@ kubectl get pods -n kro-system
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook HMAC secret (`KARDINAL_WEBHOOK_SECRET`) |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
-| `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`) |
+| `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
 | `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
@@ -115,11 +115,10 @@ kubectl get pods -n kro-system
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
-| `controller.shard` | `""` | `--shard`: this controller reconciles only PromotionSteps labelled with the shard, but still runs every other reconciler. Not a way to deploy a shard agent (see [Distributed mode](distributed-mode.md)) |
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts` |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Grant Job create/delete (the `integration-test` step) |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `128Mi` | Memory limit |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -164,6 +163,15 @@ release name other than `kardinal-promoter`, the Service is named
     tunnel — no Ingress or LoadBalancer needed. It is the recommended approach for
     platform engineers accessing the UI from their workstation.
 
+!!! warning "Ingress, NodePort and LoadBalancer need a UI auth mode"
+    With no UI auth mode set, the UI API answers only local clients, which is how
+    `kubectl port-forward` connects. A client that comes through an Ingress, a `NodePort`,
+    a `LoadBalancer` or another pod gets `403`. To serve those clients, set
+    `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name`. An authenticating proxy
+    in front of the UI can inject the shared token. With a service-mesh sidecar in the
+    controller pod, set an auth mode as well: the sidecar makes mesh clients look local.
+    See [UI API Access Control](guides/security.md#ui-api-access-control).
+
 !!! warning "Avoid accessing the UI over plain HTTP from a remote address"
     If you expose port 8082 directly (e.g. via `NodePort`) without TLS, the UI will
     display a security warning. Use port-forward from localhost instead, or configure
@@ -172,8 +180,7 @@ release name other than `kardinal-promoter`, the Service is named
 !!! note "Browsing to a name other than localhost"
     The UI API only accepts its own host names: localhost and the controller Service's
     DNS names. If you browse to an Ingress host or a node IP, add it to
-    `ui.allowedHosts` (`--ui-allowed-hosts`). Otherwise, while UI auth is off, every
-    UI API call fails with `403 host not allowed`. See
+    `ui.allowedHosts` (`--ui-allowed-hosts`) as well as setting an auth mode. See
     [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
 
 ### With TLS (production)
@@ -201,6 +208,33 @@ helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --reuse-values
 ```
+
+### Upgrading from v0.8.x: custom steps and PromotionTemplate removed
+
+The API server now rejects a Pipeline that sets `spec.environments[].steps` (a non-empty list)
+or `promotionTemplate`. Neither field ever changed the step sequence: the controller always ran
+the default one (see [Promotion Steps](pipeline-reference.md#promotion-steps)).
+
+1. **On Kubernetes older than 1.30, first** remove `steps` and `promotionTemplate` from every
+   stored Pipeline, then apply the new CRDs. These clusters do not ratchet CRD validation, so
+   after the new CRDs are applied, every update to a Pipeline that still sets either field fails,
+   status writes by the controller included. On 1.30 and later, an unchanged environment keeps
+   passing, but remove the fields anyway.
+
+    ```bash
+    # Pipelines that still set either field
+    kubectl get pipelines -A -o json | jq -r '.items[]
+      | select(any(.spec.environments // [] | .[]; (.steps // [] | length > 0) or .promotionTemplate != null))
+      | "\(.metadata.namespace)/\(.metadata.name)"'
+    ```
+
+2. The `PromotionTemplate` CRD was removed. No release shipped it, but a cluster that ran a
+   build from `main` may have it. Helm does not delete CRDs, so delete it yourself. This also
+   deletes every stored PromotionTemplate object; nothing reads them.
+
+    ```bash
+    kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found
+    ```
 
 ## Graceful shutdown
 
@@ -236,7 +270,8 @@ re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 helm uninstall kardinal-promoter -n kardinal-system
 
 # Optional: remove kardinal CRDs (deletes all Pipelines, Bundles, PolicyGates, etc.)
-kubectl delete crd \
+# promotiontemplates.kardinal.io exists only on clusters that ran a pre-release build from main.
+kubectl delete crd --ignore-not-found \
   pipelines.kardinal.io \
   bundles.kardinal.io \
   promotionsteps.kardinal.io \
@@ -273,14 +308,13 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `serviceaccounts`, `rolebindings` | get, create; get, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs) |
 | `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
-| `secrets` | get, list, watch. In the default cluster mode this covers **every Secret in the cluster** |
+| `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
 | `configmaps` | get, list, watch; the `kardinal-version` ConfigMap is written through the leader-election Role |
 | `leases` | Leader election, through a Role in the release namespace |
 | `events` | get, list, watch, create, patch |
 
-Optional rules: `rbac.argocdApplicationsWrite` (patch Applications), `rbac.integrationTestJobs`
-(create and delete Jobs), and `ui.auth.tokenReview` (create TokenReviews and
-SubjectAccessReviews). The full list of objects and rules is in
+Optional rules: `rbac.argocdApplicationsWrite` (patch Applications) and `ui.auth.tokenReview`
+(create TokenReviews and SubjectAccessReviews). The full list of objects and rules is in
 [Security: Controller RBAC](guides/security.md#controller-rbac). Set `controller.watchNamespace`
 to turn the namespaced rules into a Role in one namespace.
 

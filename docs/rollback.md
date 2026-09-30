@@ -5,11 +5,23 @@ In kardinal-promoter, rollback is not a special operation. It is a forward promo
 ## How Rollback Works
 
 1. `kardinal rollback <pipeline> --env <environment>` picks the target: the most recent Bundle, other than the one deployed in that environment now, that was Verified there and deploys different artifacts. A Bundle that an earlier rollback in that environment rolled back from is skipped, so after `v2` was rolled back to `v1`, the next rollback does not return to `v2`. The UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy use the same selection.
-2. It creates a new Bundle that copies the target's `spec.images` and `spec.configRef`, with `spec.provenance.rollbackOf` set to the target, `spec.intent.targetEnvironment` set to the environment, the label `kardinal.io/rollback: "true"` and the annotation `kardinal.io/rollback-from: <bundle deployed now>`.
+2. It creates a new Bundle that copies the target's `spec.images` and `spec.configRef`, with `spec.provenance.rollbackOf` set to the target, `spec.intent.targetEnvironment` set to the environment, the label `kardinal.io/rollback: "true"` and the annotation `kardinal.io/rollback-from: <bundle deployed now>`. It also puts back what the deployed Bundle changed that the target does not name (see [Images the target does not name](#images-the-target-does-not-name)).
 3. This Bundle runs through the normal promotion flow: Graph generation, PolicyGate evaluation, Git write, PR creation (for pr-review environments), health verification. Like any Bundle with `intent.targetEnvironment`, it is promoted through every environment upstream of the target first (see [Multi-Environment Rollback](#multi-environment-rollback)).
 4. The PR title is `[kardinal] Rollback <environment> to <rollback bundle> (restores <target>)`. The PR is labeled with `kardinal/rollback` in addition to `kardinal` and `kardinal/promotion`, so filter on `kardinal/rollback` to find rollback PRs.
 
 If there is nothing safe to roll back to (no earlier Verified Bundle, or only ones with the same artifacts as the failing Bundle), the command fails and creates nothing. The failing image is never promoted again.
+
+### Images the target does not name
+
+A Bundle does not have to name every image of the application. If the deployed Bundle `v2` names only `b:2`, and the target `v1` names only `a:1`, copying `v1` would leave `b:2`, the failing version, in place. So for each image repository the deployed Bundle names and the target does not, the rollback Bundle also carries the version from the newest Bundle that was Verified in the environment, other than the deployed one and the ones an earlier rollback rolled back from.
+
+For example, with `v0 = {a:0, b:0}`, `v1 = {a:1}` and `v2 = {b:2}` all promoted to prod, rolling back `v2` gives `{a:1, b:0}`.
+
+If no such Bundle names the image, the rollback is refused, and the error names the image. `onHealthFailure: rollback` then stops the step at `AbortedByAlarm` for a human. Roll back with `--to` a Bundle that names the image, or promote a fixed version.
+
+The same rule applies to config commits. When the deployed Bundle is a config Bundle, the rollback carries the target's config commit, or, if the target has none, the newest earlier Verified one. A rollback Bundle deploys either images or a config commit, never both: `--to` a config Bundle when the deployed Bundle is an image Bundle, or the other way round, is refused. Only `config` Bundles deploy their config commit. An `image` or `mixed` Bundle is promoted like an image Bundle (see [config-only promotions](design/09-config-only-promotions.md)).
+
+A target that, with the added images, deploys the same artifacts as the deployed Bundle is skipped, and `--to` such a target fails.
 
 `onHealthFailure: rollback` and RollbackPolicy never roll back a Bundle that is itself a rollback. If a rollback fails its health check, the step stops at `AbortedByAlarm` for a human, instead of starting another rollback.
 
@@ -36,17 +48,9 @@ Track with: kardinal explain my-app --env prod
 kardinal rollback my-app --env prod --to my-app-v1-27-0
 ```
 
-The `--to` flag names the Bundle to roll back to. It must exist in the Bundle history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a Bundle that an earlier rollback rolled back from.
+The `--to` flag names the Bundle to roll back to. It must exist in the Bundle history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a Bundle that an earlier rollback rolled back from. Images the deployed Bundle changed and the `--to` Bundle does not name are filled in the same way as without `--to`.
 
-### Emergency rollback
-
-```bash
-kardinal rollback my-app --env prod --emergency
-```
-
-This adds the `kardinal/emergency` label to the PR, signaling to reviewers that this rollback requires priority review.
-
-For environments where emergency rollbacks should not require PR review, configure `rollbackAutoMerge: true` on the environment. (This is currently a proposed feature. In Phase 1, all rollback PRs follow the same approval mode as forward promotions.)
+`--emergency` is deprecated and has no effect. It never bypassed a gate. It prints a warning, the rollback runs as without it, and the flag will be removed in the next minor release. To let a rollback through a blocking gate, use [`kardinal override`](#rollback-and-policygates).
 
 ## Automatic Rollback
 
@@ -66,7 +70,7 @@ spec:
 |---|---|
 | `none` (default) | `Failed`; downstream environments stop |
 | `abort` | `AbortedByAlarm`; a human must intervene |
-| `rollback` | A rollback Bundle is created with the artifacts of the Bundle verified before the failing one in this environment (the selection in [How Rollback Works](#how-rollback-works)), and the step moves to `RollingBack`. With nothing safe to roll back to, the step is `AbortedByAlarm` and nothing is created |
+| `rollback` | A rollback Bundle is created with the artifacts of the Bundle verified before the failing one in this environment (the selection in [How Rollback Works](#how-rollback-works)), and the step moves to `RollingBack`. With nothing safe to roll back to, including an image of the failing Bundle that no earlier Bundle names, the step is `AbortedByAlarm` and nothing is created |
 
 **When it applies.** The controller applies `onHealthFailure` when:
 
@@ -104,6 +108,17 @@ In all cases, the Graph stops all downstream nodes automatically (Graph does not
 `spec.environments[].autoRollback.failureThreshold` (roll back after N consecutive failed health checks) is reserved. The API server rejects a Pipeline that sets it, with the message `environments[].autoRollback is not implemented`. Remove the field and use `onHealthFailure`.
 
 The `RollbackPolicy` CRD is the building block for that feature. The controller reconciles RollbackPolicy objects that you create yourself, but nothing creates them automatically. A RollbackPolicy reads only the PromotionSteps of its `spec.bundleRef` in `spec.environment`. When the highest `status.consecutiveHealthFailures` among them reaches `spec.failureThreshold` (default: 3), it creates one rollback Bundle.
+
+When the threshold is reached but there is nothing safe to roll back to (see [How Rollback Works](#how-rollback-works)), the RollbackPolicy creates nothing. It sets the `RollbackRefused` condition to `True`, and the message gives the reason. It also emits one `Warning` Event with reason `RollbackRefused`. The condition shows in the `REFUSED` column:
+
+```bash
+kubectl get rollbackpolicy
+# NAME   SHOULDROLLBACK   FAILURES   THRESHOLD   REFUSED   AGE
+# rp-1   true             3          3           True      2m
+kubectl get rollbackpolicy rp-1 -o jsonpath='{.status.conditions[?(@.type=="RollbackRefused")].message}'
+```
+
+Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`.
 
 ## What Happens in Git
 

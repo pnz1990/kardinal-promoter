@@ -231,9 +231,9 @@ status is `completed`.
 ## Pipeline CRD configuration
 
 The controller uses one SCM provider for every Pipeline, chosen by `--scm-provider`
-(or `KARDINAL_SCM_PROVIDER`). `spec.git.provider` is **not read**: it does not select a
-provider, and the CRD accepts only `github` or `gitlab` there. Leave it unset. The
-repository comes from `spec.git.url`.
+(or `KARDINAL_SCM_PROVIDER`). `spec.git.provider` is **deprecated and ignored**: it does
+not select a provider, and the CRD accepts only `github` or `gitlab` there. Leave it
+unset. The repository comes from `spec.git.url`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -249,6 +249,32 @@ spec:
     - name: prod
       approval: pr-review
 ```
+
+---
+
+## Token check at startup
+
+When a token is set, the controller checks it once at startup, in the background, and
+logs what it finds. This also runs in Helm installs, where the token comes from the
+watched Secret. The check never stops the controller from starting.
+
+| Provider | Call | Logged as a warning |
+|---|---|---|
+| GitHub / GitHub Enterprise | `GET /user` | token rejected (401); a classic PAT without `repo` or `public_repo`; a fine-grained PAT or GitHub App token, whose permissions the call cannot show |
+| GitLab | `GET /api/v4/personal_access_tokens/self` | token rejected; no `api` scope |
+| Forgejo / Gitea | `GET /api/v1/user` | token rejected |
+| Bitbucket Cloud, Azure DevOps | none | not checked; an info line says so, and token problems show on the first promotion step |
+
+Find the warnings with:
+
+```bash
+kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter \
+  | grep "SCM TOKEN SCOPE WARNING"
+```
+
+A network or HTTP error from the check is logged at debug level only. The token itself is
+never logged. A token loaded later by the Secret watcher (after a rotation) is not
+checked.
 
 ---
 

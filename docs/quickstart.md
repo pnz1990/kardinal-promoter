@@ -245,7 +245,6 @@ spec:
     url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
-    provider: github
     secretRef:
       name: github-token
   environments:
@@ -421,12 +420,14 @@ spec:
 EOF
 ```
 
-The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and `kardinal explain` shows the gate with the controller's latest evaluation:
+The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and `kardinal explain` shows the gate with the controller's latest evaluation, the Bundle it belongs to, and the Bundle still deployed in prod:
 
 ```bash
 kardinal explain kardinal-test-app --env prod
-# ENVIRONMENT   TYPE         NAME                 STATE   EXPRESSION            REASON
-# prod          PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   bundle.version=sha-abc1234: !schedule.isWeekend = false
+# ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE   EXPRESSION            REASON
+# prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   bundle.version=sha-abc1234: !schedule.isWeekend = false
+#
+# prod   deployed: kardinal-test-app-7qvsr (sha-1a2b3c4)
 ```
 
 ## Adding to your CI pipeline

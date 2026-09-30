@@ -16,7 +16,8 @@
 >   reconciler.
 > - Health checks follow `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm,
 >   `rollback` → RollingBack) on timeout or a terminal result; see the Health Check section.
-> - The kardinal-agent is not shipped (see [07](07-distributed-architecture.md)).
+> - Distributed mode (the kardinal-agent and shard filtering) was removed (#1321; see
+>   [07](07-distributed-architecture.md)). The shard filtering below is history.
 > Depends on: 01-graph-integration, 02-pipeline-to-graph-translator, 08-promotion-steps-engine
 > Blocks: nothing (leaf node, but the workhorse)
 

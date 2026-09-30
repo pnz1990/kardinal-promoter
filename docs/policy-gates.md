@@ -170,9 +170,31 @@ All PolicyGate expressions are evaluated against the following context. All attr
 
 | Attribute | Type | Description |
 |---|---|---|
-| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's namespace, as a string (`""` after a query error). Convert with `double(...)` |
-| `metrics.<name>.result` | string | `"Pass"` or `"Fail"`: the MetricCheck's own threshold result |
+| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's namespace, as a string (`""` after a query error or when the result is stale). Convert with `double(...)` |
+| `metrics.<name>.result` | string | `"Pass"` or `"Fail"`: the MetricCheck's own threshold result. `"Stale"` when the result is stale |
+| `metrics.<name>.stale` | bool | `true` when the MetricCheck's result has not been refreshed in time: its `status.validUntil` is unset or has passed |
 | `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
+
+The controller does not query a MetricCheck `spec.prometheusURL` on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
+
+#### Stale metric results
+
+Each MetricCheck evaluation writes `status.validUntil`: the evaluation time plus three times the
+MetricCheck's `interval`, and at least 30 seconds (3 minutes with the default `interval: 1m`). A
+gate compares it with the time of its own evaluation. When `validUntil` is unset or has passed, the
+result is stale: nothing has refreshed it for three intervals, for example after a controller
+outage or while the MetricCheck's status write keeps failing. A stale result is exposed as
+`result: "Stale"`, `value: ""` and `stale: true`, so both `metrics["x"].result == "Pass"` and
+`double(metrics["x"].value) < 0.01` block (the second with an evaluation error, since `""` is not a
+number). Compare with `== "Pass"`, not `!= "Fail"`: a stale result is neither. The gate's
+`status.reason` then ends with `metric "x" result is stale`. `kubectl get
+metriccheck x -o yaml` shows `lastEvaluatedAt` and `validUntil`.
+
+A stale result is noticed at the gate's next evaluation (the next ScheduleClock tick or
+`recheckInterval`), and the first evaluation that refreshes it re-evaluates the gate at once.
+Right after an upgrade from a version without `validUntil`, every MetricCheck is stale until its
+first evaluation. The controller evaluates all of them when it starts, so metric gates can hold for
+at most one `interval`.
 
 ### Cross-stage history attributes (K-10)
 
@@ -413,15 +435,17 @@ PolicyGates are re-evaluated when any of the following occurs:
 
 1. **ScheduleClock tick** (primary mechanism) — A `ScheduleClock` object in `kardinal-system`
    writes `status.tick` every minute by default. The PolicyGate reconciler watches all `ScheduleClock`
-   objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide.
+   objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide
+   (not those of [finished Bundles](#gates-of-finished-bundles)).
    This is the recommended pattern for time-based gates (`schedule.isWeekend`, `schedule.hour`, etc.).
 
 2. **`recheckInterval`** — Each gate is also re-evaluated every `recheckInterval`, whether or not
    a `ScheduleClock` is installed. Without a `ScheduleClock` this is the only periodic
    re-evaluation. The minimum is `10s`: a smaller value is raised to `10s`.
 
-3. **MetricCheck result change** — When a `MetricCheck`'s result or value changes, the gates in
-   the same namespace whose expression reads `metrics` are re-evaluated at once.
+3. **MetricCheck result change** — When a `MetricCheck`'s result or value changes, or an
+   evaluation refreshes a [stale result](#stale-metric-results), the gates in the same namespace
+   whose expression reads `metrics` are re-evaluated at once.
 
 4. **ChangeWindow change** — When a `ChangeWindow` opens, closes or is edited, the gates whose
    expression reads `changewindow` are re-evaluated at once.
@@ -461,6 +485,15 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 # NAME             INTERVAL   LAST-TICK                   AGE
 # kardinal-clock   1m         2026-04-14T12:00:00Z         5m
 ```
+
+### Gates of finished Bundles
+
+The gate instances of a finished Bundle keep their last result: they are not evaluated or written
+again, and `status.lastEvaluatedAt` stops moving. A Bundle is finished when it is **Superseded**,
+or when it is **Verified** and its `GraphReady` condition is `True` (the Graph has seen every
+environment verified; nothing reads the gates after that). So the number of gate writes per
+ScheduleClock tick follows the number of Bundles in flight, not the Bundle history. The gates of a
+**Failed** Bundle are still evaluated, because the Bundle can recover.
 
 ## Mid-Flight Policy Changes
 

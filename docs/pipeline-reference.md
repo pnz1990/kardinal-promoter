@@ -15,7 +15,7 @@ spec:
     url: <string>                       # GitOps repo URL (HTTPS)
     branch: <string>                    # Base branch (default: "main")
     layout: <string>                    # "directory" (default); "branch" is not implemented (promotions fail)
-    provider: <string>                  # Not read; the controller's --scm-provider flag selects the SCM
+    provider: <string>                  # Deprecated and ignored; the controller's --scm-provider flag selects the SCM
     secretRef:
       name: <string>                    # Secret containing the Git token
 
@@ -45,14 +45,14 @@ spec:
         flagger:                        # When type: flagger
           name: <string>                # Default: Pipeline metadata.name
           namespace: <string>           # Default: environment name
-        cluster: <string>               # Not supported: must be empty (see Health Adapters)
+        cluster: <string>               # Deprecated, not supported: must be empty (see Health Adapters)
         timeout: <duration>             # Health check timeout (default: "10m")
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
-      shard: <string>                   # Agent shard name for distributed mode (optional)
-      steps:                            # Reserved, not implemented yet: a Pipeline that sets it is rejected
-        - uses: <string>                #   (see docs/custom-steps.md)
-      promotionTemplate:                # Reserved, not implemented yet: a Pipeline that sets it is rejected
+      shard: <string>                   # Deprecated, not supported: must be empty (distributed mode was removed)
+      steps:                            # Deprecated, not supported: the API server rejects it
+        - uses: <string>                #   (see Promotion Steps below)
+      promotionTemplate:                # Deprecated, not supported: the API server rejects it
         name: <string>
       waitForMergeTimeout: <duration>   # pr-review only: fail the step and close the PR after this (default: wait forever)
       stepTimeoutSeconds: <int>         # Per built-in step timeout in seconds, minimum 1 (default: none)
@@ -71,7 +71,7 @@ spec:
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
 | `provider` | No | `github` | **Not read by the controller.** The SCM provider is chosen once per controller by `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`); see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
 | `secretRef.name` | Yes | | Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. |
-| `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, `kardinal validate` reports it when the file sets `metadata.namespace`, and the optional admission webhook rejects the Pipeline. |
+| `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, and `kardinal validate` reports it when the file sets `metadata.namespace`. |
 
 ### spec.environments[]
 
@@ -95,34 +95,35 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR (`approval: pr-review` fails the step); see [Argo CD native promotion](argocd-native-promotion.md). |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`; one image per Bundle, so use one Bundle per chart image, or kustomize. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR. The API server rejects `argocd` with `approval: pr-review`, and a config or mixed Bundle fails before its first environment when any environment it promotes uses `argocd`; see [Argo CD native promotion](argocd-native-promotion.md). |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `health.type` | No | `resource` | Health verification adapter: `resource`, `argocd`, `flux`, `argoRollouts` or `flagger`. `delivery.delegate`, when set, takes precedence. There is no auto-detection. The step is Verified only when the adapter sees the promoted revision (commit or Bundle images) healthy. See [Health Adapters](health-adapters.md). |
 | `health.resource`, `health.argocd`, `health.flux`, `health.argoRollouts`, `health.flagger` | No | see [Health Check Defaults](#health-check-defaults) | Name and namespace of the object the adapter checks. `health.resource.kind` must be `Deployment`. |
 | `health.timeout` | No | `10m` | Maximum time from the start of health checking to the first healthy check. When it expires, it counts as a health failure and applies `onHealthFailure`. It does not cut a running `bake` window short. |
-| `health.cluster` | No | (must be empty) | **Not supported.** Remote-cluster health checks are not implemented, and a non-empty value fails the PromotionStep. For a workload in another cluster, check its Argo CD Application in the controller's cluster (`type: argocd`). |
+| `health.cluster` | No | (must be empty) | **Deprecated, not supported.** kardinal checks health only in the cluster it runs in. A non-empty value sets the Pipeline `Ready=False` and fails the PromotionStep. For a workload in another cluster, check its Argo CD Application (`type: argocd`) or a Flux Kustomization that targets the cluster (`type: flux`) in the hub; see [Remote Clusters](health-adapters.md#remote-clusters). |
 | `health.labelSelector` | No | (none) | `health.type=resource` only. When set, **every** Deployment in the namespace that matches these labels must pass the health check. No match is unhealthy. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is checked. Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
-| `shard` | No | (none) | Agent shard name for distributed mode. When set, only a kardinal-agent started with `--shard=<value>` reconciles this environment's PromotionSteps, and the control plane controller skips them. When omitted, the control plane controller handles the step. |
-| `steps` | No | (inferred) | **Not implemented yet.** Reserved for a custom step sequence. The controller always runs the default sequence, which it infers from `update.strategy` and `approval`. A Pipeline that sets `steps` is rejected: `kardinal validate` reports it, and its Bundles fail with a message naming the environment. See [Custom Steps](custom-steps.md). |
-| `promotionTemplate` | No | (none) | **Not implemented yet.** Reserved for a shared step sequence. It is rejected the same way as `steps`. |
+| `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False`, `kardinal validate` fails, and a PromotionStep left over from distributed mode fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
+| `steps` | No | (none) | **Deprecated, not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from the Bundle type, `update.strategy`, `approval` and `layout`. The API server rejects a Pipeline that sets `steps` (an empty list is accepted). See [Promotion Steps](#promotion-steps). |
+| `promotionTemplate` | No | (none) | **Deprecated, not supported.** The `PromotionTemplate` CRD was removed. The API server rejects a Pipeline that sets `promotionTemplate`. |
 | `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR, so a late merge cannot deliver the change. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A health alarm resets the timer. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
-| `regions` | No | (none) | **Not implemented** (#612). With two or more regions the translator stamps out one PromotionStep per region, but every region would edit the same path and push the same branch, so those PromotionSteps fail with `environments[].regions fan-out is not implemented`. Declare one environment per region instead (for example `prod-us` and `prod-eu`, with `dependsOn` or `wave`). With zero or one region the field has no effect. |
+| `regions` | No | (none) | **Deprecated, not supported.** Declare one environment per region instead (for example `prod-us` and `prod-eu`) and promote them in parallel with `wave` or `dependsOn`; each gets its own path, PR, gates and health check. Two or more regions set the Pipeline `Ready=False`, `kardinal validate` fails, and every Bundle fails when its Graph is built with `regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`. A single region is accepted and ignored. |
 
-**Reserved fields.** `steps`, `promotionTemplate`, `autoRollback`, `regions` with two or
-more entries, `layout: branch` (on `spec.git` or an environment), `health.cluster` and a
-`health.resource.kind` other than `Deployment` are not implemented. A Bundle fails when it
-reaches an environment that uses one (`steps` and `promotionTemplate` fail it when its Graph
-is built; a `health.resource.kind` fails the step after the change merged, during the
-health check). `kardinal validate` reports each of them, and the controller sets the
-Pipeline's `Ready` condition to `False` with reason `NotImplemented` and the same messages
-(`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The optional admission
-webhook admits the Pipeline with a warning per field. The API server rejects
-`autoRollback` outright.
+**Reserved and unsupported fields.** `layout: branch` (on `spec.git` or an environment) and
+a `health.resource.kind` other than `Deployment` are not implemented; `regions` with two or
+more entries, `shard` and `health.cluster` are deprecated and not supported. A Bundle fails
+when it reaches an environment that uses one (two or more `regions` fail it when its Graph is
+built; a `health.resource.kind` fails the step after the change merged, during the health
+check). `kardinal validate` reports each of them, and the controller sets the Pipeline's
+`Ready` condition to `False` with reason `NotImplemented` and the same messages
+(`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The API server rejects
+`autoRollback` and the deprecated `steps` and `promotionTemplate` outright. A Pipeline stored
+before those rules existed is still reported the same way, and its Bundles fail when their
+Graph is built.
 
 ### spec.historyLimit
 
@@ -268,62 +269,62 @@ promotion whose Pipeline or environment sets `layout: branch`, before it changes
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.
 
-## Integration Test Step (K-07)
+## Promotion Steps
 
-> **Not reachable yet.** A step outside the default sequence runs only when it is listed in `spec.environments[].steps`, and `steps` is not implemented yet. A Pipeline that sets it is rejected (see [Custom Steps](custom-steps.md)). This section describes the step for when `steps` ships.
+Every environment runs a fixed step sequence. The controller picks it from the Bundle type,
+`update.strategy`, `approval` and `layout` (`pkg/steps/defaults.go`):
 
-The `integration-test` built-in step creates a Kubernetes Job in the target environment namespace, waits for it to complete, and writes the result to the step output accumulator. This is the most powerful quality gate after bake time — running real tests against the actual deployed service.
+| Case | Steps |
+|---|---|
+| Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
-### Configuration
+`open-pr` and `wait-for-merge` run only with `approval: pr-review`. `layout: branch` is not
+implemented and fails at `git-clone`. [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
+describes each step.
 
-```yaml
-steps:
-  - uses: integration-test
-```
+kardinal has no custom step engine. `spec.environments[].steps` and
+`spec.environments[].promotionTemplate` are deprecated and cannot change the sequence: the
+API server rejects a Pipeline that sets either, and `kardinal validate` reports it.
 
-The step reads its config from `PromotionStep.spec.inputs`:
+### How `kustomize-set-image` matches images
 
-| Input key | Required | Default | Description |
-|---|---|---|---|
-| `integration_test.image` | Yes | | Container image to run (e.g., `ghcr.io/myorg/integration-tests:latest`) |
-| `integration_test.command` | No | container default | Space-separated command and args (e.g., `./run-tests.sh --env staging`) |
-| `integration_test.timeout` | No | `30m` | Maximum time to wait for Job completion (Go duration, e.g., `10m`, `1h`) |
+kustomize matches an `images` entry on its `name` only, against the image name in the
+manifests. So `kustomize-set-image` always writes, or updates, an entry whose `name` is the
+full repository (for example `name: ghcr.io/org/app`), as `kustomize edit set image` does.
+That entry rewrites manifests that use `image: ghcr.io/org/app`.
 
-### Behavior
+Entries that point at the repository under another name get the same tag or digest, so
+manifests that use that name keep promoting:
 
-1. **First call**: creates a `batch/v1 Job` in the environment namespace and returns `Pending` (reconciler requeues in 15s).
-2. **Subsequent calls**: re-checks Job status. Returns `Pending` while running, `Success` when Job succeeds, `Failed` when Job fails.
-3. **Timeout**: if `integration_test.timeout` elapses, the Job is deleted and the step returns `Failed`.
-4. **Idempotent**: multiple reconcile iterations never create duplicate Jobs (deterministic Job name from bundle+env).
-5. **Cleanup**: Jobs use `ttlSecondsAfterFinished: 3600` so they self-delete after 1 hour.
-6. **RBAC**: the controller needs `create` and `delete` on `batch` Jobs in the environment namespace. The Helm chart grants this with `--set rbac.integrationTestJobs=true`.
+- an entry whose `newName` is the repository (for example `name: app`,
+  `newName: ghcr.io/org/app`, as older kardinal versions wrote it);
+- an older short-name entry (`name: app`, no `newName`), when only one Bundle image has that
+  short name. It also gets `newName: ghcr.io/org/app`.
 
-### Outputs
+A short-name entry whose `newName` points at another repository is left alone.
 
-On success, the step populates:
-- `integration_test.result`: `"passed"`
-- `integration_test.job`: the Job name
-- `integration_test.elapsed`: time taken (e.g., `"2m34s"`)
+### Image signatures and tests
 
-On failure:
-- `integration_test.result`: `"failed"`
-- `integration_test.job`: the Job name
+Checks that must hold for the running workload belong where it runs, not in the promoter:
 
-### Example
-
-```yaml
-environments:
-  - name: test
-    steps:
-      - uses: git-clone
-      - uses: kustomize-set-image
-      - uses: git-commit
-      - uses: git-push
-      - uses: health-check
-      - uses: integration-test   # runs after health check passes
-```
-
-`examples/integration-test/pipeline.yaml` shows the environment layout; its `steps` block is commented out until the field is implemented.
+- **Image signatures.** Enforce them at admission in the cluster that runs the pods, with
+  [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
+  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
+  A check in the promoter is bypassed by anyone who can push to the GitOps repository;
+  admission is not.
+- **Tests after a deploy.** Run them as an Argo CD
+  [PostSync hook](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/) Job and
+  set `health.type: argocd`. Argo CD keeps the sync operation open while the hook runs and
+  marks it failed when a PostSync hook fails. The argocd adapter is healthy only when the
+  Application is Healthy and Synced on the promoted revision and its last operation is
+  `Succeeded` (or there is none), so the step waits for the tests; a `Failed` or `Error`
+  operation is a health failure and applies `onHealthFailure`.
+- **Metric checks.** Create a `MetricCheck` and read it from a PolicyGate on the next
+  environment, for example `metrics["error-rate"].result == "Pass"`. See
+  [Policy Gates: Metric-based](policy-gates.md#metric-based).
 
 ## Examples
 
@@ -337,7 +338,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: dev
@@ -358,7 +358,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: test
@@ -391,7 +390,7 @@ spec:
 
 ### Remote prod cluster through an Argo CD hub
 
-Health adapters read objects in the controller's own cluster, and `health.cluster` is not supported. To verify a workload in another cluster, let an Argo CD instance in the controller's cluster manage it and check its Application there: the adapter confirms the Application synced the promoted commit and is Healthy. A Flux Kustomization, Rollout, Canary or Deployment in another cluster cannot be checked. See [Health Adapters](health-adapters.md#remote-clusters).
+Health adapters read objects in the controller's own cluster, and `health.cluster` is not supported. To verify a workload in another cluster, let an Argo CD instance in the controller's cluster manage it and check its Application there: the adapter confirms the Application synced the promoted commit and is Healthy. A Flux Kustomization in the hub that targets the cluster with `spec.kubeConfig.secretRef` works the same way with `type: flux`. A Rollout, Canary or Deployment in another cluster cannot be checked, and neither can a cluster the hub does not reach. See [Health Adapters](health-adapters.md#remote-clusters).
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -401,7 +400,6 @@ metadata:
 spec:
   git:
     url: https://github.com/myorg/gitops-repo
-    provider: github
     secretRef: { name: github-token }
   environments:
     - name: dev

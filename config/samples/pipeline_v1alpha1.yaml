@@ -42,6 +42,5 @@ spec:
         delegate: argoRollouts
       dependsOn:
         - uat
-      shard: prod-cluster
   paused: false
   historyLimit: 20

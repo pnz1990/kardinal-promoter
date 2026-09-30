@@ -20,9 +20,10 @@
 > - Results are healthy, progressing, unhealthy or terminal; only unhealthy results count
 >   toward `status.consecutiveHealthFailures`.
 > - Remote-cluster checks (`health.cluster`, the Remote Cluster Client Management section)
->   are not implemented: a non-empty `health.cluster` fails the PromotionStep. Adapters read
->   the cluster that holds the PromotionSteps (a kardinal-agent included, since it uses one
->   client configuration); a remote workload can be verified through an Argo CD hub Application.
+>   are not supported and will not be implemented (#1303): `health.cluster` is deprecated and a
+>   non-empty value fails the PromotionStep. Adapters read the cluster kardinal runs in; a remote
+>   workload is verified through an Argo CD hub Application or a Flux hub Kustomization with
+>   `spec.kubeConfig` (see ../health-adapters.md#remote-clusters).
 
 ## Purpose
 

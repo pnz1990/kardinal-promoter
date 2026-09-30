@@ -34,7 +34,7 @@ writes its result to its own CRD status, because kro has no primitive for it (le
 | — (not catalogued) | The Bundle reconciler computes soak time with `time.Now` and requeues every minute while Promoting (`soakRequeue`). | Accepted |
 | — (not catalogued) | The PRStatus reconciler polls the SCM API every 30 s (`requeuePollInterval`); SCM webhooks only shorten the wait. | Accepted |
 | — (not catalogued) | Reconcilers make external HTTP calls: NotificationHook (webhook delivery), Subscription (registry and Git Smart HTTP reads in `pkg/source`), MetricCheck (Prometheus). Each writes the result to its own status. | Accepted |
-| — (not catalogued) | The `verify-image` step runs the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Accepted |
+| — (not catalogued) | The `verify-image` step ran the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Done: step removed (#1278, #1282); signatures are verified at admission in the target cluster |
 | PS-2 / BU-2, #1300, #1313 | The PromotionStep reconciler reads the freeze gate and its required gates before it starts git work (`holdIfPaused`, `checkRequiredGates`). A required gate must be ready and evaluated at or after the step was created; the check compares two stored times and does not read the clock. The step writes only its own `status.message`. It stays in the reconciler because the Graph cannot hold a step that already exists: `readyWhen` does not hold dependents in a standalone Graph (only the RGD instance controller turns on `GateReadiness`); a resolve error such as kardinal's `resolvableWhen` makes the node Unresolved, so kro stops updating the existing step but neither holds nor deletes it; `includeWhen: false` prunes the existing step; and a ref to a missing object (the freeze gate exists only while the Pipeline is paused) holds the Graph, the inverse of a pause. Ledger [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph). | Accepted |
 
 ### What to work on now
@@ -88,7 +88,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | CEL-2 / PG-2 | #131 | `buildMetricsContext()` aggregates MetricCheck CRDs in Go | Create MetricCheck Watch node; remove Go aggregation |
 | PS-4 / SCM-2 / ST-10 / ST-11 / BU-3 / WH-1 | #133 | GitHub API `GetPRStatus()` in 5 code paths | New `PRStatus` CRD + reconciler; Watch node replaces all 5 |
 | PS-6 / PS-7 | #134 | Auto-rollback threshold in Go; Bundle created from PromotionStep reconciler | New `RollbackPolicy` CRD; threshold is Watch node condition |
-| ST-3 / ST-4 | #135 | CustomWebhookStep blocks reconciler with `time.After` | Replace blocking retries with `ctrl.Result{RequeueAfter}` |
+| ST-3 / ST-4 | #135 | CustomWebhookStep blocks reconciler with `time.After` | Removed: the custom webhook step was deleted (#1282); `steps.Lookup` now errors on unregistered names |
 | CLI-1 / CLI-2 / CLI-3 | #137 | CLI imports `pkg/cel`; schedule.isWeekend computed client-side | Server-side simulation API; remove `pkg/cel` from CLI |
 
 ### HIGH
@@ -111,7 +111,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | ID | Issue | Description | Fix Approach |
 |---|---|---|---|
 | PG-5 / PG-6 | #148 | Template/instance distinction; extractVersion() not in CRD | Write results to CRD status fields |
-| PS-3 | #149 | Shard filtering silent skip in Go | Use label selector on controller; add to CRD spec |
+| PS-3 | #149 | Shard filtering silent skip in Go | Resolved: shard filtering was removed with distributed mode (#1321) |
 | PS-8 / HE-5 | #143 | Hardcoded naming conventions; live CRD probe on hot path | Move to Pipeline spec; cache at startup |
 | GB-1 | #150 | Sequential default not in Pipeline spec | Add `sequentialDefault: true` field |
 | TR-1 / TR-2 | #151 | `collectGates()` namespace aggregation; `policyNS` hardcoded | Add `policyNamespaces` to Pipeline spec |

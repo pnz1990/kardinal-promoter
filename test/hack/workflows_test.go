@@ -87,8 +87,8 @@ var (
 // TestKindClustersUseOneSupportedNodeImage checks that every kind cluster the
 // repository creates uses the node image in test/e2e/kind-config.yaml, that
 // the image is digest-pinned and new enough for kro's Graph CRD (Kubernetes
-// 1.29 rejects its CEL rule as over the cost budget), and that the workflows
-// install one kind version.
+// 1.29 rejects its CEL rule as over the cost budget), and that no workflow
+// hard-codes a kind version (hack/tool-versions.env holds the one version).
 func TestKindClustersUseOneSupportedNodeImage(t *testing.T) {
 	root := repoRoot(t)
 	var files []string
@@ -125,7 +125,78 @@ func TestKindClustersUseOneSupportedNodeImage(t *testing.T) {
 			assert.Contains(t, line, "--config", "%s: %q must use a kind config so it gets the pinned node image", rel, line)
 		}
 	}
-	assert.Len(t, kindVersions, 1, "the workflows install different kind versions: %v", kindVersions)
+	assert.Empty(t, kindVersions, "kind downloads must take KIND_VERSION from hack/tool-versions.env: %v", kindVersions)
+}
+
+// toolVersions parses hack/tool-versions.env (KEY=value lines, # comments).
+func toolVersions(t *testing.T) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "hack/tool-versions.env"))
+	require.NoError(t, err)
+	out := map[string]string{}
+	for _, l := range strings.Split(string(data), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(l, "=")
+		require.True(t, ok, "hack/tool-versions.env: not KEY=value: %q", l)
+		out[k] = v
+	}
+	return out
+}
+
+var (
+	semver    = regexp.MustCompile(`^v\d+\.(\d+)\.\d+$`)
+	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	// toolDownload matches a download of kind, kubectl or the argocd CLI.
+	toolDownload = regexp.MustCompile(`kind\.sigs\.k8s\.io/dl/|dl\.k8s\.io/release/|argo-cd/releases/download/`)
+)
+
+// TestToolDownloadsArePinnedAndVerified covers #1294: every kind, kubectl
+// and argocd download in a workflow takes its version from
+// hack/tool-versions.env and is checked against the sha256 there, kubectl
+// matches the kind node's minor, and nothing installs a floating version.
+func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
+	tv := toolVersions(t)
+	for _, tool := range []string{"KIND", "KUBECTL", "ARGOCD"} {
+		assert.Regexp(t, semver, tv[tool+"_VERSION"], "%s_VERSION", tool)
+		assert.Regexp(t, sha256Hex, tv[tool+"_SHA256"], "%s_SHA256", tool)
+	}
+
+	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), "test/e2e/kind-config.yaml"))
+	require.NoError(t, err)
+	node := kindNodeImage.FindStringSubmatch(string(cfg))
+	require.NotNil(t, node)
+	if m := semver.FindStringSubmatch(tv["KUBECTL_VERSION"]); assert.NotNil(t, m) {
+		assert.Equal(t, node[1], m[1], "KUBECTL_VERSION %s must have the kind node's minor (%s)", tv["KUBECTL_VERSION"], node[0])
+	}
+
+	downloads := 0
+	for _, f := range workflowFiles(t) {
+		for _, s := range workflowSteps(t, f) {
+			assert.NotContains(t, s.Run, "stable.txt", "%s: step %q installs a floating kubectl", f, s.Name)
+			if !toolDownload.MatchString(s.Run) {
+				continue
+			}
+			downloads++
+			assert.Contains(t, s.Run, "source hack/tool-versions.env", "%s: step %q", f, s.Name)
+			for _, l := range strings.Split(s.Run, "\n") {
+				if toolDownload.MatchString(l) {
+					assert.Contains(t, l, "_VERSION}", "%s: step %q hard-codes a tool version: %s", f, s.Name, strings.TrimSpace(l))
+				}
+			}
+			assert.Equal(t, strings.Count(s.Run, "curl "), strings.Count(s.Run, "sha256sum -c"),
+				"%s: step %q must check every download with sha256sum -c", f, s.Name)
+		}
+	}
+	assert.GreaterOrEqual(t, downloads, 5, "expected the kind and kubectl installs in e2e and pdca, and the demo-validate tools")
+
+	for _, rel := range append(workflowFiles(t), "Makefile") {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "@latest", "%s installs a floating version", rel)
+	}
 }
 
 // workflowStepNamed returns the step of workflow rel whose name starts with

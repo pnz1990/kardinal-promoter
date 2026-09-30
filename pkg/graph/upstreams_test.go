@@ -82,10 +82,6 @@ func TestUpstreamsVerified(t *testing.T) {
 		{Name: "prod-us", DependsOn: []string{"test"}},
 		{Name: "global", DependsOn: []string{"prod-eu", "prod-us"}},
 	}
-	regional := []kardinalv1alpha1.EnvironmentSpec{
-		{Name: "test", Regions: []string{"us", "eu"}},
-		{Name: "prod"},
-	}
 	step := func(bundle, env, state string) kardinalv1alpha1.PromotionStep {
 		return kardinalv1alpha1.PromotionStep{
 			ObjectMeta: metav1.ObjectMeta{Name: bundle + "-" + env, Namespace: "default"},
@@ -143,13 +139,6 @@ func TestUpstreamsVerified(t *testing.T) {
 			envs:  fanIn,
 			steps: []kardinalv1alpha1.PromotionStep{step("app-v1", "prod-eu", "Verified"), step("app-v1", "prod-us", "Promoting")},
 			env:   "global",
-			want:  false,
-		},
-		{
-			name:  "multi-region upstream needs every region",
-			envs:  regional,
-			steps: []kardinalv1alpha1.PromotionStep{step("app-v1", "test", "Verified")},
-			env:   "prod",
 			want:  false,
 		},
 		{

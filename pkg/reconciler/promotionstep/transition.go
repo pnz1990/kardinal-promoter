@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -55,10 +56,8 @@ func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.Pro
 	if err != nil || !changed {
 		return err
 	}
-	if r.Recorder != nil {
-		r.Recorder.Event(ps, corev1.EventTypeNormal, "Superseded",
-			fmt.Sprintf("env %s: %s", ps.Spec.Environment, message))
-	}
+	kubeevent.Emit(r.Recorder, ps, corev1.EventTypeNormal, "Superseded", "Cancel",
+		fmt.Sprintf("env %s: %s", ps.Spec.Environment, message))
 	return nil
 }
 
@@ -87,7 +86,7 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 // recordTransition writes the audit record, metrics and Event for a state change.
 func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.PromotionStep, state, message, auditAction string) {
 	env := ps.Spec.Environment
-	eventType, reason, note := corev1.EventTypeNormal, state, ""
+	eventType, reason, eventAction, note := corev1.EventTypeNormal, state, "Promote", ""
 	switch state {
 	case StatePromoting:
 		note = fmt.Sprintf("env %s: promotion started: %s", env, message)
@@ -95,8 +94,10 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 	case StateWaitingForMerge:
 		note = fmt.Sprintf("env %s: PR opened, waiting for merge: %s", env, ps.Status.PRURL)
 	case StateHealthChecking:
+		eventAction = "CheckHealth"
 		note = fmt.Sprintf("env %s: change delivered, running health check", env)
 	case StateVerified:
+		eventAction = "Verify"
 		note = fmt.Sprintf("env %s: step completed successfully", env)
 		writeAuditEvent(ctx, r.Client, ps, AuditActionPromotionSucceeded, AuditOutcomeSuccess, message)
 		observability.StepsTotal.WithLabelValues("PromotionStep", "succeeded").Inc()
@@ -112,15 +113,13 @@ func (r *Reconciler) recordTransition(ctx context.Context, ps *v1alpha1.Promotio
 		observability.StepsTotal.WithLabelValues("PromotionStep", "failed").Inc()
 		observability.PromotionStepAgeSeconds.Observe(time.Since(ps.CreationTimestamp.Time).Seconds())
 	case StateRollingBack:
-		eventType = corev1.EventTypeWarning
+		eventType, eventAction = corev1.EventTypeWarning, "Rollback"
 		note = fmt.Sprintf("env %s: %s", env, message)
 		writeAuditEvent(ctx, r.Client, ps, AuditActionRollbackStarted, AuditOutcomePending, message)
 	default:
 		return
 	}
-	if r.Recorder != nil {
-		r.Recorder.Event(ps, eventType, reason, note)
-	}
+	kubeevent.Emit(r.Recorder, ps, eventType, reason, eventAction, note)
 }
 
 // closeStepStatuses brings status.steps in line with the state being entered

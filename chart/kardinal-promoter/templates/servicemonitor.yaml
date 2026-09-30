@@ -1,0 +1,35 @@
+{{- /*
+Copyright 2026 The kardinal-promoter Authors.
+Licensed under the Apache License, Version 2.0
+
+ServiceMonitor for Prometheus Operator. It scrapes the Service's metrics port
+over plain HTTP (the controller's metrics server does not serve TLS). Prometheus
+Operator sets the job label to the Service name, which is the chart fullname,
+so the PrometheusRule alerts (job="<fullname>") match without extra settings.
+*/ -}}
+{{- if .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kardinal-promoter.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kardinal-promoter.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "kardinal-promoter.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: metrics
+      scheme: http
+      path: /metrics
+      {{- with .Values.serviceMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+{{- end }}

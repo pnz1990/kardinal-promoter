@@ -32,11 +32,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -45,6 +44,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
@@ -92,9 +92,6 @@ const (
 	// retries: 10s, 20s, 40s, 80s, 120s.
 	retryBaseDelay = 10 * time.Second
 	retryMaxDelay  = 2 * time.Minute
-
-	// shardLabel names the distributed-mode shard that owns a PromotionStep.
-	shardLabel = "kardinal.io/shard"
 )
 
 // Reconciler drives the PromotionStep state machine.
@@ -135,19 +132,13 @@ type Reconciler struct {
 	// If nil, the health-check step stub (always-success) is used.
 	HealthDetector *health.AutoDetector
 
-	// Shard is the distributed-mode shard this reconciler owns. It reconciles
-	// only PromotionSteps whose kardinal.io/shard label equals Shard, so an
-	// empty Shard (the control-plane controller) skips every step that an
-	// agent owns (C03-promotionstep-24).
-	Shard string
-
 	// WorkDirFn returns the working directory for a given pipeline+bundle pair.
 	// Tests set it; when nil a fixed path under the kardinal work root is used.
 	WorkDirFn func(pipelineName, bundleName string) string
 
 	// Recorder emits Kubernetes Events for PromotionStep state transitions.
 	// When nil, event emission is skipped (backward-compatible).
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // Reconcile processes one PromotionStep event.
@@ -164,21 +155,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
-	}
-
-	// Shard ownership: every PromotionStep is reconciled by exactly one
-	// controller. A step labelled kardinal.io/shard=X belongs to the agent
-	// started with --shard=X; an unlabelled step belongs to the controller
-	// started without --shard. The control-plane controller used to reconcile
-	// every step, racing the agent that owns it (C03-promotionstep-24,
-	// C13b-design-03). The predicate in SetupWithManager applies the same rule
-	// at the watch layer; this guard covers direct requeues.
-	if stepShard := ps.Labels[shardLabel]; stepShard != r.Shard {
-		log.Debug().
-			Str("step_shard", stepShard).
-			Str("our_shard", r.Shard).
-			Msg("step belongs to another shard — skipping")
-		return ctrl.Result{}, nil
 	}
 
 	// Orphan guard: if the parent Bundle no longer exists, self-delete this
@@ -313,7 +289,7 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs)
 		switch {
 		case err == nil:
-			if prs.Status.Merged || (prs.Status.LastCheckedAt != nil && !prs.Status.Open) {
+			if prs.Status.Merged || prstatus.IsClosed(&prs.Status) {
 				return nil // merged or already closed: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
@@ -559,7 +535,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
 
-		// No prURL — this is a non-blocking retry (e.g. custom webhook 5xx backoff).
+		// No prURL — this is a non-blocking retry (e.g. an SCM call to retry later).
 		// Stay in Promoting state; use the step's requested RequeueAfter duration if set.
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
@@ -777,14 +753,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if prs.Status.LastCheckedAt != nil && !prs.Status.Open {
+	// The PR stayed closed through the PRStatus grace window (#1306), or an
+	// older release recorded it closed without one.
+	if prstatus.IsClosedFinal(&prs.Status) {
 		log.Info().
 			Str("prStatusRef", prStatusName).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("PRStatus reports PR closed without merge — failing")
+		msg := fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber)
+		if prs.Status.ClosedFinal {
+			msg += fmt.Sprintf(" and not reopened within %s", prstatus.ClosedGracePeriod)
+		}
 		ps.Status.WaitForMergeExpiry = nil // clear expiry on transition out
-		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
-			fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber))
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
 	// The PRStatusReconciler got an SCM error that polling again cannot fix
@@ -802,6 +783,25 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 			fmt.Sprintf("PR #%d cannot be polled: %s", prs.Spec.PRNumber, prs.Status.PollError))
 	}
 
+	// Closed but still in the grace window: the PRStatus reconciler keeps
+	// polling, and a reopen resumes the wait. Only the message changes, and
+	// only when it differs, since each patch is a watch event.
+	closedMsg := fmt.Sprintf("PR #%d is closed; the step fails %s after closing unless it is reopened",
+		prs.Spec.PRNumber, prstatus.ClosedGracePeriod)
+	msg := ps.Status.Message
+	switch {
+	case prstatus.IsClosed(&prs.Status):
+		msg = closedMsg
+	case msg == closedMsg:
+		msg = fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber)
+	}
+	if msg != ps.Status.Message {
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch wait-for-merge message: %w", err)
+		}
+	}
+
 	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.
 	return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 }
@@ -813,7 +813,8 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 // health.OptionsForEnv, which the translator also uses for the Graph health
 // ref nodes (C03-promotionstep-04, -19). The expected revision is the pushed
 // or merged commit (expectedRevision) and the expected images are the Bundle
-// images (C03-promotionstep-11, E2E-01).
+// images (C03-promotionstep-11, E2E-01). A flux check of a pr-review step
+// that opened a PR is Progressing until the merge commit is known (#1307).
 //
 // health.timeout bounds the time until the first Healthy result. Reaching it
 // is a health failure: it counts in status.consecutiveHealthFailures and
@@ -908,7 +909,20 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
 	}
 
-	result, checkErr := adapter.Check(ctx, opts)
+	var result health.HealthStatus
+	var checkErr error
+	if adapter.Name() == "flux" && env.Approval == "pr-review" && opts.ExpectedRevision == "" &&
+		ps.Status.Outputs["noChanges"] != "true" {
+		// The flux adapter has no image check to fall back on: without the
+		// merge commit, a Kustomization Ready on the previous commit would
+		// pass. Wait for it; health.timeout ends the wait (#1307). With no
+		// changes there is no PR and no merge commit, and the previous
+		// commit already is the target.
+		result = health.HealthStatus{Progressing: true,
+			Reason: "merge commit of the PR not known yet (needed to check lastAppliedRevision)"}
+	} else {
+		result, checkErr = adapter.Check(ctx, opts)
+	}
 	if checkErr != nil {
 		log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
 		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil
@@ -1191,13 +1205,9 @@ func (r *Reconciler) handleBake(
 
 // SetupWithManager registers the PromotionStep reconciler with controller-runtime.
 //
-// The PromotionStep watch has two predicates:
-//   - shardMatchPredicate: only steps whose kardinal.io/shard label equals
-//     r.Shard (an empty Shard matches only unlabelled steps), so a hub and its
-//     agents never reconcile the same step (C03-promotionstep-24).
-//   - spec, label or annotation changes only. The reconciler's own status
-//     patches no longer re-enqueue the step immediately; it requeues itself
-//     with RequeueAfter (C03-promotionstep-12).
+// The PromotionStep watch reacts to spec, label or annotation changes only.
+// The reconciler's own status patches no longer re-enqueue the step
+// immediately; it requeues itself with RequeueAfter (C03-promotionstep-12).
 //
 // Additionally registers Watches on PRStatus and PolicyGate CRDs:
 //   - PRStatus: re-enqueue the owning PromotionStep when status.merged changes.
@@ -1209,7 +1219,6 @@ func (r *Reconciler) handleBake(
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
-			shardMatchPredicate{shard: r.Shard},
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				predicate.LabelChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
 		)).
@@ -1230,7 +1239,7 @@ func (r *Reconciler) prStatusMapper(ctx context.Context, obj client.Object) []re
 	}
 	var reqs []reconcile.Request
 	for _, step := range stepList.Items {
-		if step.Spec.PRStatusRef == prs.GetName() && step.Labels[shardLabel] == r.Shard {
+		if step.Spec.PRStatusRef == prs.GetName() {
 			reqs = append(reqs, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      step.Name,
@@ -1242,8 +1251,7 @@ func (r *Reconciler) prStatusMapper(ctx context.Context, obj client.Object) []re
 	return reqs
 }
 
-// policyGateMapper re-enqueues the unfinished PromotionSteps of this shard
-// whose spec.requiredGates names the changed gate. Enqueueing every step in
+// policyGateMapper re-enqueues the unfinished PromotionSteps whose spec.requiredGates names the changed gate. Enqueueing every step in
 // the namespace on every gate evaluation made each step reconcile (and run
 // its health check) once per gate tick (C03-promotionstep-26).
 func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -1254,7 +1262,7 @@ func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []
 	}
 	var reqs []reconcile.Request
 	for _, step := range stepList.Items {
-		if step.Labels[shardLabel] != r.Shard || !isCancellable(step.Status.State) ||
+		if !isCancellable(step.Status.State) ||
 			!slices.Contains(step.Spec.RequiredGates, gate.GetName()) {
 			continue
 		}
@@ -1266,29 +1274,6 @@ func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []
 		})
 	}
 	return reqs
-}
-
-// shardMatchPredicate implements sigs.k8s.io/controller-runtime/pkg/predicate.Predicate
-// for shard-based filtering. Eliminates PS-3: shard filtering is now at the watch
-// layer (controller-runtime predicate) rather than inside the reconcile function.
-type shardMatchPredicate struct {
-	shard string
-}
-
-func (p shardMatchPredicate) Create(e event.CreateEvent) bool {
-	return e.Object.GetLabels()[shardLabel] == p.shard
-}
-
-func (p shardMatchPredicate) Delete(e event.DeleteEvent) bool {
-	return e.Object.GetLabels()[shardLabel] == p.shard
-}
-
-func (p shardMatchPredicate) Update(e event.UpdateEvent) bool {
-	return e.ObjectNew.GetLabels()[shardLabel] == p.shard
-}
-
-func (p shardMatchPredicate) Generic(e event.GenericEvent) bool {
-	return e.Object.GetLabels()[shardLabel] == p.shard
 }
 
 // patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data

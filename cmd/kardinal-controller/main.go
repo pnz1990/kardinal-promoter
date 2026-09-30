@@ -45,7 +45,6 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	admissionpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/admission"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -183,10 +182,9 @@ func main() {
 			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
 			"Also readable from KARDINAL_TLS_KEY_FILE environment variable.")
 
-	var shard string
-	flag.StringVar(&shard, "shard", os.Getenv("KARDINAL_SHARD"),
-		"Shard name for distributed mode. When set, this controller only processes PromotionSteps "+
-			"with a matching kardinal.io/shard label. Leave empty for standalone (single-controller) mode.")
+	// --shard and --pipeline-admission-webhook were removed; setting one stops
+	// the controller with a message (removed_settings.go).
+	removed := bindRemovedFlags(flag.CommandLine, os.Getenv)
 
 	// SCM credential rotation — watch a Kubernetes Secret and reload the SCM
 	// provider on change without restarting the controller. When
@@ -213,20 +211,6 @@ func main() {
 		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_KEY"),
 		"Data key within the Secret that holds the SCM token (default: \"token\"). "+
 			"Also readable from KARDINAL_SCM_TOKEN_SECRET_KEY environment variable.")
-
-	// --pipeline-admission-webhook enables the ValidatingAdmissionWebhook handler for
-	// Pipeline CRDs. When true, the handler is mounted at
-	// POST /webhook/validate/pipeline on the webhook server (--webhook-bind-address).
-	// Operators must separately install a ValidatingWebhookConfiguration pointing at
-	// this path; the controller does not auto-create it.
-	// Design ref: docs/design/15-production-readiness.md §Lens 4
-	var pipelineAdmissionWebhook bool
-	flag.BoolVar(&pipelineAdmissionWebhook, "pipeline-admission-webhook",
-		os.Getenv("KARDINAL_PIPELINE_ADMISSION_WEBHOOK") == "true",
-		"Enable the ValidatingAdmissionWebhook handler for Pipeline cycle detection "+
-			"at POST /webhook/validate/pipeline. Requires a ValidatingWebhookConfiguration "+
-			"to be installed separately. Also readable from "+
-			"KARDINAL_PIPELINE_ADMISSION_WEBHOOK=true environment variable.")
 
 	// --watch-namespace limits the controller's informer cache to a single namespace.
 	// When empty (default), the controller watches all namespaces (cluster-wide mode).
@@ -281,10 +265,8 @@ func main() {
 	// reconciler line, errors included, goes to a disabled logger.
 	zerolog.DefaultContextLogger = &logger
 
-	if shard != "" {
-		logger.Info().Str("shard", shard).Msg("controller started in distributed mode")
-	} else {
-		logger.Info().Msg("controller started in standalone mode")
+	if err := removed.err(); err != nil {
+		logger.Fatal().Err(err).Msg("a removed controller setting is still set")
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
@@ -356,11 +338,18 @@ func main() {
 	}
 	gitClient := scm.NewGoGitClient()
 
+	// Reconcilers write events.k8s.io/v1 Events. The chart grants create and
+	// patch on events.k8s.io events for this recorder.
+	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
+
 	if err := (&bundlereconciler.Reconciler{
-		Client:       mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Uncached: the maxConcurrentPromotions count must see the Promoting
+		// patch of the previous reconcile (#1310).
+		APIReader:    mgr.GetAPIReader(),
 		Translator:   newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
 		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
-		Recorder:     mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
+		Recorder:     eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -374,7 +363,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create PolicyGateReconciler (CEL env init failed)")
 	}
-	pgReconciler.Recorder = mgr.GetEventRecorderFor("kardinal-controller") //nolint:staticcheck
+	pgReconciler.Recorder = eventRecorder
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
@@ -384,8 +373,7 @@ func main() {
 		SCM:            scmProvider,
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
-		Shard:          shard,
-		Recorder:       mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
+		Recorder:       eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
@@ -405,7 +393,8 @@ func main() {
 	}
 
 	if err := (&rbprecon.Reconciler{
-		Client: mgr.GetClient(),
+		Client:   mgr.GetClient(),
+		Recorder: eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up RollbackPolicyReconciler")
 	}
@@ -481,7 +470,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 
-	// Webhook server: SCM webhooks, bundle API, Pipeline admission.
+	// Webhook server: SCM webhooks and the bundle API.
 	webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
 	if webhookSecret == "" {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
@@ -502,13 +491,6 @@ func main() {
 		bundleAPI.onlyNamespace = watchNamespace
 		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
-	}
-	// Pipeline admission webhook — only mounted when explicitly enabled.
-	// Requires a ValidatingWebhookConfiguration installed separately by the operator.
-	// Design ref: docs/design/15-production-readiness.md §Lens 4
-	if pipelineAdmissionWebhook {
-		mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
-		logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
 	// caches sync, a bind failure stops the controller, and shutdown drains
@@ -535,7 +517,9 @@ func main() {
 	case uiAuth.tokens != nil:
 		logger.Info().Msg("UI API TokenReview authentication enabled; every read and write is authorized with a SubjectAccessReview for the caller")
 	default:
-		logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
+		logger.Warn().Msg("UI API authentication is off: /api/ answers only loopback clients (kubectl port-forward) and refuses the rest with 403. " +
+			"Behind a service-mesh sidecar, loopback means any client in the mesh, so set an auth mode: " +
+			"Helm ui.auth.tokenReview=true or ui.auth.tokenSecretRef.name (--ui-tokenreview-auth, --ui-auth-token)")
 	}
 
 	// Embedded UI server: the React app at /ui/ and its API.
@@ -556,47 +540,12 @@ func main() {
 
 	logger.Info().Msg("starting kardinal-controller")
 
-	// SCM token scope preflight check — validate that the configured token has
-	// the scopes required for kardinal-promoter to open and manage pull requests.
-	// This is a non-fatal startup check: warnings are logged but do not prevent
-	// the controller from starting. A misconfigured token will surface as a 403
-	// during the first open-pr step — surfacing it here means teams discover the
-	// problem in minutes rather than hours.
-	//
-	// The check is skipped when:
-	//   - the token is managed by a DynamicProvider (the initial token from --github-token
-	//     may be empty; the actual token is loaded from the Secret by the watcher)
-	//   - the provider type is not github/gitlab/forgejo (unsupported)
-	//   - the call returns a transient network error (logged at debug level; non-fatal)
-	if scmTokenSecretName == "" && githubToken != "" {
-		scopeCtx, scopeCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer scopeCancel()
-
-		var scopeWarnings []scm.TokenScopeWarning
-		var scopeErr error
-
-		switch scmProviderType {
-		case "", "github":
-			scopeWarnings, scopeErr = scm.ValidateGitHubTokenScopes(scopeCtx, githubToken, scmAPIURL)
-		case "gitlab":
-			scopeWarnings, scopeErr = scm.ValidateGitLabTokenScopes(scopeCtx, githubToken, scmAPIURL)
-		case "forgejo", "gitea":
-			scopeWarnings, scopeErr = scm.ValidateForgejoTokenScopes(scopeCtx, githubToken, scmAPIURL)
-		}
-
-		if scopeErr != nil {
-			logger.Debug().Err(scopeErr).
-				Str("provider", scmProviderType).
-				Msg("SCM token scope check skipped (network error — non-fatal)")
-		}
-		for _, w := range scopeWarnings {
-			logger.Warn().
-				Str("provider", scmProviderType).
-				Str("missing_scope", w.MissingScope).
-				Str("consequence", w.Consequence).
-				Msg("SCM TOKEN SCOPE WARNING — promotion steps may fail when this scope is required")
-		}
-	}
+	// SCM token scope preflight check (non-fatal; see checkSCMTokenAtStartup).
+	// It runs whenever a token is set, including chart installs that also set
+	// --scm-token-secret-name: GITHUB_TOKEN comes from that same Secret, so it
+	// is the token the watcher starts with. It runs in the background so an
+	// unreachable SCM API does not delay startup.
+	go checkSCMTokenAtStartup(context.Background(), logger, scmProviderType, githubToken, scmAPIURL)
 
 	// Register a Runnable that creates/updates the kardinal-version ConfigMap
 	// after the controller starts. `kardinal version` reads this ConfigMap.

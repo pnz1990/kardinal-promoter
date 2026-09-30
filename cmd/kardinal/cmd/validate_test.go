@@ -101,9 +101,21 @@ func TestValidate_Documents(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "regions fan-out",
+			name:    "two regions",
 			content: validPipelineDoc + "    regions: [us-east-1, eu-west-1]\n",
-			wantOut: []string{"✗ f.yaml is invalid:", "environments[].regions fan-out is not implemented"},
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": regions is not supported; declare one environment per region`},
+			wantErr: true,
+		},
+		{
+			name:    "one region is accepted and ignored",
+			content: validPipelineDoc + "    regions: [us-east-1]\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		// #1321: distributed mode was removed.
+		{
+			name:    "shard",
+			content: validPipelineDoc + "    shard: eu\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": shard is not supported: distributed mode was removed`},
 			wantErr: true,
 		},
 		{
@@ -139,10 +151,26 @@ func TestValidate_Documents(t *testing.T) {
 			content: secretRefDoc("", "team-a"),
 			wantOut: []string{"✓ f.yaml is valid"},
 		},
+		// #1281: argocd cannot open a PR, so approval: pr-review is refused,
+		// as the Pipeline's Ready=False/ValidationFailed condition does.
+		{
+			name: "argocd with pr-review",
+			content: validPipelineDoc + "    approval: pr-review\n    update:\n      strategy: argocd\n" +
+				"      argocd:\n        application: web-prod\n",
+			wantOut: []string{"✗ f.yaml is invalid:",
+				`environment "prod": update.strategy argocd patches the Application directly and cannot honour approval: pr-review`},
+			wantErr: true,
+		},
+		{
+			name: "argocd with auto approval",
+			content: validPipelineDoc + "    approval: auto\n    update:\n      strategy: argocd\n" +
+				"      argocd:\n        application: web-prod\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
 		{
 			name:    "steps are reported once",
 			content: validPipelineDoc + "    steps:\n    - uses: git-clone\n",
-			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"prod\" declares 1 steps; spec.environments[].steps is not implemented"},
+			wantOut: []string{"✗ f.yaml is invalid:\n  - environment \"prod\" declares 1 steps; spec.environments[].steps is not supported"},
 			wantErr: true,
 		},
 	}

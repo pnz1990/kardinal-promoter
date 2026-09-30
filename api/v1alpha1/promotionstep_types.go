@@ -22,16 +22,11 @@ type PromotionStepSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Environment string `json:"environment"`
 
-	// StepType identifies the built-in or custom step to execute.
+	// StepType identifies the built-in step to execute.
 	// Examples: git-clone, kustomize-set-image, git-commit, open-pr,
 	//           wait-for-merge, health-check.
 	// +kubebuilder:validation:MinLength=1
 	StepType string `json:"stepType"`
-
-	// Inputs carries step-specific configuration values derived from the
-	// Pipeline and Bundle at graph generation time.
-	// +optional
-	Inputs map[string]string `json:"inputs,omitempty"`
 
 	// UpstreamStates holds the resolved state of all upstream PromotionSteps.
 	// Each entry is a string like "Verified", set by the kro Graph controller via CEL
@@ -53,12 +48,13 @@ type PromotionStepSpec struct {
 	// +optional
 	PRStatusRef string `json:"prStatusRef,omitempty"`
 
-	// Region identifies which geographic/cloud region this PromotionStep instance
-	// promotes into. Set by the kro Graph controller via forEach "${region}"
-	// substitution when the Pipeline environment has spec.regions with ≥2 entries.
-	// Empty for single-region environments. Region fan-out is not implemented:
-	// the reconciler fails a step with a non-empty region instead of pushing the
-	// same change once per region (issue #612).
+	// Region was set on the per-region PromotionSteps of a Pipeline
+	// environment with two or more spec.regions. The Graph builder no longer
+	// sets it; the reconciler fails a step that still has one (created by a
+	// Graph built before the upgrade) with "regions is not supported".
+	//
+	// Deprecated: declare one environment per region (prod-us, prod-eu) and
+	// use wave.
 	// +optional
 	Region string `json:"region,omitempty"`
 }

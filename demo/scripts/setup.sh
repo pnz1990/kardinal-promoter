@@ -17,7 +17,7 @@
 #     • kardinal-test-app deployed
 #     • Represents pre-production environments
 #
-#   Cluster 3 — kardinal-prod  (kind, or EKS when --eks is passed)
+#   Cluster 3 — kardinal-prod  (kind)
 #     • prod namespace
 #     • kardinal-test-app deployed
 #     • Represents production
@@ -32,7 +32,6 @@
 #
 # Usage:
 #   ./demo/scripts/setup.sh                    # 3 kind clusters
-#   ./demo/scripts/setup.sh --eks              # kind control+dev, EKS prod
 #   ./demo/scripts/setup.sh --skip-build       # reuse the controller image already loaded into kind
 #   ./demo/scripts/setup.sh --clean            # tear down first, then set up
 #   GITHUB_TOKEN=xxx ./demo/scripts/setup.sh   # set GitHub token inline
@@ -41,7 +40,6 @@
 #   - Docker Desktop running
 #   - kind, kubectl, helm, argocd CLI installed
 #   - GitHub PAT with repo write access (for the GitOps push step)
-#   - (optional) aws CLI + terraform for --eks mode
 #
 # After setup, run:
 #   ./demo/scripts/validate.sh    to verify all features work end-to-end
@@ -61,7 +59,6 @@ REPO_ROOT="$(cd "${DEMO_DIR}/.." && pwd)"
 CONTROL_CLUSTER="${CONTROL_CLUSTER:-kardinal-control}"
 DEV_CLUSTER="${DEV_CLUSTER:-kardinal-dev}"
 PROD_CLUSTER="${PROD_CLUSTER:-kardinal-prod}"
-USE_EKS=false
 SKIP_BUILD=false
 CLEAN=false
 
@@ -102,13 +99,13 @@ error()   { echo -e "${RED}[demo] ✗${NC} $*" >&2; exit 1; }
 
 for arg in "$@"; do
   case $arg in
-    --eks)        USE_EKS=true ;;
     --skip-build) SKIP_BUILD=true ;;
     --clean)      CLEAN=true ;;
     --help|-h)
       sed -n '/^# Usage/,/^# Copyright/p' "${BASH_SOURCE[0]}" | grep -v "^#$" | sed 's/^# //'
       exit 0
       ;;
+    --eks)        warn "--eks was removed; the demo runs on kind only (see demo/README.md)" ;;
     *) warn "Unknown flag: $arg" ;;
   esac
 done
@@ -141,7 +138,7 @@ echo ""
 info "Demo configuration:"
 info "  Control cluster : $CONTROL_CLUSTER (kind)"
 info "  Dev cluster     : $DEV_CLUSTER (kind)"
-info "  Prod cluster    : $PROD_CLUSTER ($( [[ $USE_EKS == true ]] && echo "EKS" || echo "kind" ))"
+info "  Prod cluster    : $PROD_CLUSTER (kind)"
 info "  Controller image: ${KARDINAL_IMAGE_REPO}:${KARDINAL_IMAGE_TAG} (built from this checkout)"
 info "  GitOps repo     : $GITOPS_REPO"
 echo ""
@@ -185,23 +182,7 @@ create_kind_cluster() {
 # Every kind cluster uses the same node image (see test/e2e/kind-config.yaml).
 create_kind_cluster "$CONTROL_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
 create_kind_cluster "$DEV_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
-
-if [[ "$USE_EKS" == "true" ]]; then
-  info "  EKS prod cluster — using --eks mode..."
-  if ! aws eks describe-cluster --name kardinal-e2e-prod --region us-east-2 \
-      --query 'cluster.status' --output text 2>/dev/null | grep "ACTIVE" >/dev/null; then
-    info "  Creating EKS cluster via Terraform (this takes ~15 min)..."
-    cd "${REPO_ROOT}/terraform/eks-e2e"
-    terraform init -input=false
-    terraform apply -input=false -auto-approve
-    cd "${REPO_ROOT}"
-  fi
-  aws eks update-kubeconfig --name kardinal-e2e-prod --region us-east-2 \
-    --alias "$PROD_CLUSTER"
-  success "  EKS cluster configured"
-else
-  create_kind_cluster "$PROD_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
-fi
+create_kind_cluster "$PROD_CLUSTER" "${REPO_ROOT}/test/e2e/kind-config.yaml"
 
 success "[1/10] Clusters ready"
 
@@ -323,11 +304,7 @@ success "[4/10] Test app deployed to dev cluster"
 # ── Step 5: Deploy test app to prod cluster ───────────────────────────────────
 
 info "[5/10] Deploying test app to prod cluster..."
-if [[ "$USE_EKS" == "true" ]]; then
-  kubectl config use-context "$PROD_CLUSTER"
-else
-  kubectl config use-context "kind-${PROD_CLUSTER}"
-fi
+kubectl config use-context "kind-${PROD_CLUSTER}"
 
 kubectl create namespace kardinal-test-app-prod --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n kardinal-test-app-prod -f - <<EOF
@@ -490,7 +467,7 @@ echo ""
 echo "  Clusters:"
 echo "    kind-${CONTROL_CLUSTER}  → kardinal controller + ArgoCD"
 echo "    kind-${DEV_CLUSTER}      → test + uat environments"
-echo "    $( [[ $USE_EKS == true ]] && echo "${PROD_CLUSTER} (EKS)" || echo "kind-${PROD_CLUSTER}" )       → prod environment"
+echo "    kind-${PROD_CLUSTER}     → prod environment"
 echo ""
 echo "  Pipelines:"
 kubectl config use-context "kind-${CONTROL_CLUSTER}" &>/dev/null

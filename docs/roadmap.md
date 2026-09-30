@@ -72,9 +72,9 @@ All of the following are implemented and shipped:
 - `wave: N` field on environment spec — Wave N stages automatically depend on all Wave N-1 stages
 - Composable with explicit `dependsOn`
 
-**K-07: Integration test step**
-- Built-in `integration-test` step runs a Kubernetes Job and watches it; a failed or timed-out Job fails the step (there is no per-step `onFailure` policy)
-- Not selectable yet: it runs only from a custom step sequence (`spec.environments[].steps`), which the controller rejects as not implemented
+**K-07: Integration test step (removed)**
+- The `integration-test` step could run only from a custom step sequence (`spec.environments[].steps`), which kardinal does not support, so it is removed
+- Run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` (see [Image signatures and tests](pipeline-reference.md#image-signatures-and-tests))
 
 **K-08: PR review gate**
 - `bundle.pr["staging"].isApproved` and `bundle.pr["staging"].approvalCount` in CEL context
@@ -99,13 +99,11 @@ All of the following are implemented and shipped:
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster through an Argo CD hub (remote-cluster health checks via `health.cluster` kubeconfig Secrets are not implemented)
+- Multi-cluster through an Argo CD or Flux hub (see [Multi-Cluster](distributed-mode.md); `health.cluster` kubeconfig Secrets are not supported)
 
 **CLI** — full command set: `get`, `explain`, `create`, `promote`, `rollback`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
 **UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Overriding a gate is CLI-only (`kardinal override`)
-
-**Distributed mode (experimental)** — shard routing: the `shard:` field on Pipeline environments labels PromotionSteps, and a `kardinal-agent --shard <name>` process reconciles only the steps for its shard. The agent is built from `cmd/kardinal-agent` but is not published as an image or chart, and it uses one API server for PromotionSteps and health checks. See [Distributed Mode](distributed-mode.md).
 
 **Multi-tenant self-service** — ApplicationSet + Pipeline template bootstrap; team onboarding by committing a folder to Git; org PolicyGates automatically inherited; namespace isolation enforced by RBAC.
 
@@ -143,8 +141,8 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 - PolicyGate expression display with CEL highlighting
 - HealthChip status chips
 - Live polling with staleness indicator
-- **Fleet-wide health bar (#467)** — on the home page: counts of blocked, CI red (a failed step), promoting, and full-CD pipelines; click a count to filter the list
-- **Pipeline operations view (#462)** — sortable pipeline table: status, blocking gates, failed steps, inventory age, last merge, CD level
+- **Fleet-wide health bar (#467)** — on the home page: counts of blocked, CI red (a failed step), and promoting pipelines; click a count to filter the list
+- **Pipeline operations view (#462)** — sortable pipeline table: status, blocking gates, failed steps, inventory age, last merge
 - **Per-stage detail (#463)** — click an environment for the steps the controller runs, their conditions, Kubernetes events, and elapsed time
 - **In-UI actions (#464)** — create a bundle, pause/resume a pipeline, promote an environment whose upstream environments are Verified, roll back a Verified environment. Pause, resume, promote, and roll back ask for confirmation first
 - **Release efficiency metrics bar (#465)** — over the last 10 bundles: mean time from bundle creation to the last environment's health check, rollback rate, deploys to the last environment

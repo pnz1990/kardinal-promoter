@@ -164,11 +164,15 @@ spec:
                           type: object
                         cluster:
                           description: |-
-                            Cluster is reserved for remote-cluster health checks and is NOT implemented.
-                            A non-empty value fails the PromotionStep with "health.cluster is not
-                            supported" instead of silently checking the local cluster. To verify a
-                            workload in another cluster, use the argocd adapter against its Application
-                            in the Argo CD hub.
+                            Cluster is not supported: kardinal checks health only in the cluster it
+                            runs in. A non-empty value sets the Pipeline Ready=False (reason
+                            NotImplemented) and fails the PromotionStep with "health.cluster is not
+                            supported" instead of silently checking the local cluster.
+
+                            Deprecated: remove cluster. To verify a workload in another cluster,
+                            check its Argo CD Application (health.type: argocd) or Flux
+                            Kustomization (health.type: flux) in the hub cluster kardinal runs in;
+                            see docs/health-adapters.md#remote-clusters.
                           type: string
                         flagger:
                           description: |-
@@ -301,38 +305,47 @@ spec:
                       type: string
                     promotionTemplate:
                       description: |-
-                        PromotionTemplate is reserved for a shared step sequence and is not
-                        implemented yet. A Pipeline that sets it is rejected when a Bundle is
-                        translated and by "kardinal validate". See docs/custom-steps.md.
+                        PromotionTemplate is not supported, and the PromotionTemplate CRD was
+                        removed. The API server rejects a Pipeline that sets it, and so do Graph
+                        translation and "kardinal validate".
+
+                        Deprecated: remove it; every environment runs the default step sequence.
+                        See docs/pipeline-reference.md#promotion-steps.
                       properties:
                         name:
-                          description: Name is the PromotionTemplate resource name.
+                          description: Name is the name of a PromotionTemplate (the
+                            CRD was removed).
                           minLength: 1
                           type: string
                         namespace:
-                          description: |-
-                            Namespace is the namespace of the PromotionTemplate.
-                            If empty, the Pipeline's own namespace is used.
+                          description: Namespace is the namespace of the PromotionTemplate
+                            (the CRD was removed).
                           type: string
                       required:
                       - name
                       type: object
                     regions:
                       description: |-
-                        Regions is reserved for multi-region fan-out (issue #612) and is NOT
-                        implemented. With two or more regions the translator stamps out one
-                        PromotionStep per region (spec.region), but every region would edit the
-                        same path and push the same branch, so the PromotionStep reconciler fails
-                        such steps with "environments[].regions fan-out is not implemented".
-                        Declare one environment per region instead (for example prod-us, prod-eu).
-                        When empty or only one region is listed, the field has no effect.
+                        Regions is not supported: every region would edit the same path and push
+                        the same branch. With two or more regions the Pipeline is Ready=False
+                        (reason NotImplemented) and every Bundle fails when its Graph is built
+                        with "regions is not supported". One region has no effect.
+
+                        Deprecated: declare one environment per region (prod-us, prod-eu) and
+                        use wave.
                       items:
                         type: string
                       type: array
                     shard:
                       description: |-
-                        Shard pins this environment to a specific kardinal-controller agent shard
-                        in distributed mode. Leave empty for single-controller deployments.
+                        Shard was the agent shard of distributed mode, which was removed. A
+                        non-empty value sets the Pipeline Ready=False (reason NotImplemented)
+                        and fails the environment's PromotionSteps with "shard is not
+                        supported".
+
+                        Deprecated: remove shard; the controller reconciles every environment.
+                        For workloads in other clusters, use the Argo CD or Flux hub (see
+                        docs/distributed-mode.md).
                       type: string
                     stepTimeoutSeconds:
                       description: |-
@@ -346,26 +359,25 @@ spec:
                       type: integer
                     steps:
                       description: |-
-                        Steps is reserved for a custom step sequence and is not implemented yet:
-                        the controller always runs the default sequence (see
-                        DefaultSequenceForBundle). A Pipeline that sets it is rejected when a
-                        Bundle is translated and by "kardinal validate", instead of silently
-                        running the default steps. See docs/custom-steps.md.
+                        Steps is not supported. kardinal has no custom step engine: every
+                        environment runs the default step sequence (see DefaultSequenceForBundle).
+                        The API server rejects a Pipeline that sets it, and so do Graph
+                        translation and "kardinal validate".
+
+                        Deprecated: remove it; the step sequence follows the Bundle type,
+                        update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
                       items:
                         description: |-
-                          StepSpec declares a custom or built-in step override in a Pipeline environment.
-                          When Uses matches a built-in step name the built-in takes precedence.
-                          When Uses is an unknown name the Webhook config is required.
+                          StepSpec is the shape of the deprecated spec.environments[].steps field. A
+                          Pipeline that sets steps is rejected; see EnvironmentSpec.Steps.
                         properties:
                           uses:
-                            description: Uses identifies the step to execute (built-in
-                              name or custom name).
+                            description: Uses names a step.
                             minLength: 1
                             type: string
                           webhook:
-                            description: |-
-                              Webhook configures the HTTP endpoint for custom (non-built-in) steps.
-                              Required when Uses does not match any registered built-in step.
+                            description: Webhook was the endpoint of a custom webhook
+                              step, which was removed.
                             properties:
                               secretRef:
                                 description: |-
@@ -486,10 +498,24 @@ spec:
                   - name
                   type: object
                   x-kubernetes-validations:
+                  - message: 'environments[]: update.strategy argocd patches the Application
+                      directly and cannot honour approval: pr-review; use approval:
+                      auto with a PolicyGate, or a git-based strategy (kustomize or
+                      helm) for a reviewed promotion'
+                    rule: '!(has(self.update) && has(self.update.strategy) && self.update.strategy
+                      == ''argocd'' && has(self.approval) && self.approval == ''pr-review'')'
                   - message: environments[].autoRollback is not implemented; remove
                       it (automatic rollback is configured with onHealthFailure, see
                       docs/rollback.md)
                     rule: '!has(self.autoRollback)'
+                  - message: 'environments[].steps is not supported: kardinal has
+                      no custom step engine and every environment runs the default
+                      step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
+                    rule: '!has(self.steps) || size(self.steps) == 0'
+                  - message: 'environments[].promotionTemplate is not supported: the
+                      PromotionTemplate CRD was removed and every environment runs
+                      the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)'
+                    rule: '!has(self.promotionTemplate)'
                   - message: 'reserved environment name: the name becomes a kro Graph
                       node ID; bundle, kro reserved IDs (spec, status, metadata, graph,
                       self, each, item, ...) and CEL keywords are not allowed'
@@ -519,8 +545,11 @@ spec:
                     - branch
                     type: string
                   provider:
-                    default: github
-                    description: Provider is the SCM provider.
+                    description: |-
+                      Provider is ignored. One controller serves one SCM, chosen with its
+                      --scm-provider flag.
+
+                      Deprecated: ignored; the controller's --scm-provider flag selects the provider.
                     enum:
                     - github
                     - gitlab
@@ -581,8 +610,11 @@ spec:
                 type: boolean
               policyGates:
                 description: |-
-                  PolicyGates lists org- or team-level PolicyGate references that apply to
-                  every promotion in this pipeline.
+                  PolicyGates is not implemented, and the API server rejects a non-empty
+                  list. Org gates apply through the kardinal.io/applies-to label.
+
+                  Deprecated: remove the field; label org PolicyGates with
+                  kardinal.io/applies-to instead.
                 items:
                   description: |-
                     PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
@@ -599,6 +631,10 @@ spec:
                   - name
                   type: object
                 type: array
+                x-kubernetes-validations:
+                - message: spec.policyGates is not implemented; remove it (org gates
+                    use the kardinal.io/applies-to label)
+                  rule: size(self) == 0
               policyNamespaces:
                 description: |-
                   PolicyNamespaces lists extra namespaces to read PolicyGates from. It only

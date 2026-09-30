@@ -71,7 +71,7 @@ func journeyScheme(t *testing.T) *runtime.Scheme {
 // A user applies a 3-environment Pipeline, creates a Bundle, and the system
 // promotes through test → uat → prod automatically.
 // In this test we use approvalMode: auto for all envs (the real PR flow is verified
-// in TestPromotionLoop_PRReview_ViaWebhook in promotion_loop_test.go).
+// in TestPromotionLoop_PRReview_ViaWebhook in cmd/kardinal-controller).
 //
 // Pipeline references pnz1990/kardinal-demo (the GitOps repo) and uses
 // ghcr.io/pnz1990/kardinal-test-app (the reference test application image).
@@ -157,8 +157,8 @@ func TestJourney1Quickstart(t *testing.T) {
 // Each must reach Verified independently.
 //
 // This test uses a fake Kubernetes client (same approach as J1/J3/J4/J5/J6).
-// Stage 14 distributed mode is not required for the fan-out logic — the
-// PromotionStep reconciler handles all steps in standalone mode regardless of shard.
+// One controller reconciles every environment; distributed mode was removed
+// (#1321).
 //
 // Pass criteria (subset of definition-of-done.md Journey 2):
 //   - dependsOn fan-out: prod-eu and prod-us start after pre-prod is Verified

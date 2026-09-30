@@ -126,7 +126,7 @@ kardinal get pipelines
 - [ ] Health adapter reads Argo CD Application status from hub cluster
 - [ ] Each prod step stays HealthChecking until its hub Application is Healthy and Synced, which
       Argo CD reports only after the canary finishes
-- [ ] Both prod regions reach Verified independently
+- [ ] prod-eu and prod-us reach Verified independently
 
 ---
 
