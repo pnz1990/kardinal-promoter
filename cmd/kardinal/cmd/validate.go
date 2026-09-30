@@ -50,9 +50,13 @@ Checks:
     Deployment). The controller reports the same fields as
     Ready=False/NotImplemented on the Pipeline. With metadata.namespace set,
     a git.secretRef in another namespace is an error too (the controller
-    reports it as Ready=False/ValidationFailed).
+    reports it as Ready=False/ValidationFailed). spec.policyGates is an
+    error (the API server rejects it); spec.git.provider is a warning (the
+    controller ignores it).
   - PolicyGate: spec.expression set and compiles with the controller's
-    PolicyGate CEL environment
+    PolicyGate CEL environment; no spec.selector and a name of at most 63
+    characters (the API server rejects both); spec.when is a warning (it has
+    no effect)
 
 This is not full CRD schema validation; 'kubectl apply --dry-run=server'
 checks the schema.
@@ -167,6 +171,19 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 	// the same list.
 	errs = append(errs, graph.UnimplementedFields(&pipeline)...)
 
+	// The API server rejects a non-empty spec.policyGates (CRD CEL rule), so
+	// the file would not apply.
+	if len(pipeline.Spec.PolicyGates) > 0 { //nolint:staticcheck // SA1019: read the deprecated field to reject it
+		errs = append(errs, "spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)")
+	}
+
+	// Warnings do not fail validation.
+	var warnings []string
+	if pipeline.Spec.Git.Provider != "" { //nolint:staticcheck // SA1019: warn that the deprecated field is set
+		warnings = append(warnings, "spec.git.provider is deprecated and ignored: the controller's "+
+			"--scm-provider flag selects the SCM provider; remove it")
+	}
+
 	// A git.secretRef in another namespace is refused (ValidationFailed). A file
 	// without metadata.namespace gets its namespace at apply time, so it is not
 	// judged offline.
@@ -203,10 +220,12 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		for _, e := range errs {
 			_, _ = fmt.Fprintf(out, "  - %s\n", e)
 		}
+		printValidateWarnings(out, warnings)
 		return fmt.Errorf("validation failed")
 	}
 
 	_, _ = fmt.Fprintf(out, "✓ %s is valid\n", file)
+	printValidateWarnings(out, warnings)
 	return nil
 }
 
@@ -230,6 +249,16 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 		}
 	}
 
+	// The API server rejects both (CRD CEL rules), so the file would not apply.
+	if gate.Spec.Selector != nil { //nolint:staticcheck // SA1019: read the deprecated field to reject it
+		errs = append(errs, "spec.selector is not implemented; use the kardinal.io/applies-to label")
+	}
+	if !policyGateNameAllowed(gate.Name) {
+		errs = append(errs, fmt.Sprintf("metadata.name %q has %d characters: PolicyGate names are at most %d "+
+			"characters, because the name is copied into the kardinal.io/gate-template label of every gate instance",
+			gate.Name, len(gate.Name), maxPolicyGateNameLength))
+	}
+
 	// Warnings do not fail validation.
 	var warnings []string
 	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: warn that the deprecated field is set (#1323)
@@ -249,6 +278,16 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 	_, _ = fmt.Fprintf(out, "✓ %s is valid\n", file)
 	printValidateWarnings(out, warnings)
 	return nil
+}
+
+// maxPolicyGateNameLength is the longest PolicyGate name the CRD accepts.
+const maxPolicyGateNameLength = 63
+
+// policyGateNameAllowed mirrors the PolicyGate CRD rule: a name is at most 63
+// characters, except gate instances (their names contain "--") and pause
+// freeze gates ("freeze-" prefix), which the controller creates.
+func policyGateNameAllowed(name string) bool {
+	return len(name) <= maxPolicyGateNameLength || strings.Contains(name, "--") || strings.HasPrefix(name, "freeze-")
 }
 
 // printValidateWarnings prints each warning under a file's result line.
