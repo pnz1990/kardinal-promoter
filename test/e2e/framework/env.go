@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
 	"github.com/kardinal-promoter/kardinal-promoter/test/kindcontext"
 )
 
@@ -36,8 +37,13 @@ const (
 	// EnvArtifacts is the directory failure diagnostics are written to
 	// (default: test/e2e/results under the working directory).
 	EnvArtifacts = "KARDINAL_E2E_ARTIFACTS"
-	// EnvKeep keeps test namespaces after the test when set to 1.
+	// EnvKeep keeps test namespaces and git repos after the test when set to 1.
 	EnvKeep = "KARDINAL_E2E_KEEP"
+	// EnvWebhookURL is the controller's /webhook/scm URL as the git server
+	// reaches it. Unset means the suite relies on PR polling.
+	EnvWebhookURL = "KARDINAL_E2E_WEBHOOK_URL"
+	// EnvWebhookSecret is the HMAC secret the controller verifies webhooks with.
+	EnvWebhookSecret = "KARDINAL_E2E_WEBHOOK_SECRET"
 )
 
 // ControllerNamespace is where hack/e2e/up.sh installs the controller.
@@ -50,7 +56,9 @@ type Env struct {
 	Client  client.Client
 	Kube    kubernetes.Interface
 	Dynamic dynamic.Interface
-	cli     string
+	// Git is the suite's git server (see gitserver.FromEnv).
+	Git gitserver.Server
+	cli string
 }
 
 // Scheme has the kardinal types plus core and apps.
@@ -98,11 +106,15 @@ func New(t *testing.T) *Env {
 	if err != nil {
 		t.Fatalf("dynamic client: %v", err)
 	}
+	git, err := gitserver.FromEnv()
+	if err != nil {
+		t.Fatalf("git server: %v", err)
+	}
 	cli := os.Getenv(EnvCLI)
 	if cli == "" {
 		cli = "kardinal"
 	}
-	return &Env{Context: kubeContext, Config: cfg, Client: c, Kube: kube, Dynamic: dyn, cli: cli}
+	return &Env{Context: kubeContext, Config: cfg, Client: c, Kube: kube, Dynamic: dyn, Git: git, cli: cli}
 }
 
 // Kardinal runs the CLI against the test cluster and returns its combined
