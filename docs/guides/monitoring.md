@@ -220,7 +220,7 @@ prometheusRule:
 Install or upgrade:
 
 ```bash
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --set prometheusRule.enabled=true \
   --set 'prometheusRule.additionalLabels.release=kube-prometheus-stack'
 ```
@@ -304,7 +304,7 @@ grafanaDashboard:
 Install or upgrade:
 
 ```bash
-helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --set grafanaDashboard.enabled=true \
   --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 ```

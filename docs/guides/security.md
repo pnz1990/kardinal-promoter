@@ -39,7 +39,7 @@ The cluster-scoped rules cover `changewindows` (read, and status writes) and, wi
 To see the exact rules for your values:
 
 ```bash
-helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system -f my-values.yaml \
   --show-only templates/clusterrole.yaml
 ```
@@ -157,14 +157,14 @@ instead of a cluster-wide `ClusterRole`.
 
 ```bash
 # Team A — installs kardinal watching only the "team-a" namespace
-helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-team-a oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace team-a \
   --create-namespace \
   --set controller.watchNamespace=team-a \
   --set github.secretRef.name=github-token
 
 # Team B — separate install watching only the "team-b" namespace
-helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-team-b oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace team-b \
   --create-namespace \
   --set controller.watchNamespace=team-b \
@@ -338,7 +338,7 @@ rules:
 By default, no NetworkPolicy is applied. In environments with a NetworkPolicy-capable CNI (Calico, Cilium, etc.), enable the built-in policy to restrict the controller's network access:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --set networkPolicy.enabled=true
 ```
 
@@ -447,7 +447,7 @@ Store a random token in a Secret and point the chart at it (`--ui-auth-token`, o
 kubectl create secret generic kardinal-ui-token -n kardinal-system \
   --from-literal=token="$(openssl rand -hex 32)"
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   -n kardinal-system --reuse-values \
   --set ui.auth.tokenSecretRef.name=kardinal-ui-token
 ```
@@ -465,7 +465,7 @@ there is no per-user authorization in this mode.
 ### Option 2: Kubernetes tokens (TokenReview)
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   -n kardinal-system --reuse-values \
   --set ui.auth.tokenReview=true
 ```
@@ -569,7 +569,7 @@ non-default cluster domain, or the node IP you browse to. Clients that come in t
 way are not local, so they also need a UI auth mode (see above):
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   -n kardinal-system --reuse-values \
   --set 'ui.allowedHosts={kardinal.example.com}'
 ```
@@ -668,7 +668,7 @@ controller:
       readOnly: true
 ```
 
-Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter -f tls-values.yaml`.
+Apply it with `helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 -f tls-values.yaml`.
 The paths must point at a mounted certificate: if the files cannot be read, the controller
 exits at startup instead of serving plain HTTP.
 

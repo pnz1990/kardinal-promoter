@@ -286,7 +286,7 @@ topologySpread:
 # fresh kind cluster (no manual GitOps repo setup required).
 #
 # Example:
-#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
 #     --namespace kardinal-system --create-namespace \
 #     --set demo.enabled=true \
 #     --set github.secretRef.name=github-token
@@ -342,7 +342,7 @@ serviceMonitor:
 # with the configured label (default: grafana_dashboard=1) and loads dashboards automatically.
 #
 # Example (kube-prometheus-stack):
-#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+#   helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
 #     --set grafanaDashboard.enabled=true \
 #     --set 'grafanaDashboard.sidecarLabel.grafana_dashboard=1'
 grafanaDashboard:

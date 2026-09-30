@@ -32,7 +32,7 @@ kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
@@ -119,14 +119,14 @@ kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace \
   --set github.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
 # The chart stores it in Secret kardinal-promoter-github-token, but the token
 # also stays in the Helm release history.
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace \
   --set github.token=$GITHUB_PAT
 ```

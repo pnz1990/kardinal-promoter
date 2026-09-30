@@ -18,9 +18,10 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
-// requeuePaused is the fallback requeue while a pipeline is paused. Resume
-// normally wakes the step at once: deleting the freeze gate is a PolicyGate
-// event, and SetupWithManager watches PolicyGates.
+// requeuePaused is how often a held step re-checks its pipeline's freeze
+// gate. Resume takes effect at the next check, up to a minute later: the
+// PolicyGate watch (policyGateMapper) wakes only the steps whose
+// spec.requiredGates names the gate, and the freeze gate is not listed there.
 const requeuePaused = time.Minute
 
 // autoRollbackActor is recorded as the author of onHealthFailure=rollback Bundles.

@@ -245,7 +245,7 @@ spec:
 
 ```bash
 # Install kardinal
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace
 
 # Apply your Pipeline

@@ -241,7 +241,7 @@ kubectl create secret generic kardinal-ci-token \
   --namespace=kardinal-system \
   --from-literal=token=$(openssl rand -hex 32)
 
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   -n kardinal-system --reuse-values \
   --set bundleAPI.tokenSecretRef.name=kardinal-ci-token
 ```

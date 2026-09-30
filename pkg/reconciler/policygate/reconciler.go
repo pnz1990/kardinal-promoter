@@ -101,7 +101,8 @@ func NewReconciler(c client.Client) (*Reconciler, error) {
 // State machine:
 //   - No kardinal.io/bundle label → template, skip (no-op)
 //   - Gate not found → deleted, skip
-//   - Bundle Superseded → status kept as it was, skip (no requeue)
+//   - Bundle settled (Superseded, or Verified with GraphReady True) → status
+//     kept as it was, skip (no requeue)
 //   - Otherwise → build context, evaluate CEL, patch status, requeue
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().

@@ -80,7 +80,7 @@ kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_PAT
 
 # 2. Install kardinal-promoter
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token

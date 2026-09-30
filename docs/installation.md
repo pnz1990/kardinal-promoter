@@ -58,7 +58,7 @@ kubectl create secret generic github-token \
 ### 2. Install with Helm
 
 ```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
@@ -204,7 +204,7 @@ helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version
 Then upgrade the release:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --reuse-values
 ```
