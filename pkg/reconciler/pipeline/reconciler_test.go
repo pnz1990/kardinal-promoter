@@ -6,6 +6,7 @@ package pipeline_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,21 +41,16 @@ func newPipeline(name string, envs []kardinalv1alpha1.EnvironmentSpec) *kardinal
 	}
 }
 
-// TestPipelineReconciler_SetsInitializingCondition verifies that a new Pipeline
-// gets a Ready=False/Initializing condition after reconciliation.
-func TestPipelineReconciler_SetsInitializingCondition(t *testing.T) {
+// TestPipelineReconciler_SetsValidCondition verifies that a valid Pipeline
+// gets a Ready=True/Valid condition after reconciliation (C02-bundle-15, E2E-05).
+func TestPipelineReconciler_SetsValidCondition(t *testing.T) {
 	p := newPipeline("nginx-demo", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "test"},
 		{Name: "uat", DependsOn: []string{"test"}},
 		{Name: "prod", DependsOn: []string{"uat"}},
 	})
 
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(p).
-		WithStatusSubresource(p).
-		Build()
+	c := newClientWithIndex(newScheme(), p)
 
 	r := &pipeline.Reconciler{Client: c}
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -72,8 +68,8 @@ func TestPipelineReconciler_SetsInitializingCondition(t *testing.T) {
 	require.Len(t, got.Status.Conditions, 1)
 	cond := got.Status.Conditions[0]
 	assert.Equal(t, "Ready", cond.Type)
-	assert.Equal(t, metav1.ConditionFalse, cond.Status)
-	assert.Equal(t, "Initializing", cond.Reason)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	assert.Equal(t, "Valid", cond.Reason)
 }
 
 // TestPipelineReconciler_DuplicateEnvironmentNames verifies that a Pipeline with
@@ -84,12 +80,7 @@ func TestPipelineReconciler_DuplicateEnvironmentNames(t *testing.T) {
 		{Name: "test"}, // duplicate
 	})
 
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(p).
-		WithStatusSubresource(p).
-		Build()
+	c := newClientWithIndex(newScheme(), p)
 
 	r := &pipeline.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -117,12 +108,7 @@ func TestPipelineReconciler_DependsOnNonExistentEnv(t *testing.T) {
 		{Name: "prod", DependsOn: []string{"staging"}}, // "staging" doesn't exist
 	})
 
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(p).
-		WithStatusSubresource(p).
-		Build()
+	c := newClientWithIndex(newScheme(), p)
 
 	r := &pipeline.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -144,29 +130,25 @@ func TestPipelineReconciler_DependsOnNonExistentEnv(t *testing.T) {
 }
 
 // TestPipelineReconciler_Idempotent verifies that if a Pipeline already has the
-// correct Initializing condition, reconcile is a no-op.
+// correct Valid condition, reconcile is a no-op and keeps lastTransitionTime.
 func TestPipelineReconciler_Idempotent(t *testing.T) {
 	p := newPipeline("nginx-demo", []kardinalv1alpha1.EnvironmentSpec{
 		{Name: "test"},
 		{Name: "prod", DependsOn: []string{"test"}},
 	})
 	// Pre-populate the condition as if a previous reconcile already ran
+	ltt := metav1.NewTime(metav1.Now().Add(-time.Hour).Truncate(time.Second))
 	p.Status.Conditions = []metav1.Condition{
 		{
 			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			Reason:             "Initializing",
-			Message:            "Pipeline initialized, awaiting first Bundle",
-			LastTransitionTime: metav1.Now(),
+			Status:             metav1.ConditionTrue,
+			Reason:             "Valid",
+			Message:            "Pipeline spec is valid",
+			LastTransitionTime: ltt,
 		},
 	}
 
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(p).
-		WithStatusSubresource(p).
-		Build()
+	c := newClientWithIndex(newScheme(), p)
 
 	r := &pipeline.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -185,7 +167,8 @@ func TestPipelineReconciler_Idempotent(t *testing.T) {
 	}, &got))
 
 	require.Len(t, got.Status.Conditions, 1)
-	assert.Equal(t, "Initializing", got.Status.Conditions[0].Reason)
+	assert.Equal(t, "Valid", got.Status.Conditions[0].Reason)
+	assert.True(t, ltt.Equal(&got.Status.Conditions[0].LastTransitionTime), "lastTransitionTime must not move")
 }
 
 // TestPipelineReconciler_NotFound verifies that a missing Pipeline is handled

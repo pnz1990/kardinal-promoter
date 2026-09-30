@@ -26,7 +26,7 @@ kubectl apply -f bundle.yaml
 | Available | Discovered, not yet promoted to any environment |
 | Promoting | Actively being promoted through the pipeline |
 | Verified | Successfully promoted to all target environments |
-| Failed | A promotion step or health check failed |
+| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle intent or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
 | Superseded | Replaced by a newer Bundle |
 
 ### Bundle supersession
@@ -165,7 +165,7 @@ For multi-cluster deployments where some clusters are behind firewalls, environm
       approval: pr-review
 ```
 
-In standalone mode (single binary), the shard field is ignored and all PromotionSteps are reconciled locally.
+The `shard` value becomes the `kardinal.io/shard` label on the environment's PromotionSteps. The control-plane controller skips labelled steps, so an environment with a `shard` makes progress only while a kardinal-agent started with `--shard <value>` is running. Leave `shard` unset in standalone mode.
 
 ### How it works under the hood
 
@@ -227,17 +227,16 @@ PolicyGate expressions are evaluated against a context that includes:
 | Attribute | Type | Example |
 |---|---|---|
 | `bundle.version` | string | "1.29.0" |
-| `bundle.labels.*` | map | bundle.labels.hotfix == true |
+| `bundle.labels` | map of string | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
 | `bundle.provenance.author` | string | "dependabot[bot]" |
 | `bundle.provenance.commitSHA` | string | "abc123" |
-| `bundle.intent.target` | string | "prod" |
+| `bundle.intent.targetEnvironment` | string | "prod" |
 | `schedule.isWeekend` | bool | false |
 | `schedule.hour` | int | 14 |
 | `schedule.dayOfWeek` | string | "Tuesday" |
 | `environment.name` | string | "prod" |
-| `environment.approval` | string | "pr-review" |
 
-Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`), and previously deployed version (`previousBundle.version`). See the [CEL context reference](policy-gates.md#cel-context) for the full list.
+Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`, `upstream.<env>.soakMinutes`) and change windows (`changewindow.*`). Referencing an attribute that does not exist blocks the gate. See the [CEL context reference](reference/cel-context.md) for the full list.
 
 ### Inspecting gates
 
@@ -280,33 +279,25 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 
 ## Health Verification
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. The `health.type` field is required in every Pipeline environment. Health adapters are pluggable.
+After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified only when the environment runs the promoted revision, not merely when it is healthy.
 
 | Adapter | What it checks | When to use |
 |---|---|---|
-| `resource` | Deployment Available condition | Clusters without a GitOps tool |
-| `argocd` | Argo CD Application health + sync status | Argo CD users |
-| `flux` | Flux Kustomization Ready condition | Flux users |
+| `resource` | Deployment runs the Bundle images, is fully rolled out and `Available` | Clusters without a GitOps tool |
+| `argocd` | Argo CD Application healthy and synced to the promoted commit | Argo CD users |
+| `flux` | Flux Kustomization `Ready` with `lastAppliedRevision` at the promoted commit | Flux users |
 | `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments |
-| `flagger` | Flagger Canary phase | Canary deployments |
+| `flagger` | Flagger Canary phase (`Failed` fails the step at once) | Canary deployments |
 
-`health.type` must be set explicitly in each Pipeline environment — there is no auto-detection. This prevents misconfigurations from being silently masked.
+When `health.type` is omitted the adapter is `resource`, or the `delivery.delegate` value when that is set. kardinal does not probe the cluster for installed CRDs. See [Health Adapters](health-adapters.md) for the target defaults and overrides.
 
-For multi-cluster deployments where the workload is in a different cluster, add a `cluster` field referencing a kubeconfig Secret:
-
-```yaml
-health:
-  type: argocd
-  argocd:
-    name: my-app-prod-us
-  cluster: prod-us-cluster    # kubeconfig Secret name
-```
+`health.cluster` (checking a workload in another cluster through a kubeconfig Secret) is not supported; a non-empty value fails the step. Adapters read objects in the cluster that holds the PromotionSteps; to verify a workload in another cluster, check its Argo CD Application in the hub (`type: argocd`).
 
 ## Subscription
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
-**Image Subscription** (watches OCI registries for new image tags):
+**Image Subscription** (watches a public OCI repository for new images):
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -318,7 +309,7 @@ spec:
   pipeline: my-app
   image:
     registry: ghcr.io/myorg/my-app
-    tagFilter: "^sha-"
+    tagFilter: "^main$"          # one moving tag: a new Bundle for each new digest
     interval: 5m
 ```
 
@@ -335,11 +326,13 @@ spec:
   git:
     repoURL: https://github.com/myorg/app-config
     branch: main
-    pathGlob: "configs/my-app/**"
     interval: 5m
 ```
 
-When a new image tag or Git commit is discovered, a Bundle of the appropriate type (`image` or `config`) is created automatically.
+The first poll records the current digest or commit as a baseline. After that, each new
+image or commit creates a Bundle of the matching type (`image` or `config`) in the
+Subscription's own namespace. Only public repositories are supported. See
+[Subscription](subscription.md) for tag selection rules and limits.
 
 ## Rendered Manifests
 
@@ -400,7 +393,7 @@ human reviewer confirms the diff and gate compliance before the change lands.
 
 ### Missing `historyLimit`
 
-The default `historyLimit: 20` retains 20 Bundles per Pipeline. In high-frequency
+The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In high-frequency
 pipelines (multiple deployments per day), reduce this to `5`. The Git audit trail in
 GitHub is permanent regardless — only the CRD state in etcd is bounded.
 
@@ -410,10 +403,11 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 
 | Action | When |
 |---|---|
-| `PromotionStarted` | A Bundle moves from Pending to Promoting |
+| `PromotionStarted` | A PromotionStep starts promoting (enters Promoting) |
 | `PromotionSucceeded` | Health check passes and the step reaches Verified |
-| `PromotionFailed` | The step reaches Failed state |
+| `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion |
+| `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 
 ```bash
 # List all audit events across namespaces

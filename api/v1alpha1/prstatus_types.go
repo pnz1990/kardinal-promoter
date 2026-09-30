@@ -51,9 +51,25 @@ type PRStatusStatus struct {
 	// +optional
 	ApprovalCount int `json:"approvalCount,omitempty"`
 
-	// LastCheckedAt records the timestamp of the most recent SCM API poll.
+	// LastCheckedAt records when the status was last written from an SCM API
+	// poll. Polls that change nothing refresh it at most every 5 minutes, so it
+	// can lag the most recent poll by up to that much.
 	// +optional
 	LastCheckedAt *metav1.Time `json:"lastCheckedAt,omitempty"`
+
+	// MergeCommitSHA is the commit the PR was merged as (the merge, squash or
+	// rebase commit on the base branch). Written once the PR is merged, when the
+	// SCM provider reports it. Health adapters use it to confirm that the GitOps
+	// tool deployed this exact revision.
+	// +optional
+	MergeCommitSHA string `json:"mergeCommitSHA,omitempty"`
+
+	// PollError is the SCM API error of the last poll when a retry cannot fix
+	// it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep
+	// waiting for this PR fails with it. Cleared by the next successful poll.
+	// Transient errors (429, 5xx, network) are only logged and retried.
+	// +optional
+	PollError string `json:"pollError,omitempty"`
 }
 
 // +kubebuilder:object:root=true

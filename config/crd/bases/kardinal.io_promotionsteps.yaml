@@ -93,8 +93,9 @@ spec:
                   Region identifies which geographic/cloud region this PromotionStep instance
                   promotes into. Set by the kro Graph controller via forEach "${region}"
                   substitution when the Pipeline environment has spec.regions with ≥2 entries.
-                  Empty for single-region environments. The reconciler uses this field when
-                  constructing region-scoped Git paths and PR labels (issue #612).
+                  Empty for single-region environments. Region fan-out is not implemented:
+                  the reconciler fails a step with a non-empty region instead of pushing the
+                  same change once per region (issue #612).
                 type: string
               requiredGates:
                 description: |-
@@ -226,6 +227,13 @@ spec:
                   Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
                 format: date-time
                 type: string
+              lastHealthCheckAt:
+                description: |-
+                  LastHealthCheckAt records when the health adapter was last called. Used to
+                  space health checks at the health-check interval regardless of how often
+                  the step is reconciled.
+                format: date-time
+                type: string
               message:
                 description: Message provides human-readable detail about the current
                   state.
@@ -242,6 +250,12 @@ spec:
                   PRURL is the GitHub pull request URL opened for this promotion.
                   Set when the step enters WaitingForMerge state.
                 type: string
+              retryCount:
+                description: |-
+                  RetryCount is the number of consecutive step-engine errors retried in the
+                  current state. Reset when a step makes progress. When it reaches the retry
+                  limit the PromotionStep fails.
+                type: integer
               state:
                 description: |-
                   State is the step execution state.

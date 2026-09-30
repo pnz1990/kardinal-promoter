@@ -6,9 +6,9 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // RollbackPolicySpec defines the desired state of a RollbackPolicy.
-// RollbackPolicy objects are created per environment that has autoRollback
-// configured. They are typically created by the Pipeline/Graph controller
-// when a Bundle is promoted to an environment with AutoRollback enabled.
+// Nothing creates RollbackPolicy objects automatically: the controller only
+// reconciles the ones that exist. Automatic rollback on health failure is
+// configured with Pipeline spec.environments[].onHealthFailure: rollback.
 type RollbackPolicySpec struct {
 	// PipelineName is the Pipeline this policy monitors.
 	// +kubebuilder:validation:MinLength=1
@@ -18,9 +18,12 @@ type RollbackPolicySpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Environment string `json:"environment"`
 
-	// BundleRef is the name of the Bundle being monitored.
-	// When ConsecutiveHealthFailures on the associated PromotionStep reaches
-	// FailureThreshold, a rollback Bundle is created from this Bundle's spec.
+	// BundleRef is the name of the Bundle being monitored. Only the PromotionSteps
+	// of this Bundle in Environment are read: the steps labelled
+	// kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName
+	// (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest
+	// ConsecutiveHealthFailures among them (one step per region) reaches
+	// FailureThreshold, a rollback Bundle is created.
 	// +kubebuilder:validation:MinLength=1
 	BundleRef string `json:"bundleRef"`
 

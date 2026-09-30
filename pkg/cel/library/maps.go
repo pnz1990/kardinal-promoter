@@ -7,8 +7,6 @@
 package library
 
 import (
-	"math"
-
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
@@ -22,28 +20,11 @@ import (
 //	map(string, T).merge(map(string, T)) -> map(string, T)
 //
 // Merges two maps. Keys from the second map overwrite keys in the first map.
-func Maps(options ...MapsOption) cel.EnvOption {
-	l := &mapsLib{version: math.MaxUint32}
-	for _, o := range options {
-		l = o(l)
-	}
-	return cel.Lib(l)
+func Maps() cel.EnvOption {
+	return cel.Lib(&mapsLib{})
 }
 
-// MapsOption is a functional option for configuring the maps library.
-type MapsOption func(*mapsLib) *mapsLib
-
-// MapsVersion configures the version of the maps library.
-func MapsVersion(version uint32) MapsOption {
-	return func(lib *mapsLib) *mapsLib {
-		lib.version = version
-		return lib
-	}
-}
-
-type mapsLib struct {
-	version uint32
-}
+type mapsLib struct{}
 
 func (mapsLib) LibraryName() string {
 	return "cel.lib.ext.maps"

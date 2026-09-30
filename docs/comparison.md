@@ -24,7 +24,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Rollback mechanism** | Promotion of previous artifact through same pipeline | Manual | Manual git revert |
 | **Auto-rollback on health failure** | Yes — `onHealthFailure: rollback \| abort \| none` per stage | No | No |
 | **Contiguous healthy soak** | Yes — `bake.minutes` resets timer on health alarm | No — elapsed time only | No — elapsed time only |
-| **Change freeze management** | Yes — `ChangeWindow` CRD blocks all pipelines cluster-wide | No | Manual CommitStatus |
+| **Change freeze management** | Yes — cluster-scoped `ChangeWindow` (blackout or recurring), enforced by any gate that references it | No | Manual CommitStatus |
 | **Wave topology** | Yes — `wave:` field generates multi-region DAG edges automatically | No | No |
 | **CLI** | Full `kardinal` CLI incl. `override`, `metrics`, `logs`, `validate`, `status`, shell completion | `kargo` CLI | No CLI |
 | **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (approve and gate override are CLI-only) | Polished Kargo UI | No UI |
@@ -34,7 +34,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Image signature verification** | Not yet — the `verify-image` step (cosign) is built, but a Pipeline cannot select it until `spec.environments[].steps` is implemented | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, PolicyGate.Blocked, PromotionStep.Failed; optional auth header; pipeline selector | Yes (Kargo via Argo Notifications) | No |
-| **Multi-cluster** | Yes (Pipeline CRD, kubeconfig Secrets) | Yes | Yes |
+| **Multi-cluster** | Argo CD hub-spoke (health read from hub Applications); `health.cluster` kubeconfig Secrets not implemented | Yes | Yes |
 | **Upstream soak time in gates** | Yes — `bundle.upstreamSoakMinutes >= 30` (contiguous healthy) | No | Elapsed time only |
 | **Cross-stage history in gates** | Yes — `upstream.<env>.recentSuccessCount`, `lastPromotedAt` | No | No |
 | **Artifact discovery** | Bundle created by CI/CLI; Subscription CRD with OCI + Git watchers | Warehouse (automatic OCI/git scanning) | Git commit-based |
@@ -56,11 +56,11 @@ state — not just the current stage:
 # In a prod PolicyGate — reads upstream uat stage's soak time
 expression: "bundle.upstreamSoakMinutes >= 60"
 
-# Read upstream metrics
-expression: "metrics.errorRate < 0.01"
+# Read a MetricCheck result
+expression: 'metrics["error-rate"].result == "Pass"'
 
 # Combine schedule + soak + metadata
-expression: '!schedule.isWeekend && bundle.upstreamSoakMinutes >= 30 && bundle.labels.hotfix != "true"'
+expression: '!schedule.isWeekend && bundle.upstreamSoakMinutes >= 30 && !(has(bundle.labels.hotfix) && bundle.labels.hotfix == "true")'
 ```
 
 Neither Kargo nor GitOps Promoter can express "do not promote to prod unless UAT has been
@@ -119,9 +119,10 @@ regardless of whether the service was healthy during that window.
 
 ### Change freeze management
 
-A single `ChangeWindow` CRD in `kardinal-system` blocks all pipelines cluster-wide.
-Platform teams create one object during incidents, holidays, or maintenance windows — no
-per-pipeline configuration needed. Kargo has no equivalent. GitOps Promoter requires
+A `ChangeWindow` is a cluster-scoped object: a one-off blackout (`start`/`end`) or a
+recurring allowed window (days, hours, timezone). Platform teams reference it from an
+org-level PolicyGate (`!changewindow.isBlocked("freeze")`), so one object blocks every
+pipeline during incidents, holidays, or maintenance windows, with no per-pipeline changes. Kargo has no equivalent. GitOps Promoter requires
 manually setting CommitStatus resources per-environment.
 
 ### Wave topology for multi-region rollouts
@@ -133,8 +134,8 @@ concept. GitOps Promoter has no DAG support.
 
 ### DORA metrics built-in
 
-`Bundle.status.metrics` records `commitToProductionMinutes`, `bakeResets`, and
-`operatorInterventions` for every promotion. The `kardinal metrics` CLI surfaces these
+`Bundle.status.metrics` records `commitToProductionMinutes` and `bakeResets` for every
+promotion (`operatorInterventions` is declared but not yet written). The `kardinal metrics` CLI surfaces these
 per pipeline. Neither Kargo nor GitOps Promoter tracks deployment efficiency metrics.
 
 ---
@@ -173,7 +174,7 @@ you don't need.
 - You want **expressive, cross-stage policy gates** — soak time, upstream metrics, schedule, bundle metadata, PR approval state — without writing webhook servers
 - You need **contiguous healthy soak** — deployments must survive bake windows with zero health alarms, not just elapsed time
 - You want **wave topology** for multi-region production rollouts — promote to 1 region, bake, then expand to the next wave
-- You want a **centralized change freeze** — one `ChangeWindow` object blocks all pipelines during incidents or holidays
+- You want a **centralized change freeze** — one `ChangeWindow` object, referenced by an org-level gate, blocks all pipelines during incidents or holidays
 - You use **ArgoCD + Flux mixed**, or neither — kardinal doesn't require a specific GitOps engine
 - You want **structured PR evidence** so reviewers have full promotion context in the PR body
 - You want **auto-rollback** triggered by health check failures, with per-stage abort vs. rollback vs. ignore policy

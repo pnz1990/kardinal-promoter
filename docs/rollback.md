@@ -4,10 +4,14 @@ In kardinal-promoter, rollback is not a special operation. It is a forward promo
 
 ## How Rollback Works
 
-1. `kardinal rollback <pipeline> --env <environment>` identifies the previous verified Bundle for that environment.
-2. The controller creates a new Bundle whose `spec.artifacts` point to the previous version, with `spec.intent.target` set to the specified environment.
-3. This Bundle runs through the normal promotion flow: Graph generation, PolicyGate evaluation, Git write, PR creation (for pr-review environments), health verification.
+1. `kardinal rollback <pipeline> --env <environment>` picks the target: the most recent Bundle, other than the one deployed in that environment now, that was Verified there and deploys different artifacts. A Bundle that an earlier rollback in that environment rolled back from is skipped, so after `v2` was rolled back to `v1`, the next rollback does not return to `v2`. The UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy use the same selection.
+2. It creates a new Bundle that copies the target's `spec.images` and `spec.configRef`, with `spec.provenance.rollbackOf` set to the target, `spec.intent.targetEnvironment` set to the environment, the label `kardinal.io/rollback: "true"` and the annotation `kardinal.io/rollback-from: <bundle deployed now>`.
+3. This Bundle runs through the normal promotion flow: Graph generation, PolicyGate evaluation, Git write, PR creation (for pr-review environments), health verification. Like any Bundle with `intent.targetEnvironment`, it is promoted through every environment upstream of the target first (see [Multi-Environment Rollback](#multi-environment-rollback)).
 4. The PR is labeled with `kardinal/rollback` instead of `kardinal/promotion` for visibility.
+
+If there is nothing safe to roll back to (no earlier Verified Bundle, or only ones with the same artifacts as the failing Bundle), the command fails and creates nothing. The failing image is never promoted again.
+
+`onHealthFailure: rollback` and RollbackPolicy never roll back a Bundle that is itself a rollback. If a rollback fails its health check, the step stops at `AbortedByAlarm` for a human, instead of starting another rollback.
 
 There is no separate rollback subsystem. The same code path handles promotions and rollbacks.
 
@@ -21,19 +25,18 @@ kardinal rollback my-app --env prod
 
 Output:
 ```
-Rolling back my-app in prod: v1.29.0 to v1.28.0
-  Previous verified Bundle: v1.28.0
-  PR #145 opened: https://github.com/myorg/gitops-repo/pull/145
-  Merge PR #145 to complete rollback (gate: pr-review)
+Rolling back my-app in prod from my-app-v1-29-0 to my-app-v1-28-0 (ghcr.io/myorg/my-app:v1.28.0)
+Bundle my-app-rollback-x7k2p created (rollbackOf=my-app-v1-28-0)
+Track with: kardinal explain my-app --env prod
 ```
 
 ### Roll back to a specific version
 
 ```bash
-kardinal rollback my-app --env prod --to v1.27.0
+kardinal rollback my-app --env prod --to my-app-v1-27-0
 ```
 
-The `--to` flag specifies which version to roll back to. The version must exist in the Bundle history (within `historyLimit`).
+The `--to` flag names the Bundle to roll back to. It must exist in the Bundle history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a Bundle that an earlier rollback rolled back from.
 
 ### Emergency rollback
 
@@ -47,41 +50,60 @@ For environments where emergency rollbacks should not require PR review, configu
 
 ## Automatic Rollback
 
-kardinal-promoter triggers automatic rollback in two scenarios:
-
-### Consecutive health-check failures (configurable threshold)
-
-The most common automatic rollback scenario. Configure per environment:
+Automatic rollback is configured per environment with `onHealthFailure`:
 
 ```yaml
 spec:
   environments:
     - name: prod
-      autoRollback:
-        failureThreshold: 3   # default: 3 consecutive failures
+      bake:
+        minutes: 30
+        policy: fail-on-alarm
+      onHealthFailure: rollback   # rollback | abort | none (default)
 ```
 
-**How it works:**
+| `onHealthFailure` | What happens to the PromotionStep |
+|---|---|
+| `none` (default) | `Failed`; downstream environments stop |
+| `abort` | `AbortedByAlarm`; a human must intervene |
+| `rollback` | A rollback Bundle is created with the artifacts of the Bundle verified before the failing one in this environment (the selection in [How Rollback Works](#how-rollback-works)), and the step moves to `RollingBack`. With nothing safe to roll back to, the step is `AbortedByAlarm` and nothing is created |
 
-1. The `PromotionStep` reconciler tracks `status.consecutiveHealthFailures` during `HealthChecking`.
-2. On each failed health check the counter increments. On success it resets to 0.
-3. When `consecutiveHealthFailures >= failureThreshold`, the controller automatically creates a rollback Bundle with:
-   - `spec.provenance.rollbackOf: <original bundle name>`
-   - Label `kardinal.io/rollback: "true"`
-4. The rollback Bundle runs through the same promotion flow (same gates, same PR flow).
-5. **Idempotent**: if a rollback Bundle already exists for the original Bundle, no duplicate is created.
+**When it applies.** The controller applies `onHealthFailure` when:
 
-Omit `spec.environments[].autoRollback` to disable automatic rollback for an environment.
+- the PromotionStep has no Healthy check within `health.timeout` (default: 10m);
+- the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed`);
+- a health check fails during a bake window with `bake.policy: fail-on-alarm`.
+
+A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
+
+### What counts as a failed health check
+
+Each health check has one of four results (see [Timings and failures](health-adapters.md#timings-and-failures)):
+
+| Result | Examples | Counts in `consecutiveHealthFailures` | Applies `onHealthFailure` |
+|---|---|---|---|
+| Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
+| Waiting | A rollout in progress, including new pods that are not available yet; Argo CD or Flux not synced to the promoted commit yet; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
+| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded`; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
+| Failed | Deployment `ProgressDeadlineExceeded`; Flagger canary `Failed` | Yes | Yes, at once |
 
 ### Health timeout
 
-If a PromotionStep does not reach `Verified` within the configured `health.timeout` (default: 10m), the step is marked as `Failed`. The controller creates a rollback Bundle for the affected environment.
+If a PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, the timeout is a health failure: it increments `status.consecutiveHealthFailures` and applies `onHealthFailure`, as a Failed result does. The step message is `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: <last check>`. The timeout does not apply once a `bake` window has started.
+
+A new image whose pods crash-loop is the common case. Kubernetes reports such a Deployment as still rolling out (`Progressing=True`, reason `ReplicaSetUpdated`) until its `progressDeadlineSeconds` (default: 600s) passes, so every check before that is Waiting. The step then fails at `health.timeout`, or earlier when `ProgressDeadlineExceeded` is reported first. To fail sooner, set the Deployment's `progressDeadlineSeconds` below `health.timeout`.
 
 ### Delegation failure
 
-If a delegated rollout (Argo Rollouts or Flagger) reports a `Degraded` or `Failed` status, the PromotionStep is marked as `Failed`. The controller creates a rollback Bundle.
+A Flagger canary `Failed` is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or sooner under `bake.policy: fail-on-alarm`.
 
-In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node).
+In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node). Use `kardinal rollback` to roll back manually.
+
+### `autoRollback` is not implemented
+
+`spec.environments[].autoRollback.failureThreshold` (roll back after N consecutive failed health checks) is reserved. The API server rejects a Pipeline that sets it, with the message `environments[].autoRollback is not implemented`. Remove the field and use `onHealthFailure`.
+
+The `RollbackPolicy` CRD is the building block for that feature. The controller reconciles RollbackPolicy objects that you create yourself, but nothing creates them automatically. A RollbackPolicy reads only the PromotionSteps of its `spec.bundleRef` in `spec.environment`. When the highest `status.consecutiveHealthFailures` among them reaches `spec.failureThreshold` (default: 3), it creates one rollback Bundle.
 
 ## What Happens in Git
 
@@ -126,16 +148,16 @@ v1.28.0   promote    prod    #138   alice      12m        2026-04-07 14:00
 
 ## How Far Back Can You Roll Back
 
-The `historyLimit` field on the Pipeline (default: 20) determines how many Bundles are retained. `kardinal rollback --to <version>` can target any version within the history. Bundles beyond the limit are garbage-collected, but the Git PRs remain as the permanent audit trail.
+The `historyLimit` field on the Pipeline (default: 50) determines how many Bundles are retained. `kardinal rollback --to <bundle>` can target any Bundle within the history. Bundles beyond the limit are garbage-collected, but the Git PRs remain as the permanent audit trail.
 
 ## Multi-Environment Rollback
 
-When a PromotionStep fails in a downstream environment, Graph stops all downstream nodes. The controller opens rollback PRs only for environments that actually received the failed Bundle. Environments that were not yet promoted are unaffected.
+When a PromotionStep fails, the Graph stops the environments downstream of it. A rollback targets one environment (`spec.intent.targetEnvironment`), but its Graph keeps every environment upstream of the target, the same as any Bundle with a target environment. So the rollback writes the old artifacts to each upstream environment first, opens PRs there for pr-review environments, and waits on their PolicyGates, soak and health checks, before it reaches the target. Environments that are not upstream of the target are not touched.
 
 For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` fails:
-- `prod-eu` may still be promoting or may have already succeeded. It is not rolled back.
-- Only `prod-us` gets a rollback PR.
-- If both prod environments fail, both get rollback PRs.
+- The rollback promotes the old version to `dev`, then `staging`, then `prod-us`. `dev` and `staging` run the old version afterwards too.
+- `prod-eu` is not upstream of `prod-us`. It is not rolled back.
+- If both prod environments fail, each gets its own rollback Bundle, and each of them goes through `dev` and `staging`.
 
 ## Comparison with Other Tools
 
@@ -150,20 +172,24 @@ For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` 
 
 ## Pause and Resume
 
-During an incident, you may want to stop all in-flight promotions without rolling back.
+During an incident, you may want to stop promotions without rolling back.
 
 ```bash
-# Pause: hold all promotions at their current state
+# Pause: no new promotion step starts; in-flight steps hold at the next safe point
 kardinal pause my-app
 
-# Resume: allow promotions to continue
+# Resume: held steps continue where they stopped
 kardinal resume my-app
 ```
 
-When a Pipeline is paused (`spec.paused: true`):
-- PromotionSteps already in progress are held at their current state (Promoting, WaitingForMerge, etc.)
-- Open PRs remain open — no new commits are pushed
-- No new Bundles will advance from Available to Promoting
-- All states are preserved in etcd — resume picks up exactly where pause left
+`kardinal pause` (and the UI Pause button) sets `spec.paused: true` on the Pipeline, and the controller keeps a freeze PolicyGate named `freeze-<pipeline>` in the Pipeline's namespace while it is set. While the Pipeline is paused:
+- No PromotionStep leaves `Pending`, so no new environment starts promoting.
+- A step in `Promoting` (clone, update manifests, commit, open PR) holds before its next git step. Its status message says the pipeline is paused.
+- A step in `WaitingForMerge` or `HealthChecking` finishes. Stopping it would leave a merged change unverified. Open PRs stay open; merging one during a pause still deploys it.
+- New Bundles are still accepted, but their steps wait in `Pending`.
 
-After resume, promotions continue automatically from where they paused. No re-trigger is required.
+After resume, held steps continue from where they stopped. No re-trigger is required.
+
+While the Pipeline is paused it has a `Paused` condition. `True` (reason `FreezeGateActive`) means the freeze gate holds new promotions. Do not name your own PolicyGate `freeze-<pipeline>`: kardinal does not treat a gate it did not create (no `kardinal.io/freeze=true` label and not owned by the Pipeline) as a pause, and does not delete it. While such a gate exists, `kardinal pause` fails with an error naming it, and the condition is `False` with reason `FreezeGateNameConflict`, so the pipeline keeps running. Rename or delete that gate and the pause takes effect.
+
+Upgrading: before this release the UI Pause button, and editing `spec.paused` by hand, set the field without creating the freeze gate, so the Pipeline kept promoting. After upgrading, the controller creates the gate for every Pipeline with `spec.paused: true`, and those Pipelines stop. Resume any that should keep running.

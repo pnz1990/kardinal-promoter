@@ -34,7 +34,7 @@ All state lives in Kubernetes CRDs. There is no external database.
 - **Policy gates as DAG nodes.** CEL-powered gates are visible in the UI and debuggable via `kardinal explain`. Org-level gates cannot be bypassed by teams.
 - **Pluggable integrations.** SCM providers (GitHub, GitLab), manifest update strategies (Kustomize, Helm), health adapters (Argo CD, Flux, Deployment), and delivery delegation (Argo Rollouts, Flagger) are Go interfaces. Adding a provider is one interface implementation.
 - **PR-native approval.** Promotion PRs contain artifact provenance, upstream verification, and policy gate compliance. Human approval for production is merging the PR.
-- **Multi-cluster.** Argo CD hub-spoke (out of the box), Flux and bare K8s (via kubeconfig Secrets).
+- **Multi-cluster.** Argo CD hub-spoke: health checks read the Applications in the hub. Remote-cluster health checks for Flux and bare Kubernetes (`health.cluster` kubeconfig Secrets) are not implemented yet.
 
 ## Status
 

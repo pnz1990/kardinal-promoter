@@ -105,9 +105,28 @@ func WatchNodeTemplate(healthType string, opts CheckOptions) (WatchNodeSpec, err
 	}
 }
 
+// deploymentReadyWhen mirrors DeploymentAdapter.Check (without the image
+// check, which needs the Bundle): the condition is True and the rollout of the
+// current generation is complete, as `kubectl rollout status` decides it.
+// Status counters are omitted from the object when zero, hence the has() guards.
+func deploymentReadyWhen(condition string) string {
+	return fmt.Sprintf(
+		"healthNode.status.conditions.exists(c, c.type == %q && c.status == 'True') && "+
+			"has(healthNode.status.observedGeneration) && "+
+			"healthNode.status.observedGeneration >= healthNode.metadata.generation && "+
+			"!healthNode.status.conditions.exists(c, c.type == 'Progressing' && has(c.reason) && "+
+			"c.reason == 'ProgressDeadlineExceeded') && "+
+			"has(healthNode.status.updatedReplicas) && "+
+			"healthNode.status.updatedReplicas == healthNode.spec.replicas && "+
+			"healthNode.status.replicas == healthNode.status.updatedReplicas && "+
+			"has(healthNode.status.availableReplicas) && "+
+			"healthNode.status.availableReplicas == healthNode.status.updatedReplicas",
+		condition)
+}
+
 // watchNodeResource builds a Watch node spec for a single named Kubernetes Deployment.
 //
-// readyWhen: the Available condition must be True.
+// readyWhen: see deploymentReadyWhen.
 // HE-1 in docs/design/11-graph-purity-tech-debt.md.
 func watchNodeResource(cfg ResourceConfig) WatchNodeSpec {
 	condition := cfg.Condition
@@ -119,10 +138,7 @@ func watchNodeResource(cfg ResourceConfig) WatchNodeSpec {
 		Kind:       "Deployment",
 		Name:       cfg.Name,
 		Namespace:  cfg.Namespace,
-		ReadyWhen: fmt.Sprintf(
-			"healthNode.status.conditions.exists(c, c.type == %q && c.status == 'True')",
-			condition,
-		),
+		ReadyWhen:  deploymentReadyWhen(condition),
 		HealthType: "resource",
 	}
 }
@@ -130,7 +146,7 @@ func watchNodeResource(cfg ResourceConfig) WatchNodeSpec {
 // watchNodeResourceWatchKind builds a collection node spec for the Deployments
 // matched by label selector.
 //
-// readyWhen: every matched Deployment must have the Available condition True.
+// readyWhen: every matched Deployment must satisfy deploymentReadyWhen.
 // UseWatchKind=true causes the translator to emit a ref node with
 // metadata.selector instead of metadata.name. kro evaluates readyWhen per
 // element, so the expression is written for a single Deployment.
@@ -146,10 +162,7 @@ func watchNodeResourceWatchKind(cfg ResourceConfig) WatchNodeSpec {
 		LabelSelector: cfg.LabelSelector,
 		UseWatchKind:  true,
 		// Per-element expression: the translator binds healthNode to "each".
-		ReadyWhen: fmt.Sprintf(
-			"healthNode.status.conditions.exists(c, c.type == %q && c.status == 'True')",
-			condition,
-		),
+		ReadyWhen:  deploymentReadyWhen(condition),
 		HealthType: "resource",
 	}
 }

@@ -23,7 +23,9 @@
 //
 //	This is an Owned node (Q2 in the Graph-first question stack):
 //	  - It writes only to its own CRD status (status.phase, status.lastSeenDigest, etc.)
-//	  - It creates Bundle CRDs as owned child resources (permitted for Owned nodes)
+//	  - It creates Bundle CRDs in its own namespace. The Bundles carry labels, not
+//	    owner references: deleting a Subscription leaves its Bundles (and their
+//	    promotions) in place.
 //	  - time.Now() is only used inside status writes (no bare time calls in logic)
 //	  - No cross-CRD status mutations
 //	  - No exec.Command or in-memory state between reconcile iterations
@@ -32,19 +34,26 @@ package subscription
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
 
 const (
+	// maxBundleNameLen keeps Bundle names usable as label values
+	// (kardinal.io/bundle on PromotionSteps and PolicyGates).
+	maxBundleNameLen = 63
 	// defaultInterval is the polling interval when spec is empty or invalid.
 	defaultInterval = 5 * time.Minute
 	// minInterval prevents hot-loops from misconfiguration.
@@ -89,6 +98,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	now := r.now()
 
+	// A Subscription only creates Bundles in its own namespace. spec.namespace
+	// used to redirect Bundles into any namespace, which let a user who can
+	// create a Subscription start promotions of an image they choose in another
+	// team's Pipeline.
+	if sub.Spec.Namespace != "" && sub.Spec.Namespace != sub.Namespace {
+		return r.writeError(ctx, &sub, now, fmt.Sprintf(
+			"spec.namespace %q is not allowed: a Subscription creates Bundles only in its own namespace %q; "+
+				"remove spec.namespace or create the Subscription in %q",
+			sub.Spec.Namespace, sub.Namespace, sub.Spec.Namespace))
+	}
+
 	// Create the watcher for this subscription type.
 	watcher, err := r.WatcherFn(&sub)
 	if err != nil {
@@ -103,12 +123,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	interval := r.parseInterval(&sub)
 
-	// No change — update lastCheckedAt and requeue.
+	// No change — update lastCheckedAt and requeue. The watchers report the
+	// first poll (empty lastSeenDigest) as "no change", so the digest must be
+	// recorded here: it is the baseline the next poll compares against.
 	if !result.Changed {
 		log.Debug().Str("digest", result.Digest).Msg("no change detected")
 		return ctrl.Result{RequeueAfter: interval}, r.patchStatus(ctx, &sub, func(s *kardinalv1alpha1.SubscriptionStatus) {
 			s.Phase = "Watching"
 			s.LastCheckedAt = now.UTC().Format(time.RFC3339)
+			if result.Digest != "" {
+				s.LastSeenDigest = result.Digest
+			}
 			s.Message = ""
 		})
 	}
@@ -138,10 +163,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // This is safe under HA and concurrent reconciles — unlike the status.lastSeenDigest
 // comparison, which has a read-compare-write race (#620).
 func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Subscription, result *source.WatchResult, now time.Time) (string, error) {
-	ns := sub.Spec.Namespace
-	if ns == "" {
-		ns = sub.Namespace
-	}
+	ns := sub.Namespace
 
 	// Short-circuit: check if a Bundle for this digest already exists in the API server.
 	// Uses a label selector — safe under concurrent reconciles and HA deployments.
@@ -159,19 +181,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		}
 	}
 
-	// Derive bundle name from subscription name + short digest.
-	shortDigest := result.Tag
-	if shortDigest == "" && len(result.Digest) >= 8 {
-		shortDigest = result.Digest[len(result.Digest)-8:]
-	}
-	if shortDigest == "" {
-		shortDigest = now.Format("20060102-150405")
-	}
-	bundleName := fmt.Sprintf("%s-%s", sub.Name, shortDigest)
-	// Kubernetes name max is 253 chars; truncate if necessary.
-	if len(bundleName) > 253 {
-		bundleName = bundleName[:253]
-	}
+	bundleName := bundleNameFor(sub.Name, result, now)
 
 	bundleType := "image"
 	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeGit {
@@ -201,7 +211,9 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 	if sub.Spec.Type == kardinalv1alpha1.SubscriptionTypeImage && sub.Spec.Image != nil {
 		bundle.Spec.Images = []kardinalv1alpha1.ImageRef{
 			{
-				Repository: sub.Spec.Image.Registry,
+				// The watcher accepts an explicit scheme ("http://localhost:5000/app");
+				// an image reference does not carry one.
+				Repository: strings.TrimPrefix(strings.TrimPrefix(sub.Spec.Image.Registry, "https://"), "http://"),
 				Tag:        result.Tag,
 				Digest:     result.Digest,
 			},
@@ -218,15 +230,77 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 			CommitSHA: result.Digest,
 		}
 	}
+	lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
 	if err := r.Create(ctx, bundle); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			// Already created (crash recovery) — return name without error.
-			return bundleName, nil
+		if !apierrors.IsAlreadyExists(err) {
+			return "", fmt.Errorf("create bundle %s: %w", bundleName, err)
 		}
-		return "", fmt.Errorf("create bundle %s: %w", bundleName, err)
+		// Crash recovery returns the existing Bundle, but only when it is for the
+		// same artifact: a name collision must not swallow a new digest.
+		var existing kardinalv1alpha1.Bundle
+		if getErr := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: bundleName}, &existing); getErr != nil {
+			return "", fmt.Errorf("get existing bundle %s: %w", bundleName, getErr)
+		}
+		if existing.Labels["kardinal.io/source-digest"] != bundle.Labels["kardinal.io/source-digest"] ||
+			existing.Labels["kardinal.io/subscription"] != sub.Name {
+			return "", fmt.Errorf("bundle %s already exists for another artifact or owner; not creating a Bundle for digest %s",
+				bundleName, result.Digest)
+		}
+		return bundleName, nil
 	}
 	return bundleName, nil
+}
+
+// bundleNameFor returns "<subscription>-<tag>-<digest[:8]>", made DNS-safe and
+// at most maxBundleNameLen characters. The digest suffix keeps a re-pushed
+// mutable tag ("latest", "v1") from colliding with the previous Bundle. The
+// tag part is omitted when it is already a prefix of the digest (git short SHA).
+func bundleNameFor(subName string, result *source.WatchResult, now time.Time) string {
+	digest := result.Digest
+	if _, hexPart, ok := strings.Cut(digest, ":"); ok {
+		digest = hexPart
+	}
+	digest = dnsSlug(digest)
+	if len(digest) > 8 {
+		digest = digest[:8]
+	}
+	tag := dnsSlug(result.Tag)
+	if tag != "" && digest != "" && strings.HasPrefix(digest, tag) {
+		tag = ""
+	}
+
+	suffix := digest
+	if suffix == "" {
+		suffix = now.UTC().Format("20060102-150405")
+	}
+	prefix := subName
+	if tag != "" {
+		prefix += "-" + tag
+	}
+	if max := maxBundleNameLen - len(suffix) - 1; len(prefix) > max {
+		prefix = strings.TrimRight(prefix[:max], "-.")
+	}
+	return prefix + "-" + suffix
+}
+
+// dnsSlug lowercases s and replaces every character that is not a lowercase
+// letter or digit with "-", collapsing runs and trimming the ends.
+func dnsSlug(s string) string {
+	var b strings.Builder
+	dash := false
+	for _, c := range strings.ToLower(s) {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') {
+			b.WriteRune(c)
+			dash = false
+			continue
+		}
+		if !dash && b.Len() > 0 {
+			b.WriteByte('-')
+			dash = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
 }
 
 // writeError patches status to phase=Error and returns a requeue result.
@@ -310,28 +384,34 @@ func (r *Reconciler) findExistingBundleForDigest(ctx context.Context, namespace,
 	return list.Items[0].Name, nil
 }
 
-// sanitizeLabelValue truncates and sanitizes a string for use as a Kubernetes label value.
+// sanitizeLabelValue turns a digest into a Kubernetes label value.
 // Label values must be 63 characters or fewer, and may only contain alphanumerics,
 // hyphens, underscores, and dots, starting and ending with an alphanumeric.
-// Digests (SHA-256 hex, OCI sha256:...) are shortened to the last 40 hex chars.
+// The algorithm prefix ("sha256:") is stripped, other invalid characters are
+// dropped, and the last 63 characters are kept (a sha256 hex digest is 64).
 func sanitizeLabelValue(s string) string {
-	if s == "" {
-		return ""
+	if _, hexPart, ok := strings.Cut(s, ":"); ok {
+		s = hexPart
 	}
-	// Strip common prefixes like "sha256:"
-	if len(s) > 7 && s[:7] == "sha256:" {
-		s = s[7:]
-	}
-	// Kubernetes label values must be <= 63 chars.
+	s = strings.Map(func(c rune) rune {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			return c
+		}
+		return -1
+	}, s)
 	if len(s) > 63 {
 		s = s[len(s)-63:]
 	}
-	return s
+	return strings.Trim(s, "-_.")
 }
 
 // SetupWithManager registers the SubscriptionReconciler with the controller-runtime Manager.
+// Its own status writes do not re-trigger it (eventfilter.SpecOrAnnotationChanged):
+// every poll writes lastCheckedAt, and each re-trigger was an extra registry
+// or git poll (C04-gates-36). Polling is driven by RequeueAfter; a spec edit or
+// an annotation change polls at once.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.Subscription{}).
+		For(&kardinalv1alpha1.Subscription{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
 		Complete(r)
 }

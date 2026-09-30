@@ -36,7 +36,7 @@ Runs in the control plane cluster. Contains:
 - Webhook handlers: `/api/v1/bundles`, `/webhooks`
 - Metrics: `/metrics`
 
-In standalone mode, this is the only binary. It handles all PromotionSteps regardless of shard.
+In standalone mode, this is the only binary. It handles every PromotionStep without a shard label; steps with a `kardinal.io/shard` label are left for an agent (`pkg/reconciler/promotionstep`, `Shard == ""`), so do not set `environments[].shard` without running the matching agent.
 
 ### kardinal-agent (per shard)
 
@@ -127,6 +127,9 @@ kardinal-agent \
   --health-kubeconfig=/etc/kardinal/local-kubeconfig  # or in-cluster
 ```
 
+> The shipped agent has `--shard` but none of the three kubeconfig/cache flags above: it uses
+> one client configuration (`--kubeconfig`, `KUBECONFIG` or in-cluster) for everything.
+
 The agent:
 1. Watches PromotionStep CRs in the control plane (read via the control plane kubeconfig)
 2. Updates PromotionStep status in the control plane (write via the control plane kubeconfig)
@@ -183,7 +186,9 @@ This means the control plane never holds workload cluster credentials or Git tok
 
 ### Health check credentials
 
-The agent uses its local cluster credentials (in-cluster ServiceAccount or a provided kubeconfig) for health checks. For remote health checks within the agent's network, the agent stores kubeconfig Secrets locally.
+> **Not implemented (2026-09 audit).** `kardinal-agent` builds one Kubernetes client from one configuration (`ctrl.GetConfigOrDie()`) and uses it for the PromotionSteps and for health checks, so it checks the API server that holds the PromotionSteps, not the cluster it runs in. `health.cluster` kubeconfig Secrets are not read; a non-empty `health.cluster` fails the PromotionStep.
+
+The design: the agent uses its local cluster credentials (in-cluster ServiceAccount or a provided kubeconfig) for health checks. For remote health checks within the agent's network, the agent stores kubeconfig Secrets locally.
 
 ## Observability
 
@@ -197,7 +202,7 @@ Recommended: Option A (standard Kubernetes monitoring pattern). The controller's
 
 ## Standalone to Distributed Upgrade Path
 
-1. **Phase 1 (standalone):** Deploy `kardinal-controller` as a single binary. The `shard` field on environments is ignored. All PromotionSteps are reconciled locally.
+1. **Phase 1 (standalone):** Deploy `kardinal-controller` as a single binary. Leave the `shard` field unset on environments: the controller skips PromotionSteps that carry a shard label.
 
 2. **Add an agent:** Deploy `kardinal-agent` in a target cluster with `--shard=eu-cluster`. Create a ServiceAccount in the control plane with the required RBAC. Distribute the control plane kubeconfig to the agent.
 

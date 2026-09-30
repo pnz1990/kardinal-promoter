@@ -17,6 +17,7 @@ package promotionstep_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -50,17 +51,33 @@ type mockSCM struct {
 	prNumber    int
 	getPRCalled int
 	openCalled  int
+
+	getPRErr  error    // returned by GetPRStatus
+	closeErrs []error  // returned in order by successive ClosePR calls; nil entries succeed
+	closed    []string // "repo#number" of every ClosePR call
+	comments  []string // body of every CommentOnPR call
 }
 
 func (m *mockSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
 	m.openCalled++
 	return m.prURL, m.prNumber, m.openPRErr
 }
-func (m *mockSCM) ClosePR(_ context.Context, _ string, _ int) error               { return nil }
-func (m *mockSCM) CommentOnPR(_ context.Context, _ string, _ int, _ string) error { return nil }
+func (m *mockSCM) ClosePR(_ context.Context, repo string, number int) error {
+	m.closed = append(m.closed, fmt.Sprintf("%s#%d", repo, number))
+	if len(m.closeErrs) > 0 {
+		err := m.closeErrs[0]
+		m.closeErrs = m.closeErrs[1:]
+		return err
+	}
+	return nil
+}
+func (m *mockSCM) CommentOnPR(_ context.Context, _ string, _ int, body string) error {
+	m.comments = append(m.comments, body)
+	return nil
+}
 func (m *mockSCM) GetPRStatus(_ context.Context, _ string, _ int) (bool, bool, error) {
 	m.getPRCalled++
-	return m.merged, m.open, nil
+	return m.merged, m.open, m.getPRErr
 }
 func (m *mockSCM) GetPRReviewStatus(_ context.Context, _ string, _ int) (bool, int, error) {
 	return false, 0, nil
@@ -92,11 +109,17 @@ func buildScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// healthyDeployment returns a Deployment with Available=True for health check tests.
+// healthyDeployment returns a Deployment whose rollout is complete: the
+// current generation is observed, its one replica is updated and available,
+// and Available=True.
 func healthyDeployment(name, namespace string) *appsv1.Deployment {
+	one := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
 		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			Replicas:           1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1,
 			Conditions: []appsv1.DeploymentCondition{
 				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue},
 			},
@@ -104,16 +127,28 @@ func healthyDeployment(name, namespace string) *appsv1.Deployment {
 	}
 }
 
-// degradedDeployment returns a Deployment with Available=False for health check tests.
+// degradedDeployment returns a Deployment whose rollout finished but whose
+// replica is no longer available (Available=False): a health failure, not a
+// rollout in progress.
 func degradedDeployment(name, namespace string) *appsv1.Deployment {
+	one := int32(1)
 	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Generation: 1},
+		Spec:       appsv1.DeploymentSpec{Replicas: &one},
 		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			Replicas:           1, UpdatedReplicas: 1, UnavailableReplicas: 1,
 			Conditions: []appsv1.DeploymentCondition{
 				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Message: "pods not ready"},
 			},
 		},
 	}
+}
+
+// withImage sets the Deployment's single container image.
+func withImage(d *appsv1.Deployment, image string) *appsv1.Deployment {
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app", Image: image}}
+	return d
 }
 
 func makeStep(name, pipelineName, bundleName, env string) *v1alpha1.PromotionStep {
@@ -785,10 +820,10 @@ func TestStepIndex_OutputsAccumulated(t *testing.T) {
 }
 
 // TestPausedPipeline_ReconcilerNolongerChecksSpecPaused documents the PS-2 fix:
-// the PromotionStep reconciler no longer reads Pipeline.Spec.Paused.
-// Pause enforcement is now via the freeze PolicyGate (Graph-visible).
-// A "Promoting" step with a paused pipeline will now attempt to advance (and the
-// freeze gate in the Graph prevents the Graph node from being triggered in prod).
+// the PromotionStep reconciler does not read Pipeline.Spec.Paused. Pause is
+// enforced by the freeze PolicyGate, which the Pipeline reconciler converges
+// to spec.paused and the step holds on (TestPause_FreezeGateHoldsStep). With
+// spec.paused set but no gate yet, the step still advances.
 func TestPausedPipeline_ReconcilerNolongerChecksSpecPaused(t *testing.T) {
 	scheme := buildScheme(t)
 
@@ -1145,6 +1180,11 @@ func TestSupersessionGuard_ClosesOpenPRAndFails(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "stale-prod-step", Namespace: "default"}, &got))
 	assert.Equal(t, "Failed", got.Status.State, "WaitingForMerge step must be Failed when bundle is Superseded")
 	assert.Contains(t, got.Status.Message, "superseded", "failure message must mention supersession")
+	// The open PR must be closed, with a comment saying why, or a later merge
+	// would deliver a superseded version (C03-promotionstep-08).
+	assert.Equal(t, []string{"org/repo#42"}, mock.closed, "the superseded step's PR must be closed")
+	require.Len(t, mock.comments, 1)
+	assert.Contains(t, mock.comments[0], "superseded")
 }
 
 // TestSupersessionGuard_PendingStepNeverStarts verifies that a Pending step of
@@ -1697,73 +1737,6 @@ func TestOnHealthFailure_AbortSetsAbortedState(t *testing.T) {
 
 	assert.Equal(t, "AbortedByAlarm", got.Status.State,
 		"step must be AbortedByAlarm when onHealthFailure=abort and health fails")
-}
-
-// TestOnHealthFailure_RollbackCreatesBundle verifies that onHealthFailure=rollback
-// creates a rollback Bundle and transitions the step to RollingBack.
-func TestOnHealthFailure_RollbackCreatesBundle(t *testing.T) {
-	scheme := buildScheme(t)
-	pipeline := pipelineWithHealthFailurePolicy(t, "my-app", "prod", "rollback")
-
-	startedAt := metav1.NewTime(time.Now().Add(-5 * time.Minute))
-	ps := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-app-prod", Namespace: "default"},
-		Spec: v1alpha1.PromotionStepSpec{
-			PipelineName: "my-app",
-			BundleName:   "my-app-v1",
-			Environment:  "prod",
-			StepType:     "health-check",
-		},
-		Status: v1alpha1.PromotionStepStatus{
-			State:         "HealthChecking",
-			BakeStartedAt: &startedAt,
-		},
-	}
-
-	// Unhealthy deployment + a "previous" bundle to roll back to
-	deploy := degradedDeployment("my-app", "prod")
-	bundle := makeBundle("my-app-v1", "my-app")
-	bundle.Spec.Provenance = &v1alpha1.BundleProvenance{CommitSHA: "abc123"}
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(pipeline, ps, deploy, bundle).
-		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
-		Build()
-
-	dynClient := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
-	healthDet := health.NewAutoDetector(c, dynClient)
-	r := &promotionstep.Reconciler{
-		Client:         c,
-		SCM:            &mockSCM{},
-		GitClient:      &mockGit{},
-		HealthDetector: healthDet,
-	}
-
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-app-prod", Namespace: "default"}}
-	_, err := r.Reconcile(context.Background(), req)
-	require.NoError(t, err)
-
-	var got v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
-
-	assert.Equal(t, "RollingBack", got.Status.State,
-		"step must be RollingBack when onHealthFailure=rollback and health fails")
-
-	// A rollback Bundle must have been created
-	var bundles v1alpha1.BundleList
-	require.NoError(t, c.List(context.Background(), &bundles))
-	var rollbackBundle *v1alpha1.Bundle
-	for i := range bundles.Items {
-		b := &bundles.Items[i]
-		if b.Name != "my-app-v1" && b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "" {
-			rollbackBundle = b
-			break
-		}
-	}
-	require.NotNil(t, rollbackBundle, "a rollback Bundle must be created by the reconciler")
-	assert.Equal(t, "my-app-v1", rollbackBundle.Spec.Provenance.RollbackOf,
-		"rollback Bundle must reference the failing bundle")
-	assert.Equal(t, "my-app", rollbackBundle.Spec.Pipeline,
-		"rollback Bundle must target the same pipeline")
 }
 
 // pipelineWithHealthFailurePolicy creates a Pipeline with bake + onHealthFailure for K-03 tests.

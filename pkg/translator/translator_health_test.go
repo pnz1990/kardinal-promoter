@@ -560,3 +560,77 @@ func TestInjectHealthNodes_SkipsUnservedKinds(t *testing.T) {
 	assert.NotNil(t, findHealthNode(g, "uat"))
 	assert.Nil(t, findHealthNode(g, "prod"))
 }
+
+// TestInjectHealthWatchNodes_FollowsOptionsForEnv proves C01-graph-07: the
+// health ref node reads the object the PromotionStep reconciler checks
+// (health.OptionsForEnv): delivery.delegate takes precedence over
+// health.type, a delegate alone selects its adapter, and the health.<type>
+// name and namespace overrides apply. An environment with neither
+// health.type nor a delegate gets no node.
+func TestInjectHealthWatchNodes_FollowsOptionsForEnv(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        kardinalv1alpha1.EnvironmentSpec
+		wantNode   bool
+		wantKind   string
+		wantName   string
+		wantNS     string
+		wantReadyW string
+	}{
+		{name: "delegate takes precedence over health.type",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource"},
+				Delivery: kardinalv1alpha1.DeliveryConfig{Delegate: "flagger"}},
+			wantNode: true, wantKind: "Canary", wantName: "web", wantNS: "prod"},
+		{name: "a delegate alone selects its adapter",
+			env:      kardinalv1alpha1.EnvironmentSpec{Name: "prod", Delivery: kardinalv1alpha1.DeliveryConfig{Delegate: "argoRollouts"}},
+			wantNode: true, wantKind: "Rollout", wantName: "web", wantNS: "prod"},
+		{name: "delegate none keeps health.type",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "flux"},
+				Delivery: kardinalv1alpha1.DeliveryConfig{Delegate: "none"}},
+			wantNode: true, wantKind: "Kustomization", wantName: "web-prod", wantNS: "flux-system"},
+		{name: "resource name, namespace and condition overrides",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "resource",
+				Resource: &kardinalv1alpha1.ResourceRef{Name: "web-api", Namespace: "apps", Condition: "Progressing"}}},
+			wantNode: true, wantKind: "Deployment", wantName: "web-api", wantNS: "apps", wantReadyW: `c.type == "Progressing" && c.status == 'True'`},
+		{name: "argocd overrides",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argocd",
+				ArgoCD: &kardinalv1alpha1.HealthTargetRef{Name: "web-production", Namespace: "gitops"}}},
+			wantNode: true, wantKind: "Application", wantName: "web-production", wantNS: "gitops"},
+		{name: "flux overrides",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "flux",
+				Flux: &kardinalv1alpha1.HealthTargetRef{Name: "apps"}}},
+			wantNode: true, wantKind: "Kustomization", wantName: "apps", wantNS: "flux-system"},
+		{name: "argoRollouts overrides",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Health: kardinalv1alpha1.HealthConfig{Type: "argoRollouts",
+				ArgoRollouts: &kardinalv1alpha1.HealthTargetRef{Name: "web-rollout", Namespace: "rollouts"}}},
+			wantNode: true, wantKind: "Rollout", wantName: "web-rollout", wantNS: "rollouts"},
+		{name: "flagger overrides apply to a flagger delegate",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Delivery: kardinalv1alpha1.DeliveryConfig{Delegate: "flagger"},
+				Health: kardinalv1alpha1.HealthConfig{Flagger: &kardinalv1alpha1.HealthTargetRef{Name: "web-canary", Namespace: "canaries"}}},
+			wantNode: true, wantKind: "Canary", wantName: "web-canary", wantNS: "canaries"},
+		{name: "neither health.type nor a delegate",
+			env: kardinalv1alpha1.EnvironmentSpec{Name: "prod", Delivery: kardinalv1alpha1.DeliveryConfig{Delegate: "none"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := makeTestGraph("prod")
+			injected := injectAll(makePipeline("web", []kardinalv1alpha1.EnvironmentSpec{tt.env}), g)
+			node := findHealthNode(g, "prod")
+			if !tt.wantNode {
+				assert.Equal(t, 0, injected)
+				assert.Nil(t, node)
+				return
+			}
+			assert.Equal(t, 1, injected)
+			require.NotNil(t, node)
+			assert.Equal(t, tt.wantKind, node.Ref["kind"])
+			md := node.Ref["metadata"].(map[string]interface{})
+			assert.Equal(t, tt.wantName, md["name"])
+			assert.Equal(t, tt.wantNS, md["namespace"])
+			if tt.wantReadyW != "" {
+				require.NotEmpty(t, node.ReadyWhen)
+				assert.Contains(t, node.ReadyWhen[0], tt.wantReadyW)
+			}
+		})
+	}
+}

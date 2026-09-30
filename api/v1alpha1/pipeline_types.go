@@ -106,11 +106,16 @@ type SecretRef struct {
 	Name string `json:"name"`
 
 	// Namespace is the Secret namespace. If empty, the Pipeline's namespace is used.
+	// For spec.git.secretRef it must be empty or equal to the Pipeline's namespace:
+	// the controller refuses to read a Secret from another namespace and fails the
+	// PromotionStep with a clear message, so a Pipeline author cannot borrow another
+	// team's credentials.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
 // EnvironmentSpec defines one environment in a Pipeline.
+// +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
 // +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed"
 type EnvironmentSpec struct {
 	// Name is the environment identifier (e.g. "test", "uat", "prod").
@@ -170,8 +175,8 @@ type EnvironmentSpec struct {
 	// +optional
 	Shard string `json:"shard,omitempty"`
 
-	// AutoRollback configures automatic rollback when health checks fail repeatedly.
-	// When not set, automatic rollback is disabled.
+	// AutoRollback is reserved and rejected by the API server: consecutive-failure
+	// auto-rollback is not implemented. See OnHealthFailure.
 	// +optional
 	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
 
@@ -234,14 +239,13 @@ type EnvironmentSpec struct {
 	// +optional
 	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
 
-	// Regions enables multi-region fan-out for this environment (issue #612).
-	// When two or more region names are listed, the translator emits a single
-	// forEach Graph node that stamps out one PromotionStep per region. Each
-	// stamped PromotionStep receives spec.region = the region name, which the
-	// reconciler uses when constructing Git paths and PR labels.
-	// All regions must be Verified before downstream environments proceed.
-	// When empty or only one region is listed, the environment uses the default
-	// single-node behaviour (no forEach).
+	// Regions is reserved for multi-region fan-out (issue #612) and is NOT
+	// implemented. With two or more regions the translator stamps out one
+	// PromotionStep per region (spec.region), but every region would edit the
+	// same path and push the same branch, so the PromotionStep reconciler fails
+	// such steps with "environments[].regions fan-out is not implemented".
+	// Declare one environment per region instead (for example prod-us, prod-eu).
+	// When empty or only one region is listed, the field has no effect.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
 }
@@ -258,7 +262,8 @@ type PromotionTemplateRef struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// AutoRollbackSpec defines the automatic rollback policy for an environment.
+// AutoRollbackSpec is reserved for a consecutive-failure rollback policy. It is
+// not implemented, and EnvironmentSpec rejects it; see OnHealthFailure.
 type AutoRollbackSpec struct {
 	// FailureThreshold is the number of consecutive health-check failures
 	// that trigger an automatic rollback Bundle creation. Default: 3.
@@ -376,6 +381,9 @@ type ArgoCDUpdateConfig struct {
 type HealthConfig struct {
 	// Type selects the health check backend.
 	// Supported values: resource, argocd, flux, argoRollouts, flagger.
+	// When empty the PromotionStep reconciler uses "resource" (a Deployment named
+	// after the Pipeline in the environment namespace, unless health.resource
+	// overrides it). delivery.delegate, when set, takes precedence.
 	// +kubebuilder:validation:Enum=resource;argocd;flux;argoRollouts;flagger
 	// +optional
 	Type string `json:"type,omitempty"`
@@ -386,7 +394,11 @@ type HealthConfig struct {
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
 
-	// Cluster is the kubeconfig Secret name for remote cluster health checks.
+	// Cluster is reserved for remote-cluster health checks and is NOT implemented.
+	// A non-empty value fails the PromotionStep with "health.cluster is not
+	// supported" instead of silently checking the local cluster. To verify a
+	// workload in another cluster, use the argocd adapter against its Application
+	// in the Argo CD hub.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
 
@@ -410,14 +422,54 @@ type HealthConfig struct {
 	// Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger.
 	// +optional
 	Resource *ResourceRef `json:"resource,omitempty"`
+
+	// ArgoCD overrides the Argo CD Application checked by health.type=argocd.
+	// Defaults: name "<pipeline>-<environment>", namespace "argocd".
+	// +optional
+	ArgoCD *HealthTargetRef `json:"argocd,omitempty"`
+
+	// Flux overrides the Flux Kustomization checked by health.type=flux.
+	// Defaults: name "<pipeline>-<environment>", namespace "flux-system".
+	// +optional
+	Flux *HealthTargetRef `json:"flux,omitempty"`
+
+	// ArgoRollouts overrides the Rollout checked by health.type=argoRollouts
+	// (or delivery.delegate=argoRollouts).
+	// Defaults: name "<pipeline>", namespace "<environment>".
+	// +optional
+	ArgoRollouts *HealthTargetRef `json:"argoRollouts,omitempty"`
+
+	// Flagger overrides the Canary checked by health.type=flagger
+	// (or delivery.delegate=flagger).
+	// Defaults: name "<pipeline>", namespace "<environment>".
+	// +optional
+	Flagger *HealthTargetRef `json:"flagger,omitempty"`
+}
+
+// HealthTargetRef names the object a health adapter reads.
+// Empty fields fall back to the adapter's default.
+type HealthTargetRef struct {
+	// Name is the object name.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Namespace is the object namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // ResourceRef identifies a Kubernetes resource by kind, name, and namespace.
 type ResourceRef struct {
-	// Kind is the Kubernetes resource kind (e.g. "Deployment", "StatefulSet").
+	// Kind is the Kubernetes resource kind. Only "Deployment" is supported;
+	// any other value fails the PromotionStep with a clear message.
 	// Defaults to "Deployment" when unset.
 	// +optional
 	Kind string `json:"kind,omitempty"`
+
+	// Condition is the Deployment condition type that must be True.
+	// Defaults to "Available".
+	// +optional
+	Condition string `json:"condition,omitempty"`
 
 	// Name is the resource name. Defaults to the pipeline name when unset.
 	// +optional

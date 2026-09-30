@@ -14,86 +14,38 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
+	"errors"
 
 	"github.com/spf13/cobra"
-	"k8s.io/apimachinery/pkg/types"
-	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
-
-	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
 
-func newApproveCmd() *cobra.Command {
-	var envFlag string
+// errApproveRemoved is returned by `kardinal approve`. The command used to
+// label the Bundle kardinal.io/approved=true and report success, but nothing
+// ever read that label, so it never bypassed a gate.
+var errApproveRemoved = errors.New("kardinal approve is deprecated and has no effect: " +
+	"it only labelled the Bundle, and no gate ever read the label. " +
+	"To force-pass a gate with an audit record, run: " +
+	"kardinal override <pipeline> --stage <environment> --gate <gate-name> --reason <text>")
 
+func newApproveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "approve <bundle>",
-		Short: "Approve a Bundle for promotion, bypassing upstream gate requirements",
-		Long: `Approve a Bundle for promotion to a specific environment.
+		Short: "Deprecated: has no effect; use `kardinal override` to force-pass a gate",
+		Long: `Deprecated. approve used to label a Bundle kardinal.io/approved=true, but no
+gate, reconciler or CEL context reads that label, so it never bypassed anything.
+It now fails without changing the Bundle.
 
-Approval is expressed by patching the Bundle with the label
-kardinal.io/approved=true (and optionally kardinal.io/approved-for=<env>).
+To force-pass a PolicyGate with an audit record, use kardinal override:
 
-This is useful for hotfix deployments that must skip the normal
-upstream soak / gate requirements.
-
-Example:
-  kardinal approve nginx-demo-v1-29-0 --env prod`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, ns, err := buildClient()
-			if err != nil {
-				return fmt.Errorf("approve: %w", err)
-			}
-			return approveFn(cmd.OutOrStdout(), c, ns, args[0], envFlag)
+  kardinal override nginx-demo --stage prod --gate no-weekend-deploys \
+    --reason "hotfix for INC-123" --expires-in 1h`,
+		Deprecated: "it has no effect; use `kardinal override` to force-pass a gate",
+		Args:       cobra.ArbitraryArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return errApproveRemoved
 		},
 	}
-
-	cmd.Flags().StringVar(&envFlag, "env", "", "Target environment to approve for (optional)")
+	// Accepted so old scripts get the deprecation error, not a flag error.
+	cmd.Flags().String("env", "", "Ignored")
 	return cmd
-}
-
-// approveFn patches a Bundle with approval labels.
-func approveFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, bundleName, env string) error {
-	ctx := context.Background()
-
-	// Fetch the existing bundle to verify it exists.
-	var bundle v1alpha1.Bundle
-	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: bundleName}, &bundle); err != nil {
-		return fmt.Errorf("get bundle %q: %w", bundleName, err)
-	}
-
-	// Apply approval labels via a merge patch.
-	labels := map[string]string{
-		"kardinal.io/approved": "true",
-	}
-	if env != "" {
-		labels["kardinal.io/approved-for"] = env
-	}
-
-	patch := bundle.DeepCopy()
-	if patch.Labels == nil {
-		patch.Labels = make(map[string]string)
-	}
-	for k, v := range labels {
-		patch.Labels[k] = v
-	}
-
-	if err := c.Patch(ctx, patch, sigs_client.MergeFrom(&bundle)); err != nil {
-		return fmt.Errorf("patch bundle %q: %w", bundleName, err)
-	}
-
-	if env != "" {
-		if _, err := fmt.Fprintf(w, "Bundle %q approved for %q.\n  Label: kardinal.io/approved=true, kardinal.io/approved-for=%s\n  To track: kardinal explain %s --env %s\n",
-			bundleName, env, env, bundle.Spec.Pipeline, env); err != nil {
-			return fmt.Errorf("write: %w", err)
-		}
-	} else {
-		if _, err := fmt.Fprintf(w, "Bundle %q approved.\n  Label: kardinal.io/approved=true\n  To track: kardinal explain %s\n",
-			bundleName, bundle.Spec.Pipeline); err != nil {
-			return fmt.Errorf("write: %w", err)
-		}
-	}
-	return nil
 }
