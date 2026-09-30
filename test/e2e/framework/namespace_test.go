@@ -23,7 +23,7 @@ func TestNamespaceFor(t *testing.T) {
 		long,
 		long + "x",
 	} {
-		got := namespaceFor(in)
+		got := namespaceFor(in, "n1")
 		assert.LessOrEqual(t, len(got), 63, got)
 		assert.Regexp(t, dns1123Label, got)
 		assert.True(t, strings.HasPrefix(got, "e2e-"), got)
@@ -32,5 +32,6 @@ func TestNamespaceFor(t *testing.T) {
 		}
 		names[got] = in
 	}
-	assert.Equal(t, namespaceFor("TestX"), namespaceFor("TestX"), "must be stable")
+	assert.Equal(t, namespaceFor("TestX", "a"), namespaceFor("TestX", "a"), "must be stable")
+	assert.NotEqual(t, namespaceFor("TestX", "a"), namespaceFor("TestX", "b"), "a new nonce gives a new name")
 }

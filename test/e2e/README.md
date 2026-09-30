@@ -1,0 +1,66 @@
+# Live e2e tests
+
+`test/e2e/live` runs kardinal against real components on a kind cluster: a
+real git server, a real GitOps engine, real workloads, and the controller and
+CLI built from the checkout. Nothing is faked.
+
+## Run a suite
+
+```bash
+make e2e-up SUITE=core        # kind cluster kardinal-e2e-core + components (~5 min cold)
+make test-e2e-live SUITE=core # the suite's tests
+make e2e-down SUITE=core
+```
+
+`make e2e-up` is idempotent: re-run it after changing the controller to
+rebuild and redeploy it. It writes `test/e2e/results/kardinal-e2e-<suite>/env`
+(git server URLs and tokens, mode 0600), which `make test-e2e-live` sources.
+
+On hosts where `docker build` can't download Go modules, set
+`KARDINAL_E2E_BUILD=host` to build the controller binary on the host instead.
+
+`make test-e2e-live` fails when a test fails or skips, or when no test ran,
+and keeps the `go test -json` stream in `test/e2e/results/<cluster>/test.json`.
+`COUNT=3` repeats every test. `make e2e-up KIND_K8S=1.37` picks the
+Kubernetes minor (one of the `KIND_NODE_*` images in `hack/tool-versions.env`;
+the default is `test/e2e/kind-config.yaml`'s). Use the kind version pinned
+there: older kind releases can't boot its node images.
+
+CI (`.github/workflows/e2e-live.yml`) runs every suite on every pull request,
+the core suite on each of the three Kubernetes minors. A weekly run repeats
+every test three times to find flakes. The `e2e live` check passes when every suite
+passed.
+
+| Suite | Components | Tests |
+|---|---|---|
+| `core` | Forgejo, Argo CD | `TestCore_*` |
+| `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*` |
+
+## Rules
+
+- **A live test never skips.** A missing cluster, component or credential
+  fails the test. CI treats a skipped test as a failure too.
+- **Each test owns its state.** `Env.Namespace` gives the test its own
+  namespace and `Env.Repo` its own repo (a branch of one shared repo on
+  GitHub), so tests run in any order and never see each other's PRs.
+- **Wait on conditions, not time.** Use `framework.Eventually`,
+  `WaitStepState` (fails fast when a step reaches a different terminal
+  state) and `Consistently` for "must not happen" checks. No `time.Sleep`.
+- **Assert what users see.** The Deployment runs the new image, the file in
+  git has the new tag, the PR has its labels and evidence, the Bundle ends
+  Verified. A PromotionStep state alone is not enough.
+- **Gates are checked both ways.** Show the promotion blocked while the gate
+  is closed, then allowed once it opens.
+- **On failure** the test writes the namespace's kardinal objects, events,
+  pod logs and the controller log to
+  `test/e2e/results/kardinal-e2e-<suite>/diagnostics/<namespace>/`. The
+  namespace is `e2e-<test name>-<hash>`, new on every run.
+  `KARDINAL_E2E_KEEP=1` keeps namespaces and repos for debugging.
+
+## Test app
+
+Fixtures deploy [podinfo](https://github.com/stefanprodan/podinfo) at pinned
+real tags (`fixtures.V1`..`V3`). It has a readiness probe and Prometheus
+metrics, so the same app drives health, canary and MetricCheck tests.
+`fixtures.BrokenTag` does not exist, which gives a rollout that never
+becomes Available.

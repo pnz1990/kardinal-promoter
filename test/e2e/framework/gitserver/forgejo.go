@@ -114,8 +114,32 @@ func (f *forgejo) MergePR(ctx context.Context, r Repo, number int) error {
 }
 
 func (f *forgejo) ClosePR(ctx context.Context, r Repo, number int) error {
+	return f.setState(ctx, r, number, "closed")
+}
+
+func (f *forgejo) ReopenPR(ctx context.Context, r Repo, number int) error {
+	return f.setState(ctx, r, number, "open")
+}
+
+func (f *forgejo) setState(ctx context.Context, r Repo, number int, state string) error {
 	return f.do(ctx, http.MethodPatch, fmt.Sprintf("%s/pulls/%d", f.repoPath(r), number),
-		map[string]string{"state": "closed"}, nil)
+		map[string]string{"state": state}, nil)
+}
+
+// Comments reads the PR's issue comments; Forgejo keeps PR conversation
+// comments on the issue with the same number.
+func (f *forgejo) Comments(ctx context.Context, r Repo, number int) ([]string, error) {
+	var comments []struct {
+		Body string `json:"body"`
+	}
+	if err := f.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d/comments", f.repoPath(r), number), nil, &comments); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(comments))
+	for _, c := range comments {
+		out = append(out, c.Body)
+	}
+	return out, nil
 }
 
 func (f *forgejo) AddWebhook(ctx context.Context, r Repo, hookURL, secret string) error {

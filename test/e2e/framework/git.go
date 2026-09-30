@@ -81,6 +81,45 @@ func (e *Env) WaitPR(t *testing.T, repo gitserver.Repo, timeout time.Duration, w
 	return found
 }
 
+// WaitPRState waits until PR number on repo is in state (open, closed or
+// merged) and returns it.
+func (e *Env) WaitPRState(t *testing.T, repo gitserver.Repo, number int, state string, timeout time.Duration) gitserver.PR {
+	t.Helper()
+	var found gitserver.PR
+	Eventually(t, timeout, fmt.Sprintf("PR #%d to be %s", number, state), func(ctx context.Context) (bool, string) {
+		prs, err := e.Git.PullRequests(ctx, repo)
+		if err != nil {
+			return false, err.Error()
+		}
+		for _, pr := range prs {
+			if pr.Number == number {
+				found = pr
+				return pr.State == state, "state=" + pr.State
+			}
+		}
+		return false, describePRs(prs)
+	})
+	return found
+}
+
+// PRComments returns the bodies of PR number's comments that contain substr.
+func (e *Env) PRComments(t *testing.T, repo gitserver.Repo, number int, substr string) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	all, err := e.Git.Comments(ctx, repo, number)
+	if err != nil {
+		t.Fatalf("comments of PR #%d: %v", number, err)
+	}
+	var hits []string
+	for _, c := range all {
+		if strings.Contains(c, substr) {
+			hits = append(hits, c)
+		}
+	}
+	return hits
+}
+
 // ReadFile reads path at ref, failing the test on error.
 func (e *Env) ReadFile(t *testing.T, repo gitserver.Repo, ref, path string) string {
 	t.Helper()

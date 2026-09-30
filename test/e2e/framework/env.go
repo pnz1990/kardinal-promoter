@@ -11,6 +11,7 @@
 package framework
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,6 +25,8 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
+	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/framework/gitserver"
@@ -48,6 +51,10 @@ const (
 
 // ControllerNamespace is where hack/e2e/up.sh installs the controller.
 const ControllerNamespace = "kardinal-system"
+
+// The controller-runtime client logs nothing useful here, and without a
+// logger it prints a stack trace to warn that none was set.
+func init() { ctrllog.SetLogger(czap.New(czap.WriteTo(io.Discard))) }
 
 // Env holds the clients for the kind cluster named in KARDINAL_E2E_CONTEXT.
 type Env struct {

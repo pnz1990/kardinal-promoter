@@ -110,6 +110,31 @@ func (g *gitlab) ClosePR(ctx context.Context, r Repo, number int) error {
 		map[string]string{"state_event": "close"}, nil)
 }
 
+func (g *gitlab) ReopenPR(ctx context.Context, r Repo, number int) error {
+	return g.do(ctx, http.MethodPut, fmt.Sprintf("%s/merge_requests/%d", g.projectPath(r), number),
+		map[string]string{"state_event": "reopen"}, nil)
+}
+
+// Comments lists the MR's notes written by users; GitLab's own system notes
+// ("closed", "added label") are left out.
+func (g *gitlab) Comments(ctx context.Context, r Repo, number int) ([]string, error) {
+	var notes []struct {
+		Body   string `json:"body"`
+		System bool   `json:"system"`
+	}
+	if err := g.do(ctx, http.MethodGet, fmt.Sprintf("%s/merge_requests/%d/notes?sort=asc&order_by=created_at&per_page=100",
+		g.projectPath(r), number), nil, &notes); err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, n := range notes {
+		if !n.System {
+			out = append(out, n.Body)
+		}
+	}
+	return out, nil
+}
+
 // AddWebhook needs the instance setting allow_local_requests_from_web_hooks_and_services,
 // which hack/e2e/components/gitlab.sh turns on, to deliver to an in-cluster URL.
 func (g *gitlab) AddWebhook(ctx context.Context, r Repo, hookURL, secret string) error {

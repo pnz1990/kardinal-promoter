@@ -71,9 +71,10 @@ func TestForgejo(t *testing.T) {
 			{"number":1,"title":"a","state":"closed","merged":true,"head":{"ref":"kardinal/x"},"base":{"ref":"main"},"labels":[{"name":"kardinal"}]},
 			{"number":2,"title":"b","state":"open","head":{"ref":"kardinal/y"},"base":{"ref":"main"}},
 			{"number":3,"title":"c","state":"open","head":{"ref":"z"},"base":{"ref":"other"}}]`,
-		"POST /api/v1/repos/e2e/r/pulls/2/merge": `{}`,
-		"PATCH /api/v1/repos/e2e/r/pulls/2":      `{}`,
-		"POST /api/v1/repos/e2e/r/hooks":         `{}`,
+		"POST /api/v1/repos/e2e/r/pulls/2/merge":    `{}`,
+		"PATCH /api/v1/repos/e2e/r/pulls/2":         `{}`,
+		"POST /api/v1/repos/e2e/r/hooks":            `{}`,
+		"GET /api/v1/repos/e2e/r/issues/2/comments": `[{"body":"one"},{"body":"two"}]`,
 	})
 	s := server(t, "gitea", srv.URL, "")
 	assert.Equal(t, "gitea", s.Kind())
@@ -99,6 +100,11 @@ func TestForgejo(t *testing.T) {
 	require.NoError(t, s.MergePR(ctx, r, 2))
 	require.NoError(t, s.ClosePR(ctx, r, 2))
 	assert.Equal(t, "closed", f.bodies["PATCH /api/v1/repos/e2e/r/pulls/2"]["state"])
+	require.NoError(t, s.ReopenPR(ctx, r, 2))
+	assert.Equal(t, "open", f.bodies["PATCH /api/v1/repos/e2e/r/pulls/2"]["state"])
+	comments, err := s.Comments(ctx, r, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "two"}, comments)
 	require.NoError(t, s.AddWebhook(ctx, r, "http://hook", "sec"))
 	assert.Equal(t, "gitea", f.bodies["POST /api/v1/repos/e2e/r/hooks"]["type"])
 
@@ -118,6 +124,8 @@ func TestGitLab(t *testing.T) {
 		"PUT /api/v4/projects/e2e%2Fr/merge_requests/4/merge": `{}`,
 		"PUT /api/v4/projects/e2e%2Fr/merge_requests/4":       `{}`,
 		"POST /api/v4/projects/e2e%2Fr/hooks":                 `{}`,
+		"GET /api/v4/projects/e2e%2Fr/merge_requests/4/notes?sort=asc&order_by=created_at&per_page=100": `[
+			{"body":"closed","system":true},{"body":"kardinal says hi","system":false}]`,
 	})
 	s := server(t, "gitlab", srv.URL, "")
 
@@ -139,6 +147,11 @@ func TestGitLab(t *testing.T) {
 	require.NoError(t, s.MergePR(ctx, r, 4))
 	require.NoError(t, s.ClosePR(ctx, r, 4))
 	assert.Equal(t, "close", f.bodies["PUT /api/v4/projects/e2e%2Fr/merge_requests/4"]["state_event"])
+	require.NoError(t, s.ReopenPR(ctx, r, 4))
+	assert.Equal(t, "reopen", f.bodies["PUT /api/v4/projects/e2e%2Fr/merge_requests/4"]["state_event"])
+	comments, err := s.Comments(ctx, r, 4)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"kardinal says hi"}, comments, "system notes are left out")
 	require.NoError(t, s.AddWebhook(ctx, r, "http://hook", "sec"))
 	assert.Equal(t, "sec", f.bodies["POST /api/v4/projects/e2e%2Fr/hooks"]["token"])
 }
@@ -153,9 +166,10 @@ func TestGitHub(t *testing.T) {
 		"GET /repos/o/demo/pulls?state=all&base=e2e%2Fr&per_page=100&page=1": `[
 			{"number":8,"state":"open","head":{"ref":"kardinal/a"},"base":{"ref":"e2e/r"}},
 			{"number":9,"state":"closed","merged_at":"2026-09-30T00:00:00Z","head":{"ref":"kardinal/b"},"base":{"ref":"e2e/r"}}]`,
-		"PATCH /repos/o/demo/pulls/8":                    `{}`,
-		"DELETE /repos/o/demo/git/refs/heads/kardinal/a": `{}`,
-		"DELETE /repos/o/demo/git/refs/heads/e2e/r":      `{}`,
+		"PATCH /repos/o/demo/pulls/8":                      `{}`,
+		"DELETE /repos/o/demo/git/refs/heads/kardinal/a":   `{}`,
+		"DELETE /repos/o/demo/git/refs/heads/e2e/r":        `{}`,
+		"GET /repos/o/demo/issues/8/comments?per_page=100": `[{"body":"c"}]`,
 	})
 	s := server(t, "github", srv.URL, "o/demo")
 
@@ -176,6 +190,12 @@ func TestGitHub(t *testing.T) {
 	require.Len(t, prs, 2)
 	assert.Equal(t, "open", prs[0].State)
 	assert.Equal(t, "merged", prs[1].State)
+
+	require.NoError(t, s.ReopenPR(ctx, r, 8))
+	assert.Equal(t, "open", f.bodies["PATCH /repos/o/demo/pulls/8"]["state"])
+	comments, err := s.Comments(ctx, r, 8)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c"}, comments)
 
 	assert.ErrorIs(t, s.AddWebhook(ctx, r, "u", "s"), ErrNoWebhookDelivery)
 

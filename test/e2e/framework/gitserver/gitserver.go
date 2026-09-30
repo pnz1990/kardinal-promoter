@@ -69,6 +69,10 @@ type Server interface {
 	PullRequests(ctx context.Context, r Repo) ([]PR, error)
 	MergePR(ctx context.Context, r Repo, number int) error
 	ClosePR(ctx context.Context, r Repo, number int) error
+	// ReopenPR reopens a closed, unmerged PR.
+	ReopenPR(ctx context.Context, r Repo, number int) error
+	// Comments lists the bodies of the PR's conversation comments, oldest first.
+	Comments(ctx context.Context, r Repo, number int) ([]string, error)
 	// AddWebhook registers a pull request webhook signed with secret.
 	AddWebhook(ctx context.Context, r Repo, url, secret string) error
 }

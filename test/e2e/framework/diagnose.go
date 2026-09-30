@@ -25,11 +25,11 @@ var diagnosedGroups = []string{"kardinal.io", "kro.run"}
 var logNamespaces = []string{ControllerNamespace, "kro-system"}
 
 // Diagnose writes the state a failed test needs for debugging to
-// $KARDINAL_E2E_ARTIFACTS/<test>/: every kardinal.io and kro.run object in
+// $KARDINAL_E2E_ARTIFACTS/<ns>/: every kardinal.io and kro.run object in
 // ns, the namespace's events, and the controller and kro logs.
 func (e *Env) Diagnose(t *testing.T, ns string) {
 	t.Helper()
-	dir := filepath.Join(artifactsDir(), namespaceFor(t.Name()))
+	dir := filepath.Join(artifactsDir(), ns)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Logf("diagnostics: %v", err)
 		return

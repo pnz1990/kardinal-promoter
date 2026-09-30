@@ -8,8 +8,8 @@ This guide covers installing kardinal-promoter in a Kubernetes cluster using Hel
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Kubernetes | ≥ 1.28 | kind, EKS, GKE, or any conformant cluster |
-| kubectl | ≥ 1.28 | Matches your cluster version |
+| Kubernetes | ≥ 1.30 | kind, EKS, GKE, or any conformant cluster. kro's Graph CRD does not install on 1.29 or older; CI tests 1.35, 1.36 and 1.37 |
+| kubectl | ≥ 1.30 | Within one minor of your cluster |
 | Helm | ≥ 3.12 | `brew install helm` |
 | GitHub token | — | Personal access token with `repo` scope |
 | kro | ≥ 0.10.0-rc.0 | Graph controller with the `GraphKind` feature gate — see [Install kro](#install-kro) |

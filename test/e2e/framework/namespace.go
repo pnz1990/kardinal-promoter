@@ -5,6 +5,7 @@ package framework
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -32,7 +33,11 @@ var nonSlug = regexp.MustCompile(`[^a-z0-9-]+`)
 func (e *Env) Namespace(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	name := namespaceFor(t.Name())
+	nonce := make([]byte, 4)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("namespace nonce: %v", err)
+	}
+	name := namespaceFor(t.Name(), hex.EncodeToString(nonce))
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:   name,
@@ -77,9 +82,11 @@ func (e *Env) Namespace(t *testing.T) string {
 }
 
 // namespaceFor turns a test name into a namespace name: a readable prefix
-// plus a hash of the full name, at most 63 characters.
-func namespaceFor(testName string) string {
-	sum := sha256.Sum256([]byte(testName))
+// plus a hash of the full name and nonce, at most 63 characters. The nonce
+// makes every run's name new, so a run never meets the previous run's
+// namespace while it terminates (or its repo, with KARDINAL_E2E_KEEP=1).
+func namespaceFor(testName, nonce string) string {
+	sum := sha256.Sum256([]byte(testName + "\x00" + nonce))
 	suffix := hex.EncodeToString(sum[:])[:8]
 	base := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(testName), "-"), "-")
 	if max := 63 - len("e2e--") - len(suffix); len(base) > max {

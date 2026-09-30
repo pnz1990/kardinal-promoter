@@ -158,8 +158,30 @@ func (g *github) MergePR(ctx context.Context, _ Repo, number int) error {
 }
 
 func (g *github) ClosePR(ctx context.Context, _ Repo, number int) error {
+	return g.setState(ctx, number, "closed")
+}
+
+func (g *github) ReopenPR(ctx context.Context, _ Repo, number int) error {
+	return g.setState(ctx, number, "open")
+}
+
+func (g *github) setState(ctx context.Context, number int, state string) error {
 	return g.do(ctx, http.MethodPatch, fmt.Sprintf("%s/pulls/%d", g.repoPath(), number),
-		map[string]string{"state": "closed"}, nil)
+		map[string]string{"state": state}, nil)
+}
+
+func (g *github) Comments(ctx context.Context, _ Repo, number int) ([]string, error) {
+	var comments []struct {
+		Body string `json:"body"`
+	}
+	if err := g.do(ctx, http.MethodGet, fmt.Sprintf("%s/issues/%d/comments?per_page=100", g.repoPath(), number), nil, &comments); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(comments))
+	for _, c := range comments {
+		out = append(out, c.Body)
+	}
+	return out, nil
 }
 
 func (g *github) AddWebhook(context.Context, Repo, string, string) error {
