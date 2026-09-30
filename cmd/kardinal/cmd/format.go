@@ -91,11 +91,16 @@ func stepStatePriority(state string) int {
 	}
 }
 
-// FormatPipelineTableFull writes a table of pipelines to w. steps (any
-// namespaces) give the per-environment state and the active bundle. When subs
-// is non-nil a SUB column counts the Watching Subscriptions per pipeline.
-// showNamespace prepends a NAMESPACE column (--all-namespaces).
-func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, subs []v1alpha1.Subscription, showNamespace bool) error {
+// FormatPipelineTableFull writes a table of pipelines to w. Each environment
+// column shows the state of that environment's current Bundle, the Bundle
+// explain and status describe there (currentBundleByEnv), and BUNDLE is the
+// newest of those Bundles. bundles, steps and gates may span namespaces and
+// pipelines. When subs is non-nil a SUB column counts the Watching
+// Subscriptions per pipeline. showNamespace prepends a NAMESPACE column
+// (--all-namespaces).
+func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, bundles []v1alpha1.Bundle,
+	steps []v1alpha1.PromotionStep, gates []v1alpha1.PolicyGate, subs []v1alpha1.Subscription,
+	showNamespace bool) error {
 	var subCount map[string]int
 	if subs != nil {
 		// namespace/pipeline → count of active Subscriptions (Phase=="Watching").
@@ -109,56 +114,110 @@ func FormatPipelineTableFull(w io.Writer, pipelines []v1alpha1.Pipeline, steps [
 			}
 		}
 	}
-	return formatPipelineTableInternal(w, pipelines, steps, subCount, showNamespace)
+	return formatPipelineTableInternal(w, pipelines, pipelineEnvStates(bundles, steps, gates), subCount, showNamespace)
 }
 
-// formatPipelineTableInternal renders the pipeline table. subCount maps
+// pipelineRow is the table content of one pipeline: its current Bundle and
+// the state of each environment.
+type pipelineRow struct {
+	bundle string
+	envs   map[string]string
+}
+
+// pipelineEnvStates returns, per namespace/pipeline, the BUNDLE and
+// per-environment states of the pipeline table (E2E-R17). An environment
+// shows its current Bundle's step state (the highest stepStatePriority over
+// the Bundle's region steps there; an unstarted step is Pending), or
+// "Waiting" when the current Bundle has no step there yet: it is held by a
+// gate or has not reached the environment, and another Bundle's state there
+// would describe a Bundle that is no longer current. BUNDLE is the newest
+// current Bundle over all environments (lifecycle.CompareCreation).
+func pipelineEnvStates(bundles []v1alpha1.Bundle, steps []v1alpha1.PromotionStep,
+	gates []v1alpha1.PolicyGate) map[string]pipelineRow {
+	type group struct {
+		bundles []v1alpha1.Bundle
+		steps   []v1alpha1.PromotionStep
+		gates   []v1alpha1.PolicyGate
+	}
+	groups := make(map[string]*group)
+	get := func(ns, pipeline string) *group {
+		key := ns + "/" + pipeline
+		if groups[key] == nil {
+			groups[key] = &group{}
+		}
+		return groups[key]
+	}
+	for i := range bundles {
+		if bundles[i].Spec.Pipeline != "" {
+			g := get(bundles[i].Namespace, bundles[i].Spec.Pipeline)
+			g.bundles = append(g.bundles, bundles[i])
+		}
+	}
+	for i := range steps {
+		if steps[i].Spec.PipelineName != "" {
+			g := get(steps[i].Namespace, steps[i].Spec.PipelineName)
+			g.steps = append(g.steps, steps[i])
+		}
+	}
+	for i := range gates {
+		if p := gates[i].Labels["kardinal.io/pipeline"]; p != "" {
+			g := get(gates[i].Namespace, p)
+			g.gates = append(g.gates, gates[i])
+		}
+	}
+
+	out := make(map[string]pipelineRow, len(groups))
+	for key, g := range groups {
+		current := currentBundleByEnv(g.bundles, g.steps, g.gates)
+		if len(current) == 0 {
+			continue
+		}
+		byName := make(map[string]*v1alpha1.Bundle, len(g.bundles))
+		for i := range g.bundles {
+			byName[g.bundles[i].Name] = &g.bundles[i]
+		}
+		row := pipelineRow{envs: make(map[string]string, len(current))}
+		var newest *v1alpha1.Bundle
+		for env, name := range current {
+			row.envs[env] = "Waiting"
+			if b := byName[name]; newest == nil || lifecycle.CompareCreation(b, newest) > 0 {
+				newest = b
+			}
+		}
+		row.bundle = newest.Name
+		best := make(map[string]int)
+		for i := range g.steps {
+			s := &g.steps[i]
+			env := s.Spec.Environment
+			if name, ok := current[env]; !ok || s.Spec.BundleName != name {
+				continue
+			}
+			state := s.Status.State
+			if state == "" {
+				state = "Pending"
+			}
+			if p, seen := best[env]; !seen || stepStatePriority(state) > p {
+				best[env] = stepStatePriority(state)
+				row.envs[env] = state
+			}
+		}
+		out[key] = row
+	}
+	return out
+}
+
+// formatPipelineTableInternal renders the pipeline table. rows maps
+// namespace/pipeline → its current Bundle and environment states; a pipeline
+// or environment without an entry shows "-". subCount maps
 // namespace/pipeline → active subscription count; nil means no SUB column.
-func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, steps []v1alpha1.PromotionStep, subCount map[string]int, showNamespace bool) error {
+func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, rows map[string]pipelineRow,
+	subCount map[string]int, showNamespace bool) error {
 	if len(pipelines) == 0 {
 		_, _ = fmt.Fprintln(w, "No pipelines found.")
 		_, _ = fmt.Fprintln(w, "  To get started, apply a Pipeline CRD:")
 		_, _ = fmt.Fprintln(w, "    kubectl apply -f examples/quickstart/pipeline.yaml")
 		_, _ = fmt.Fprintln(w, "  Or check CRD installation with: kardinal doctor")
 		return nil
-	}
-	// When multiple PromotionSteps exist for the same pipeline+env (from different
-	// bundles), prefer the one with the highest state priority, then most recently
-	// created.
-	type envState struct {
-		state      string
-		bundleName string
-		priority   int
-		createdAt  time.Time
-	}
-	// pipelineEnvMap[namespace/pipelineName][envName] = envState
-	pipelineEnvMap := make(map[string]map[string]envState)
-	for _, s := range steps {
-		env := s.Spec.Environment
-		if s.Spec.PipelineName == "" || env == "" {
-			continue
-		}
-		pipe := s.Namespace + "/" + s.Spec.PipelineName
-		if _, ok := pipelineEnvMap[pipe]; !ok {
-			pipelineEnvMap[pipe] = make(map[string]envState)
-		}
-		state := s.Status.State
-		if state == "" {
-			state = "Pending"
-		}
-		priority := stepStatePriority(state)
-		existing, hasExisting := pipelineEnvMap[pipe][env]
-		// Replace if: higher priority, or same priority + more recent step.
-		if !hasExisting ||
-			priority > existing.priority ||
-			(priority == existing.priority && s.CreationTimestamp.After(existing.createdAt)) {
-			pipelineEnvMap[pipe][env] = envState{
-				state:      state,
-				bundleName: s.Spec.BundleName,
-				priority:   priority,
-				createdAt:  s.CreationTimestamp.Time,
-			}
-		}
 	}
 
 	// Collect all environment names in spec order across all pipelines so that
@@ -195,28 +254,9 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, ste
 	}
 
 	for _, p := range pipelines {
-		// Determine active bundle version.
-		// Pick the bundle name from the highest-priority step across all environments.
-		// This ensures the most-active bundle (Promoting > Verified > Failed) is shown,
-		// not an older superseded bundle that happens to be Verified.
-		bundleDisplay := "-"
-		var bestPriority int
-		var bestCreatedAt time.Time
 		pipelineKey := p.Namespace + "/" + p.Name
-		if envMap, ok := pipelineEnvMap[pipelineKey]; ok {
-			for _, est := range envMap {
-				if est.bundleName == "" {
-					continue
-				}
-				if bundleDisplay == "-" ||
-					est.priority > bestPriority ||
-					(est.priority == bestPriority && est.createdAt.After(bestCreatedAt)) {
-					bundleDisplay = est.bundleName
-					bestPriority = est.priority
-					bestCreatedAt = est.createdAt
-				}
-			}
-		}
+		pr := rows[pipelineKey]
+		bundleDisplay := orDash(pr.bundle)
 
 		// Build the row. Append [PAUSED] to the pipeline name when the pipeline
 		// has spec.paused=true so operators immediately see the frozen state.
@@ -229,13 +269,7 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, ste
 			row = fmt.Sprintf("%s\t%s\t%s", p.Namespace, pipelineDisplay, bundleDisplay)
 		}
 		for _, env := range envOrder {
-			state := "-"
-			if envMap, ok := pipelineEnvMap[pipelineKey]; ok {
-				if est, ok := envMap[env]; ok {
-					state = est.state
-				}
-			}
-			row += "\t" + state
+			row += "\t" + orDash(pr.envs[env])
 		}
 		if subCount != nil {
 			row += "\t" + fmt.Sprintf("%d", subCount[pipelineKey])

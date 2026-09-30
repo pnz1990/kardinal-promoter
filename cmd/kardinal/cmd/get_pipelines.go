@@ -71,6 +71,13 @@ func newGetPipelinesCmd() *cobra.Command {
 		Short:       "List Pipelines",
 		Long: `List Pipelines and their per-environment promotion status.
 
+Each environment column shows the state of the current bundle there: the
+newest bundle that is not Superseded and has a PromotionStep there, or a gate
+instance there and has not failed (the bundle kardinal status and kardinal
+explain describe). Waiting means that bundle has no PromotionStep there yet:
+it is held by a PolicyGate or has not reached the environment. BUNDLE is the
+newest of those bundles. A dash means no bundle has been in the environment.
+
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
 
 When a Bundle promotion fails (e.g. due to an invalid dependsOn reference
@@ -122,30 +129,7 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 		return fmt.Errorf("list pipelines: %w", err)
 	}
 
-	// Fetch PromotionSteps in the same namespace(s) for per-environment status columns.
-	var promotionSteps v1alpha1.PromotionStepList
-	if err := c.List(ctx, &promotionSteps, opts...); err != nil {
-		// Non-fatal: fall back to empty step list (env columns will show "-").
-		promotionSteps.Items = nil
-	}
-
-	// Fetch Subscriptions for the SUB column. On error: pass nil to omit the column
-	// rather than showing misleading zeros.
-	var subsItems []v1alpha1.Subscription
-	var subsList v1alpha1.SubscriptionList
-	if err := c.List(ctx, &subsList, opts...); err == nil {
-		subsItems = subsList.Items
-	}
-
-	// Fetch Bundles so we can surface Failed-phase error conditions after the table.
-	// Non-fatal: if the list fails, we still render the table without error notices.
-	var bundlesItems []v1alpha1.Bundle
-	var bundlesList v1alpha1.BundleList
-	if err := c.List(ctx, &bundlesList, opts...); err == nil {
-		bundlesItems = bundlesList.Items
-	}
-
-	// If a specific name was given, filter pipelines (and the bundle list to match).
+	// If a specific name was given, filter pipelines.
 	items := pipelines.Items
 	if len(args) == 1 {
 		name := args[0]
@@ -156,15 +140,6 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 			}
 		}
 		items = filtered
-
-		// Also filter bundles to only those belonging to this pipeline.
-		var filteredBundles []v1alpha1.Bundle
-		for _, b := range bundlesItems {
-			if b.Spec.Pipeline == name {
-				filteredBundles = append(filteredBundles, b)
-			}
-		}
-		bundlesItems = filteredBundles
 	}
 
 	switch OutputFormat() {
@@ -173,8 +148,41 @@ func getPipelinesOnce(w io.Writer, c sigs_client.Client, ns string, args []strin
 	case "yaml":
 		return WriteYAML(w, items)
 	default:
-		if err := FormatPipelineTableFull(w, items, promotionSteps.Items, subsItems, allNamespaces); err != nil {
+		// The environment columns come from each environment's current
+		// Bundle, which needs the Bundles, their PromotionSteps and their
+		// gate instances; without any of them the table would show another
+		// Bundle's state, so a list failure is an error.
+		var steps v1alpha1.PromotionStepList
+		if err := c.List(ctx, &steps, opts...); err != nil {
+			return fmt.Errorf("list promotion steps: %w", err)
+		}
+		var bundles v1alpha1.BundleList
+		if err := c.List(ctx, &bundles, opts...); err != nil {
+			return fmt.Errorf("list bundles: %w", err)
+		}
+		var gates v1alpha1.PolicyGateList
+		if err := c.List(ctx, &gates, opts...); err != nil {
+			return fmt.Errorf("list policy gates: %w", err)
+		}
+		// Fetch Subscriptions for the SUB column. On error: pass nil to omit
+		// the column rather than showing misleading zeros.
+		var subsItems []v1alpha1.Subscription
+		var subsList v1alpha1.SubscriptionList
+		if err := c.List(ctx, &subsList, opts...); err == nil {
+			subsItems = subsList.Items
+		}
+		if err := FormatPipelineTableFull(w, items, bundles.Items, steps.Items, gates.Items, subsItems, allNamespaces); err != nil {
 			return err
+		}
+		// Bundle errors are listed for the shown pipelines only.
+		bundlesItems := bundles.Items
+		if len(args) == 1 {
+			bundlesItems = nil
+			for _, b := range bundles.Items {
+				if b.Spec.Pipeline == args[0] {
+					bundlesItems = append(bundlesItems, b)
+				}
+			}
 		}
 		// Surface Bundle-level errors (e.g. dependsOn validation failures) that
 		// would otherwise be invisible in the table. Non-fatal: ignore write errors

@@ -304,3 +304,55 @@ func TestGetPipelinesOnce_HealthyBundles_NoErrorSection(t *testing.T) {
 	out := buf.String()
 	assert.NotContains(t, out, "ERROR:", "no ERROR: section expected when bundles are healthy")
 }
+
+// E2E-R17: get pipelines reads the Bundles and gate instances as well as the
+// steps, so a bundle held at prod by a gate shows Waiting there, not the
+// older bundle's Verified, and BUNDLE names the held bundle.
+func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
+	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
+	tests := []struct {
+		name string
+		objs []sigs_client.Object
+		want map[string]string
+	}{
+		{
+			name: "newer bundle failed at the first env",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old), explainBundle("b2", "Failed", recent),
+				explainStep("demo", "b1", "test", "Verified", "", old),
+				explainStep("demo", "b1", "prod", "Verified", "", old),
+				explainStep("demo", "b2", "test", "Failed", "", recent),
+			},
+			want: map[string]string{"BUNDLE": "b2", "TEST": "Failed", "PROD": "Verified"},
+		},
+		{
+			name: "bundle held at prod by a gate",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old), explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b1", "test", "Verified", "", old),
+				explainStep("demo", "b1", "prod", "Verified", "", old),
+				explainStep("demo", "b2", "test", "Verified", "", recent),
+				explainGateInstance("demo", "b2", "prod", "require-uat-soak", "false", false, true, "soak 3m < 30m"),
+			},
+			want: map[string]string{"BUNDLE": "b2", "TEST": "Verified", "PROD": "Waiting"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := policyClient(t, append(tt.objs, policyPipeline("demo", "test", "prod"))...)
+			var buf bytes.Buffer
+			require.NoError(t, getPipelinesOnce(&buf, fc, "default", []string{"demo"}, false))
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			header := strings.Fields(lines[0])
+			cells := strings.Fields(lines[1])
+			require.Len(t, cells, len(header), buf.String())
+			row := map[string]string{}
+			for i, h := range header {
+				row[h] = cells[i]
+			}
+			for col, want := range tt.want {
+				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
+			}
+		})
+	}
+}

@@ -76,7 +76,7 @@ func TestFormatPipelineTable(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, steps, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, stepBundles(steps), steps, nil, nil, false))
 	out := buf.String()
 
 	// Header must have per-environment columns.
@@ -119,13 +119,38 @@ func TestFormatPipelineTable_NoSteps(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, nil, nil, false))
 	out := buf.String()
 
 	row := tableRow(t, out, "my-pipeline")
 	assert.Equal(t, map[string]string{
 		"PIPELINE": "my-pipeline", "BUNDLE": "-", "DEV": "-", "PROD": "-", "AGE": "5m",
 	}, row)
+}
+
+// stepBundles returns one Promoting Bundle per namespace and bundle name in
+// steps, created with the bundle's first step: the table describes Bundles
+// that exist, so fixtures that only list steps need their Bundles.
+func stepBundles(steps []v1alpha1.PromotionStep) []v1alpha1.Bundle {
+	var out []v1alpha1.Bundle
+	idx := map[string]int{}
+	for _, s := range steps {
+		key := s.Namespace + "/" + s.Spec.BundleName
+		if i, ok := idx[key]; ok {
+			if s.CreationTimestamp.Before(&out[i].CreationTimestamp) {
+				out[i].CreationTimestamp = s.CreationTimestamp
+			}
+			continue
+		}
+		idx[key] = len(out)
+		b := v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: s.Spec.BundleName, Namespace: s.Namespace, CreationTimestamp: s.CreationTimestamp},
+			Spec:       v1alpha1.BundleSpec{Pipeline: s.Spec.PipelineName, Type: "image"},
+		}
+		b.Status.Phase = "Promoting"
+		out = append(out, b)
+	}
+	return out
 }
 
 // tableRow returns the cells of the row whose first cell is first, keyed by
@@ -203,7 +228,7 @@ func TestFormatPipelineTable_MultiPipeline(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, steps, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, stepBundles(steps), steps, nil, nil, false))
 	out := buf.String()
 
 	// Union columns: TEST, PROD from app-a, STAGING from app-b.
@@ -419,7 +444,7 @@ func TestFormatPipelineTable_PausedBadge(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, nil, nil, false))
 	out := buf.String()
 
 	assert.Contains(t, out, "my-pipeline [PAUSED]", "paused pipeline must show [PAUSED] badge in name")
@@ -444,7 +469,7 @@ func TestFormatPipelineTable_NonPausedNoBadge(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, nil, nil, false))
 	out := buf.String()
 
 	assert.NotContains(t, out, "[PAUSED]", "non-paused pipeline must not show [PAUSED] badge")
@@ -513,7 +538,7 @@ func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, steps, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, stepBundles(steps), steps, nil, nil, false))
 	out := buf.String()
 
 	// The table MUST show the new (Promoting) bundle, not the old (Verified) bundle.
@@ -521,6 +546,107 @@ func TestFormatPipelineTable_ActiveBundlePrefersPromoting(t *testing.T) {
 		"table must show the active Promoting bundle, not the old Verified one")
 	assert.NotContains(t, out, "my-app-old",
 		"the old Verified bundle should not appear when a newer Promoting bundle exists")
+}
+
+// E2E-R17: each environment column shows the state of that environment's
+// current Bundle (currentBundleByEnv, as status and explain use), and BUNDLE
+// is the newest current Bundle. An environment whose current Bundle has no
+// step yet shows Waiting, not the state of an older Bundle deployed there.
+func TestFormatPipelineTable_CurrentBundleState(t *testing.T) {
+	now := time.Now()
+	old, recent := now.Add(-2*time.Hour), now.Add(-10*time.Minute)
+	pipelines := []v1alpha1.Pipeline{{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default", CreationTimestamp: metav1.NewTime(old)},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
+			{Name: "dev"}, {Name: "stage"}, {Name: "prod"},
+		}},
+	}}
+	bundle := func(name, phase string, created time.Time) v1alpha1.Bundle {
+		b := v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "app", Type: "image"},
+		}
+		b.Status.Phase = phase
+		return b
+	}
+	step := func(b, env, state string, created time.Time) v1alpha1.PromotionStep {
+		return v1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: b + "-" + env, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+			Spec:       v1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: b, Environment: env},
+			Status:     v1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	gate := func(b, env string) v1alpha1.PolicyGate {
+		return v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{
+			Name: b + "-" + env + "-soak", Namespace: "default",
+			Labels: map[string]string{
+				"kardinal.io/pipeline": "app", "kardinal.io/bundle": b,
+				"kardinal.io/environment": env, "kardinal.io/gate-name": "soak",
+			},
+		}}
+	}
+	b1Everywhere := []v1alpha1.PromotionStep{
+		step("app-b1", "dev", "Verified", old), step("app-b1", "stage", "Verified", old),
+		step("app-b1", "prod", "Verified", old),
+	}
+
+	tests := []struct {
+		name    string
+		bundles []v1alpha1.Bundle
+		steps   []v1alpha1.PromotionStep
+		gates   []v1alpha1.PolicyGate
+		want    map[string]string
+	}{
+		{
+			// scenA.log: B2 failed at the first env; the table said B1 and
+			// Verified there while status said Failed.
+			name:    "newer bundle failed at the first env",
+			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Failed", recent)},
+			steps:   append(b1Everywhere, step("app-b2", "dev", "Failed", recent)),
+			gates:   []v1alpha1.PolicyGate{gate("app-b2", "prod")},
+			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Failed", "STAGE": "Verified", "PROD": "Verified"},
+		},
+		{
+			// j1-happy.log: B2 held at prod by a not-ready gate; the older
+			// bundle's Verified was shown next to BUNDLE B2.
+			name:    "bundle held at prod by a gate, older bundle Verified there",
+			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent)},
+			steps: append(b1Everywhere,
+				step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Verified", recent)),
+			gates: []v1alpha1.PolicyGate{gate("app-b2", "prod")},
+			want:  map[string]string{"BUNDLE": "app-b2", "DEV": "Verified", "STAGE": "Verified", "PROD": "Waiting"},
+		},
+		{
+			name:    "held bundle over a Superseded bundle",
+			bundles: []v1alpha1.Bundle{bundle("app-b1", "Superseded", old), bundle("app-b2", "Promoting", recent)},
+			steps: append(b1Everywhere,
+				step("app-b2", "dev", "Verified", recent), step("app-b2", "stage", "Verified", recent)),
+			gates: []v1alpha1.PolicyGate{gate("app-b2", "prod")},
+			want:  map[string]string{"BUNDLE": "app-b2", "DEV": "Verified", "STAGE": "Verified", "PROD": "Waiting"},
+		},
+		{
+			name:    "unstarted step of the current bundle is Pending",
+			bundles: []v1alpha1.Bundle{bundle("app-b1", "Verified", old), bundle("app-b2", "Promoting", recent)},
+			steps:   append(b1Everywhere, step("app-b2", "dev", "", recent)),
+			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Pending", "STAGE": "Verified", "PROD": "Verified"},
+		},
+		{
+			name:    "steps of a deleted bundle are ignored",
+			bundles: []v1alpha1.Bundle{bundle("app-b2", "Promoting", recent)},
+			steps:   append(b1Everywhere, step("app-b2", "dev", "Promoting", recent)),
+			want:    map[string]string{"BUNDLE": "app-b2", "DEV": "Promoting", "STAGE": "-", "PROD": "-"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, tt.bundles, tt.steps, tt.gates, nil, false))
+			row := tableRow(t, buf.String(), "app")
+			for col, want := range tt.want {
+				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
+			}
+		})
+	}
 }
 
 // TestFormatStepsTable_OnePerEnvWhenMultipleBundles verifies that when multiple
@@ -600,7 +726,7 @@ func TestFormatPipelineTableFull_ShowNamespace(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, true))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, nil, nil, true))
 	out := buf.String()
 
 	assert.Contains(t, out, "NAMESPACE", "header must include NAMESPACE column when showNamespace=true")
@@ -626,7 +752,7 @@ func TestFormatPipelineTableFull_NoNamespaceByDefault(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, false))
+	require.NoError(t, cmd.FormatPipelineTableFull(&buf, pipelines, nil, nil, nil, nil, false))
 	out := buf.String()
 
 	assert.NotContains(t, out, "NAMESPACE", "default table must not include NAMESPACE column")
@@ -848,10 +974,11 @@ func TestFormatPipelineTableFull_AllNamespacesNoCrossTalk(t *testing.T) {
 		Status:     v1alpha1.SubscriptionStatus{Phase: "Watching"},
 	}
 
+	steps := []v1alpha1.PromotionStep{step("team-a", "web-a1", "Verified"), step("team-b", "web-b1", "Failed")}
 	var buf bytes.Buffer
 	require.NoError(t, cmd.FormatPipelineTableFull(&buf,
 		[]v1alpha1.Pipeline{pipe("team-a"), pipe("team-b")},
-		[]v1alpha1.PromotionStep{step("team-a", "web-a1", "Verified"), step("team-b", "web-b1", "Failed")},
+		stepBundles(steps), steps, nil,
 		[]v1alpha1.Subscription{sub}, true))
 
 	rows := map[string][]string{}

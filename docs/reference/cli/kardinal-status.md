@@ -15,7 +15,10 @@ pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps
 (one row per region, active steps marked), the PolicyGates holding it back
-(with CEL expression and current reason), and open PR URLs. This is the first
+(with CEL expression and current reason), and open PR URLs. A gate is listed
+as blocking only once the bundle has reached its environment: every upstream
+environment is Verified for that bundle and the gate is not ready. A gate of
+an environment the bundle has not reached yet is not listed. This is the first
 command to run when a promotion is stuck.
 
 Examples:

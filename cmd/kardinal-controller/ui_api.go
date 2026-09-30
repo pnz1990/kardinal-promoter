@@ -62,7 +62,9 @@ type uiPipelineResponse struct {
 	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
 
 	// Operations table columns (#462): derived from active Bundle + steps + gates.
-	// BlockerCount is the number of PolicyGates with ready=false for the active bundle.
+	// BlockerCount is the number of the active bundle's PolicyGates with
+	// ready=false in environments it has reached (every upstream Verified)
+	// but not started; see blockingGateCount.
 	BlockerCount int `json:"blockerCount,omitempty"`
 	// FailedStepCount is the number of PromotionSteps with state=Failed for the active bundle.
 	FailedStepCount int `json:"failedStepCount,omitempty"`
@@ -321,25 +323,8 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build per-pipeline blocker count from PolicyGates (ops table #462).
-	// Index: namespace/bundle → count of gates with ready=false.
-	var gateList v1alpha1.PolicyGateList
-	if err := s.client.List(r.Context(), &gateList); err != nil {
-		s.log.Error().Err(err).Msg("ui: list policy gates")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	blockersByBundle := make(map[string]int, len(gateList.Items))
-	for _, g := range gateList.Items {
-		if !g.Status.Ready {
-			bundleLabel := g.Labels["kardinal.io/bundle"]
-			if bundleLabel != "" {
-				blockersByBundle[g.Namespace+"/"+bundleLabel]++
-			}
-		}
-	}
-
-	// Build per-pipeline failed step count from PromotionSteps (ops table #462).
+	// PromotionSteps feed the failed step count and, with the gates, the
+	// blocker count (ops table #462). Index both by namespace/bundle.
 	var stepList v1alpha1.PromotionStepList
 	if err := s.client.List(r.Context(), &stepList); err != nil {
 		s.log.Error().Err(err).Msg("ui: list promotion steps")
@@ -347,10 +332,28 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	failedStepsByBundle := make(map[string]int, len(stepList.Items))
+	stepsByBundle := make(map[string][]v1alpha1.PromotionStep, len(stepList.Items))
 	for _, ps := range stepList.Items {
+		key := ps.Namespace + "/" + ps.Spec.BundleName
+		stepsByBundle[key] = append(stepsByBundle[key], ps)
 		// AbortedByAlarm is a failure too: the health alarm stopped the promotion.
 		if ps.Status.State == "Failed" || ps.Status.State == "AbortedByAlarm" {
-			failedStepsByBundle[ps.Namespace+"/"+ps.Spec.BundleName]++
+			failedStepsByBundle[key]++
+		}
+	}
+
+	// Index: namespace/bundle → the bundle's gate instances that are not ready.
+	var gateList v1alpha1.PolicyGateList
+	if err := s.client.List(r.Context(), &gateList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list policy gates")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	notReadyByBundle := make(map[string][]v1alpha1.PolicyGate)
+	for _, g := range gateList.Items {
+		if bundleLabel := g.Labels["kardinal.io/bundle"]; bundleLabel != "" && !g.Status.Ready {
+			key := g.Namespace + "/" + bundleLabel
+			notReadyByBundle[key] = append(notReadyByBundle[key], g)
 		}
 	}
 
@@ -387,7 +390,8 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				resp.EnvironmentStates = ab.envStates
 			}
 			// Ops table: blocker + failed step counts derived from active bundle.
-			if n := blockersByBundle[p.Namespace+"/"+ab.name]; n > 0 {
+			bundleKey := p.Namespace + "/" + ab.name
+			if n := blockingGateCount(&p, ab.bundle, notReadyByBundle[bundleKey], stepsByBundle[bundleKey]); n > 0 {
 				resp.BlockerCount = n
 			}
 			if n := failedStepsByBundle[p.Namespace+"/"+ab.name]; n > 0 {
@@ -406,6 +410,32 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		result = append(result, resp)
 	}
 	writeJSON(w, result)
+}
+
+// blockingGateCount counts the not-ready gate instances of bundle that hold it
+// back (E2E-R18): the gate's environment has no step of bundle yet, and the
+// bundle has reached it, every upstream environment Verified
+// (graph.UpstreamsVerified). A gate of an environment the bundle has not
+// reached cannot be the reason it is waiting, so it is not counted, and
+// neither is a gate of a Failed or Superseded bundle, which will not come.
+// kardinal status lists the same gates as Blocking Policy Gates.
+func blockingGateCount(p *v1alpha1.Pipeline, bundle *v1alpha1.Bundle, notReady []v1alpha1.PolicyGate,
+	steps []v1alpha1.PromotionStep) int {
+	if phase := bundle.Status.Phase; phase == "Failed" || phase == "Superseded" {
+		return 0
+	}
+	stepped := make(map[string]bool, len(steps))
+	for i := range steps {
+		stepped[steps[i].Spec.Environment] = true
+	}
+	n := 0
+	for _, g := range notReady {
+		env := g.Labels["kardinal.io/environment"]
+		if env != "" && !stepped[env] && graphpkg.UpstreamsVerified(p, bundle, env, steps) {
+			n++
+		}
+	}
+	return n
 }
 
 // handlePipelinesSubpath handles GET /api/v1/ui/pipelines/{name}/bundles.

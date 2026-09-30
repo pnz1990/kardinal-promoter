@@ -26,7 +26,10 @@ export interface Pipeline {
   /** #342: per-environment promotion phases from active Bundle status.
    * Keys are environment names, values are the promotion phase (Promoting, Verified, etc.) */
   environmentStates?: Record<string, string>
-  /** #462: number of PolicyGates with ready=false for the active bundle. */
+  /** #462: number of the active bundle's PolicyGates with ready=false in
+   *  environments it has reached (every upstream Verified) but not started:
+   *  the gates holding it back. Gates further down the pipeline are not
+   *  counted, so a bundle still promoting upstream reads Promoting (E2E-R18). */
   blockerCount?: number
   /** #462: number of PromotionSteps with state=Failed for the active bundle. */
   failedStepCount?: number

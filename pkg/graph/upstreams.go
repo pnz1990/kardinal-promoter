@@ -39,3 +39,45 @@ func DirectUpstreams(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alph
 	}
 	return filteredDeps(envName, deps, filteredSet), nil
 }
+
+// UpstreamsVerified reports whether the Graph Build generates for bundle has
+// released envName: every direct upstream environment (DirectUpstreams) has
+// the bundle's PromotionStep Verified. That is the upstream half of the gate
+// on envName's PromotionStep (verifiedCond); for a multi-region upstream every
+// region's step must exist and be Verified. A root environment is released.
+//
+// steps may hold PromotionSteps of any bundle; only those with
+// spec.bundleName == bundle.Name count. It returns false when envName is not
+// part of the bundle's promotion or the Pipeline ordering is invalid.
+func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	envName string, steps []kardinalv1alpha1.PromotionStep) bool {
+	ups, err := DirectUpstreams(pipeline, bundle, envName)
+	if err != nil {
+		return false
+	}
+	regions := make(map[string]int, len(pipeline.Spec.Environments))
+	for _, e := range pipeline.Spec.Environments {
+		regions[e.Name] = len(e.Regions)
+	}
+	for _, up := range ups {
+		want := regions[up]
+		if want < 2 {
+			want = 1
+		}
+		verified := 0
+		for i := range steps {
+			s := &steps[i]
+			if s.Spec.BundleName != bundle.Name || s.Spec.Environment != up {
+				continue
+			}
+			if s.Status.State != "Verified" {
+				return false
+			}
+			verified++
+		}
+		if verified < want {
+			return false
+		}
+	}
+	return true
+}

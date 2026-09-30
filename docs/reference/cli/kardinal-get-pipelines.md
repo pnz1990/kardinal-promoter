@@ -6,6 +6,13 @@ List Pipelines
 
 List Pipelines and their per-environment promotion status.
 
+Each environment column shows the state of the current bundle there: the
+newest bundle that is not Superseded and has a PromotionStep there, or a gate
+instance there and has not failed (the bundle kardinal status and kardinal
+explain describe). Waiting means that bundle has no PromotionStep there yet:
+it is held by a PolicyGate or has not reached the environment. BUNDLE is the
+newest of those bundles. A dash means no bundle has been in the environment.
+
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
 
 When a Bundle promotion fails (e.g. due to an invalid dependsOn reference
