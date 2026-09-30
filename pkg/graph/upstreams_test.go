@@ -244,3 +244,78 @@ func TestGateHolds(t *testing.T) {
 		})
 	}
 }
+
+// GateState is the state the UI API and kardinal explain share (E2E-R21):
+// only a gate that holds its bundle is Block; a gate the bundle has not
+// reached is Waiting, and a Superseded bundle's gates are Superseded.
+func TestGateState(t *testing.T) {
+	p := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
+			{Name: "test"}, {Name: "prod"},
+		}},
+	}
+	step := func(env, state string) kardinalv1alpha1.PromotionStep {
+		return kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-v1-" + env, Namespace: "default"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "app-v1", Environment: env},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	reached := []kardinalv1alpha1.PromotionStep{step("test", "Verified")}
+	notReached := []kardinalv1alpha1.PromotionStep{step("test", "HealthChecking")}
+	evaluated := metav1.Now()
+	tests := []struct {
+		name      string
+		phase     string // bundle phase; "gone" for no Bundle
+		noPipe    bool
+		template  bool // a gate template, no kardinal.io/bundle label
+		ready     bool
+		evaluated bool
+		steps     []kardinalv1alpha1.PromotionStep
+		want      string
+	}{
+		{name: "ready", phase: "Promoting", ready: true, evaluated: true, steps: reached, want: GateStatePass},
+		{name: "holding, evaluated", phase: "Promoting", evaluated: true, steps: reached, want: GateStateBlock},
+		{name: "holding, not evaluated yet", phase: "Promoting", steps: reached, want: GateStateBlock},
+		{name: "not reached, evaluated", phase: "Promoting", evaluated: true, steps: notReached, want: GateStateWaiting},
+		{name: "not reached, not evaluated yet", phase: "Promoting", steps: notReached, want: GateStatePending},
+		{name: "Failed bundle", phase: "Failed", evaluated: true, steps: reached, want: GateStateWaiting},
+		{name: "Superseded bundle", phase: "Superseded", evaluated: true, steps: reached, want: GateStateSuperseded},
+		{name: "Superseded bundle, not evaluated yet", phase: "Superseded", steps: notReached, want: GateStateSuperseded},
+		{name: "Superseded bundle, ready", phase: "Superseded", ready: true, steps: reached, want: GateStatePass},
+		{name: "Pipeline gone", phase: "Promoting", noPipe: true, evaluated: true, steps: reached, want: GateStateWaiting},
+		{name: "Bundle gone", phase: "gone", evaluated: true, steps: reached, want: GateStateWaiting},
+		{name: "template, evaluated", phase: "gone", template: true, evaluated: true, want: GateStateWaiting},
+		{name: "template, not evaluated", phase: "gone", template: true, want: GateStatePending},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b *kardinalv1alpha1.Bundle
+			if tt.phase != "gone" {
+				b = &kardinalv1alpha1.Bundle{
+					ObjectMeta: metav1.ObjectMeta{Name: "app-v1", Namespace: "default"},
+					Spec:       kardinalv1alpha1.BundleSpec{Pipeline: "app"},
+					Status:     kardinalv1alpha1.BundleStatus{Phase: tt.phase},
+				}
+			}
+			pipe := p
+			if tt.noPipe {
+				pipe = nil
+			}
+			labels := map[string]string{"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod"}
+			if tt.template {
+				labels = map[string]string{"kardinal.io/applies-to": "prod"}
+			}
+			g := &kardinalv1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-v1-prod-soak", Namespace: "default", Labels: labels},
+				Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "false"},
+				Status:     kardinalv1alpha1.PolicyGateStatus{Ready: tt.ready},
+			}
+			if tt.evaluated {
+				g.Status.LastEvaluatedAt = &evaluated
+			}
+			assert.Equal(t, tt.want, GateState(pipe, b, g, tt.steps))
+		})
+	}
+}

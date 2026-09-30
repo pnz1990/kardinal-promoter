@@ -85,7 +85,8 @@ func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 
 // GateHolds reports whether gate, a PolicyGate instance of bundle, is holding
 // the bundle's promotion back in the gate's environment. It is the one rule
-// for the UI API's blockerCount and kardinal status's blocking gates. The gate
+// for the UI API's blockerCount, kardinal status's blocking gates and the
+// Block state of GateState. The gate
 // must be not ready and the bundle still in flight (not Failed or Superseded),
 // and either:
 //   - the bundle has no PromotionStep in the environment and every upstream
@@ -122,4 +123,42 @@ func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bun
 		}
 	}
 	return !stepped && UpstreamsVerified(pipeline, bundle, env, steps)
+}
+
+// The states GateState gives a PolicyGate instance.
+const (
+	GateStatePass       = "Pass"
+	GateStateBlock      = "Block"
+	GateStateSuperseded = "Superseded"
+	GateStatePending    = "Pending"
+	GateStateWaiting    = "Waiting"
+)
+
+// GateState is the one state the UI API (bundle graph and gate list) and
+// kardinal explain show for gate, a PolicyGate instance of bundle:
+//   - Pass: ready.
+//   - Block: holds the bundle back (GateHolds), evaluated yet or not. Only
+//     these count as blocked.
+//   - Superseded: its bundle was superseded. That is final; the gate is not
+//     evaluated again.
+//   - Pending: not evaluated yet.
+//   - Waiting: evaluated not ready, but the bundle is not held here: it has not
+//     reached the environment, or it failed (a Failed bundle can retry).
+//
+// pipeline or bundle may be nil, when it is gone; nothing is held then. A gate
+// template (no kardinal.io/bundle label) holds nothing either.
+func GateState(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	gate *kardinalv1alpha1.PolicyGate, steps []kardinalv1alpha1.PromotionStep) string {
+	switch {
+	case gate.Status.Ready:
+		return GateStatePass
+	case pipeline != nil && bundle != nil && GateHolds(pipeline, bundle, gate, steps):
+		return GateStateBlock
+	case bundle != nil && bundle.Status.Phase == "Superseded":
+		return GateStateSuperseded
+	case gate.Status.LastEvaluatedAt == nil:
+		return GateStatePending
+	default:
+		return GateStateWaiting
+	}
 }

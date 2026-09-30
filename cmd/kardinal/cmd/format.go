@@ -260,23 +260,6 @@ func formatPipelineTableInternal(w io.Writer, pipelines []v1alpha1.Pipeline, row
 	return nil
 }
 
-// PolicyGatePhase derives the three-way display state for a PolicyGate:
-//   - "Pass"    — ready == true (expression evaluated to true)
-//   - "Block"   — ready == false AND lastEvaluatedAt is set (expression evaluated to false)
-//   - "Pending" — not yet evaluated (lastEvaluatedAt is nil)
-//
-// This function is the single source of truth for this derivation; both
-// explain.go and policy.go must call it rather than re-implementing the logic.
-func PolicyGatePhase(g v1alpha1.PolicyGate) string {
-	if g.Status.Ready {
-		return "Pass"
-	}
-	if g.Status.LastEvaluatedAt != nil {
-		return "Block"
-	}
-	return "Pending"
-}
-
 // FormatBundleErrors writes a plain-text error notice for each pipeline whose
 // newest Bundle that is not Superseded is Failed. A newer Bundle, promoting or
 // Verified, means the failure is history, so it is not reported (E2E-R16).

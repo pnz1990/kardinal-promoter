@@ -28,6 +28,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -51,6 +52,17 @@ shown. Gates include org
 gates from the policy namespaces and skip-permission gates: they are the
 instances the Graph created for that Bundle, with the controller's latest
 evaluation. Gates that are not ready are listed first.
+
+A gate's STATE is the one the UI shows, the first that applies:
+
+    Pass        ready
+    Block       holding the Bundle: every upstream environment is Verified
+                and the environment has no step yet, or a pre-deploy gate
+                holds the environment's Pending step
+    Superseded  the Bundle was superseded; the gate is not evaluated again
+    Pending     not evaluated yet
+    Waiting     evaluated not ready, not holding the Bundle: the Bundle has
+                not reached the environment, or it failed (it can retry)
 
 Use --env to filter to a specific environment.
 Use --watch to refresh every 3 seconds.
@@ -143,11 +155,15 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		state       string
 		reason      string
 		expression  string // CEL expression for PolicyGate rows (empty for Step rows)
-		notReady    bool   // a PolicyGate that is not ready: it holds the Bundle
+		notReady    bool   // a PolicyGate that is not ready (Block, Waiting, Pending or Superseded)
 	}
 
 	current := currentBundleByEnv(bundles.Items, steps.Items, gates.Items)
 	currentBundle := func(env string) string { return current[env] }
+	bundleByName := make(map[string]*v1alpha1.Bundle, len(bundles.Items))
+	for i := range bundles.Items {
+		bundleByName[bundles.Items[i].Name] = &bundles.Items[i]
+	}
 
 	var rows []explainRow
 	for _, s := range steps.Items {
@@ -193,7 +209,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 			environment: env,
 			kind:        "PolicyGate",
 			name:        gateDisplayName(g),
-			state:       PolicyGatePhase(g),
+			state:       graph.GateState(pipe, bundleByName[bundle], &g, steps.Items),
 			reason:      reason,
 			expression:  expr,
 			notReady:    !g.Status.Ready,
