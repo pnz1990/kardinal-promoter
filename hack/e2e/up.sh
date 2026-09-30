@@ -8,7 +8,7 @@
 # Re-running reuses the cluster and re-applies every component.
 #
 # Suites (test/e2e/README.md lists the tests each one runs):
-#   core    Forgejo + Argo CD
+#   core    Forgejo + Argo CD, webhook receiver, OCI registry, Bundle API
 #   gitea   Gitea + Argo CD
 #   delivery Forgejo + Argo CD + Argo Rollouts + Flagger
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
@@ -34,7 +34,7 @@ case "$SUITE" in
   # RUN is the go test -run pattern of the suite's tests; the prefix names
   # the area (test/e2e/README.md). Every git server suite runs the TestCore_
   # promotion tests against its server.
-  core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh)
+  core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh webhook-receiver.sh registry.sh ciapi.sh)
     RUN='^Test(Core|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_' ;;
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM)_' ;;
   delivery) COMPONENTS=("giteafamily.sh forgejo" argocd.sh rollouts.sh flagger.sh)
