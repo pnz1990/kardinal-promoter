@@ -503,8 +503,11 @@ type PipelinePolicyGateRef struct {
 
 // PipelineStatus defines the observed state of a Pipeline.
 type PipelineStatus struct {
-	// Phase is the overall pipeline phase.
-	// +kubebuilder:validation:Enum=Ready;Degraded;Unknown
+	// Phase is the overall pipeline phase: Promoting while a Bundle is in
+	// flight (also when a PolicyGate holds it), Degraded when the newest Bundle
+	// failed, Ready when the newest Bundle is Verified in every environment it
+	// reached, and Unknown before the first Bundle.
+	// +kubebuilder:validation:Enum=Ready;Degraded;Promoting;Unknown
 	// +kubebuilder:default=Unknown
 	Phase string `json:"phase,omitempty"`
 

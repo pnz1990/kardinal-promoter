@@ -214,7 +214,7 @@ func TestCheckGitHubToken(t *testing.T) {
 	}
 }
 
-// C09a-cli-11: pipeline phases are Ready, Degraded, Unknown; a Get error other
+// C09a-cli-11: pipeline phases are Ready, Degraded, Promoting, Unknown; a Get error other
 // than NotFound is reported as such.
 func TestCheckPipelineHealth(t *testing.T) {
 	pipe := func(phase string) *v1alpha1.Pipeline {
@@ -230,6 +230,8 @@ func TestCheckPipelineHealth(t *testing.T) {
 	}{
 		{name: "ready", client: doctorClient(pipe("Ready")), wantIcon: doctorPass, wantDetail: "status: Ready"},
 		{name: "degraded", client: doctorClient(pipe("Degraded")), wantIcon: doctorWarn, wantDetail: "status: Degraded"},
+		// E2E-R05: a Bundle in flight or held by a gate.
+		{name: "promoting", client: doctorClient(pipe("Promoting")), wantIcon: doctorPass, wantDetail: "status: Promoting"},
 		{name: "unknown", client: doctorClient(pipe("Unknown")), wantIcon: doctorWarn,
 			wantDetail: "status: Unknown (not yet reconciled)"},
 		{name: "unset", client: doctorClient(pipe("")), wantIcon: doctorWarn,

@@ -115,6 +115,22 @@ describe('PipelineList — pipeline items', () => {
     render(<PipelineList pipelines={pipelines} onSelect={vi.fn()} />)
     expect(screen.getByText(/4 envs/i)).toBeInTheDocument()
   })
+
+  // E2E-R05: "Idle" is only for phase Unknown (no bundle yet). A promoting
+  // pipeline that a PolicyGate holds reads "Blocked", in the amber of the
+  // fleet bar's Blocked badge.
+  it.each<[string, Partial<Pipeline>, string, string]>([
+    ['no bundle yet', { phase: 'Unknown' }, 'Idle', 'Unknown'],
+    ['a bundle promoting', { phase: 'Promoting' }, 'Promoting', 'Reconciling'],
+    ['a bundle held by a gate', { phase: 'Promoting', blockerCount: 1 }, 'Blocked', 'Reconciling'],
+    ['every environment verified', { phase: 'Ready' }, 'Ready', 'Ready'],
+    ['paused with a bundle held by a gate', { phase: 'Promoting', blockerCount: 1, paused: true }, 'Paused', 'Paused'],
+  ])('phase chip for %s', (_, overrides, label, health) => {
+    const { container } = render(<PipelineList pipelines={[makePipeline(overrides)]} onSelect={vi.fn()} />)
+    const chip = container.querySelector('.health-chip')
+    expect(chip?.textContent).toBe(label)
+    expect(chip).toHaveAttribute('data-health-state', health)
+  })
 })
 
 describe('PipelineList — search filter (#345 #800)', () => {

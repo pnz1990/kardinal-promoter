@@ -299,7 +299,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `status.deploymentMetrics.rolloutsLast30Days` | integer |  | RolloutsLast30Days is the number of successful (Verified) promotions to the final pipeline environment in the last 30 calendar days. |
 | `status.deploymentMetrics.sampleSize` | integer |  | SampleSize is the number of Bundles included in this computation. |
 | `status.deploymentMetrics.staleProdDays` | integer |  | StaleProdDays is the number of days since the last successful promotion to the final pipeline environment. 0 means a promotion completed today. -1 means no promotion has ever completed. |
-| `status.phase` | string |  | Phase is the overall pipeline phase. One of: `Ready`, `Degraded`, `Unknown`. Default: `Unknown`. |
+| `status.phase` | string |  | Phase is the overall pipeline phase: Promoting while a Bundle is in flight (also when a PolicyGate holds it), Degraded when the newest Bundle failed, Ready when the newest Bundle is Verified in every environment it reached, and Unknown before the first Bundle. One of: `Ready`, `Degraded`, `Promoting`, `Unknown`. Default: `Unknown`. |
 
 ## PolicyGate
 

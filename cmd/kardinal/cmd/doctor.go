@@ -401,11 +401,11 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 		r.failed = true
 		return r
 	}
-	// Pipeline phases: Ready, Degraded, Unknown (api/v1alpha1/pipeline_types.go).
+	// Pipeline phases: Ready, Degraded, Promoting, Unknown (api/v1alpha1/pipeline_types.go).
 	switch p.Status.Phase {
-	case "Ready":
+	case "Ready", "Promoting":
 		r.icon = doctorPass
-		r.detail = "status: Ready"
+		r.detail = "status: " + p.Status.Phase
 	case "Degraded":
 		r.icon = doctorWarn
 		r.warned = true

@@ -238,10 +238,10 @@ func TestPipelineReconciler_NotFound(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, result)
 }
 
-// TestDerivePhase_NoSteps verifies that an empty step list yields Unknown.
+// TestDerivePhase_NoSteps verifies that no Bundles and no steps yield Unknown.
 func TestDerivePhase_NoSteps(t *testing.T) {
-	assert.Equal(t, "Unknown", pipeline.DerivePhase(nil))
-	assert.Equal(t, "Unknown", pipeline.DerivePhase([]kardinalv1alpha1.PromotionStep{}))
+	assert.Equal(t, "Unknown", pipeline.DerivePhase("app", nil, nil))
+	assert.Equal(t, "Unknown", pipeline.DerivePhase("app", []kardinalv1alpha1.Bundle{}, []kardinalv1alpha1.PromotionStep{}))
 }
 
 // TestDerivePhase_AllVerified verifies that all-Verified steps yield Ready.
@@ -259,7 +259,7 @@ func TestDerivePhase_AllVerified(t *testing.T) {
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 	}
-	assert.Equal(t, "Ready", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Ready", pipeline.DerivePhase("app", nil, steps))
 }
 
 // TestDerivePhase_OneFailed verifies that a Failed step yields Degraded.
@@ -277,10 +277,11 @@ func TestDerivePhase_OneFailed(t *testing.T) {
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
 		},
 	}
-	assert.Equal(t, "Degraded", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", nil, steps))
 }
 
-// TestDerivePhase_Promoting verifies that Promoting steps yield Unknown (not yet done).
+// TestDerivePhase_Promoting verifies that a step still in flight yields
+// Promoting, not Unknown (E2E-R05).
 func TestDerivePhase_Promoting(t *testing.T) {
 	now := metav1.Now()
 	steps := []kardinalv1alpha1.PromotionStep{
@@ -295,7 +296,7 @@ func TestDerivePhase_Promoting(t *testing.T) {
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Promoting"},
 		},
 	}
-	assert.Equal(t, "Unknown", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Promoting", pipeline.DerivePhase("app", nil, steps))
 }
 
 // TestDerivePhase_MultiBundle_NewFailed_OldVerified verifies that when a new bundle
@@ -318,5 +319,5 @@ func TestDerivePhase_MultiBundle_NewFailed_OldVerified(t *testing.T) {
 		},
 	}
 	// Most recent step per env wins: new-prod is Failed → Degraded
-	assert.Equal(t, "Degraded", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", nil, steps))
 }

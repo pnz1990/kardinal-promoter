@@ -38,8 +38,9 @@ const IN_FLIGHT_STATES = new Set(['Promoting', 'WaitingForMerge', 'HealthCheckin
 
 /**
  * A pipeline is promoting when any environment of its active bundle is in
- * flight. Pipeline.phase cannot be used: the backend only sets it to Ready,
- * Degraded, Unknown or a condition reason, never "Promoting".
+ * flight. Pipeline.phase is not used: it is also "Promoting" while a
+ * PolicyGate holds a bundle before any environment starts, which the Blocked
+ * count already shows.
  */
 export function isPromoting(p: Pipeline): boolean {
   return Object.values(p.environmentStates ?? {}).some(s => IN_FLIGHT_STATES.has(s))
