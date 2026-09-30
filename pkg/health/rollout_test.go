@@ -338,8 +338,8 @@ func TestProgressiveDeliveryPhases(t *testing.T) {
 	obj := func(apiVersion, kind, phase string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": apiVersion, "kind": kind,
-			"metadata": map[string]interface{}{"name": "web", "namespace": "prod"},
-			"status":   map[string]interface{}{"phase": phase},
+			"metadata": map[string]interface{}{"name": "web", "namespace": "prod", "generation": int64(1)},
+			"status":   map[string]interface{}{"phase": phase, "observedGeneration": "1"},
 		}}
 	}
 	tests := []struct {

@@ -24,6 +24,7 @@ package health
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -584,8 +586,8 @@ func findCondition(conditions []interface{}, condType string) map[string]interfa
 
 // --- ArgoRolloutsAdapter ---
 
-// ArgoRolloutsAdapter checks Argo Rollouts Rollout health status.
-// A Rollout is healthy when status.phase == "Healthy".
+// ArgoRolloutsAdapter checks that an Argo Rollouts Rollout finished rolling
+// out the promoted revision (see Check).
 // Uses the dynamic client to avoid a compile-time dependency on the Argo Rollouts SDK.
 type ArgoRolloutsAdapter struct {
 	dynamic dynamic.Interface
@@ -605,7 +607,19 @@ var argoRolloutsGVR = schema.GroupVersionResource{
 	Resource: "rollouts",
 }
 
-// Check verifies that the Argo Rollouts Rollout is in the Healthy phase.
+// Check reports the Rollout healthy only once it runs the promoted revision:
+//
+//  1. the pod template (spec.template, or the Deployment named by
+//     spec.workloadRef) runs the Bundle images (ExpectedImages), else
+//     Progressing: the GitOps tool has not applied the change yet;
+//  2. status.observedGeneration is metadata.generation (and, with a
+//     workloadRef, status.workloadObservedGeneration is the Deployment's
+//     generation), else Progressing: the phase describes an older spec;
+//  3. status.phase: Healthy with status.stableRS == status.currentPodHash is
+//     Healthy, Degraded is unhealthy, any other phase is Progressing.
+//
+// Without the first two checks, the Healthy or Degraded phase of the previous
+// revision would decide the new one's health.
 func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.ArgoRollouts
 	if cfg.Namespace == "" {
@@ -637,14 +651,132 @@ func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (Hea
 	if message != "" {
 		reason += " — " + message
 	}
+	id := fmt.Sprintf("Rollout %s/%s", cfg.Namespace, cfg.Name)
+
+	running, workload, err := a.rolloutImages(ctx, rollout)
+	if apierrors.IsNotFound(err) {
+		return unhealthy(fmt.Sprintf("%s: workloadRef %v", id, err)), nil
+	}
+	if err != nil {
+		return HealthStatus{}, err
+	}
+	imagesOK, imageNote := checkImages(opts.ExpectedImages, running)
+	if !imagesOK {
+		return progressing(fmt.Sprintf("%s not updated yet: %s (%s)", id, imageNote, reason)), nil
+	}
+
+	observed, known := observedGeneration(rollout.Object, "status", "observedGeneration")
+	switch {
+	case !known:
+		return progressing(fmt.Sprintf("%s: status.observedGeneration not set: the Argo Rollouts controller has not reconciled it yet (%s)",
+			id, reason)), nil
+	case observed != rollout.GetGeneration():
+		return progressing(fmt.Sprintf("%s: waiting for the Argo Rollouts controller to observe generation %d (observed %d; %s)",
+			id, rollout.GetGeneration(), observed, reason)), nil
+	}
+	if workload != nil {
+		observed, known := observedGeneration(rollout.Object, "status", "workloadObservedGeneration")
+		if !known || observed != workload.Generation {
+			return progressing(fmt.Sprintf("%s: waiting for the Argo Rollouts controller to observe generation %d of Deployment %s/%s (%s)",
+				id, workload.Generation, workload.Namespace, workload.Name, reason)), nil
+		}
+	}
+
 	switch phase {
 	case "Healthy":
+		stable, _, _ := unstructured.NestedString(rollout.Object, "status", "stableRS")
+		current, _, _ := unstructured.NestedString(rollout.Object, "status", "currentPodHash")
+		if current != "" && stable != current {
+			return progressing(fmt.Sprintf("%s: stable ReplicaSet %q is not the current pod template hash %q yet (%s)",
+				id, stable, current, reason)), nil
+		}
+		if imageNote != "" {
+			reason += " " + imageNote
+		}
 		return healthy(reason), nil
 	case "Degraded":
 		return unhealthy(reason), nil
 	default: // Progressing, Paused, or not reported yet
 		return progressing(reason), nil
 	}
+}
+
+// rolloutImages returns the images of the Rollout's pod template. A Rollout
+// with spec.workloadRef takes its template from that Deployment, which is
+// returned too; only a Deployment workloadRef is read.
+func (a *ArgoRolloutsAdapter) rolloutImages(ctx context.Context, rollout *unstructured.Unstructured) (
+	[]string, *appsv1.Deployment, error) {
+	ref, hasRef, _ := unstructured.NestedMap(rollout.Object, "spec", "workloadRef")
+	if !hasRef {
+		return containerImages(rollout.Object, "spec", "template", "spec"), nil, nil
+	}
+	kind, _ := ref["kind"].(string)
+	name, _ := ref["name"].(string)
+	if kind != "Deployment" || name == "" {
+		return nil, nil, nil
+	}
+	d, err := getDeployment(ctx, a.dynamic, rollout.GetNamespace(), name)
+	if err != nil {
+		return nil, nil, err
+	}
+	var images []string
+	for _, c := range d.Spec.Template.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	return images, d, nil
+}
+
+// containerImages lists the container images of the pod spec at fields.
+func containerImages(obj map[string]interface{}, fields ...string) []string {
+	containers, _, _ := unstructured.NestedSlice(obj, append(fields, "containers")...)
+	var images []string
+	for _, c := range containers {
+		m, _ := c.(map[string]interface{})
+		if img, _ := m["image"].(string); img != "" {
+			images = append(images, img)
+		}
+	}
+	return images
+}
+
+// observedGeneration reads a generation that Argo Rollouts writes as a string
+// ("4"); an integer is accepted too. A value that is not a number (Argo
+// Rollouts before v1.0 wrote a hash) counts as observed, as Argo Rollouts
+// itself treats it; a missing field does not.
+func observedGeneration(obj map[string]interface{}, fields ...string) (int64, bool) {
+	v, found, _ := unstructured.NestedFieldNoCopy(obj, fields...)
+	if !found {
+		return 0, false
+	}
+	gen, _, _ := unstructured.NestedInt64(obj, "metadata", "generation")
+	switch x := v.(type) {
+	case string:
+		n, err := strconv.ParseInt(x, 10, 64)
+		if err != nil {
+			return gen, true
+		}
+		return n, true
+	case int64:
+		return x, true
+	case float64:
+		return int64(x), true
+	}
+	return gen, true
+}
+
+var deploymentGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+
+// getDeployment reads a Deployment through the dynamic client.
+func getDeployment(ctx context.Context, dyn dynamic.Interface, namespace, name string) (*appsv1.Deployment, error) {
+	u, err := dyn.Resource(deploymentGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get deployment %s/%s: %w", namespace, name, err)
+	}
+	var d appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &d); err != nil {
+		return nil, fmt.Errorf("convert deployment %s/%s: %w", namespace, name, err)
+	}
+	return &d, nil
 }
 
 // --- FlaggerAdapter ---
