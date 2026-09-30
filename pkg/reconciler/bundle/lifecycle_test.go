@@ -181,6 +181,95 @@ func TestLifecycle_MetricsSumBakeResets(t *testing.T) {
 	assert.Equal(t, 3, got.Status.Metrics.BakeResets)
 }
 
+// #1308: status.metrics.operatorInterventions counts the overrides recorded
+// on the Bundle's own gate instances, not always 0.
+func TestLifecycle_MetricsCountOperatorInterventions(t *testing.T) {
+	gate := func(name, bundleName string, overrides int) *kardinalv1alpha1.PolicyGate {
+		g := &kardinalv1alpha1.PolicyGate{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: "default",
+				Labels:    map[string]string{"kardinal.io/bundle": bundleName, "kardinal.io/pipeline": "app"},
+			},
+			Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "false"},
+		}
+		for i := 0; i < overrides; i++ {
+			g.Spec.Overrides = append(g.Spec.Overrides, kardinalv1alpha1.PolicyGateOverride{
+				Reason:    fmt.Sprintf("hotfix %d", i),
+				ExpiresAt: metav1.NewTime(time.Now().UTC().Add(time.Hour)),
+			})
+		}
+		return g
+	}
+	tests := []struct {
+		name  string
+		gates []client.Object
+		want  int
+	}{
+		{name: "no gate instances", want: 0},
+		{name: "gate instances without overrides", gates: []client.Object{
+			gate("g-test", "app-v1", 0), gate("g-prod", "app-v1", 0),
+		}, want: 0},
+		{name: "two overrides on one gate", gates: []client.Object{
+			gate("g-test", "app-v1", 0), gate("g-prod", "app-v1", 2),
+		}, want: 2},
+		{name: "overrides on two gates add up", gates: []client.Object{
+			gate("g-test", "app-v1", 1), gate("g-prod", "app-v1", 2),
+		}, want: 3},
+		{name: "another Bundle's gates are not counted", gates: []client.Object{
+			gate("g-prod", "app-v1", 1), gate("g-prod-v0", "app-v0", 4), gate("g-other", "other-v1", 2),
+		}, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC().Add(-time.Hour))
+			objs := append([]client.Object{
+				lcPipeline("app", lcEnvs("test", "prod")...), b,
+				lcStep("app-v1", "test", "s-test", "Verified"),
+				lcStep("app-v1", "prod", "s-prod", "Verified"),
+			}, tt.gates...)
+			c := lcClient(objs...)
+			r := &bundle.Reconciler{Client: c}
+			lcReconcile(t, r, "app-v1")
+			lcReconcile(t, r, "app-v1")
+
+			got := lcGet(t, c, "app-v1")
+			require.Equal(t, "Verified", got.Status.Phase)
+			require.NotNil(t, got.Status.Metrics)
+			assert.Equal(t, tt.want, got.Status.Metrics.OperatorInterventions)
+		})
+	}
+}
+
+// #1308: a failed read of the gate instances is retried, not recorded as zero
+// interventions in metrics that are written only once.
+func TestLifecycle_MetricsNotWrittenWhenGateListFails(t *testing.T) {
+	b := lcBundle("app-v1", "image", "Promoting", time.Now().UTC().Add(-time.Hour))
+	c := indexedBuilder(newScheme()).
+		WithObjects(lcPipeline("app", lcEnvs("test")...), b, lcStep("app-v1", "test", "s-test", "Verified")).
+		WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}, &kardinalv1alpha1.PromotionStep{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*kardinalv1alpha1.PolicyGateList); ok {
+					return apierrors.NewServiceUnavailable("etcd leader change")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &bundle.Reconciler{Client: c}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"},
+	})
+	_, err2 := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"},
+	})
+	require.Error(t, errors.Join(err, err2), "a failed read of the gate instances is retried")
+
+	got := lcGet(t, c, "app-v1")
+	assert.Nil(t, got.Status.Metrics)
+	assert.NotEqual(t, "Verified", got.Status.Phase)
+}
+
 // C02-bundle-01: a Verified bundle stays Verified when a newer one arrives;
 // the history keeps the successful promotion.
 func TestLifecycle_VerifiedBundleIsNotSuperseded(t *testing.T) {

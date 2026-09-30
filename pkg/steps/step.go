@@ -55,7 +55,7 @@ type StepResult struct {
 
 	// RequeueAfter, when set with StepPending, signals to the reconciler how long
 	// to wait before re-executing the step. A zero value means requeue immediately.
-	// Used by steps that need non-blocking retry backoff (e.g. custom webhook retries).
+	// Used by steps that need non-blocking retry backoff (e.g. wait-for-merge SCM retries).
 	RequeueAfter time.Duration
 }
 
@@ -116,12 +116,10 @@ type StepState struct {
 	UpstreamEnvironments []v1alpha1.EnvironmentStatus
 
 	// Inputs holds step-specific configuration values from PromotionStep.Spec.Inputs.
-	// Custom webhook steps read their configuration (webhook.url, webhook.timeoutSeconds,
-	// webhook.secretRef.name, webhook.authorization) from this map.
 	Inputs map[string]string
 
-	// K8sClient is the Kubernetes API client for steps that need to create or
-	// manage cluster resources (e.g., integration-test Job creation).
+	// K8sClient is the Kubernetes API client for steps that read or patch
+	// cluster resources (e.g., argocd-set-image patching an Application).
 	// May be nil for unit tests or environments that do not use such steps.
 	K8sClient client.Client
 

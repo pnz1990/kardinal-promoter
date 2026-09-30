@@ -221,9 +221,10 @@ func (g *GitHubProvider) ParseWebhookEvent(payload []byte, signature string) (We
 	var raw struct {
 		Action      string `json:"action"`
 		PullRequest struct {
-			Number  int    `json:"number"`
-			Merged  bool   `json:"merged"`
-			HTMLURL string `json:"html_url"`
+			Number         int    `json:"number"`
+			Merged         bool   `json:"merged"`
+			HTMLURL        string `json:"html_url"`
+			MergeCommitSHA string `json:"merge_commit_sha"`
 		} `json:"pull_request"`
 		Repository struct {
 			FullName string `json:"full_name"`
@@ -233,13 +234,18 @@ func (g *GitHubProvider) ParseWebhookEvent(payload []byte, signature string) (We
 		return WebhookEvent{}, fmt.Errorf("parse webhook payload: %w", err)
 	}
 
-	return WebhookEvent{
+	event := WebhookEvent{
 		EventType:    "pull_request",
 		PRNumber:     raw.PullRequest.Number,
 		RepoFullName: raw.Repository.FullName,
 		Merged:       raw.PullRequest.Merged,
 		Action:       raw.Action,
-	}, nil
+	}
+	if event.Merged {
+		// Before the merge it is the test merge commit, not the promoted one.
+		event.MergeCommitSHA = raw.PullRequest.MergeCommitSHA
+	}
+	return event, nil
 }
 
 // validateSignature checks that the payload matches the HMAC-SHA256 signature.

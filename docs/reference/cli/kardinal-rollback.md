@@ -15,8 +15,11 @@ environment.
 
 Creates a new Bundle that copies the target's images and config ref, sets
 spec.provenance.rollbackOf to the target and intent.targetEnvironment to the
-environment. It goes through the same PolicyGates and PR flow as any Bundle,
-and through every environment upstream of the target first.
+environment. An image the deployed Bundle changed and the target does not name
+gets the version from the newest earlier Bundle Verified in the environment;
+when there is none, the rollback is refused and names the image. The rollback
+goes through the same PolicyGates and PR flow as any Bundle, and through every
+environment upstream of the target first.
 
 ```
 kardinal rollback <pipeline> [flags]
@@ -25,7 +28,6 @@ kardinal rollback <pipeline> [flags]
 ### Options
 
 ```
-      --emergency    Emergency rollback: bypass skipPermission PolicyGates
       --env string   Target environment to roll back (required)
   -h, --help         help for rollback
       --to string    Specific Bundle name to roll back to

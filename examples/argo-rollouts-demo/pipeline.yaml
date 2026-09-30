@@ -1,7 +1,7 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: kardinal-test-app
+  name: argo-rollouts-demo
   namespace: default
 spec:
   git:
@@ -14,7 +14,8 @@ spec:
 
   environments:
     # test: resource health check — simple Deployment check
-    # Deployment name is derived: <pipeline> = kardinal-test-app, namespace = <env>
+    # The Deployment is kardinal-test-app (the default would be the Pipeline
+    # name); the namespace is derived: <env> = test
     - name: test
       path: environments/test
       update:
@@ -22,9 +23,11 @@ spec:
       approval: auto
       health:
         type: resource
+        resource:
+          name: kardinal-test-app
 
     # uat: ArgoCD health check — ArgoCD manages the uat environment
-    # ArgoCD Application name is derived: <pipeline>-<env> = kardinal-test-app-uat
+    # ArgoCD Application name is derived: <pipeline>-<env> = argo-rollouts-demo-uat
     # in namespace argocd
     - name: uat
       path: environments/uat
@@ -39,7 +42,7 @@ spec:
     # prod: Argo Rollouts progressive delivery — canary analysis before full rollout
     # The Pipeline updates the Rollout's image; Argo Rollouts manages traffic splitting.
     # kardinal waits for Rollout.status.phase == "Healthy" (full promotion complete).
-    # Rollout name is derived: <pipeline> = kardinal-test-app, namespace = <env>
+    # Rollout name is derived: <pipeline> = argo-rollouts-demo, namespace = <env> = prod
     - name: prod
       path: environments/prod
       update:

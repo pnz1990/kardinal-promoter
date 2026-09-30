@@ -616,3 +616,123 @@ func TestFluxAdapter_NotFound(t *testing.T) {
 	assert.False(t, result.Healthy, "missing Kustomization must be Unhealthy")
 	assert.Contains(t, result.Reason, "not found")
 }
+
+// TestFluxAdapter_GenerationFieldsRequired verifies that a Kustomization
+// missing metadata.generation or status.observedGeneration is Progressing: a
+// missing field must not read as 0 and match the other one (#1279). Ready=False
+// still fails at once.
+func TestFluxAdapter_GenerationFieldsRequired(t *testing.T) {
+	tests := []struct {
+		name       string
+		ready      string
+		generation interface{}
+		observed   interface{}
+		want       wantKind
+		reason     string
+	}{
+		{name: "both set and equal", generation: int64(2), observed: int64(2), want: isHealthy, reason: "generation=2"},
+		{name: "both missing", want: isProgressing, reason: "metadata.generation not set"},
+		{name: "generation missing", observed: int64(0), want: isProgressing, reason: "metadata.generation not set"},
+		{name: "observedGeneration missing", generation: int64(1), want: isProgressing,
+			reason: "status.observedGeneration not set"},
+		{name: "observedGeneration missing, Ready=False", ready: "False", generation: int64(1), want: isUnhealthy,
+			reason: "Ready=False"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := map[string]interface{}{"name": "app", "namespace": "flux-system"}
+			if tt.generation != nil {
+				meta["generation"] = tt.generation
+			}
+			ready := tt.ready
+			if ready == "" {
+				ready = "True"
+			}
+			status := map[string]interface{}{"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": ready}}}
+			if tt.observed != nil {
+				status["observedGeneration"] = tt.observed
+			}
+			ks := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+				"metadata": meta, "status": status,
+			}}
+			got, err := health.NewFluxAdapter(dynfake.NewSimpleDynamicClient(runtime.NewScheme(), ks)).
+				Check(context.Background(), health.CheckOptions{
+					Flux: health.FluxConfig{Name: "app", Namespace: "flux-system"}})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
+		})
+	}
+}
+
+// TestProgressiveDeliveryAdapters_NamespaceRequired verifies that the Rollout
+// and Canary adapters return an error for an empty namespace instead of
+// reading "default" (#1279). OptionsForEnv always sets one.
+func TestProgressiveDeliveryAdapters_NamespaceRequired(t *testing.T) {
+	dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme())
+	tests := []struct {
+		name  string
+		check func() (health.HealthStatus, error)
+	}{
+		{name: "argoRollouts", check: func() (health.HealthStatus, error) {
+			return health.NewArgoRolloutsAdapter(dyn).Check(context.Background(),
+				health.CheckOptions{ArgoRollouts: health.ArgoRolloutsConfig{Name: "web"}})
+		}},
+		{name: "flagger", check: func() (health.HealthStatus, error) {
+			return health.NewFlaggerAdapter(dyn).Check(context.Background(),
+				health.CheckOptions{Flagger: health.FlaggerConfig{Name: "web"}})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.check()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `"web" has no namespace`)
+		})
+	}
+}
+
+// TestFlaggerAdapter_ConditionMessage verifies that the Canary result carries
+// the Promoted condition message (why a canary failed), not
+// status.lastTransitionTime (#1279).
+func TestFlaggerAdapter_ConditionMessage(t *testing.T) {
+	tests := []struct {
+		name       string
+		phase      string
+		conditions []interface{}
+		want       wantKind
+		reason     string
+	}{
+		{name: "failed with the Promoted message", phase: "Failed",
+			conditions: []interface{}{map[string]interface{}{"type": "Promoted", "status": "False",
+				"reason": "Failed", "message": "Canary analysis failed, Deployment scaled to zero."}},
+			want: isTerminal, reason: "Canary phase: Failed — Canary analysis failed, Deployment scaled to zero."},
+		{name: "progressing with the Ready message", phase: "Progressing",
+			conditions: []interface{}{map[string]interface{}{"type": "Ready", "status": "Unknown",
+				"message": "New revision detected, progressing canary analysis."}},
+			want: isProgressing, reason: "Canary phase: Progressing — New revision detected, progressing canary analysis."},
+		{name: "no conditions", phase: "Initializing", want: isProgressing, reason: "Canary phase: Initializing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status := map[string]interface{}{"phase": tt.phase, "lastTransitionTime": "2026-09-30T10:00:00Z"}
+			if tt.conditions != nil {
+				status["conditions"] = tt.conditions
+			}
+			canary := &unstructured.Unstructured{Object: map[string]interface{}{
+				"apiVersion": "flagger.app/v1beta1", "kind": "Canary",
+				"metadata": map[string]interface{}{"name": "web", "namespace": "prod"},
+				"status":   status,
+			}}
+			got, err := health.NewFlaggerAdapter(dynfake.NewSimpleDynamicClient(runtime.NewScheme(), canary)).
+				Check(context.Background(), health.CheckOptions{
+					Flagger: health.FlaggerConfig{Name: "web", Namespace: "prod"}})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Equal(t, tt.reason, got.Reason)
+			assert.NotContains(t, got.Reason, "lastTransition")
+		})
+	}
+}

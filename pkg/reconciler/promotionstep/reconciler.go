@@ -559,7 +559,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
 
-		// No prURL — this is a non-blocking retry (e.g. custom webhook 5xx backoff).
+		// No prURL — this is a non-blocking retry (e.g. an SCM call to retry later).
 		// Stay in Promoting state; use the step's requested RequeueAfter duration if set.
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
@@ -813,7 +813,8 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 // health.OptionsForEnv, which the translator also uses for the Graph health
 // ref nodes (C03-promotionstep-04, -19). The expected revision is the pushed
 // or merged commit (expectedRevision) and the expected images are the Bundle
-// images (C03-promotionstep-11, E2E-01).
+// images (C03-promotionstep-11, E2E-01). A flux check of a pr-review step
+// that opened a PR is Progressing until the merge commit is known (#1307).
 //
 // health.timeout bounds the time until the first Healthy result. Reaching it
 // is a health failure: it counts in status.consecutiveHealthFailures and
@@ -908,7 +909,20 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, err.Error())
 	}
 
-	result, checkErr := adapter.Check(ctx, opts)
+	var result health.HealthStatus
+	var checkErr error
+	if adapter.Name() == "flux" && env.Approval == "pr-review" && opts.ExpectedRevision == "" &&
+		ps.Status.Outputs["noChanges"] != "true" {
+		// The flux adapter has no image check to fall back on: without the
+		// merge commit, a Kustomization Ready on the previous commit would
+		// pass. Wait for it; health.timeout ends the wait (#1307). With no
+		// changes there is no PR and no merge commit, and the previous
+		// commit already is the target.
+		result = health.HealthStatus{Progressing: true,
+			Reason: "merge commit of the PR not known yet (needed to check lastAppliedRevision)"}
+	} else {
+		result, checkErr = adapter.Check(ctx, opts)
+	}
 	if checkErr != nil {
 		log.Error().Err(checkErr).Str("adapter", adapter.Name()).Msg("health adapter check error")
 		return ctrl.Result{RequeueAfter: requeueHealthCheck}, nil

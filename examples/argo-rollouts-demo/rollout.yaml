@@ -1,7 +1,9 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
-  name: kardinal-test-app
+  # The argoRollouts health check looks up the Rollout named after the
+  # Pipeline (argo-rollouts-demo) in the environment's namespace (prod).
+  name: argo-rollouts-demo
   namespace: prod
 spec:
   replicas: 3

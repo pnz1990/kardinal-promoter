@@ -19,31 +19,44 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
-// TestPolicyGateReconciler_SupersededBundleNotEvaluated verifies that a gate
-// instance of a Superseded Bundle keeps the status it had when the Bundle was
-// superseded: no evaluation, status write, audit record or requeue (E2E-R20).
-// Before the fix a blocked soak gate of a Superseded Bundle turned ready later
-// and let its Graph create a prod PromotionStep. A Failed Bundle can recover,
-// so its gates are still evaluated.
-func TestPolicyGateReconciler_SupersededBundleNotEvaluated(t *testing.T) {
+// TestPolicyGateReconciler_SettledBundleNotEvaluated verifies that a gate
+// instance of a settled Bundle keeps the status it had: no evaluation, status
+// write, audit record or requeue. Settled is Superseded (E2E-R20: before that
+// fix a blocked soak gate of a Superseded Bundle turned ready later and let its
+// Graph create a prod PromotionStep), or Verified with GraphReady True (#1301:
+// before that fix every ScheduleClock tick re-evaluated and rewrote the gates
+// of every finished Bundle). A Failed Bundle can recover, and a Verified
+// Bundle's Graph is still read until GraphReady is True, so their gates are
+// still evaluated.
+func TestPolicyGateReconciler_SettledBundleNotEvaluated(t *testing.T) {
 	tuesday := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
 	lastEval := metav1.NewTime(tuesday.Add(-2 * time.Hour))
 	const frozenReason = "bundle.version=main: !schedule.isWeekend = false"
+	graphReady := func(status metav1.ConditionStatus) []metav1.Condition {
+		return []metav1.Condition{{Type: "GraphReady", Status: status, Reason: "Test", LastTransitionTime: lastEval}}
+	}
 
 	cases := []struct {
-		phase     string
-		evaluated bool
+		name       string
+		phase      string
+		conditions []metav1.Condition
+		evaluated  bool
 	}{
-		{phase: "Superseded"},
-		{phase: "Failed", evaluated: true},
-		{phase: "Promoting", evaluated: true},
+		{name: "Superseded", phase: "Superseded"},
+		{name: "Verified, GraphReady True", phase: "Verified", conditions: graphReady(metav1.ConditionTrue)},
+		{name: "Verified, GraphReady False", phase: "Verified", conditions: graphReady(metav1.ConditionFalse), evaluated: true},
+		{name: "Verified, no GraphReady", phase: "Verified", evaluated: true},
+		{name: "Failed", phase: "Failed", evaluated: true},
+		{name: "Failed, GraphReady True", phase: "Failed", conditions: graphReady(metav1.ConditionTrue), evaluated: true},
+		{name: "Promoting", phase: "Promoting", evaluated: true},
 	}
 	for _, tc := range cases {
-		t.Run(tc.phase, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			gate := makeGateInstance("no-weekend", "default", "nginx-demo-v1", "!schedule.isWeekend", "5m")
 			gate.Status = kardinalv1alpha1.PolicyGateStatus{Ready: false, Reason: frozenReason, LastEvaluatedAt: &lastEval}
 			bundle := makeBundle("nginx-demo-v1", "default")
 			bundle.Status.Phase = tc.phase
+			bundle.Status.Conditions = tc.conditions
 			c := fake.NewClientBuilder().
 				WithScheme(newScheme()).
 				WithObjects(gate, bundle).
@@ -61,7 +74,7 @@ func TestPolicyGateReconciler_SupersededBundleNotEvaluated(t *testing.T) {
 				if tc.evaluated {
 					assert.Greater(t, result.RequeueAfter, time.Duration(0), "an evaluated gate is rechecked")
 				} else {
-					assert.Equal(t, ctrl.Result{}, result, "a Superseded Bundle's gate is not requeued")
+					assert.Equal(t, ctrl.Result{}, result, "a settled Bundle's gate is not requeued")
 				}
 			}
 
@@ -75,11 +88,11 @@ func TestPolicyGateReconciler_SupersededBundleNotEvaluated(t *testing.T) {
 				assert.Len(t, audits.Items, 1, "the ready flip is audited once")
 				return
 			}
-			assert.False(t, got.Status.Ready, "status stays as it was at supersession")
+			assert.False(t, got.Status.Ready, "status stays as it was when the Bundle settled")
 			assert.Equal(t, frozenReason, got.Status.Reason)
 			require.NotNil(t, got.Status.LastEvaluatedAt)
 			assert.True(t, got.Status.LastEvaluatedAt.Equal(&lastEval), "lastEvaluatedAt not moved")
-			assert.Empty(t, audits.Items, "no GateEvaluated audit for a Superseded Bundle")
+			assert.Empty(t, audits.Items, "no GateEvaluated audit for a settled Bundle")
 		})
 	}
 }

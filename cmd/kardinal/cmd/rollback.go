@@ -33,7 +33,7 @@ func newRollbackCmd() *cobra.Command {
 	var (
 		envFlag       string
 		toFlag        string
-		emergencyFlag bool
+		emergencyFlag bool // deprecated, ignored (#1288)
 	)
 
 	cmd := &cobra.Command{
@@ -50,21 +50,28 @@ environment.
 
 Creates a new Bundle that copies the target's images and config ref, sets
 spec.provenance.rollbackOf to the target and intent.targetEnvironment to the
-environment. It goes through the same PolicyGates and PR flow as any Bundle,
-and through every environment upstream of the target first.`,
+environment. An image the deployed Bundle changed and the target does not name
+gets the version from the newest earlier Bundle Verified in the environment;
+when there is none, the rollback is refused and names the image. The rollback
+goes through the same PolicyGates and PR flow as any Bundle, and through every
+environment upstream of the target first.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, ns, err := buildClient()
 			if err != nil {
 				return fmt.Errorf("rollback: %w", err)
 			}
-			return rollbackFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag, emergencyFlag)
+			return rollbackFn(cmd.OutOrStdout(), c, ns, args[0], envFlag, toFlag)
 		},
 	}
 
 	cmd.Flags().StringVar(&envFlag, "env", "", "Target environment to roll back (required)")
 	cmd.Flags().StringVar(&toFlag, "to", "", "Specific Bundle name to roll back to")
-	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Emergency rollback: bypass skipPermission PolicyGates")
+	// Deprecated: --emergency never bypassed a gate and has no effect; use
+	// `kardinal override` to pass a blocking gate. Deleted in the next minor
+	// release (#1288).
+	cmd.Flags().BoolVar(&emergencyFlag, "emergency", false, "Deprecated: has no effect")
+	_ = cmd.Flags().MarkDeprecated("emergency", "it has no effect; use kardinal override to pass a blocking gate")
 	_ = cmd.MarkFlagRequired("env")
 
 	return cmd
@@ -73,7 +80,7 @@ and through every environment upstream of the target first.`,
 // rollbackFn is the testable implementation of rollback. The target and the
 // rollback Bundle come from lifecycle.PlanRollback, the implementation the UI
 // and the automatic rollback share.
-func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBundle string, emergency bool) error {
+func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBundle string) error {
 	ctx := context.Background()
 
 	plan, err := lifecycle.PlanRollback(ctx, c, lifecycle.RollbackRequest{
@@ -81,7 +88,6 @@ func rollbackFn(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter, toBu
 		Pipeline:    pipeline,
 		Environment: envFilter,
 		ToBundle:    toBundle,
-		Emergency:   emergency,
 		Actor:       currentUser(),
 		Now:         time.Now(),
 	})

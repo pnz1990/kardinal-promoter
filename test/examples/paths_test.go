@@ -322,7 +322,7 @@ func TestPathCheckCatchesKnownMistakes(t *testing.T) {
 // TestExampleHealthTargetsExist checks, per example directory, that the
 // Argo CD Applications and Flux Kustomizations the directory ships have the
 // names the health adapters look up: <pipeline>-<env> in argocd or
-// flux-system.
+// flux-system, unless health.argocd or health.flux names another.
 func TestExampleHealthTargetsExist(t *testing.T) {
 	type target struct{ kind, namespace, name string }
 	group := func(source string) string {
@@ -360,12 +360,22 @@ func TestExampleHealthTargetsExist(t *testing.T) {
 		case strings.HasPrefix(apiVersion, "kardinal.io/") && kind == "Pipeline":
 			pipeline := str(d.obj, "metadata", "name")
 			for _, env := range list(get(d.obj, "spec", "environments")) {
-				name := pipeline + "-" + str(env, "name")
+				// health.<type>.name and .namespace override the defaults.
+				targetOf := func(kind, adapter, namespace string) target {
+					tg := target{kind, namespace, pipeline + "-" + str(env, "name")}
+					if n := str(env, "health", adapter, "name"); n != "" {
+						tg.name = n
+					}
+					if ns := str(env, "health", adapter, "namespace"); ns != "" {
+						tg.namespace = ns
+					}
+					return tg
+				}
 				switch str(env, "health", "type") {
 				case "argocd":
-					want[g] = append(want[g], target{"Application", "argocd", name})
+					want[g] = append(want[g], targetOf("Application", "argocd", "argocd"))
 				case "flux":
-					want[g] = append(want[g], target{"Kustomization", "flux-system", name})
+					want[g] = append(want[g], targetOf("Kustomization", "flux", "flux-system"))
 				}
 			}
 		}
