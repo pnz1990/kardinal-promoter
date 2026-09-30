@@ -358,6 +358,26 @@ func TestInitCmd_FileFlagAndHelmScaffold(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "-o is not a file path")
 }
 
+// --file creates the directories it names, as in the help's
+// "kardinal init --file deploy/pipeline.yaml".
+func TestInitCmd_FileInNewDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Cleanup(func() { globalOutput = "" })
+	root := NewRootCmd()
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&bytes.Buffer{})
+	root.SetIn(strings.NewReader("web\ndefault\ntest,prod\nhttps://github.com/o/r\nmain\nkustomize\n"))
+	root.SetArgs([]string{"init", "--file", filepath.Join("deploy", "base", "pipeline.yaml")})
+	require.NoError(t, root.Execute())
+
+	content, err := os.ReadFile(filepath.Join(dir, "deploy", "base", "pipeline.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "kind: Pipeline\n")
+	assert.Contains(t, stdout.String(), "Pipeline YAML written to deploy/base/pipeline.yaml\n")
+}
+
 // --stdout replaces the Pipeline file only. --scaffold-gitops and
 // --demo still write the scaffold, and stdout stays the bare YAML.
 func TestInitCmd_StdoutKeepsScaffold(t *testing.T) {

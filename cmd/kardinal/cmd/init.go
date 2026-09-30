@@ -110,6 +110,11 @@ Example:
 				progress = cmd.ErrOrStderr()
 			} else {
 				outFile := fileFlag
+				// --file may name a directory that does not exist yet
+				// (the help's "--file deploy/pipeline.yaml").
+				if err := os.MkdirAll(filepath.Dir(outFile), 0o755); err != nil {
+					return fmt.Errorf("create directory for %s: %w", outFile, err)
+				}
 				if err := os.WriteFile(outFile, buf.Bytes(), 0o644); err != nil {
 					return fmt.Errorf("write %s: %w", outFile, err)
 				}
