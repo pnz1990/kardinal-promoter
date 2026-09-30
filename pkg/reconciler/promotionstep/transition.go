@@ -37,10 +37,39 @@ func (r *Reconciler) transition(ctx context.Context, base, ps *v1alpha1.Promotio
 // state, for example PromotionSuperseded instead of PromotionFailed.
 func (r *Reconciler) transitionAudit(ctx context.Context, base, ps *v1alpha1.PromotionStep,
 	state, message, auditAction string) error {
-	prev := base.Status.State
+	changed, err := r.patchState(ctx, base, ps, state, message)
+	if err != nil || !changed {
+		return err
+	}
+	r.recordTransition(ctx, ps, state, message, auditAction)
+	return nil
+}
+
+// cancelUnstarted fails a step that never left Pending because its Bundle was
+// superseded. The step did no work, so unlike transition it writes no
+// AuditEvent and records no step metrics: kardinal audit summary counts
+// neither a started nor a superseded promotion (E2E-R20). Only the Kubernetes
+// Event is emitted.
+func (r *Reconciler) cancelUnstarted(ctx context.Context, base, ps *v1alpha1.PromotionStep, message string) error {
+	changed, err := r.patchState(ctx, base, ps, StateFailed, message)
+	if err != nil || !changed {
+		return err
+	}
+	if r.Recorder != nil {
+		r.Recorder.Event(ps, corev1.EventTypeNormal, "Superseded",
+			fmt.Sprintf("env %s: %s", ps.Spec.Environment, message))
+	}
+	return nil
+}
+
+// patchState sets state and message on ps and patches its status against
+// base. It reports whether the state changed; a step deleted while
+// reconciling reports no change and no error.
+func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.PromotionStep,
+	state, message string) (bool, error) {
 	ps.Status.State = state
 	ps.Status.Message = message
-	changed := prev != state
+	changed := base.Status.State != state
 	if changed {
 		closeStepStatuses(ps, state)
 		ps.Status.RetryCount = 0
@@ -48,14 +77,11 @@ func (r *Reconciler) transitionAudit(ctx context.Context, base, ps *v1alpha1.Pro
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Deleted while reconciling: nothing left to transition.
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("patch state %s: %w", state, err)
+		return false, fmt.Errorf("patch state %s: %w", state, err)
 	}
-	if changed {
-		r.recordTransition(ctx, ps, state, message, auditAction)
-	}
-	return nil
+	return changed, nil
 }
 
 // recordTransition writes the audit record, metrics and Event for a state change.
