@@ -27,6 +27,7 @@ import (
 	sigsyaml "sigs.k8s.io/yaml"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // HumanAge returns a human-readable age string for the given creation time.
@@ -269,10 +270,11 @@ func PolicyGatePhase(g v1alpha1.PolicyGate) string {
 	return "Pending"
 }
 
-// FormatBundleErrors writes a plain-text error notice for the most recent
-// Failed Bundle of each pipeline. The notice is printed after the pipeline
-// table so the root cause of a silent "Phase: Error" is visible without
-// `kubectl describe graph`.
+// FormatBundleErrors writes a plain-text error notice for each pipeline whose
+// newest Bundle that is not Superseded is Failed. A newer Bundle, promoting or
+// Verified, means the failure is history, so it is not reported (E2E-R16).
+// The notice is printed after the pipeline table so the root cause of a
+// silent "Phase: Error" is visible without `kubectl describe graph`.
 //
 // Output format (one line per pipeline, sorted by pipeline):
 //
@@ -287,13 +289,14 @@ func PolicyGatePhase(g v1alpha1.PolicyGate) string {
 func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bool) error {
 	sorted := make([]v1alpha1.Bundle, 0, len(bundles))
 	for _, b := range bundles {
-		if b.Status.Phase == "Failed" {
+		if b.Status.Phase != "Superseded" {
 			sorted = append(sorted, b)
 		}
 	}
-	// Newest first, so the first Failed bundle seen per pipeline is the current one.
+	// Newest first (lifecycle.CompareCreation, the order supersession uses),
+	// so the first bundle seen per pipeline is the current one.
 	sort.SliceStable(sorted, func(i, j int) bool {
-		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp.Time)
+		return lifecycle.CompareCreation(&sorted[i], &sorted[j]) > 0
 	})
 
 	typeRank := map[string]int{"InvalidSpec": 20, "Failed": 10}
@@ -314,6 +317,9 @@ func FormatBundleErrors(w io.Writer, bundles []v1alpha1.Bundle, showNamespace bo
 			continue
 		}
 		seen[key] = true
+		if b.Status.Phase != "Failed" {
+			continue
+		}
 
 		msg, rank := "", -1
 		for _, cond := range b.Status.Conditions {
