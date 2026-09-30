@@ -75,8 +75,9 @@ func (r *Reconciler) holdIfPaused(ctx context.Context, log zerolog.Logger, ps *v
 //
 // It returns the rollback Bundle name. refusal is set, and nothing is
 // created, when there is nothing safe to roll back to (no earlier Verified
-// Bundle with different artifacts); the caller then stops the step for a
-// human. err is a transient error to retry.
+// Bundle with different artifacts) or the failing Bundle is itself a
+// rollback (a failing rollback does not start another); the caller then
+// stops the step for a human. err is a transient error to retry.
 //
 // Graph-first: it creates a new Bundle and writes no other object's status.
 func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.PromotionStep) (name string, refusal, err error) {
@@ -98,6 +99,10 @@ func (r *Reconciler) createAutoRollback(ctx context.Context, ps *v1alpha1.Promot
 		Actor:       autoRollbackActor,
 		Name:        name,
 		Reason:      "AutoRollback",
+		Automatic:   true,
+		// time.Now() here stamps the created-at annotation of the Bundle this
+		// reconciler creates: a CRD write, like the other Bundle creators.
+		Now: time.Now().UTC(),
 	})
 	if planErr != nil {
 		if errors.Is(planErr, lifecycle.ErrConflict) || errors.Is(planErr, lifecycle.ErrInvalid) ||

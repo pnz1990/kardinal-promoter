@@ -196,7 +196,9 @@ func stepBundle(step *v1alpha1.PromotionStep) string {
 // `kardinal rollback`, the UI and onHealthFailure=rollback: it restores the
 // artifacts of the most recent Bundle, other than spec.bundleRef, that was
 // Verified in the environment, and never re-promotes the failing image. When
-// there is nothing safe to roll back to, no Bundle is created (C04-gates-06).
+// there is nothing safe to roll back to, or spec.bundleRef is itself a
+// rollback (a failing rollback does not start another), no Bundle is created
+// (C04-gates-06).
 func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logger,
 	rp *v1alpha1.RollbackPolicy) (string, error) {
 	// Reuse a rollback of this Bundle created before this planner existed:
@@ -239,6 +241,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		Name:        rollbackName,
 		Reason:      "AutoRollback",
 		Now:         r.now(),
+		Automatic:   true,
 	})
 	if err != nil {
 		if errors.Is(err, lifecycle.ErrConflict) || errors.Is(err, lifecycle.ErrInvalid) ||

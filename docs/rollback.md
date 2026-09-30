@@ -4,12 +4,14 @@ In kardinal-promoter, rollback is not a special operation. It is a forward promo
 
 ## How Rollback Works
 
-1. `kardinal rollback <pipeline> --env <environment>` picks the target: the most recent Bundle, other than the one deployed in that environment now, that was Verified there and deploys different artifacts. The UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy use the same selection.
+1. `kardinal rollback <pipeline> --env <environment>` picks the target: the most recent Bundle, other than the one deployed in that environment now, that was Verified there and deploys different artifacts. A Bundle that an earlier rollback in that environment rolled back from is skipped, so after `v2` was rolled back to `v1`, the next rollback does not return to `v2`. The UI Rollback button, `onHealthFailure: rollback` and RollbackPolicy use the same selection.
 2. It creates a new Bundle that copies the target's `spec.images` and `spec.configRef`, with `spec.provenance.rollbackOf` set to the target, `spec.intent.targetEnvironment` set to the environment, the label `kardinal.io/rollback: "true"` and the annotation `kardinal.io/rollback-from: <bundle deployed now>`.
-3. This Bundle runs through the normal promotion flow: Graph generation, PolicyGate evaluation, Git write, PR creation (for pr-review environments), health verification.
+3. This Bundle runs through the normal promotion flow: Graph generation, PolicyGate evaluation, Git write, PR creation (for pr-review environments), health verification. Like any Bundle with `intent.targetEnvironment`, it is promoted through every environment upstream of the target first (see [Multi-Environment Rollback](#multi-environment-rollback)).
 4. The PR is labeled with `kardinal/rollback` instead of `kardinal/promotion` for visibility.
 
 If there is nothing safe to roll back to (no earlier Verified Bundle, or only ones with the same artifacts as the failing Bundle), the command fails and creates nothing. The failing image is never promoted again.
+
+`onHealthFailure: rollback` and RollbackPolicy never roll back a Bundle that is itself a rollback. If a rollback fails its health check, the step stops at `AbortedByAlarm` for a human, instead of starting another rollback.
 
 There is no separate rollback subsystem. The same code path handles promotions and rollbacks.
 
@@ -34,7 +36,7 @@ Track with: kardinal explain my-app --env prod
 kardinal rollback my-app --env prod --to my-app-v1-27-0
 ```
 
-The `--to` flag names the Bundle to roll back to. It must exist in the Bundle history (within `historyLimit`), belong to the pipeline, carry images or a config ref, and differ from what is deployed now; otherwise the command fails and creates nothing.
+The `--to` flag names the Bundle to roll back to. It must exist in the Bundle history (within `historyLimit`), belong to the pipeline, carry images or a config ref, differ from what is deployed now, and have been Verified in the environment; otherwise the command fails and creates nothing. `--to` can name a Bundle that an earlier rollback rolled back from.
 
 ### Emergency rollback
 
@@ -126,12 +128,12 @@ The `historyLimit` field on the Pipeline (default: 50) determines how many Bundl
 
 ## Multi-Environment Rollback
 
-When a PromotionStep fails in a downstream environment, Graph stops all downstream nodes. The controller opens rollback PRs only for environments that actually received the failed Bundle. Environments that were not yet promoted are unaffected.
+When a PromotionStep fails, the Graph stops the environments downstream of it. A rollback targets one environment (`spec.intent.targetEnvironment`), but its Graph keeps every environment upstream of the target, the same as any Bundle with a target environment. So the rollback writes the old artifacts to each upstream environment first, opens PRs there for pr-review environments, and waits on their PolicyGates, soak and health checks, before it reaches the target. Environments that are not upstream of the target are not touched.
 
 For example, in a pipeline `dev -> staging -> [prod-us, prod-eu]`, if `prod-us` fails:
-- `prod-eu` may still be promoting or may have already succeeded. It is not rolled back.
-- Only `prod-us` gets a rollback PR.
-- If both prod environments fail, both get rollback PRs.
+- The rollback promotes the old version to `dev`, then `staging`, then `prod-us`. `dev` and `staging` run the old version afterwards too.
+- `prod-eu` is not upstream of `prod-us`. It is not rolled back.
+- If both prod environments fail, each gets its own rollback Bundle, and each of them goes through `dev` and `staging`.
 
 ## Comparison with Other Tools
 

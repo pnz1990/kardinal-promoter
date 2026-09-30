@@ -7,13 +7,16 @@ Roll back a pipeline environment to a previous Bundle
 Roll back a pipeline environment to a previous Bundle.
 
 Without --to, the target is the most recent Bundle, other than the one deployed
-now, that was Verified in the environment and deploys different artifacts.
+now, that was Verified in the environment and deploys different artifacts. A
+Bundle that an earlier rollback in the environment rolled back from is skipped.
 With --to, the named Bundle must belong to the pipeline, carry images or a
-config commit, and differ from what is deployed now.
+config commit, differ from what is deployed now, and have been Verified in the
+environment.
 
 Creates a new Bundle that copies the target's images and config ref, sets
 spec.provenance.rollbackOf to the target and intent.targetEnvironment to the
-environment. It goes through the same PolicyGates and PR flow as any Bundle.
+environment. It goes through the same PolicyGates and PR flow as any Bundle,
+and through every environment upstream of the target first.
 
 ```
 kardinal rollback <pipeline> [flags]

@@ -40,6 +40,12 @@ type RollbackRequest struct {
 	Reason string
 	// Now stamps kardinal.io/created-at when not zero.
 	Now time.Time
+	// Automatic marks a rollback the controller starts on its own
+	// (onHealthFailure=rollback, RollbackPolicy). An automatic rollback of a
+	// Bundle that is itself a rollback is refused: a failing rollback must not
+	// start another one, or the environment would ping-pong between two
+	// Bundles. A human can still roll back with `kardinal rollback`.
+	Automatic bool
 }
 
 // RollbackPlan is the result of PlanRollback.
@@ -60,17 +66,26 @@ type RollbackPlan struct {
 //
 // Rules:
 //   - The environment must exist in the pipeline.
+//   - Automatic: the deployed Bundle must not itself be a rollback (label
+//     kardinal.io/rollback=true).
 //   - With ToBundle: the Bundle must exist, belong to the pipeline, carry
-//     artifacts, and differ from what is deployed now.
+//     artifacts, differ from what is deployed now, and have been Verified in
+//     the environment (every one of its PromotionSteps there is Verified).
 //   - Without ToBundle: the target is the most recent Bundle, other than the
 //     deployed one, whose PromotionSteps in the environment are all Verified,
 //     that has the same type as the deployed one, carries artifacts, and deploys
 //     different artifacts. A Bundle with the deployed (failing) images is never
-//     chosen.
-//   - The rollback Bundle copies the target's images and config ref, targets
-//     only this environment (intent.targetEnvironment) and records the target
-//     in spec.provenance.rollbackOf and the deployed Bundle in the
-//     kardinal.io/rollback-from annotation.
+//     chosen, and neither is a Bundle that an earlier rollback in the
+//     environment rolled back from (named in the kardinal.io/rollback-from
+//     annotation of a rollback Bundle): after V2 was rolled back to V1, rolling
+//     back again does not return to V2. ToBundle can still name it.
+//   - The rollback Bundle copies the target's images and config ref, sets
+//     intent.targetEnvironment to this environment, and records the target in
+//     spec.provenance.rollbackOf and the deployed Bundle in the
+//     kardinal.io/rollback-from annotation. The Graph of a targetEnvironment
+//     Bundle keeps every environment upstream of the target (graph
+//     filterByIntent), so the rollback promotes the target's artifacts through
+//     those environments first, with their gates, soak and health checks.
 //
 // Errors wrap ErrNotFound, ErrInvalid or ErrConflict.
 func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*RollbackPlan, error) {
@@ -104,6 +119,10 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		}
 		plan.Current = cur
 	}
+	if req.Automatic && plan.Current != nil && plan.Current.Labels[LabelRollback] == "true" {
+		return nil, fmt.Errorf("rollback: %s is itself a rollback; a failing rollback is not rolled back automatically, roll back by hand with kardinal rollback: %w",
+			plan.CurrentName, ErrConflict)
+	}
 
 	if req.ToBundle != "" {
 		target, getErr := getBundle(ctx, c, req.Namespace, req.ToBundle)
@@ -126,6 +145,9 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		case plan.Current != nil && SameArtifacts(target, plan.Current):
 			return nil, fmt.Errorf("rollback: bundle %s deploys the same artifacts as the deployed bundle %s: %w",
 				target.Name, plan.CurrentName, ErrConflict)
+		case !h.verifiedIn(target.Name):
+			return nil, fmt.Errorf("rollback: bundle %s was never Verified in %s, so it is not known to work there; pick a Bundle that was: %w",
+				target.Name, req.Environment, ErrInvalid)
 		}
 		plan.Target = target
 	} else {
@@ -133,8 +155,12 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			return nil, fmt.Errorf("rollback: nothing has been deployed to %s in pipeline %s yet: %w",
 				req.Environment, req.Pipeline, ErrConflict)
 		}
+		rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment)
+		if rbErr != nil {
+			return nil, fmt.Errorf("rollback: %w", rbErr)
+		}
 		for _, name := range h.verifiedNewestFirst() {
-			if name == plan.CurrentName {
+			if name == plan.CurrentName || rolledBack[name] {
 				continue
 			}
 			cand, getErr := getBundle(ctx, c, req.Namespace, name)
@@ -154,7 +180,7 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			break
 		}
 		if plan.Target == nil {
-			return nil, fmt.Errorf("rollback: no earlier Bundle with artifacts was Verified in %s (deployed now: %s); pick one with --to: %w",
+			return nil, fmt.Errorf("rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in %s (deployed now: %s); pick one with --to: %w",
 				req.Environment, plan.CurrentName, ErrConflict)
 		}
 	}
@@ -208,6 +234,30 @@ func buildRollbackBundle(req RollbackRequest, plan *RollbackPlan) *v1alpha1.Bund
 	prov.RollbackOf = plan.Target.Name
 	b.Spec.Provenance = prov
 	return b
+}
+
+// rolledBackFrom returns the Bundles that a rollback in the environment has
+// rolled back from: the kardinal.io/rollback-from annotation of every rollback
+// Bundle of the pipeline that targets env. Rollback Bundles created before the
+// annotation existed are not counted.
+func rolledBackFrom(ctx context.Context, c client.Reader, ns, pipeline, env string) (map[string]bool, error) {
+	var list v1alpha1.BundleList
+	if err := c.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{LabelRollback: "true"}); err != nil {
+		return nil, fmt.Errorf("list rollback bundles of pipeline %s: %w", pipeline, err)
+	}
+	out := map[string]bool{}
+	for i := range list.Items {
+		b := &list.Items[i]
+		from := b.Annotations[AnnotationRollbackFrom]
+		if from == "" || b.Spec.Pipeline != pipeline {
+			continue
+		}
+		if b.Spec.Intent != nil && b.Spec.Intent.TargetEnvironment != "" && b.Spec.Intent.TargetEnvironment != env {
+			continue
+		}
+		out[from] = true
+	}
+	return out, nil
 }
 
 func getBundle(ctx context.Context, c client.Reader, ns, name string) (*v1alpha1.Bundle, error) {

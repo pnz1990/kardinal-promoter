@@ -941,8 +941,12 @@ func (r *Reconciler) applyHealthFailurePolicy(
 	case "rollback":
 		// Roll the environment back to the Bundle verified before the failing
 		// one (createAutoRollback, the planner the CLI and UI use). The rollback
-		// Bundle targets only this environment. RollingBack is terminal for this
-		// step: the rollback Bundle carries the environment from here.
+		// Bundle sets intent.targetEnvironment to this environment, and its
+		// Graph keeps every environment upstream of it, so the old artifacts
+		// are promoted through those first, with their gates and soaks.
+		// Environments that are not upstream are not touched. RollingBack is
+		// terminal for this step: the rollback Bundle carries the environment
+		// from here.
 		rollbackName, refusal, rbErr := r.createAutoRollback(ctx, ps)
 		if rbErr != nil {
 			return ctrl.Result{}, rbErr

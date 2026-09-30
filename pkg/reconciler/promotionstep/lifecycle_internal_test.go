@@ -55,7 +55,9 @@ func arStep(bundle, state string, minute int) *v1alpha1.PromotionStep {
 // C03-promotionstep-09: onHealthFailure=rollback creates a Bundle with the
 // images of the Bundle verified before the failing one (the planner the CLI
 // and UI use), never re-promotes the failing image, is idempotent, and stops
-// the step for a human when there is nothing safe to roll back to.
+// the step for a human when there is nothing safe to roll back to or when the
+// failing Bundle is itself a rollback. The rollback Bundle is stamped with
+// kardinal.io/created-at like the CLI's and UI's.
 func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
@@ -69,6 +71,8 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 		wantState string
 		wantTag   string
 		wantTgt   string
+		// failingIsRollback makes app-v2 a rollback Bundle (from app-v3).
+		failingIsRollback bool
 	}{
 		{name: "rolls back to the bundle verified before the failing one",
 			earlier:   []client.Object{arBundle("app-v1", "1", 0), arStep("app-v1", StateVerified, 5)},
@@ -84,12 +88,22 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 		{name: "only the failing image was verified before: abort, never re-promote it",
 			earlier:   []client.Object{arBundle("app-v2b", "2", 6), arStep("app-v2b", StateVerified, 8)},
 			wantState: StateAbortedByAlarm},
+		{name: "the failing bundle is itself a rollback: abort, never roll back a rollback",
+			earlier:           []client.Object{arBundle("app-v1", "1", 0), arStep("app-v1", StateVerified, 5)},
+			failingIsRollback: true,
+			wantState:         StateAbortedByAlarm},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			failing := arStep("app-v2", StateHealthChecking, 10)
-			objs := append([]client.Object{pipeline.DeepCopy(), arBundle("app-v2", "2", 9), failing}, tc.earlier...)
+			failingBundle := arBundle("app-v2", "2", 9)
+			if tc.failingIsRollback {
+				failingBundle.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
+				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v3"}
+				failingBundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+			}
+			objs := append([]client.Object{pipeline.DeepCopy(), failingBundle, failing}, tc.earlier...)
 			c := fakeclient.NewClientBuilder().WithScheme(newTestScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 				WithObjects(objs...).Build()
@@ -114,7 +128,7 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			require.NoError(t, c.List(ctx, &list))
 			var rollbacks []v1alpha1.Bundle
 			for _, b := range list.Items {
-				if b.Labels[lifecycle.LabelRollback] == "true" {
+				if b.Labels[lifecycle.LabelRollback] == "true" && b.Name != "app-v2" {
 					rollbacks = append(rollbacks, b)
 				}
 			}
@@ -132,6 +146,8 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			assert.Equal(t, "app-v2", rb.Annotations[lifecycle.AnnotationRollbackFrom])
 			assert.Equal(t, "prod", rb.Spec.Intent.TargetEnvironment)
 			assert.Equal(t, "AutoRollback", rb.Labels[lifecycle.LabelReason])
+			assert.NotEmpty(t, rb.Annotations[lifecycle.AnnotationCreatedAt],
+				"the rollback Bundle is stamped with kardinal.io/created-at")
 			assert.Contains(t, got.Status.Message, rb.Name)
 		})
 	}

@@ -53,8 +53,9 @@ func rtVerifiedStep(bundle string, minute int) *v1alpha1.PromotionStep {
 // TestRollbackPolicy_RollsBackToPreviousVerifiedBundle covers C04-gates-06: the
 // RollbackPolicy rollback Bundle carries the images of the Bundle Verified
 // before spec.bundleRef in the environment, never the failing image; nothing is
-// created when there is no such Bundle; an existing automatic rollback of the
-// Bundle is reused; and a second reconcile creates nothing more.
+// created when there is no such Bundle or when spec.bundleRef is itself a
+// rollback; an existing automatic rollback of the Bundle is reused; and a
+// second reconcile creates nothing more.
 func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 	alarm := func() client.Object {
 		b := rtBundle(lifecycle.AutoRollbackName("bundle-1", "alarm"), "1.24.0", 55)
@@ -69,6 +70,8 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 		wantName string // "" = no rollback Bundle
 		wantTag  string
 		wantTo   string
+		// failingIsRollback makes bundle-1 a rollback Bundle (from bundle-2).
+		failingIsRollback bool
 	}{
 		{name: "restores the bundle verified before the failing one",
 			history:  []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5)},
@@ -80,6 +83,9 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 			},
 			wantName: lifecycle.AutoRollbackName("bundle-1", "policy"), wantTag: "1.24.0", wantTo: "bundle-0"},
 		{name: "nothing verified before: no rollback bundle"},
+		{name: "the failing bundle is itself a rollback: no rollback bundle",
+			history:           []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5)},
+			failingIsRollback: true},
 		{name: "reuses the onHealthFailure rollback of the same bundle",
 			history:  []client.Object{rtBundle("bundle-0", "1.24.0", 0), rtVerifiedStep("bundle-0", 5), alarm()},
 			wantName: lifecycle.AutoRollbackName("bundle-1", "alarm")},
@@ -90,7 +96,13 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 			rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
 			failing := makePromotionStep("a-bundle-1-prod", "nginx-demo", "prod", 3)
 			failing.Labels["kardinal.io/bundle"] = "bundle-1"
-			objs := append([]client.Object{rp, failing, rtPipeline(), rtBundle("bundle-1", "1.25.0", 30)}, tc.history...)
+			failingBundle := rtBundle("bundle-1", "1.25.0", 30)
+			if tc.failingIsRollback {
+				failingBundle.Labels[lifecycle.LabelRollback] = "true"
+				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "bundle-2"}
+				failingBundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+			}
+			objs := append([]client.Object{rp, failing, rtPipeline(), failingBundle}, tc.history...)
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(objs...).
 				WithStatusSubresource(&v1alpha1.RollbackPolicy{}, &v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).Build()
 			r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
@@ -109,7 +121,7 @@ func TestRollbackPolicy_RollsBackToPreviousVerifiedBundle(t *testing.T) {
 			require.NoError(t, c.List(ctx, &list))
 			var rollbacks []v1alpha1.Bundle
 			for _, b := range list.Items {
-				if b.Labels[lifecycle.LabelRollback] == "true" {
+				if b.Labels[lifecycle.LabelRollback] == "true" && b.Name != "bundle-1" {
 					rollbacks = append(rollbacks, b)
 				}
 			}

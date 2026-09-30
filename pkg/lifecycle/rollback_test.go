@@ -30,6 +30,15 @@ func TestPlanRollback(t *testing.T) {
 		return b
 	}
 	other := bundle("other-v1", "other", "o1", 0)
+	// rollbackOf builds a rollback Bundle of pipeline app in env that restored
+	// tag after rolling back from the Bundle from.
+	rollbackOf := func(name, from, env, tag string, minute int) *v1alpha1.Bundle {
+		b := bundle(name, "app", tag, minute)
+		b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
+		b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: from}
+		b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: env}
+		return b
+	}
 
 	tests := []struct {
 		name       string
@@ -117,6 +126,108 @@ func TestPlanRollback(t *testing.T) {
 			},
 			req:        lifecycle.RollbackRequest{ToBundle: "v1"},
 			wantTarget: "v1", wantFrom: "v3", wantTag: "1",
+		},
+		{
+			name: "a bundle an earlier rollback rolled back from is not the target",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				rollbackOf("r1", "v2", "prod", "1", 30),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11),
+				step("v2", "app", "prod", "Verified", 21), step("r1", "app", "prod", "Verified", 31),
+			},
+			wantTarget: "v0", wantFrom: "r1", wantTag: "0",
+		},
+		{
+			name: "after v2 was rolled back to v1, rolling back again never returns to v2",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				rollbackOf("r1", "v2", "prod", "1", 30),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				step("r1", "app", "prod", "Verified", 31),
+			},
+			wantErr: lifecycle.ErrConflict,
+		},
+		{
+			name: "a rollback in another environment does not exclude the bundle",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), bundle("v2", "app", "2", 10), bundle("v3", "app", "3", 20),
+				rollbackOf("r-uat", "v2", "uat", "1", 15),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+				step("v3", "app", "prod", "Verified", 21),
+			},
+			wantTarget: "v2", wantFrom: "v3", wantTag: "2",
+		},
+		{
+			name: "a verified rollback bundle is a target like any other",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20), bundle("v3", "app", "3", 40),
+				rollbackOf("r1", "v2", "prod", "1", 30),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				step("r1", "app", "prod", "Verified", 31), step("v3", "app", "prod", "Verified", 41),
+			},
+			wantTarget: "r1", wantFrom: "v3", wantTag: "1",
+		},
+		{
+			name: "--to can name a bundle an earlier rollback rolled back from",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				rollbackOf("r1", "v2", "prod", "1", 30),
+				step("v1", "app", "prod", "Verified", 11), step("v2", "app", "prod", "Verified", 21),
+				step("r1", "app", "prod", "Verified", 31),
+			},
+			req:        lifecycle.RollbackRequest{ToBundle: "v2"},
+			wantTarget: "v2", wantFrom: "r1", wantTag: "2",
+		},
+		{
+			name: "an automatic rollback of a bundle that is not a rollback goes ahead",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), bundle("v2", "app", "2", 10),
+				step("v1", "app", "prod", "Verified", 1), healthFailed(step("v2", "app", "prod", "Failed", 11)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "v2", Automatic: true},
+			wantTarget: "v1", wantFrom: "v2", wantTag: "1",
+		},
+		{
+			name: "an automatic rollback of a failing rollback is refused",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				rollbackOf("r1", "v2", "prod", "1", 30),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11),
+				step("v2", "app", "prod", "Verified", 21), healthFailed(step("r1", "app", "prod", "Failed", 31)),
+			},
+			req:     lifecycle.RollbackRequest{FromBundle: "r1", Automatic: true},
+			wantErr: lifecycle.ErrConflict,
+		},
+		{
+			name: "a manual rollback of a failing rollback is allowed",
+			objs: []client.Object{
+				bundle("v0", "app", "0", 0), bundle("v1", "app", "1", 10), bundle("v2", "app", "2", 20),
+				rollbackOf("r1", "v2", "prod", "1", 30),
+				step("v0", "app", "prod", "Verified", 1), step("v1", "app", "prod", "Verified", 11),
+				step("v2", "app", "prod", "Verified", 21), healthFailed(step("r1", "app", "prod", "Failed", 31)),
+			},
+			req:        lifecycle.RollbackRequest{FromBundle: "r1"},
+			wantTarget: "v0", wantFrom: "r1", wantTag: "0",
+		},
+		{
+			name: "--to must have been Verified in the environment",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), bundle("v2", "app", "2", 10), bundle("v3", "app", "3", 20),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "Verified", 11),
+				step("v3", "app", "uat", "Verified", 21),
+			},
+			req:     lifecycle.RollbackRequest{ToBundle: "v3"},
+			wantErr: lifecycle.ErrInvalid,
+		},
+		{
+			name: "--to must have been Verified in every region of the environment",
+			objs: []client.Object{
+				bundle("v1", "app", "1", 0), bundle("v2", "app", "2", 10),
+				named(step("v1", "app", "prod", "Verified", 1), "v1-prod-eu"), named(step("v1", "app", "prod", "Failed", 1), "v1-prod-us"),
+				named(step("v2", "app", "prod", "Verified", 11), "v2-prod-eu"), named(step("v2", "app", "prod", "Verified", 11), "v2-prod-us"),
+			},
+			req:     lifecycle.RollbackRequest{ToBundle: "v1"},
+			wantErr: lifecycle.ErrInvalid,
 		},
 		{
 			name:    "--to must exist",
