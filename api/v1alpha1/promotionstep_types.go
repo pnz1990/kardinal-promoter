@@ -22,16 +22,11 @@ type PromotionStepSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Environment string `json:"environment"`
 
-	// StepType identifies the built-in or custom step to execute.
+	// StepType identifies the built-in step to execute.
 	// Examples: git-clone, kustomize-set-image, git-commit, open-pr,
 	//           wait-for-merge, health-check.
 	// +kubebuilder:validation:MinLength=1
 	StepType string `json:"stepType"`
-
-	// Inputs carries step-specific configuration values derived from the
-	// Pipeline and Bundle at graph generation time.
-	// +optional
-	Inputs map[string]string `json:"inputs,omitempty"`
 
 	// UpstreamStates holds the resolved state of all upstream PromotionSteps.
 	// Each entry is a string like "Verified", set by the kro Graph controller via CEL

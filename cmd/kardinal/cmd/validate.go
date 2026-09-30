@@ -185,8 +185,8 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		// Build rejects custom steps too; they are reported above already.
 		buildable := pipeline.DeepCopy()
 		for i := range buildable.Spec.Environments {
-			buildable.Spec.Environments[i].Steps = nil
-			buildable.Spec.Environments[i].PromotionTemplate = nil
+			buildable.Spec.Environments[i].Steps = nil             //nolint:staticcheck // SA1019: clear the deprecated field reported above
+			buildable.Spec.Environments[i].PromotionTemplate = nil //nolint:staticcheck // SA1019: clear the deprecated field reported above
 		}
 		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: dummyBundle}); err != nil {
 			errs = append(errs, err.Error())

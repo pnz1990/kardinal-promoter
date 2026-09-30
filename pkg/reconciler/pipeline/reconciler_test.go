@@ -140,13 +140,13 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 		mutate  func(p *kardinalv1alpha1.Pipeline)
 		wantMsg string
 	}{
-		{name: "steps", wantMsg: "spec.environments[].steps is not implemented",
+		{name: "steps", wantMsg: "spec.environments[].steps is not supported",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}
+				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}} //nolint:staticcheck // SA1019: the test sets the deprecated field
 			}},
-		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not implemented",
+		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not supported",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"}
+				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"} //nolint:staticcheck // SA1019: the test sets the deprecated field
 			}},
 		{name: "regions fan-out", wantMsg: "regions fan-out is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) {

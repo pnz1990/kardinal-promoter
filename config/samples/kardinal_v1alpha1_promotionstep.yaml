@@ -12,7 +12,3 @@ spec:
   bundleName: nginx-demo-v1
   environment: prod
   stepType: open-pr
-  inputs:
-    repo: "myorg/gitops"
-    branch: "kardinal/promote-nginx-demo-v1-prod"
-    title: "feat(nginx-demo): promote v1.29.0 to prod"

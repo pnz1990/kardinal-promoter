@@ -248,7 +248,6 @@ kubectl delete crd \
   changewindows.kardinal.io \
   subscriptions.kardinal.io \
   notificationhooks.kardinal.io \
-  promotiontemplates.kardinal.io \
   auditevents.kardinal.io
 
 # Optional: remove kro and its CRDs (only if nothing else uses kro)

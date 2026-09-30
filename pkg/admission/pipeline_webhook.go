@@ -130,11 +130,11 @@ func validatePipeline(req *admissionv1.AdmissionRequest, log zerolog.Logger) *ad
 		Str("pipeline", pipeline.Name).
 		Msg("admission: Pipeline admitted — no cycle detected")
 	resp := allow()
-	// The CRD accepts these reserved fields, so the Pipeline is admitted, but
-	// a Bundle fails when it reaches an environment that uses one (or when its
-	// Graph is built, for steps and promotionTemplate): warn with the messages
-	// "kardinal validate" and the Pipeline's Ready=False/NotImplemented
-	// condition show.
+	// The CRD accepts most reserved fields (its CEL rules reject steps,
+	// promotionTemplate and autoRollback before this webhook runs), so the
+	// Pipeline is admitted, but a Bundle fails when it reaches an environment
+	// that uses one: warn with the messages "kardinal validate" and the
+	// Pipeline's Ready=False/NotImplemented condition show.
 	resp.Warnings = graph.UnimplementedFields(&pipeline)
 	return resp
 }

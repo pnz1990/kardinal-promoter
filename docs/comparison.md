@@ -30,6 +30,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (approve and gate override are CLI-only) | Polished Kargo UI | No UI |
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
+| **Custom promotion steps** | No — each environment runs a fixed sequence chosen by the Bundle type, `update.strategy` and `approval` ([Promotion Steps](pipeline-reference.md#promotion-steps)) | Yes — a Stage's `promotionTemplate` lists promotion steps | No |
 | **Integration test step** | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | No | No |
 | **Image signature verification** | No — use admission-time verification in the workload cluster (Sigstore policy-controller or Kyverno `verifyImages`; [how](pipeline-reference.md#image-signatures-and-tests)) | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
