@@ -166,7 +166,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.11.4
 
@@ -181,9 +181,8 @@ jobs:
           # Scan with the toolchain pinned in go.mod so stdlib fixes stay in sync.
           go-version-file: go.mod
       - name: Run govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+        # make vuln installs govulncheck at the Makefile's GOVULNCHECK_VERSION.
+        run: make vuln
 
   # ── go.sum integrity ─────────────────────────────────────────────────────────
   go-sum-integrity:
@@ -208,7 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Scan filesystem for HIGH/CRITICAL CVEs
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
