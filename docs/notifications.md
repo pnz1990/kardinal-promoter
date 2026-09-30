@@ -42,12 +42,25 @@ The controller POSTs a JSON body to the configured URL on each qualifying event:
 
 ```json
 {
-  "event":       "Bundle.Verified",
+  "event":     "Bundle.Verified",
+  "pipeline":  "nginx-demo",
+  "bundle":    "nginx-demo-abc123",
+  "message":   "Bundle nginx-demo-abc123 is Verified",
+  "timestamp": "2026-04-21T10:00:00Z"
+}
+```
+
+Bundle events have no `environment` field. PolicyGate and PromotionStep events
+carry the environment:
+
+```json
+{
+  "event":       "PromotionStep.Failed",
   "pipeline":    "nginx-demo",
   "bundle":      "nginx-demo-abc123",
   "environment": "prod",
-  "message":     "Bundle nginx-demo-abc123 is Verified",
-  "timestamp":   "2026-04-21T10:00:00Z"
+  "message":     "PromotionStep nginx-demo-abc123-prod failed: health check timeout after 10m0s",
+  "timestamp":   "2026-04-21T10:12:00Z"
 }
 ```
 
