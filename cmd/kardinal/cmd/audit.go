@@ -26,6 +26,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func newAuditCmd() *cobra.Command {
@@ -49,6 +50,8 @@ func newAuditSummaryCmd() *cobra.Command {
 		Long: `Show a summary of promotion activity from the AuditEvent log.
 
 Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
+Rollbacks counts the rollback Bundles created in the window, from kardinal
+rollback, the UI, a RollbackPolicy or onHealthFailure=rollback.
 The success rate is succeeded / (succeeded + failed + superseded) among the
 promotions that finished inside the window.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -96,7 +99,34 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		}
 	}
 
-	if len(events) == 0 {
+	// Every rollback (kardinal rollback, the UI, a RollbackPolicy and
+	// onHealthFailure=rollback) creates a rollback Bundle, so rollbacks are
+	// counted from the Bundles created in the window (E2E-R07). A manual
+	// rollback writes no RollbackStarted event.
+	var bundleList v1alpha1.BundleList
+	if err := client.List(context.Background(), &bundleList, sigs_client.InNamespace(ns)); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
+	type rollbackKey struct{ pipeline, from, env string }
+	rolledBack := make(map[rollbackKey]bool)
+	rollbacks := 0
+	var rollbackPipelines []string
+	for _, b := range bundleList.Items {
+		if !isRollbackBundle(b) || (pipeline != "" && b.Spec.Pipeline != pipeline) {
+			continue
+		}
+		env := ""
+		if b.Spec.Intent != nil {
+			env = b.Spec.Intent.TargetEnvironment
+		}
+		rolledBack[rollbackKey{b.Spec.Pipeline, b.Annotations[lifecycle.AnnotationRollbackFrom], env}] = true
+		if !b.CreationTimestamp.Before(&cutoff) {
+			rollbacks++
+			rollbackPipelines = append(rollbackPipelines, b.Spec.Pipeline)
+		}
+	}
+
+	if len(events) == 0 && rollbacks == 0 {
 		_, _ = fmt.Fprintf(out, "No audit events found in the last %s.\n", sinceDuration)
 		if pipeline != "" {
 			_, _ = fmt.Fprintf(out, "Pipeline filter: %s\n", pipeline)
@@ -113,9 +143,11 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 		totalDuration                          time.Duration
 		durationCount                          int
 		gateTotal, gateBlocked                 int
-		rollbacks                              int
 		pipelines                              = make(map[string]bool)
 	)
+	for _, p := range rollbackPipelines {
+		pipelines[p] = true
+	}
 
 	for _, ae := range events {
 		pipelines[ae.Spec.PipelineName] = true
@@ -143,7 +175,13 @@ func auditSummaryFn(out io.Writer, client sigs_client.Client, ns, pipeline, sinc
 				gateBlocked++
 			}
 		case "RollbackStarted":
-			rollbacks++
+			// onHealthFailure=rollback writes one per region; its rollback
+			// Bundle is counted above unless it has been deleted.
+			k := rollbackKey{ae.Spec.PipelineName, ae.Spec.BundleName, ae.Spec.Environment}
+			if !rolledBack[k] {
+				rolledBack[k] = true
+				rollbacks++
+			}
 		}
 	}
 

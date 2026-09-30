@@ -41,10 +41,12 @@ kardinal-version ConfigMap in --controller-namespace), the pipeline count with
 any Degraded pipelines, and the bundle count (active = Available or Promoting).
 
 When called with a pipeline name: shows in-flight promotion details for that
-pipeline — the active bundle per environment, its PromotionSteps (one row per
-region, active steps marked), the PolicyGates holding it back (with CEL
-expression and current reason), and open PR URLs. This is the first command to
-run when a promotion is stuck.
+pipeline — the current bundle per environment (the newest bundle that is not
+Superseded and has a PromotionStep there, or a gate instance there and has not
+failed; see kardinal explain), its PromotionSteps
+(one row per region, active steps marked), the PolicyGates holding it back
+(with CEL expression and current reason), and open PR URLs. This is the first
+command to run when a promotion is stuck.
 
 Examples:
   # Cluster-level summary
@@ -148,7 +150,12 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		return fmt.Errorf("list policy gates: %w", err)
 	}
 
-	active := activeBundleByEnv(&pl, steps.Items, gates.Items)
+	var bundles v1alpha1.BundleList
+	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
+
+	active := currentBundleByEnv(bundles.Items, steps.Items, gates.Items)
 
 	// One row per PromotionStep of the active Bundle, so the regions of a
 	// multi-region environment each get a row.
@@ -198,7 +205,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		return rows[i].region < rows[j].region
 	})
 
-	// A gate blocks when it belongs to the active Bundle of its environment,
+	// A gate blocks when it belongs to the current Bundle of its environment,
 	// is not ready, and that Bundle has no step there yet: the Graph creates
 	// the step only once every gate passes.
 	var blockingGates []v1alpha1.PolicyGate

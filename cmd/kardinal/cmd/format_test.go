@@ -25,6 +25,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/cmd/kardinal/cmd"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 func TestFormatPipelineTable(t *testing.T) {
@@ -897,6 +898,58 @@ func TestStepStatePriority_AllStates(t *testing.T) {
 			var buf bytes.Buffer
 			require.NoError(t, cmd.FormatStepsTable(&buf, steps))
 			assert.Contains(t, buf.String(), " "+tc.want+" ", buf.String())
+		})
+	}
+}
+
+// E2E-R16: a Failed bundle's error is shown only while no newer bundle of the
+// same pipeline that is not Superseded exists: a newer bundle that is
+// promoting or Verified makes the failure history, not the pipeline's state.
+func TestFormatBundleErrors_NewerBundleHidesOlderFailure(t *testing.T) {
+	now := time.Now()
+	bundle := func(ns, pipeline, name, phase string, age time.Duration) v1alpha1.Bundle {
+		b := v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, CreationTimestamp: metav1.NewTime(now.Add(-age))},
+			Spec:       v1alpha1.BundleSpec{Pipeline: pipeline, Type: "image"},
+			Status:     v1alpha1.BundleStatus{Phase: phase},
+		}
+		if phase == "Failed" {
+			b.Status.Conditions = []metav1.Condition{{Type: "Failed", Status: metav1.ConditionTrue, Reason: "StepFailed",
+				Message: "environment prod: PR #28 was closed without merging"}}
+		}
+		return b
+	}
+	failed := bundle("default", "kardinal-test-app", "kardinal-test-app-rollback-bkgwk", "Failed", 13*time.Minute)
+	lifecycle.StampCreatedAt(&failed, failed.CreationTimestamp.Time)
+	// sameSecond is created in the same second as failed; the
+	// kardinal.io/created-at annotation orders the two (lifecycle.CompareCreation).
+	sameSecond := func(phase string, after time.Duration) v1alpha1.Bundle {
+		b := bundle("default", "kardinal-test-app", "kardinal-test-app-9smn4", phase, 0)
+		b.CreationTimestamp = failed.CreationTimestamp
+		lifecycle.StampCreatedAt(&b, failed.CreationTimestamp.Add(after))
+		return b
+	}
+	const wantErr = "ERROR: pipeline kardinal-test-app: environment prod: PR #28 was closed without merging\n"
+	cases := []struct {
+		name  string
+		other v1alpha1.Bundle
+		want  string
+	}{
+		{"newer verified bundle", bundle("default", "kardinal-test-app", "kardinal-test-app-9smn4", "Verified", 3*time.Minute), ""},
+		{"newer promoting bundle", bundle("default", "kardinal-test-app", "kardinal-test-app-9smn4", "Promoting", 3*time.Minute), ""},
+		{"newer bundle not started", bundle("default", "kardinal-test-app", "kardinal-test-app-9smn4", "", 3*time.Minute), ""},
+		{"newer superseded bundle", bundle("default", "kardinal-test-app", "kardinal-test-app-9smn4", "Superseded", 3*time.Minute), wantErr},
+		{"older verified bundle", bundle("default", "kardinal-test-app", "kardinal-test-app-9tptr", "Verified", time.Hour), wantErr},
+		{"newer bundle of another pipeline", bundle("default", "other", "other-9smn4", "Verified", 3*time.Minute), wantErr},
+		{"newer bundle in another namespace", bundle("team-b", "kardinal-test-app", "kardinal-test-app-9smn4", "Verified", 3*time.Minute), wantErr},
+		{"newer bundle in the same second", sameSecond("Verified", 400*time.Millisecond), ""},
+		{"older bundle in the same second", sameSecond("Verified", -400*time.Millisecond), wantErr},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			require.NoError(t, cmd.FormatBundleErrors(&buf, []v1alpha1.Bundle{failed, tc.other}, false))
+			assert.Equal(t, tc.want, buf.String())
 		})
 	}
 }

@@ -28,7 +28,6 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 func newExplainCmd() *cobra.Command {
@@ -42,9 +41,16 @@ func newExplainCmd() *cobra.Command {
 		Use:   "explain <pipeline>",
 		Short: "Explain the current state of a promotion pipeline",
 		Long: `Explain displays, per environment, the PromotionStep and the PolicyGates of
-the Bundle currently promoting there (or last promoted). Gates include org
-gates from the policy namespaces: they are the instances the Graph created for
-that Bundle, with the controller's latest evaluation.
+the current Bundle there: the newest Bundle that is not Superseded and has a
+PromotionStep in that environment, or a gate instance there and has not
+failed. The Graph creates a Bundle's gate instances when the Bundle starts, so
+an environment a promoting Bundle has not reached yet shows the gates it will
+wait on; one a Failed Bundle never reached keeps the Bundle before it. When
+every Bundle there is Superseded, the newest one with a PromotionStep there is
+shown. Gates include org
+gates from the policy namespaces and skip-permission gates: they are the
+instances the Graph created for that Bundle, with the controller's latest
+evaluation. Gates that are not ready are listed first.
 
 Use --env to filter to a specific environment.
 Use --watch to refresh every 3 seconds.
@@ -125,6 +131,11 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return fmt.Errorf("list policy gates: %w", err)
 	}
 
+	var bundles v1alpha1.BundleList
+	if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
+		return fmt.Errorf("list bundles: %w", err)
+	}
+
 	type explainRow struct {
 		environment string
 		kind        string // "PolicyGate" or "Step"
@@ -132,10 +143,11 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		state       string
 		reason      string
 		expression  string // CEL expression for PolicyGate rows (empty for Step rows)
+		notReady    bool   // a PolicyGate that is not ready: it holds the Bundle
 	}
 
-	active := activeBundleByEnv(pipe, steps.Items, gates.Items)
-	activeBundle := func(env string) string { return active[env] }
+	current := currentBundleByEnv(bundles.Items, steps.Items, gates.Items)
+	currentBundle := func(env string) string { return current[env] }
 
 	var rows []explainRow
 	for _, s := range steps.Items {
@@ -143,7 +155,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		if envFilter != "" && env != envFilter {
 			continue
 		}
-		if s.Spec.BundleName != activeBundle(env) {
+		if s.Spec.BundleName != currentBundle(env) {
 			continue
 		}
 		reason := s.Status.Message
@@ -166,7 +178,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 			continue
 		}
 		bundle := g.Labels["kardinal.io/bundle"]
-		if bundle == "" || bundle != activeBundle(env) {
+		if bundle == "" || bundle != currentBundle(env) {
 			continue
 		}
 		reason := g.Status.Reason
@@ -184,6 +196,7 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 			state:       PolicyGatePhase(g),
 			reason:      reason,
 			expression:  expr,
+			notReady:    !g.Status.Ready,
 		})
 	}
 
@@ -198,13 +211,17 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return nil
 	}
 
-	// Sort by environment, then kind (PolicyGate before Step), then name.
+	// Sort by environment, then kind (PolicyGate before Step), then gates
+	// that are not ready before the ones that pass, then name.
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].environment != rows[j].environment {
 			return rows[i].environment < rows[j].environment
 		}
 		if rows[i].kind != rows[j].kind {
 			return rows[i].kind < rows[j].kind
+		}
+		if rows[i].notReady != rows[j].notReady {
+			return rows[i].notReady
 		}
 		return rows[i].name < rows[j].name
 	})
@@ -245,85 +262,6 @@ func explainOnce(w io.Writer, c sigs_client.Client, ns, pipeline, envFilter stri
 		return fmt.Errorf("write explain output: %w", err)
 	}
 	return nil
-}
-
-// activeBundleByEnv returns, per environment, the Bundle explain and status
-// describe. Candidates are the Bundles with a PromotionStep there, ranked by
-// stepStatePriority, and the Bundles waiting at its gates: gate instances
-// there, no step yet, and a Verified step in every upstream environment (the
-// Graph creates the step once the gates pass). A waiting Bundle ranks with a
-// Pending step, so a Bundle held by a gate beats an older Verified one. Ties
-// go to the newest. A Bundle whose gate instances exist but that has not
-// reached the environment is used only when nothing else is there.
-func activeBundleByEnv(pipe *v1alpha1.Pipeline, steps []v1alpha1.PromotionStep,
-	gates []v1alpha1.PolicyGate) map[string]string {
-	// A Pipeline the builder rejects (no environments, a cycle) has no
-	// upstreams to check; its existing steps and gates are still shown.
-	deps, _ := graph.EnvironmentDependencies(pipe)
-	type key struct{ bundle, env string }
-	stepStates := make(map[key][]string)
-	for _, s := range steps {
-		k := key{s.Spec.BundleName, s.Spec.Environment}
-		stepStates[k] = append(stepStates[k], stepState(s))
-	}
-	verifiedIn := func(bundle, env string) bool {
-		states := stepStates[key{bundle, env}]
-		for _, st := range states {
-			if st != "Verified" {
-				return false
-			}
-		}
-		return len(states) > 0
-	}
-
-	type candidate struct {
-		bundle   string
-		priority int
-		created  time.Time
-	}
-	best := make(map[string]candidate)
-	offer := func(env string, c candidate) {
-		b, ok := best[env]
-		if !ok || c.priority > b.priority ||
-			(c.priority == b.priority && (c.created.After(b.created) ||
-				(c.created.Equal(b.created) && c.bundle > b.bundle))) {
-			best[env] = c
-		}
-	}
-	for _, s := range steps {
-		offer(s.Spec.Environment, candidate{s.Spec.BundleName, stepStatePriority(stepState(s)), s.CreationTimestamp.Time})
-	}
-
-	gateCreated := make(map[key]time.Time)
-	for _, g := range gates {
-		k := key{g.Labels["kardinal.io/bundle"], g.Labels["kardinal.io/environment"]}
-		if k.bundle == "" {
-			continue // a template, not an instance
-		}
-		if t, ok := gateCreated[k]; !ok || g.CreationTimestamp.After(t) {
-			gateCreated[k] = g.CreationTimestamp.Time
-		}
-	}
-	for k, created := range gateCreated {
-		if _, stepped := stepStates[k]; stepped {
-			continue
-		}
-		priority := -1 // not reached yet
-		reached := true
-		for _, up := range deps[k.env] {
-			reached = reached && verifiedIn(k.bundle, up)
-		}
-		if reached {
-			priority = stepStatePriority("Pending")
-		}
-		offer(k.env, candidate{k.bundle, priority, created})
-	}
-
-	out := make(map[string]string, len(best))
-	for env, c := range best {
-		out[env] = c.bundle
-	}
-	return out
 }
 
 func stepState(s v1alpha1.PromotionStep) string {

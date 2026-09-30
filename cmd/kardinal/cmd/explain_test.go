@@ -28,6 +28,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
 // explainStep is a PromotionStep shaped like the ones the Graph creates.
@@ -70,6 +71,23 @@ func explainGateInstance(pipeline, bundle, env, template, expr string, ready, ev
 	return g
 }
 
+// explainBundle is a Bundle of pipeline demo in phase, created at created.
+func explainBundle(name, phase string, created time.Time) *v1alpha1.Bundle {
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: metav1.NewTime(created)},
+		Spec:       v1alpha1.BundleSpec{Pipeline: "demo", Type: "image"},
+	}
+	b.Status.Phase = phase
+	return b
+}
+
+// withCreatedAt stamps b with the kardinal.io/created-at annotation the
+// controller writes, which orders Bundles created in the same second.
+func withCreatedAt(b *v1alpha1.Bundle, at time.Time) *v1alpha1.Bundle {
+	lifecycle.StampCreatedAt(b, at)
+	return b
+}
+
 func runExplain(t *testing.T, c sigs_client.Client, pipeline, env string, color bool) (string, error) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -90,6 +108,7 @@ func TestExplain_ShowsAppliedGateInstances(t *testing.T) {
 	c := policyClient(t,
 		policyPipeline("demo", "test", "uat", "prod"),
 		template,
+		explainBundle("b1", "Promoting", created),
 		explainStep("demo", "b1", "prod", "Pending", "", created),
 		explainGateInstance("demo", "b1", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
 			"bundle.version=sha-abc1234: !schedule.isWeekend = false"),
@@ -134,6 +153,7 @@ func TestExplain_Rows(t *testing.T) {
 		{
 			name: "env filter",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Promoting", recent),
 				explainStep("demo", "b1", "test", "Verified", "", recent),
 				explainStep("demo", "b1", "prod", "WaitingForMerge", "PR #7 open", recent),
 			},
@@ -144,14 +164,17 @@ func TestExplain_Rows(t *testing.T) {
 		{
 			name: "unevaluated gate is Pending",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Promoting", recent),
 				explainStep("demo", "b1", "uat", "Verified", "", recent),
 				explainGateInstance("demo", "b1", "prod", "uat-soak", "upstream.uat.soakMinutes >= 30", false, false, ""),
 			},
 			contains: []string{"uat-soak", "upstream.uat.soakMinutes >= 30", "Pending"},
 		},
 		{
-			name: "only the active bundle",
+			name: "only the current bundle",
 			objs: []sigs_client.Object{
+				explainBundle("old", "Verified", old),
+				explainBundle("new", "Promoting", recent),
 				explainStep("demo", "old", "prod", "Verified", "old-step", old),
 				explainGateInstance("demo", "old", "prod", "old-gate", "true", true, true, "old"),
 				explainStep("demo", "new", "prod", "Promoting", "new-step", recent),
@@ -161,17 +184,76 @@ func TestExplain_Rows(t *testing.T) {
 			excludes: []string{"old-step", "old-gate"},
 		},
 		{
-			name: "rolling back beats an older verified bundle",
+			name: "the newest bundle beats an older rolling back one",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Failed", old),
+				explainBundle("b2", "Verified", recent),
 				explainStep("demo", "b2", "prod", "Verified", "b2 verified", recent),
 				explainStep("demo", "b1", "prod", "RollingBack", "rolling back", old),
 			},
-			contains: []string{"RollingBack", "rolling back"},
-			excludes: []string{"b2 verified"},
+			contains: []string{"b2 verified"},
+			excludes: []string{"RollingBack", "rolling back"},
+		},
+		{
+			name: "a failed bundle is current until a newer one exists",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainBundle("b2", "Failed", recent),
+				explainStep("demo", "b1", "prod", "Verified", "b1 verified", old),
+				explainStep("demo", "b2", "prod", "Failed", "PR #8 closed", recent),
+			},
+			contains: []string{"Failed", "PR #8 closed"},
+			excludes: []string{"b1 verified"},
+		},
+		{
+			// The Graph creates every gate instance when the Bundle starts,
+			// so a Bundle that failed at test has gate instances in uat and
+			// prod without ever reaching them.
+			name: "a newer failed bundle is not current where it never arrived",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainBundle("b2", "Failed", recent),
+				explainStep("demo", "b1", "test", "Verified", "b1 test", old),
+				explainStep("demo", "b1", "uat", "Verified", "b1 uat", old),
+				explainStep("demo", "b1", "prod", "Verified", "b1 prod", old),
+				explainGateInstance("demo", "b1", "prod", "b1-gate", "true", true, true, "ok"),
+				explainStep("demo", "b2", "test", "Failed", "PR #9 closed", recent),
+				explainGateInstance("demo", "b2", "uat", "b2-uat-gate", "true", false, false, ""),
+				explainGateInstance("demo", "b2", "prod", "b2-prod-gate", "false", false, true, "x"),
+			},
+			contains: []string{"PR #9 closed", "b1 uat", "b1 prod", "b1-gate"},
+			excludes: []string{"b1 test", "b2-uat-gate", "b2-prod-gate"},
+		},
+		{
+			name: "same-second bundles are ordered by the created-at annotation",
+			objs: []sigs_client.Object{
+				withCreatedAt(explainBundle("b-z", "Verified", recent), recent),
+				withCreatedAt(explainBundle("b-a", "Promoting", recent), recent.Add(300*time.Millisecond)),
+				explainStep("demo", "b-z", "prod", "Verified", "b-z step", recent),
+				explainStep("demo", "b-a", "prod", "Promoting", "b-a step", recent),
+			},
+			contains: []string{"b-a step"},
+			excludes: []string{"b-z step"},
+		},
+		{
+			name: "when every bundle is superseded the newest one with a step is shown",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Superseded", old),
+				explainBundle("b2", "Superseded", recent),
+				explainBundle("b3", "Superseded", policyTestNow),
+				explainStep("demo", "b1", "prod", "Promoting", "b1 step", old),
+				explainStep("demo", "b2", "prod", "WaitingForMerge", "b2 step", recent),
+				explainGateInstance("demo", "b2", "prod", "b2-gate", "true", true, true, "ok"),
+				explainStep("demo", "b3", "test", "Verified", "b3 test", policyTestNow),
+				explainGateInstance("demo", "b3", "prod", "b3-gate", "false", false, true, "x"),
+			},
+			contains: []string{"b2 step", "b2-gate", "b3 test"},
+			excludes: []string{"b1 step", "b3-gate"},
 		},
 		{
 			name: "gates before the step is created",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Promoting", recent),
 				explainStep("demo", "b1", "uat", "Promoting", "", recent),
 				explainGateInstance("demo", "b1", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
 					"!schedule.isWeekend = false"),
@@ -182,6 +264,8 @@ func TestExplain_Rows(t *testing.T) {
 		{
 			name: "a newer bundle held at a gate beats an older verified one",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainBundle("b2", "Promoting", recent),
 				explainStep("demo", "b1", "prod", "Verified", "b1 verified", old),
 				explainStep("demo", "b2", "uat", "Verified", "", recent),
 				explainGateInstance("demo", "b2", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
@@ -192,20 +276,44 @@ func TestExplain_Rows(t *testing.T) {
 			excludes: []string{"b1 verified"},
 		},
 		{
-			name: "a newer bundle that has not reached the environment",
+			name: "a newer bundle shows its gates before it reaches the environment",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainBundle("b2", "Promoting", recent),
 				explainStep("demo", "b1", "prod", "Verified", "b1 verified", old),
 				explainStep("demo", "b2", "uat", "Promoting", "", recent),
 				explainGateInstance("demo", "b2", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
 					"!schedule.isWeekend = false"),
 			},
 			env:      "prod",
+			contains: []string{"no-weekend-deploys", "Block"},
+			excludes: []string{"b1 verified"},
+		},
+		{
+			name: "an environment without the newest bundle keeps the older one",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b1", "test", "Verified", "b1 verified", old),
+				explainStep("demo", "b2", "uat", "Promoting", "b2 promoting", recent),
+			},
+			contains: []string{"b1 verified", "b2 promoting"},
+		},
+		{
+			name: "steps and gates of a deleted bundle are ignored",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Verified", old),
+				explainStep("demo", "b1", "prod", "Verified", "b1 verified", old),
+				explainStep("demo", "gone", "prod", "Promoting", "gone step", recent),
+				explainGateInstance("demo", "gone", "prod", "gone-gate", "true", false, true, "x"),
+			},
 			contains: []string{"b1 verified"},
-			excludes: []string{"no-weekend-deploys"},
+			excludes: []string{"gone step", "gone-gate"},
 		},
 		{
 			name: "gate of another pipeline is ignored",
 			objs: []sigs_client.Object{
+				explainBundle("b1", "Promoting", recent),
 				explainStep("demo", "b1", "prod", "Promoting", "", recent),
 				explainGateInstance("other", "b1", "prod", "other-gate", "true", false, true, "x"),
 			},
@@ -226,6 +334,81 @@ func TestExplain_Rows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// E2E-R02: once the newest Bundle is Verified everywhere, explain shows its
+// steps, not the gate instances of an older Superseded Bundle that never
+// reached prod.
+func TestExplain_SupersededBundleIsNotCurrent(t *testing.T) {
+	old := policyTestNow.Add(-18 * time.Hour)
+	recent := policyTestNow.Add(-17 * time.Minute)
+	objs := []sigs_client.Object{
+		policyPipeline("demo", "test", "uat", "prod"),
+		explainBundle("kardinal-test-app-7qvsr", "Superseded", old),
+		explainBundle("kardinal-test-app-9tptr", "Verified", recent),
+		explainStep("demo", "kardinal-test-app-7qvsr", "test", "Verified", "7qvsr test", old),
+		explainStep("demo", "kardinal-test-app-7qvsr", "uat", "Verified", "7qvsr uat", old),
+		explainStep("demo", "kardinal-test-app-9tptr", "test", "Verified", "9tptr test", recent),
+		explainStep("demo", "kardinal-test-app-9tptr", "uat", "Verified", "9tptr uat", recent),
+		explainStep("demo", "kardinal-test-app-9tptr", "prod", "Verified", "9tptr prod", recent),
+	}
+	for _, b := range []string{"kardinal-test-app-7qvsr", "kardinal-test-app-9tptr"} {
+		version := map[string]string{"kardinal-test-app-7qvsr": "main", "kardinal-test-app-9tptr": "sha-9349a3f"}[b]
+		objs = append(objs,
+			explainGateInstance("demo", b, "prod", "no-weekend-deploys", "!schedule.isWeekend", true, true,
+				"bundle.version="+version+": !schedule.isWeekend = true"),
+			explainGateInstance("demo", b, "prod", "require-uat-soak", "bundle.upstreamSoakMinutes >= 30", true, true,
+				"bundle.version="+version+": bundle.upstreamSoakMinutes >= 30 = true"))
+	}
+	c := policyClient(t, objs...)
+
+	out, err := runExplain(t, c, "demo", "prod", false)
+	require.NoError(t, err)
+	assert.Contains(t, out, "9tptr prod")
+	assert.Contains(t, out, "bundle.version=sha-9349a3f")
+	assert.NotContains(t, out, "bundle.version=main", "the Superseded Bundle's gates are not shown:\n%s", out)
+
+	out, err = runExplain(t, c, "demo", "", false)
+	require.NoError(t, err)
+	for _, want := range []string{"9tptr test", "9tptr uat", "9tptr prod"} {
+		assert.Contains(t, out, want)
+	}
+	assert.NotContains(t, out, "7qvsr")
+}
+
+// E2E-R11: a Bundle that skips an environment waits at a skip-permission gate
+// instance. explain shows that instance, not the Step of the older Bundle
+// already in the environment, and lists the gate that blocks first.
+func TestExplain_WaitingBundleSkipGate(t *testing.T) {
+	old := policyTestNow.Add(-5 * time.Minute)
+	recent := policyTestNow.Add(-time.Minute)
+	skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
+		`bundle.version == "sha-9349a3f"`, false, true, `bundle.version=main: bundle.version == "sha-9349a3f" = false`)
+	skip.Labels["kardinal.io/type"] = "skip-permission"
+	skip.Annotations = map[string]string{"kardinal.io/skipped-environments": "uat"}
+	c := policyClient(t,
+		policyPipeline("demo", "test", "uat", "prod"),
+		explainBundle("gapa-e2e2-gkvb2", "Verified", old),
+		explainBundle("gapa-e2e2-wbptb", "Promoting", recent),
+		explainStep("demo", "gapa-e2e2-gkvb2", "prod", "Verified", "gkvb2 health check passed", old),
+		explainGateInstance("demo", "gapa-e2e2-gkvb2", "prod", "gapa-predeploy-freeze",
+			`changewindow.isAllowed("gapa-freeze")`, true, true, "gkvb2 freeze"),
+		explainStep("demo", "gapa-e2e2-wbptb", "test", "Verified", "", recent),
+		skip,
+		explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "a-predeploy-freeze",
+			`changewindow.isAllowed("gapa-freeze")`, true, true, "wbptb freeze"),
+	)
+
+	out, err := runExplain(t, c, "demo", "prod", false)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	require.Len(t, lines, 3, out)
+	assert.Contains(t, lines[1], "gapa-allow-stage-skip", "the not-ready gate comes first:\n%s", out)
+	assert.Contains(t, lines[1], "Block")
+	assert.Contains(t, lines[1], `bundle.version == "sha-9349a3f" = false`)
+	assert.Contains(t, lines[2], "a-predeploy-freeze")
+	assert.Contains(t, lines[2], "Pass")
+	assert.NotContains(t, out, "gkvb2")
 }
 
 // C09a-cli-14: an unknown env or pipeline is an error; a valid idle env is not.
@@ -255,6 +438,7 @@ func TestExplain_ColorOnlyStateColumn(t *testing.T) {
 	created := policyTestNow.Add(-time.Hour)
 	c := policyClient(t,
 		policyPipeline("demo", "test", "uat", "prod"),
+		explainBundle("b1", "Promoting", created),
 		explainStep("demo", "b1", "prod", "Promoting", "push Failed once, retrying", created),
 		explainStep("demo", "b1", "uat", "Verified", "", created),
 		explainGateInstance("demo", "b1", "prod", "gate", "bundle.type != 'Block'", true, true, "Pass"),
