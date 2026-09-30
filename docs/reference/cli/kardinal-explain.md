@@ -14,7 +14,16 @@ every Bundle there is Superseded, the newest one with a PromotionStep there is
 shown. Gates include org
 gates from the policy namespaces and skip-permission gates: they are the
 instances the Graph created for that Bundle, with the controller's latest
-evaluation. Gates that are not ready are listed first.
+evaluation. Gates that are not ready are listed first. BUNDLE names the
+Bundle each row belongs to.
+
+An environment where that Bundle's change has not landed yet (it has not
+reached the environment, or its PR is not merged) also gets a line after the
+table with the Bundle deployed there now: the one whose change landed last,
+as kardinal rollback judges it, with its image tags or config commit.
+"deployed: none" means no change has landed there yet.
+
+    prod   deployed: app-v1 (sha-1a2b3c4)
 
 A gate's STATE is the one the UI shows, the first that applies:
 

@@ -58,6 +58,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
@@ -118,8 +119,10 @@ type pendingEvent struct {
 // It is idempotent and safe to re-run after a crash.
 type Reconciler struct {
 	client.Client
-	// HTTPClient is the HTTP client used for webhook delivery.
-	// Overridable for testing. Redirects are never followed, whichever client is used.
+	// HTTPClient is the HTTP client used for webhook delivery. When nil, a
+	// client with the egress address guard is used (no loopback, link-local
+	// or cloud metadata destinations). Overridable for testing. Redirects are
+	// never followed, whichever client is used.
 	HTTPClient *http.Client
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
@@ -392,6 +395,12 @@ func (r *Reconciler) qualifyingEvents(ctx context.Context, hook *v1alpha1.Notifi
 // hook cannot bounce the controller's POST to another address.
 var errRedirect = errors.New("webhook redirects are not followed")
 
+// guardedTransport refuses loopback, link-local and cloud metadata
+// destinations at dial time, so a hook URL (or a name it resolves to) cannot
+// reach the controller's own UI API or the node's credential endpoints. It
+// honours HTTP(S)_PROXY, as the default transport did.
+var guardedTransport = egress.NewTransport(http.ProxyFromEnvironment)
+
 // deliver sends the webhook payload to the configured URL.
 // The returned error never contains the URL, which may embed a token (Slack,
 // Teams); it is written to status and logs.
@@ -403,7 +412,7 @@ func (r *Reconciler) deliver(ctx context.Context, hook *v1alpha1.NotificationHoo
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
-	httpClient := http.Client{Timeout: webhookTimeout}
+	httpClient := http.Client{Timeout: webhookTimeout, Transport: guardedTransport}
 	if r.HTTPClient != nil {
 		httpClient = *r.HTTPClient
 	}

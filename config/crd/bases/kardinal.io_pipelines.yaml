@@ -498,6 +498,12 @@ spec:
                   - name
                   type: object
                   x-kubernetes-validations:
+                  - message: 'environments[]: update.strategy argocd patches the Application
+                      directly and cannot honour approval: pr-review; use approval:
+                      auto with a PolicyGate, or a git-based strategy (kustomize or
+                      helm) for a reviewed promotion'
+                    rule: '!(has(self.update) && has(self.update.strategy) && self.update.strategy
+                      == ''argocd'' && has(self.approval) && self.approval == ''pr-review'')'
                   - message: environments[].autoRollback is not implemented; remove
                       it (automatic rollback is configured with onHealthFailure, see
                       docs/rollback.md)
@@ -539,8 +545,11 @@ spec:
                     - branch
                     type: string
                   provider:
-                    default: github
-                    description: Provider is the SCM provider.
+                    description: |-
+                      Provider is ignored. One controller serves one SCM, chosen with its
+                      --scm-provider flag.
+
+                      Deprecated: ignored; the controller's --scm-provider flag selects the provider.
                     enum:
                     - github
                     - gitlab
@@ -601,8 +610,11 @@ spec:
                 type: boolean
               policyGates:
                 description: |-
-                  PolicyGates lists org- or team-level PolicyGate references that apply to
-                  every promotion in this pipeline.
+                  PolicyGates is not implemented, and the API server rejects a non-empty
+                  list. Org gates apply through the kardinal.io/applies-to label.
+
+                  Deprecated: remove the field; label org PolicyGates with
+                  kardinal.io/applies-to instead.
                 items:
                   description: |-
                     PipelinePolicyGateRef is a reference to a PolicyGate that must pass before
@@ -619,6 +631,10 @@ spec:
                   - name
                   type: object
                 type: array
+                x-kubernetes-validations:
+                - message: spec.policyGates is not implemented; remove it (org gates
+                    use the kardinal.io/applies-to label)
+                  rule: size(self) == 0
               policyNamespaces:
                 description: |-
                   PolicyNamespaces lists extra namespaces to read PolicyGates from. It only

@@ -198,12 +198,16 @@ func TestUIHandler_DNSRebinding(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://evil.example:8082/api/v1/ui/pause",
 		strings.NewReader(`{"pipeline":"app"}`))
 	req.Host = "evil.example:8082"
+	// A loopback peer (a browser on the port-forward machine), so the Host
+	// check is what refuses the request.
+	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("Origin", "http://evil.example:8082")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "--ui-allowed-hosts")
 	assert.Empty(t, rec.Header().Get("Access-Control-Allow-Origin"))
 	var pl v1alpha1.Pipeline
 	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "app"}, &pl))
@@ -234,6 +238,7 @@ func TestUIHandler_DNSRebindingReads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "http://"+tt.host+"/api/v1/ui/pipelines", nil)
 			req.Host = tt.host
+			req.RemoteAddr = "127.0.0.1:54321" // a browser on the port-forward machine
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 

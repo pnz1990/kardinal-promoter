@@ -192,7 +192,7 @@ This allows exposing the UI to browser users (VPN) while restricting the webhook
 
 The UI API has three modes. Static assets at `/ui/*` are public in all of them (they hold no data).
 
-- **Off (default).** The controller logs `UI API authentication disabled` and reads and writes with its own ServiceAccount. To limit DNS rebinding, `/api/` requests are accepted only when the Host is `localhost`, `127.0.0.1`, `::1` or a name in `--ui-allowed-hosts` (the chart adds the Service DNS names).
+- **Off (default).** The controller logs a startup warning and reads and writes with its own ServiceAccount. `/api/` serves only clients whose TCP peer is loopback (`kubectl port-forward`) and whose request has no proxy header (`Forwarded`, `X-Forwarded-*`, `X-Real-Ip`, `X-Envoy-*`, `l5d-*`); everyone else gets `403` (#1262). To limit DNS rebinding, `/api/` requests are also accepted only when the Host is `localhost`, `127.0.0.1`, `::1` or a name in `--ui-allowed-hosts` (the chart adds the Service DNS names).
 - **Static token** (`--ui-auth-token`, env `KARDINAL_UI_TOKEN`). Every `/api/v1/ui/*` request needs `Authorization: Bearer <token>`. It takes precedence over TokenReview.
 - **TokenReview** (`--ui-tokenreview-auth`, chart `ui.auth.tokenReview`, default `false`). Bearer tokens are checked with a TokenReview, and every object the API reads or writes is authorized with a SubjectAccessReview for the caller. It fails closed.
 

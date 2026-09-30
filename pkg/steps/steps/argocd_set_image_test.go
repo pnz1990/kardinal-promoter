@@ -308,8 +308,8 @@ func TestDefaultSequenceForBundle_ArgoCDStrategy(t *testing.T) {
 }
 
 // TestArgoCDSetImageStep_RejectsPRReview verifies approval: pr-review is not
-// bypassed by the argocd strategy, and config Bundles are not silently
-// dropped (C05-steps-11).
+// bypassed by the argocd strategy, and config and mixed Bundles are not
+// silently dropped (C05-steps-11, #1281).
 func TestArgoCDSetImageStep_RejectsPRReview(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -319,6 +319,12 @@ func TestArgoCDSetImageStep_RejectsPRReview(t *testing.T) {
 	}{
 		{"pr-review", "pr-review", v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2"}}}, "cannot honour approval: pr-review"},
 		{"config bundle", "auto", v1alpha1.BundleSpec{Type: "config", ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "abc"}}, "config Bundles are not supported"},
+		// #1281: a mixed Bundle's config change would be skipped too.
+		{"mixed bundle", "auto", v1alpha1.BundleSpec{
+			Type:      "mixed",
+			Images:    []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2"}},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "abc"},
+		}, "mixed Bundles are not supported"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

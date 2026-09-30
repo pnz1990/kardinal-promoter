@@ -42,7 +42,6 @@ describe('computeFleetHealth', () => {
     expect(s.healthy).toBe(0)
     expect(s.blocked).toBe(0)
     expect(s.ciRed).toBe(0)
-    expect(s.fullCD).toBe(0)
     expect(s.promoting).toBe(0)
   })
 
@@ -71,11 +70,6 @@ describe('computeFleetHealth', () => {
     expect(s.healthy).toBe(0)
   })
 
-  it('counts full-cd pipeline', () => {
-    const s = computeFleetHealth([makePipeline({ cdLevel: 'full-cd' })])
-    expect(s.fullCD).toBe(1)
-  })
-
   // "promoting" comes from the per-environment states of the active bundle,
   // not from phase "Promoting" (also set while a gate holds the bundle).
   it.each<[string, Record<string, string> | undefined, number]>([
@@ -97,10 +91,10 @@ describe('computeFleetHealth', () => {
 
   it('handles mixed fleet correctly', () => {
     const pipelines = [
-      makePipeline({ name: 'a', blockerCount: 0, failedStepCount: 0, phase: 'Ready', cdLevel: 'full-cd' }),
+      makePipeline({ name: 'a', blockerCount: 0, failedStepCount: 0, phase: 'Ready' }),
       makePipeline({ name: 'b', blockerCount: 1, phase: 'Unknown', environmentStates: { prod: 'WaitingForMerge' } }),
       makePipeline({ name: 'c', failedStepCount: 2 }),
-      makePipeline({ name: 'd', phase: 'Unknown', environmentStates: { test: 'Promoting' }, cdLevel: 'full-cd' }),
+      makePipeline({ name: 'd', phase: 'Unknown', environmentStates: { test: 'Promoting' } }),
     ]
     const s = computeFleetHealth(pipelines)
     expect(s.total).toBe(4)
@@ -108,7 +102,6 @@ describe('computeFleetHealth', () => {
     expect(s.healthy).toBe(2)
     expect(s.blocked).toBe(1) // 'b'
     expect(s.ciRed).toBe(1)   // 'c'
-    expect(s.fullCD).toBe(2)  // 'a' and 'd'
     expect(s.promoting).toBe(2) // 'b' and 'd'
   })
 })
@@ -120,17 +113,16 @@ describe('filterPipelines', () => {
     makePipeline({ name: 'healthy', blockerCount: 0, failedStepCount: 0, paused: false }),
     makePipeline({ name: 'blocked', blockerCount: 1 }),
     makePipeline({ name: 'ci-red', failedStepCount: 1 }),
-    makePipeline({ name: 'full-cd', cdLevel: 'full-cd' }),
     makePipeline({ name: 'promoting', phase: 'Unknown', environmentStates: { test: 'Verified', prod: 'HealthChecking' } }),
   ]
 
   it('filter=all returns all pipelines', () => {
-    expect(filterPipelines(pipelines, 'all')).toHaveLength(5)
+    expect(filterPipelines(pipelines, 'all')).toHaveLength(4)
   })
 
   it('filter=healthy returns only healthy', () => {
     const result = filterPipelines(pipelines, 'healthy')
-    // 'healthy' and 'full-cd' and 'promoting' pipelines qualify (no blockers/failures/pause)
+    // 'healthy' and 'promoting' pipelines qualify (no blockers/failures/pause)
     expect(result.map(p => p.name)).toContain('healthy')
     expect(result.map(p => p.name)).not.toContain('blocked')
     expect(result.map(p => p.name)).not.toContain('ci-red')
@@ -146,12 +138,6 @@ describe('filterPipelines', () => {
     const result = filterPipelines(pipelines, 'ci-red')
     expect(result).toHaveLength(1)
     expect(result[0].name).toBe('ci-red')
-  })
-
-  it('filter=full-cd returns only full-cd pipelines', () => {
-    const result = filterPipelines(pipelines, 'full-cd')
-    expect(result).toHaveLength(1)
-    expect(result[0].name).toBe('full-cd')
   })
 
   it('filter=promoting returns only promoting pipelines', () => {
@@ -215,6 +201,12 @@ describe('FleetHealthBar', () => {
     render(<FleetHealthBar pipelines={pipelines} activeFilter="blocked" onFilterChange={() => {}} />)
     const blockedBtn = screen.getByLabelText(/blocked pipelines/i)
     expect(blockedBtn).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  // #1269: the Full CD count read spec.policyGates, which gates nothing.
+  it('has no Full CD badge', () => {
+    render(<FleetHealthBar pipelines={[makePipeline()]} activeFilter="all" onFilterChange={() => {}} />)
+    expect(screen.queryByText('Full CD')).not.toBeInTheDocument()
   })
 
   it('does not show CI Red badge when no CI red pipelines', () => {

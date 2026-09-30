@@ -175,6 +175,9 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 			errs = append(errs, err.Error())
 		}
 	}
+	if err := graph.ValidateUpdateStrategy(&pipeline); err != nil {
+		errs = append(errs, err.Error())
+	}
 
 	// Dependency: no circular deps (uses the graph builder's topoSort).
 	if len(pipeline.Spec.Environments) > 0 && !hasUnnamedEnv(pipeline) {

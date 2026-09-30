@@ -181,6 +181,9 @@ ui:
   # included, gets 403 (DNS rebinding protection). Static /ui/ assets are not
   # checked. Host names only: no scheme, path or wildcard.
   allowedHosts: []
+  # With neither auth mode set, /api/ serves only clients connecting from
+  # loopback (kubectl port-forward); Ingress, NodePort, LoadBalancer, pod and
+  # service-mesh clients get 403. Set one mode to serve them.
   auth:
     # -- Static bearer token for /api/v1/ui/* (KARDINAL_UI_TOKEN).
     tokenSecretRef:

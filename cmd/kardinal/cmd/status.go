@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -45,7 +46,10 @@ When called with a pipeline name: shows in-flight promotion details for that
 pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps
-(one row per region, active steps marked), the PolicyGates holding it back
+(one row per region, active steps marked, with the Bundle each row belongs
+to), the Bundle deployed in every environment (the one whose change landed
+there last, as kardinal rollback judges it, with its image tags or config
+commit; "none" when no change has landed yet), the PolicyGates holding it back
 (with CEL expression and current reason), and open PR URLs. A gate is listed
 as blocking only while it holds the bundle back: it is not ready and either
 every upstream environment is Verified for that bundle and the bundle has no
@@ -168,6 +172,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	type stepRow struct {
 		env        string
 		region     string
+		bundle     string
 		state      string
 		activeStep string // currently executing step (from status.steps[])
 		prURL      string
@@ -198,6 +203,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		rows = append(rows, stepRow{
 			env:        env,
 			region:     orDash(s.Spec.Region), //nolint:staticcheck // SA1019: shows steps from a Graph built before regions were removed
+			bundle:     s.Spec.BundleName,
 			state:      stepState(*s),
 			activeStep: activeStep,
 			prURL:      orDash(s.Status.PRURL),
@@ -260,7 +266,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	_, _ = fmt.Fprintln(w, "Promotion Steps")
 	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tREGION\tSTATE\tACTIVE STEP\tPR\tAGE")
+	_, _ = fmt.Fprintln(tw, "ENVIRONMENT\tREGION\tBUNDLE\tSTATE\tACTIVE STEP\tPR\tAGE")
 	for _, r := range rows {
 		// Mark in-progress states with a pointer.
 		marker := "  "
@@ -272,10 +278,25 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		if len(prDisplay) > 40 {
 			prDisplay = prDisplay[len(prDisplay)-40:]
 		}
-		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\n",
-			marker, r.env, r.region, r.state, r.activeStep, prDisplay, r.age)
+		_, _ = fmt.Fprintf(tw, "%s%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			marker, r.env, r.region, r.bundle, r.state, r.activeStep, prDisplay, r.age)
 	}
 	_ = tw.Flush()
+
+	// What runs in each environment now, whether or not the active Bundle
+	// has reached it (lifecycle.DeployedBundle, the Bundle rollback starts
+	// from).
+	envs := slices.Sorted(slices.Values(pipelineEnvNames(&pl)))
+	deployed := deployedBundles(steps.Items, pipeline, envs)
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Deployed")
+	_, _ = fmt.Fprintln(w, strings.Repeat("─", 72))
+	dtw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(dtw, "ENVIRONMENT\tBUNDLE")
+	for _, env := range envs {
+		_, _ = fmt.Fprintf(dtw, "%s\t%s\n", env, deployedLabel(deployed[env], byName))
+	}
+	_ = dtw.Flush()
 
 	if len(blockingGates) > 0 {
 		_, _ = fmt.Fprintln(w)

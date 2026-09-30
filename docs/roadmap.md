@@ -141,8 +141,8 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 - PolicyGate expression display with CEL highlighting
 - HealthChip status chips
 - Live polling with staleness indicator
-- **Fleet-wide health bar (#467)** — on the home page: counts of blocked, CI red (a failed step), promoting, and full-CD pipelines; click a count to filter the list
-- **Pipeline operations view (#462)** — sortable pipeline table: status, blocking gates, failed steps, inventory age, last merge, CD level
+- **Fleet-wide health bar (#467)** — on the home page: counts of blocked, CI red (a failed step), and promoting pipelines; click a count to filter the list
+- **Pipeline operations view (#462)** — sortable pipeline table: status, blocking gates, failed steps, inventory age, last merge
 - **Per-stage detail (#463)** — click an environment for the steps the controller runs, their conditions, Kubernetes events, and elapsed time
 - **In-UI actions (#464)** — create a bundle, pause/resume a pipeline, promote an environment whose upstream environments are Verified, roll back a Verified environment. Pause, resume, promote, and roll back ask for confirmation first
 - **Release efficiency metrics bar (#465)** — over the last 10 bundles: mean time from bundle creation to the last environment's health check, rollback rate, deploys to the last environment

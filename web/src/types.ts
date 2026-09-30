@@ -38,8 +38,6 @@ export interface Pipeline {
   inventoryAgeDays?: number
   /** #462: RFC3339 timestamp of the last environment that reached Verified. */
   lastMergedAt?: string
-  /** #462: CD automation level derived from PolicyGate count. */
-  cdLevel?: 'full-cd' | 'mostly-cd' | 'manual'
   /** #525: static pipeline topology from spec — shown even when no Bundle is promoting. */
   environmentTopology?: EnvironmentNode[]
 }
