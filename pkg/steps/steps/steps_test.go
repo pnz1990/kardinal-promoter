@@ -640,9 +640,10 @@ func TestDefaultSequencesUseRegisteredSteps(t *testing.T) {
 	}
 }
 
-// TestEngine_UnknownStepFailsWithoutExecuting proves a sequence with an
-// unknown step name stops at that step with a permanent error and runs
-// nothing: before #1282 the name became a webhook call.
+// TestEngine_UnknownStepFailsWithoutExecuting proves that the engine stops at
+// an unknown step name with a permanent error instead of executing anything
+// for it: before #1282 the name became a webhook call. The health-check step
+// before it runs as usual.
 func TestEngine_UnknownStepFailsWithoutExecuting(t *testing.T) {
 	state := &parentsteps.StepState{Outputs: map[string]string{}}
 	next, result, err := parentsteps.NewEngine([]string{"health-check", "my-webhook"}).
