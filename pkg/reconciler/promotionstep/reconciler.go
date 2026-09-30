@@ -32,7 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -137,7 +137,7 @@ type Reconciler struct {
 
 	// Recorder emits Kubernetes Events for PromotionStep state transitions.
 	// When nil, event emission is skipped (backward-compatible).
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // Reconcile processes one PromotionStep event.

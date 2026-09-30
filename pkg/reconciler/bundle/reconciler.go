@@ -40,7 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,6 +52,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -121,15 +122,20 @@ type graphReader interface {
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
 	client.Client
+	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
+	// maxConcurrentPromotions count reads through it, so a Bundle this
+	// reconciler moved to Promoting a moment ago counts even before the
+	// informer cache has it (#1310). When nil, Client is used (tests).
+	APIReader client.Reader
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
 	// May be nil in test environments where translation is not needed.
 	Translator BundleTranslator
 	// GraphChecker detects whether the Graph CR still exists.
 	// When nil, graph recreation is skipped (backward-compatible).
 	GraphChecker GraphChecker
-	// Recorder emits Kubernetes Events for Bundle phase transitions.
+	// Recorder emits events.k8s.io/v1 Events for Bundle phase transitions.
 	// When nil, event emission is skipped (backward-compatible).
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // Reconcile is called whenever a Bundle is created or updated, and whenever a
@@ -717,14 +723,27 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 }
 
 // countPromoting counts the other Promoting Bundles of b's pipeline.
+//
+// It lists through the uncached APIReader (#1310). The Bundle controller runs
+// one reconcile at a time and only the leader reconciles, and the Promoting
+// status patch is accepted by the API server before the next reconcile starts,
+// so an uncached count always sees the previous admission. The spec.pipeline
+// field index exists only in the informer cache, so the namespace is listed
+// and filtered on spec.pipeline in memory. That is one API read per cap check,
+// and only for a Pipeline that sets maxConcurrentPromotions.
 func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bundle) (int, error) {
-	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
-	if err != nil {
-		return 0, err
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	var list kardinalv1alpha1.BundleList
+	if err := reader.List(ctx, &list, client.InNamespace(b.Namespace)); err != nil {
+		return 0, fmt.Errorf("list bundles of pipeline %s: %w", b.Spec.Pipeline, err)
 	}
 	n := 0
-	for i := range siblings {
-		if siblings[i].Name != b.Name && siblings[i].Status.Phase == phasePromoting {
+	for i := range list.Items {
+		s := &list.Items[i]
+		if s.Spec.Pipeline == b.Spec.Pipeline && s.Name != b.Name && s.Status.Phase == phasePromoting {
 			n++
 		}
 	}
@@ -1047,11 +1066,29 @@ func setBundleCondition(b *kardinalv1alpha1.Bundle, condType string, status meta
 	})
 }
 
-// event emits a Kubernetes Event when a Recorder is configured.
+// eventActions maps each Bundle Event reason to the events.k8s.io/v1 action,
+// which says what the controller did. The API requires an action.
+var eventActions = map[string]string{
+	"Available":        "Accept",
+	"Superseded":       "Supersede",
+	"PipelineNotFound": "ResolvePipeline",
+	"TranslationError": "CreateGraph",
+	"Promoting":        "Promote",
+	"Failed":           "Promote",
+	"Retrying":         "Retry",
+	"GraphDeleted":     "SyncGraph",
+	"GraphSyncFailed":  "SyncGraph",
+	"Verified":         "Verify",
+	"Recovered":        "Promote",
+}
+
+// event emits an Event when a Recorder is configured.
 func (r *Reconciler) event(b *kardinalv1alpha1.Bundle, eventType, reason, message string) {
-	if r.Recorder != nil {
-		r.Recorder.Event(b, eventType, reason, message)
+	action, ok := eventActions[reason]
+	if !ok {
+		action = "Reconcile"
 	}
+	kubeevent.Emit(r.Recorder, b, eventType, reason, action, message)
 }
 
 // failedState reports whether a PromotionStep state is a failure.
