@@ -216,6 +216,7 @@ type EnvironmentSpec struct {
 	//
 	// Deprecated: remove it; the step sequence follows the Bundle type,
 	// update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
+	//
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
 
@@ -225,6 +226,7 @@ type EnvironmentSpec struct {
 	//
 	// Deprecated: remove it; every environment runs the default step sequence.
 	// See docs/pipeline-reference.md#promotion-steps.
+	//
 	// +optional
 	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
 
