@@ -10,6 +10,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -835,4 +839,237 @@ func TestGate_FinishedBundlesNotEvaluated(t *testing.T) {
 	e.SetBundleLabel(t, a.ns, latest, openLabel, "true")
 	e.WaitStepState(t, a.ns, pipelineName, latest, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
+}
+
+// createdByRE reads the user kardinal override records the override under.
+var createdByRE = regexp.MustCompile(`(?m)^Created by: (\S+)$`)
+
+// TestGate_OverridePassesStage checks an emergency override through the CLI:
+// kardinal override on the blocked prod gate, with a reason and an expiry,
+// makes the gate pass with a reason naming who overrode it, why and until
+// when. prod then promotes, and its PR's Policy Gate Compliance table shows
+// the override.
+//
+// Covers GATE-OVERRIDE-01.
+func TestGate_OverridePassesStage(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "hold", "prod", openExpr, recheck))
+	a.apply(t, a.pipeline(map[string]string{"prod": "pr-review"}))
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", false, "= false", gateTimeout)
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
+
+	out := e.MustKardinal(t, a.ns, "override", pipelineName, "--stage", "prod", "--gate", "hold",
+		"--reason", "INC-4521 hotfix", "--expires-in", "30m")
+	assert.Contains(t, out, fmt.Sprintf("Override applied: gate=%s pipeline=%s stage=prod", gate.Name, pipelineName))
+	m := createdByRE.FindStringSubmatch(out)
+	require.Len(t, m, 2, "override output names its author:\n%s", out)
+	overridden := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by "+m[1]+": INC-4521 hotfix", gateTimeout)
+	require.Len(t, overridden.Spec.Overrides, 1)
+	o := overridden.Spec.Overrides[0]
+	assert.Equal(t, "prod", o.Stage)
+	assert.WithinDuration(t, time.Now().Add(30*time.Minute), o.ExpiresAt.Time, 2*time.Minute)
+	assert.Contains(t, overridden.Status.Reason, "(expires "+o.ExpiresAt.UTC().Format("2006-01-02T15:04Z")+")")
+
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
+	pr := e.WaitPR(t, a.repo, time.Minute, "prod PR", func(pr gitserver.PR) bool { return pr.State == "open" })
+	assert.Regexp(t, `\| hold \| `+a.ns+` \| Pass \| OVERRIDDEN by `+regexp.QuoteMeta(m[1])+`: INC-4521 hotfix \(expires `, pr.Body)
+	require.NoError(t, e.Git.MergePR(context.Background(), a.repo, pr.Number))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGate_OverrideLimits checks what an override does not do: an expired
+// override and an override for another stage leave prod's gate blocked. A
+// short override passes the gate only until it expires; the controller
+// re-evaluates the gate right at expiry, although its recheckInterval is an
+// hour. An override for every stage (no stage) releases prod.
+//
+// Covers GATE-OVERRIDE-02.
+func TestGate_OverrideLimits(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "hold", "prod", openExpr, "1h"))
+	// test waits for its PR merge, so the Bundle stays in flight and prod is
+	// not reached while the overrides come and go.
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", false, "= false", gateTimeout)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "WaitingForMerge", promoteTimeout)
+
+	patched := metav1.NewTime(time.Now().Truncate(time.Second))
+	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "prod", Reason: "expired",
+		CreatedBy: "e2e-expired", ExpiresAt: metav1.NewTime(time.Now().Add(-time.Minute))})
+	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "staging", Reason: "other stage",
+		CreatedBy: "e2e-other-stage", ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+	e.WaitGate(t, a.ns, bundle, "prod", "hold", gateTimeout, "re-evaluated after the overrides", func(g *v1alpha1.PolicyGate) bool {
+		return len(g.Spec.Overrides) == 2 && !g.Status.LastEvaluatedAt.Before(&patched)
+	})
+	framework.Consistently(t, 15*time.Second, "gate hold still blocked", func(ctx context.Context) (bool, string) {
+		g, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "hold")
+		if err != nil || !ok {
+			return false, fmt.Sprintf("gate lookup: ok=%v err=%v", ok, err)
+		}
+		return !g.Status.Ready && strings.Contains(g.Status.Reason, "= false"), framework.DescribeGate(g)
+	})
+
+	// No fast ScheduleClock may re-evaluate the gate for us around the expiry.
+	clockMu.Lock()
+	expires := time.Now().Add(20 * time.Second)
+	e.Override(t, gate, v1alpha1.PolicyGateOverride{Stage: "prod", Reason: "short",
+		CreatedBy: "e2e-short", ExpiresAt: metav1.NewTime(expires)})
+	e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by e2e-short: short", gateTimeout)
+	after := e.WaitGateReady(t, a.ns, bundle, "prod", "hold", false, "= false", time.Minute)
+	clockMu.Unlock()
+	assert.WithinDuration(t, expires, after.Status.LastEvaluatedAt.Time, 5*time.Second,
+		"re-evaluated at expiry, not at the next recheck or clock tick")
+
+	e.Override(t, gate, v1alpha1.PolicyGateOverride{Reason: "every stage",
+		CreatedBy: "e2e-all-stages", ExpiresAt: metav1.NewTime(time.Now().Add(time.Hour))})
+	e.WaitGateReady(t, a.ns, bundle, "prod", "hold", true, "OVERRIDDEN by e2e-all-stages: every stage", gateTimeout)
+	pr := e.WaitPR(t, a.repo, time.Minute, "test PR", func(pr gitserver.PR) bool { return pr.State == "open" })
+	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr.Number))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// gateAudit lists the GateEvaluated AuditEvents of the Bundle's gate for env,
+// oldest first.
+func gateAudit(ctx context.Context, e *framework.Env, ns, bundle, env, gate string) ([]v1alpha1.AuditEvent, error) {
+	var list v1alpha1.AuditEventList
+	if err := e.Client.List(ctx, &list, client.InNamespace(ns), client.MatchingLabels{
+		"kardinal.io/bundle": bundle, "kardinal.io/environment": env,
+		"kardinal.io/action": "GateEvaluated", "kardinal.io/gate": gate,
+	}); err != nil {
+		return nil, err
+	}
+	sort.Slice(list.Items, func(i, j int) bool {
+		return list.Items[i].Spec.Timestamp.Before(&list.Items[j].Spec.Timestamp)
+	})
+	return list.Items, nil
+}
+
+// outcomes is the Outcome of each event.
+func outcomes(events []v1alpha1.AuditEvent) []string {
+	out := make([]string, len(events))
+	for i, ae := range events {
+		out[i] = ae.Spec.Outcome
+	}
+	return out
+}
+
+// TestGate_AuditsEvaluations checks the gate audit trail: one GateEvaluated
+// AuditEvent for the first evaluation and one per readiness flip, none for
+// rechecks with the same result, each carrying the reason; Blocked and
+// Allowed Kubernetes Events on the gate; and kardinal get auditevents lists
+// them.
+//
+// Covers GATE-AUDIT-01.
+func TestGate_AuditsEvaluations(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "audited", "prod", openExpr, recheck))
+	// test waits for its PR merge so the gate can flip without prod starting.
+	a.apply(t, a.pipeline(map[string]string{"test": "pr-review"}))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+
+	waitAudit := func(want ...string) []v1alpha1.AuditEvent {
+		t.Helper()
+		var got []v1alpha1.AuditEvent
+		framework.Eventually(t, gateTimeout, fmt.Sprintf("audit outcomes %v", want), func(ctx context.Context) (bool, string) {
+			evs, err := gateAudit(ctx, e, a.ns, bundle, "prod", "audited")
+			if err != nil {
+				return false, err.Error()
+			}
+			got = evs
+			return assert.ObjectsAreEqual(want, outcomes(evs)), fmt.Sprintf("%v", outcomes(evs))
+		})
+		return got
+	}
+	blocked := e.WaitGateReady(t, a.ns, bundle, "prod", "audited", false, "= false", gateTimeout)
+	evs := waitAudit("Failure")
+	assert.Equal(t, blocked.Status.Reason, evs[0].Spec.Message)
+	assert.Equal(t, pipelineName, evs[0].Spec.PipelineName)
+	framework.Consistently(t, holdFor, "no audit record for rechecks", func(ctx context.Context) (bool, string) {
+		evs, err := gateAudit(ctx, e, a.ns, bundle, "prod", "audited")
+		if err != nil {
+			return false, err.Error()
+		}
+		return len(evs) == 1, fmt.Sprintf("%v", outcomes(evs))
+	})
+
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "audited", true, "= true", gateTimeout)
+	evs = waitAudit("Failure", "Success")
+	assert.Contains(t, evs[1].Spec.Message, "= true")
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "audited", false, "= false", gateTimeout)
+	waitAudit("Failure", "Success", "Failure")
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "audited", true, "= true", gateTimeout)
+	waitAudit("Failure", "Success", "Failure", "Success")
+
+	var events corev1.EventList
+	require.NoError(t, e.Client.List(ctx, &events, client.InNamespace(a.ns)))
+	reasons := map[string]string{}
+	for _, ev := range events.Items {
+		if ev.InvolvedObject.Kind == "PolicyGate" && ev.InvolvedObject.Name == blocked.Name {
+			reasons[ev.Reason] = ev.Type
+		}
+	}
+	assert.Equal(t, map[string]string{"Blocked": corev1.EventTypeWarning, "Allowed": corev1.EventTypeNormal}, reasons)
+
+	out := e.MustKardinal(t, a.ns, "get", "auditevents", "--pipeline", pipelineName, "--bundle", bundle, "--env", "prod")
+	var rows []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "GateEvaluated") {
+			rows = append(rows, strings.Fields(line)[5])
+		}
+	}
+	assert.Equal(t, []string{"Success", "Failure", "Success", "Failure"}, rows, "newest first")
+
+	pr := e.WaitPR(t, a.repo, time.Minute, "test PR", func(pr gitserver.PR) bool { return pr.State == "open" })
+	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr.Number))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGate_InvalidGatesRejected checks that the API server refuses the
+// PolicyGates the controller cannot honour and says what to do instead: a
+// spec.selector, and a name over 63 characters. A 63-character name is
+// accepted.
+//
+// Covers GATE-REJECT-01.
+func TestGate_InvalidGatesRejected(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	ns := e.Namespace(t)
+
+	for name, sel := range map[string]*metav1.LabelSelector{
+		"with-selector":  {MatchLabels: map[string]string{"app": "podinfo"}},
+		"empty-selector": {},
+	} {
+		g := framework.Gate(ns, name, "prod", "true", "")
+		g.Spec.Selector = sel
+		err := e.Client.Create(ctx, g)
+		require.Error(t, err, name)
+		assert.True(t, apierrors.IsInvalid(err), "%s: %v", name, err)
+		assert.Contains(t, err.Error(), "spec.selector is not implemented; use the kardinal.io/applies-to label", name)
+	}
+
+	long := framework.Gate(ns, strings.Repeat("g", 64), "prod", "true", "")
+	err := e.Client.Create(ctx, long)
+	require.Error(t, err)
+	assert.True(t, apierrors.IsInvalid(err), "%v", err)
+	assert.Contains(t, err.Error(), "PolicyGate names are at most 63 characters")
+
+	require.NoError(t, e.Client.Create(ctx, framework.Gate(ns, strings.Repeat("g", 63), "prod", "true", "")))
 }
