@@ -14,10 +14,12 @@ All overrides are preserved for audit purposes. Use --expires-in to control
 the override window (default: 1h).
 
 --gate takes the gate template name (for example no-weekend-deploy). The
-override is recorded on the instances of that gate the Pipeline's promoting
-Bundles have for --stage (every stage when --stage is not set), so run it
-while the Bundle waits on the gate. The name of one gate instance is also
-accepted.
+override is recorded on the instances of that gate that the Pipeline's
+in-progress Bundles have for --stage (every stage when --stage is not set),
+so run it while the Bundle waits on the gate. Instances of Verified, Failed
+and Superseded Bundles are left alone: they are never evaluated again. The
+name of one gate instance, as kubectl get policygates shows it, is also
+accepted; that instance alone gets the override.
 
 Example:
   kardinal override my-app --stage prod --gate no-weekend-deploy \

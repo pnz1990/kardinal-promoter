@@ -16,12 +16,14 @@ package cmd_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -175,6 +177,16 @@ func gateInstance(name, template, pipeline, env string) *v1alpha1.PolicyGate {
 	return g
 }
 
+// overrideBundle returns a Bundle of pipeline in phase.
+func overrideBundle(name, pipeline, phase string) *v1alpha1.Bundle {
+	b := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       v1alpha1.BundleSpec{Pipeline: pipeline, Type: "image"},
+	}
+	b.Status.Phase = phase
+	return b
+}
+
 // TestOverrideFn_TemplateName verifies that the documented form, --gate with
 // the gate template name, records the override on the instances the
 // PolicyGate reconciler evaluates, and never on the template (C01-graph-05,
@@ -183,14 +195,20 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 	tests := []struct {
 		name      string
 		stage     string
+		phase     string   // phase of Bundle b1, which owns the instances
 		want      []string // instances that get the override
 		wantErr   string
 		instances bool
 	}{
-		{name: "stage", stage: "prod", instances: true, want: []string{"no-weekend-deploy-prod-b1"}},
-		{name: "every stage", instances: true, want: []string{"no-weekend-deploy-prod-b1", "no-weekend-deploy-uat-b1"}},
-		{name: "stage without instance", stage: "test", instances: true, wantErr: "is a template"},
-		{name: "no instances", stage: "prod", wantErr: "is a template"},
+		{name: "stage", stage: "prod", phase: "Promoting", instances: true, want: []string{"no-weekend-deploy-prod-b1"}},
+		{name: "every stage", phase: "Promoting", instances: true,
+			want: []string{"no-weekend-deploy-prod-b1", "no-weekend-deploy-uat-b1"}},
+		{name: "new bundle", stage: "prod", instances: true, want: []string{"no-weekend-deploy-prod-b1"}},
+		{name: "stage without instance", stage: "test", phase: "Promoting", instances: true, wantErr: "is a template"},
+		{name: "no instances", stage: "prod", phase: "Promoting", wantErr: "is a template"},
+		{name: "verified bundle", stage: "prod", phase: "Verified", instances: true, wantErr: "is a template"},
+		{name: "superseded bundle", stage: "prod", phase: "Superseded", instances: true, wantErr: "is a template"},
+		{name: "failed bundle", stage: "prod", phase: "Failed", instances: true, wantErr: "is a template"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -200,8 +218,11 @@ func TestOverrideFn_TemplateName(t *testing.T) {
 				Spec: v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
 			}
 			objs := []sigs_client.Object{template,
+				overrideBundle("my-app-x7k2m", "my-app", tt.phase),
+				overrideBundle("other-x7k2m", "other-app", "Promoting"),
 				// Another pipeline's instance of the same template.
 				gateInstance("no-weekend-deploy-prod-other", "no-weekend-deploy", "other-app", "prod")}
+			objs[len(objs)-1].GetLabels()["kardinal.io/bundle"] = "other-x7k2m"
 			if tt.instances {
 				objs = append(objs,
 					gateInstance("no-weekend-deploy-prod-b1", "no-weekend-deploy", "my-app", "prod"),
@@ -262,4 +283,96 @@ func TestOverrideFn_ConcurrentOverridesBothKept(t *testing.T) {
 		reasons = append(reasons, o.Reason)
 	}
 	assert.Equal(t, []string{"second operator", "first operator"}, reasons)
+}
+
+// selectorCheckingClient rejects a List whose label selector the API server
+// would reject. The fake client does not validate selectors, and
+// controller-runtime's MatchingLabels builds them unvalidated.
+func selectorCheckingClient(t *testing.T, objs ...sigs_client.Object) sigs_client.Client {
+	t.Helper()
+	return fake.NewClientBuilder().WithScheme(newOverrideTestScheme()).WithObjects(objs...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl sigs_client.WithWatch, list sigs_client.ObjectList,
+				opts ...sigs_client.ListOption) error {
+				lo := &sigs_client.ListOptions{}
+				lo.ApplyOptions(opts)
+				if lo.LabelSelector != nil {
+					if _, err := labels.Parse(lo.LabelSelector.String()); err != nil {
+						return fmt.Errorf("unable to parse requirement: %w", err)
+					}
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+}
+
+// E2E-R08: instance names are longer than a label value may be. Naming an
+// instance patches it without a label lookup, and a template name patches
+// the instances of the pipeline's in-progress Bundles directly.
+func TestOverrideFn_LongInstanceNames(t *testing.T) {
+	const (
+		current  = "kardinal-test-app-9smn4"
+		verified = "kardinal-test-app-4cqnl"
+		prefix   = "require-uat-soak-platform-policies-prod--"
+	)
+	long := func(bundle, env string) *v1alpha1.PolicyGate {
+		g := gateInstance(prefix+bundle, "require-uat-soak", "kardinal-test-app", env)
+		g.Labels["kardinal.io/bundle"] = bundle
+		return g
+	}
+	require.Greater(t, len(prefix+current), 63)
+	tests := []struct {
+		name    string
+		gate    string
+		stage   string
+		want    []string
+		wantErr string
+	}{
+		{name: "template name", gate: "require-uat-soak", stage: "prod", want: []string{prefix + current}},
+		{name: "instance name", gate: prefix + current, stage: "prod", want: []string{prefix + current}},
+		{name: "instance name without stage", gate: prefix + current, want: []string{prefix + current}},
+		{name: "instance of a finished bundle", gate: prefix + verified, stage: "prod",
+			want: []string{prefix + verified}},
+		{name: "instance of another stage", gate: prefix + current, stage: "uat",
+			wantErr: "is the instance for stage prod, not uat"},
+		{name: "unknown long name", gate: prefix + "kardinal-test-app-zzzzz", stage: "prod",
+			wantErr: "no gate instance of that name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			template := &v1alpha1.PolicyGate{
+				ObjectMeta: metav1.ObjectMeta{Name: "require-uat-soak", Namespace: "platform-policies"},
+				Spec:       v1alpha1.PolicyGateSpec{Expression: "bundle.upstreamSoakMinutes >= 30"},
+			}
+			c := selectorCheckingClient(t, template,
+				overrideBundle(current, "kardinal-test-app", "Promoting"),
+				overrideBundle(verified, "kardinal-test-app", "Verified"),
+				long(current, "prod"), long(verified, "prod"))
+
+			var buf bytes.Buffer
+			err := cmd.ExportedOverrideFn(&buf, c, "default", "kardinal-test-app", tt.stage, tt.gate,
+				"hotfix", "30m")
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+
+			var list v1alpha1.PolicyGateList
+			require.NoError(t, c.List(context.Background(), &list))
+			var got []string
+			for _, g := range list.Items {
+				if len(g.Spec.Overrides) > 0 {
+					got = append(got, g.Name)
+					require.Len(t, g.Spec.Overrides, 1, "patched once")
+					assert.Equal(t, tt.stage, g.Spec.Overrides[0].Stage)
+				}
+			}
+			assert.ElementsMatch(t, tt.want, got)
+			for _, name := range tt.want {
+				assert.Contains(t, buf.String(), "Override applied: gate="+name)
+			}
+		})
+	}
 }

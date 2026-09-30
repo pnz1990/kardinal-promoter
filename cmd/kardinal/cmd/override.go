@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"os/user"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -50,10 +52,12 @@ All overrides are preserved for audit purposes. Use --expires-in to control
 the override window (default: 1h).
 
 --gate takes the gate template name (for example no-weekend-deploy). The
-override is recorded on the instances of that gate the Pipeline's promoting
-Bundles have for --stage (every stage when --stage is not set), so run it
-while the Bundle waits on the gate. The name of one gate instance is also
-accepted.
+override is recorded on the instances of that gate that the Pipeline's
+in-progress Bundles have for --stage (every stage when --stage is not set),
+so run it while the Bundle waits on the gate. Instances of Verified, Failed
+and Superseded Bundles are left alone: they are never evaluated again. The
+name of one gate instance, as kubectl get policygates shows it, is also
+accepted; that instance alone gets the override.
 
 Example:
   kardinal override my-app --stage prod --gate no-weekend-deploy \
@@ -88,9 +92,10 @@ Example:
 }
 
 // overrideFn is the testable implementation of override.
-// gateName is a gate template name, resolved to this pipeline's instances of
-// it (for stage, when set), or the name of one gate instance. It appends a
-// PolicyGateOverride entry to each instance's spec.overrides slice.
+// gateName is the name of one gate instance, or a gate template name resolved
+// to the instances of it that this pipeline's in-progress Bundles have (for
+// stage, when set). It appends a PolicyGateOverride entry to each instance's
+// spec.overrides slice.
 // The policygate reconciler checks for active (non-expired) overrides before
 // evaluating CEL, making this Gate-first: no direct status write here.
 func overrideFn(
@@ -106,41 +111,9 @@ func overrideFn(
 		return fmt.Errorf("invalid --expires-in %q: must be a positive Go duration (e.g. 1h, 30m)", expiresIn)
 	}
 
-	// A gate template (for example platform-policies/no-weekend-deploy) is
-	// never evaluated itself: each Bundle's Graph stamps an instance of it per
-	// environment in the Pipeline namespace, labelled with the template name,
-	// and the PolicyGate reconciler evaluates the instances. Record the
-	// override on this Pipeline's instances of the named template.
-	var instances v1alpha1.PolicyGateList
-	selector := sigs_client.MatchingLabels{
-		"kardinal.io/pipeline":      pipeline,
-		"kardinal.io/gate-template": gateName,
-	}
-	if stage != "" {
-		selector["kardinal.io/environment"] = stage
-	}
-	if listErr := c.List(ctx, &instances, sigs_client.InNamespace(ns), selector); listErr != nil {
-		return fmt.Errorf("list instances of policygate %s: %w", gateName, listErr)
-	}
-	if len(instances.Items) > 0 {
-		for _, inst := range instances.Items {
-			if err := overrideFn(w, c, ns, pipeline, stage, inst.Name, reason, expiresIn); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	// Otherwise gateName names a gate instance directly.
-	var gate v1alpha1.PolicyGate
-	if getErr := c.Get(ctx, types.NamespacedName{Name: gateName, Namespace: ns}, &gate); getErr != nil {
-		return fmt.Errorf("get policygate %s: no instance of a gate template of that name for pipeline %s "+
-			"in namespace %s: %w", gateName, pipeline, ns, getErr)
-	}
-	if _, isInstance := gate.Labels["kardinal.io/bundle"]; !isInstance {
-		return fmt.Errorf("policygate %s/%s is a template, and no Bundle of pipeline %s has an instance of it "+
-			"(stage %q); an override applies to the instances a promoting Bundle creates, so run it while "+
-			"the Bundle waits on the gate", ns, gateName, pipeline, stage)
+	targets, err := overrideTargets(ctx, c, ns, pipeline, stage, gateName)
+	if err != nil {
+		return err
 	}
 
 	// Determine who is creating the override (best-effort)
@@ -158,31 +131,21 @@ func overrideFn(
 		CreatedBy: createdBy,
 	}
 
-	// Append to spec.overrides. A merge patch replaces the whole list, so it
-	// carries the resourceVersion and is retried on conflict: a concurrent
-	// override is re-read, not overwritten.
-	appendErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		patch := sigs_client.MergeFromWithOptions(gate.DeepCopy(), sigs_client.MergeFromWithOptimisticLock{})
-		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
-		err := c.Patch(ctx, &gate, patch)
-		if apierrors.IsConflict(err) {
-			if getErr := c.Get(ctx, sigs_client.ObjectKeyFromObject(&gate), &gate); getErr != nil {
-				return getErr
-			}
-		}
-		return err
-	})
-	if appendErr != nil {
-		return fmt.Errorf("patch policygate %s: %w", gateName, appendErr)
-	}
-
 	stageInfo := "all stages"
 	if stage != "" {
 		stageInfo = "stage=" + stage
 	}
+	for i := range targets {
+		if err := appendOverride(ctx, c, &targets[i], override); err != nil {
+			return fmt.Errorf("patch policygate %s: %w", targets[i].Name, err)
+		}
+		if _, writeErr := fmt.Fprintf(w, "Override applied: gate=%s pipeline=%s %s\n",
+			targets[i].Name, pipeline, stageInfo); writeErr != nil {
+			return fmt.Errorf("write output: %w", writeErr)
+		}
+	}
 	if _, writeErr := fmt.Fprintf(w,
-		"Override applied: gate=%s pipeline=%s %s\nReason: %s\nExpires: %s (in %s)\nCreated by: %s\n\nThe gate will pass immediately until the override expires.\n",
-		gateName, pipeline, stageInfo,
+		"Reason: %s\nExpires: %s (in %s)\nCreated by: %s\n\nThe gate will pass immediately until the override expires.\n",
 		reason,
 		expiresAt.UTC().Format(time.RFC3339),
 		expDuration.Round(time.Minute),
@@ -192,6 +155,109 @@ func overrideFn(
 	}
 
 	return nil
+}
+
+// overrideTargets returns the gate instances an override of gateName is
+// recorded on.
+//
+// A gate template (for example platform-policies/no-weekend-deploy) is never
+// evaluated itself: each Bundle's Graph stamps an instance of it per
+// environment in the Pipeline namespace, labelled with the template name, and
+// the PolicyGate reconciler evaluates the instances. An instance name is
+// usually longer than the 63 characters a label value may have, so a name
+// that is an instance is read directly and never used in a label selector
+// (E2E-R08). A template name is resolved to the instances of the Bundles
+// still in progress: those of a Verified, Failed or Superseded Bundle are
+// never evaluated again, so an override on them changes nothing.
+func overrideTargets(ctx context.Context, c sigs_client.Client, ns, pipeline, stage, gateName string) (
+	[]v1alpha1.PolicyGate, error) {
+	var gate v1alpha1.PolicyGate
+	getErr := c.Get(ctx, types.NamespacedName{Name: gateName, Namespace: ns}, &gate)
+	if getErr != nil && !apierrors.IsNotFound(getErr) {
+		return nil, fmt.Errorf("get policygate %s: %w", gateName, getErr)
+	}
+	if getErr == nil {
+		if _, isInstance := gate.Labels["kardinal.io/bundle"]; isInstance {
+			if p := gate.Labels["kardinal.io/pipeline"]; p != "" && p != pipeline {
+				return nil, fmt.Errorf("policygate %s/%s is an instance of pipeline %s, not %s",
+					ns, gateName, p, pipeline)
+			}
+			if env := gate.Labels["kardinal.io/environment"]; stage != "" && env != "" && env != stage {
+				return nil, fmt.Errorf("policygate %s/%s is the instance for stage %s, not %s",
+					ns, gateName, env, stage)
+			}
+			return []v1alpha1.PolicyGate{gate}, nil
+		}
+	}
+
+	// A template name is a valid label value (pkg/graph/validate.go checks
+	// it); anything longer cannot label an instance.
+	if len(validation.IsValidLabelValue(gateName)) > 0 {
+		return nil, fmt.Errorf("get policygate %s: no gate instance of that name in namespace %s: %w",
+			gateName, ns, getErr)
+	}
+	var instances v1alpha1.PolicyGateList
+	selector := sigs_client.MatchingLabels{
+		"kardinal.io/pipeline":      pipeline,
+		"kardinal.io/gate-template": gateName,
+	}
+	if stage != "" {
+		selector["kardinal.io/environment"] = stage
+	}
+	if err := c.List(ctx, &instances, sigs_client.InNamespace(ns), selector); err != nil {
+		return nil, fmt.Errorf("list instances of policygate %s: %w", gateName, err)
+	}
+	var bundles v1alpha1.BundleList
+	if len(instances.Items) > 0 {
+		if err := c.List(ctx, &bundles, sigs_client.InNamespace(ns)); err != nil {
+			return nil, fmt.Errorf("list bundles: %w", err)
+		}
+	}
+	inProgress := make(map[string]bool, len(bundles.Items))
+	for _, b := range bundles.Items {
+		switch b.Status.Phase {
+		case "Verified", "Failed", "Superseded":
+		default:
+			inProgress[b.Name] = true
+		}
+	}
+	var targets []v1alpha1.PolicyGate
+	for _, inst := range instances.Items {
+		if inProgress[inst.Labels["kardinal.io/bundle"]] {
+			targets = append(targets, inst)
+		}
+	}
+	if len(targets) > 0 {
+		sort.Slice(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
+		return targets, nil
+	}
+
+	if getErr != nil {
+		return nil, fmt.Errorf("get policygate %s: no gate instance or template of that name for pipeline %s "+
+			"in namespace %s: %w", gateName, pipeline, ns, getErr)
+	}
+	return nil, fmt.Errorf("policygate %s/%s is a template, and no in-progress Bundle of pipeline %s has an "+
+		"instance of it (stage %q; %d instance(s) of finished Bundles); an override applies to the instances "+
+		"a promoting Bundle creates, so run it while the Bundle waits on the gate",
+		ns, gateName, pipeline, stage, len(instances.Items))
+}
+
+// appendOverride appends override to gate's spec.overrides. A merge patch
+// replaces the whole list, so it carries the resourceVersion and is retried
+// on conflict: a concurrent override is re-read, not overwritten.
+func appendOverride(ctx context.Context, c sigs_client.Client, gate *v1alpha1.PolicyGate,
+	override v1alpha1.PolicyGateOverride) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		patch := sigs_client.MergeFromWithOptions(gate.DeepCopy(), sigs_client.MergeFromWithOptimisticLock{})
+		gate.Spec.Overrides = append(gate.Spec.Overrides, override)
+		err := c.Patch(ctx, gate, patch)
+		if apierrors.IsConflict(err) {
+			if getErr := c.Get(ctx, sigs_client.ObjectKeyFromObject(gate), gate); getErr != nil {
+				return getErr
+			}
+		}
+		return err
+	})
 }
 
 // currentUser returns the current OS user name for audit trail purposes.
