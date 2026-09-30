@@ -108,9 +108,9 @@ func TestCreateBundle_DigestStoredInDigestField(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			c := lcClient(t)
+			c := lcClient(t, lcPipeline())
 			var buf bytes.Buffer
-			err := createBundleFn(&buf, c, "default", "app", []string{tc.image}, "image")
+			err := createBundleFn(&buf, c, "default", "app", createBundleOptions{Images: []string{tc.image}, Type: "image"})
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 				assert.Empty(t, newBundles(t, c), "no Bundle is created for a bad image")
@@ -167,7 +167,7 @@ func TestRollbackCmd_RestoresPreviousVerifiedBundle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := lcClient(t, tc.objs...)
 			var buf bytes.Buffer
-			err := rollbackFn(&buf, c, "default", "app", "prod", tc.to, false)
+			err := rollbackFn(&buf, c, "default", "app", "prod", tc.to)
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				assert.Empty(t, newBundles(t, c, fixture...), "a refused rollback creates no Bundle")
@@ -187,6 +187,20 @@ func TestRollbackCmd_RestoresPreviousVerifiedBundle(t *testing.T) {
 			assert.Contains(t, buf.String(), "ghcr.io/org/app:"+tc.wantTag)
 		})
 	}
+}
+
+// TestRollbackCmd_EmergencyDeprecated is #1288: --emergency still parses, so
+// a runbook that passes it keeps working, prints a deprecation warning that
+// points to kardinal override, and is hidden from the help.
+func TestRollbackCmd_EmergencyDeprecated(t *testing.T) {
+	cmd := newRollbackCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	require.NoError(t, cmd.ParseFlags([]string{"--env", "prod", "--emergency"}))
+	assert.Contains(t, out.String(),
+		"Flag --emergency has been deprecated, it has no effect; use kardinal override to pass a blocking gate")
+	assert.NotContains(t, cmd.Flags().FlagUsages(), "emergency", "a deprecated flag is not in the help")
 }
 
 // TestPromoteCmd_CopiesBundleVerifiedUpstream covers C09b-cli-04: promote

@@ -143,7 +143,33 @@ func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1
 		return fmt.Errorf("build: bundle name %q cannot be used as a label value: %s",
 			bundle.Name, strings.Join(errs, "; "))
 	}
+	if err := ValidateBundleArtifacts(&bundle.Spec); err != nil {
+		return fmt.Errorf("build: bundle %q: %w", bundle.Name, err)
+	}
 	return validateEnvironments(pipeline.Spec.Environments)
+}
+
+// ValidateBundleArtifacts checks that a Bundle carries what its type needs:
+// at least one image for image and mixed, and configRef.commitSHA for config
+// and mixed. An empty type counts as image, the default of the Bundle API and
+// kardinal create bundle. The Bundle API, the CLI (lifecycle.ValidateNewBundle)
+// and Build share this rule, so a Bundle with nothing to promote made with
+// kubectl fails before the first environment instead of "succeeding" in every
+// one with no images to update (#1285).
+func ValidateBundleArtifacts(spec *kardinalv1alpha1.BundleSpec) error {
+	typ := spec.Type
+	if typ == "" {
+		typ = "image"
+	}
+	needImages := typ == "image" || typ == "mixed"
+	needConfig := typ == "config" || typ == "mixed"
+	if needImages && len(spec.Images) == 0 {
+		return fmt.Errorf("type %q requires at least one entry in images", typ)
+	}
+	if needConfig && (spec.ConfigRef == nil || spec.ConfigRef.CommitSHA == "") {
+		return fmt.Errorf("type %q requires configRef.commitSHA", typ)
+	}
+	return nil
 }
 
 // validateGateNames rejects a gate this Graph instantiates whose name cannot

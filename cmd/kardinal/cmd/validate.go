@@ -188,7 +188,7 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 			buildable.Spec.Environments[i].Steps = nil             //nolint:staticcheck // SA1019: clear the deprecated field reported above
 			buildable.Spec.Environments[i].PromotionTemplate = nil //nolint:staticcheck // SA1019: clear the deprecated field reported above
 		}
-		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: dummyBundle}); err != nil {
+		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)}); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}

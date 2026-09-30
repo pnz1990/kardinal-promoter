@@ -31,8 +31,7 @@ type RollbackRequest struct {
 	// to the failing Bundle.
 	FromBundle string
 	// Actor is recorded as spec.provenance.author of the rollback Bundle.
-	Actor     string
-	Emergency bool
+	Actor string
 	// Name fixes the rollback Bundle name (used by automatic rollbacks for
 	// idempotency). Empty means GenerateName "<pipeline>-rollback-".
 	Name string
@@ -79,9 +78,19 @@ type RollbackPlan struct {
 //     environment rolled back from (named in the kardinal.io/rollback-from
 //     annotation of a rollback Bundle): after V2 was rolled back to V1, rolling
 //     back again does not return to V2. ToBundle can still name it.
-//   - The rollback Bundle copies the target's images and config ref, sets
-//     intent.targetEnvironment to this environment, and records the target in
-//     spec.provenance.rollbackOf and the deployed Bundle in the
+//   - The rollback Bundle copies the target's images and config ref, and
+//     puts back everything else the deployed Bundle changed (#1315): for each
+//     image repository the deployed Bundle names and the target does not, the
+//     version from the newest Bundle, other than the deployed one and the ones
+//     rolled back from, that was Verified in the environment. The same for the
+//     config commit of a config Bundle. When no such Bundle exists the
+//     rollback is refused, naming the image or config repository, instead of
+//     leaving the failing version in place. A target whose type cannot carry
+//     what the deployed Bundle changed (a config Bundle for images, an image
+//     or mixed Bundle for a config commit) is refused too. Without ToBundle a
+//     target whose restored set equals what is deployed is skipped.
+//   - It sets intent.targetEnvironment to this environment, and records the
+//     target in spec.provenance.rollbackOf and the deployed Bundle in the
 //     kardinal.io/rollback-from annotation. The Graph of a targetEnvironment
 //     Bundle keeps every environment upstream of the target (graph
 //     filterByIntent), so the rollback promotes the target's artifacts through
@@ -124,6 +133,17 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			plan.CurrentName, ErrConflict)
 	}
 
+	rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment)
+	if rbErr != nil {
+		return nil, fmt.Errorf("rollback: %w", rbErr)
+	}
+	src := &restoreSources{
+		c: c, ns: req.Namespace, pipeline: req.Pipeline, env: req.Environment,
+		verified: h.verifiedNewestFirst(), deployed: plan.CurrentName, rolledBack: rolledBack,
+		cache: map[string]*v1alpha1.Bundle{},
+	}
+	var restored *v1alpha1.Bundle
+
 	if req.ToBundle != "" {
 		target, getErr := getBundle(ctx, c, req.Namespace, req.ToBundle)
 		if getErr != nil {
@@ -149,17 +169,21 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			return nil, fmt.Errorf("rollback: bundle %s was never Verified in %s, so it is not known to work there; pick a Bundle that was: %w",
 				target.Name, req.Environment, ErrInvalid)
 		}
-		plan.Target = target
+		r, restoreErr := src.restore(ctx, plan.Current, target)
+		if restoreErr != nil {
+			return nil, fmt.Errorf("rollback: %w", restoreErr)
+		}
+		if plan.Current != nil && SameArtifacts(r, plan.Current) {
+			return nil, fmt.Errorf("rollback: rolling back to bundle %s restores the same artifacts as the deployed bundle %s: %w",
+				target.Name, plan.CurrentName, ErrConflict)
+		}
+		plan.Target, restored = target, r
 	} else {
 		if plan.CurrentName == "" {
 			return nil, fmt.Errorf("rollback: nothing has been deployed to %s in pipeline %s yet: %w",
 				req.Environment, req.Pipeline, ErrConflict)
 		}
-		rolledBack, rbErr := rolledBackFrom(ctx, c, req.Namespace, req.Pipeline, req.Environment)
-		if rbErr != nil {
-			return nil, fmt.Errorf("rollback: %w", rbErr)
-		}
-		for _, name := range h.verifiedNewestFirst() {
+		for _, name := range src.verified {
 			if name == plan.CurrentName || rolledBack[name] {
 				continue
 			}
@@ -176,7 +200,16 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			if plan.Current != nil && (cand.Spec.Type != plan.Current.Spec.Type || SameArtifacts(cand, plan.Current)) {
 				continue
 			}
-			plan.Target = cand
+			// A refusal does not depend on the candidate: an image or config
+			// commit missing from the history is missing for every one.
+			r, restoreErr := src.restore(ctx, plan.Current, cand)
+			if restoreErr != nil {
+				return nil, fmt.Errorf("rollback: %w", restoreErr)
+			}
+			if plan.Current != nil && SameArtifacts(r, plan.Current) {
+				continue
+			}
+			plan.Target, restored = cand, r
 			break
 		}
 		if plan.Target == nil {
@@ -185,17 +218,142 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		}
 	}
 
-	plan.Bundle = buildRollbackBundle(ctx, req, plan)
+	plan.Bundle = buildRollbackBundle(ctx, req, plan, restored)
 	return plan, nil
 }
 
-func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *RollbackPlan) *v1alpha1.Bundle {
+// restoreSources is the environment history PlanRollback fills a rollback
+// from: the Bundles Verified in the environment, newest first, without the
+// deployed one and the ones a rollback in the environment rolled back from.
+type restoreSources struct {
+	c                 client.Reader
+	ns, pipeline, env string
+	verified          []string
+	deployed          string
+	rolledBack        map[string]bool
+	cache             map[string]*v1alpha1.Bundle
+}
+
+// deploysConfig reports whether promoting b deploys its config commit rather
+// than its images. Only config Bundles do: no step reads spec.configRef of an
+// image or mixed Bundle, which are promoted like image Bundles
+// (docs/design/09-config-only-promotions.md).
+func deploysConfig(b *v1alpha1.Bundle) bool {
+	return b.Spec.Type == "config"
+}
+
+// restore returns the artifacts of the rollback of cur to target: target's
+// images and config ref, plus, from the history, the version of every image
+// repository cur names that target does not, and, when cur is a config Bundle
+// and target has no config commit, the newest earlier config commit.
+// It fails with ErrConflict naming what the history has no other version of,
+// and with ErrInvalid when target's type cannot carry what cur changed. With
+// cur unknown (deleted), target's artifacts are returned as they are.
+func (s *restoreSources) restore(ctx context.Context, cur, target *v1alpha1.Bundle) (*v1alpha1.Bundle, error) {
+	out := &v1alpha1.Bundle{}
+	copyArtifacts(&out.Spec, target)
+	if cur == nil {
+		return out, nil
+	}
+
+	if deploysConfig(cur) {
+		ref := cur.Spec.ConfigRef
+		if ref == nil || ref.CommitSHA == "" {
+			return out, nil
+		}
+		if !deploysConfig(target) {
+			return nil, fmt.Errorf("bundle %s is a %s Bundle and cannot restore the config commit of %s that the deployed config bundle %s changed; pick a config Bundle with --to: %w",
+				target.Name, target.Spec.Type, ref.GitRepo, cur.Name, ErrInvalid)
+		}
+		if out.Spec.ConfigRef != nil && out.Spec.ConfigRef.CommitSHA != "" {
+			return out, nil
+		}
+		from, err := s.newest(ctx, func(b *v1alpha1.Bundle) bool {
+			return deploysConfig(b) && b.Spec.ConfigRef != nil && b.Spec.ConfigRef.CommitSHA != ""
+		})
+		if err != nil {
+			return nil, err
+		}
+		if from == nil {
+			return nil, fmt.Errorf("no Bundle other than %s with a config commit of %s was Verified in %s, so a rollback to %s would leave the deployed commit in place: %w",
+				cur.Name, ref.GitRepo, s.env, target.Name, ErrConflict)
+		}
+		fromRef := *from.Spec.ConfigRef
+		out.Spec.ConfigRef = &fromRef
+		return out, nil
+	}
+
+	if len(cur.Spec.Images) > 0 && deploysConfig(target) {
+		return nil, fmt.Errorf("bundle %s is a config Bundle and cannot restore the images (%s) that the deployed %s bundle %s changed; pick an image Bundle with --to: %w",
+			target.Name, repositories(cur.Spec.Images), cur.Spec.Type, cur.Name, ErrInvalid)
+	}
+	for _, img := range cur.Spec.Images {
+		if hasRepository(out.Spec.Images, img.Repository) {
+			continue
+		}
+		from, err := s.newest(ctx, func(b *v1alpha1.Bundle) bool {
+			return !deploysConfig(b) && hasRepository(b.Spec.Images, img.Repository)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if from == nil {
+			return nil, fmt.Errorf("no Bundle other than %s with image %s was Verified in %s, so a rollback to %s would leave %s at the deployed version; roll back with a Bundle that names it: %w",
+				cur.Name, img.Repository, s.env, target.Name, img.Repository, ErrConflict)
+		}
+		for _, fromImg := range from.Spec.Images {
+			if fromImg.Repository == img.Repository {
+				out.Spec.Images = append(out.Spec.Images, fromImg)
+			}
+		}
+	}
+	return out, nil
+}
+
+// newest returns the newest history Bundle that match accepts, or nil.
+// Bundles pruned by historyLimit and Bundles of another pipeline are skipped.
+func (s *restoreSources) newest(ctx context.Context, match func(*v1alpha1.Bundle) bool) (*v1alpha1.Bundle, error) {
+	for _, name := range s.verified {
+		if name == s.deployed || s.rolledBack[name] {
+			continue
+		}
+		b, ok := s.cache[name]
+		if !ok {
+			got, err := getBundle(ctx, s.c, s.ns, name)
+			switch {
+			case apierrors.IsNotFound(err):
+			case err != nil:
+				return nil, fmt.Errorf("get bundle %s: %w", name, err)
+			default:
+				b = got
+			}
+			s.cache[name] = b
+		}
+		if b != nil && b.Spec.Pipeline == s.pipeline && match(b) {
+			return b, nil
+		}
+	}
+	return nil, nil
+}
+
+func hasRepository(images []v1alpha1.ImageRef, repo string) bool {
+	return slices.ContainsFunc(images, func(img v1alpha1.ImageRef) bool { return img.Repository == repo })
+}
+
+func repositories(images []v1alpha1.ImageRef) string {
+	repos := make([]string, 0, len(images))
+	for _, img := range images {
+		repos = append(repos, img.Repository)
+	}
+	return strings.Join(repos, ", ")
+}
+
+// buildRollbackBundle builds the rollback Bundle of plan. restored holds the
+// images and config ref to deploy (restoreSources.restore).
+func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *RollbackPlan, restored *v1alpha1.Bundle) *v1alpha1.Bundle {
 	labels := map[string]string{
 		LabelRollback: "true",
 		LabelPipeline: req.Pipeline,
-	}
-	if req.Emergency {
-		labels[LabelEmergency] = "true"
 	}
 	if req.Reason != "" {
 		labels[LabelReason] = req.Reason
@@ -220,7 +378,7 @@ func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *Rollbac
 	}
 	StampCreatedAt(b, req.Now)
 
-	copyArtifacts(&b.Spec, plan.Target)
+	copyArtifacts(&b.Spec, restored)
 	prov := &v1alpha1.BundleProvenance{}
 	if plan.Target.Spec.Provenance != nil {
 		prov.CommitSHA = plan.Target.Spec.Provenance.CommitSHA

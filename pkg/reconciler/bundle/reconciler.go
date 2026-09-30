@@ -121,6 +121,11 @@ type graphReader interface {
 // Bundle.status.environments, and derives the Verified and Failed phases.
 type Reconciler struct {
 	client.Client
+	// APIReader reads straight from the API server (mgr.GetAPIReader()). The
+	// maxConcurrentPromotions count reads through it, so a Bundle this
+	// reconciler moved to Promoting a moment ago counts even before the
+	// informer cache has it (#1310). When nil, Client is used (tests).
+	APIReader client.Reader
 	// Translator creates the kro Graph for a Bundle+Pipeline pair.
 	// May be nil in test environments where translation is not needed.
 	Translator BundleTranslator
@@ -717,14 +722,27 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 }
 
 // countPromoting counts the other Promoting Bundles of b's pipeline.
+//
+// It lists through the uncached APIReader (#1310). The Bundle controller runs
+// one reconcile at a time and only the leader reconciles, and the Promoting
+// status patch is accepted by the API server before the next reconcile starts,
+// so an uncached count always sees the previous admission. The spec.pipeline
+// field index exists only in the informer cache, so the namespace is listed
+// and filtered on spec.pipeline in memory. That is one API read per cap check,
+// and only for a Pipeline that sets maxConcurrentPromotions.
 func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bundle) (int, error) {
-	siblings, err := r.pipelineBundleList(ctx, b.Namespace, b.Spec.Pipeline)
-	if err != nil {
-		return 0, err
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	var list kardinalv1alpha1.BundleList
+	if err := reader.List(ctx, &list, client.InNamespace(b.Namespace)); err != nil {
+		return 0, fmt.Errorf("list bundles of pipeline %s: %w", b.Spec.Pipeline, err)
 	}
 	n := 0
-	for i := range siblings {
-		if siblings[i].Name != b.Name && siblings[i].Status.Phase == phasePromoting {
+	for i := range list.Items {
+		s := &list.Items[i]
+		if s.Spec.Pipeline == b.Spec.Pipeline && s.Name != b.Name && s.Status.Phase == phasePromoting {
 			n++
 		}
 	}
@@ -912,7 +930,16 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			if err == nil && allVerified(b.Status.Environments, expected) {
 				b.Status.Phase = phaseVerified
 				if b.Status.Metrics == nil {
-					b.Status.Metrics = computeBundleMetrics(b, expected, steps)
+					// The metrics are written once, so a failed read is
+					// retried rather than recorded as zero interventions.
+					var gates kardinalv1alpha1.PolicyGateList
+					if err := r.List(ctx, &gates,
+						client.InNamespace(b.Namespace),
+						client.MatchingLabels{"kardinal.io/bundle": b.Name},
+					); err != nil {
+						return ctrl.Result{}, fmt.Errorf("list gate instances for bundle %s: %w", b.Name, err)
+					}
+					b.Status.Metrics = computeBundleMetrics(b, expected, steps, gates.Items)
 				}
 				setBundleCondition(b, condReady, metav1.ConditionTrue, "Verified", "all environments verified")
 				n := len(expected)
@@ -1205,10 +1232,14 @@ func allVerified(envs []kardinalv1alpha1.EnvironmentStatus, expected []string) b
 //
 // K-05: commitToProductionMinutes is the time from Bundle creation to the last
 // expected environment reaching HealthCheckedAt. bakeResets sums the bake
-// resets of the Bundle's PromotionSteps.
-// Graph-first: reads CRD status only; the result is written to Bundle status.
+// resets of the Bundle's PromotionSteps. operatorInterventions counts the
+// entries in spec.overrides of the Bundle's gate instances (the PolicyGates
+// labelled kardinal.io/bundle=<name>): kardinal override appends one entry per
+// override, and the Graph never copies a template's overrides to an instance
+// (#1308).
+// Graph-first: reads CRD fields only; the result is written to Bundle status.
 func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
-	steps []kardinalv1alpha1.PromotionStep) *kardinalv1alpha1.BundleMetrics {
+	steps []kardinalv1alpha1.PromotionStep, gates []kardinalv1alpha1.PolicyGate) *kardinalv1alpha1.BundleMetrics {
 	checked := make(map[string]time.Time, len(b.Status.Environments))
 	for _, e := range b.Status.Environments {
 		if e.HealthCheckedAt != nil {
@@ -1227,6 +1258,11 @@ func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
 	}
 	for i := range steps {
 		m.BakeResets += steps[i].Status.BakeResets
+	}
+	for i := range gates {
+		if gates[i].Labels["kardinal.io/bundle"] == b.Name {
+			m.OperatorInterventions += len(gates[i].Spec.Overrides)
+		}
 	}
 	return m
 }

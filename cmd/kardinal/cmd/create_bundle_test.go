@@ -70,7 +70,7 @@ func TestCreateBundle_DryRun_NoAPICallsMade(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := createBundleDryRun(&buf, c, "default", "nginx-demo",
-		[]string{"ghcr.io/org/app:sha-abc123"}, "image")
+		createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc123"}, Type: "image"})
 	require.NoError(t, err)
 
 	// No Bundle should exist after dry-run
@@ -101,7 +101,7 @@ func TestCreateBundle_DryRun_OutputContainsKeyInfo(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := createBundleDryRun(&buf, c, "default", "nginx-demo",
-		[]string{"ghcr.io/org/app:sha-abc123"}, "image")
+		createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc123"}, Type: "image"})
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -117,7 +117,7 @@ func TestCreateBundle_DryRun_PipelineNotFound(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := createBundleDryRun(&buf, c, "default", "nonexistent",
-		[]string{"ghcr.io/org/app:sha-abc123"}, "image")
+		createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc123"}, Type: "image"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dry-run", "error must mention dry-run context")
 }
@@ -129,7 +129,7 @@ func TestCreateBundle_DryRun_InvalidImage(t *testing.T) {
 
 	var buf bytes.Buffer
 	err := createBundleDryRun(&buf, c, "default", "nginx-demo",
-		[]string{"not valid @@@"}, "image")
+		createBundleOptions{Images: []string{"not valid @@@"}, Type: "image"})
 	require.Error(t, err)
 	assert.Equal(t, `invalid image repository "not valid @@": want [host[:port]/]path (e.g. ghcr.io/org/image)`,
 		err.Error())
@@ -168,7 +168,7 @@ func TestCreateBundle_DryRun_EnvironmentsInPromotionOrder(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(buildCreateBundleScheme(t)).WithObjects(pipe).Build()
 			var buf bytes.Buffer
 			require.NoError(t, createBundleDryRun(&buf, c, "default", "demo",
-				[]string{"ghcr.io/org/app:sha-abc1234"}, "image"))
+				createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc1234"}, Type: "image"}))
 			assert.Contains(t, buf.String(), "Environments in promotion order:\n"+tc.want, buf.String())
 		})
 	}
@@ -195,7 +195,7 @@ func TestCreateBundle_DryRun_DemoPipelinesListEveryEnvironment(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(buildCreateBundleScheme(t)).WithObjects(&pipe).Build()
 			var buf bytes.Buffer
 			require.NoError(t, createBundleDryRun(&buf, c, pipe.Namespace, pipe.Name,
-				[]string{"ghcr.io/pnz1990/kardinal-test-app:sha-abc1234"}, "image"))
+				createBundleOptions{Images: []string{"ghcr.io/pnz1990/kardinal-test-app:sha-abc1234"}, Type: "image"}))
 			_, list, found := strings.Cut(buf.String(), "Environments in promotion order:\n")
 			require.True(t, found, buf.String())
 			list, _, _ = strings.Cut(list, "\n\n")
@@ -205,5 +205,94 @@ func TestCreateBundle_DryRun_DemoPipelinesListEveryEnvironment(t *testing.T) {
 				assert.Contains(t, buf.String(), "  • "+env.Name, buf.String())
 			}
 		})
+	}
+}
+
+// TestCreateBundle_SharesBundleAPIRules is #1285: kardinal create bundle
+// applies the Bundle API's checks (lifecycle.ValidateNewBundle), checks that
+// the Pipeline exists, and sets configRef and provenance from the new flags.
+// Before, it created a Bundle for a missing Pipeline, an image Bundle with no
+// image, and could not create a config Bundle or set provenance.
+func TestCreateBundle_SharesBundleAPIRules(t *testing.T) {
+	const img = "ghcr.io/org/app:v1"
+	tests := []struct {
+		name     string
+		pipeline string
+		opts     createBundleOptions
+		wantErr  string
+		check    func(t *testing.T, b v1alpha1.Bundle)
+	}{
+		{name: "unknown pipeline", pipeline: "ghost",
+			opts:    createBundleOptions{Images: []string{img}, Type: "image"},
+			wantErr: `pipeline "ghost" not found in namespace "default"`},
+		{name: "image bundle without an image",
+			opts:    createBundleOptions{Type: "image"},
+			wantErr: `create bundle: type "image" requires at least one --image`},
+		{name: "config bundle without a commit",
+			opts:    createBundleOptions{Type: "config", ConfigRepo: "https://github.com/org/config"},
+			wantErr: `create bundle: type "config" requires --config-commit`},
+		{name: "mixed bundle without a commit",
+			opts:    createBundleOptions{Images: []string{img}, Type: "mixed"},
+			wantErr: `create bundle: type "mixed" requires --config-commit`},
+		{name: "unknown type",
+			opts:    createBundleOptions{Images: []string{img}, Type: "helm"},
+			wantErr: `create bundle: type must be one of image, config, mixed (got "helm")`},
+		{name: "ci run url with another scheme",
+			opts:    createBundleOptions{Images: []string{img}, Type: "image", CIRunURL: "javascript:alert(1)"},
+			wantErr: "create bundle: --ci-run-url must be an absolute http or https URL"},
+		{name: "config bundle",
+			opts: createBundleOptions{Type: "config", ConfigRepo: "https://github.com/org/config", ConfigCommit: "9f8e7d6"},
+			check: func(t *testing.T, b v1alpha1.Bundle) {
+				assert.Equal(t, "config", b.Spec.Type)
+				assert.Empty(t, b.Spec.Images)
+				assert.Equal(t, &v1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "9f8e7d6"}, b.Spec.ConfigRef)
+				assert.Nil(t, b.Spec.Provenance, "no provenance flag, no provenance")
+			}},
+		{name: "image bundle with provenance",
+			opts: createBundleOptions{Images: []string{img}, Type: "image",
+				Commit: "abc1234", Author: "ci-bot", CIRunURL: "https://github.com/org/app/actions/runs/1"},
+			check: func(t *testing.T, b v1alpha1.Bundle) {
+				assert.Equal(t, []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}}, b.Spec.Images)
+				assert.Nil(t, b.Spec.ConfigRef)
+				require.NotNil(t, b.Spec.Provenance)
+				assert.Equal(t, "abc1234", b.Spec.Provenance.CommitSHA)
+				assert.Equal(t, "ci-bot", b.Spec.Provenance.Author)
+				assert.Equal(t, "https://github.com/org/app/actions/runs/1", b.Spec.Provenance.CIRunURL)
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := tc.pipeline
+			if pipeline == "" {
+				pipeline = "demo"
+			}
+			c := fake.NewClientBuilder().WithScheme(buildCreateBundleScheme(t)).
+				WithObjects(policyPipeline("demo", "test", "prod")).Build()
+			var buf bytes.Buffer
+			err := createBundleFn(&buf, c, "default", pipeline, tc.opts)
+			var list v1alpha1.BundleList
+			require.NoError(t, c.List(context.Background(), &list))
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+				assert.Empty(t, list.Items, "nothing is created when a check fails")
+
+				// The dry-run applies the same checks.
+				buf.Reset()
+				require.Error(t, createBundleDryRun(&buf, c, "default", pipeline, tc.opts))
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, list.Items, 1)
+			tc.check(t, list.Items[0])
+		})
+	}
+}
+
+// TestCreateBundle_ConfigAndProvenanceFlagsRegistered pins the #1285 flags.
+func TestCreateBundle_ConfigAndProvenanceFlagsRegistered(t *testing.T) {
+	cmd := newCreateBundleCmd()
+	for _, name := range []string{"config-repo", "config-commit", "commit", "author", "ci-run-url"} {
+		assert.NotNil(t, cmd.Flags().Lookup(name), "--%s", name)
 	}
 }

@@ -162,7 +162,7 @@ func TestBuilder_SlugifyUppercase(t *testing.T) {
 	pipeline := makeLinearPipeline("App", "test")
 	bundle := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "MyApp-V1.2.3", Namespace: "default"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "App"},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "App", Images: testImages},
 	}
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})

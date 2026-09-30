@@ -42,7 +42,8 @@ func teamPipeline(envs ...kardinalv1alpha1.EnvironmentSpec) *kardinalv1alpha1.Pi
 func teamBundle(intent *kardinalv1alpha1.BundleIntent) *kardinalv1alpha1.Bundle {
 	return &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "payments-x7k2m", Namespace: "team-a", UID: "uid-x7k2m"},
-		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "payments", Intent: intent},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "payments", Intent: intent,
+			Images: []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/payments", Tag: "v1"}}},
 	}
 }
 
@@ -257,6 +258,15 @@ func TestTranslate_PermanentErrors(t *testing.T) {
 		_, err := newTranslator(nil).Translate(ctx, p, teamBundle(nil))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, graph.ErrInvalid)
+	})
+	t.Run("bundle with nothing to promote (#1285)", func(t *testing.T) {
+		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
+		b := teamBundle(nil)
+		b.Spec.Images = nil
+		_, err := newTranslator(nil).Translate(ctx, p, b)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, graph.ErrInvalid)
+		assert.Contains(t, err.Error(), `type "image" requires at least one entry in images`)
 	})
 	t.Run("api error", func(t *testing.T) {
 		p := teamPipeline(kardinalv1alpha1.EnvironmentSpec{Name: "prod"})
