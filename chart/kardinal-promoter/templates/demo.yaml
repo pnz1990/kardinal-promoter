@@ -33,7 +33,7 @@ metadata:
         kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
 spec:
   git:
-    url: https://github.com/pnz1990/kardinal-demo
+    url: {{ required "demo.git.url is required (your fork of pnz1990/kardinal-demo)" .Values.demo.git.url | quote }}
     branch: main
     layout: directory
     provider: github

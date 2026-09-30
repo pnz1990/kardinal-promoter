@@ -89,7 +89,7 @@ test → uat → prod automatically, with a PR opened for prod that they review 
 
 ```bash
 # 1. Install
-helm install kardinal oci://ghcr.io/pnz1990/kardinal-promoter/chart \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace
 
 # 2. Verify

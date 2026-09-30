@@ -5,8 +5,10 @@ This guide walks you through setting up your first promotion pipeline with kardi
 ## Fast Start — under 10 minutes
 
 No GitOps repo setup required. Install with `demo.enabled=true` and you get a pre-configured
-Pipeline named `demo` in the release namespace. It targets the
+Pipeline named `demo` in the release namespace. It pushes to the repository in
+`demo.git.url`, which defaults to the
 [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) reference repository.
+Your token cannot write to that repository, so fork it first and set `demo.git.url` to the fork.
 
 Before you start, the cluster needs:
 
@@ -17,6 +19,10 @@ Before you start, the cluster needs:
   [Create Argo CD Applications](#create-argo-cd-applications).
 
 ```bash
+# 0. Fork the demo GitOps repo (your GITHUB_PAT needs write access to the fork)
+gh repo fork pnz1990/kardinal-demo --clone=false
+DEMO_REPO=https://github.com/<your-user>/kardinal-demo
+
 # 1. Install kro (from a kardinal-promoter checkout)
 bash hack/install-kro.sh
 
@@ -29,6 +35,7 @@ kubectl create secret generic github-token \
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --set demo.enabled=true \
+  --set demo.git.url=$DEMO_REPO \
   --set github.secretRef.name=github-token
 
 # 3. Check the demo Pipeline (it lives in the release namespace)
@@ -42,15 +49,13 @@ kardinal create bundle demo -n kardinal-system \
   --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
 ```
 
-The demo Pipeline uses the reference `kardinal-demo` GitOps repo (already has the correct
-Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
+The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already has the
+correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
 
 !!! note "Estimated time: under 10 minutes on a fresh kind cluster"
     Prerequisites: kind cluster, `helm`, `kubectl`, `kardinal`, Argo CD, and a GitHub PAT
-    with write access to the repository in the Pipeline's `spec.git.url`. The demo Pipeline
-    points at `pnz1990/kardinal-demo`. To use your own fork, point both the Pipeline
-    (`kubectl edit pipeline demo -n kardinal-system`, field `spec.git.url`) and the
-    ApplicationSet `repoURL` at the fork.
+    with write access to the repository in `demo.git.url`. Point the ApplicationSet
+    `repoURL` in [Create Argo CD Applications](#create-argo-cd-applications) at the same fork.
 
 ---
 
@@ -145,7 +150,7 @@ kardinal version
 
 ## Set up your GitOps repo
 
-This quickstart uses [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) as the GitOps target repository. It already has the required directory structure with environment branches. Fork it or use it directly.
+This quickstart uses [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) as the GitOps target repository. It already has one directory per environment on `main`. Fork it: kardinal pushes to this repository, so the token needs write access to it.
 
 The repository structure:
 
@@ -183,7 +188,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/pnz1990/kardinal-demo
+        repoURL: https://github.com/pnz1990/kardinal-demo   # your fork
         targetRevision: main
         path: environments/{{env}}
       destination:
@@ -453,4 +458,4 @@ The Bundle API (`POST /api/v1/bundles`) listens on port 8083 of the `kardinal-pr
 
 - [Core Concepts](concepts.md): deeper dive into Bundles, Pipelines, PolicyGates, and health adapters
 - [Multi-Cluster Fleet Example](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/multi-cluster-fleet): parallel prod regions with Argo Rollouts canary
-- [Design Document](design/design-v2.1.md): full technical design
+- [Architecture](architecture.md): how the controller works

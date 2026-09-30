@@ -47,4 +47,4 @@ See the [full documentation](https://pnz1990.github.io/kardinal-promoter/) and [
 
 ## Design
 
-See [kardinal-promoter Technical Design Document v2.1](docs/design/design-v2.1.md).
+See [Architecture](docs/architecture.md) for how the controller works and [Concepts](docs/concepts.md) for the resource model.

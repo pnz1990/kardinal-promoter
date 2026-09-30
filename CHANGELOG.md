@@ -51,7 +51,7 @@ All notable changes are documented here. Maintained automatically by SM §4a.
 - fix(cel): add ErrNilCELValue sentinel to GoNativeType (#1087)
 - docs(changelog): add version sections for v0.1.0–v0.8.1 (#1085)
 - feat(cli): surface dependsOn validation errors in kardinal get pipelines (#1071)
-- feat(loop): proactive skills discovery — COORD §1b-skills + docs/aide/skills-inventory.md (#1068)
+- docs(loop): add docs/aide/skills-inventory.md (#1068); the COORD §1b-skills change never landed in otherness, and the file was removed later
 - feat(loop): simulation delta read half — COORD adjusts session limit from ratio history (#1067)
 - 5 PRs merged: docs+4 loop improvements (#1065)
 - feat(loop): prediction vs actual delta in SM batch report (#1064)
