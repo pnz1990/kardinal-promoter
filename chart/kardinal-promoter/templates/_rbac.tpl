@@ -47,7 +47,6 @@ rules exist for. A new client call needs a row there and a rule here.
     - policygates
     - rollbackpolicies
     - subscriptions
-    - promotiontemplates
     - promotionsteps
     - prstatuses
     - metricchecks
@@ -61,7 +60,6 @@ rules exist for. A new client call needs a row there and a rule here.
     - policygates/status
     - rollbackpolicies/status
     - subscriptions/status
-    - promotiontemplates/status
     - promotionsteps/status
     - prstatuses/status
     - metricchecks/status

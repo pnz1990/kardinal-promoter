@@ -313,7 +313,7 @@ func TestBuilder_ShardLabel(t *testing.T) {
 		"prod node must have kardinal.io/shard = cluster-b")
 }
 
-// Test 8: Custom steps are not implemented, so Build rejects them loudly
+// Test 8: Custom steps are not supported, so Build rejects them loudly
 // instead of silently running the default sequence.
 func TestBuilder_CustomSteps(t *testing.T) {
 	b := graph.NewBuilder()
@@ -330,7 +330,7 @@ func TestBuilder_CustomSteps(t *testing.T) {
 	_, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `environment "prod" declares 1 steps`)
-	assert.Contains(t, err.Error(), "not implemented")
+	assert.Contains(t, err.Error(), "not supported")
 }
 
 // Test 9: Config Bundle uses config-merge step type.
@@ -1074,7 +1074,8 @@ func TestNodeIDs_LongGateNodeIDsKept(t *testing.T) {
 // TestBuilder_RejectsCustomStepsAndTemplates verifies that Build refuses
 // spec.environments[].steps and promotionTemplate. The PromotionStep
 // reconciler always runs the default sequence, so accepting them would
-// silently skip the steps the author declared (C01-graph-27).
+// silently skip the steps the author declared (C01-graph-27). The CRD CEL
+// rules reject both fields too; this covers Pipelines stored before them.
 func TestBuilder_RejectsCustomStepsAndTemplates(t *testing.T) {
 	steps := []kardinalv1alpha1.StepSpec{
 		{Uses: "git-clone"},
@@ -1115,7 +1116,7 @@ func TestBuilder_RejectsCustomStepsAndTemplates(t *testing.T) {
 			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: makeBundle("app-v1", "app")})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
-			assert.Contains(t, err.Error(), "not implemented")
+			assert.Contains(t, err.Error(), "not supported")
 		})
 	}
 }

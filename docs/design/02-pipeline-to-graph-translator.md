@@ -238,7 +238,7 @@ Test cases for `translator.go`:
 5. intent.skipEnvironments = [staging] with SkipPermission: verify staging removed, dev -> prod directly.
 6. intent.skipEnvironments = [staging] without SkipPermission: verify Build fails with `skip denied` (ErrInvalid); with one, verify the permission instance holds prod.
 7. Pipeline with shard on prod: verify shard label on prod PromotionStep.
-8. Pipeline with custom steps or a promotionTemplate on prod: verify Build rejects it (not implemented yet).
+8. Pipeline with custom steps or a promotionTemplate on prod: verify Build rejects it (neither is supported; the CRD CEL rules reject them too, and Build covers Pipelines stored before those rules).
 9. Config Bundle: verify different default step sequence (config-merge instead of kustomize-set-image).
 10. Empty Pipeline: verify error.
 11. Circular dependency: verify error.

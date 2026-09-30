@@ -287,10 +287,6 @@ func TestPromotionStepRoundtrip(t *testing.T) {
 			BundleName:   "nginx-demo-v1",
 			Environment:  "prod",
 			StepType:     "open-pr",
-			Inputs: map[string]string{
-				"repo":   "myorg/gitops",
-				"branch": "kardinal/promote-nginx-demo-v1-prod",
-			},
 		},
 	}
 
@@ -304,9 +300,6 @@ func TestPromotionStepRoundtrip(t *testing.T) {
 	assert.Equal(t, "prod", got.Spec.Environment)
 	assert.Equal(t, "nginx-demo", got.Spec.PipelineName)
 	assert.Equal(t, "nginx-demo-v1", got.Spec.BundleName)
-	require.NotNil(t, got.Spec.Inputs)
-	assert.Equal(t, "myorg/gitops", got.Spec.Inputs["repo"])
-	assert.Equal(t, "kardinal/promote-nginx-demo-v1-prod", got.Spec.Inputs["branch"])
 }
 
 // TestPromotionStepStatusState verifies that status.state (not status.phase)

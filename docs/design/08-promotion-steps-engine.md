@@ -10,8 +10,9 @@
 > - Merge detection goes through the PRStatus CRD, not a `prMerged` webhook.
 > - Custom webhook steps, `verify-image` and `integration-test` were removed (#1282, #1278):
 >   `Lookup` returns an error for any name that is not a registered built-in step.
-> - `environments[].steps` and `environments[].promotionTemplate` are rejected by
->   `graph.Build`: the controller always runs the default sequence.
+> - `environments[].steps` and `environments[].promotionTemplate` are deprecated and rejected
+>   by the CRD CEL rules and `graph.Build`: the controller always runs the default sequence.
+>   The PromotionTemplate CRD and `PromotionStep.spec.inputs` were removed (#1282).
 > Depends on: 01-graph-integration, 03-promotionstep-reconciler
 > Blocks: 09-config-only-promotions (config-merge is a step)
 
@@ -112,9 +113,10 @@ The PromotionStep reconciler calls `engine.RunStep()` for each step in the seque
 > **Status (audit 2026-09):** only the inferred default sequence runs
 > (`steps.DefaultSequenceForBundle`). `PromotionStepSpec` has no field that carries a
 > custom sequence, so `spec.environments[].steps` and `promotionTemplate` cannot reach the
-> reconciler. `graph.Build` rejects a Pipeline that sets either one, and so does
-> `kardinal validate`, so they no longer fail silently. The custom-sequence and
-> PromotionTemplate sections below are the design for when that field exists.
+> reconciler. The API server (CRD CEL), `graph.Build` and `kardinal validate` reject a
+> Pipeline that sets either one. The custom-sequence and PromotionTemplate sections below
+> are a design that was not built; the custom step engine and the PromotionTemplate CRD
+> were removed (#1282).
 
 When `spec.steps` is omitted from the environment, the engine infers the sequence:
 
@@ -476,7 +478,7 @@ environments:
     stepsRef: { name: prod-steps }
 ```
 
-This is a Phase 3 feature and is not implemented: the CRD exists, but `graph.Build` rejects `promotionTemplate` on an environment (see the status note under Default Step Inference). The field shipped as `promotionTemplate: {name, namespace}`, not `stepsRef`.
+This Phase 3 feature was not built, and the PromotionTemplate CRD was removed (#1282). The field shipped as `promotionTemplate: {name, namespace}`, not `stepsRef`; it is deprecated and the API server rejects it.
 
 ## Unit Tests
 

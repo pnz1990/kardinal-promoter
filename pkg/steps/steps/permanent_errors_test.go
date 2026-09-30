@@ -52,7 +52,7 @@ func TestStepErrors_PermanentMarker(t *testing.T) {
 			K8sClient: fake.NewClientBuilder().WithScheme(newArgoCDScheme(t)).Build(),
 			Environment: v1alpha1.EnvironmentSpec{Name: "prod", Approval: approval,
 				Update: v1alpha1.UpdateConfig{Strategy: "argocd", ArgoCD: &v1alpha1.ArgoCDUpdateConfig{Application: app}}},
-			Bundle: bundle, Inputs: map[string]string{}, Outputs: map[string]string{},
+			Bundle: bundle, Outputs: map[string]string{},
 		}
 		return mustLookup(t, "argocd-set-image").Execute(context.Background(), state)
 	}

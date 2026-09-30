@@ -115,9 +115,6 @@ type StepState struct {
 	// UpstreamEnvironments holds verification evidence from upstream environments.
 	UpstreamEnvironments []v1alpha1.EnvironmentStatus
 
-	// Inputs holds step-specific configuration values from PromotionStep.Spec.Inputs.
-	Inputs map[string]string
-
 	// K8sClient is the Kubernetes API client for steps that read or patch
 	// cluster resources (e.g., argocd-set-image patching an Application).
 	// May be nil for unit tests or environments that do not use such steps.
