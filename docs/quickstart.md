@@ -338,8 +338,8 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT              PROD   SUB   AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   -      0     2m
+# PIPELINE            BUNDLE                    TEST       UAT              PROD      SUB   AGE
+# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   Waiting   0     2m
 
 # See the steps of the active Bundle
 kardinal get steps kardinal-test-app

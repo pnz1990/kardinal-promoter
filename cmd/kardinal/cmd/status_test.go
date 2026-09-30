@@ -93,6 +93,116 @@ func TestStatusPipelineWriter_BlockingGate(t *testing.T) {
 	assert.NotContains(t, out, "terminal state", "a Bundle held at a gate is not idle")
 }
 
+// E2E-R18: a not-ready gate blocks only once the Bundle has reached its
+// environment, every upstream environment Verified for that Bundle. A soak
+// gate on prod does not block a Bundle still health checking in test.
+func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
+	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
+	soak := func() *v1alpha1.PolicyGate {
+		return explainGateInstance("demo", "b2", "prod", "require-uat-soak", "upstream.uat.soakMinutes >= 30",
+			false, true, "upstream.uat.soakMinutes >= 30 = false")
+	}
+	preDeploy := func() *v1alpha1.PolicyGate {
+		g := soak()
+		g.Spec.When = "pre-deploy"
+		return g
+	}
+	// prodStep is the prod step waiting on the soak gate, the way the Graph
+	// builder lists gate instances in spec.requiredGates.
+	prodStep := func(state string) *v1alpha1.PromotionStep {
+		s := explainStep("demo", "b2", "prod", state, "", recent)
+		s.Spec.RequiredGates = []string{soak().Name}
+		return s
+	}
+	upstream := func() []sigs_client.Object {
+		return []sigs_client.Object{explainBundle("b2", "Promoting", recent),
+			explainStep("demo", "b2", "test", "Verified", "", recent),
+			explainStep("demo", "b2", "uat", "Verified", "", recent)}
+	}
+	tests := []struct {
+		name         string
+		objs         []sigs_client.Object
+		wantBlocking bool
+	}{
+		{
+			// checkPreDeployGates keeps the step Pending, before git.
+			name:         "pre-deploy gate holds the Pending prod step",
+			objs:         append(upstream(), prodStep("Pending"), preDeploy()),
+			wantBlocking: true,
+		},
+		{
+			name:         "pre-deploy gate holds the new prod step",
+			objs:         append(upstream(), prodStep(""), preDeploy()),
+			wantBlocking: true,
+		},
+		{
+			name: "pre-deploy gate after the prod step started",
+			objs: append(upstream(), prodStep("Promoting"), preDeploy()),
+		},
+		{
+			name: "post-deploy gate does not hold the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), soak()),
+		},
+		{
+			// j6-supersede.log: 7k9rk HealthChecking in test, the prod soak
+			// gate listed as blocking.
+			name: "bundle health checking in test",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Superseded", old), explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b1", "test", "Verified", "", old),
+				explainStep("demo", "b1", "uat", "Verified", "", old),
+				explainStep("demo", "b1", "prod", "Verified", "", old),
+				explainStep("demo", "b2", "test", "HealthChecking", "", recent),
+				soak(),
+			},
+		},
+		{
+			name: "bundle Verified in test, uat not started",
+			objs: []sigs_client.Object{
+				explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b2", "test", "Verified", "", recent),
+				soak(),
+			},
+		},
+		{
+			name: "bundle promoting in uat",
+			objs: []sigs_client.Object{
+				explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b2", "test", "Verified", "", recent),
+				explainStep("demo", "b2", "uat", "Promoting", "", recent),
+				soak(),
+			},
+		},
+		{
+			name: "bundle Verified in test and uat",
+			objs: []sigs_client.Object{
+				explainBundle("b1", "Superseded", old), explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b1", "prod", "Verified", "", old),
+				explainStep("demo", "b2", "test", "Verified", "", recent),
+				explainStep("demo", "b2", "uat", "Verified", "", recent),
+				soak(),
+			},
+			wantBlocking: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := runStatusPipeline(t, append(tt.objs, policyPipeline("demo", "test", "uat", "prod"))...)
+			assert.Contains(t, out, "Active bundle(s):", out)
+			assert.NotContains(t, out, "terminal state", "a bundle still to reach prod is not finished:\n%s", out)
+			if !tt.wantBlocking {
+				assert.NotContains(t, out, "Blocking Policy Gates", out)
+				assert.NotContains(t, out, "require-uat-soak", out)
+				return
+			}
+			_, gateSection, found := strings.Cut(out, "Blocking Policy Gates")
+			require.True(t, found, out)
+			assert.Contains(t, gateSection, "require-uat-soak")
+			assert.Contains(t, gateSection, "prod")
+		})
+	}
+}
+
 // C09b-cli-18: gates of another Bundle, templates and passing gates are not
 // reported as blocking.
 func TestStatusPipelineWriter_NotBlocking(t *testing.T) {
@@ -222,10 +332,13 @@ func TestStatusPipelineWriter_CurrentBundle(t *testing.T) {
 		skip := explainGateInstance("demo", "gapa-e2e2-wbptb", "prod", "gapa-allow-stage-skip",
 			`bundle.version == "sha-9349a3f"`, false, true, `bundle.version == "sha-9349a3f" = false`)
 		skip.Labels["kardinal.io/type"] = "skip-permission"
+		// The bundle skips uat, so prod's upstream is test (Verified).
+		skipping := explainBundle("gapa-e2e2-wbptb", "Promoting", recent)
+		skipping.Spec.Intent = &v1alpha1.BundleIntent{SkipEnvironments: []string{"uat"}}
 		out := runStatusPipeline(t,
 			policyPipeline("demo", "test", "uat", "prod"),
 			explainBundle("gapa-e2e2-gkvb2", "Verified", old),
-			explainBundle("gapa-e2e2-wbptb", "Promoting", recent),
+			skipping,
 			explainStep("demo", "gapa-e2e2-gkvb2", "prod", "Verified", "", old),
 			explainStep("demo", "gapa-e2e2-wbptb", "test", "Verified", "", recent),
 			skip,

@@ -317,9 +317,14 @@ func TestUIAPI_Pipelines_ActiveBundleAndCounts(t *testing.T) {
 			Status:     v1alpha1.BundleStatus{Phase: "Verified"},
 		}
 	}
+	// test fans out to prod-eu and prod-us.
 	pipeline := func(ns string) *v1alpha1.Pipeline {
 		return &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: ns},
-			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{{Name: "test"}}}}
+			Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
+				{Name: "test"},
+				{Name: "prod-eu", DependsOn: []string{"test"}},
+				{Name: "prod-us", DependsOn: []string{"test"}},
+			}}}
 	}
 	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(
 		pipeline("team-a"), pipeline("team-b"),
@@ -328,9 +333,10 @@ func TestUIAPI_Pipelines_ActiveBundleAndCounts(t *testing.T) {
 		bundle("team-a", "app-2-new", newer),
 		bundle("team-b", "app-2-new", newer),
 		uiGateInstance("team-a", "g1", "app-2-new", "no-weekend", "test", false),
-		uiGateInstance("team-b", "g2", "app-2-new", "no-weekend", "test", false),
-		uiGateInstance("team-b", "g3", "app-2-new", "freeze", "test", false),
-		uiStep("team-b", "s1", "app-2-new", "test", "Failed"),
+		uiStep("team-b", "s0", "app-2-new", "test", "Verified"),
+		uiStep("team-b", "s1", "app-2-new", "prod-eu", "Failed"),
+		uiGateInstance("team-b", "g2", "app-2-new", "no-weekend", "prod-us", false),
+		uiGateInstance("team-b", "g3", "app-2-new", "freeze", "prod-us", false),
 	).Build()
 
 	rec := uiReadGet(t, c, "/api/v1/ui/pipelines")
@@ -552,6 +558,125 @@ func TestUIAPI_GateApprove_RetriesConflicts(t *testing.T) {
 			var gate v1alpha1.PolicyGate
 			require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "team-a", Name: "g"}, &gate))
 			assert.Len(t, gate.Spec.Overrides, tt.wantOverrides)
+		})
+	}
+}
+
+// E2E-R18: blockerCount counts only the active bundle's not-ready gates in
+// environments it has reached (every upstream Verified) and not started, the
+// gates kardinal status lists as blocking. A soak gate on prod does not count
+// while the bundle is still in test, so the sidebar says Promoting, not
+// Blocked (j6-supersede.log, ui.log:97).
+func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
+	now := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	pipeline := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
+		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
+			{Name: "test"}, {Name: "uat"}, {Name: "prod"},
+		}}}
+	bundle := func(phase string) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-b2", Namespace: "default", CreationTimestamp: now},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+			Status:     v1alpha1.BundleStatus{Phase: phase},
+		}
+	}
+	soak := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
+	preDeploy := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
+	preDeploy.Spec.When = "pre-deploy"
+	// prodStep is the prod step waiting on the soak gate, the way the Graph
+	// builder lists gate instances in spec.requiredGates.
+	prodStep := func(state string) *v1alpha1.PromotionStep {
+		s := uiStep("default", "s-prod", "app-b2", "prod", state)
+		s.Spec.RequiredGates = []string{"app-b2-prod-soak"}
+		return s
+	}
+	upstream := func() []client.Object {
+		return []client.Object{bundle("Promoting"),
+			uiStep("default", "s-test", "app-b2", "test", "Verified"),
+			uiStep("default", "s-uat", "app-b2", "uat", "Verified")}
+	}
+	tests := []struct {
+		name string
+		objs []client.Object
+		want int
+	}{
+		{
+			// checkPreDeployGates keeps the step Pending, before git.
+			name: "pre-deploy gate holds the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), preDeploy),
+			want: 1,
+		},
+		{
+			name: "pre-deploy gate holds the new prod step",
+			objs: append(upstream(), prodStep(""), preDeploy),
+			want: 1,
+		},
+		{
+			name: "pre-deploy gate after the prod step started",
+			objs: append(upstream(), prodStep("Promoting"), preDeploy),
+			want: 0,
+		},
+		{
+			name: "post-deploy gate does not hold the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), soak),
+			want: 0,
+		},
+		{
+			name: "health checking in test",
+			objs: []client.Object{bundle("Promoting"),
+				uiStep("default", "s-test", "app-b2", "test", "HealthChecking"), soak},
+			want: 0,
+		},
+		{
+			name: "Verified in test, promoting in uat",
+			objs: []client.Object{bundle("Promoting"),
+				uiStep("default", "s-test", "app-b2", "test", "Verified"),
+				uiStep("default", "s-uat", "app-b2", "uat", "Promoting"), soak},
+			want: 0,
+		},
+		{
+			name: "Verified in test and uat",
+			objs: []client.Object{bundle("Promoting"),
+				uiStep("default", "s-test", "app-b2", "test", "Verified"),
+				uiStep("default", "s-uat", "app-b2", "uat", "Verified"), soak},
+			want: 1,
+		},
+		{
+			name: "prod step already created",
+			objs: []client.Object{bundle("Promoting"),
+				uiStep("default", "s-test", "app-b2", "test", "Verified"),
+				uiStep("default", "s-uat", "app-b2", "uat", "Verified"),
+				uiStep("default", "s-prod", "app-b2", "prod", "Promoting"), soak},
+			want: 0,
+		},
+		{
+			name: "gate on the first env blocks at once",
+			objs: []client.Object{bundle("Promoting"),
+				uiGateInstance("default", "app-b2-test-freeze", "app-b2", "freeze", "test", false), soak},
+			want: 1,
+		},
+		{
+			name: "failed bundle's gates do not block",
+			objs: []client.Object{bundle("Failed"),
+				uiStep("default", "s-test", "app-b2", "test", "Verified"),
+				uiStep("default", "s-uat", "app-b2", "uat", "Failed"), soak},
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := []client.Object{pipeline.DeepCopy()}
+			for _, o := range tt.objs {
+				objs = append(objs, o.DeepCopyObject().(client.Object))
+			}
+			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+			rec := uiReadGet(t, c, "/api/v1/ui/pipelines")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var resp []uiPipelineResponse
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.Len(t, resp, 1)
+			assert.Equal(t, "app-b2", resp[0].ActiveBundleName)
+			assert.Equal(t, tt.want, resp[0].BlockerCount)
 		})
 	}
 }

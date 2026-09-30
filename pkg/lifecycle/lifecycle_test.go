@@ -123,6 +123,40 @@ func TestCompareCreation(t *testing.T) {
 	}
 }
 
+// TestCurrentBundle pins the pipeline-level current Bundle rule shared by the
+// UI API (activeBundleName) and kardinal get pipelines.
+func TestCurrentBundle(t *testing.T) {
+	b := func(name string, minute int, p string) v1alpha1.Bundle {
+		return *phase(bundle(name, "app", "", minute), p)
+	}
+	tests := []struct {
+		name    string
+		bundles []v1alpha1.Bundle
+		want    string
+	}{
+		{name: "no bundles", want: ""},
+		{name: "newest wins whatever its phase",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), b("b2", 2, "Failed")}, want: "b2"},
+		{name: "a new bundle with no phase yet is current",
+			bundles: []v1alpha1.Bundle{b("b2", 2, ""), b("b1", 1, "Verified")}, want: "b2"},
+		{name: "a newer Superseded bundle is skipped",
+			bundles: []v1alpha1.Bundle{b("b1", 1, "Verified"), b("b2", 2, "Superseded")}, want: "b1"},
+		{name: "every bundle Superseded: the newest",
+			bundles: []v1alpha1.Bundle{b("b2", 2, "Superseded"), b("b1", 1, "Superseded")}, want: "b2"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := lifecycle.CurrentBundle(tc.bundles)
+			if tc.want == "" {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, tc.want, got.Name)
+		})
+	}
+}
+
 func TestStampCreatedAt(t *testing.T) {
 	b := &v1alpha1.Bundle{}
 	lifecycle.StampCreatedAt(b, time.Time{})

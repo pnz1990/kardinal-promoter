@@ -304,3 +304,70 @@ func TestGetPipelinesOnce_HealthyBundles_NoErrorSection(t *testing.T) {
 	out := buf.String()
 	assert.NotContains(t, out, "ERROR:", "no ERROR: section expected when bundles are healthy")
 }
+
+// E2E-R17: every cell of a get pipelines row describes the row's BUNDLE, the
+// pipeline's newest bundle: Waiting where it is still to come, a dash where it
+// failed before getting there, never the older bundle's Verified.
+func TestGetPipelinesOnce_CurrentBundleState(t *testing.T) {
+	old, recent := time.Now().Add(-2*time.Hour), time.Now().Add(-10*time.Minute)
+	b1Everywhere := func() []sigs_client.Object {
+		return []sigs_client.Object{
+			explainBundle("b1", "Verified", old),
+			explainStep("demo", "b1", "test", "Verified", "", old),
+			explainStep("demo", "b1", "uat", "Verified", "", old),
+			explainStep("demo", "b1", "prod", "Verified", "", old),
+		}
+	}
+	tests := []struct {
+		name string
+		objs []sigs_client.Object
+		want map[string]string
+	}{
+		{
+			// scenA.log: the row said b1 and Verified while status said Failed.
+			name: "newer bundle failed at the first env",
+			objs: append([]sigs_client.Object{
+				explainBundle("b2", "Failed", recent),
+				explainStep("demo", "b2", "test", "Failed", "", recent),
+			}, b1Everywhere()...),
+			want: map[string]string{"BUNDLE": "b2", "TEST": "Failed", "UAT": "-", "PROD": "-"},
+		},
+		{
+			// j1-happy.log: b1's Verified was shown next to BUNDLE b2.
+			name: "bundle held at prod by a gate",
+			objs: append([]sigs_client.Object{
+				explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b2", "test", "Verified", "", recent),
+				explainStep("demo", "b2", "uat", "Verified", "", recent),
+				explainGateInstance("demo", "b2", "prod", "require-uat-soak", "false", false, true, "soak 3m < 30m"),
+			}, b1Everywhere()...),
+			want: map[string]string{"BUNDLE": "b2", "TEST": "Verified", "UAT": "Verified", "PROD": "Waiting"},
+		},
+		{
+			name: "bundle health checking in test, ungated uat",
+			objs: append([]sigs_client.Object{
+				explainBundle("b2", "Promoting", recent),
+				explainStep("demo", "b2", "test", "HealthChecking", "", recent),
+			}, b1Everywhere()...),
+			want: map[string]string{"BUNDLE": "b2", "TEST": "HealthChecking", "UAT": "Waiting", "PROD": "Waiting"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := policyClient(t, append(tt.objs, policyPipeline("demo", "test", "uat", "prod"))...)
+			var buf bytes.Buffer
+			require.NoError(t, getPipelinesOnce(&buf, fc, "default", []string{"demo"}, false))
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			header := strings.Fields(lines[0])
+			cells := strings.Fields(lines[1])
+			require.Len(t, cells, len(header), buf.String())
+			row := map[string]string{}
+			for i, h := range header {
+				row[h] = cells[i]
+			}
+			for col, want := range tt.want {
+				assert.Equal(t, want, row[col], "column %s in:\n%s", col, buf.String())
+			}
+		})
+	}
+}

@@ -5,6 +5,7 @@ package graph
 
 import (
 	"fmt"
+	"slices"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -38,4 +39,87 @@ func DirectUpstreams(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alph
 		return nil, fmt.Errorf("direct upstreams: environment %q is not promoted by bundle %s", envName, bundle.Name)
 	}
 	return filteredDeps(envName, deps, filteredSet), nil
+}
+
+// UpstreamsVerified reports whether the Graph Build generates for bundle has
+// released envName: every direct upstream environment (DirectUpstreams) has
+// the bundle's PromotionStep Verified. That is the upstream half of the gate
+// on envName's PromotionStep (verifiedCond); for a multi-region upstream every
+// region's step must exist and be Verified. A root environment is released.
+//
+// steps may hold PromotionSteps of any bundle; only those with
+// spec.bundleName == bundle.Name count. It returns false when envName is not
+// part of the bundle's promotion or the Pipeline ordering is invalid.
+func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	envName string, steps []kardinalv1alpha1.PromotionStep) bool {
+	ups, err := DirectUpstreams(pipeline, bundle, envName)
+	if err != nil {
+		return false
+	}
+	regions := make(map[string]int, len(pipeline.Spec.Environments))
+	for _, e := range pipeline.Spec.Environments {
+		regions[e.Name] = len(e.Regions)
+	}
+	for _, up := range ups {
+		want := regions[up]
+		if want < 2 {
+			want = 1
+		}
+		verified := 0
+		for i := range steps {
+			s := &steps[i]
+			if s.Spec.BundleName != bundle.Name || s.Spec.Environment != up {
+				continue
+			}
+			if s.Status.State != "Verified" {
+				return false
+			}
+			verified++
+		}
+		if verified < want {
+			return false
+		}
+	}
+	return true
+}
+
+// GateHolds reports whether gate, a PolicyGate instance of bundle, is holding
+// the bundle's promotion back in the gate's environment. It is the one rule
+// for the UI API's blockerCount and kardinal status's blocking gates. The gate
+// must be not ready and the bundle still in flight (not Failed or Superseded),
+// and either:
+//   - the bundle has no PromotionStep in the environment and every upstream
+//     environment is Verified for it (UpstreamsVerified): the Graph creates
+//     the step only once the gate is ready; or
+//   - the gate is a pre-deploy gate (spec.when) that a step of the bundle in
+//     the environment lists in spec.requiredGates while that step is still
+//     Pending ("" or "Pending"): the PromotionStep reconciler
+//     (checkPreDeployGates, K-02) keeps such a step Pending, before any git
+//     operation, until the gate is ready.
+//
+// A gate of an environment the bundle has not reached, or whose steps have
+// all left Pending, holds nothing. steps may hold PromotionSteps of any
+// bundle; only the bundle's own count.
+func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	gate *kardinalv1alpha1.PolicyGate, steps []kardinalv1alpha1.PromotionStep) bool {
+	env := gate.Labels["kardinal.io/environment"]
+	if gate.Status.Ready || env == "" || gate.Labels["kardinal.io/bundle"] != bundle.Name {
+		return false
+	}
+	if phase := bundle.Status.Phase; phase == "Failed" || phase == "Superseded" {
+		return false
+	}
+	stepped := false
+	for i := range steps {
+		s := &steps[i]
+		if s.Spec.BundleName != bundle.Name || s.Spec.Environment != env {
+			continue
+		}
+		stepped = true
+		pending := s.Status.State == "" || s.Status.State == "Pending"
+		if gate.Spec.When == "pre-deploy" && pending && slices.Contains(s.Spec.RequiredGates, gate.Name) {
+			return true
+		}
+	}
+	return !stepped && UpstreamsVerified(pipeline, bundle, env, steps)
 }

@@ -62,7 +62,9 @@ type uiPipelineResponse struct {
 	EnvironmentTopology []uiEnvironmentNode `json:"environmentTopology,omitempty"`
 
 	// Operations table columns (#462): derived from active Bundle + steps + gates.
-	// BlockerCount is the number of PolicyGates with ready=false for the active bundle.
+	// BlockerCount is the number of the active bundle's PolicyGates with
+	// ready=false in environments it has reached (every upstream Verified)
+	// but not started; see blockingGateCount.
 	BlockerCount int `json:"blockerCount,omitempty"`
 	// FailedStepCount is the number of PromotionSteps with state=Failed for the active bundle.
 	FailedStepCount int `json:"failedStepCount,omitempty"`
@@ -274,72 +276,51 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// Index: namespace/pipeline → current bundle. The current bundle is the
-	// newest non-Superseded bundle (lifecycle.CompareCreation: creationTimestamp,
-	// then the created-at annotation, then the name), whatever its phase, so a
-	// newer Failed bundle is never hidden behind an older Verified or Promoting
-	// one (E2E-R15). When every bundle is Superseded, the newest one is used.
-	// web/src/bundleSelection.ts pickDefaultBundle applies the same rule.
+	// Index: namespace/pipeline → current bundle (lifecycle.CurrentBundle): the
+	// newest non-Superseded bundle (lifecycle.CompareCreation), whatever its
+	// phase, so a newer Failed bundle is never hidden behind an older Verified
+	// or Promoting one (E2E-R15). When every bundle is Superseded, the newest
+	// one is used. kardinal get pipelines and web/src/bundleSelection.ts
+	// pickDefaultBundle apply the same rule.
 	type activeBundleEntry struct {
 		bundle       *v1alpha1.Bundle
 		name         string
-		superseded   bool
 		envStates    map[string]string
 		createdAt    time.Time
 		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
 	}
-	activeBundles := make(map[string]*activeBundleEntry)
-	for i := range bundleList.Items {
-		b := &bundleList.Items[i]
-		if b.Spec.Pipeline == "" {
-			continue
+	bundlesByPipeline := make(map[string][]v1alpha1.Bundle)
+	for _, b := range bundleList.Items {
+		if b.Spec.Pipeline != "" {
+			key := b.Namespace + "/" + b.Spec.Pipeline
+			bundlesByPipeline[key] = append(bundlesByPipeline[key], b)
 		}
-		key := fmt.Sprintf("%s/%s", b.Namespace, b.Spec.Pipeline)
-		existing := activeBundles[key]
-		superseded := b.Status.Phase == "Superseded"
-		if existing == nil || (existing.superseded && !superseded) ||
-			(existing.superseded == superseded && lifecycle.CompareCreation(b, existing.bundle) > 0) {
-			envStates := make(map[string]string, len(b.Status.Environments))
-			var lastVerified time.Time
-			for _, env := range b.Status.Environments {
-				if env.Phase != "" {
-					envStates[env.Name] = env.Phase
-				}
-				// Track most recent HealthCheckedAt across all envs for lastMergedAt.
-				if env.HealthCheckedAt != nil && env.HealthCheckedAt.After(lastVerified) {
-					lastVerified = env.HealthCheckedAt.Time
-				}
+	}
+	activeBundles := make(map[string]*activeBundleEntry, len(bundlesByPipeline))
+	for key, bundles := range bundlesByPipeline {
+		b := lifecycle.CurrentBundle(bundles)
+		envStates := make(map[string]string, len(b.Status.Environments))
+		var lastVerified time.Time
+		for _, env := range b.Status.Environments {
+			if env.Phase != "" {
+				envStates[env.Name] = env.Phase
 			}
-			activeBundles[key] = &activeBundleEntry{
-				bundle:       b,
-				name:         b.Name,
-				superseded:   superseded,
-				envStates:    envStates,
-				createdAt:    b.CreationTimestamp.Time,
-				lastVerified: lastVerified,
+			// Track most recent HealthCheckedAt across all envs for lastMergedAt.
+			if env.HealthCheckedAt != nil && env.HealthCheckedAt.After(lastVerified) {
+				lastVerified = env.HealthCheckedAt.Time
 			}
+		}
+		activeBundles[key] = &activeBundleEntry{
+			bundle:       b,
+			name:         b.Name,
+			envStates:    envStates,
+			createdAt:    b.CreationTimestamp.Time,
+			lastVerified: lastVerified,
 		}
 	}
 
-	// Build per-pipeline blocker count from PolicyGates (ops table #462).
-	// Index: namespace/bundle → count of gates with ready=false.
-	var gateList v1alpha1.PolicyGateList
-	if err := s.client.List(r.Context(), &gateList); err != nil {
-		s.log.Error().Err(err).Msg("ui: list policy gates")
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	blockersByBundle := make(map[string]int, len(gateList.Items))
-	for _, g := range gateList.Items {
-		if !g.Status.Ready {
-			bundleLabel := g.Labels["kardinal.io/bundle"]
-			if bundleLabel != "" {
-				blockersByBundle[g.Namespace+"/"+bundleLabel]++
-			}
-		}
-	}
-
-	// Build per-pipeline failed step count from PromotionSteps (ops table #462).
+	// PromotionSteps feed the failed step count and, with the gates, the
+	// blocker count (ops table #462). Index both by namespace/bundle.
 	var stepList v1alpha1.PromotionStepList
 	if err := s.client.List(r.Context(), &stepList); err != nil {
 		s.log.Error().Err(err).Msg("ui: list promotion steps")
@@ -347,10 +328,28 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	failedStepsByBundle := make(map[string]int, len(stepList.Items))
+	stepsByBundle := make(map[string][]v1alpha1.PromotionStep, len(stepList.Items))
 	for _, ps := range stepList.Items {
+		key := ps.Namespace + "/" + ps.Spec.BundleName
+		stepsByBundle[key] = append(stepsByBundle[key], ps)
 		// AbortedByAlarm is a failure too: the health alarm stopped the promotion.
 		if ps.Status.State == "Failed" || ps.Status.State == "AbortedByAlarm" {
-			failedStepsByBundle[ps.Namespace+"/"+ps.Spec.BundleName]++
+			failedStepsByBundle[key]++
+		}
+	}
+
+	// Index: namespace/bundle → the bundle's gate instances that are not ready.
+	var gateList v1alpha1.PolicyGateList
+	if err := s.client.List(r.Context(), &gateList); err != nil {
+		s.log.Error().Err(err).Msg("ui: list policy gates")
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	notReadyByBundle := make(map[string][]v1alpha1.PolicyGate)
+	for _, g := range gateList.Items {
+		if bundleLabel := g.Labels["kardinal.io/bundle"]; bundleLabel != "" && !g.Status.Ready {
+			key := g.Namespace + "/" + bundleLabel
+			notReadyByBundle[key] = append(notReadyByBundle[key], g)
 		}
 	}
 
@@ -387,7 +386,8 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				resp.EnvironmentStates = ab.envStates
 			}
 			// Ops table: blocker + failed step counts derived from active bundle.
-			if n := blockersByBundle[p.Namespace+"/"+ab.name]; n > 0 {
+			bundleKey := p.Namespace + "/" + ab.name
+			if n := blockingGateCount(&p, ab.bundle, notReadyByBundle[bundleKey], stepsByBundle[bundleKey]); n > 0 {
 				resp.BlockerCount = n
 			}
 			if n := failedStepsByBundle[p.Namespace+"/"+ab.name]; n > 0 {
@@ -406,6 +406,24 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		result = append(result, resp)
 	}
 	writeJSON(w, result)
+}
+
+// blockingGateCount counts the not-ready gate instances of bundle that hold it
+// back (E2E-R18), graph.GateHolds: the gate's environment has no step of
+// bundle yet and every upstream environment is Verified, or a Pending step
+// there waits on the gate as a pre-deploy gate. A gate of an environment the
+// bundle has not reached is not the reason it is waiting, so it is not
+// counted, and neither is a gate of a Failed or Superseded bundle. kardinal
+// status lists the same gates as Blocking Policy Gates.
+func blockingGateCount(p *v1alpha1.Pipeline, bundle *v1alpha1.Bundle, notReady []v1alpha1.PolicyGate,
+	steps []v1alpha1.PromotionStep) int {
+	n := 0
+	for i := range notReady {
+		if graphpkg.GateHolds(p, bundle, &notReady[i], steps) {
+			n++
+		}
+	}
+	return n
 }
 
 // handlePipelinesSubpath handles GET /api/v1/ui/pipelines/{name}/bundles.

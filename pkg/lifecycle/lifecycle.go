@@ -93,6 +93,35 @@ func CompareCreation(a, b *v1alpha1.Bundle) int {
 	return strings.Compare(a.Name, b.Name)
 }
 
+// moreCurrent reports whether Bundle a outranks Bundle b of the same
+// Pipeline as the Pipeline's current Bundle. A Bundle that is not Superseded
+// outranks a Superseded one whatever its phase, so a newer Failed Bundle is
+// never hidden behind an older Verified or Promoting one (E2E-R15). Otherwise
+// the newer one (CompareCreation) wins.
+func moreCurrent(a, b *v1alpha1.Bundle) bool {
+	aSuperseded, bSuperseded := a.Status.Phase == "Superseded", b.Status.Phase == "Superseded"
+	if aSuperseded != bSuperseded {
+		return bSuperseded
+	}
+	return CompareCreation(a, b) > 0
+}
+
+// CurrentBundle returns the current Bundle of one Pipeline, given its
+// Bundles: the newest Bundle that is not Superseded, whatever its phase, or
+// the newest one when every Bundle is Superseded (moreCurrent). It returns
+// nil when bundles is empty. The UI API's activeBundleName, the pipeline
+// table of kardinal get pipelines and web/src/bundleSelection.ts
+// pickDefaultBundle all use this rule.
+func CurrentBundle(bundles []v1alpha1.Bundle) *v1alpha1.Bundle {
+	var current *v1alpha1.Bundle
+	for i := range bundles {
+		if current == nil || moreCurrent(&bundles[i], current) {
+			current = &bundles[i]
+		}
+	}
+	return current
+}
+
 func createdAt(b *v1alpha1.Bundle) (time.Time, bool) {
 	s, ok := b.Annotations[AnnotationCreatedAt]
 	if !ok {
@@ -154,9 +183,9 @@ func hasEnvironment(p *v1alpha1.Pipeline, env string) bool {
 	return false
 }
 
-// inFlightPhase reports whether a Bundle phase is still on its way through the
+// InFlightPhase reports whether a Bundle phase is still on its way through the
 // pipeline: new, Available or Promoting.
-func inFlightPhase(phase string) bool {
+func InFlightPhase(phase string) bool {
 	return phase == "" || phase == "Available" || phase == "Promoting"
 }
 

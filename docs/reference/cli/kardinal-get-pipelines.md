@@ -6,6 +6,21 @@ List Pipelines
 
 List Pipelines and their per-environment promotion status.
 
+BUNDLE is the pipeline's current bundle: the newest bundle that is not
+Superseded, whatever its phase (the newest one when all are Superseded), the
+same bundle the UI shows. Every environment column describes that bundle: its
+PromotionStep state there; Waiting when it has no PromotionStep there yet and
+is still promoting (held by a PolicyGate, or an upstream environment is not
+Verified yet). A dash means the bundle has no PromotionStep there and is
+finished (Verified, Failed or Superseded) or skips the environment or stops
+before it (skipEnvironments or targetEnvironment). kardinal status and kardinal
+explain instead pick the current bundle per environment, so for an
+environment the newest bundle has not reached they describe the bundle that
+was there before.
+
+The table needs list permission on bundles and promotionsteps; without it the
+command fails instead of showing dashes.
+
 Use --watch / -w to stream live updates (polls every 2s, Ctrl-C to quit).
 
 When a Bundle promotion fails (e.g. due to an invalid dependsOn reference

@@ -27,6 +27,7 @@ import (
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 func newStatusCmd() *cobra.Command {
@@ -45,8 +46,13 @@ pipeline — the current bundle per environment (the newest bundle that is not
 Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps
 (one row per region, active steps marked), the PolicyGates holding it back
-(with CEL expression and current reason), and open PR URLs. This is the first
-command to run when a promotion is stuck.
+(with CEL expression and current reason), and open PR URLs. A gate is listed
+as blocking only while it holds the bundle back: it is not ready and either
+every upstream environment is Verified for that bundle and the bundle has no
+PromotionStep in the gate's environment yet, or it is a pre-deploy gate that
+the bundle's Pending PromotionStep there waits on. A gate of an environment
+the bundle has not reached yet is not listed. This is the first command to
+run when a promotion is stuck.
 
 Examples:
   # Cluster-level summary
@@ -205,14 +211,24 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		return rows[i].region < rows[j].region
 	})
 
-	// A gate blocks when it belongs to the current Bundle of its environment,
-	// is not ready, and that Bundle has no step there yet: the Graph creates
-	// the step only once every gate passes.
+	// A gate blocks when it belongs to the current Bundle of its environment
+	// and holds that Bundle back there (graph.GateHolds, the rule the UI's
+	// blockerCount uses): it is not ready, and either the Bundle has no step
+	// there yet and every upstream step is Verified, or a Pending step there
+	// waits on it as a pre-deploy gate (E2E-R18).
+	byName := make(map[string]*v1alpha1.Bundle, len(bundles.Items))
+	for i := range bundles.Items {
+		byName[bundles.Items[i].Name] = &bundles.Items[i]
+	}
 	var blockingGates []v1alpha1.PolicyGate
-	for _, g := range gates.Items {
+	for i := range gates.Items {
+		g := &gates.Items[i]
 		env, bundle := g.Labels["kardinal.io/environment"], g.Labels["kardinal.io/bundle"]
-		if bundle != "" && bundle == active[env] && !stepped[env] && !g.Status.Ready {
-			blockingGates = append(blockingGates, g)
+		if bundle == "" || bundle != active[env] {
+			continue
+		}
+		if b := byName[bundle]; b != nil && graph.GateHolds(&pl, b, g, steps.Items) {
+			blockingGates = append(blockingGates, *g)
 		}
 	}
 	sort.Slice(blockingGates, func(i, j int) bool {
@@ -280,10 +296,17 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		_ = gtw.Flush()
 	}
 
-	// Show a hint if everything is terminal.
+	// Show a hint if everything is terminal. An environment whose current
+	// Bundle has not started there yet (only its gate instances exist) is
+	// still to come, so the promotion is not over.
 	allTerminal := len(blockingGates) == 0
 	for _, r := range rows {
 		if !terminalStates[r.state] {
+			allTerminal = false
+		}
+	}
+	for env := range active {
+		if !stepped[env] {
 			allTerminal = false
 		}
 	}

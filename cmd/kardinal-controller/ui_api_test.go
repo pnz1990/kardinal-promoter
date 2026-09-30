@@ -602,9 +602,11 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	p := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{
+			// test fans out to prod-eu and prod-us.
 			Environments: []v1alpha1.EnvironmentSpec{
 				{Name: "test"},
-				{Name: "prod"},
+				{Name: "prod-eu", DependsOn: []string{"test"}},
+				{Name: "prod-us", DependsOn: []string{"test"}},
 			},
 			// 2 pipeline-level gates → cdLevel = "mostly-cd"
 			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
@@ -625,11 +627,12 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 		Status: v1alpha1.BundleStatus{Phase: "Promoting"},
 	}
 
-	// Two PolicyGates blocking (ready=false) for this bundle
+	// Two PolicyGates blocking (ready=false) for this bundle at prod-us, which
+	// it has reached (test Verified).
 	gate1 := &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "no-weekend", Namespace: "default",
-			Labels: map[string]string{"kardinal.io/bundle": "my-app-v1"},
+			Labels: map[string]string{"kardinal.io/bundle": "my-app-v1", "kardinal.io/environment": "prod-us"},
 		},
 		Spec:   v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend()"},
 		Status: v1alpha1.PolicyGateStatus{Ready: false},
@@ -637,23 +640,28 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	gate2 := &v1alpha1.PolicyGate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "needs-approval", Namespace: "default",
-			Labels: map[string]string{"kardinal.io/bundle": "my-app-v1"},
+			Labels: map[string]string{"kardinal.io/bundle": "my-app-v1", "kardinal.io/environment": "prod-us"},
 		},
 		Spec:   v1alpha1.PolicyGateSpec{Expression: "bundle.pr[\"prod\"].isApproved"},
 		Status: v1alpha1.PolicyGateStatus{Ready: false},
 	}
 
-	// One PromotionStep in Failed state for this bundle
+	// One PromotionStep in Failed state for this bundle, after test Verified.
+	testStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-test", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{BundleName: "my-app-v1", Environment: "test"},
+		Status:     v1alpha1.PromotionStepStatus{State: "Verified"},
+	}
 	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-prod", Namespace: "default"},
-		Spec:       v1alpha1.PromotionStepSpec{BundleName: "my-app-v1", Environment: "prod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app-v1-prod-eu", Namespace: "default"},
+		Spec:       v1alpha1.PromotionStepSpec{BundleName: "my-app-v1", Environment: "prod-eu"},
 		Status:     v1alpha1.PromotionStepStatus{State: "Failed"},
 	}
 
 	s := uiScheme()
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(p, bundle, gate1, gate2, step).
-		WithStatusSubresource(gate1, gate2, step).
+		WithObjects(p, bundle, gate1, gate2, testStep, step).
+		WithStatusSubresource(gate1, gate2, testStep, step).
 		Build()
 	srv := newUIAPIServer(c, zerolog.Nop())
 	mux := http.NewServeMux()
