@@ -317,7 +317,7 @@ These are not gaps, but the translator has to work around them.
   (`pkg/controller/instance/controller.go:317`), not the Graph controller. Deleting the
   Graph deletes every managed resource (`pkg/controller/graph/controller.go`
   `reconcileDelete`), and a node whose `includeWhen` turns false is pruned
-  (`executor/simple.go:290-298`). To stop a Superseded Bundle's Graph while keeping its
+  (`executor/simple.go:289-296`). To stop a Superseded Bundle's Graph while keeping its
   steps and gates, every step node holds on `bundle.status.phase` through `resolvableWhen`
   (G1).
 - **Data-pending classification is by error text** (`runtime/errors.go:43-49`). G1's

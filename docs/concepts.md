@@ -38,8 +38,9 @@ same Pipeline, the older Bundle is **superseded**:
 - Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
   open is closed with a comment
 - Its Graph, PromotionSteps and PolicyGates are kept as history, but the Graph creates no
-  new PromotionStep, and its PolicyGates are no longer evaluated: they keep the status
-  they had when the Bundle was superseded
+  new PromotionStep (a Graph built before this behaviour can still create one at the
+  moment of supersession), and its PolicyGates are no longer evaluated: they keep the
+  status they had when the Bundle was superseded
 - A step the Graph created just before the Bundle was superseded, and that never started,
   is failed with "superseded before this step started" and writes no AuditEvent
 - Deleting the Bundle deletes its Graph and everything the Graph created
