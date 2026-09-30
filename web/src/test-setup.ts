@@ -14,3 +14,11 @@
 // Vitest test setup file.
 // Imports @testing-library/jest-dom to extend vitest matchers with DOM assertions.
 import '@testing-library/jest-dom'
+import type { TestingLibraryMatchers } from '@testing-library/jest-dom/matchers'
+
+// jest-dom's vitest typings (through 7.0) augment vitest's old Assertion<T>.
+// Vitest 5 takes custom matcher types from Matchers<R, T>, so declare them here.
+declare module 'vitest' {
+  interface Matchers<R extends void | Promise<void> = void | Promise<void>, T = unknown>
+    extends TestingLibraryMatchers<any, R> {}
+}
