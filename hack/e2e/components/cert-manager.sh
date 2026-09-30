@@ -16,8 +16,13 @@ source "$(dirname "$0")/../lib.sh"
 target_cluster
 
 ISSUER=e2e-selfsigned
-"${KUBECTL[@]}" apply --server-side --force-conflicts \
-  -f "https://github.com/cert-manager/cert-manager/releases/download/$CERT_MANAGER_RELEASE/cert-manager.yaml" >/dev/null
+MANIFEST="$E2E_OUT/cert-manager-$CERT_MANAGER_RELEASE.yaml"
+[ -s "$MANIFEST" ] || curl -fsSL --retry 5 -o "$MANIFEST" \
+  "https://github.com/cert-manager/cert-manager/releases/download/$CERT_MANAGER_RELEASE/cert-manager.yaml"
+# Pre-pull with retries: shared CI runners get rate-limited by registries.
+mapfile -t images < <(awk '$1 == "image:" {gsub(/"/, "", $2); print $2}' "$MANIFEST" | sort -u)
+pull_images "${images[@]}"
+"${KUBECTL[@]}" apply --server-side --force-conflicts -f "$MANIFEST" >/dev/null
 for d in cert-manager cert-manager-cainjector cert-manager-webhook; do
   "${KUBECTL[@]}" -n cert-manager rollout status "deploy/$d" --timeout=300s >/dev/null
 done
