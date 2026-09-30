@@ -77,7 +77,8 @@ spec:
                     default: 5m
                     description: |-
                       Interval is how often to poll the repository.
-                      Uses Go duration format (e.g. "5m", "1h").
+                      Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised
+                      to 30s; empty or "0" means the 5m default.
                     pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                   pathGlob:
@@ -101,7 +102,8 @@ spec:
                     default: 5m
                     description: |-
                       Interval is how often to poll the registry.
-                      Uses Go duration format (e.g. "5m", "1h").
+                      Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised
+                      to 30s; empty or "0" means the 5m default.
                     pattern: ^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$
                     type: string
                   registry:

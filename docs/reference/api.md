@@ -429,11 +429,11 @@ Subscription watches an OCI registry or Git repository for new artifacts and aut
 | `spec` | object |  | SubscriptionSpec defines the desired state of a Subscription. |
 | `spec.git` | object |  | Git holds Git repository watching parameters. Required when type=git. |
 | `spec.git.branch` | string |  | Branch is the branch to watch. Defaults to "main". Default: `main`. |
-| `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
+| `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
 | `spec.git.pathGlob` | string |  | PathGlob is reserved for path filtering, which is not implemented. A non-empty value puts the Subscription in phase Error; leave it empty (every new commit on the branch creates a Bundle). |
 | `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. |
 | `spec.image` | object |  | Image holds OCI registry watching parameters. Required when type=image. |
-| `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
+| `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
 | `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://localhost:5000/myapp" for a plain-HTTP registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. |
 | `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. With one matching tag its digest is tracked (a moving tag such as "^main$"); when every matching tag is a semantic version the highest wins; otherwise the most recently built image wins (at most 50 matching tags). No matching tag is an error. |
 | `spec.namespace` | string |  | Namespace must be empty or equal to the Subscription's own namespace. Bundles are always created in the Subscription's namespace; any other value puts the Subscription in phase Error and creates no Bundle. Leave it empty: the field is kept only so existing manifests still apply. |

@@ -57,9 +57,10 @@ const (
 	// maxBundleNameLen keeps Bundle names usable as label values
 	// (kardinal.io/bundle on PromotionSteps and PolicyGates).
 	maxBundleNameLen = 63
-	// defaultInterval is the polling interval when spec is empty or invalid.
+	// defaultInterval is the polling interval when spec is empty, zero or invalid.
 	defaultInterval = 5 * time.Minute
-	// minInterval prevents hot-loops from misconfiguration.
+	// minInterval is the shortest polling interval: a smaller spec interval is
+	// raised to it, so a misconfiguration cannot poll the registry in a hot loop.
 	minInterval = 30 * time.Second
 	// errorRequeueInterval is how long to wait before retrying after a watch error.
 	errorRequeueInterval = 1 * time.Minute
@@ -328,8 +329,9 @@ func (r *Reconciler) patchStatus(ctx context.Context, sub *kardinalv1alpha1.Subs
 	return nil
 }
 
-// parseInterval parses the subscription's polling interval.
-// Returns defaultInterval on parse errors. Enforces minInterval.
+// parseInterval parses the subscription's polling interval. It returns
+// defaultInterval when the interval is empty, zero or does not parse, and
+// raises a positive interval below minInterval to minInterval.
 func (r *Reconciler) parseInterval(sub *kardinalv1alpha1.Subscription) time.Duration {
 	var raw string
 	switch sub.Spec.Type {
@@ -346,8 +348,11 @@ func (r *Reconciler) parseInterval(sub *kardinalv1alpha1.Subscription) time.Dura
 		return defaultInterval
 	}
 	d, err := time.ParseDuration(raw)
-	if err != nil || d < minInterval {
+	if err != nil || d <= 0 {
 		return defaultInterval
+	}
+	if d < minInterval {
+		return minInterval
 	}
 	return d
 }

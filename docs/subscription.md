@@ -44,7 +44,7 @@ spec:
   image:
     registry: ghcr.io/myorg/my-app      # no tag, no digest, no credentials
     tagFilter: '^v\d+\.\d+\.\d+$'        # semantic version tags
-    interval: 5m                        # poll every 5 minutes (minimum 30s)
+    interval: 5m                        # poll every 5 minutes (values under 30s are raised to 30s)
 ```
 
 `registry` is a repository reference: `host/path`, a Docker Hub short name

@@ -66,7 +66,8 @@ type ImageSubscriptionSpec struct {
 	TagFilter string `json:"tagFilter,omitempty"`
 
 	// Interval is how often to poll the registry.
-	// Uses Go duration format (e.g. "5m", "1h").
+	// Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised
+	// to 30s; empty or "0" means the 5m default.
 	// +kubebuilder:default="5m"
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
@@ -92,7 +93,8 @@ type GitSubscriptionSpec struct {
 	PathGlob string `json:"pathGlob,omitempty"`
 
 	// Interval is how often to poll the repository.
-	// Uses Go duration format (e.g. "5m", "1h").
+	// Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised
+	// to 30s; empty or "0" means the 5m default.
 	// +kubebuilder:default="5m"
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
