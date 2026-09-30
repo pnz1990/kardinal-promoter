@@ -757,7 +757,7 @@ func TestUIAPI_GateHolding_MatchesBlockerCount(t *testing.T) {
 }
 
 // The graph node and the gate list give a gate instance the same state
-// (gateUIState). A holding gate is Block even before its first evaluation, so
+// (graph.GateState). A holding gate is Block even before its first evaluation, so
 // the DAG agrees with the banner; a Superseded bundle's gates are Superseded,
 // which is final, while a Failed bundle's gates wait because it can retry.
 func TestUIAPI_GateState(t *testing.T) {

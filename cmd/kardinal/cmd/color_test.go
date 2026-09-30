@@ -22,7 +22,7 @@ import (
 
 func TestColorizer_Disabled(t *testing.T) {
 	cr := newColorizer(&bytes.Buffer{}, false) // non-TTY writer, no force
-	for _, s := range []string{"Pass", "Block", "Pending", "Verified", "Failed", "Superseded"} {
+	for _, s := range []string{"Pass", "Block", "Pending", "Waiting", "Verified", "Failed", "Superseded"} {
 		assert.Equal(t, s, cr.colorState(s), "disabled: %s must be unchanged", s)
 	}
 }
@@ -38,6 +38,7 @@ func TestColorizer_Forced(t *testing.T) {
 		"Failed":          ansiRed,
 		"AbortedByAlarm":  ansiRed,
 		"Pending":         ansiYellow,
+		"Waiting":         ansiYellow,
 		"Promoting":       ansiYellow,
 		"WaitingForMerge": ansiYellow,
 		"HealthChecking":  ansiYellow,

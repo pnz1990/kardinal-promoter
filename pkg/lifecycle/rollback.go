@@ -185,11 +185,11 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 		}
 	}
 
-	plan.Bundle = buildRollbackBundle(req, plan)
+	plan.Bundle = buildRollbackBundle(ctx, req, plan)
 	return plan, nil
 }
 
-func buildRollbackBundle(req RollbackRequest, plan *RollbackPlan) *v1alpha1.Bundle {
+func buildRollbackBundle(ctx context.Context, req RollbackRequest, plan *RollbackPlan) *v1alpha1.Bundle {
 	labels := map[string]string{
 		LabelRollback: "true",
 		LabelPipeline: req.Pipeline,
@@ -224,7 +224,7 @@ func buildRollbackBundle(req RollbackRequest, plan *RollbackPlan) *v1alpha1.Bund
 	prov := &v1alpha1.BundleProvenance{}
 	if plan.Target.Spec.Provenance != nil {
 		prov.CommitSHA = plan.Target.Spec.Provenance.CommitSHA
-		prov.CIRunURL = plan.Target.Spec.Provenance.CIRunURL
+		prov.CIRunURL = copyableCIRunURL(ctx, plan.Target)
 		prov.Author = plan.Target.Spec.Provenance.Author
 		prov.Timestamp = plan.Target.Spec.Provenance.Timestamp
 	}

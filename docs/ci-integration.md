@@ -264,9 +264,19 @@ The `provenance` field on the Bundle is optional but strongly recommended. It en
 | Field | Description | Example |
 |---|---|---|
 | `commitSHA` | The Git commit that triggered the build | `abc123def456` |
-| `ciRunURL` | URL of the CI run | `https://github.com/.../runs/12345` |
+| `ciRunURL` | URL of the CI run: an absolute `http://` or `https://` URL | `https://github.com/.../runs/12345` |
 | `author` | Who or what triggered the build | `engineer-name`, `dependabot[bot]` |
 | `timestamp` | When the image was built (ISO 8601) | `2026-04-09T10:00:00Z` |
+
+The PR body and the UI link `ciRunURL`, so it is checked when a Bundle is created. It must be
+empty or an absolute `http://` or `https://` URL with a host, without user info
+(`https://user@host/...`), spaces or control characters.
+
+- The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value.
+- Bundles created directly (`kubectl apply`, your own client) and existing Bundles are not
+  checked. Where such a Bundle's `ciRunURL` fails the check, the PR body and the UI show `—`
+  instead of a link, and promote and rollback (CLI, UI and automatic) leave it out of the
+  Bundle they create.
 
 ## Multi-Image Bundles
 
@@ -359,7 +369,7 @@ rejected with `400`, so a misspelt key fails the request instead of being ignore
 | `namespace` | No | Target namespace. Defaults to `--watch-namespace`, or `default` |
 | `images` | For `image` and `mixed` | At least one image |
 | `configRef` | For `config` and `mixed` | `gitRepo` and `commitSHA` (`commitSHA` is required) |
-| `provenance` | No | `commitSHA`, `ciRunURL`, `author`, `timestamp` (set to now if empty) |
+| `provenance` | No | `commitSHA`, `ciRunURL` (empty or an absolute `http(s)` URL, see [Provenance](#provenance)), `author`, `timestamp` (set to now if empty) |
 | `intent` | No | `targetEnvironment`, `skipEnvironments` |
 
 The body is limited to 1 MiB.

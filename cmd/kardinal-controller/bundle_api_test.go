@@ -302,6 +302,20 @@ func TestBundleAPI_ValidatesRequest(t *testing.T) {
 		{name: "namespace outside watch namespace", onlyNamespace: "default",
 			body:     `{"pipeline":"app","namespace":"team-a",` + image + `}`,
 			wantCode: http.StatusForbidden, wantBody: "not watched"},
+		{name: "ciRunURL with another scheme", body: `{"pipeline":"app",` + image + `,"provenance":{"ciRunURL":"javascript:alert(1)"}}`,
+			wantCode: http.StatusBadRequest, wantBody: "provenance.ciRunURL must be an absolute http or https URL"},
+		{name: "relative ciRunURL", body: `{"pipeline":"app",` + image + `,"provenance":{"ciRunURL":"/o/r/actions/runs/1"}}`,
+			wantCode: http.StatusBadRequest, wantBody: "provenance.ciRunURL must be an absolute http or https URL"},
+		{name: "ciRunURL with a newline", body: `{"pipeline":"app",` + image + `,"provenance":{"ciRunURL":"https://ci.example.com/1\n| x |"}}`,
+			wantCode: http.StatusBadRequest, wantBody: "provenance.ciRunURL must not contain whitespace"},
+		{name: "ciRunURL with user info", body: `{"pipeline":"app",` + image + `,"provenance":{"ciRunURL":"https://u:s3cret@ci.example.com/1"}}`,
+			wantCode: http.StatusBadRequest, wantBody: "provenance.ciRunURL must not contain user info"},
+		{name: "ciRunURL with a credential parsed as a port", body: `{"pipeline":"app",` + image + `,"provenance":{"ciRunURL":"https://user:s3cret/x"}}`,
+			wantCode: http.StatusBadRequest, wantBody: "provenance.ciRunURL is not a valid URL"},
+		{name: "https ciRunURL", body: `{"pipeline":"app",` + image + `,"provenance":{"ciRunURL":"https://github.com/o/r/actions/runs/1","commitSHA":"abc"}}`,
+			wantCode: http.StatusCreated},
+		{name: "provenance without ciRunURL", body: `{"pipeline":"app",` + image + `,"provenance":{"commitSHA":"abc"}}`,
+			wantCode: http.StatusCreated},
 		{name: "config bundle", body: `{"pipeline":"app","type":"config","configRef":{"commitSHA":"abc"}}`,
 			wantCode: http.StatusCreated},
 		{name: "other namespace with the pipeline, cluster-wide mode", body: `{"pipeline":"app","namespace":"team-a",` + image + `}`,
@@ -318,6 +332,7 @@ func TestBundleAPI_ValidatesRequest(t *testing.T) {
 			if tt.wantBody != "" {
 				assert.Contains(t, w.Body.String(), tt.wantBody)
 			}
+			assert.NotContains(t, w.Body.String(), "s3cret", "a rejected ciRunURL must not be echoed")
 			var list v1alpha1.BundleList
 			require.NoError(t, c.List(context.Background(), &list))
 			if tt.wantCode == http.StatusCreated {

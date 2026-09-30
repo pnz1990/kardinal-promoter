@@ -106,3 +106,22 @@ describe('BundleDiffPanel — keyboard (C10a-web-17)', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 })
+
+// E2E-R22: the CI Run cell links only a URL that isCIRunURL accepts, and
+// shows "—" for anything else, never the value: it can hold credentials.
+describe('BundleDiffPanel — CI Run link', () => {
+  it.each([
+    { name: 'https is linked', url: 'https://ci.example.com/1', linked: true },
+    { name: 'javascript is not shown', url: 'javascript:alert(1)', linked: false },
+    { name: 'user info is not shown', url: 'https://u:s3cret@ci.example.com/1', linked: false },
+  ])('$name', ({ url, linked }) => {
+    const { container } = render(<BundleDiffPanel bundleA={makeBundle({ name: 'a', provenance: { ciRunURL: url } })} bundleB={makeBundle({ name: 'b' })} onClose={vi.fn()} />)
+    if (linked) {
+      expect(screen.getByText(url).closest('a')).toHaveAttribute('href', url)
+      return
+    }
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.innerHTML).not.toContain(url.slice(0, 12))
+    expect(container.innerHTML).not.toContain('s3cret')
+  })
+})

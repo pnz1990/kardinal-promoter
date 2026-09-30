@@ -133,7 +133,7 @@ type uiGraphNode struct {
 	StartedAt       string            `json:"startedAt,omitempty"` // ISO 8601 step creation time for elapsed timers (#330)
 	// Holding is set on a PolicyGate node whose gate holds the bundle back
 	// (graph.GateHolds, the rule blockerCount uses); its State is "Block".
-	// See gateUIState for the other gate states.
+	// See graph.GateState for the other gate states.
 	Holding bool `json:"holding,omitempty"`
 }
 
@@ -218,7 +218,8 @@ type uiGateResponse struct {
 	// not holding is waiting for the bundle, not blocking it.
 	Holding bool `json:"holding,omitempty"`
 	// State is the state the UI shows: Pass, Block, Superseded, Pending or
-	// Waiting (gateUIState), the same as the gate's node in the bundle graph.
+	// Waiting (graph.GateState), the same as the gate's node in the bundle
+	// graph and the STATE kardinal explain prints.
 	State string `json:"state"`
 	// #502: Override history from spec.overrides[].
 	Overrides []uiGateOverride `json:"overrides,omitempty"`
@@ -563,7 +564,7 @@ func (s *uiAPIServer) findBundle(ctx context.Context, name, namespace string) (*
 //   - one PromotionStep node per environment (synthetic "NotStarted" when the
 //     step does not exist yet);
 //   - one PolicyGate node per gate and environment it guards, in the state
-//     gateUIState gives it (Pass, Block, Superseded, Pending or Waiting);
+//     graph.GateState gives it (Pass, Block, Superseded, Pending or Waiting);
 //   - edges that follow the Pipeline's dependencies (the Graph builder's
 //     rules: waves, dependsOn, else the previous environment), with each
 //     environment's gates between its upstream steps and its own step.
@@ -600,10 +601,6 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 	var envOrder []string
 	var deps map[string][]string
 	var pipeline *v1alpha1.Pipeline
-	bundlePhase := "" // gateUIState; the Bundle may be gone while its steps and gates remain
-	if bundle != nil {
-		bundlePhase = bundle.Status.Phase
-	}
 	if bundle != nil && bundle.Spec.Pipeline != "" {
 		var pl v1alpha1.Pipeline
 		err := s.client.Get(ctx, client.ObjectKey{Name: bundle.Spec.Pipeline, Namespace: bundle.Namespace}, &pl)
@@ -715,9 +712,10 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 			for _, name := range names {
 				g := gates[gateKey{name: name, env: env}]
 				gateID := "gate-" + g.Name
-				// Without its Pipeline the rule cannot run; nothing is holding.
-				holding := pipeline != nil && graphpkg.GateHolds(pipeline, bundle, g, psList.Items)
-				state := gateUIState(g, holding, bundlePhase)
+				// The Bundle may be gone while its steps and gates remain, and
+				// without its Pipeline the rule cannot run; nothing holds then.
+				state := graphpkg.GateState(pipeline, bundle, g, psList.Items)
+				holding := state == graphpkg.GateStateBlock
 				lastEval := ""
 				if g.Status.LastEvaluatedAt != nil {
 					lastEval = g.Status.LastEvaluatedAt.Format("2006-01-02T15:04:05Z07:00")
@@ -875,15 +873,15 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	holds, err := s.holdingGates(r.Context(), list.Items)
+	states, err := s.gateStates(r.Context(), list.Items)
 	if err != nil {
-		s.log.Error().Err(err).Msg("ui: gates: holding")
+		s.log.Error().Err(err).Msg("ui: gates: state")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	result := make([]uiGateResponse, 0, len(list.Items))
 	for _, g := range list.Items {
-		hold := holds[g.Namespace+"/"+g.Name]
+		state := states[g.Namespace+"/"+g.Name]
 		resp := uiGateResponse{
 			Name:        g.Name,
 			Namespace:   g.Namespace,
@@ -894,8 +892,8 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 			Bundle:      g.Labels["kardinal.io/bundle"],
 			Environment: g.Labels["kardinal.io/environment"],
 			Template:    g.Labels["kardinal.io/bundle"] == "",
-			Holding:     hold.holding,
-			State:       gateUIState(&g, hold.holding, hold.bundlePhase),
+			Holding:     state == graphpkg.GateStateBlock,
+			State:       state,
 		}
 		if g.Status.LastEvaluatedAt != nil {
 			resp.LastEvaluatedAt = g.Status.LastEvaluatedAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -920,46 +918,19 @@ func (s *uiAPIServer) handleGates(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
-// gateUIState is the state the UI shows for a gate instance, the same in the
-// bundle graph and the gate list:
-//   - Pass: ready.
-//   - Block: holds the bundle back (graph.GateHolds, the rule blockerCount
-//     uses), evaluated yet or not. Only these count as blocked (E2E-R19).
-//   - Superseded: its bundle was superseded. That is final; the gate is not
-//     evaluated again.
-//   - Pending: not evaluated yet.
-//   - Waiting: evaluated not ready, but the bundle is not held here: it has not
-//     reached the environment, or it failed (a Failed bundle can retry).
-func gateUIState(g *v1alpha1.PolicyGate, holding bool, bundlePhase string) string {
-	switch {
-	case g.Status.Ready:
-		return "Pass"
-	case holding:
-		return "Block"
-	case bundlePhase == "Superseded":
-		return "Superseded"
-	case g.Status.LastEvaluatedAt == nil:
-		return "Pending"
-	default:
-		return "Waiting"
-	}
-}
-
-// gateHold is what the gate list needs from a gate instance's bundle.
-type gateHold struct {
-	holding     bool   // graph.GateHolds
-	bundlePhase string // the bundle's status.phase
-}
-
-// holdingGates returns, by namespace/name, whether each not-ready gate
-// instance in gates holds its bundle back (graph.GateHolds, the rule
-// blockerCount uses) and its bundle's phase. It reads the Pipelines, Bundles
-// and PromotionSteps only when a gate instance is not ready.
-func (s *uiAPIServer) holdingGates(ctx context.Context, gates []v1alpha1.PolicyGate) (map[string]gateHold, error) {
-	out := map[string]gateHold{}
+// gateStates returns, by namespace/name, the state of each gate in gates
+// (graph.GateState). It reads the Pipelines, Bundles and PromotionSteps only
+// when a gate instance is not ready: only such a gate can hold its bundle or
+// belong to a Superseded one.
+func (s *uiAPIServer) gateStates(ctx context.Context, gates []v1alpha1.PolicyGate) (map[string]string, error) {
+	out := make(map[string]string, len(gates))
 	if !slices.ContainsFunc(gates, func(g v1alpha1.PolicyGate) bool {
 		return !g.Status.Ready && g.Labels["kardinal.io/bundle"] != ""
 	}) {
+		for i := range gates {
+			g := &gates[i]
+			out[g.Namespace+"/"+g.Name] = graphpkg.GateState(nil, nil, g, nil)
+		}
 		return out, nil
 	}
 	var pipelines v1alpha1.PipelineList
@@ -991,15 +962,14 @@ func (s *uiAPIServer) holdingGates(ctx context.Context, gates []v1alpha1.PolicyG
 	}
 	for i := range gates {
 		g := &gates[i]
+		var p *v1alpha1.Pipeline
+		var bundleSteps []v1alpha1.PromotionStep
 		b := bundleByKey[g.Namespace+"/"+g.Labels["kardinal.io/bundle"]]
-		if g.Status.Ready || b == nil {
-			continue
+		if b != nil {
+			p = pipelineByKey[b.Namespace+"/"+b.Spec.Pipeline]
+			bundleSteps = stepsByBundle[b.Namespace+"/"+b.Name]
 		}
-		p := pipelineByKey[b.Namespace+"/"+b.Spec.Pipeline]
-		out[g.Namespace+"/"+g.Name] = gateHold{
-			holding:     p != nil && graphpkg.GateHolds(p, b, g, stepsByBundle[b.Namespace+"/"+b.Name]),
-			bundlePhase: b.Status.Phase,
-		}
+		out[g.Namespace+"/"+g.Name] = graphpkg.GateState(p, b, g, bundleSteps)
 	}
 	return out, nil
 }

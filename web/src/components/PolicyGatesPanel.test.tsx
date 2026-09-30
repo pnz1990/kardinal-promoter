@@ -26,7 +26,7 @@ const makeGate = (overrides: Partial<PolicyGate> = {}): PolicyGate => ({
   state: 'Pass',
   ...overrides,
 })
-// The UI API's states (gateUIState): a gate holding its bundle is Block; one
+// The UI API's states (graph.GateState): a gate holding its bundle is Block; one
 // that is not ready and not holding is Waiting.
 const blocked = { ready: false, holding: true, state: 'Block' } as const
 const waiting = { ready: false, state: 'Waiting' } as const

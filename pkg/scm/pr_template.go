@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // PRBodyUpstreamEnv holds per-environment upstream verification evidence for the
@@ -95,8 +96,34 @@ type PRBody struct {
 // uses "||") would start a new cell and a newline would end the row.
 var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r", " ")
 
+// ciRunLink renders the CI Run cell of the provenance table: a link when raw
+// passes graph.ValidateCIRunURL (an absolute http(s) URL), "—" otherwise. The
+// bundle API checks new Bundles, but a Bundle created another way or before
+// that check may hold anything: an empty ciRunURL must
+// not render an empty "[CI run]()" link, another scheme (javascript:, a
+// relative path) is not linked, and the characters of a valid URL that could
+// end the link or the table cell (")", "|", "<", a backtick) are
+// percent-encoded.
+func ciRunLink(raw string) string {
+	if raw == "" || graph.ValidateCIRunURL(raw) != nil {
+		return "—"
+	}
+	var b strings.Builder
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("-._~:/?#[]@!$&'*+,;=%", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "%%%02X", c)
+	}
+	return "[CI run](" + b.String() + ")"
+}
+
 var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMap{
 	"mdcell": mdCellReplacer.Replace,
+	"cirun":  ciRunLink,
 }).Parse(`<!-- kardinal-promoter auto-generated PR -->
 {{- if .RollbackOf}}
 ## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
@@ -114,7 +141,7 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 | Image | Tag | Digest | CI Run | Commit SHA | Author |
 |---|---|---|---|---|---|
 {{- range .Bundle.Images}}
-| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}[CI run]({{$.Bundle.Provenance.CIRunURL}}){{else}}—{{end}} | {{if $.Bundle.Provenance}}{{mdcell $.Bundle.Provenance.CommitSHA}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{mdcell $.Bundle.Provenance.Author}}{{else}}—{{end}} |
+| {{.Repository}} | {{if .Tag}}{{.Tag}}{{else}}—{{end}} | {{if .Digest}}{{.Digest}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{cirun $.Bundle.Provenance.CIRunURL}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.CommitSHA) "—"}}{{else}}—{{end}} | {{if $.Bundle.Provenance}}{{or (mdcell $.Bundle.Provenance.Author) "—"}}{{else}}—{{end}} |
 {{- else}}
 | — | — | — | — | — | — |
 {{- end}}

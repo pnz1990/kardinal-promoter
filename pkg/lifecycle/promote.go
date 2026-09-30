@@ -152,6 +152,7 @@ func PlanPromote(ctx context.Context, c client.Reader, req PromoteRequest) (*Pro
 	if src.Spec.Provenance != nil {
 		prov := *src.Spec.Provenance
 		prov.RollbackOf = ""
+		prov.CIRunURL = copyableCIRunURL(ctx, src)
 		b.Spec.Provenance = &prov
 	}
 	return &PromotePlan{Source: src, Upstreams: ups, Bundle: b}, nil

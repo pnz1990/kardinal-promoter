@@ -12,15 +12,18 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
 // Labels and annotations written by lifecycle actions.
@@ -172,6 +175,23 @@ func copyArtifacts(dst *v1alpha1.BundleSpec, src *v1alpha1.Bundle) {
 		ref := *src.Spec.ConfigRef
 		dst.ConfigRef = &ref
 	}
+}
+
+// copyableCIRunURL is the ciRunURL a Bundle copied from src may carry: src's,
+// unless it fails graph.ValidateCIRunURL, the bundle API's check (E2E-R22).
+// src may have been created another way or before that check. The dropped URL
+// is not logged: it can hold credentials.
+func copyableCIRunURL(ctx context.Context, src *v1alpha1.Bundle) string {
+	raw := src.Spec.Provenance.CIRunURL
+	if err := graph.ValidateCIRunURL(raw); err != nil {
+		zerolog.Ctx(ctx).Info().
+			Str("bundle", src.Name).
+			Str("namespace", src.Namespace).
+			Str("reason", err.Error()).
+			Msg("not copying provenance.ciRunURL to the new Bundle")
+		return ""
+	}
+	return raw
 }
 
 func hasEnvironment(p *v1alpha1.Pipeline, env string) bool {

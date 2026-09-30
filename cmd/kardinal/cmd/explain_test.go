@@ -109,7 +109,8 @@ func TestExplain_ShowsAppliedGateInstances(t *testing.T) {
 		policyPipeline("demo", "test", "uat", "prod"),
 		template,
 		explainBundle("b1", "Promoting", created),
-		explainStep("demo", "b1", "prod", "Pending", "", created),
+		explainStep("demo", "b1", "test", "Verified", "", created),
+		explainStep("demo", "b1", "uat", "Verified", "", created),
 		explainGateInstance("demo", "b1", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
 			"bundle.version=sha-abc1234: !schedule.isWeekend = false"),
 		explainGateInstance("demo", "b1", "prod", "change-freeze", "!changewindow['q4'].isBlocked()", true, true,
@@ -162,10 +163,10 @@ func TestExplain_Rows(t *testing.T) {
 			excludes: []string{"Verified", "test "},
 		},
 		{
-			name: "unevaluated gate is Pending",
+			name: "unevaluated gate of an environment not reached is Pending",
 			objs: []sigs_client.Object{
 				explainBundle("b1", "Promoting", recent),
-				explainStep("demo", "b1", "uat", "Verified", "", recent),
+				explainStep("demo", "b1", "uat", "Promoting", "", recent),
 				explainGateInstance("demo", "b1", "prod", "uat-soak", "upstream.uat.soakMinutes >= 30", false, false, ""),
 			},
 			contains: []string{"uat-soak", "upstream.uat.soakMinutes >= 30", "Pending"},
@@ -254,7 +255,7 @@ func TestExplain_Rows(t *testing.T) {
 			name: "gates before the step is created",
 			objs: []sigs_client.Object{
 				explainBundle("b1", "Promoting", recent),
-				explainStep("demo", "b1", "uat", "Promoting", "", recent),
+				explainStep("demo", "b1", "uat", "Verified", "", recent),
 				explainGateInstance("demo", "b1", "prod", "no-weekend-deploys", "!schedule.isWeekend", false, true,
 					"!schedule.isWeekend = false"),
 			},
@@ -276,6 +277,7 @@ func TestExplain_Rows(t *testing.T) {
 			excludes: []string{"b1 verified"},
 		},
 		{
+			// E2E-R21: the gate does not hold b2, which is still in uat.
 			name: "a newer bundle shows its gates before it reaches the environment",
 			objs: []sigs_client.Object{
 				explainBundle("b1", "Verified", old),
@@ -286,8 +288,8 @@ func TestExplain_Rows(t *testing.T) {
 					"!schedule.isWeekend = false"),
 			},
 			env:      "prod",
-			contains: []string{"no-weekend-deploys", "Block"},
-			excludes: []string{"b1 verified"},
+			contains: []string{"no-weekend-deploys", "Waiting"},
+			excludes: []string{"b1 verified", "Block"},
 		},
 		{
 			name: "an environment without the newest bundle keeps the older one",
@@ -332,6 +334,82 @@ func TestExplain_Rows(t *testing.T) {
 			for _, s := range tc.excludes {
 				assert.NotContains(t, out, s)
 			}
+		})
+	}
+}
+
+// E2E-R21: explain gives a gate the state the UI API gives it
+// (graph.GateState). Only a gate that holds the Bundle is Block; a gate of an
+// environment the Bundle has not reached, or of a step that already started,
+// is Waiting, and a Superseded Bundle's gate is Superseded.
+func TestExplain_GateStates(t *testing.T) {
+	created := policyTestNow.Add(-time.Hour)
+	// upstreamVerified has b1 Verified in test and uat, with its prod step
+	// in prodState waiting on gate ("" for no prod step).
+	upstreamVerified := func(prodState string, gate *v1alpha1.PolicyGate) []sigs_client.Object {
+		objs := []sigs_client.Object{
+			explainStep("demo", "b1", "test", "Verified", "", created),
+			explainStep("demo", "b1", "uat", "Verified", "", created),
+		}
+		if prodState != "" {
+			s := explainStep("demo", "b1", "prod", prodState, "", created)
+			s.Spec.RequiredGates = []string{gate.Name}
+			objs = append(objs, s)
+		}
+		return objs
+	}
+	inTest := func() []sigs_client.Object {
+		return []sigs_client.Object{explainStep("demo", "b1", "test", "HealthChecking", "", created)}
+	}
+	gate := func(ready, evaluated bool) *v1alpha1.PolicyGate {
+		return explainGateInstance("demo", "b1", "prod", "require-uat-soak", "bundle.upstreamSoakMinutes >= 30",
+			ready, evaluated, "bundle.upstreamSoakMinutes >= 30")
+	}
+	preDeploy := gate(false, true)
+	preDeploy.Spec.When = "pre-deploy"
+	started := gate(false, true)
+	failed := gate(false, true)
+	superseded := gate(false, true)
+	tests := []struct {
+		name  string
+		phase string
+		gate  *v1alpha1.PolicyGate
+		steps []sigs_client.Object
+		want  string
+	}{
+		{name: "ready", phase: "Promoting", gate: gate(true, true), steps: upstreamVerified("", nil), want: "Pass"},
+		{name: "holding, evaluated", phase: "Promoting", gate: gate(false, true), steps: upstreamVerified("", nil), want: "Block"},
+		{name: "holding, not evaluated yet", phase: "Promoting", gate: gate(false, false), steps: upstreamVerified("", nil), want: "Block"},
+		{name: "not reached, evaluated", phase: "Promoting", gate: gate(false, true), steps: inTest(), want: "Waiting"},
+		{name: "not reached, not evaluated yet", phase: "Promoting", gate: gate(false, false), steps: inTest(), want: "Pending"},
+		{
+			name: "pre-deploy gate holds its Pending step", phase: "Promoting", gate: preDeploy,
+			steps: upstreamVerified("Pending", preDeploy), want: "Block",
+		},
+		{
+			name: "gate of a step that started", phase: "Promoting", gate: started,
+			steps: upstreamVerified("Promoting", started), want: "Waiting",
+		},
+		{name: "Failed bundle", phase: "Failed", gate: failed, steps: upstreamVerified("Failed", failed), want: "Waiting"},
+		{
+			name: "Superseded bundle", phase: "Superseded", gate: superseded,
+			steps: upstreamVerified("Promoting", superseded), want: "Superseded",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := append([]sigs_client.Object{
+				policyPipeline("demo", "test", "uat", "prod"), explainBundle("b1", tt.phase, created), tt.gate,
+			}, tt.steps...)
+			out, err := runExplain(t, policyClient(t, objs...), "demo", "prod", false)
+			require.NoError(t, err)
+			var state string
+			for _, l := range strings.Split(out, "\n") {
+				if f := strings.Fields(l); len(f) > 3 && f[1] == "PolicyGate" {
+					state = f[3]
+				}
+			}
+			assert.Equal(t, tt.want, state, "gate STATE:\n%s", out)
 		})
 	}
 }
@@ -386,10 +464,12 @@ func TestExplain_WaitingBundleSkipGate(t *testing.T) {
 		`bundle.version == "sha-9349a3f"`, false, true, `bundle.version=main: bundle.version == "sha-9349a3f" = false`)
 	skip.Labels["kardinal.io/type"] = "skip-permission"
 	skip.Annotations = map[string]string{"kardinal.io/skipped-environments": "uat"}
+	skipping := explainBundle("gapa-e2e2-wbptb", "Promoting", recent)
+	skipping.Spec.Intent = &v1alpha1.BundleIntent{SkipEnvironments: []string{"uat"}}
 	c := policyClient(t,
 		policyPipeline("demo", "test", "uat", "prod"),
 		explainBundle("gapa-e2e2-gkvb2", "Verified", old),
-		explainBundle("gapa-e2e2-wbptb", "Promoting", recent),
+		skipping,
 		explainStep("demo", "gapa-e2e2-gkvb2", "prod", "Verified", "gkvb2 health check passed", old),
 		explainGateInstance("demo", "gapa-e2e2-gkvb2", "prod", "gapa-predeploy-freeze",
 			`changewindow.isAllowed("gapa-freeze")`, true, true, "gkvb2 freeze"),

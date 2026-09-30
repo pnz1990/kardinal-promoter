@@ -463,6 +463,10 @@ because its environment is not reached yet or the Bundle failed (it can still re
 **Waiting** (grey) instead of **Block** (red). A superseded Bundle's gates that are not ready are
 shown as **Superseded**: they are not evaluated again.
 
+`kardinal explain` gives each gate the same state in its STATE column: **Pass** (ready), **Block**
+(holding the Bundle), **Superseded**, **Pending** (not evaluated yet) or **Waiting** (evaluated not
+ready, not holding the Bundle).
+
 ## Emergency Overrides (K-09)
 
 Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.

@@ -12,6 +12,7 @@
 import { useRef } from 'react'
 import type { Bundle, ImageRef } from '../types'
 import { useModalFocus } from '../useModalFocus'
+import { isCIRunURL } from '../prLink'
 
 interface Props {
   bundleA: Bundle
@@ -243,7 +244,8 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
 }
 
 function DiffCell({ value, changed, isLink, full }: { value: string | null; changed: boolean; isLink?: boolean; full?: boolean }) {
-  if (!value) {
+  // A CI run URL that isCIRunURL rejects is not shown: it can hold credentials.
+  if (!value || (isLink && !isCIRunURL(value))) {
     return <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>—</span>
   }
   if (full) {
@@ -259,7 +261,7 @@ function DiffCell({ value, changed, isLink, full }: { value: string | null; chan
       </span>
     )
   }
-  if (isLink && /^https?:\/\//i.test(value)) {
+  if (isLink) {
     return (
       <a
         href={value}

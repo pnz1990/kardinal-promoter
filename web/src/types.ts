@@ -166,7 +166,7 @@ export interface StepStatus {
 }
 
 /**
- * PolicyGate state from the UI API (gateUIState in ui_api.go):
+ * PolicyGate state from the UI API, decided by graph.GateState:
  * Pass (ready), Block (holds the bundle back; only these count as blocked),
  * Superseded (its bundle was superseded; final), Pending (not evaluated yet),
  * Waiting (not ready, not holding the bundle; E2E-R19).
@@ -189,7 +189,7 @@ export interface PolicyGate {
   /** True when this gate instance holds its bundle back (graph.GateHolds, decided
    *  by the UI API). Its state is then 'Block'. */
   holding?: boolean
-  /** The state to show, decided by the UI API (gateUIState), the same as the
+  /** The state to show, decided by the UI API (graph.GateState), the same as the
    *  gate's node in the bundle graph. */
   state: GateState
   /** #502: Override history from spec.overrides[]. */

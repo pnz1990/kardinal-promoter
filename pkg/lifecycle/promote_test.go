@@ -4,9 +4,11 @@
 package lifecycle_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -161,4 +163,72 @@ func TestPlanPromote(t *testing.T) {
 		})
 		require.ErrorIs(t, err, lifecycle.ErrNotFound)
 	})
+}
+
+// TestPlan_CopiesOnlyValidCIRunURL: promote and rollback copy the source
+// Bundle's ciRunURL only when it passes graph.ValidateCIRunURL, the bundle
+// API's check. A Bundle created another way or before that check may hold any
+// string. A dropped URL is logged without the URL, which can hold credentials.
+func TestPlan_CopiesOnlyValidCIRunURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		want    string
+		dropped bool
+	}{
+		{name: "https", url: "https://github.com/o/r/actions/runs/1", want: "https://github.com/o/r/actions/runs/1"},
+		{name: "empty", url: "", want: ""},
+		{name: "javascript", url: "javascript:alert(1)", want: "", dropped: true},
+		{name: "relative", url: "/runs/1", want: "", dropped: true},
+		{name: "whitespace", url: "https://ci.example.com/1 | x", want: "", dropped: true},
+		{name: "user info", url: "https://u:s3cret@ci.example.com/1", want: "", dropped: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withURL := func(b *v1alpha1.Bundle) *v1alpha1.Bundle {
+				b.Spec.Provenance.CIRunURL = tt.url
+				return b
+			}
+			checkLog := func(t *testing.T, logs *bytes.Buffer) {
+				t.Helper()
+				if !tt.dropped {
+					assert.Empty(t, logs.String())
+					return
+				}
+				assert.Contains(t, logs.String(), "not copying provenance.ciRunURL")
+				assert.Contains(t, logs.String(), `"bundle":"v1"`)
+				if tt.url != "" {
+					assert.NotContains(t, logs.String(), tt.url, "the dropped URL must not be logged")
+				}
+				assert.NotContains(t, logs.String(), "s3cret")
+			}
+
+			// v1 is Verified in test and failed in prod: promote copies it.
+			var logs bytes.Buffer
+			ctx := zerolog.New(&logs).WithContext(context.Background())
+			c := newClient(t, pipeline("app", "test", "prod"), withURL(bundle("v1", "app", "1", 0)),
+				step("v1", "app", "test", "Verified", 1), step("v1", "app", "prod", "Failed", 2))
+			promote, err := lifecycle.PlanPromote(ctx, c, lifecycle.PromoteRequest{
+				Namespace: ns, Pipeline: "app", Environment: "prod",
+			})
+			require.NoError(t, err)
+			require.Equal(t, "v1", promote.Source.Name)
+			assert.Equal(t, tt.want, promote.Bundle.Spec.Provenance.CIRunURL, "promote")
+			assert.Equal(t, "sha-1", promote.Bundle.Spec.Provenance.CommitSHA, "the rest of the provenance is kept")
+			checkLog(t, &logs)
+
+			// v1 was Verified in prod, v2 is deployed there now: rollback restores v1.
+			logs.Reset()
+			c = newClient(t, pipeline("app", "prod"), withURL(bundle("v1", "app", "1", 0)), bundle("v2", "app", "2", 10),
+				step("v1", "app", "prod", "Verified", 1), step("v2", "app", "prod", "HealthChecking", 11))
+			rollback, err := lifecycle.PlanRollback(ctx, c, lifecycle.RollbackRequest{
+				Namespace: ns, Pipeline: "app", Environment: "prod",
+			})
+			require.NoError(t, err)
+			require.Equal(t, "v1", rollback.Target.Name)
+			assert.Equal(t, tt.want, rollback.Bundle.Spec.Provenance.CIRunURL, "rollback")
+			assert.Equal(t, "sha-1", rollback.Bundle.Spec.Provenance.CommitSHA, "the rest of the provenance is kept")
+			checkLog(t, &logs)
+		})
+	}
 }

@@ -477,3 +477,54 @@ func TestValidateSecretRef(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateCIRunURL: a new Bundle's ciRunURL is empty or an absolute
+// http(s) URL without user info, whitespace or control characters. Errors do
+// not echo the URL or any part of it (url.Parse errors quote the "port" of
+// https://user:token/x).
+func TestValidateCIRunURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr string
+	}{
+		{name: "empty", url: ""},
+		{name: "GitHub Actions run", url: "https://github.com/o/r/actions/runs/123?check=1#step:2:1"},
+		{name: "http with port", url: "http://jenkins.local:8080/job/app/7/"},
+		{name: "upper-case scheme", url: "HTTPS://gitlab.com/g/p/-/pipelines/1"},
+		{name: "parentheses", url: "https://ci.example.com/run(1)"},
+		{name: "javascript", url: "javascript:alert(1)", wantErr: "absolute http or https URL"},
+		{name: "data", url: "data:text/html,<b>x</b>", wantErr: "absolute http or https URL"},
+		{name: "ftp", url: "ftp://ci.example.com/1", wantErr: "absolute http or https URL"},
+		{name: "relative path", url: "/o/r/actions/runs/1", wantErr: "absolute http or https URL"},
+		{name: "no scheme", url: "ci.example.com/runs/1", wantErr: "absolute http or https URL"},
+		{name: "no host", url: "https:///runs/1", wantErr: "absolute http or https URL"},
+		{name: "scheme-relative", url: "//ci.example.com/runs/1", wantErr: "absolute http or https URL"},
+		{name: "user info", url: "https://user:s3cret@ci.example.com/1", wantErr: "user info"},
+		{name: "host disguised as user info", url: "https://github.com@evil.example/1", wantErr: "user info"},
+		{name: "space", url: "https://ci.example.com/a b", wantErr: "whitespace or control"},
+		{name: "leading space", url: " https://ci.example.com/1", wantErr: "whitespace or control"},
+		{name: "newline", url: "https://ci.example.com/1\n| x |", wantErr: "whitespace or control"},
+		{name: "tab", url: "https://ci.example.com/\t1", wantErr: "whitespace or control"},
+		{name: "NUL", url: "https://ci.example.com/\x001", wantErr: "whitespace or control"},
+		{name: "no-break space", url: "https://ci.example.com/ 1", wantErr: "whitespace or control"},
+		{name: "bad escape", url: "https://ci.example.com/%zz", wantErr: "not a valid URL"},
+		{name: "bad host", url: "https://[::1/runs", wantErr: "not a valid URL"},
+		{name: "credential parsed as a port", url: "https://user:s3cret/x", wantErr: "not a valid URL"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := graph.ValidateCIRunURL(tt.url)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Contains(t, err.Error(), "provenance.ciRunURL")
+			for _, secret := range []string{"s3cret", "evil.example", "ci.example.com", "runs", "zz", "::1"} {
+				assert.NotContains(t, err.Error(), secret, "the error must not echo the URL")
+			}
+		})
+	}
+}
