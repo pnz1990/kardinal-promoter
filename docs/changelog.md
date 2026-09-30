@@ -102,7 +102,7 @@ The v0.8.1 tag points to `bd2bcf3`, a merge commit that is not on main. Its tree
 
 ### Added
 
-- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires Graph controller fork `745998f`+ (#652)
+- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires Graph controller fork `745998f`+ (#652, docs #659)
 - **Kargo migration guide** — concept mapping, side-by-side Pipeline vs Kargo YAML, 7-step migration walkthrough in `docs/guides/` (#640)
 - **Operations runbook expanded** — PolicyGate debugging, SCM failure modes, RBAC issues, Graph controller restarts, performance tuning added (#639)
 - **Bundle image diff in NodeDetail** — UI compares the current bundle's image against the previous bundle for that environment; closes a Kargo parity gap (#638)
@@ -114,8 +114,14 @@ The v0.8.1 tag points to `bd2bcf3`, a merge commit that is not on main. Its tree
 - **UI: cross-environment error aggregation** — groups PromotionStep failures by type across environments; shows affected count (#564)
 - **Graph controller fork upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
 
+### Changed
+
+- **PromotionStep `spec.upstreamStates`** replaces `spec.upstreamVerified` and `spec.upstreamVerified2`. The CRD declared only those two, so an environment with more than two upstream environments failed; the list has no limit. The Graph sets the field (#660)
+- **Graph controller fork pin** `745998f` → `81c5a03` — health Watch nodes drop `readyWhen`, so the new fork does not patch the watched Deployment or Application; WatchKind nodes are scoped to the environment namespace (#654)
+
 ### Fixed
 
+- **PromotionStep reacts to PRStatus and PolicyGate changes** — the reconciler watches both, so a merged PR or a gate that changes state moves the step on at once instead of at the next requeue (#655)
 - **Bundle reconciler watches Pipeline changes** — Graph is regenerated when Pipeline spec changes (new environments, updated policyNamespaces, changed git config). Previously Pipeline changes were invisible to in-flight Bundles (#634)
 - **Subscription deduplication under HA** — uses label selector (`kardinal.io/source-digest`) instead of status field comparison; safe under concurrent reconciles and multiple controller replicas (#636)
 - **CEL documentation accuracy** — corrected false claims about `pkg/cel/NewCELEnvironment()` (does not exist) and `schedule.*` (map variable, not CEL library function) in design docs and code comments (#631)
@@ -142,10 +148,14 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 
 - **Multi-tenant self-service (J7)** — ApplicationSet + Pipeline template bootstrap; team onboarding via Git directory; org PolicyGates automatically inherited (#489)
 - **OCI + Git source watchers** — `OCIWatcher` and `GitWatcher` Subscription reconcilers poll registries and Git branches, creating Bundles on new images/commits (#491, #493)
-- **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498)
+- **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498, #511)
 - **`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates (#506)
 - **Graph controller fork upgraded to `948ad6c`** — DNS-1123 node ID validation, drift timers (30 min), propagation hash includes `propagateWhen` state
-- **Cardinal logo** — added across docs site, UI sidebar, and README
+- **Cardinal logo** — added across docs site, UI sidebar, and README (#515)
+
+### Changed
+
+- **`kustomize-set-image` without the kustomize binary** — the step edits `kustomization.yaml` in Go. `kustomize-build` still runs the kustomize binary (#512)
 
 ### Fixed
 
@@ -164,13 +174,14 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 - **K-01: Contiguous healthy soak** — `bake.minutes` + `bake.policy: reset-on-alarm` on environment spec; `BakeElapsedMinutes` and `BakeResets` tracked in PromotionStep status
 - **K-02: Pre-deploy gate type** — `when: pre-deploy` on PolicyGate spec; holds the PromotionStep in `Pending` before `git-clone` starts
 - **K-03: Auto-rollback with ABORT vs ROLLBACK distinction** — `onHealthFailure: rollback | abort | none` per environment
-- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL map variable is `true` when the window is active/blocking
+- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL map variable is `true` when the window is active/blocking (#460)
 - **K-05: Bundle.status.metrics** — commitToProductionMinutes, bakeResets, autoRollbacks, operatorInterventions; `kardinal metrics` CLI command
 - **K-06: Wave topology** — `wave: N` field on environment spec; Wave N automatically depends on all Wave N-1 stages
-- **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence
-- **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD
-- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body
-- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions
+- **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence (#470)
+- **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD (#472)
+- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body (#471)
+- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions (#473)
+- **Policy test** — `kardinal policy test` checks PolicyGate YAML and CEL syntax offline (#235)
 - **UI control plane** — all 7 UI issues shipped (#462–#468): fleet health dashboard, pipeline ops view, per-stage bake countdown, in-UI actions (pause/resume/rollback/override), release metrics bar, bundle timeline, policy gate detail panel
 
 ### Fixed
@@ -186,8 +197,7 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 
 ### Added
 
-- **Distributed mode** — `--shard` flag routes PromotionSteps to matching shard agents; supports multi-cluster deployments where each spoke cluster runs its own agent
-- **Argo Rollouts delivery delegation** — `delivery.delegate: argoRollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource
+- **Argo Rollouts delivery delegation** — `delivery.delegate: argoRollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource (#197)
 - **GitLab + Forgejo/Gitea SCM providers** — selected per controller with `--scm-provider gitlab` or `--scm-provider forgejo` (also `gitea`)
 - **PRStatus CRD** — makes PR merge/close signal observable by the Graph (eliminates 6 GitHub API call paths from the reconciler hot path)
 - **RollbackPolicy CRD** — auto-rollback threshold comparison moved to dedicated reconciler
@@ -209,6 +219,7 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 ### Added
 
 - **Embedded React UI** — promotion DAG visualization with 6-state health chips, CEL expression display, live polling with staleness indicator, blocked-gate banner
+- **Distributed mode** — `--shard` flag routes PromotionSteps to matching shard agents; supports multi-cluster deployments where each spoke cluster runs its own agent (#196)
 - **PR evidence body** — structured markdown in every prod PR: image digest, CI run link, gate results, upstream soak time
 - **kardinal diff** — `kardinal diff <bundle-a> <bundle-b>` shows artifact delta
 - **kardinal approve** — approve a Bundle bypassing upstream gate requirements
@@ -233,9 +244,14 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 - **PRStatus CRD** — replaces in-reconciler GitHub API polling for PR state
 - **RollbackPolicy CRD** — moves auto-rollback threshold logic out of PromotionStepReconciler
 - **ScheduleClock CRD** — writes `status.tick` on a configurable interval to drive time-based policy gate re-evaluation via real Kubernetes watch events; replaces the `ctrl.Result{RequeueAfter}` timer loop pattern
+- **Health Watch nodes** — for each environment with `health.type`, the Graph watches the health resource (Deployment, Argo CD Application, Flux Kustomization, Argo Rollout, Flagger Canary) (#191, #194)
+- **Promote command** — `kardinal promote` creates a Bundle from the last verified image (#160)
+- **UI: 5s polling and bundle history** — the UI refreshes every 5 seconds and lists earlier Bundles of the selected pipeline (#170)
 
 ### Fixed
 
+- **Promotion working directory** — the git working directory is recorded in `PromotionStep.status` and removed when the step finishes (#195)
+- `kardinal policy list` shows `Pending` for a gate that was not evaluated yet, as `kardinal explain` does, instead of `unknown` (#170)
 - `time.Now()` calls moved outside reconciler hot paths into CRD status writes
 - Cross-CRD status mutations eliminated — each reconciler writes only to its own CRD
 - `exec.Command()` in reconciler replaced with library call
@@ -250,24 +266,19 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 
 kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo) end-to-end on a live kind cluster.
 
-### Added
-
-- **MetricCheck CRD** — Prometheus-backed policy gates: block promotions when error rate > threshold
-- **Custom promotion steps** — HTTP webhook steps for extensible promotion workflows
-- **Auto-rollback** — configurable failure threshold triggers rollback PR after N consecutive health failures
-- **Pause/resume** — `kardinal pause/resume <pipeline>` halts in-flight promotions
-- **Policy simulate** — `kardinal policy simulate` evaluates gates without creating a Bundle
-- **Policy test** — `kardinal policy test` validates CEL syntax offline
-- **Policy list** — lists active PolicyGates scoped to a pipeline/environment
-- **Promote command** — `kardinal promote` creates a Bundle from the last verified image
-- **Config Bundle type** — promotes Git commit SHAs through the same pipeline as image Bundles
-- **Rendered manifests step** — `pre-render` strategy generates environment-specific YAML
-
 ### Fixed
 
 - kind E2E infrastructure (`make setup-e2e-env`) sets up the Graph controller + ArgoCD + test/uat/prod namespaces
-- `kardinal get pipelines` shows per-environment status columns
-- `kardinal explain` shows active PolicyGates with CEL expression and current value
+- `kardinal get pipelines` shows per-environment status columns (#128)
+- `kardinal explain` shows active PolicyGates with CEL expression and current value (#129)
+- **Graph node IDs are CEL-safe** — node IDs use underscores, because CEL reads a hyphen as minus; the Kubernetes object names keep hyphens
+- **git push** — pushes `HEAD:<branch>`, so a push no longer fails with `src refspec does not match any`
+- **Git token from the Pipeline** — the token is read from the Secret in `Pipeline.spec.git.secretRef`
+- **PromotionStep and PolicyGate schemas** — PromotionStep spec declares `upstreamVerified` and `requiredGates`, and PolicyGate spec declares `upstreamEnvironment`, the fields the Graph writes; without them the Graph controller rejected the objects
+- **RBAC for health checks** — the ClusterRole can read Deployments, Argo CD Applications and Flux Kustomizations
+- **Existing promotion PR** — when the PR is already open (for example after a controller restart), the controller finds it instead of failing with `422`
+- **GitHub token in the Helm chart** — `github.secretRef` and `github.token` values pass `GITHUB_TOKEN` to the controller
+- **Graph controller fork pin** upgraded to `9c18aa34`, which re-evaluates `propagateWhen` after the managed resource's status changes
 
 ---
 
@@ -283,6 +294,13 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 - **Helm chart** — controller deployment, RBAC, CRDs packaged for OCI registry
 - **Graph integration** — kro Graph builder and translator: Pipeline → Graph spec
 - **PolicyGate CEL evaluator** — `!schedule.isWeekend`, `upstream.uat.soakMinutes >= 30`, kro CEL library
+- **MetricCheck CRD** — Prometheus-backed policy gates: block promotions when error rate > threshold, with `metrics.<name>.result` and upstream soak time in gate expressions (#114)
+- **Custom promotion steps** — HTTP webhook steps for extensible promotion workflows (#124)
+- **Auto-rollback** — configurable failure threshold triggers rollback PR after N consecutive health failures (#77)
+- **Pause/resume** — `kardinal pause/resume <pipeline>` halts in-flight promotions (#63, #110)
+- **Policy simulate and list** — `kardinal policy simulate` evaluates gates without creating a Bundle; `kardinal policy list` lists the PolicyGates of a pipeline or environment (#63)
+- **Config Bundle type** — promotes Git commit SHAs through the same pipeline as image Bundles (#78)
+- **Rendered manifests step** — `layout: branch` with `kustomize-build` writes environment-specific YAML (#82)
 - **SCM provider** — GitHub: push branch, open PR, detect merge, post comments
 - **Health adapters** — Kubernetes Deployment readiness, ArgoCD Application sync, Flux Kustomization
 - **Steps engine** — kustomize-set-image, helm-set-image, git-commit, open-pr, wait-for-merge, health-check
