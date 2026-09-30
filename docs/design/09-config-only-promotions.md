@@ -161,7 +161,15 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
 
 ### CLI
 
-`kardinal create bundle` sets only the type and images (`--type`, `--image`, `--dry-run`); it cannot set `configRef`. A config Bundle made with the CLI has no `configRef`, so `config-merge` is a no-op. Create config Bundles with the Bundle API above, a `type: git` Subscription, or `kubectl apply` of a Bundle with `spec.configRef`:
+`kardinal create bundle --type config --config-commit <sha>` sets `configRef.commitSHA`; `--config-repo` sets `configRef.gitRepo` (default: the Pipeline repo). The CLI applies the Bundle API's checks, so a config Bundle without `--config-commit` is refused (#1285). The Graph builder also fails a config Bundle without `configRef.commitSHA` with `InvalidSpec`, whichever way it was created.
+
+```bash
+kardinal create bundle my-app --type config \
+  --config-repo https://github.com/myorg/app-config --config-commit "${COMMIT_SHA}" \
+  --commit "${COMMIT_SHA}" --ci-run-url "${CI_URL}"
+```
+
+A config Bundle can also come from the Bundle API above, a `type: git` Subscription, or `kubectl apply` of a Bundle with `spec.configRef`:
 
 ```bash
 kubectl create -f - <<EOF

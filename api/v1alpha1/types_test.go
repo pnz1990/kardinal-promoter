@@ -189,17 +189,11 @@ func TestBundleStatusEnvironments(t *testing.T) {
 		Phase: "Verified",
 		Environments: []v1alpha1.EnvironmentStatus{
 			{
-				Name:  "prod",
-				Phase: "Verified",
-				PRURL: "https://github.com/myorg/gitops/pull/42",
-				GateResults: []v1alpha1.GateResult{
-					{
-						GateName:    "no-weekend-deploys",
-						Result:      "pass",
-						Reason:      "Not a weekend",
-						EvaluatedAt: now,
-					},
-				},
+				Name:            "prod",
+				Phase:           "Verified",
+				PRURL:           "https://github.com/myorg/gitops/pull/42",
+				HealthCheckedAt: &now,
+				SoakMinutes:     30,
 			},
 		},
 	}
@@ -215,9 +209,10 @@ func TestBundleStatusEnvironments(t *testing.T) {
 	assert.Equal(t, "prod", env.Name)
 	assert.Equal(t, "Verified", env.Phase)
 	assert.Equal(t, "https://github.com/myorg/gitops/pull/42", env.PRURL)
-	require.Len(t, env.GateResults, 1)
-	assert.Equal(t, "no-weekend-deploys", env.GateResults[0].GateName)
-	assert.Equal(t, "pass", env.GateResults[0].Result)
+	require.NotNil(t, env.HealthCheckedAt)
+	want := now.Rfc3339Copy()
+	assert.True(t, want.Equal(env.HealthCheckedAt))
+	assert.Equal(t, int64(30), env.SoakMinutes)
 }
 
 // ---------------------------------------------------------------------------

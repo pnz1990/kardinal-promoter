@@ -356,11 +356,18 @@ func main() {
 	}
 	gitClient := scm.NewGoGitClient()
 
+	// Reconcilers write events.k8s.io/v1 Events. The chart grants create and
+	// patch on events.k8s.io events for this recorder.
+	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
+
 	if err := (&bundlereconciler.Reconciler{
-		Client:       mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Uncached: the maxConcurrentPromotions count must see the Promoting
+		// patch of the previous reconcile (#1310).
+		APIReader:    mgr.GetAPIReader(),
 		Translator:   newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
 		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
-		Recorder:     mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
+		Recorder:     eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
@@ -374,7 +381,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create PolicyGateReconciler (CEL env init failed)")
 	}
-	pgReconciler.Recorder = mgr.GetEventRecorderFor("kardinal-controller") //nolint:staticcheck
+	pgReconciler.Recorder = eventRecorder
 	if err := pgReconciler.SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PolicyGateReconciler")
 	}
@@ -385,7 +392,7 @@ func main() {
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		Shard:          shard,
-		Recorder:       mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
+		Recorder:       eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
 	}
@@ -556,47 +563,12 @@ func main() {
 
 	logger.Info().Msg("starting kardinal-controller")
 
-	// SCM token scope preflight check — validate that the configured token has
-	// the scopes required for kardinal-promoter to open and manage pull requests.
-	// This is a non-fatal startup check: warnings are logged but do not prevent
-	// the controller from starting. A misconfigured token will surface as a 403
-	// during the first open-pr step — surfacing it here means teams discover the
-	// problem in minutes rather than hours.
-	//
-	// The check is skipped when:
-	//   - the token is managed by a DynamicProvider (the initial token from --github-token
-	//     may be empty; the actual token is loaded from the Secret by the watcher)
-	//   - the provider type is not github/gitlab/forgejo (unsupported)
-	//   - the call returns a transient network error (logged at debug level; non-fatal)
-	if scmTokenSecretName == "" && githubToken != "" {
-		scopeCtx, scopeCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer scopeCancel()
-
-		var scopeWarnings []scm.TokenScopeWarning
-		var scopeErr error
-
-		switch scmProviderType {
-		case "", "github":
-			scopeWarnings, scopeErr = scm.ValidateGitHubTokenScopes(scopeCtx, githubToken, scmAPIURL)
-		case "gitlab":
-			scopeWarnings, scopeErr = scm.ValidateGitLabTokenScopes(scopeCtx, githubToken, scmAPIURL)
-		case "forgejo", "gitea":
-			scopeWarnings, scopeErr = scm.ValidateForgejoTokenScopes(scopeCtx, githubToken, scmAPIURL)
-		}
-
-		if scopeErr != nil {
-			logger.Debug().Err(scopeErr).
-				Str("provider", scmProviderType).
-				Msg("SCM token scope check skipped (network error — non-fatal)")
-		}
-		for _, w := range scopeWarnings {
-			logger.Warn().
-				Str("provider", scmProviderType).
-				Str("missing_scope", w.MissingScope).
-				Str("consequence", w.Consequence).
-				Msg("SCM TOKEN SCOPE WARNING — promotion steps may fail when this scope is required")
-		}
-	}
+	// SCM token scope preflight check (non-fatal; see checkSCMTokenAtStartup).
+	// It runs whenever a token is set, including chart installs that also set
+	// --scm-token-secret-name: GITHUB_TOKEN comes from that same Secret, so it
+	// is the token the watcher starts with. It runs in the background so an
+	// unreachable SCM API does not delay startup.
+	go checkSCMTokenAtStartup(context.Background(), logger, scmProviderType, githubToken, scmAPIURL)
 
 	// Register a Runnable that creates/updates the kardinal-version ConfigMap
 	// after the controller starts. `kardinal version` reads this ConfigMap.

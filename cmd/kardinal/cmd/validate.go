@@ -191,7 +191,7 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 			buildable.Spec.Environments[i].Steps = nil
 			buildable.Spec.Environments[i].PromotionTemplate = nil
 		}
-		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: dummyBundle}); err != nil {
+		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: buildableBundle(dummyBundle)}); err != nil {
 			errs = append(errs, err.Error())
 		}
 	}

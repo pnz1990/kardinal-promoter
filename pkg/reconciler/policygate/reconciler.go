@@ -19,7 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +32,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -79,7 +80,7 @@ type Reconciler struct {
 	MetricsNowFn func() time.Time
 	// Recorder emits Kubernetes Events when a PolicyGate first blocks.
 	// When nil, event emission is skipped (backward-compatible).
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // NewReconciler creates a Reconciler with an initialized CEL evaluator.
@@ -783,12 +784,12 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 		pipeline := gate.Labels[labelPipeline]
 		if (!ready && isFirstEval) || (!ready && ready != prevReady) {
 			// Gate is blocking (first eval or newly blocked).
-			r.Recorder.Event(gate, corev1.EventTypeWarning, "Blocked",
+			kubeevent.Emit(r.Recorder, gate, corev1.EventTypeWarning, "Blocked", "Evaluate",
 				fmt.Sprintf("env %s pipeline %s: gate %s blocking promotion: %s",
 					envName, pipeline, gate.Name, reason))
 		} else if ready && ready != prevReady {
 			// Gate just allowed (was blocked before).
-			r.Recorder.Event(gate, corev1.EventTypeNormal, "Allowed",
+			kubeevent.Emit(r.Recorder, gate, corev1.EventTypeNormal, "Allowed", "Evaluate",
 				fmt.Sprintf("env %s pipeline %s: gate %s now allowing promotion",
 					envName, pipeline, gate.Name))
 		}

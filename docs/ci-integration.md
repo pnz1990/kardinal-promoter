@@ -163,6 +163,29 @@ promote:
         }"
 ```
 
+### kardinal CLI
+
+`kardinal create bundle` uses the kubeconfig of the CI runner, like kubectl, and applies the
+same checks as the [Bundle API](#webhook-endpoint-reference): the Pipeline must exist, an
+`image` or `mixed` Bundle needs at least one `--image`, a `config` or `mixed` Bundle needs
+`--config-commit`, and `--ci-run-url` must pass the [Provenance](#provenance) check. Nothing is
+created when a check fails.
+
+```bash
+kardinal create bundle my-app -n my-team \
+  --image "ghcr.io/myorg/my-app:${GITHUB_SHA}" \
+  --commit "${GITHUB_SHA}" \
+  --author "${GITHUB_ACTOR}" \
+  --ci-run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+# A config Bundle: --config-repo defaults to the Pipeline's git.url.
+kardinal create bundle my-app --type config \
+  --config-repo https://github.com/myorg/app-config --config-commit "${CONFIG_SHA}"
+```
+
+`--commit`, `--author` and `--ci-run-url` set `spec.provenance`. See
+[`kardinal create bundle`](reference/cli/kardinal-create-bundle.md) for every flag.
+
 ### kubectl (declarative)
 
 For teams that prefer a fully declarative approach, the Bundle can be created via kubectl in CI:
@@ -194,6 +217,11 @@ For teams that prefer a fully declarative approach, the Bundle can be created vi
 ```
 
 This requires the CI runner to have kubectl access to the cluster and RBAC permissions to create Bundle CRDs.
+
+A Bundle created this way is not checked when it is created. A Bundle that has nothing its type
+promotes (an `image` or `mixed` Bundle with no `images`, a `config` or `mixed` Bundle with no
+`configRef.commitSHA`) goes to phase `Failed` with condition `InvalidSpec` before any environment
+is promoted.
 
 ## Authentication
 
@@ -272,11 +300,17 @@ The PR body and the UI link `ciRunURL`, so it is checked when a Bundle is create
 empty or an absolute `http://` or `https://` URL with a host, without user info
 (`https://user@host/...`), spaces or control characters.
 
-- The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value.
+- The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value, and
+  `kardinal create bundle --ci-run-url` returns an error.
 - Bundles created directly (`kubectl apply`, your own client) and existing Bundles are not
   checked. Where such a Bundle's `ciRunURL` fails the check, the PR body and the UI show `—`
   instead of a link, and promote and rollback (CLI, UI and automatic) leave it out of the
   Bundle they create.
+
+kardinal records provenance as the caller gives it, whichever way the Bundle is created (Bundle
+API, `kardinal create bundle`, kubectl): it does not check `commitSHA`, `author` or `ciRunURL`
+against your source repository or CI. A PolicyGate on `bundle.provenance.author` therefore trusts
+everyone who holds the Bundle API token or may create Bundles in the namespace.
 
 ## Multi-Image Bundles
 

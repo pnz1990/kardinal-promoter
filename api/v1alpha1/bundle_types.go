@@ -150,13 +150,9 @@ type BundleMetrics struct {
 	// +optional
 	BakeResets int `json:"bakeResets,omitempty"`
 
-	// AutoRollbacks is the number of environments that auto-rolled back during
-	// this Bundle's promotion.
-	// +optional
-	AutoRollbacks int `json:"autoRollbacks,omitempty"`
-
-	// OperatorInterventions is the number of PolicyGate overrides applied during
-	// this Bundle's promotion across all environments.
+	// OperatorInterventions is the number of PolicyGate overrides recorded on
+	// this Bundle's gate instances (kardinal override), counted when the Bundle
+	// becomes Verified.
 	// +optional
 	OperatorInterventions int `json:"operatorInterventions,omitempty"`
 }
@@ -173,14 +169,6 @@ type EnvironmentStatus struct {
 	// +optional
 	PRURL string `json:"prURL,omitempty"`
 
-	// PRMergedAt is when the promotion PR was merged.
-	// +optional
-	PRMergedAt *metav1.Time `json:"prMergedAt,omitempty"`
-
-	// MergedBy is the actor who merged the promotion PR.
-	// +optional
-	MergedBy string `json:"mergedBy,omitempty"`
-
 	// HealthCheckedAt is when the post-merge health check completed.
 	// +optional
 	HealthCheckedAt *metav1.Time `json:"healthCheckedAt,omitempty"`
@@ -192,11 +180,6 @@ type EnvironmentStatus struct {
 	// the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix).
 	// +optional
 	SoakMinutes int64 `json:"soakMinutes,omitempty"`
-
-	// GateResults holds the result of each PolicyGate evaluation for this
-	// environment.
-	// +optional
-	GateResults []GateResult `json:"gateResults,omitempty"`
 }
 
 // GateResult records the outcome of a single PolicyGate evaluation.
