@@ -134,38 +134,37 @@
 <a id=__codelineno-9-8 name=__codelineno-9-8 href=#__codelineno-9-8></a><span class=s>    url: https://github.com/pnz1990/kardinal-demo</span>
 <a id=__codelineno-9-9 name=__codelineno-9-9 href=#__codelineno-9-9></a><span class=s>    branch: main</span>
 <a id=__codelineno-9-10 name=__codelineno-9-10 href=#__codelineno-9-10></a><span class=s>    layout: directory</span>
-<a id=__codelineno-9-11 name=__codelineno-9-11 href=#__codelineno-9-11></a><span class=s>    provider: github</span>
-<a id=__codelineno-9-12 name=__codelineno-9-12 href=#__codelineno-9-12></a><span class=s>    secretRef:</span>
-<a id=__codelineno-9-13 name=__codelineno-9-13 href=#__codelineno-9-13></a><span class=s>      name: github-token</span>
-<a id=__codelineno-9-14 name=__codelineno-9-14 href=#__codelineno-9-14></a><span class=s>  environments:</span>
-<a id=__codelineno-9-15 name=__codelineno-9-15 href=#__codelineno-9-15></a><span class=s>    - name: test</span>
-<a id=__codelineno-9-16 name=__codelineno-9-16 href=#__codelineno-9-16></a><span class=s>      path: environments/test</span>
-<a id=__codelineno-9-17 name=__codelineno-9-17 href=#__codelineno-9-17></a><span class=s>      update:</span>
-<a id=__codelineno-9-18 name=__codelineno-9-18 href=#__codelineno-9-18></a><span class=s>        strategy: kustomize</span>
-<a id=__codelineno-9-19 name=__codelineno-9-19 href=#__codelineno-9-19></a><span class=s>      approval: auto</span>
-<a id=__codelineno-9-20 name=__codelineno-9-20 href=#__codelineno-9-20></a><span class=s>      health:</span>
-<a id=__codelineno-9-21 name=__codelineno-9-21 href=#__codelineno-9-21></a><span class=s>        type: argocd</span>
-<a id=__codelineno-9-22 name=__codelineno-9-22 href=#__codelineno-9-22></a><span class=s>        argocd:</span>
-<a id=__codelineno-9-23 name=__codelineno-9-23 href=#__codelineno-9-23></a><span class=s>          name: kardinal-test-app-test</span>
-<a id=__codelineno-9-24 name=__codelineno-9-24 href=#__codelineno-9-24></a><span class=s>    - name: uat</span>
-<a id=__codelineno-9-25 name=__codelineno-9-25 href=#__codelineno-9-25></a><span class=s>      path: environments/uat</span>
-<a id=__codelineno-9-26 name=__codelineno-9-26 href=#__codelineno-9-26></a><span class=s>      update:</span>
-<a id=__codelineno-9-27 name=__codelineno-9-27 href=#__codelineno-9-27></a><span class=s>        strategy: kustomize</span>
-<a id=__codelineno-9-28 name=__codelineno-9-28 href=#__codelineno-9-28></a><span class=s>      approval: auto</span>
-<a id=__codelineno-9-29 name=__codelineno-9-29 href=#__codelineno-9-29></a><span class=s>      health:</span>
-<a id=__codelineno-9-30 name=__codelineno-9-30 href=#__codelineno-9-30></a><span class=s>        type: argocd</span>
-<a id=__codelineno-9-31 name=__codelineno-9-31 href=#__codelineno-9-31></a><span class=s>        argocd:</span>
-<a id=__codelineno-9-32 name=__codelineno-9-32 href=#__codelineno-9-32></a><span class=s>          name: kardinal-test-app-uat</span>
-<a id=__codelineno-9-33 name=__codelineno-9-33 href=#__codelineno-9-33></a><span class=s>    - name: prod</span>
-<a id=__codelineno-9-34 name=__codelineno-9-34 href=#__codelineno-9-34></a><span class=s>      path: environments/prod</span>
-<a id=__codelineno-9-35 name=__codelineno-9-35 href=#__codelineno-9-35></a><span class=s>      update:</span>
-<a id=__codelineno-9-36 name=__codelineno-9-36 href=#__codelineno-9-36></a><span class=s>        strategy: kustomize</span>
-<a id=__codelineno-9-37 name=__codelineno-9-37 href=#__codelineno-9-37></a><span class=s>      approval: pr-review</span>
-<a id=__codelineno-9-38 name=__codelineno-9-38 href=#__codelineno-9-38></a><span class=s>      health:</span>
-<a id=__codelineno-9-39 name=__codelineno-9-39 href=#__codelineno-9-39></a><span class=s>        type: argocd</span>
-<a id=__codelineno-9-40 name=__codelineno-9-40 href=#__codelineno-9-40></a><span class=s>        argocd:</span>
-<a id=__codelineno-9-41 name=__codelineno-9-41 href=#__codelineno-9-41></a><span class=s>          name: kardinal-test-app-prod</span>
-<a id=__codelineno-9-42 name=__codelineno-9-42 href=#__codelineno-9-42></a><span class=s>EOF</span>
+<a id=__codelineno-9-11 name=__codelineno-9-11 href=#__codelineno-9-11></a><span class=s>    secretRef:</span>
+<a id=__codelineno-9-12 name=__codelineno-9-12 href=#__codelineno-9-12></a><span class=s>      name: github-token</span>
+<a id=__codelineno-9-13 name=__codelineno-9-13 href=#__codelineno-9-13></a><span class=s>  environments:</span>
+<a id=__codelineno-9-14 name=__codelineno-9-14 href=#__codelineno-9-14></a><span class=s>    - name: test</span>
+<a id=__codelineno-9-15 name=__codelineno-9-15 href=#__codelineno-9-15></a><span class=s>      path: environments/test</span>
+<a id=__codelineno-9-16 name=__codelineno-9-16 href=#__codelineno-9-16></a><span class=s>      update:</span>
+<a id=__codelineno-9-17 name=__codelineno-9-17 href=#__codelineno-9-17></a><span class=s>        strategy: kustomize</span>
+<a id=__codelineno-9-18 name=__codelineno-9-18 href=#__codelineno-9-18></a><span class=s>      approval: auto</span>
+<a id=__codelineno-9-19 name=__codelineno-9-19 href=#__codelineno-9-19></a><span class=s>      health:</span>
+<a id=__codelineno-9-20 name=__codelineno-9-20 href=#__codelineno-9-20></a><span class=s>        type: argocd</span>
+<a id=__codelineno-9-21 name=__codelineno-9-21 href=#__codelineno-9-21></a><span class=s>        argocd:</span>
+<a id=__codelineno-9-22 name=__codelineno-9-22 href=#__codelineno-9-22></a><span class=s>          name: kardinal-test-app-test</span>
+<a id=__codelineno-9-23 name=__codelineno-9-23 href=#__codelineno-9-23></a><span class=s>    - name: uat</span>
+<a id=__codelineno-9-24 name=__codelineno-9-24 href=#__codelineno-9-24></a><span class=s>      path: environments/uat</span>
+<a id=__codelineno-9-25 name=__codelineno-9-25 href=#__codelineno-9-25></a><span class=s>      update:</span>
+<a id=__codelineno-9-26 name=__codelineno-9-26 href=#__codelineno-9-26></a><span class=s>        strategy: kustomize</span>
+<a id=__codelineno-9-27 name=__codelineno-9-27 href=#__codelineno-9-27></a><span class=s>      approval: auto</span>
+<a id=__codelineno-9-28 name=__codelineno-9-28 href=#__codelineno-9-28></a><span class=s>      health:</span>
+<a id=__codelineno-9-29 name=__codelineno-9-29 href=#__codelineno-9-29></a><span class=s>        type: argocd</span>
+<a id=__codelineno-9-30 name=__codelineno-9-30 href=#__codelineno-9-30></a><span class=s>        argocd:</span>
+<a id=__codelineno-9-31 name=__codelineno-9-31 href=#__codelineno-9-31></a><span class=s>          name: kardinal-test-app-uat</span>
+<a id=__codelineno-9-32 name=__codelineno-9-32 href=#__codelineno-9-32></a><span class=s>    - name: prod</span>
+<a id=__codelineno-9-33 name=__codelineno-9-33 href=#__codelineno-9-33></a><span class=s>      path: environments/prod</span>
+<a id=__codelineno-9-34 name=__codelineno-9-34 href=#__codelineno-9-34></a><span class=s>      update:</span>
+<a id=__codelineno-9-35 name=__codelineno-9-35 href=#__codelineno-9-35></a><span class=s>        strategy: kustomize</span>
+<a id=__codelineno-9-36 name=__codelineno-9-36 href=#__codelineno-9-36></a><span class=s>      approval: pr-review</span>
+<a id=__codelineno-9-37 name=__codelineno-9-37 href=#__codelineno-9-37></a><span class=s>      health:</span>
+<a id=__codelineno-9-38 name=__codelineno-9-38 href=#__codelineno-9-38></a><span class=s>        type: argocd</span>
+<a id=__codelineno-9-39 name=__codelineno-9-39 href=#__codelineno-9-39></a><span class=s>        argocd:</span>
+<a id=__codelineno-9-40 name=__codelineno-9-40 href=#__codelineno-9-40></a><span class=s>          name: kardinal-test-app-prod</span>
+<a id=__codelineno-9-41 name=__codelineno-9-41 href=#__codelineno-9-41></a><span class=s>EOF</span>
 </code></pre></div> <p>Verify the Pipeline was created:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-10-1 name=__codelineno-10-1 href=#__codelineno-10-1></a>kardinal<span class=w> </span>get<span class=w> </span>pipelines
 <a id=__codelineno-10-2 name=__codelineno-10-2 href=#__codelineno-10-2></a><span class=c1># PIPELINE            BUNDLE   TEST   UAT   PROD   SUB   AGE</span>
 <a id=__codelineno-10-3 name=__codelineno-10-3 href=#__codelineno-10-3></a><span class=c1># kardinal-test-app   -        -      -     -      0     10s</span>
@@ -241,9 +240,11 @@
 <a id=__codelineno-18-15 name=__codelineno-18-15 href=#__codelineno-18-15></a><span class=s>  message: "Production deployments are blocked on weekends"</span>
 <a id=__codelineno-18-16 name=__codelineno-18-16 href=#__codelineno-18-16></a><span class=s>  recheckInterval: 5m</span>
 <a id=__codelineno-18-17 name=__codelineno-18-17 href=#__codelineno-18-17></a><span class=s>EOF</span>
-</code></pre></div> <p>The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and <code>kardinal explain</code> shows the gate with the controller's latest evaluation:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-19-1 name=__codelineno-19-1 href=#__codelineno-19-1></a>kardinal<span class=w> </span>explain<span class=w> </span>kardinal-test-app<span class=w> </span>--env<span class=w> </span>prod
-<a id=__codelineno-19-2 name=__codelineno-19-2 href=#__codelineno-19-2></a><span class=c1># ENVIRONMENT   TYPE         NAME                 STATE   EXPRESSION            REASON</span>
-<a id=__codelineno-19-3 name=__codelineno-19-3 href=#__codelineno-19-3></a><span class=c1># prod          PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   bundle.version=sha-abc1234: !schedule.isWeekend = false</span>
+</code></pre></div> <p>The next Bundle promoted to prod will have this gate injected into its Graph. If it is a weekend, the gate blocks the promotion and <code>kardinal explain</code> shows the gate with the controller's latest evaluation, the Bundle it belongs to, and the Bundle still deployed in prod:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-19-1 name=__codelineno-19-1 href=#__codelineno-19-1></a>kardinal<span class=w> </span>explain<span class=w> </span>kardinal-test-app<span class=w> </span>--env<span class=w> </span>prod
+<a id=__codelineno-19-2 name=__codelineno-19-2 href=#__codelineno-19-2></a><span class=c1># ENVIRONMENT   BUNDLE                    TYPE         NAME                 STATE   EXPRESSION            REASON</span>
+<a id=__codelineno-19-3 name=__codelineno-19-3 href=#__codelineno-19-3></a><span class=c1># prod          kardinal-test-app-9tptr   PolicyGate   no-weekend-deploys   Block   !schedule.isWeekend   bundle.version=sha-abc1234: !schedule.isWeekend = false</span>
+<a id=__codelineno-19-4 name=__codelineno-19-4 href=#__codelineno-19-4></a><span class=c1>#</span>
+<a id=__codelineno-19-5 name=__codelineno-19-5 href=#__codelineno-19-5></a><span class=c1># prod   deployed: kardinal-test-app-7qvsr (sha-1a2b3c4)</span>
 </code></pre></div> <h2 id=adding-to-your-ci-pipeline>Adding to your CI pipeline<a class=headerlink href=#adding-to-your-ci-pipeline title="Permanent link">&para;</a></h2> <p>Add a step to your CI pipeline that creates a Bundle after building and pushing your image.</p> <p>The Bundle API (<code>POST /api/v1/bundles</code>) listens on port 8083 of the <code>kardinal-promoter</code> Service and is off until you set <code>bundleAPI.tokenSecretRef.name</code>. Expose it to CI yourself (for example with an Ingress); <code>kardinal.example.com</code> below stands for that address. See <a href=../ci-integration/#webhook-token>CI integration</a>.</p> <p><strong>GitHub Actions example:</strong></p> <div class=highlight><pre><span></span><code><a id=__codelineno-20-1 name=__codelineno-20-1 href=#__codelineno-20-1></a><span class="p p-Indicator">-</span><span class=w> </span><span class=nt>name</span><span class=p>:</span><span class=w> </span><span class="l l-Scalar l-Scalar-Plain">Create Bundle</span>
 <a id=__codelineno-20-2 name=__codelineno-20-2 href=#__codelineno-20-2></a><span class=w>  </span><span class=nt>run</span><span class=p>:</span><span class=w> </span><span class="p p-Indicator">|</span>
 <a id=__codelineno-20-3 name=__codelineno-20-3 href=#__codelineno-20-3></a><span class=w>    </span><span class=no>curl -X POST https://kardinal.example.com/api/v1/bundles \</span>
