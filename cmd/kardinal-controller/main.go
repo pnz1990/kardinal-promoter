@@ -412,7 +412,8 @@ func main() {
 	}
 
 	if err := (&rbprecon.Reconciler{
-		Client: mgr.GetClient(),
+		Client:   mgr.GetClient(),
+		Recorder: eventRecorder,
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up RollbackPolicyReconciler")
 	}

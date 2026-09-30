@@ -549,3 +549,33 @@ func TestPlanRollback_RestoresEveryImageTheDeployedBundleChanged(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanRollback_ToHintOnlyForPeople: the "pick one with --to" hint is CLI
+// wording. An automatic rollback (RollbackPolicy, onHealthFailure=rollback)
+// shows the refusal in a status condition or Event, where it does not apply.
+func TestPlanRollback_ToHintOnlyForPeople(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		automatic bool
+		wantHint  bool
+	}{
+		{name: "kardinal rollback", wantHint: true},
+		{name: "automatic rollback", automatic: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newClient(t, bundle("v1", "app", "1", 0), step("v1", "app", "prod", "Verified", 1),
+				pipeline("app", "test", "uat", "prod"))
+			_, err := lifecycle.PlanRollback(context.Background(), c, lifecycle.RollbackRequest{
+				Namespace: ns, Pipeline: "app", Environment: "prod", FromBundle: "v1",
+				Automatic: tc.automatic, Actor: "alice", Now: t0.Add(time.Hour),
+			})
+			require.ErrorIs(t, err, lifecycle.ErrConflict)
+			assert.Contains(t, err.Error(), "no earlier Bundle")
+			if tc.wantHint {
+				assert.Contains(t, err.Error(), "pick one with --to")
+			} else {
+				assert.NotContains(t, err.Error(), "--to")
+			}
+		})
+	}
+}

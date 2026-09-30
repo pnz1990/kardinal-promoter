@@ -45,6 +45,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 
@@ -313,7 +314,7 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs)
 		switch {
 		case err == nil:
-			if prs.Status.Merged || (prs.Status.LastCheckedAt != nil && !prs.Status.Open) {
+			if prs.Status.Merged || prstatus.IsClosed(&prs.Status) {
 				return nil // merged or already closed: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
@@ -777,14 +778,19 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	if prs.Status.LastCheckedAt != nil && !prs.Status.Open {
+	// The PR stayed closed through the PRStatus grace window (#1306), or an
+	// older release recorded it closed without one.
+	if prstatus.IsClosedFinal(&prs.Status) {
 		log.Info().
 			Str("prStatusRef", prStatusName).
 			Int("prNumber", prs.Spec.PRNumber).
 			Msg("PRStatus reports PR closed without merge — failing")
+		msg := fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber)
+		if prs.Status.ClosedFinal {
+			msg += fmt.Sprintf(" and not reopened within %s", prstatus.ClosedGracePeriod)
+		}
 		ps.Status.WaitForMergeExpiry = nil // clear expiry on transition out
-		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
-			fmt.Sprintf("PR #%d was closed without merging", prs.Spec.PRNumber))
+		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
 
 	// The PRStatusReconciler got an SCM error that polling again cannot fix
@@ -800,6 +806,25 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 		ps.Status.WaitForMergeExpiry = nil
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed,
 			fmt.Sprintf("PR #%d cannot be polled: %s", prs.Spec.PRNumber, prs.Status.PollError))
+	}
+
+	// Closed but still in the grace window: the PRStatus reconciler keeps
+	// polling, and a reopen resumes the wait. Only the message changes, and
+	// only when it differs, since each patch is a watch event.
+	closedMsg := fmt.Sprintf("PR #%d is closed; the step fails %s after closing unless it is reopened",
+		prs.Spec.PRNumber, prstatus.ClosedGracePeriod)
+	msg := ps.Status.Message
+	switch {
+	case prstatus.IsClosed(&prs.Status):
+		msg = closedMsg
+	case msg == closedMsg:
+		msg = fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber)
+	}
+	if msg != ps.Status.Message {
+		ps.Status.Message = msg
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("patch wait-for-merge message: %w", err)
+		}
 	}
 
 	// PR is still open or PRStatus reconciler hasn't polled yet — requeue.

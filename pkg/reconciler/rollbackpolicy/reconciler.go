@@ -35,9 +35,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,6 +50,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
 )
 
 const (
@@ -59,6 +63,17 @@ const (
 	labelPipeline    = "kardinal.io/pipeline"
 	labelEnvironment = "kardinal.io/environment"
 	labelBundle      = "kardinal.io/bundle"
+
+	// ConditionRollbackRefused is True when the failure threshold was reached
+	// but the rollback planner refused to create a rollback Bundle (#1314).
+	ConditionRollbackRefused = "RollbackRefused"
+	// ReasonNoSafeTarget: nothing safe to roll back to (lifecycle.ErrConflict).
+	ReasonNoSafeTarget = "NoSafeTarget"
+	// ReasonInvalidPolicy: the Pipeline or environment the policy names does
+	// not exist (lifecycle.ErrNotFound, lifecycle.ErrInvalid).
+	ReasonInvalidPolicy = "InvalidPolicy"
+	// ReasonRollbackCreated: a rollback Bundle was created or found.
+	ReasonRollbackCreated = "RollbackCreated"
 )
 
 // Reconciler monitors a RollbackPolicy and triggers auto-rollback when the
@@ -69,6 +84,10 @@ type Reconciler struct {
 
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+
+	// Recorder emits the Warning Event when a rollback is refused. Nil
+	// disables Events.
+	Recorder events.EventRecorder
 }
 
 // Reconcile processes one RollbackPolicy event.
@@ -130,18 +149,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// If threshold exceeded, create rollback Bundle (if not already done).
 	if rp.Status.ShouldRollback {
-		rbName, err := r.ensureRollbackBundle(ctx, log, &rp)
+		rbName, refusal, err := r.ensureRollbackBundle(ctx, log, &rp)
 		if err != nil {
 			log.Error().Err(err).Msg("failed to ensure rollback bundle")
 			return ctrl.Result{RequeueAfter: requeueInterval}, nil
 		}
-		if rbName != "" {
-			// Record the rollback bundle name on the status.
-			patch2 := client.MergeFrom(rp.DeepCopy())
-			rp.Status.RollbackBundleName = &rbName
-			if patchErr := r.Status().Patch(ctx, &rp, patch2); patchErr != nil {
-				return ctrl.Result{}, fmt.Errorf("patch rollbackpolicy bundlename %s: %w", req.Name, patchErr)
-			}
+		if err := r.recordOutcome(ctx, &rp, rbName, refusal, now); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
 	}
@@ -189,8 +203,57 @@ func stepBundle(step *v1alpha1.PromotionStep) string {
 	return step.Labels[labelBundle]
 }
 
+// recordOutcome writes the result of a rollback attempt to the policy status:
+// status.rollbackBundleName and RollbackRefused=False when a rollback Bundle
+// exists, or RollbackRefused=True with the planner's reason when it refused
+// (#1314). The status is patched only when it changes, and the Warning Event
+// is emitted only when RollbackRefused turns True, so a policy that stays
+// refused does not emit an Event per reconcile.
+func (r *Reconciler) recordOutcome(ctx context.Context, rp *v1alpha1.RollbackPolicy,
+	rbName string, refusal *refusal, now metav1.Time) error {
+	patch := client.MergeFrom(rp.DeepCopy())
+	wasRefused := meta.IsStatusConditionTrue(rp.Status.Conditions, ConditionRollbackRefused)
+	cond := metav1.Condition{
+		Type:               ConditionRollbackRefused,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonRollbackCreated,
+		Message:            fmt.Sprintf("rollback Bundle %s was created", rbName),
+		ObservedGeneration: rp.Generation,
+		LastTransitionTime: now,
+	}
+	changed := false
+	if refusal != nil {
+		cond.Status, cond.Reason, cond.Message = metav1.ConditionTrue, refusal.reason, refusal.message
+	} else if rp.Status.RollbackBundleName == nil || *rp.Status.RollbackBundleName != rbName {
+		rp.Status.RollbackBundleName = &rbName
+		changed = true
+	}
+	if meta.SetStatusCondition(&rp.Status.Conditions, cond) {
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if err := r.Status().Patch(ctx, rp, patch); err != nil {
+		return fmt.Errorf("patch rollbackpolicy outcome %s: %w", rp.Name, err)
+	}
+	if refusal != nil && !wasRefused {
+		kubeevent.Emit(r.Recorder, rp, corev1.EventTypeWarning, ConditionRollbackRefused, "Rollback",
+			fmt.Sprintf("env %s: no rollback Bundle created for %s after %d consecutive health failures: %s",
+				rp.Spec.Environment, rp.Spec.BundleRef, rp.Status.ConsecutiveFailures, refusal.message))
+	}
+	return nil
+}
+
+// refusal is why the rollback planner did not plan a rollback.
+type refusal struct {
+	reason  string
+	message string
+}
+
 // ensureRollbackBundle creates a rollback Bundle if one doesn't already exist.
-// Returns the name of the rollback Bundle (new or existing), or "" if not needed.
+// It returns the name of the rollback Bundle (new or existing), or a refusal
+// when the planner found nothing safe to roll back to.
 //
 // The rollback is planned by lifecycle.PlanRollback, the planner shared with
 // `kardinal rollback`, the UI and onHealthFailure=rollback: it restores the
@@ -200,13 +263,13 @@ func stepBundle(step *v1alpha1.PromotionStep) string {
 // rollback (a failing rollback does not start another), no Bundle is created
 // (C04-gates-06).
 func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logger,
-	rp *v1alpha1.RollbackPolicy) (string, error) {
+	rp *v1alpha1.RollbackPolicy) (string, *refusal, error) {
 	// Reuse a rollback of this Bundle created before this planner existed:
 	// those have no kardinal.io/rollback-from annotation and recorded the
 	// failing Bundle in provenance.rollbackOf.
 	var existingBundles v1alpha1.BundleList
 	if err := r.List(ctx, &existingBundles, client.InNamespace(rp.Namespace)); err != nil {
-		return "", fmt.Errorf("list bundles: %w", err)
+		return "", nil, fmt.Errorf("list bundles: %w", err)
 	}
 	for _, b := range existingBundles.Items {
 		if b.Labels[lifecycle.LabelRollback] == "true" &&
@@ -216,7 +279,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 			log.Debug().
 				Str("existing_rollback", b.Name).
 				Msg("rollback bundle already exists, reusing")
-			return b.Name, nil
+			return b.Name, nil, nil
 		}
 	}
 	// Reuse a rollback of this Bundle in this environment from either
@@ -224,11 +287,11 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 	existing, err := lifecycle.FindRollback(ctx, r.Client, rp.Namespace,
 		rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
 	if err != nil {
-		return "", fmt.Errorf("find rollback of bundle %s: %w", rp.Spec.BundleRef, err)
+		return "", nil, fmt.Errorf("find rollback of bundle %s: %w", rp.Spec.BundleRef, err)
 	}
 	if existing != "" {
 		log.Debug().Str("existing_rollback", existing).Msg("rollback bundle already exists, reusing")
-		return existing, nil
+		return existing, nil, nil
 	}
 
 	rollbackName := lifecycle.AutoRollbackName(rp.Spec.BundleRef, "policy")
@@ -244,19 +307,23 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		Automatic:   true,
 	})
 	if err != nil {
-		if errors.Is(err, lifecycle.ErrConflict) || errors.Is(err, lifecycle.ErrInvalid) ||
-			errors.Is(err, lifecycle.ErrNotFound) {
-			log.Warn().Err(err).
-				Str("bundleRef", rp.Spec.BundleRef).
-				Str("environment", rp.Spec.Environment).
-				Msg("auto-rollback: nothing safe to roll back to; no rollback bundle created, human intervention required")
-			return "", nil
+		reason := ReasonNoSafeTarget
+		switch {
+		case errors.Is(err, lifecycle.ErrConflict):
+		case errors.Is(err, lifecycle.ErrInvalid), errors.Is(err, lifecycle.ErrNotFound):
+			reason = ReasonInvalidPolicy
+		default:
+			return "", nil, fmt.Errorf("plan rollback of bundle %s: %w", rp.Spec.BundleRef, err)
 		}
-		return "", fmt.Errorf("plan rollback of bundle %s: %w", rp.Spec.BundleRef, err)
+		log.Warn().Err(err).
+			Str("bundleRef", rp.Spec.BundleRef).
+			Str("environment", rp.Spec.Environment).
+			Msg("auto-rollback: nothing safe to roll back to; no rollback bundle created, human intervention required")
+		return "", &refusal{reason: reason, message: kubeevent.Truncate(err.Error())}, nil
 	}
 
 	if err := r.Create(ctx, plan.Bundle); err != nil && !apierrors.IsAlreadyExists(err) {
-		return "", fmt.Errorf("create rollback bundle: %w", err)
+		return "", nil, fmt.Errorf("create rollback bundle: %w", err)
 	}
 
 	log.Info().
@@ -268,7 +335,7 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 		Str("environment", rp.Spec.Environment).
 		Msg("auto-rollback: created rollback bundle via RollbackPolicy")
 
-	return rollbackName, nil
+	return rollbackName, nil, nil
 }
 
 // now returns the current time via NowFn if set (for testing), otherwise time.Now().UTC().
