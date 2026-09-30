@@ -110,9 +110,13 @@ The `RollbackPolicy` CRD is the building block for that feature. The controller 
 Rollback is a forward promotion. The controller writes the previous version's image tag to the environment's manifests, commits, and pushes (or opens a PR). The Git history shows:
 
 ```
-commit abc123  [kardinal] Promote my-app to prod: v1.28.0 to v1.29.0
-commit def456  [kardinal] Rollback my-app in prod: v1.29.0 to v1.28.0
+commit abc123  [kardinal] Promote my-app-9tptr to prod
+commit def456  [kardinal] Promote my-app-rollback-bkgwk to prod
 ```
+
+Every commit, a rollback's included, is titled `[kardinal] Promote <bundle> to <environment>`, with
+the Bundle and Pipeline names in the body. A rollback Bundle is usually named `<pipeline>-rollback-<suffix>`,
+and its PR is labelled `kardinal/rollback`.
 
 The rollback commit is a new commit, not a `git revert`. The history is always append-only.
 
