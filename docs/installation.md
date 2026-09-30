@@ -107,7 +107,7 @@ kubectl get pods -n kro-system
 | `scm.apiURL` | `""` | `--scm-api-url` for self-hosted SCM instances |
 | `webhook.secretRef.name` / `.key` | `""` / `secret` | Secret with the SCM webhook HMAC secret (`KARDINAL_WEBHOOK_SECRET`) |
 | `bundleAPI.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with the Bundle API bearer token (`KARDINAL_BUNDLE_TOKEN`). `POST /api/v1/bundles` is off until this is set |
-| `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`) |
+| `ui.auth.tokenSecretRef.name` / `.key` | `""` / `token` | Secret with a static UI API bearer token (`KARDINAL_UI_TOKEN`). With neither this nor `ui.auth.tokenReview` set, the UI API serves only local clients (`kubectl port-forward`) |
 | `ui.auth.tokenReview` | `false` | `--ui-tokenreview-auth`: validate UI tokens with TokenReview; adds the RBAC it needs |
 | `ui.corsAllowedOrigins` | `[]` | `--cors-allowed-origins` |
 | `ui.allowedHosts` | `[]` | Extra host names for `--ui-allowed-hosts` (Ingress host, node IP). localhost and the Service DNS names are always allowed |
@@ -164,6 +164,15 @@ release name other than `kardinal-promoter`, the Service is named
     tunnel — no Ingress or LoadBalancer needed. It is the recommended approach for
     platform engineers accessing the UI from their workstation.
 
+!!! warning "Ingress, NodePort and LoadBalancer need a UI auth mode"
+    With no UI auth mode set, the UI API answers only local clients, which is how
+    `kubectl port-forward` connects. A client that comes through an Ingress, a `NodePort`,
+    a `LoadBalancer` or another pod gets `403`. To serve those clients, set
+    `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name`. An authenticating proxy
+    in front of the UI can inject the shared token. With a service-mesh sidecar in the
+    controller pod, set an auth mode as well: the sidecar makes mesh clients look local.
+    See [UI API Access Control](guides/security.md#ui-api-access-control).
+
 !!! warning "Avoid accessing the UI over plain HTTP from a remote address"
     If you expose port 8082 directly (e.g. via `NodePort`) without TLS, the UI will
     display a security warning. Use port-forward from localhost instead, or configure
@@ -172,8 +181,7 @@ release name other than `kardinal-promoter`, the Service is named
 !!! note "Browsing to a name other than localhost"
     The UI API only accepts its own host names: localhost and the controller Service's
     DNS names. If you browse to an Ingress host or a node IP, add it to
-    `ui.allowedHosts` (`--ui-allowed-hosts`). Otherwise, while UI auth is off, every
-    UI API call fails with `403 host not allowed`. See
+    `ui.allowedHosts` (`--ui-allowed-hosts`) as well as setting an auth mode. See
     [Host names (DNS rebinding)](guides/security.md#host-names-dns-rebinding).
 
 ### With TLS (production)
@@ -273,7 +281,7 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `serviceaccounts`, `rolebindings` | get, create; get, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs) |
 | `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
-| `secrets` | get, list, watch. In the default cluster mode this covers **every Secret in the cluster** |
+| `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
 | `configmaps` | get, list, watch; the `kardinal-version` ConfigMap is written through the leader-election Role |
 | `leases` | Leader election, through a Role in the release namespace |
 | `events` | get, list, watch, create, patch |

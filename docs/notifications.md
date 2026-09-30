@@ -101,6 +101,11 @@ never send `PolicyGate.Blocked`.
 - The controller does not follow redirects. A 3xx response is a failed
   delivery.
 - Requests time out after 10 seconds.
+- The controller refuses to connect to loopback, link-local (cloud metadata),
+  unspecified and multicast addresses, checked on the resolved address. Such a
+  delivery fails with `destination address is not allowed` in `failureMessage`.
+  Cluster Services and other private addresses are allowed. See
+  [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls).
 
 ---
 

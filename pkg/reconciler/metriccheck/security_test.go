@@ -44,7 +44,7 @@ func TestQueryScalar_PathPrefixKept(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			v, err := metriccheck.NewPrometheusProvider().QueryScalar(context.Background(), srv.URL+tt.prefix, `up{job="a"}`)
+			v, err := loopbackProvider().QueryScalar(context.Background(), srv.URL+tt.prefix, `up{job="a"}`)
 			require.NoError(t, err)
 			assert.InDelta(t, 0.5, v, 1e-9)
 			assert.Equal(t, tt.wantPath, gotPath)
@@ -94,7 +94,7 @@ func TestQueryScalar_ErrorsDoNotLeak(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := metriccheck.NewPrometheusProvider().QueryScalar(context.Background(), tt.url, "up")
+			_, err := loopbackProvider().QueryScalar(context.Background(), tt.url, "up")
 			require.Error(t, err)
 			for _, want := range tt.wantIn {
 				assert.Contains(t, err.Error(), want)
@@ -122,7 +122,7 @@ func TestQueryScalar_BodyIsBounded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := metriccheck.NewPrometheusProvider().QueryScalar(context.Background(), srv.URL, "up")
+	_, err := loopbackProvider().QueryScalar(context.Background(), srv.URL, "up")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a Prometheus API response")
 }

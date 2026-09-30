@@ -52,9 +52,11 @@ Headers:
 - `Authorization: <value>` (only if `secretRef` is configured; see [Authentication](#authentication))
 
 `webhook.url` must be an `http` or `https` URL. The controller refuses to connect to
-link-local addresses (including the `169.254.169.254` and `fd00:ec2::254` cloud metadata
-endpoints), unspecified and multicast addresses, also after DNS resolution and redirects.
-Cluster Services and other private addresses are allowed.
+loopback addresses, link-local addresses (including the `169.254.169.254` and
+`fd00:ec2::254` cloud metadata endpoints), other cloud metadata addresses, unspecified
+and multicast addresses, also after DNS resolution and redirects. Cluster Services and
+other private addresses are allowed. See
+[Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls).
 
 Body:
 

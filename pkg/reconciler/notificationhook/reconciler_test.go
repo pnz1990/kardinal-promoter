@@ -43,6 +43,10 @@ func nhScheme() *runtime.Scheme {
 	return s
 }
 
+// loopbackClient has no egress guard. The tests' webhook servers are
+// httptest servers on loopback, which the default client refuses.
+var loopbackClient = &http.Client{}
+
 func reqFor(namespace, name string) ctrl.Request {
 	return reconcile.Request{NamespacedName: k8stypes.NamespacedName{Namespace: namespace, Name: name}}
 }
@@ -79,7 +83,7 @@ func TestReconcile_BundleVerified(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.NotificationHook{}).
 		Build()
 
-	r := &notificationhook.Reconciler{Client: c}
+	r := &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient}
 	result, err := r.Reconcile(context.Background(), reqFor("default", "test-hook"))
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result)
@@ -128,7 +132,7 @@ func TestReconcile_BundleFailed(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.NotificationHook{}).
 		Build()
 
-	r := &notificationhook.Reconciler{Client: c}
+	r := &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient}
 	_, err := r.Reconcile(context.Background(), reqFor("default", "test-hook"))
 	require.NoError(t, err)
 
@@ -180,7 +184,7 @@ func TestReconcile_Idempotency(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.NotificationHook{}).
 		Build()
 
-	r := &notificationhook.Reconciler{Client: c}
+	r := &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient}
 	_, err := r.Reconcile(context.Background(), reqFor("default", "test-hook"))
 	require.NoError(t, err)
 	_, err = r.Reconcile(context.Background(), reqFor("default", "test-hook"))
@@ -221,7 +225,7 @@ func TestReconcile_PayloadShape(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.NotificationHook{}).
 		Build()
 
-	r := &notificationhook.Reconciler{Client: c}
+	r := &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient}
 	_, err := r.Reconcile(context.Background(), reqFor("default", "test-hook"))
 	require.NoError(t, err)
 
@@ -267,7 +271,7 @@ func TestReconcile_NoMatchingEvent(t *testing.T) {
 		WithStatusSubresource(&v1alpha1.NotificationHook{}).
 		Build()
 
-	r := &notificationhook.Reconciler{Client: c}
+	r := &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient}
 	_, err := r.Reconcile(context.Background(), reqFor("default", "test-hook"))
 	require.NoError(t, err)
 

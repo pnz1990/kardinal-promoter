@@ -535,7 +535,9 @@ func main() {
 	case uiAuth.tokens != nil:
 		logger.Info().Msg("UI API TokenReview authentication enabled; every read and write is authorized with a SubjectAccessReview for the caller")
 	default:
-		logger.Warn().Msg("UI API authentication disabled — set --ui-auth-token or --ui-tokenreview-auth to require authentication")
+		logger.Warn().Msg("UI API authentication is off: /api/ answers only loopback clients (kubectl port-forward) and refuses the rest with 403. " +
+			"Behind a service-mesh sidecar, loopback means any client in the mesh, so set an auth mode: " +
+			"Helm ui.auth.tokenReview=true or ui.auth.tokenSecretRef.name (--ui-tokenreview-auth, --ui-auth-token)")
 	}
 
 	// Embedded UI server: the React app at /ui/ and its API.

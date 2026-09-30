@@ -17,8 +17,10 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -29,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -45,6 +48,37 @@ type webhookRequestBody struct {
 	Environment  string              `json:"environment"`
 	Inputs       map[string]string   `json:"inputs"`
 	OutputsSoFar map[string]string   `json:"outputs_so_far"`
+}
+
+// newWebhookServer starts an httptest server on a non-loopback IPv4 address
+// of this host. The default webhook client refuses loopback (#1267) but
+// allows private and public addresses, as in a cluster, so the tests reach
+// the server through the real, guarded client.
+func newWebhookServer(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	require.NoError(t, err)
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(ipnet.IP)
+		if !ok || !ip.Unmap().Is4() || egress.CheckAddr(ip) != nil {
+			continue
+		}
+		ln, err := net.Listen("tcp", net.JoinHostPort(ip.Unmap().String(), "0"))
+		if err != nil {
+			continue
+		}
+		srv := httptest.NewUnstartedServer(h)
+		_ = srv.Listener.Close()
+		srv.Listener = ln
+		srv.Start()
+		return srv
+	}
+	t.Skip("no non-loopback IPv4 address to listen on")
+	return nil
 }
 
 func makeCustomStepState(webhookURL string) *parentsteps.StepState {
@@ -66,7 +100,7 @@ func makeCustomStepState(webhookURL string) *parentsteps.StepState {
 // TestCustomWebhookStep_Pass verifies that a "pass" response succeeds and propagates outputs.
 func TestCustomWebhookStep_Pass(t *testing.T) {
 	var capturedBody webhookRequestBody
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&capturedBody))
@@ -95,7 +129,7 @@ func TestCustomWebhookStep_Pass(t *testing.T) {
 
 // TestCustomWebhookStep_Fail verifies that a "fail" response sets StepFailed.
 func TestCustomWebhookStep_Fail(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(webhookResponseBody{ //nolint:errcheck
 			Result:  "fail",
@@ -117,7 +151,7 @@ func TestCustomWebhookStep_Fail(t *testing.T) {
 // within webhook.timeoutSeconds fails the step, as documented (C05-steps-24).
 func TestCustomWebhookStep_Timeout(t *testing.T) {
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-release:
 		case <-r.Context().Done():
@@ -157,7 +191,7 @@ func TestCustomWebhookStep_ErrorResponses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				atomic.AddInt32(&calls, 1)
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
@@ -182,7 +216,7 @@ func TestCustomWebhookStep_ErrorResponses(t *testing.T) {
 func TestCustomWebhookStep_BodyHasNoSecrets(t *testing.T) {
 	var raw []byte
 	var auth string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ = io.ReadAll(r.Body)
 		auth = r.Header.Get("Authorization")
 		_ = json.NewEncoder(w).Encode(webhookResponseBody{Result: "pass"})
@@ -205,8 +239,9 @@ func TestCustomWebhookStep_BodyHasNoSecrets(t *testing.T) {
 	assert.Equal(t, map[string]string{"suite": "smoke"}, body.Inputs)
 }
 
-// TestCustomWebhookStep_URLValidation verifies non-http schemes and the
-// link-local cloud metadata endpoint are refused (C05-steps-25).
+// TestCustomWebhookStep_URLValidation verifies non-http schemes, the
+// link-local cloud metadata endpoint (C05-steps-25) and loopback (#1267) are
+// refused.
 func TestCustomWebhookStep_URLValidation(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -219,6 +254,8 @@ func TestCustomWebhookStep_URLValidation(t *testing.T) {
 		{"metadata ipv6", "http://[fd00:ec2::254]/latest/meta-data/", "not allowed"},
 		{"link-local ipv6", "http://[fe80::1]:80/", "not allowed"},
 		{"unspecified", "http://0.0.0.0:80/", "not allowed"},
+		{"loopback ui api", "http://127.0.0.1:8082/api/v1/ui/pause", "not allowed"},
+		{"localhost", "http://localhost:8082/api/v1/ui/pause", "not allowed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -237,7 +274,7 @@ func TestCustomWebhookStep_URLValidation(t *testing.T) {
 // TestCustomWebhookStep_AuthHeader verifies that the Authorization header is sent from Inputs.
 func TestCustomWebhookStep_AuthHeader(t *testing.T) {
 	var capturedAuthHeader string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedAuthHeader = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(webhookResponseBody{Result: "pass"}) //nolint:errcheck
@@ -263,7 +300,7 @@ func TestCustomWebhookStep_AuthHeader(t *testing.T) {
 // The retry counter is persisted in state.Outputs (which maps to PromotionStep.status.outputs).
 func TestCustomWebhookStep_5xxRetry_NonBlocking(t *testing.T) {
 	var callCount int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&callCount, 1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -289,7 +326,7 @@ func TestCustomWebhookStep_5xxRetry_NonBlocking(t *testing.T) {
 // TestCustomWebhookStep_5xxRetryExhausted verifies that after maxRetries 5xx failures
 // the step returns StepFailed.
 func TestCustomWebhookStep_5xxRetryExhausted(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
@@ -324,7 +361,7 @@ func TestCustomWebhookStep_5xxRetryExhausted(t *testing.T) {
 // and returns "pass" on the next reconcile cycle.
 func TestCustomWebhookStep_5xxThenPass(t *testing.T) {
 	var callCount int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := atomic.AddInt32(&callCount, 1)
 		if call == 1 {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -361,7 +398,7 @@ func TestCustomWebhookStep_5xxThenPass(t *testing.T) {
 // (same attempt counter in outputs) does not double-count attempts.
 func TestCustomWebhookStep_Idempotent(t *testing.T) {
 	var callCount int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&callCount, 1)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(webhookResponseBody{Result: "pass"})
@@ -404,7 +441,7 @@ func TestCustomWebhookStep_MissingURL(t *testing.T) {
 
 // TestCustomWebhookStep_UnexpectedResult verifies that an unknown result value returns Failed.
 func TestCustomWebhookStep_UnexpectedResult(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"result": "unknown"}) //nolint:errcheck
 	}))
@@ -423,7 +460,7 @@ func TestCustomWebhookStep_UnexpectedResult(t *testing.T) {
 // in state.Outputs is correctly serialised as a decimal integer string (so the reconciler
 // can persist it to PromotionStep.status.outputs which stores map[string]string).
 func TestCustomWebhookStep_5xxRetryAttemptTrackedInOutputs(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -455,7 +492,7 @@ func TestLookup_CustomStepFallback(t *testing.T) {
 // TestEngine_CustomStep_PassPropagatesOutputs verifies that a custom step's outputs
 // are merged into state.Outputs and visible to the next step.
 func TestEngine_CustomStep_PassPropagatesOutputs(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(webhookResponseBody{ //nolint:errcheck
 			Result:  "pass",
@@ -485,7 +522,7 @@ func TestEngine_CustomStep_PassPropagatesOutputs(t *testing.T) {
 
 // TestEngine_CustomStep_FailStopsExecution verifies that a custom step failure stops the pipeline.
 func TestEngine_CustomStep_FailStopsExecution(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newWebhookServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(webhookResponseBody{ //nolint:errcheck
 			Result:  "fail",

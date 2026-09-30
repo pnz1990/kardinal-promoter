@@ -20,18 +20,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -190,7 +188,7 @@ func (s *CustomWebhookStep) Execute(ctx context.Context, state *StepState) (Step
 	cancel()
 
 	if callErr != nil {
-		if errors.Is(callErr, context.DeadlineExceeded) || errors.Is(callErr, errBlockedAddress) {
+		if errors.Is(callErr, context.DeadlineExceeded) || errors.Is(callErr, egress.ErrBlockedAddress) {
 			// A timeout fails the step, as documented; a blocked address never
 			// becomes reachable by retrying (C05-steps-24, C05-steps-25).
 			delete(state.Outputs, outputKeyRetryAttempt)
@@ -350,50 +348,10 @@ func validateWebhookURL(raw string) error {
 	return nil
 }
 
-// errBlockedAddress is returned when a webhook resolves to an address the
-// controller must not call.
-var errBlockedAddress = errors.New("address is not allowed for custom webhooks")
-
-// imdsIPv6 is the AWS instance metadata service IPv6 address.
-var imdsIPv6 = netip.MustParseAddr("fd00:ec2::254")
-
-// blockWebhookAddress refuses connections to link-local addresses (which
-// include the 169.254.169.254 cloud metadata endpoint), the IPv6 metadata
-// endpoint, and unspecified or multicast addresses (C05-steps-25). It runs
-// after DNS resolution, so a hostname cannot hide such an address.
-// Cluster-private and loopback addresses stay allowed: webhook servers are
-// usually cluster Services, and the controller's own loopback ports are also
-// served on its Service.
-func blockWebhookAddress(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return fmt.Errorf("%w: %s", errBlockedAddress, address)
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil {
-		return fmt.Errorf("%w: %s", errBlockedAddress, address)
-	}
-	ip = ip.Unmap()
-	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
-		ip.IsMulticast() || ip.IsUnspecified() || ip == imdsIPv6 {
-		return fmt.Errorf("%w: %s", errBlockedAddress, ip)
-	}
-	return nil
-}
-
-// webhookHTTPClient is the client used for custom webhook steps. It applies
-// blockWebhookAddress to every connection, including redirects, and ignores
-// proxy settings, since a proxy would hide the real destination. Every call
-// is bounded by the webhook.timeoutSeconds context deadline.
-var webhookHTTPClient = &http.Client{
-	Transport: &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-			Control:   blockWebhookAddress,
-		}).DialContext,
-		TLSHandshakeTimeout: 10 * time.Second,
-		MaxIdleConns:        10,
-		IdleConnTimeout:     90 * time.Second,
-	},
-}
+// webhookHTTPClient is the client used for custom webhook steps. Its
+// transport applies the shared egress guard (pkg/egress) to every
+// connection, redirects included: loopback, link-local, cloud metadata,
+// unspecified and multicast addresses are refused (C05-steps-25, #1267). It
+// ignores proxy settings, since a proxy would hide the real destination.
+// Every call is bounded by the webhook.timeoutSeconds context deadline.
+var webhookHTTPClient = &http.Client{Transport: egress.NewTransport(nil)}
