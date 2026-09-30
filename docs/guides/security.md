@@ -31,7 +31,6 @@ What the namespaced rules grant:
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
 | `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, create, update, delete; bind | The Graph identity |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
-| `batch` `jobs` | get, list, watch, create, delete | Only with `rbac.integrationTestJobs=true` |
 
 The cluster-scoped rules cover `changewindows` (read, and status writes) and, with
 `ui.auth.tokenReview=true`, `tokenreviews` and `subjectaccessreviews` (create).

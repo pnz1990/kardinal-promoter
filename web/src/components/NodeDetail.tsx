@@ -242,7 +242,7 @@ function stepNote(s: StepStatus, shown: StepStatus['state'], promotion: Promotio
 /**
  * Step progress for a PromotionStep node, from status.steps[]: the sequence
  * the controller resolved for this promotion (it differs per update strategy,
- * approval mode and custom steps, so it is never hard-coded here).
+ * bundle type, approval mode and layout, so it is never hard-coded here).
  */
 function StepProgress({ step }: { step: PromotionStep }) {
   const list = step.steps ?? []

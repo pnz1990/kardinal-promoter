@@ -106,10 +106,10 @@ Built-in step implementations:
 | `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |
-| `integration-test` | Runs a Kubernetes Job as part of the promotion; waits for completion. Not in any default sequence |
-| Webhook steps | Call a user-defined webhook with the promotion context. Not in any default sequence |
 
-Only the steps of the default sequence run today. `integration-test`, `verify-image` and webhook steps can be selected only through `spec.environments[].steps`, which is not implemented yet: a Pipeline that sets it is rejected (see [Custom Steps](custom-steps.md)).
+There is no custom step engine: every environment runs one of these sequences, and a Pipeline
+that sets `spec.environments[].steps` or `promotionTemplate` is rejected. For image signature
+checks and tests, see [Pipeline Reference: Image signatures and tests](pipeline-reference.md#image-signatures-and-tests).
 
 ### PolicyGate Evaluator (`pkg/reconciler/policygate`)
 
