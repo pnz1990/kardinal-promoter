@@ -17,6 +17,8 @@
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
 #           Grafana
+#   chart   Forgejo + Argo CD + cert-manager, and no controller release: each
+#           TestChart_ test installs the chart from this checkout itself
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -57,6 +59,8 @@ case "$SUITE" in
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
   flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
+  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh) RUN='^TestChart_'
+    export KARDINAL_E2E_INSTALL=0 ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
@@ -101,6 +105,11 @@ for c in "${COMPONENTS[@]}"; do
   bash "$E2E_DIR/components/"$c
 done
 KARDINAL_E2E_HELM_ARGS="$HELM_ARGS ${KARDINAL_E2E_HELM_ARGS:-}" bash "$E2E_DIR/components/kardinal.sh"
+if [ "${KARDINAL_E2E_INSTALL:-1}" = 0 ]; then
+  # No release in kardinal-system receives webhooks; tests that need one
+  # register their own release's URL.
+  env_set KARDINAL_E2E_WEBHOOK_URL ""
+fi
 for c in "${AFTER[@]}"; do
   # shellcheck disable=SC2086
   bash "$E2E_DIR/components/"$c

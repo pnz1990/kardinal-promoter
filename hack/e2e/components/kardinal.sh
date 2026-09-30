@@ -15,6 +15,9 @@
 #                           host: go build on the host + hack/e2e/controller.Dockerfile
 #                           none: KARDINAL_E2E_IMAGE is already built (CI)
 #   KARDINAL_E2E_HELM_ARGS  extra helm arguments, word-split
+#   KARDINAL_E2E_INSTALL    0: build and load the image and the CLI and apply the
+#                           chart's CRDs, but install no release (the chart suite's
+#                           tests install their own); default 1
 #
 # Copyright 2026 The kardinal-promoter Authors.
 # Licensed under the Apache License, Version 2.0
@@ -45,6 +48,19 @@ esac
 load_image "$IMAGE"
 (cd "$REPO_ROOT" && go build -o "$BIN/kardinal" ./cmd/kardinal)
 log "controller image $IMAGE ($BUILD), CLI $BIN/kardinal"
+env_set KARDINAL_E2E_IMAGE "$IMAGE"
+env_set KARDINAL_E2E_CHART "$REPO_ROOT/chart/kardinal-promoter"
+env_set KARDINAL_E2E_HELM "$(command -v helm)"
+
+if [ "${KARDINAL_E2E_INSTALL:-1}" = 0 ]; then
+  # Helm installs crds/ only when a CRD is missing, and parallel installs
+  # would race for them; apply them once here.
+  "${HELM[@]}" show crds "$REPO_ROOT/chart/kardinal-promoter" |
+    "${KUBECTL[@]}" apply --server-side --force-conflicts -f - >/dev/null
+  env_set KARDINAL_E2E_CLI "$BIN/kardinal"
+  log "no controller release (KARDINAL_E2E_INSTALL=0); CRDs applied"
+  exit 0
+fi
 
 args=(
   --set "image.repository=${IMAGE%:*}" --set "image.tag=${IMAGE##*:}" --set image.pullPolicy=Never
