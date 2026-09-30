@@ -4,7 +4,8 @@
 // Command report reads `go test -json` from stdin, prints the test output as
 // it arrives, and ends with a summary. It exits 1 when a test failed, when a
 // test skipped (a skipped live test proves nothing), or when no test ran.
-// With GITHUB_STEP_SUMMARY set it also writes the summary there as Markdown.
+// With GITHUB_STEP_SUMMARY set it also writes the summary there as Markdown;
+// with -out it writes the results as JSON for test/e2e/proof.
 //
 //	go test -tags e2e -json ./test/e2e/live ... | go run ./test/e2e/report -suite core
 package main
@@ -32,9 +33,9 @@ type event struct {
 // result is a test's last pass, fail or skip. A test run with -count=N has N
 // results.
 type result struct {
-	Test    string
-	Action  string
-	Elapsed float64
+	Test    string  `json:"test"`
+	Action  string  `json:"action"`
+	Elapsed float64 `json:"elapsed"`
 }
 
 type summary struct {
@@ -42,6 +43,13 @@ type summary struct {
 	// pkgFailed is set when a package failed outside any test (a build error,
 	// a panic in TestMain, a timeout).
 	pkgFailed bool
+}
+
+// file is the -out JSON: test/e2e/proof reads one per suite run.
+type file struct {
+	Suite     string   `json:"suite"`
+	Results   []result `json:"results"`
+	PkgFailed bool     `json:"pkgFailed"`
 }
 
 func (s *summary) count(action string) int {
@@ -111,6 +119,7 @@ func (s *summary) markdown(suite string) string {
 
 func main() {
 	suite := flag.String("suite", "", "suite name, for the summary")
+	outFile := flag.String("out", "", "write the results as JSON to this file")
 	flag.Parse()
 
 	s, err := read(os.Stdin, os.Stdout)
@@ -134,6 +143,16 @@ func main() {
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "report: write step summary: %v\n", err)
+		}
+	}
+	if *outFile != "" {
+		data, err := json.MarshalIndent(file{Suite: *suite, Results: s.results, PkgFailed: s.pkgFailed}, "", "  ")
+		if err == nil {
+			err = os.WriteFile(*outFile, append(data, '\n'), 0o644)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "report: write %s: %v\n", *outFile, err)
+			os.Exit(1)
 		}
 	}
 	switch {

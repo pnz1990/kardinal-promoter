@@ -36,6 +36,21 @@ passed.
 | `core` | Forgejo, Argo CD | `TestCore_*` |
 | `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*` |
 
+## Coverage
+
+`test/e2e/coverage.tsv` lists every documented behavior with an id, and
+whether a test covers it yet. A test claims rows with one sentence in its doc
+comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, and only for what it fully
+asserts. `go test ./test/hack -run TestE2ECoverage` fails when the file and
+the tests disagree, when a live test claims no row, and when no suite runs a
+live test. Only live tests cover live rows; contract rows (Bitbucket, Azure
+DevOps, which can't be self-hosted) are covered by unit tests.
+
+Each suite run writes `test/e2e/results/<cluster>/summary.json`. The `e2e
+live` job runs `go run ./test/e2e/proof` on every suite's summary: it fails
+when a claimed row's test failed, skipped or didn't run, and the job summary
+lists every row's result. `-complete` also fails on rows still todo.
+
 ## Rules
 
 - **A live test never skips.** A missing cluster, component or credential
