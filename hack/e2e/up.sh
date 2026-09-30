@@ -12,6 +12,7 @@
 #   gitea   Gitea + Argo CD
 #   delivery Forgejo + Argo CD + Argo Rollouts + Flagger
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
+#   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -45,6 +46,10 @@ case "$SUITE" in
   # components/ui.sh.
   ui) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) AFTER=(ui.sh) RUN='^TestUI_'
     HELM_ARGS='--set ui.allowedHosts={kardinal-ui.test}' ;;
+  # Flux health checks, MetricChecks against Prometheus, and the chart's
+  # ServiceMonitor, PrometheusRule and Grafana dashboard.
+  flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh) RUN='^Test(Flux|Metric|Obs)_'
+    HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
