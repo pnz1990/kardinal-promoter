@@ -105,6 +105,17 @@ In all cases, the Graph stops all downstream nodes automatically (Graph does not
 
 The `RollbackPolicy` CRD is the building block for that feature. The controller reconciles RollbackPolicy objects that you create yourself, but nothing creates them automatically. A RollbackPolicy reads only the PromotionSteps of its `spec.bundleRef` in `spec.environment`. When the highest `status.consecutiveHealthFailures` among them reaches `spec.failureThreshold` (default: 3), it creates one rollback Bundle.
 
+When the threshold is reached but there is nothing safe to roll back to (see [How Rollback Works](#how-rollback-works)), the RollbackPolicy creates nothing. It sets the `RollbackRefused` condition to `True`, and the message gives the reason. It also emits one `Warning` Event with reason `RollbackRefused`. The condition shows in the `REFUSED` column:
+
+```bash
+kubectl get rollbackpolicy
+# NAME   SHOULDROLLBACK   FAILURES   THRESHOLD   REFUSED   AGE
+# rp-1   true             3          3           True      2m
+kubectl get rollbackpolicy rp-1 -o jsonpath='{.status.conditions[?(@.type=="RollbackRefused")].message}'
+```
+
+Roll back by hand (see [CLI](#cli)) or fix the policy. The RollbackPolicy is evaluated again when its PromotionSteps or its own spec change; when that evaluation creates the rollback Bundle, the condition becomes `False` with reason `RollbackCreated`.
+
 ## What Happens in Git
 
 Rollback is a forward promotion. The controller writes the previous version's image tag to the environment's manifests, commits, and pushes (or opens a PR). The Git history shows:

@@ -110,12 +110,13 @@ func TestReconciler_OpenPR_PollsAndSetsMerged(t *testing.T) {
 			expectRequeue: false,
 		},
 		{
+			// Still polled for the grace window (#1306).
 			name:          "PR closed without merge",
 			merged:        false,
 			open:          false,
 			expectMerged:  false,
 			expectOpen:    false,
-			expectRequeue: false,
+			expectRequeue: true,
 		},
 	}
 
