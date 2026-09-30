@@ -127,7 +127,8 @@ func (existsChecker) GraphExists(_ context.Context, _, _ string) (bool, error) {
 // graphStatusReader is a GraphChecker that also returns the Graph with status,
 // like *graph.GraphClient.
 type graphStatusReader struct {
-	g *graph.Graph
+	g    *graph.Graph
+	gets int
 }
 
 func (m *graphStatusReader) GraphExists(_ context.Context, _, _ string) (bool, error) {
@@ -135,6 +136,7 @@ func (m *graphStatusReader) GraphExists(_ context.Context, _, _ string) (bool, e
 }
 
 func (m *graphStatusReader) Get(_ context.Context, _, name string) (*graph.Graph, error) {
+	m.gets++
 	if m.g == nil {
 		return nil, fmt.Errorf("get graph: %w", apierrors.NewNotFound(schema.GroupResource{Group: "kro.run", Resource: "graphs"}, name))
 	}
@@ -768,6 +770,58 @@ func TestLifecycle_GraphConditionsMirrored(t *testing.T) {
 				assert.Equal(t, "GraphRejected", failed.Reason)
 				assert.Contains(t, failed.Message, tc.wantFailedMsg)
 			}
+		})
+	}
+}
+
+// E2E-R03: kro re-evaluates readyWhen on a backoff requeue, so the Graph
+// turns Ready some time after the last PromotionStep is Verified and the Bundle
+// with it. The Graph event must still refresh the Bundle's mirrored GraphReady;
+// a Superseded Bundle's Graph never converges, so it is not read.
+func TestLifecycle_GraphReadyMirroredAfterVerified(t *testing.T) {
+	readyGraph := &graph.Graph{ObjectMeta: metav1.ObjectMeta{Name: "app-app-v1", Namespace: "default", Generation: 1}}
+	readyGraph.Status.Conditions = []metav1.Condition{
+		{Type: "Accepted", Status: metav1.ConditionTrue, Reason: "Compiled", ObservedGeneration: 1},
+		{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Ready", ObservedGeneration: 1},
+	}
+	tests := []struct {
+		name       string
+		phase      string
+		mirrored   metav1.ConditionStatus
+		wantReady  metav1.ConditionStatus
+		wantReason string
+		wantGets   int
+	}{
+		{name: "verified bundle picks up the converged graph", phase: "Verified",
+			mirrored: metav1.ConditionFalse, wantReady: metav1.ConditionTrue, wantReason: "Ready", wantGets: 1},
+		{name: "an already ready mirror is not re-read", phase: "Verified",
+			mirrored: metav1.ConditionTrue, wantReady: metav1.ConditionTrue, wantReason: "Ready", wantGets: 0},
+		{name: "superseded bundle is left alone", phase: "Superseded",
+			mirrored: metav1.ConditionFalse, wantReady: metav1.ConditionFalse, wantReason: "WaitingForReadiness", wantGets: 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := lcBundle("app-v1", "image", tc.phase, time.Now().UTC())
+			b.Status.GraphRef = "app-app-v1"
+			reason := "WaitingForReadiness"
+			if tc.mirrored == metav1.ConditionTrue {
+				reason = "Ready"
+			}
+			meta.SetStatusCondition(&b.Status.Conditions, metav1.Condition{
+				Type: "GraphReady", Status: tc.mirrored, Reason: reason, Message: `node "prod" readyWhen is false`})
+			c := lcClient(lcPipeline("app", lcEnvs("test")...), b, lcStep("app-v1", "test", "s-test", "Verified"))
+			tr := &countingTranslator{}
+			reader := &graphStatusReader{g: readyGraph}
+			r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: reader}
+			lcReconcile(t, r, "app-v1")
+			got := lcGet(t, c, "app-v1")
+			assert.Equal(t, tc.phase, got.Status.Phase)
+			assert.Zero(t, tr.calls, "a terminal Bundle's Graph is never re-translated")
+			assert.Equal(t, tc.wantGets, reader.gets)
+			ready := meta.FindStatusCondition(got.Status.Conditions, "GraphReady")
+			require.NotNil(t, ready)
+			assert.Equal(t, tc.wantReady, ready.Status)
+			assert.Equal(t, tc.wantReason, ready.Reason)
 		})
 	}
 }

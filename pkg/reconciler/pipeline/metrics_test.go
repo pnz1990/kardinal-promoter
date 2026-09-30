@@ -56,6 +56,7 @@ func makeVerifiedBundle(name, ns, pipelineName string, createdAt time.Time) *kar
 			Type:     "image",
 			Pipeline: pipelineName,
 		},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Verified"},
 	}
 }
 

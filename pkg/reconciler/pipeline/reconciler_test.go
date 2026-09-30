@@ -5,11 +5,13 @@ package pipeline_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -129,6 +131,107 @@ func TestPipelineReconciler_DependsOnNonExistentEnv(t *testing.T) {
 	assert.Contains(t, cond.Message, "staging")
 }
 
+// E2E-R14: a Pipeline that sets a reserved, unimplemented field gets
+// Ready=False/NotImplemented, the same answer as "kardinal validate", instead
+// of Ready=True/Valid while its Bundles fail.
+func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(p *kardinalv1alpha1.Pipeline)
+		wantMsg string
+	}{
+		{name: "steps", wantMsg: "spec.environments[].steps is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].Steps = []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}
+			}},
+		{name: "promotionTemplate", wantMsg: "spec.environments[].promotionTemplate is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"}
+			}},
+		{name: "regions fan-out", wantMsg: "regions fan-out is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"}
+			}},
+		{name: "pipeline layout branch", wantMsg: "spec.git.layout: branch is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Git.Layout = "branch" }},
+		{name: "environment layout branch", wantMsg: `environment "test": layout: branch is not implemented`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Layout = "branch" }},
+		{name: "autoRollback", wantMsg: "autoRollback is not implemented",
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
+			}},
+		{name: "health.cluster", wantMsg: `environment "test": health.cluster is not supported`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }},
+		{name: "health.resource.kind", wantMsg: `environment "test": health.resource.kind "StatefulSet" is not supported`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) {
+				p.Spec.Environments[0].Health.Resource = &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}
+			}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("reserved", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			tc.mutate(p)
+			c := newClientWithIndex(newScheme(), p)
+			r := &pipeline.Reconciler{Client: c}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "reserved", Namespace: "default"},
+			})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "reserved", Namespace: "default"}, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, metav1.ConditionFalse, cond.Status)
+			assert.Equal(t, "NotImplemented", cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+			// Most fields fail a Bundle only in the environment that sets them.
+			assert.NotContains(t, cond.Message, "every Bundle")
+			assert.True(t, strings.HasPrefix(cond.Message, "not implemented, so a Bundle fails when it reaches "+
+				"an environment that uses one (steps and promotionTemplate fail it when its Graph is built): "),
+				cond.Message)
+		})
+	}
+}
+
+// TestPipelineReconciler_SecretRefNamespaceInvalid: a git.secretRef in another
+// namespace is refused on purpose (the controller would push another
+// namespace's token to a URL the Pipeline author controls), so the Pipeline is
+// Ready=False/ValidationFailed, not NotImplemented.
+func TestPipelineReconciler_SecretRefNamespaceInvalid(t *testing.T) {
+	tests := []struct {
+		name       string
+		secretNS   string
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantMsg    string
+	}{
+		{name: "another namespace", secretNS: "kardinal-system", wantStatus: metav1.ConditionFalse,
+			wantReason: "ValidationFailed",
+			wantMsg:    `git.secretRef.namespace "kardinal-system" is not allowed: the Secret must be in the Pipeline's namespace "default"`},
+		{name: "the Pipeline's namespace", secretNS: "default", wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+		{name: "no namespace", wantStatus: metav1.ConditionTrue, wantReason: "Valid"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPipeline("app", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+			p.Spec.Git.SecretRef = &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: tc.secretNS}
+			c := newClientWithIndex(newScheme(), p)
+			key := types.NamespacedName{Name: "app", Namespace: "default"}
+			_, err := (&pipeline.Reconciler{Client: c}).Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Pipeline
+			require.NoError(t, c.Get(context.Background(), key, &got))
+			cond := meta.FindStatusCondition(got.Status.Conditions, "Ready")
+			require.NotNil(t, cond)
+			assert.Equal(t, tc.wantStatus, cond.Status)
+			assert.Equal(t, tc.wantReason, cond.Reason)
+			assert.Contains(t, cond.Message, tc.wantMsg)
+		})
+	}
+}
+
 // TestPipelineReconciler_Idempotent verifies that if a Pipeline already has the
 // correct Valid condition, reconcile is a no-op and keeps lastTransitionTime.
 func TestPipelineReconciler_Idempotent(t *testing.T) {
@@ -185,64 +288,80 @@ func TestPipelineReconciler_NotFound(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, result)
 }
 
-// TestDerivePhase_NoSteps verifies that an empty step list yields Unknown.
+// TestDerivePhase_NoSteps verifies that no Bundles and no steps yield Unknown.
 func TestDerivePhase_NoSteps(t *testing.T) {
-	assert.Equal(t, "Unknown", pipeline.DerivePhase(nil))
-	assert.Equal(t, "Unknown", pipeline.DerivePhase([]kardinalv1alpha1.PromotionStep{}))
+	assert.Equal(t, "Unknown", pipeline.DerivePhase("app", nil, nil))
+	assert.Equal(t, "Unknown", pipeline.DerivePhase("app", []kardinalv1alpha1.Bundle{}, []kardinalv1alpha1.PromotionStep{}))
+}
+
+// phaseBundle returns a Bundle of pipeline "app" in phase, created at.
+func phaseBundle(name, phase string, at metav1.Time) kardinalv1alpha1.Bundle {
+	return kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: at},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: phase},
+	}
 }
 
 // TestDerivePhase_AllVerified verifies that all-Verified steps yield Ready.
 func TestDerivePhase_AllVerified(t *testing.T) {
 	now := metav1.Now()
+	// A settled Bundle, so the steps alone decide.
+	settled := []kardinalv1alpha1.Bundle{phaseBundle("b1", "Verified", now)}
 	steps := []kardinalv1alpha1.PromotionStep{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "test"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 	}
-	assert.Equal(t, "Ready", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Ready", pipeline.DerivePhase("app", settled, steps))
 }
 
 // TestDerivePhase_OneFailed verifies that a Failed step yields Degraded.
 func TestDerivePhase_OneFailed(t *testing.T) {
 	now := metav1.Now()
+	// A settled Bundle, so the steps alone decide.
+	settled := []kardinalv1alpha1.Bundle{phaseBundle("b1", "Verified", now)}
 	steps := []kardinalv1alpha1.PromotionStep{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "test"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
 		},
 	}
-	assert.Equal(t, "Degraded", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", settled, steps))
 }
 
-// TestDerivePhase_Promoting verifies that Promoting steps yield Unknown (not yet done).
+// TestDerivePhase_Promoting verifies that a step still in flight yields
+// Promoting, not Unknown (E2E-R05).
 func TestDerivePhase_Promoting(t *testing.T) {
 	now := metav1.Now()
+	// A settled Bundle, so the steps alone decide.
+	settled := []kardinalv1alpha1.Bundle{phaseBundle("b1", "Verified", now)}
 	steps := []kardinalv1alpha1.PromotionStep{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "test"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Promoting"},
 		},
 	}
-	assert.Equal(t, "Unknown", pipeline.DerivePhase(steps))
+	assert.Equal(t, "Promoting", pipeline.DerivePhase("app", settled, steps))
 }
 
 // TestDerivePhase_MultiBundle_NewFailed_OldVerified verifies that when a new bundle
@@ -254,16 +373,17 @@ func TestDerivePhase_MultiBundle_NewFailed_OldVerified(t *testing.T) {
 		// Old bundle — Verified in prod
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "old-prod", Namespace: "default", CreationTimestamp: old},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "old", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		// New bundle — Failed in prod
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "new-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "new", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
 		},
 	}
-	// Most recent step per env wins: new-prod is Failed → Degraded
-	assert.Equal(t, "Degraded", pipeline.DerivePhase(steps))
+	bundles := []kardinalv1alpha1.Bundle{phaseBundle("old", "Verified", old), phaseBundle("new", "Failed", now)}
+	// The newest Bundle per env wins: new is Failed in prod → Degraded
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps))
 }

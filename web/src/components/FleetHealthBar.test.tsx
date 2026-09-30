@@ -76,8 +76,8 @@ describe('computeFleetHealth', () => {
     expect(s.fullCD).toBe(1)
   })
 
-  // The backend never sends phase "Promoting" (DerivePhase: Ready/Degraded/Unknown);
-  // "promoting" comes from the per-environment states of the active bundle.
+  // "promoting" comes from the per-environment states of the active bundle,
+  // not from phase "Promoting" (also set while a gate holds the bundle).
   it.each<[string, Record<string, string> | undefined, number]>([
     ['an environment Promoting', { test: 'Verified', prod: 'Promoting' }, 1],
     ['an environment WaitingForMerge', { test: 'Verified', prod: 'WaitingForMerge' }, 1],
@@ -91,7 +91,7 @@ describe('computeFleetHealth', () => {
     expect(s.promoting).toBe(want)
   })
 
-  it('does not count phase "Promoting" alone (the backend never sends it)', () => {
+  it('does not count phase "Promoting" alone (a gate may hold the bundle)', () => {
     expect(computeFleetHealth([makePipeline({ phase: 'Promoting' })]).promoting).toBe(0)
   })
 

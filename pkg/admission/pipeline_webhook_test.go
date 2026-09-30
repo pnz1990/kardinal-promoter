@@ -216,3 +216,84 @@ func TestPipelineWebhookHandler_OversizedBody(t *testing.T) {
 		httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(body)))
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 }
+
+// E2E-R14: the optional webhook admits a Pipeline that sets a reserved,
+// unimplemented field (the CRD accepts it) but warns with the same messages
+// as "kardinal validate" and the Pipeline's Ready=False/NotImplemented.
+func TestPipelineWebhookHandler_WarnsOnUnimplementedFields(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "reserved"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/org/repo", Layout: "branch"},
+			Environments: []kardinalv1alpha1.EnvironmentSpec{
+				{Name: "test", Regions: []string{"us-east-1", "eu-west-1"}},
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(buildReview(t, pipeline)))
+	w := httptest.NewRecorder()
+	admission.PipelineWebhookHandler(zerolog.Nop())(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp admissionv1.AdmissionReview
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.True(t, resp.Response.Allowed)
+	require.Len(t, resp.Response.Warnings, 2)
+	assert.Contains(t, resp.Response.Warnings[0], "spec.git.layout: branch is not implemented")
+	assert.Contains(t, resp.Response.Warnings[1], "regions fan-out is not implemented")
+}
+
+// A git.secretRef in another namespace is refused on purpose (C03-promotionstep-18),
+// so the webhook rejects it like any other invalid Pipeline instead of warning
+// that it is "not implemented". The request namespace is used when the object
+// does not carry one.
+func TestPipelineWebhookHandler_DeniesCrossNamespaceSecretRef(t *testing.T) {
+	tests := []struct {
+		name        string
+		objectNS    string
+		requestNS   string
+		secretNS    string
+		wantAllowed bool
+		wantMsg     string
+	}{
+		{name: "another namespace", objectNS: "team-a", requestNS: "team-a", secretNS: "kardinal-system",
+			wantMsg: `git.secretRef.namespace "kardinal-system" is not allowed: the Secret must be in the Pipeline's namespace "team-a"`},
+		{name: "namespace taken from the request", requestNS: "team-a", secretNS: "team-b",
+			wantMsg: `git.secretRef.namespace "team-b" is not allowed`},
+		{name: "the Pipeline's namespace", requestNS: "team-a", secretNS: "team-a", wantAllowed: true},
+		{name: "no namespace", objectNS: "team-a", requestNS: "team-a", wantAllowed: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pipeline := &kardinalv1alpha1.Pipeline{
+				ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: tc.objectNS},
+				Spec: kardinalv1alpha1.PipelineSpec{
+					Git: kardinalv1alpha1.PipelineGit{URL: "https://github.com/org/repo",
+						SecretRef: &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: tc.secretNS}},
+					Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+				},
+			}
+			raw, err := json.Marshal(pipeline)
+			require.NoError(t, err)
+			body, err := json.Marshal(admissionv1.AdmissionReview{
+				TypeMeta: metav1.TypeMeta{APIVersion: "admission.k8s.io/v1", Kind: "AdmissionReview"},
+				Request: &admissionv1.AdmissionRequest{UID: "test-uid", Namespace: tc.requestNS,
+					Operation: admissionv1.Create, Object: runtime.RawExtension{Raw: raw}},
+			})
+			require.NoError(t, err)
+			w := httptest.NewRecorder()
+			admission.PipelineWebhookHandler(zerolog.Nop())(w,
+				httptest.NewRequest(http.MethodPost, "/webhook/validate/pipeline", bytes.NewReader(body)))
+			require.Equal(t, http.StatusOK, w.Code)
+
+			var resp admissionv1.AdmissionReview
+			require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+			assert.Equal(t, tc.wantAllowed, resp.Response.Allowed)
+			assert.Empty(t, resp.Response.Warnings)
+			if !tc.wantAllowed {
+				require.NotNil(t, resp.Response.Result)
+				assert.Contains(t, resp.Response.Result.Message, tc.wantMsg)
+			}
+		})
+	}
+}

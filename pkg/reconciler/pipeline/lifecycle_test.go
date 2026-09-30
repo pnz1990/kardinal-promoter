@@ -227,14 +227,133 @@ func TestPipelineLifecycle_DerivePhase(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, pipeline.DerivePhase(tc.steps))
+			// One settled Bundle per step Bundle, created with its step, so the
+			// steps alone decide.
+			var bundles []kardinalv1alpha1.Bundle
+			seen := map[string]bool{}
+			for _, s := range tc.steps {
+				if !seen[s.Spec.BundleName] {
+					seen[s.Spec.BundleName] = true
+					bundles = append(bundles, kardinalv1alpha1.Bundle{
+						ObjectMeta: metav1.ObjectMeta{Name: s.Spec.BundleName, CreationTimestamp: s.CreationTimestamp},
+						Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+						Status:     kardinalv1alpha1.BundleStatus{Phase: "Verified"},
+					})
+				}
+			}
+			assert.Equal(t, tc.want, pipeline.DerivePhase("app", bundles, tc.steps))
 			reversed := make([]kardinalv1alpha1.PromotionStep, len(tc.steps))
 			for i := range tc.steps {
 				reversed[len(tc.steps)-1-i] = tc.steps[i]
 			}
-			assert.Equal(t, tc.want, pipeline.DerivePhase(reversed), "the phase must not depend on List order")
+			assert.Equal(t, tc.want, pipeline.DerivePhase("app", bundles, reversed), "the phase must not depend on List order")
 		})
 	}
+}
+
+// TestPipelineLifecycle_DerivePhaseInFlight covers E2E-R05: a Pipeline whose
+// newest Bundle is still promoting, or is held by a gate before any step
+// exists, is Promoting, not Unknown (shown as "Idle" in the UI). Unknown is
+// left for a Pipeline with nothing in flight and no steps. The newest Bundle
+// is chosen as the UI and the CLI choose it.
+func TestPipelineLifecycle_DerivePhaseInFlight(t *testing.T) {
+	ts := metav1.NewTime(time.Now().UTC().Truncate(time.Second))
+	later := metav1.NewTime(ts.Add(time.Minute))
+	bundle := func(name, pipelineName, phase string, at metav1.Time) kardinalv1alpha1.Bundle {
+		return kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: at},
+			Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName},
+			Status:     kardinalv1alpha1.BundleStatus{Phase: phase},
+		}
+	}
+	step := func(bundleName, env, state string, at metav1.Time) kardinalv1alpha1.PromotionStep {
+		return kardinalv1alpha1.PromotionStep{
+			ObjectMeta: metav1.ObjectMeta{Name: bundleName + "-" + env, CreationTimestamp: at},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: bundleName, Environment: env},
+			Status:     kardinalv1alpha1.PromotionStepStatus{State: state},
+		}
+	}
+	createdAt := func(b kardinalv1alpha1.Bundle, at time.Time) kardinalv1alpha1.Bundle {
+		b.Annotations = map[string]string{lifecycle.AnnotationCreatedAt: at.Format(time.RFC3339Nano)}
+		return b
+	}
+	verifiedV1 := []kardinalv1alpha1.PromotionStep{step("v1", "test", "Verified", ts), step("v1", "prod", "Verified", ts)}
+	tests := []struct {
+		name    string
+		bundles []kardinalv1alpha1.Bundle
+		steps   []kardinalv1alpha1.PromotionStep
+		want    string
+	}{
+		{name: "no bundles and no steps", want: "Unknown"},
+		{name: "a gate holds the only bundle before any step exists",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Promoting", ts)}, want: "Promoting"},
+		{name: "a bundle waiting for a maxConcurrentPromotions slot",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Available", ts)}, want: "Promoting"},
+		{name: "a bundle the bundle reconciler has not seen yet",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "", ts)}, want: "Promoting"},
+		{name: "the newest step is still promoting",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Promoting", ts)},
+			steps:   []kardinalv1alpha1.PromotionStep{step("v1", "test", "Verified", ts), step("v1", "prod", "WaitingForMerge", ts)},
+			want:    "Promoting"},
+		{name: "a gate holds a newer bundle while the old one is verified everywhere",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Verified", ts), bundle("v2", "app", "Promoting", later)},
+			steps:   verifiedV1, want: "Promoting"},
+		{name: "every bundle settled and every newest step verified",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v0", "app", "Superseded", ts), bundle("v1", "app", "Verified", later)},
+			steps:   verifiedV1, want: "Ready"},
+		{name: "another pipeline's bundle in flight is ignored",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Verified", ts), bundle("o1", "other", "Promoting", later)},
+			steps:   verifiedV1, want: "Ready"},
+		{name: "a failed step wins over a bundle in flight",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Failed", ts), bundle("v2", "app", "Promoting", later)},
+			steps:   []kardinalv1alpha1.PromotionStep{step("v1", "test", "Failed", ts)},
+			want:    "Degraded"},
+		{name: "the newest bundle failed before any step was created",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Verified", ts), bundle("v2", "app", "Failed", later)},
+			steps:   verifiedV1, want: "Degraded"},
+		{name: "an old failed bundle replaced by a verified one",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v0", "app", "Failed", ts), bundle("v1", "app", "Verified", later)},
+			steps:   verifiedV1, want: "Ready"},
+		// Superseded Bundles and their steps are skipped, as the UI and the CLI
+		// pick the current Bundle: handleSuperseded fails the old Bundle's
+		// cancelled prod step, which must not make the Pipeline Degraded.
+		{name: "a superseded bundle's cancelled step is skipped",
+			bundles: []kardinalv1alpha1.Bundle{bundle("v1", "app", "Superseded", ts), bundle("v2", "app", "Promoting", later)},
+			steps: []kardinalv1alpha1.PromotionStep{step("v1", "test", "Verified", ts), step("v1", "prod", "Failed", ts),
+				step("v2", "test", "Promoting", later)},
+			want: "Promoting"},
+		// Newest is lifecycle.CompareCreation: in the same second the
+		// created-at annotation decides, not the name or the step's own time.
+		{name: "a same-second tie follows the created-at annotation",
+			bundles: []kardinalv1alpha1.Bundle{
+				createdAt(bundle("a", "app", "Verified", ts), ts.Add(500*time.Millisecond)),
+				createdAt(bundle("b", "app", "Failed", ts), ts.Add(100*time.Millisecond)),
+			},
+			steps: []kardinalv1alpha1.PromotionStep{step("a", "prod", "Verified", ts), step("b", "prod", "Failed", later)},
+			want:  "Ready"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pipeline.DerivePhase("app", tc.bundles, tc.steps))
+			reversed := make([]kardinalv1alpha1.Bundle, len(tc.bundles))
+			for i := range tc.bundles {
+				reversed[len(tc.bundles)-1-i] = tc.bundles[i]
+			}
+			assert.Equal(t, tc.want, pipeline.DerivePhase("app", reversed, tc.steps), "the phase must not depend on List order")
+		})
+	}
+}
+
+// TestPipelineLifecycle_PhasePromotingWhileGateBlocks covers E2E-R05 end to
+// end: the reconciler writes Promoting for a Pipeline whose only Bundle is held
+// by a gate and has no PromotionStep yet.
+func TestPipelineLifecycle_PhasePromotingWhileGateBlocks(t *testing.T) {
+	b := makeVerifiedBundle("app-v1", "default", "app", time.Now().UTC())
+	b.Status.Phase = "Promoting"
+	got, err := reconcilePipeline(t, newClientWithIndex(newPipelineScheme(),
+		makePipelineWithEnvs("app", "default", "prod"), b), "app")
+	require.NoError(t, err)
+	assert.Equal(t, "Promoting", got.Status.Phase)
 }
 
 // TestPipelineLifecycle_FreezeGateFollowsSpecPaused covers C02-bundle-08: the

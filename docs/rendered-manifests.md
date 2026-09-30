@@ -5,7 +5,9 @@
     `layout: branch` (on `spec.git` or on an environment) is accepted by the API, but the
     `git-clone` step fails the promotion with
     `layout: branch is not implemented` before it touches the
-    repository. Nothing writes to `env/<name>` branches today, and the `kustomize-build`
+    repository. `kardinal validate` reports it, and the controller sets the Pipeline's
+    `Ready` condition to `False` with reason `NotImplemented`.
+    Nothing writes to `env/<name>` branches today, and the `kustomize-build`
     step never runs: the only default sequence that includes it is the `layout: branch` one.
     `renderManifests`, `sourceBranch` and `branchPrefix` are not fields of the Pipeline CRD.
     Use the default `layout: directory` until this lands. The rest of this page describes

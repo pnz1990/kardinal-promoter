@@ -1,5 +1,6 @@
 # Planned design only: layout: branch is not implemented yet, so every promotion
-# of this Pipeline fails at git-clone. See docs/rendered-manifests.md.
+# of this Pipeline fails at git-clone. kardinal validate reports it, and the
+# Pipeline shows Ready=False/NotImplemented. See docs/rendered-manifests.md.
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:

@@ -228,10 +228,38 @@ func (r *Reconciler) handleBound(ctx context.Context, log zerolog.Logger,
 
 	before := b.DeepCopy()
 	var syncErr error
-	if active && pipeline != nil {
+	switch {
+	case active && pipeline != nil:
 		syncErr = r.syncGraph(ctx, log, b, pipeline)
+	case b.Status.Phase == phaseVerified:
+		r.refreshGraphConditions(ctx, log, b)
 	}
 	return r.handleSyncEvidence(ctx, log, before, b, pipeline, syncErr)
+}
+
+// refreshGraphConditions mirrors the Graph conditions of a Verified Bundle
+// until GraphReady is True (E2E-R03). The Bundle turns Verified on the last
+// PromotionStep event, but kro re-evaluates readyWhen on a backoff requeue and
+// sets Graph Ready later; the Graph watch then lands here. The Graph is only
+// read: a Verified Bundle's Graph is never re-translated or recreated. Once
+// GraphReady is True it is not read again. A Superseded Bundle's Graph never
+// converges (its steps are Failed), so it is not refreshed.
+func (r *Reconciler) refreshGraphConditions(ctx context.Context, log zerolog.Logger, b *kardinalv1alpha1.Bundle) {
+	if r.GraphChecker == nil || meta.IsStatusConditionTrue(b.Status.Conditions, condGraphReady) {
+		return
+	}
+	name := b.Status.GraphRef
+	if name == "" {
+		name = graph.GraphNameFrom(b.Spec.Pipeline, b.Name)
+	}
+	g, _, err := r.readGraph(ctx, b.Namespace, name)
+	if err != nil {
+		log.Warn().Err(err).Str("graph", name).Msg("failed to read graph of verified bundle (non-fatal)")
+		return
+	}
+	if g != nil {
+		mirrorGraphConditions(b, g)
+	}
 }
 
 // syncGraph keeps the Graph of an active Bundle current. It re-translates the

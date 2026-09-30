@@ -27,9 +27,11 @@ const maxAdmissionBody = 1 << 20 // 1 MB
 //  1. Decodes the AdmissionReview request.
 //  2. Unmarshals the Pipeline object from request.object.raw.
 //  3. Calls graph.DetectCycle to check the environment ordering (cycles,
-//     unknown dependsOn, no environments). DELETE is always allowed.
-//  4. Returns an AdmissionReview response: allowed=true, or allowed=false
-//     with the ordering error as the message.
+//     unknown dependsOn, no environments) and graph.ValidateSecretRef to
+//     refuse a git.secretRef in another namespace. DELETE is always allowed.
+//  4. Returns an AdmissionReview response: allowed=true, with a warning per
+//     reserved field that is not implemented, or allowed=false with the
+//     error as the message.
 //
 // Bodies over 1 MB are rejected with 413 rather than truncated.
 //
@@ -112,10 +114,29 @@ func validatePipeline(req *admissionv1.AdmissionRequest, log zerolog.Logger) *ad
 		return deny(fmt.Sprintf("Pipeline rejected: %v", err))
 	}
 
+	// The object may omit metadata.namespace; the request carries it.
+	if pipeline.Namespace == "" {
+		pipeline.Namespace = req.Namespace
+	}
+	if err := graph.ValidateSecretRef(&pipeline); err != nil {
+		log.Info().
+			Str("pipeline", pipeline.Name).
+			Err(err).
+			Msg("admission: Pipeline rejected — git.secretRef in another namespace")
+		return deny(fmt.Sprintf("Pipeline rejected: %v", err))
+	}
+
 	log.Debug().
 		Str("pipeline", pipeline.Name).
 		Msg("admission: Pipeline admitted — no cycle detected")
-	return allow()
+	resp := allow()
+	// The CRD accepts these reserved fields, so the Pipeline is admitted, but
+	// a Bundle fails when it reaches an environment that uses one (or when its
+	// Graph is built, for steps and promotionTemplate): warn with the messages
+	// "kardinal validate" and the Pipeline's Ready=False/NotImplemented
+	// condition show.
+	resp.Warnings = graph.UnimplementedFields(&pipeline)
+	return resp
 }
 
 func allow() *admissionv1.AdmissionResponse {

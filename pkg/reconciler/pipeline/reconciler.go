@@ -18,8 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -30,6 +33,10 @@ import (
 const (
 	reasonValid            = "Valid"
 	reasonValidationFailed = "ValidationFailed"
+	// reasonNotImplemented: the spec sets a reserved field the controller
+	// does not implement (graph.UnimplementedFields), so a Bundle fails when
+	// it reaches an environment that uses one, or when its Graph is built.
+	reasonNotImplemented = "NotImplemented"
 )
 
 // The Paused condition is set while spec.paused is true and removed when it is
@@ -48,10 +55,10 @@ type Reconciler struct {
 	client.Client
 }
 
-// Reconcile is called whenever a Pipeline, one of its PromotionSteps or its
-// freeze gate changes. It validates the spec, converges the freeze gate to
-// spec.paused, derives status.phase from the PromotionSteps and sets the Ready
-// condition.
+// Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
+// phase of one of its Bundles or its freeze gate changes. It validates the
+// spec, converges the freeze gate to spec.paused, derives status.phase from
+// the Bundles and PromotionSteps and sets the Ready condition.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("pipeline", req.Name).
@@ -80,9 +87,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	desired := r.validate(&p)
 
-	// Derive status.phase from active PromotionStep states.
-	// This is a Watch-node pattern: we read PromotionStep CRD status (written by the
-	// PromotionStep reconciler) and write only our own CRD status (Pipeline.status.phase).
+	// Derive status.phase from Bundle phases and PromotionStep states.
+	// This is a Watch-node pattern: we read Bundle and PromotionStep CRD status
+	// (written by their reconcilers) and write only our own CRD status (Pipeline.status.phase).
 	// A failed read returns the error without patching, so a transient apiserver
 	// or cache error never overwrites a good phase and metrics.
 	var stepList kardinalv1alpha1.PromotionStepList
@@ -93,8 +100,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("list promotion steps of pipeline %s: %w", p.Name, err)
 	}
 
-	desiredPhase := DerivePhase(stepList.Items)
-
 	// Compute aggregate deployment metrics from Bundles + PromotionSteps.
 	// Graph-first: reads only CRD status fields written by their own reconcilers.
 	// Writes only to Pipeline.status.deploymentMetrics (our own CRD).
@@ -102,6 +107,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.List(ctx, &bundleList, client.InNamespace(p.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list bundles of pipeline %s: %w", p.Name, err)
 	}
+	desiredPhase := DerivePhase(p.Name, bundleList.Items, stepList.Items)
 	desiredMetrics := ComputeDeploymentMetrics(&p, bundleList.Items, stepList.Items, time.Now().UTC())
 
 	// Idempotency: only patch if something changed.
@@ -184,6 +190,26 @@ func pipelineForFreezeGate(_ context.Context, obj client.Object) []ctrl.Request 
 	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: name}}}
 }
 
+// pipelineForBundle maps a Bundle to the Pipeline named by spec.pipeline.
+func pipelineForBundle(_ context.Context, obj client.Object) []ctrl.Request {
+	b, ok := obj.(*kardinalv1alpha1.Bundle)
+	if !ok || b.Spec.Pipeline == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: b.Namespace, Name: b.Spec.Pipeline}}}
+}
+
+// bundlePhaseChanged passes Bundle creates and deletes, and updates that
+// change status.phase; evidence and condition updates do not change the
+// Pipeline phase.
+var bundlePhaseChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldB, okOld := e.ObjectOld.(*kardinalv1alpha1.Bundle)
+		newB, okNew := e.ObjectNew.(*kardinalv1alpha1.Bundle)
+		return okOld && okNew && oldB.Status.Phase != newB.Status.Phase
+	},
+}
+
 // Step states that DerivePhase reports as Degraded.
 var degradedStates = map[string]bool{
 	"Failed":         true,
@@ -191,46 +217,75 @@ var degradedStates = map[string]bool{
 	"RollingBack":    true,
 }
 
-// DerivePhase computes the Pipeline.status.phase from the given PromotionStep list:
-//   - "Unknown"  — no PromotionSteps exist yet, or the newest Bundle is still promoting somewhere
-//   - "Degraded" — the newest Bundle in some environment is Failed, AbortedByAlarm or RollingBack
-//   - "Ready"    — the newest Bundle is Verified in every environment it reached
+// Bundle phases that DerivePhase reports as Promoting: new, waiting for a
+// Graph or a maxConcurrentPromotions slot, or promoting (possibly held by a
+// gate before its first PromotionStep exists).
+var inFlightBundlePhases = map[string]bool{
+	"":          true,
+	"Available": true,
+	"Promoting": true,
+}
+
+// DerivePhase computes the Pipeline.status.phase from the Bundles and the
+// PromotionSteps of pipeline pipelineName:
+//   - "Degraded"  — the newest Bundle in some environment is Failed,
+//     AbortedByAlarm or RollingBack there, or the newest Bundle of the
+//     Pipeline is Failed (it may have failed before any step was created)
+//   - "Promoting" — a Bundle is new, Available or Promoting (held by a gate
+//     or a maxConcurrentPromotions slot counts), or the newest Bundle in some
+//     environment is not Verified there yet (E2E-R05)
+//   - "Ready"     — nothing is in flight and the newest Bundle is Verified in
+//     every environment it reached
+//   - "Unknown"   — no Bundle is in flight and no PromotionStep counts (the
+//     UI shows "Idle")
 //
-// Each environment is judged by its newest Bundle only (newest step creation
-// time, ties broken by bundle name), and by every step that Bundle has there,
-// so a multi-region environment is Degraded when any region is, whatever the
-// List order.
-func DerivePhase(steps []kardinalv1alpha1.PromotionStep) string {
-	if len(steps) == 0 {
-		return "Unknown"
+// Newest follows the rule the UI (ui_api.go) and the CLI (current_bundle.go)
+// use to pick the current Bundle: Superseded Bundles and their steps are
+// skipped (handleSuperseded fails a superseded Bundle's cancelled steps), and
+// Bundles are ordered by lifecycle.CompareCreation, the order supersession
+// uses. A step whose Bundle is not listed (another pipeline's, or being
+// deleted) is skipped too. Each environment is judged by every step its newest
+// Bundle has there, so a multi-region environment is Degraded when any region
+// is, whatever the List order.
+func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps []kardinalv1alpha1.PromotionStep) string {
+	byName := make(map[string]*kardinalv1alpha1.Bundle, len(bundles))
+	inFlight := false
+	var newestBundle *kardinalv1alpha1.Bundle
+	for i := range bundles {
+		b := &bundles[i]
+		if b.Spec.Pipeline != pipelineName || b.Status.Phase == "Superseded" {
+			continue
+		}
+		byName[b.Name] = b
+		if inFlightBundlePhases[b.Status.Phase] {
+			inFlight = true
+		}
+		if newestBundle == nil || lifecycle.CompareCreation(b, newestBundle) > 0 {
+			newestBundle = b
+		}
 	}
 
 	// Pass 1: the newest Bundle per environment.
-	type envKey struct{ pipeline, env string }
-	type bundleAt struct {
-		name    string
-		created time.Time
-	}
-	newest := make(map[envKey]bundleAt)
+	newest := make(map[string]*kardinalv1alpha1.Bundle)
 	for i := range steps {
 		s := &steps[i]
-		key := envKey{s.Spec.PipelineName, s.Spec.Environment}
-		at := bundleAt{s.Spec.BundleName, s.CreationTimestamp.Time}
-		cur, ok := newest[key]
-		if !ok || at.created.After(cur.created) ||
-			(at.created.Equal(cur.created) && at.name > cur.name) {
-			newest[key] = at
+		b, ok := byName[s.Spec.BundleName]
+		if !ok {
+			continue
+		}
+		if cur, ok := newest[s.Spec.Environment]; !ok || lifecycle.CompareCreation(b, cur) > 0 {
+			newest[s.Spec.Environment] = b
 		}
 	}
 
 	// Pass 2: every step of that Bundle in the environment counts.
-	hasDegraded := false
-	allVerified := true
+	counted, hasDegraded, allVerified := 0, false, true
 	for i := range steps {
 		s := &steps[i]
-		if newest[envKey{s.Spec.PipelineName, s.Spec.Environment}].name != s.Spec.BundleName {
+		if b, ok := newest[s.Spec.Environment]; !ok || b.Name != s.Spec.BundleName {
 			continue
 		}
+		counted++
 		if degradedStates[s.Status.State] {
 			hasDegraded = true
 		}
@@ -240,9 +295,11 @@ func DerivePhase(steps []kardinalv1alpha1.PromotionStep) string {
 	}
 
 	switch {
-	case hasDegraded:
+	case hasDegraded || (newestBundle != nil && newestBundle.Status.Phase == "Failed"):
 		return "Degraded"
-	case allVerified:
+	case inFlight || !allVerified:
+		return "Promoting"
+	case counted > 0:
 		return "Ready"
 	default:
 		return "Unknown"
@@ -250,7 +307,9 @@ func DerivePhase(steps []kardinalv1alpha1.PromotionStep) string {
 }
 
 // validate checks pipeline invariants and returns the desired Ready condition:
-// True/Valid, or False/ValidationFailed with the first problem found.
+// True/Valid, False/ValidationFailed with the first problem found, or
+// False/NotImplemented listing the reserved fields that are set but not
+// implemented (the same list "kardinal validate" reports).
 func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	invalid := func(msg string) metav1.Condition {
 		return metav1.Condition{
@@ -284,6 +343,21 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	// Bundle of a cyclic pipeline would fail with CircularDependency.
 	if err := graph.DetectCycle(p); err != nil {
 		return invalid(err.Error())
+	}
+
+	// A git.secretRef in another namespace is refused on purpose (confused
+	// deputy), so it is a validation error, not an unimplemented field.
+	if err := graph.ValidateSecretRef(p); err != nil {
+		return invalid(err.Error())
+	}
+
+	if msgs := graph.UnimplementedFields(p); len(msgs) > 0 {
+		return metav1.Condition{
+			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonNotImplemented,
+			Message: "not implemented, so a Bundle fails when it reaches an environment that uses one " +
+				"(steps and promotionTemplate fail it when its Graph is built): " + strings.Join(msgs, "; "),
+			ObservedGeneration: p.Generation,
+		}
 	}
 
 	return metav1.Condition{
@@ -327,6 +401,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Deleting the freeze gate by hand while the pipeline is paused, or
 		// removing a user gate that has its name, re-enqueues the Pipeline.
 		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
+		// A Bundle phase change re-derives status.phase: a Bundle held by a
+		// gate has no PromotionStep to trigger it (E2E-R05).
+		Watches(&kardinalv1alpha1.Bundle{}, handler.EnqueueRequestsFromMapFunc(pipelineForBundle),
+			builder.WithPredicates(bundlePhaseChanged)).
 		// Enqueue the pipeline named by spec.pipelineName whenever a PromotionStep changes.
 		Watches(&kardinalv1alpha1.PromotionStep{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {

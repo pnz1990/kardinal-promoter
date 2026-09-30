@@ -350,11 +350,15 @@ export function PipelineList({ pipelines, selected, selectedNamespace, onSelect,
                   </span>
                 )}
                 {p.phase && (
-                  // #523: pipelines with phase "Unknown" have no active promotion — show
-                  // "Idle" as a more descriptive label than "Unknown" to users.
+                  // #523: phase "Unknown" means no bundle yet — show "Idle".
+                  // E2E-R05: a promoting pipeline held by a PolicyGate reads
+                  // "Blocked" (amber, like the fleet bar's Blocked badge).
                   <HealthChip
                     state={p.paused ? 'Paused' : p.phase}
-                    label={p.paused ? undefined : p.phase === 'Unknown' ? 'Idle' : undefined}
+                    label={p.paused ? undefined
+                      : p.phase === 'Unknown' ? 'Idle'
+                      : p.phase === 'Promoting' && (p.blockerCount ?? 0) > 0 ? 'Blocked'
+                      : undefined}
                     size="sm"
                   />
                 )}

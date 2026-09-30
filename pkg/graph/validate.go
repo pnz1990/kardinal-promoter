@@ -208,20 +208,10 @@ func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 			}
 			regions[r] = true
 		}
-		// The PromotionStep reconciler always runs the default step sequence
-		// (steps.DefaultSequenceForBundle); PromotionStepSpec has no field to
-		// carry a custom one. Refuse the Pipeline instead of silently ignoring
-		// the steps the author asked for.
-		if len(e.Steps) > 0 {
-			return fmt.Errorf("build: environment %q declares %d steps; spec.environments[].steps is "+
-				"not implemented yet (the controller always runs the default step sequence), so "+
-				"remove it; see docs/custom-steps.md", e.Name, len(e.Steps))
-		}
-		if e.PromotionTemplate != nil {
-			return fmt.Errorf("build: environment %q references PromotionTemplate %q; "+
-				"spec.environments[].promotionTemplate is not implemented yet (the controller always "+
-				"runs the default step sequence), so remove it; see docs/custom-steps.md",
-				e.Name, e.PromotionTemplate.Name)
+		// Refuse a custom step sequence instead of silently ignoring the steps
+		// the author asked for.
+		if msg := customStepsUnimplemented(&e); msg != "" {
+			return fmt.Errorf("build: %s", msg)
 		}
 	}
 	return nil
@@ -247,6 +237,22 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return fmt.Errorf("build: intent.skipEnvironments names unknown environments %v", unknown)
+	}
+	return nil
+}
+
+// ValidateSecretRef refuses a spec.git.secretRef in another namespace than the
+// Pipeline's (C03-promotionstep-18). This is deliberate, not a missing
+// feature: the controller can read Secrets in every namespace and sends the
+// token to spec.git.url, which the same author controls, so a Pipeline could
+// otherwise use another namespace's credentials. An empty Pipeline namespace
+// fails closed. The PromotionStep reconciler refuses the step with this error,
+// the Pipeline reconciler sets Ready=False/ValidationFailed, the admission
+// webhook denies the Pipeline and "kardinal validate" reports it.
+func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
+	if ref := p.Spec.Git.SecretRef; ref != nil && ref.Namespace != "" && ref.Namespace != p.Namespace {
+		return fmt.Errorf("git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q",
+			ref.Namespace, p.Namespace)
 	}
 	return nil
 }

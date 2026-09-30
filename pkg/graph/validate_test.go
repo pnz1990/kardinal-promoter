@@ -437,3 +437,43 @@ func TestBuild_ErrorsAreErrInvalid(t *testing.T) {
 	}
 	assert.ErrorIs(t, graph.ValidateNodeIDs([]graph.GraphNode{{ID: "prod-eu"}}), graph.ErrInvalid)
 }
+
+// TestValidateSecretRef: a Pipeline may name only a git Secret in its own
+// namespace (C03-promotionstep-18). This is a refusal, not a missing feature,
+// so it is a validation error and never reads "not implemented".
+func TestValidateSecretRef(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string // the Pipeline's namespace
+		ref       *kardinalv1alpha1.SecretRef
+		wantErr   string
+	}{
+		{name: "no secretRef", namespace: "team-a"},
+		{name: "empty namespace means the Pipeline's", namespace: "team-a",
+			ref: &kardinalv1alpha1.SecretRef{Name: "github-token"}},
+		{name: "the Pipeline's namespace", namespace: "team-a",
+			ref: &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: "team-a"}},
+		{name: "another namespace", namespace: "team-a",
+			ref:     &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: "kardinal-system"},
+			wantErr: `git.secretRef.namespace "kardinal-system" is not allowed: the Secret must be in the Pipeline's namespace "team-a"`},
+		{name: "an unknown Pipeline namespace fails closed", namespace: "",
+			ref:     &kardinalv1alpha1.SecretRef{Name: "github-token", Namespace: "team-b"},
+			wantErr: `git.secretRef.namespace "team-b" is not allowed`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := pipelineOf("app", kardinalv1alpha1.EnvironmentSpec{Name: "test"})
+			p.Namespace = tc.namespace
+			p.Spec.Git.SecretRef = tc.ref
+			err := graph.ValidateSecretRef(p)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			assert.NotContains(t, err.Error(), "not implemented")
+			assert.Empty(t, graph.UnimplementedFields(p), "a refusal is not an unimplemented field")
+		})
+	}
+}

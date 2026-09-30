@@ -724,10 +724,15 @@ spec:
                 type: object
               phase:
                 default: Unknown
-                description: Phase is the overall pipeline phase.
+                description: |-
+                  Phase is the overall pipeline phase: Promoting while a Bundle is in
+                  flight (also when a PolicyGate holds it), Degraded when the newest Bundle
+                  failed, Ready when the newest Bundle is Verified in every environment it
+                  reached, and Unknown before the first Bundle.
                 enum:
                 - Ready
                 - Degraded
+                - Promoting
                 - Unknown
                 type: string
             type: object

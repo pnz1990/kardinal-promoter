@@ -71,7 +71,7 @@ spec:
 | `layout` | No | `directory` | `directory`: environments as directories on one branch. `branch` (rendered manifests on per-environment branches) is **not implemented**: the `git-clone` step fails every promotion that uses it. See [Rendered Manifests](rendered-manifests.md). |
 | `provider` | No | `github` | **Not read by the controller.** The SCM provider is chosen once per controller by `--scm-provider` (`github`, `gitlab`, `forgejo`, `gitea`, `bitbucket` or `azuredevops`); see [SCM Providers](scm-providers.md). The CRD accepts only `github` or `gitlab` here. Leave it unset. |
 | `secretRef.name` | Yes | | Name of a Kubernetes Secret in the Pipeline's namespace containing a `token` field with a GitHub PAT or GitLab token. |
-| `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. |
+| `secretRef.namespace` | No | Pipeline's namespace | Must be empty or the Pipeline's own namespace. Any other namespace fails the PromotionStep without reading the Secret, so a Pipeline cannot use another namespace's credentials. The Pipeline's `Ready` condition is `False` with reason `ValidationFailed`, `kardinal validate` reports it when the file sets `metadata.namespace`, and the optional admission webhook rejects the Pipeline. |
 
 ### spec.environments[]
 
@@ -112,6 +112,17 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
 | `regions` | No | (none) | **Not implemented** (#612). With two or more regions the translator stamps out one PromotionStep per region, but every region would edit the same path and push the same branch, so those PromotionSteps fail with `environments[].regions fan-out is not implemented`. Declare one environment per region instead (for example `prod-us` and `prod-eu`, with `dependsOn` or `wave`). With zero or one region the field has no effect. |
+
+**Reserved fields.** `steps`, `promotionTemplate`, `autoRollback`, `regions` with two or
+more entries, `layout: branch` (on `spec.git` or an environment), `health.cluster` and a
+`health.resource.kind` other than `Deployment` are not implemented. A Bundle fails when it
+reaches an environment that uses one (`steps` and `promotionTemplate` fail it when its Graph
+is built; a `health.resource.kind` fails the step after the change merged, during the
+health check). `kardinal validate` reports each of them, and the controller sets the
+Pipeline's `Ready` condition to `False` with reason `NotImplemented` and the same messages
+(`kubectl get pipeline <name> -o jsonpath='{.status.conditions}'`). The optional admission
+webhook admits the Pipeline with a warning per field. The API server rejects
+`autoRollback` outright.
 
 ### spec.historyLimit
 
@@ -252,6 +263,7 @@ Promotion updates the image tag in the target directory and pushes (auto) or ope
 manifests pattern, where DRY Kustomize source lives on one branch and rendered plain YAML
 lives on per-environment branches (`env/<name>`). Today the `git-clone` step fails every
 promotion whose Pipeline or environment sets `layout: branch`, before it changes anything.
+`kardinal validate` reports it, and the Pipeline is `Ready=False` with reason `NotImplemented`.
 `sourceBranch`, `branchPrefix` and `renderManifests` are not Pipeline fields.
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.

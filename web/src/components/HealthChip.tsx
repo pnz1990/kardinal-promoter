@@ -32,7 +32,7 @@ export type HealthState =
 /**
  * Maps a kardinal state string to a HealthState. Handles PromotionStep states
  * (api/v1alpha1/promotionstep_types.go), the graph API's synthetic NotStarted,
- * Bundle phases, Pipeline phases (Ready/Degraded/Unknown) and gate states.
+ * Bundle phases, Pipeline phases (Ready/Degraded/Promoting/Unknown) and gate states.
  */
 export function kardinalStateToHealth(state: string, nodeType?: string): HealthState {
   if (nodeType === 'PolicyGate') {
