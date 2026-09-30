@@ -28,67 +28,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **PR body CI run link** — the provenance table no longer renders an empty `[CI run]()` link when the Bundle has provenance without `ciRunURL`; the cell is `—`, as it is for a URL that is not `http(s)`, and a `ciRunURL` can no longer break the table or add markup. An empty commit or author is `—` too. See [PR Evidence](pr-evidence.md#artifact-provenance)
 - **`provenance.ciRunURL` is checked on Bundle creation** — the Bundle API returns `400` unless it is empty or an absolute `http(s)` URL without user info, spaces or control characters. Bundles created another way or before the check are not rejected, but the PR body, the UI bundle header and the bundle comparison show `—` instead of linking such a URL, and promote and rollback do not copy it. See [Provenance](ci-integration.md#provenance)
 - **`kardinal validate`** — skips non-kardinal kinds such as Namespace, so the shipped quickstart and demo gate files validate, and reports the same unimplemented fields as the Pipeline status and the admission webhook (which warns)
-- feat(loop): prediction vs actual delta in SM batch report (#1064)
-- feat(loop): skills library growth rate in SM batch report (#1063)
-- feat(loop): housekeeping_streak counter for LOOP STALL detection (#1062)
-- feat(loop): PDCA regression attribution + COORDINATOR halt gate (#1061)
-- docs(scm): document zero-downtime credential rotation (#1060)
-- feat(api): add maxConcurrentPromotions cap per pipeline (#1059)
-- feat(sm): add health snapshot comment to REPORT_ISSUE every batch (#1058)
-- feat(sm): add PDCA workflow result check to SM §4f health signal (#1056)
-- 2 PRs merged; 10 items queued. (#1055)
-- docs(community): add CONTRIBUTING.md and community links (#1044)
-- feat(chart): add demo.enabled mode for under-10-minute quickstart (#1043)
-- Vision scan done. No new items; backlog at 79. (#1042)
-- fix(ci): restore missing newline — opencode step YAML invalid (#1041)
-- Added Bitbucket & Azure DevOps SCM support (#1040)
-- hotfix(ci): restore opencode SHA for v1.14.20 (#1039)
-- chore(ci): upgrade opencode to v1.14.20 (#1038)
-- docs(comparison): add Bitbucket Cloud and Azure DevOps to SCM providers row (#1037)
-- feat(scm): add Bitbucket Cloud and Azure DevOps SCM providers (#1035)
-- PR #1032: PromotionTemplate CRD merged (#1033)
-
-**UI accessibility compliance, DX polish, keyboard shortcuts**
-
-### Added
-
-- **`kardinal-agent` standalone binary** — separate binary for spoke-cluster distributed mode (`cmd/kardinal-agent/`); runs only the PromotionStep reconciler for a specific shard, without Bundle, Pipeline, PolicyGate, UI, or webhook components. Required flag: `--shard`. Defaults to ports :8085/:8086 to avoid collision with the controller. (#886)
-- **`kubectl get` printer columns on Bundle and PromotionStep CRDs** — `kubectl get bundle` now shows Type, Pipeline, Phase, Age; `kubectl get promotionstep` (shortname: `ps`) now shows Pipeline, Env, Bundle, State, Age. No more `kubectl describe` to find which pipeline a step belongs to. (#903)
-- **WaitingForMerge timeout** — `environment.waitForMergeTimeout` on Pipeline environments (e.g. `waitForMergeTimeout: "24h"`) causes a PromotionStep stuck waiting for a PR reviewer to transition to `Failed` after the configured duration. No timeout by default (no behavior change for existing pipelines). Closes production-blocker: abandoned PR reviews no longer stall pipelines indefinitely. (#906)
-- **Shell completion** — `kardinal completion bash|zsh|fish|powershell` (#731)
-- **Color output for `kardinal explain`** — `--color` flag, auto-detected TTY; Pass=green, Block=red, Pending=yellow (#730)
-- **Dark/light mode** — system-aware theme with manual toggle in the embedded UI (#734)
-- **Prometheus metrics** — `kardinal_bundles_total{phase}`, `kardinal_steps_total{type,result}`, `kardinal_gate_evaluations_total{result}`, `kardinal_pr_duration_seconds` histogram emitted from reconcilers (#726)
-- **`kardinal validate`** — validate Pipeline and PolicyGate YAML files offline; checks CEL syntax and schema (#713)
-- **`kardinal status`** — show controller health, CRD versions, and resource summary (#715)
-- **Improved explain error** — `kardinal explain <pipeline> --env <bogus>` now lists available environments (#717)
-- **Improved circular dependency error** — cycle path displayed in full (#711)
-- **`--dry-run` for `kardinal create bundle`** — print what would be created without submitting; useful for CI validation (#741)
-- **URL routing in embedded UI** — selecting a pipeline, node, or bundle diff panel updates the URL hash fragment; page reload and back/forward navigation restore selection (#742)
-- **Keyboard shortcuts in embedded UI** — `?` opens help panel, `r` refreshes, `Esc` closes panels (#750)
-- **Error boundaries on async UI components** — DAGView, PipelineList, NodeDetail, BundleTimeline show a user-friendly message + Retry on render error (#755)
-- **WCAG 2.1 AA accessibility enforcement** — axe-core Playwright check in E2E test suite (Journey 009); all structural violations resolved (#756, #759, #760)
-- **Copy-to-clipboard on pipeline names and bundle hashes** — click to copy pipeline name, bundle name, or commit SHA in the embedded UI (#764)
-- **Stale data indicator escalation** — red + pulse animation when dashboard data is >30s old; screen reader announcement via `aria-live` (#767)
-- **Skeleton loading states** — NodeDetail step details, BundleTimeline chips, and PolicyGatesPanel now show animated shimmer placeholders instead of blank panels while data loads (#784)
-- **`/` keyboard shortcut to focus pipeline search** — pressing `/` anywhere (except when an input is focused) moves keyboard focus to the pipeline filter input; `Esc` inside the filter clears and blurs; `/` listed in the `?` shortcut help modal (#800)
-- **Responsive layout at 1280px** — Journey 010 Playwright test formalizes the no-overflow guarantee at 1280×800 viewport (#806)
-- **Virtual scrolling for pipeline list** — `@tanstack/react-virtual` used for flat lists exceeding 50 entries; multi-namespace grouped display falls back to normal rendering (#817)
-- **Full adapter demo coverage** — examples, unit tests, and `docs/demo-validation.md` for all 5 health adapters: resource, argocd, flux, argoRollouts, flagger (#821)
-- **`kardinal delete bundle <name>`** — new CLI command to explicitly delete a Bundle by name, cancelling any in-progress promotion (#851)
-
-### Changed
-
-- **UI CSS theme tokens** — migrated 206 hardcoded hex color values to CSS custom properties (`--color-*` tokens); consistent theming across dark/light mode (#738)
-- **UI WCAG color contrast** — all theme colors now meet WCAG 2.1 AA 4.5:1 minimum contrast ratio in both dark and light modes (#760)
-- **Graph controller fork upgraded to `3376810`** — correctness fix: propagation trigger on self-state refresh. Without this, UAT PromotionStep was never created after test reached Verified. Also includes NodeState sync guard and ForEach typed binding (#789)
-- **Graph controller fork upgraded to `d6cbc54`** — additive forEach incremental diff optimization (O(K) vs O(N) rehash), WatchManager canonical Kind caching fix. No breaking changes (#803)
-
-### Fixed
-
-- **Demo Validate nightly workflow** — missing `issues: write` permission caused `GraphQL: Resource not accessible by integration (addComment)` on every scheduled run; fixed and improved to post to the current daily report issue instead of hard-coded #1 (#801)
-- **UAT never starting after test Verified** — Graph controller Path 2 (self-state refresh) now correctly marks dependents as `propagationTriggered`; UAT PromotionStep is created once test PS writes `status.state=Verified` (#789)
-- **AbortedByAlarm / RollingBack cycling** — PromotionStep reconciler now handles `AbortedByAlarm` and `RollingBack` as explicit terminal/managed cases, preventing fall-through to `default` which incorrectly reset state to Pending (#789)
+- **UI API access control** — bearer-token auth with `--ui-auth-token` (#924) or Kubernetes TokenReview (#1015); CORS limited with `--cors-allowed-origins` (#940); TLS with `--tls-cert-file` / `--tls-key-file` (#937); the UI warns on an insecure connection (#941)
+- **Bitbucket Cloud and Azure DevOps SCM providers** (#1035, #1040)
+- **NotificationHook CRD** — outbound webhook notifications for promotion events (#942)
+- **`argocd-set-image` step** — promotes by setting the image on the Argo CD Application, without git operations (#966)
+- **Create Bundle from GitHub Actions** — composite action in `.github/actions/create-bundle` (#953); the UI has a Create Bundle dialog (#950)
+- **`maxConcurrentPromotions`** — per-Pipeline cap on Bundles promoting at once (#1059)
+- **`stepTimeoutSeconds`** — per-environment limit on how long a promotion step runs (#1123)
+- **`environment.waitForMergeTimeout`** — fails a PromotionStep whose PR is not merged in time; no timeout by default (#906, #908)
+- **`health.resource`** — names the Deployment the resource health adapter checks, when it differs from the pipeline name or namespace (#1117)
+- **Bundle history limit** — old Bundles beyond `historyLimit` are deleted (#919)
+- **Bundle `status.conditions`** — set on every phase transition (#991)
+- **SCM credential rotation without restart** — the controller picks up a changed token Secret (#994, #1060); it checks the token's scopes at startup (#996)
+- **Namespace-scoped install** — chart value `controller.watchNamespace` (#1024)
+- **Chart `demo.enabled`** — quickstart mode (#1043); **Grafana dashboard** — chart value `grafanaDashboard.enabled` ships the dashboard as a ConfigMap (#1139)
+- **Metrics** — step duration, gate blocking time and PromotionStep age (#992)
+- **Readiness** — `/readyz` fails until the informer caches have synced (#1147)
+- **CLI** — `kardinal get subscriptions` and a SUB column in `get pipelines` (#948); `kardinal logs` shows a per-step table (#1012) and streams with `--follow` (#1124); `kardinal status` lists in-flight promotions per pipeline (#997); `kardinal get pipelines` shows `dependsOn` errors (#1071); `kardinal init --scaffold-gitops` and `--demo` (#1022); `kardinal delete bundle <name>` (#851)
+- **`kubectl get` printer columns** — Bundle shows Type, Pipeline, Phase, Age; PromotionStep (`ps`) shows Pipeline, Env, Bundle, State, Age (#903)
+- **UI** — skeleton loading states (#784), `/` focuses the pipeline filter (#800), virtual scrolling for lists over 50 pipelines (#817)
+- **Demo coverage for every health adapter** — examples and tests for resource, argocd, flux, argoRollouts and flagger (#821)
+- **RBAC** — the ClusterRole and Role grant access to NotificationHooks and AuditEvents (#1095)
+- **Fixed: Bundle requeue hot loop** — a 1 ms `RequeueAfter` is now at least 500 ms (#988)
+- **Fixed: `AbortedByAlarm` and `RollingBack` steps no longer reset to Pending** — the PromotionStep reconciler handles both states (#789)
 
 ---
 
@@ -96,11 +58,41 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Security release: supply chain hardening — trivy, cosign, SBOM, SLSA, Graph controller image scan**
 
+The v0.8.1 tag points to `bd2bcf3`, a merge commit that is not on main. Its tree is identical to `34d8524` (#787) on main.
+
+### Added
+
+- **Image vulnerability scan** — the release workflow scans the controller image with trivy and uploads the SARIF report; findings do not block the release (#696, #787). The Graph controller fork image is scanned too (#708)
+- **Keyless image signing** — the controller image is signed with cosign through GitHub Actions OIDC (#700)
+- **SBOM** — Syft SPDX SBOM, attached to the image as a cosign attestation (#703)
+- **SLSA provenance** — GitHub build provenance attestation for the controller image (#707)
+- **CLI** — `kardinal completion bash|zsh|fish|powershell` (#731); `kardinal validate` checks Pipeline and PolicyGate YAML offline (#713); `kardinal status` shows controller health and a resource summary (#715); `kardinal explain --color` (#730); `kardinal create bundle --dry-run` (#741); `explain` with an unknown environment lists the valid ones (#717); a dependency cycle error shows the cycle (#711)
+- **Prometheus metrics** — `kardinal_bundles_total`, `kardinal_steps_total`, `kardinal_gate_evaluations_total`, `kardinal_pr_duration_seconds` (#726)
+- **UI** — dark and light mode (#734); selection kept in the URL (#742); keyboard shortcuts `?`, `r`, `Esc` with a focus-trapped help modal (#750, #785); error boundaries with Retry (#755); copy-to-clipboard on pipeline names and bundle hashes (#764); the stale-data indicator turns red after 30 s (#767)
+- **Demo environment** — complete demo setup (#786)
+
+### Changed
+
+- **UI theme tokens and WCAG 2.1 AA** — colors moved to CSS custom properties (#738) and meet 4.5:1 contrast in both themes (#760, #772); axe-core checks run in the Playwright suite (#756, #759, #771)
+
 ---
 
 ## [v0.8.0] — 2026-04-17
 
 **Audit log, SCM circuit breaker, Bundle Watch node, Graph-first cleanup, DX improvements**
+
+### Added
+
+- **AuditEvent CRD** — an immutable promotion event log, with gate evaluation and rollback events (#679, #681)
+- **`kardinal get auditevents`** (#684) and **`kardinal audit summary`** (#686)
+- **Admission webhook** for Pipeline and Bundle validation (#670)
+- **SCM circuit breaker** — exponential backoff that respects rate limits (#666)
+- **Bundle Watch node** — `bundle.*` is in Graph CEL scope (#667)
+- **Actionable CLI error hints** for common failures (#689)
+
+### Changed
+
+- **Graph controller fork pin** `81c5a03` → `05db829` (#677)
 
 ---
 
@@ -110,7 +102,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires Graph controller fork `745998f`+ (#652)
+- **WatchKind health nodes** — `health.labelSelector` on Pipeline environments switches from Watch (O(n) full list per event) to WatchKind (O(1) incremental cache). Requires Graph controller fork `745998f`+ (#652, docs #659)
 - **Kargo migration guide** — concept mapping, side-by-side Pipeline vs Kargo YAML, 7-step migration walkthrough in `docs/guides/` (#640)
 - **Operations runbook expanded** — PolicyGate debugging, SCM failure modes, RBAC issues, Graph controller restarts, performance tuning added (#639)
 - **Bundle image diff in NodeDetail** — UI compares the current bundle's image against the previous bundle for that environment; closes a Kargo parity gap (#638)
@@ -122,8 +114,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **UI: cross-environment error aggregation** — groups PromotionStep failures by type across environments; shows affected count (#564)
 - **Graph controller fork upgraded to `745998f`** — Decorator bootstrap primitive, Definition compile-time type inference, forEach array format support, DAG finalizer guard for non-resource nodes (#614)
 
+### Changed
+
+- **PromotionStep `spec.upstreamStates`** replaces `spec.upstreamVerified` and `spec.upstreamVerified2`. The CRD declared only those two, so an environment with more than two upstream environments failed; the list has no limit. The Graph sets the field (#660)
+- **Graph controller fork pin** `745998f` → `81c5a03` — health Watch nodes drop `readyWhen`, so the new fork does not patch the watched Deployment or Application; WatchKind nodes are scoped to the environment namespace (#654)
+
 ### Fixed
 
+- **PromotionStep reacts to PRStatus and PolicyGate changes** — the reconciler watches both, so a merged PR or a gate that changes state moves the step on at once instead of at the next requeue (#655)
 - **Bundle reconciler watches Pipeline changes** — Graph is regenerated when Pipeline spec changes (new environments, updated policyNamespaces, changed git config). Previously Pipeline changes were invisible to in-flight Bundles (#634)
 - **Subscription deduplication under HA** — uses label selector (`kardinal.io/source-digest`) instead of status field comparison; safe under concurrent reconciles and multiple controller replicas (#636)
 - **CEL documentation accuracy** — corrected false claims about `pkg/cel/NewCELEnvironment()` (does not exist) and `schedule.*` (map variable, not CEL library function) in design docs and code comments (#631)
@@ -144,14 +142,20 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Live-cluster validation infrastructure, J7 multi-tenant self-service, OCI/Git source watchers, pipeline deployment metrics**
 
+The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree is identical to `a316253` (#515) on main.
+
 ### Added
 
 - **Multi-tenant self-service (J7)** — ApplicationSet + Pipeline template bootstrap; team onboarding via Git directory; org PolicyGates automatically inherited (#489)
 - **OCI + Git source watchers** — `OCIWatcher` and `GitWatcher` Subscription reconcilers poll registries and Git branches, creating Bundles on new images/commits (#491, #493)
-- **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498)
+- **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498, #511)
 - **`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates (#506)
 - **Graph controller fork upgraded to `948ad6c`** — DNS-1123 node ID validation, drift timers (30 min), propagation hash includes `propagateWhen` state
-- **Cardinal logo** — added across docs site, UI sidebar, and README
+- **Cardinal logo** — added across docs site, UI sidebar, and README (#515)
+
+### Changed
+
+- **`kustomize-set-image` without the kustomize binary** — the step edits `kustomization.yaml` in Go. `kustomize-build` still runs the kustomize binary (#512)
 
 ### Fixed
 
@@ -170,13 +174,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **K-01: Contiguous healthy soak** — `bake.minutes` + `bake.policy: reset-on-alarm` on environment spec; `BakeElapsedMinutes` and `BakeResets` tracked in PromotionStep status
 - **K-02: Pre-deploy gate type** — `when: pre-deploy` on PolicyGate spec; holds the PromotionStep in `Pending` before `git-clone` starts
 - **K-03: Auto-rollback with ABORT vs ROLLBACK distinction** — `onHealthFailure: rollback | abort | none` per environment
-- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL map variable is `true` when the window is active/blocking
+- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL map variable is `true` when the window is active/blocking (#460)
 - **K-05: Bundle.status.metrics** — commitToProductionMinutes, bakeResets, autoRollbacks, operatorInterventions; `kardinal metrics` CLI command
 - **K-06: Wave topology** — `wave: N` field on environment spec; Wave N automatically depends on all Wave N-1 stages
-- **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence
-- **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD
-- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body
-- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions
+- **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence (#470)
+- **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD (#472)
+- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body (#471)
+- **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions (#473)
+- **Policy test** — `kardinal policy test` checks PolicyGate YAML and CEL syntax offline (#235)
 - **UI control plane** — all 7 UI issues shipped (#462–#468): fleet health dashboard, pipeline ops view, per-stage bake countdown, in-UI actions (pause/resume/rollback/override), release metrics bar, bundle timeline, policy gate detail panel
 
 ### Fixed
@@ -192,8 +197,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Distributed mode** — `--shard` flag routes PromotionSteps to matching shard agents; supports multi-cluster deployments where each spoke cluster runs its own agent
-- **Argo Rollouts delivery delegation** — `delivery.delegate: argoRollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource
+- **Argo Rollouts delivery delegation** — `delivery.delegate: argoRollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource (#197)
 - **GitLab + Forgejo/Gitea SCM providers** — selected per controller with `--scm-provider gitlab` or `--scm-provider forgejo` (also `gitea`)
 - **PRStatus CRD** — makes PR merge/close signal observable by the Graph (eliminates 6 GitHub API call paths from the reconciler hot path)
 - **RollbackPolicy CRD** — auto-rollback threshold comparison moved to dedicated reconciler
@@ -215,6 +219,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Embedded React UI** — promotion DAG visualization with 6-state health chips, CEL expression display, live polling with staleness indicator, blocked-gate banner
+- **Distributed mode** — `--shard` flag routes PromotionSteps to matching shard agents; supports multi-cluster deployments where each spoke cluster runs its own agent (#196)
 - **PR evidence body** — structured markdown in every prod PR: image digest, CI run link, gate results, upstream soak time
 - **kardinal diff** — `kardinal diff <bundle-a> <bundle-b>` shows artifact delta
 - **kardinal approve** — approve a Bundle bypassing upstream gate requirements
@@ -239,9 +244,14 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **PRStatus CRD** — replaces in-reconciler GitHub API polling for PR state
 - **RollbackPolicy CRD** — moves auto-rollback threshold logic out of PromotionStepReconciler
 - **ScheduleClock CRD** — writes `status.tick` on a configurable interval to drive time-based policy gate re-evaluation via real Kubernetes watch events; replaces the `ctrl.Result{RequeueAfter}` timer loop pattern
+- **Health Watch nodes** — for each environment with `health.type`, the Graph watches the health resource (Deployment, Argo CD Application, Flux Kustomization, Argo Rollout, Flagger Canary) (#191, #194)
+- **Promote command** — `kardinal promote` creates a Bundle from the last verified image (#160)
+- **UI: 5s polling and bundle history** — the UI refreshes every 5 seconds and lists earlier Bundles of the selected pipeline (#170)
 
 ### Fixed
 
+- **Promotion working directory** — the git working directory is recorded in `PromotionStep.status` and removed when the step finishes (#195)
+- `kardinal policy list` shows `Pending` for a gate that was not evaluated yet, as `kardinal explain` does, instead of `unknown` (#170)
 - `time.Now()` calls moved outside reconciler hot paths into CRD status writes
 - Cross-CRD status mutations eliminated — each reconciler writes only to its own CRD
 - `exec.Command()` in reconciler replaced with library call
@@ -256,24 +266,19 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](https://catalog.workshops.aws/platform-engineering-on-eks/en-US/30-progressiveapplicationdelivery/40-production-deploy-kargo) end-to-end on a live kind cluster.
 
-### Added
-
-- **MetricCheck CRD** — Prometheus-backed policy gates: block promotions when error rate > threshold
-- **Custom promotion steps** — HTTP webhook steps for extensible promotion workflows
-- **Auto-rollback** — configurable failure threshold triggers rollback PR after N consecutive health failures
-- **Pause/resume** — `kardinal pause/resume <pipeline>` halts in-flight promotions
-- **Policy simulate** — `kardinal policy simulate` evaluates gates without creating a Bundle
-- **Policy test** — `kardinal policy test` validates CEL syntax offline
-- **Policy list** — lists active PolicyGates scoped to a pipeline/environment
-- **Promote command** — `kardinal promote` creates a Bundle from the last verified image
-- **Config Bundle type** — promotes Git commit SHAs through the same pipeline as image Bundles
-- **Rendered manifests step** — `pre-render` strategy generates environment-specific YAML
-
 ### Fixed
 
 - kind E2E infrastructure (`make setup-e2e-env`) sets up the Graph controller + ArgoCD + test/uat/prod namespaces
-- `kardinal get pipelines` shows per-environment status columns
-- `kardinal explain` shows active PolicyGates with CEL expression and current value
+- `kardinal get pipelines` shows per-environment status columns (#128)
+- `kardinal explain` shows active PolicyGates with CEL expression and current value (#129)
+- **Graph node IDs are CEL-safe** — node IDs use underscores, because CEL reads a hyphen as minus; the Kubernetes object names keep hyphens
+- **git push** — pushes `HEAD:<branch>`, so a push no longer fails with `src refspec does not match any`
+- **Git token from the Pipeline** — the token is read from the Secret in `Pipeline.spec.git.secretRef`
+- **PromotionStep and PolicyGate schemas** — PromotionStep spec declares `upstreamVerified` and `requiredGates`, and PolicyGate spec declares `upstreamEnvironment`, the fields the Graph writes; without them the Graph controller rejected the objects
+- **RBAC for health checks** — the ClusterRole can read Deployments, Argo CD Applications and Flux Kustomizations
+- **Existing promotion PR** — when the PR is already open (for example after a controller restart), the controller finds it instead of failing with `422`
+- **GitHub token in the Helm chart** — `github.secretRef` and `github.token` values pass `GITHUB_TOKEN` to the controller
+- **Graph controller fork pin** upgraded to `9c18aa34`, which re-evaluates `propagateWhen` after the managed resource's status changes
 
 ---
 
@@ -289,6 +294,13 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 - **Helm chart** — controller deployment, RBAC, CRDs packaged for OCI registry
 - **Graph integration** — kro Graph builder and translator: Pipeline → Graph spec
 - **PolicyGate CEL evaluator** — `!schedule.isWeekend`, `upstream.uat.soakMinutes >= 30`, kro CEL library
+- **MetricCheck CRD** — Prometheus-backed policy gates: block promotions when error rate > threshold, with `metrics.<name>.result` and upstream soak time in gate expressions (#114)
+- **Custom promotion steps** — HTTP webhook steps for extensible promotion workflows (#124)
+- **Auto-rollback** — configurable failure threshold triggers rollback PR after N consecutive health failures (#77)
+- **Pause/resume** — `kardinal pause/resume <pipeline>` halts in-flight promotions (#63, #110)
+- **Policy simulate and list** — `kardinal policy simulate` evaluates gates without creating a Bundle; `kardinal policy list` lists the PolicyGates of a pipeline or environment (#63)
+- **Config Bundle type** — promotes Git commit SHAs through the same pipeline as image Bundles (#78)
+- **Rendered manifests step** — `layout: branch` with `kustomize-build` writes environment-specific YAML (#82)
 - **SCM provider** — GitHub: push branch, open PR, detect merge, post comments
 - **Health adapters** — Kubernetes Deployment readiness, ArgoCD Application sync, Flux Kustomization
 - **Steps engine** — kustomize-set-image, helm-set-image, git-commit, open-pr, wait-for-merge, health-check
