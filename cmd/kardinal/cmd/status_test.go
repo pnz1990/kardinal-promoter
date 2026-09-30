@@ -257,10 +257,10 @@ func TestStatusPipelineWriter_ActiveBundleAndRegions(t *testing.T) {
 	recent := time.Now().Add(-time.Hour)
 	east := explainStep("demo", "b2", "prod", "Promoting", "", recent)
 	east.Name += "-us-east-1"
-	east.Spec.Region = "us-east-1"
+	east.Spec.Region = "us-east-1" //nolint:staticcheck // SA1019: a step from a Graph built before regions were removed
 	west := explainStep("demo", "b2", "prod", "Verified", "", recent)
 	west.Name += "-eu-west-1"
-	west.Spec.Region = "eu-west-1"
+	west.Spec.Region = "eu-west-1" //nolint:staticcheck // SA1019: a step from a Graph built before regions were removed
 	out := runStatusPipeline(t,
 		policyPipeline("demo", "test", "prod"),
 		explainBundle("b1", "Verified", old),

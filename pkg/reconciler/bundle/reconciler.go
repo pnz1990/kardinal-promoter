@@ -1062,8 +1062,8 @@ func environmentStatuses(b *kardinalv1alpha1.Bundle, pipeline *kardinalv1alpha1.
 	var order []string
 	if pipeline != nil {
 		for _, e := range pipeline.Spec.Environments {
-			if len(e.Regions) >= 2 {
-				regions[e.Name] = len(e.Regions)
+			if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: aggregates steps from a Graph built before regions were removed
+				regions[e.Name] = len(e.Regions) //nolint:staticcheck // SA1019: aggregates steps from a Graph built before regions were removed
 			}
 		}
 		order, _ = graph.PromotedEnvironments(pipeline, b)

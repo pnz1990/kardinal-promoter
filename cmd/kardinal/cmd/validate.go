@@ -188,7 +188,7 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		for i := range buildable.Spec.Environments {
 			buildable.Spec.Environments[i].Steps = nil
 			buildable.Spec.Environments[i].PromotionTemplate = nil
-			buildable.Spec.Environments[i].Regions = nil
+			buildable.Spec.Environments[i].Regions = nil //nolint:staticcheck // SA1019: cleared because it is reported above
 		}
 		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: dummyBundle}); err != nil {
 			errs = append(errs, err.Error())

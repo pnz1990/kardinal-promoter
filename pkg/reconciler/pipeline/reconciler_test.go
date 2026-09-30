@@ -150,11 +150,11 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			}},
 		{name: "two regions", wantMsg: `environment "test": regions is not supported; declare one environment per region`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
-				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"}
+				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
 			}},
 		// #1321: distributed mode was removed, so a shard is rejected.
 		{name: "shard", wantMsg: `environment "test": shard is not supported: distributed mode was removed`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }},
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "pipeline layout branch", wantMsg: "spec.git.layout: branch is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Git.Layout = "branch" }},
 		{name: "environment layout branch", wantMsg: `environment "test": layout: branch is not implemented`,
@@ -164,7 +164,7 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 				p.Spec.Environments[0].AutoRollback = &kardinalv1alpha1.AutoRollbackSpec{}
 			}},
 		{name: "health.cluster", wantMsg: `environment "test": health.cluster is not supported`,
-			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }},
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Health.Cluster = "prod-eu" }}, //nolint:staticcheck // SA1019: tests the rejection
 		{name: "health.resource.kind", wantMsg: `environment "test": health.resource.kind "StatefulSet" is not supported`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].Health.Resource = &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}

@@ -211,10 +211,10 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 		}, "declared twice"},
 		// #1304: two or more regions fail at Graph build, before any step.
 		{"two regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"}
+			p.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"} //nolint:staticcheck // SA1019: tests the rejection
 		}, `environment "prod": regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`},
 		{"two invalid regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"US_EAST", "US_EAST"}
+			p.Spec.Environments[1].Regions = []string{"US_EAST", "US_EAST"} //nolint:staticcheck // SA1019: tests the rejection
 		}, "regions is not supported"},
 		{"unknown skipped environment", func(_ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) {
 			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"stagign"}}

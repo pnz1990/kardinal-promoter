@@ -26,16 +26,16 @@ func unsupportedConfig(pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec
 	// Distributed mode was removed. The Pipeline reconciler reports the same
 	// field as Ready=False/NotImplemented; this fails a step left over from a
 	// Graph built before the upgrade instead of leaving it Pending.
-	if env.Shard != "" {
+	if env.Shard != "" { //nolint:staticcheck // SA1019: read to reject it
 		return graph.ShardNotSupported
 	}
-	if env.Health.Cluster != "" {
+	if env.Health.Cluster != "" { //nolint:staticcheck // SA1019: read to reject it
 		return graph.HealthClusterNotSupported
 	}
 	// Build rejects two or more regions, but a Graph built before the upgrade
 	// is not rebuilt until the Pipeline spec changes, so its region steps can
 	// still run.
-	if ps.Spec.Region != "" {
+	if ps.Spec.Region != "" { //nolint:staticcheck // SA1019: read to reject it
 		return graph.RegionsNotSupported
 	}
 	if res := env.Health.Resource; res != nil && res.Kind != "" && res.Kind != "Deployment" &&

@@ -63,16 +63,16 @@ func UnimplementedFields(p *kardinalv1alpha1.Pipeline) []string {
 			msgs = append(msgs, fmt.Sprintf("environment %q: environments[].autoRollback is not implemented; "+
 				"remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)", e.Name))
 		}
-		if len(e.Regions) >= 2 {
+		if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: read to reject it
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, RegionsNotSupported))
 		}
-		if e.Shard != "" {
+		if e.Shard != "" { //nolint:staticcheck // SA1019: read to reject it
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, ShardNotSupported))
 		}
 		if e.Layout == "branch" {
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, layoutBranchNotImplemented))
 		}
-		if e.Health.Cluster != "" {
+		if e.Health.Cluster != "" { //nolint:staticcheck // SA1019: read to reject it
 			msgs = append(msgs, fmt.Sprintf("environment %q: %s", e.Name, HealthClusterNotSupported))
 		}
 		// As the PromotionStep reconciler checks it: only the resource adapter

@@ -116,27 +116,27 @@ func TestUnsupportedConfigFailsLoudly(t *testing.T) {
 		message string
 	}{
 		{name: "health.cluster at start", state: "",
-			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Health.Cluster = "prod-kubeconfig" },
+			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Health.Cluster = "prod-kubeconfig" }, //nolint:staticcheck // SA1019: tests the rejection
 			message: "health.cluster is not supported"},
 		{name: "health.cluster while health checking", state: "HealthChecking",
-			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Health.Cluster = "prod-kubeconfig" },
+			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Health.Cluster = "prod-kubeconfig" }, //nolint:staticcheck // SA1019: tests the rejection
 			message: "health.cluster is not supported"},
 		{name: "region step left over from a pre-upgrade Graph", state: "",
-			mutate:  func(_ *v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) { ps.Spec.Region = "us-east-1" },
+			mutate:  func(_ *v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) { ps.Spec.Region = "us-east-1" }, //nolint:staticcheck // SA1019: tests the rejection
 			message: "regions is not supported; declare one environment per region"},
 		// #1321: distributed mode was removed. A step left over with a shard
 		// label used to be skipped by the controller and hang in Pending.
 		{name: "shard step left over from distributed mode", state: "",
 			mutate: func(env *v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) {
-				env.Shard = "eu"
+				env.Shard = "eu" //nolint:staticcheck // SA1019: tests the rejection
 				ps.Labels = map[string]string{"kardinal.io/shard": "eu"}
 			},
 			message: "shard is not supported: distributed mode was removed"},
 		{name: "shard on the environment only", state: "",
-			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" },
+			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" }, //nolint:staticcheck // SA1019: tests the rejection
 			message: "shard is not supported"},
 		{name: "shard while promoting", state: "Promoting",
-			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" },
+			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" }, //nolint:staticcheck // SA1019: tests the rejection
 			message: "shard is not supported"},
 		{name: "resource kind other than Deployment", state: "HealthChecking",
 			mutate: func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) {

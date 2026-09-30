@@ -195,7 +195,7 @@ func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 		names[e.Name] = true
 		// One region names nothing Build uses; two or more would push the same
 		// change to the same branch once per region.
-		if len(e.Regions) >= 2 {
+		if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: read to reject it
 			return fmt.Errorf("build: environment %q: %s", e.Name, RegionsNotSupported)
 		}
 		// Refuse a custom step sequence instead of silently ignoring the steps

@@ -197,7 +197,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 		}
 		rows = append(rows, stepRow{
 			env:        env,
-			region:     orDash(s.Spec.Region),
+			region:     orDash(s.Spec.Region), //nolint:staticcheck // SA1019: shows steps from a Graph built before regions were removed
 			state:      stepState(*s),
 			activeStep: activeStep,
 			prURL:      orDash(s.Status.PRURL),
