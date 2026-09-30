@@ -61,7 +61,7 @@ metadata:
   labels:
     kardinal.io/pipeline: my-app-pipeline
     kardinal.io/subscription: my-app-image
-    kardinal.io/source-digest: 3f2a9c1b...
+    kardinal.io/source-digest: 3f2a9c1b...  # first 63 characters of the digest, without "sha256:"
 spec:
   type: image
   pipeline: my-app-pipeline
@@ -151,6 +151,16 @@ Before creating a Bundle the controller also looks for an existing Bundle with t
 `kardinal.io/subscription` and `kardinal.io/source-digest` labels, so a restart or two
 replicas polling at once do not create duplicates. If a Bundle with the generated name
 already exists for a different digest, the Subscription goes to phase `Error`.
+
+The `kardinal.io/source-digest` value is the digest without its `sha256:` prefix, cut to
+the first 63 characters (the label value limit), so you can find a Bundle by digest:
+
+```bash
+kubectl get bundles -l kardinal.io/source-digest=$(echo "${DIGEST#sha256:}" | cut -c1-63)
+```
+
+Bundles created by earlier releases carry the last 63 characters instead. The controller
+still matches those, so upgrading does not create a second Bundle for the same digest.
 
 Bundles carry labels, not owner references: deleting a Subscription does not delete
 the Bundles it created or stop their promotions.

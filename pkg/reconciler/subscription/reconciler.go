@@ -34,12 +34,15 @@ package subscription
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -197,8 +200,9 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 				"kardinal.io/subscription": sub.Name,
 				// source-digest enables idempotent dedup by label selector (#620):
 				// any reconcile (including concurrent HA replicas) can find this
-				// bundle before creating a duplicate.
-				"kardinal.io/source-digest": sanitizeLabelValue(result.Digest),
+				// bundle before creating a duplicate. The value is the first 63
+				// characters of the digest (E2E-R13).
+				sourceDigestLabelKey: sourceDigestLabel(result.Digest),
 			},
 		},
 		Spec: kardinalv1alpha1.BundleSpec{
@@ -242,7 +246,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 		if getErr := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: bundleName}, &existing); getErr != nil {
 			return "", fmt.Errorf("get existing bundle %s: %w", bundleName, getErr)
 		}
-		if existing.Labels["kardinal.io/source-digest"] != bundle.Labels["kardinal.io/source-digest"] ||
+		if !sourceDigestMatches(existing.Labels[sourceDigestLabelKey], result.Digest) ||
 			existing.Labels["kardinal.io/subscription"] != sub.Name {
 			return "", fmt.Errorf("bundle %s already exists for another artifact or owner; not creating a Bundle for digest %s",
 				bundleName, result.Digest)
@@ -361,19 +365,25 @@ func (r *Reconciler) now() time.Time {
 //
 // Using a label selector is safe under HA and concurrent reconciles — it reads from
 // the API server (or cache) without a read-compare-write race on status fields (#620).
+//
+// The lookup matches the current label value and the value older controllers
+// wrote (legacySourceDigestLabel), so a Bundle created before an upgrade is
+// still found and not duplicated.
 func (r *Reconciler) findExistingBundleForDigest(ctx context.Context, namespace, subscriptionName, digest string) (string, error) {
-	safeDigest := sanitizeLabelValue(digest)
-	if safeDigest == "" {
+	values := sourceDigestLabelValues(digest)
+	if len(values) == 0 {
 		return "", nil
 	}
+	digestReq, err := labels.NewRequirement(sourceDigestLabelKey, selection.In, values)
+	if err != nil {
+		return "", fmt.Errorf("findExistingBundleForDigest: selector: %w", err)
+	}
+	sel := labels.SelectorFromSet(labels.Set{"kardinal.io/subscription": subscriptionName}).Add(*digestReq)
 
 	var list kardinalv1alpha1.BundleList
 	if err := r.List(ctx, &list,
 		client.InNamespace(namespace),
-		client.MatchingLabels{
-			"kardinal.io/subscription":  subscriptionName,
-			"kardinal.io/source-digest": safeDigest,
-		},
+		client.MatchingLabelsSelector{Selector: sel},
 	); err != nil {
 		return "", fmt.Errorf("findExistingBundleForDigest: list: %w", err)
 	}
@@ -384,25 +394,66 @@ func (r *Reconciler) findExistingBundleForDigest(ctx context.Context, namespace,
 	return list.Items[0].Name, nil
 }
 
-// sanitizeLabelValue turns a digest into a Kubernetes label value.
+// sourceDigestLabelKey is the Bundle label that records the artifact digest a
+// Subscription created the Bundle for.
+const sourceDigestLabelKey = "kardinal.io/source-digest"
+
+// sourceDigestLabel turns a digest into the kardinal.io/source-digest label value.
 // Label values must be 63 characters or fewer, and may only contain alphanumerics,
 // hyphens, underscores, and dots, starting and ending with an alphanumeric.
 // The algorithm prefix ("sha256:") is stripped, other invalid characters are
-// dropped, and the last 63 characters are kept (a sha256 hex digest is 64).
-func sanitizeLabelValue(s string) string {
-	if _, hexPart, ok := strings.Cut(s, ":"); ok {
-		s = hexPart
+// dropped, and the first 63 characters are kept (a sha256 hex digest is 64), so
+// the label is a prefix of the digest and matches its short forms (E2E-R13).
+func sourceDigestLabel(digest string) string {
+	s := digestLabelChars(digest)
+	if len(s) > 63 {
+		s = s[:63]
 	}
-	s = strings.Map(func(c rune) rune {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
-			return c
-		}
-		return -1
-	}, s)
+	return strings.Trim(s, "-_.")
+}
+
+// legacySourceDigestLabel is the label value controllers before the E2E-R13
+// fix wrote: the last 63 characters, which dropped the first hex character of
+// a sha256 digest. Dedup still matches it so an upgrade does not create a
+// second Bundle for a digest a Bundle already exists for.
+func legacySourceDigestLabel(digest string) string {
+	s := digestLabelChars(digest)
 	if len(s) > 63 {
 		s = s[len(s)-63:]
 	}
 	return strings.Trim(s, "-_.")
+}
+
+// sourceDigestLabelValues returns the distinct, non-empty label values that
+// identify digest: the current one first, then the legacy one.
+func sourceDigestLabelValues(digest string) []string {
+	var out []string
+	for _, v := range []string{sourceDigestLabel(digest), legacySourceDigestLabel(digest)} {
+		if v != "" && !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// sourceDigestMatches reports whether a kardinal.io/source-digest label value
+// identifies digest, in the current or the legacy form.
+func sourceDigestMatches(value, digest string) bool {
+	return value == sourceDigestLabel(digest) || value == legacySourceDigestLabel(digest)
+}
+
+// digestLabelChars strips the algorithm prefix from digest and drops every
+// character a label value cannot hold.
+func digestLabelChars(digest string) string {
+	if _, hexPart, ok := strings.Cut(digest, ":"); ok {
+		digest = hexPart
+	}
+	return strings.Map(func(c rune) rune {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			return c
+		}
+		return -1
+	}, digest)
 }
 
 // SetupWithManager registers the SubscriptionReconciler with the controller-runtime Manager.
