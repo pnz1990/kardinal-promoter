@@ -2,9 +2,9 @@
 // Licensed under the Apache License, Version 2.0
 
 // Package web embeds the kardinal-ui React application into the controller binary.
-// The UI is built into web/dist and embedded via go:embed. `make ui` and the
-// Dockerfile build it with npm (package-lock.json); the CI frontend job
-// type-checks, builds and tests it with bun (bun.lock).
+// The UI is built into web/dist and embedded via go:embed. `make ui`, the
+// Dockerfile and the CI frontend job all build it with npm (package-lock.json),
+// and CI fails when the committed web/dist differs from a fresh build.
 package web
 
 import "embed"
