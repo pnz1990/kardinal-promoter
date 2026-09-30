@@ -148,12 +148,13 @@ func docsCELFixture(t *testing.T) (*Reconciler, *kardinalv1alpha1.PolicyGate) {
 		Status: kardinalv1alpha1.BundleStatus{Environments: envStatus},
 	}
 	objs := []runtime.Object{pipeline, bundle}
+	validUntil := metav1.NewTime(now.Add(time.Minute))
 	for name, value := range map[string]string{
 		"error-rate": "0.001", "p99-latency": "120", "success-rate": "0.999", "staging-error-rate": "0.001",
 	} {
 		objs = append(objs, &kardinalv1alpha1.MetricCheck{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Status:     kardinalv1alpha1.MetricCheckStatus{LastValue: value, Result: "Pass"},
+			Status:     kardinalv1alpha1.MetricCheckStatus{LastValue: value, Result: "Pass", ValidUntil: &validUntil},
 		})
 	}
 	objs = append(objs, &kardinalv1alpha1.PRStatus{

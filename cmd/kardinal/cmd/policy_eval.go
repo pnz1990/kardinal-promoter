@@ -58,6 +58,10 @@ type gateEvaluator struct {
 	c   sigs_client.Client
 	r   *policygate.Reconciler
 	now time.Time
+	// metricsAt, when set, is the time MetricCheck results are checked for
+	// staleness against, instead of now: simulate keeps the cluster's metric
+	// results as they are at the real current time.
+	metricsAt time.Time
 }
 
 func newGateEvaluator(c sigs_client.Client) (*gateEvaluator, error) {
@@ -67,6 +71,12 @@ func newGateEvaluator(c sigs_client.Client) (*gateEvaluator, error) {
 	}
 	e := &gateEvaluator{c: c, r: r}
 	r.NowFn = func() time.Time { return e.now }
+	r.MetricsNowFn = func() time.Time {
+		if e.metricsAt.IsZero() {
+			return e.now
+		}
+		return e.metricsAt
+	}
 	return e, nil
 }
 

@@ -333,9 +333,17 @@ func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
 			End:   metav1.NewTime(time.Date(2026, time.October, 4, 0, 0, 0, 0, time.UTC)),
 		},
 	}
+	// Fresh at policyTestNow (the real time of the run), not at the simulated
+	// --time days later: simulate judges staleness at the real time (#1302).
+	fresh := metav1.NewTime(policyTestNow.Add(5 * time.Minute))
 	errorRate := &v1alpha1.MetricCheck{
 		ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: "default"},
-		Status:     v1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0.01"},
+		Status:     v1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0.01", ValidUntil: &fresh},
+	}
+	expired := metav1.NewTime(policyTestNow.Add(-time.Minute))
+	staleRate := &v1alpha1.MetricCheck{
+		ObjectMeta: metav1.ObjectMeta{Name: "stale-rate", Namespace: "default"},
+		Status:     v1alpha1.MetricCheckStatus{Result: "Pass", LastValue: "0.01", ValidUntil: &expired},
 	}
 	tests := []struct {
 		expr string
@@ -350,6 +358,9 @@ func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
 		{expr: `"PROD".lowerAscii() == environment.name`, time: "Tuesday 10am", pass: true},
 		{expr: `json.unmarshal("{\"ready\": true}").ready == true`, time: "Tuesday 10am", pass: true},
 		{expr: `metrics["error-rate"].result == "Pass"`, time: "Tuesday 10am", pass: true},
+		{expr: `double(metrics["error-rate"].value) < 0.05`, time: "Saturday 3pm", pass: true},
+		{expr: `metrics["stale-rate"].result == "Pass"`, time: "Tuesday 10am", pass: false},
+		{expr: `metrics["stale-rate"].stale`, time: "Tuesday 10am", pass: true},
 		{expr: `upstream.uat.soakMinutes >= 30`, time: "Tuesday 10am", soak: 60, pass: true},
 		{expr: `upstream.uat.soakMinutes >= 30`, time: "Tuesday 10am", soak: 10, pass: false},
 		{expr: `bundle.upstreamSoakMinutes >= 30`, time: "Tuesday 10am", soak: 30, pass: true},
@@ -360,7 +371,7 @@ func TestPolicySimulate_ControllerEnvironmentAndContext(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.expr+"@"+tt.time, func(t *testing.T) {
-			c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"), freeze, errorRate,
+			c := policyClient(t, policyPipeline("demo", "test", "uat", "prod"), freeze, errorRate, staleRate,
 				policyGate("gate", "platform-policies", "prod", tt.expr))
 			out, err := runSimulate(t, c, simulateOptions{Time: tt.time, SoakMinutes: tt.soak})
 			require.NoError(t, err)

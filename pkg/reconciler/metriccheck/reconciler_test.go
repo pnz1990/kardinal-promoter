@@ -222,3 +222,30 @@ func TestReconciler_RequeueAfterInterval(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 30*time.Second, res.RequeueAfter, "should requeue after spec.interval=30s")
 }
+
+// Each evaluation writes status.validUntil = lastEvaluatedAt + max(3 x interval,
+// 30s), after which PolicyGates treat the result as stale (#1302). A failed
+// query writes it too: Fail is a fresh result.
+func TestReconciler_WritesValidUntil(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval string
+		provider *fakeProvider
+		want     time.Duration
+	}{
+		{name: "3 x interval", interval: "5m", provider: &fakeProvider{value: 0.005}, want: 15 * time.Minute},
+		{name: "default interval", interval: "", provider: &fakeProvider{value: 0.005}, want: 3 * time.Minute},
+		{name: "raised minimum interval", interval: "1s", provider: &fakeProvider{value: 0.005}, want: 30 * time.Second},
+		{name: "query error", interval: "1m", provider: &fakeProvider{err: fmt.Errorf("connection refused")}, want: 3 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := newMetricCheck("error-rate", "lt", 0.01)
+			mc.Spec.Interval = tt.interval
+			result := reconcileOnce(t, mc, tt.provider)
+
+			require.NotNil(t, result.Status.ValidUntil)
+			assert.Equal(t, fixedNow.Add(tt.want), result.Status.ValidUntil.UTC())
+		})
+	}
+}
