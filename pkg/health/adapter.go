@@ -113,7 +113,14 @@ type CheckOptions struct {
 	// ExpectedImages are the Bundle images. The resource adapter (and the argocd
 	// adapter when no ExpectedRevision is known) require every workload container
 	// that runs one of these repositories to run the Bundle's tag or digest.
+	// The argoRollouts and flagger adapters require the Rollout or Canary
+	// target to run them.
 	ExpectedImages []ImageExpectation
+
+	// Since is when the health check of this promotion started. The flagger
+	// adapter ignores a Succeeded or Failed phase that Flagger set before it
+	// when it cannot compare images. Zero skips that check.
+	Since time.Time
 }
 
 // ResourceConfig is the health check configuration for a Kubernetes Deployment.
@@ -781,8 +788,8 @@ func getDeployment(ctx context.Context, dyn dynamic.Interface, namespace, name s
 
 // --- FlaggerAdapter ---
 
-// FlaggerAdapter checks Flagger Canary health status.
-// A Canary is healthy when status.phase == "Succeeded".
+// FlaggerAdapter checks that a Flagger Canary analyzed and promoted the
+// promoted revision (see Check).
 // Uses the dynamic client to avoid a compile-time dependency on the Flagger SDK.
 type FlaggerAdapter struct {
 	dynamic dynamic.Interface
@@ -802,7 +809,28 @@ var flaggerGVR = schema.GroupVersionResource{
 	Resource: "canaries",
 }
 
-// Check verifies that the Flagger Canary is in the Succeeded phase.
+// Check reports the Canary healthy only once Flagger promoted the promoted
+// revision. Flagger keeps the phase of its last analysis (Succeeded or
+// Failed) until an analysis tick notices that the target changed, so right
+// after the GitOps tool applies a change the phase describes the previous
+// release.
+//
+//  1. The target Deployment (spec.targetRef) must run the Bundle images
+//     (ExpectedImages), else Progressing: the change is not applied yet.
+//  2. Succeeded is Healthy when the primary Deployment (<target>-primary), to
+//     which Flagger copies a revision it promotes, runs the Bundle images and
+//     is rolled out and Available. A primary on other images means the phase
+//     is from an earlier release: Progressing.
+//  3. Failed is Terminal (Flagger rolled the canary back) unless it is from
+//     an earlier release: Healthy when the primary runs the Bundle images (the
+//     Bundle is the revision Flagger last promoted, which it does not analyze
+//     again), Progressing when Flagger set the phase before Since (see
+//     phaseSetAt).
+//  4. When the images cannot be compared (a Bundle without images, a Bundle
+//     image renamed by kustomize, a target that is not a Deployment),
+//     Succeeded and Failed count only when Flagger set the phase at or after
+//     Since.
+//  5. Every other phase is Progressing.
 func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.Flagger
 	if cfg.Namespace == "" {
@@ -840,15 +868,163 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 	if msg, _ := cond["message"].(string); msg != "" {
 		reason += " — " + msg
 	}
+
+	rev, err := a.canaryRevision(ctx, canary, opts.ExpectedImages)
+	if err != nil {
+		return HealthStatus{}, err
+	}
+	if rev.status != nil {
+		return *rev.status, nil
+	}
+
+	// stale explains why a Succeeded or Failed phase predates this health check.
+	stale := ""
+	if !opts.Since.IsZero() {
+		since := opts.Since.Truncate(time.Second)
+		lt, field := phaseSetAt(canary, phase, findCondition(conditions, "Promoted"))
+		at, perr := time.Parse(time.RFC3339, lt)
+		switch {
+		case perr != nil:
+			stale = fmt.Sprintf("%s %q is not a time", field, lt)
+		case at.Before(since):
+			stale = fmt.Sprintf("its %s %s is before this health check started (%s)",
+				field, at.UTC().Format(time.RFC3339), since.UTC().Format(time.RFC3339))
+		}
+	}
+	const wait = "waiting for Flagger to analyze the new revision"
+
 	switch phase {
 	case "Succeeded":
+		if rev.primary != nil {
+			if !rev.primaryRunsBundle {
+				return progressing(fmt.Sprintf("Canary phase: Succeeded is for an earlier release: %s; %s", rev.primaryNote, wait)), nil
+			}
+			return rev.primaryHealth("Canary phase: Succeeded"), nil
+		}
+		if stale != "" {
+			return progressing(fmt.Sprintf("Canary phase: Succeeded is for an earlier release: %s; %s", stale, wait)), nil
+		}
+		if rev.note != "" {
+			return healthy("Canary phase: Succeeded " + rev.note), nil
+		}
 		return healthy("Canary phase: Succeeded"), nil
 	case "Failed":
+		if rev.primary != nil && rev.primaryRunsBundle {
+			return rev.primaryHealth("Canary phase: Failed is for an earlier release: the Bundle is the revision Flagger last promoted"), nil
+		}
+		if stale != "" {
+			return progressing(fmt.Sprintf("Canary phase: Failed is for an earlier release: %s; %s", stale, wait)), nil
+		}
 		// Flagger rolled the canary back; waiting will not make it succeed.
 		return terminal(reason), nil
 	default: // Initializing, Initialized, Waiting, Progressing, WaitingPromotion, Promoting, Finalising
 		return progressing(reason), nil
 	}
+}
+
+// phaseSetAt is when Flagger set the Canary's current phase, and the field
+// that says so. Flagger rewrites status.lastTransitionTime at every analysis
+// tick of a Failed Canary (it syncs status.lastAppliedSpec), so a Failed
+// phase from an earlier release looks new there. The Promoted condition is
+// steady: its reason is the phase, and Flagger sets its lastUpdateTime only
+// when the reason or status changes. Without a Promoted condition for the
+// phase (an older Flagger), the time is status.lastTransitionTime.
+func phaseSetAt(canary *unstructured.Unstructured, phase string, promoted map[string]interface{}) (string, string) {
+	if reason, _ := promoted["reason"].(string); reason != "" && reason == phase {
+		if at, _ := promoted["lastUpdateTime"].(string); at != "" {
+			return at, "Promoted condition's lastUpdateTime"
+		}
+	}
+	lt, _, _ := unstructured.NestedString(canary.Object, "status", "lastTransitionTime")
+	return lt, "status.lastTransitionTime"
+}
+
+// canaryRevision is what the Canary's Deployments say about the revision
+// Flagger works on.
+type canaryRevision struct {
+	// status, when set, is the result: the target is missing or does not run
+	// the Bundle images yet.
+	status *HealthStatus
+	// primary is the primary Deployment when its images can be compared with
+	// the Bundle's; nil otherwise.
+	primary *appsv1.Deployment
+	// primaryRunsBundle reports whether primary runs the Bundle images;
+	// primaryNote says what it runs instead.
+	primaryRunsBundle bool
+	primaryNote       string
+	// note says why the images could not be compared.
+	note string
+}
+
+// primaryHealth is the health of a primary Deployment that runs the Bundle
+// images, prefixed with what the phase says.
+func (r canaryRevision) primaryHealth(prefix string) HealthStatus {
+	st := checkDeployment(r.primary, "Available", nil)
+	id := fmt.Sprintf("primary Deployment %s/%s", r.primary.Namespace, r.primary.Name)
+	if st.Healthy {
+		return healthy(fmt.Sprintf("%s; %s runs the Bundle images: %s", prefix, id, st.Reason))
+	}
+	st.Reason = fmt.Sprintf("%s; %s", prefix, st.Reason)
+	return st
+}
+
+// canaryRevision reads the Canary's target Deployment and its primary.
+func (a *FlaggerAdapter) canaryRevision(ctx context.Context, canary *unstructured.Unstructured,
+	expected []ImageExpectation) (canaryRevision, error) {
+	ns := canary.GetNamespace()
+	kind, _, _ := unstructured.NestedString(canary.Object, "spec", "targetRef", "kind")
+	name, _, _ := unstructured.NestedString(canary.Object, "spec", "targetRef", "name")
+	switch {
+	case len(expected) == 0:
+		return canaryRevision{}, nil
+	case name == "":
+		return canaryRevision{note: "(image not verified: the Canary has no spec.targetRef)"}, nil
+	case kind != "" && kind != "Deployment":
+		return canaryRevision{note: fmt.Sprintf("(image not verified: the Canary target is a %s)", kind)}, nil
+	}
+
+	target, err := getDeployment(ctx, a.dynamic, ns, name)
+	if apierrors.IsNotFound(err) {
+		st := unhealthy(fmt.Sprintf("Canary %s/%s: target Deployment %s/%s not found", ns, canary.GetName(), ns, name))
+		return canaryRevision{status: &st}, nil
+	}
+	if err != nil {
+		return canaryRevision{}, err
+	}
+	var images []string
+	for _, c := range target.Spec.Template.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	ok, note := checkImages(expected, images)
+	if !ok {
+		st := progressing(fmt.Sprintf("Canary %s/%s: target Deployment %s/%s not updated yet: %s",
+			ns, canary.GetName(), ns, name, note))
+		return canaryRevision{status: &st}, nil
+	}
+	if note != "" {
+		return canaryRevision{note: note}, nil
+	}
+
+	primary, err := getDeployment(ctx, a.dynamic, ns, name+"-primary")
+	if apierrors.IsNotFound(err) {
+		// Flagger has not initialized the Canary yet.
+		return canaryRevision{note: fmt.Sprintf("(image not verified: no primary Deployment %s/%s-primary)", ns, name)}, nil
+	}
+	if err != nil {
+		return canaryRevision{}, err
+	}
+	images = images[:0]
+	for _, c := range primary.Spec.Template.Spec.Containers {
+		images = append(images, c.Image)
+	}
+	ok, note = checkImages(expected, images)
+	rev := canaryRevision{primary: primary, primaryRunsBundle: ok && note == ""}
+	if !ok {
+		rev.primaryNote = fmt.Sprintf("primary Deployment %s/%s %s", ns, primary.Name, note)
+	} else if note != "" {
+		rev.primaryNote = fmt.Sprintf("primary Deployment %s/%s %s", ns, primary.Name, note)
+	}
+	return rev, nil
 }
 
 // --- AutoDetector ---

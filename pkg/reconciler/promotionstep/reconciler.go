@@ -902,6 +902,7 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 		opts.ExpectedImages = append(opts.ExpectedImages,
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
 	}
+	opts.Since = healthCheckStart(ps)
 
 	adapter, err := r.HealthDetector.Select(ctx, opts.Type)
 	if err != nil {
@@ -1113,6 +1114,23 @@ func (r *Reconciler) checkRequiredGates(ctx context.Context, ps *v1alpha1.Promot
 		}
 	}
 	return "", nil
+}
+
+// healthCheckStart is when this promotion's health check started: the
+// startedAt of its health-check step, which closeStepStatuses sets when the
+// step enters HealthChecking. It is zero when the promotion changed nothing in
+// git (the environment already had the Bundle, so an earlier status of the
+// workload describes it) or the step sequence has no health-check step.
+func healthCheckStart(ps *v1alpha1.PromotionStep) time.Time {
+	if ps.Status.Outputs["noChanges"] == "true" {
+		return time.Time{}
+	}
+	for _, s := range ps.Status.Steps {
+		if s.Name == "health-check" && s.StartedAt != nil {
+			return s.StartedAt.Time
+		}
+	}
+	return time.Time{}
 }
 
 // handleBake implements the K-01 contiguous-healthy soak window.

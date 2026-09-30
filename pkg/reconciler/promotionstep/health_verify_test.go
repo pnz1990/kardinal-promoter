@@ -433,3 +433,50 @@ func TestShardLabelNoLongerSkipsStep(t *testing.T) {
 	reconcileStep(t, r, "step")
 	assert.Equal(t, "Promoting", getStep(t, c, "step").Status.State)
 }
+
+// TestFlaggerPhaseFromThisPromotion proves the reconciler half of bugs 2
+// and 3 of the delivery spike: the flagger check gets the start of the
+// health-check step, so a Succeeded or Failed phase that Flagger set before
+// it (about the previous release) neither verifies nor fails the step. A step
+// that changed nothing in git keeps trusting the phase.
+func TestFlaggerPhaseFromThisPromotion(t *testing.T) {
+	env := v1alpha1.EnvironmentSpec{Name: "test", Health: v1alpha1.HealthConfig{Type: "flagger"}}
+	started := metav1.NewTime(time.Now().Add(-time.Minute).Truncate(time.Second))
+	steps := []v1alpha1.StepStatus{{Name: "health-check", State: v1alpha1.StepExecutionInProgress, StartedAt: &started}}
+	at := func(phase string, d time.Duration) *unstructured.Unstructured {
+		return unstructuredObj("flagger.app/v1beta1", "Canary", "test", "p", map[string]interface{}{
+			"phase": phase, "lastTransitionTime": started.Add(d).UTC().Format(time.RFC3339)})
+	}
+	tests := []struct {
+		name         string
+		status       v1alpha1.PromotionStepStatus
+		canary       *unstructured.Unstructured
+		wantState    string
+		wantMsg      string
+		wantFailures int
+	}{
+		{name: "Succeeded before the health check started waits",
+			status: v1alpha1.PromotionStepStatus{Steps: steps}, canary: at("Succeeded", -time.Hour),
+			wantState: "HealthChecking", wantMsg: "Succeeded is for an earlier release"},
+		{name: "Succeeded after the health check started verifies",
+			status: v1alpha1.PromotionStepStatus{Steps: steps}, canary: at("Succeeded", 20*time.Second),
+			wantState: "Verified", wantMsg: "via flagger"},
+		{name: "Failed before the health check started is not a failure",
+			status: v1alpha1.PromotionStepStatus{Steps: steps}, canary: at("Failed", -time.Hour),
+			wantState: "HealthChecking", wantMsg: "Failed is for an earlier release"},
+		{name: "Failed after the health check started fails",
+			status: v1alpha1.PromotionStepStatus{Steps: steps}, canary: at("Failed", 20*time.Second),
+			wantState: "Failed", wantMsg: "health alarm via flagger", wantFailures: 1},
+		{name: "no changes in git: the earlier Succeeded describes the Bundle",
+			status: v1alpha1.PromotionStepStatus{Steps: steps, Outputs: map[string]string{"noChanges": "true"}},
+			canary: at("Succeeded", -time.Hour), wantState: "Verified"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got, _ := healthCase{env: env, status: tt.status, dynObjs: []runtime.Object{tt.canary}}.run(t)
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Contains(t, got.Status.Message, tt.wantMsg)
+			assert.Equal(t, tt.wantFailures, got.Status.ConsecutiveHealthFailures)
+		})
+	}
+}
