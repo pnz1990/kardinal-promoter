@@ -7,6 +7,8 @@ Aggregate promotion metrics from AuditEvent records
 Show a summary of promotion activity from the AuditEvent log.
 
 Includes: promotion counts, success rate, average duration, gate block rate, and rollbacks.
+Rollbacks counts the rollback Bundles created in the window, from kardinal
+rollback, the UI, a RollbackPolicy or onHealthFailure=rollback.
 The success rate is succeeded / (succeeded + failed + superseded) among the
 promotions that finished inside the window.
 
