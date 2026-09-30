@@ -87,6 +87,7 @@ func NewReconciler(c client.Client) (*Reconciler, error) {
 // State machine:
 //   - No kardinal.io/bundle label → template, skip (no-op)
 //   - Gate not found → deleted, skip
+//   - Bundle Superseded → status kept as it was, skip (no requeue)
 //   - Otherwise → build context, evaluate CEL, patch status, requeue
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
@@ -109,6 +110,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if bundleName == "" {
 		log.Debug().Msg("policygate has no bundle label, validating CEL syntax (template)")
 		return r.reconcileTemplate(ctx, &gate)
+	}
+
+	// A Superseded Bundle never promotes again (Superseded is terminal), so
+	// its gate instances are left as they were when it was superseded: no
+	// evaluation, status write, audit record or requeue (E2E-R20). A Failed
+	// Bundle can recover, so its gates keep being evaluated.
+	if r.bundleSuperseded(ctx, gate.Namespace, bundleName) {
+		log.Debug().Str("bundle", bundleName).Msg("bundle superseded, gate not evaluated")
+		return ctrl.Result{}, nil
 	}
 
 	recheckInterval := parseRecheckInterval(gate.Spec.RecheckInterval)
@@ -233,6 +243,17 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// bundleSuperseded reports whether the gate's Bundle exists and is Superseded.
+// A read error is not treated as superseded: buildContext reports it and the
+// gate fails closed as before.
+func (r *Reconciler) bundleSuperseded(ctx context.Context, namespace, bundleName string) bool {
+	var bundle kardinalv1alpha1.Bundle
+	if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: namespace}, &bundle); err != nil {
+		return false
+	}
+	return bundle.Status.Phase == "Superseded"
 }
 
 // buildContext constructs the Phase 1 CEL context for gate evaluation.

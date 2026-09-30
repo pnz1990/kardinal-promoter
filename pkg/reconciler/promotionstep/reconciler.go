@@ -257,7 +257,8 @@ func isCancellable(state string) bool {
 // handleSuperseded closes the step's PR, if it opened one that is still open,
 // and fails the step. A failed close is retried with backoff up to
 // maxStepRetries times; after that the step fails anyway and the message
-// tells the operator to close the PR by hand (C03-promotionstep-08).
+// tells the operator to close the PR by hand (C03-promotionstep-08). A step
+// that never left Pending is failed without an AuditEvent (cancelUnstarted).
 func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	base := ps.DeepCopy()
 	log.Info().
@@ -266,7 +267,15 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 		Str("state", ps.Status.State).
 		Msg("parent bundle superseded — closing open PR and cancelling step")
 
+	// A step still Pending never started: no PromotionStarted record, no
+	// branch, no PR. It can exist when its Graph created it just before the
+	// Bundle was superseded (E2E-R20). It is not a cancelled promotion, so it
+	// is failed without a PromotionSuperseded record or step metrics.
+	unstarted := base.Status.State == StatePending || base.Status.State == StatePendingExplicit
 	msg := fmt.Sprintf("bundle %s was superseded — promotion cancelled", ps.Spec.BundleName)
+	if unstarted {
+		msg = fmt.Sprintf("bundle %s was superseded before this step started", ps.Spec.BundleName)
+	}
 	if closeErr := r.closeStepPR(ctx, ps, "bundle "+ps.Spec.BundleName+" was superseded by a newer Bundle"); closeErr != nil {
 		if ps.Status.RetryCount < maxStepRetries {
 			ps.Status.RetryCount++
@@ -278,6 +287,9 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			return ctrl.Result{RequeueAfter: retryDelay(ps.Status.RetryCount)}, nil
 		}
 		msg += fmt.Sprintf("; closing its PR failed after %d retries (%v) — close it by hand", maxStepRetries, closeErr)
+	}
+	if unstarted {
+		return ctrl.Result{}, r.cancelUnstarted(ctx, base, ps, msg)
 	}
 	if err := r.transitionAudit(ctx, base, ps, StateFailed, msg, AuditActionPromotionSuperseded); err != nil {
 		return ctrl.Result{}, err

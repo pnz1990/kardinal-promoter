@@ -208,7 +208,9 @@ func firstFailed(ps v1alpha1.PromotionStep) string {
 // of a superseded Bundle, HealthChecking included, is cancelled; its PR is
 // closed, found through the PRStatus or, for a placeholder PRStatus, the step
 // outputs; a failed close is retried; and the AuditEvent is
-// PromotionSuperseded.
+// PromotionSuperseded. A step that never left Pending did no work and is
+// failed without an AuditEvent, so it is not counted as a superseded
+// promotion (E2E-R20).
 func TestSupersession(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -224,6 +226,10 @@ func TestSupersession(t *testing.T) {
 		wantClosed  []string
 		wantAudit   []string
 	}{
+		{name: "step never reconciled is failed without an audit", state: "",
+			wantState: "Failed", wantMsg: "superseded before this step started", wantAudit: []string{}},
+		{name: "pending step is failed without an audit", state: "Pending",
+			wantState: "Failed", wantMsg: "superseded before this step started", wantAudit: []string{}},
 		{name: "health checking step is cancelled", state: "HealthChecking",
 			wantState: "Failed", wantMsg: "was superseded", wantAudit: []string{"PromotionSuperseded"}},
 		{name: "open PR is closed through the PRStatus", state: "WaitingForMerge",
@@ -278,6 +284,14 @@ func TestSupersession(t *testing.T) {
 			assert.Contains(t, got.Status.Message, tt.wantMsg)
 			assert.Equal(t, tt.wantClosed, m.closed)
 			assert.Equal(t, tt.wantAudit, auditActions(t, c))
+
+			// Idempotent: a second reconcile changes nothing more.
+			if tt.wantState == "Failed" {
+				_, err = r.Reconcile(context.Background(), reqFor("step"))
+				require.NoError(t, err)
+				assert.Equal(t, got.Status, getStep(t, c, "step").Status)
+				assert.Equal(t, tt.wantAudit, auditActions(t, c))
+			}
 		})
 	}
 }

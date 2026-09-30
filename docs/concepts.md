@@ -34,10 +34,15 @@ kubectl apply -f bundle.yaml
 When a new Bundle is created while a previous Bundle is still promoting through the
 same Pipeline, the older Bundle is **superseded**:
 
-- The older Bundle's status transitions to `Superseded`
-- Its in-progress PromotionSteps are cancelled
-- Its kro Graph is deleted (PromotionStep CRs cascade-deleted)
-- Open PRs are commented on but not automatically closed
+- The older Bundle's status transitions to `Superseded`, which is final
+- Its unfinished PromotionSteps are failed, and a PR one of them opened that is still
+  open is closed with a comment
+- Its Graph, PromotionSteps and PolicyGates are kept as history, but the Graph creates no
+  new PromotionStep, and its PolicyGates are no longer evaluated: they keep the status
+  they had when the Bundle was superseded
+- A step the Graph created just before the Bundle was superseded, and that never started,
+  is failed with "superseded before this step started" and writes no AuditEvent
+- Deleting the Bundle deletes its Graph and everything the Graph created
 
 Supersession is tracked independently by Bundle type. A new `image` Bundle does not
 supersede an in-flight `config` Bundle, and vice versa.
@@ -407,7 +412,7 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 | `PromotionStarted` | A PromotionStep starts promoting (enters Promoting) |
 | `PromotionSucceeded` | Health check passes and the step reaches Verified |
 | `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
-| `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion |
+| `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion (a step that had not started writes none) |
 | `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 
 ```bash
