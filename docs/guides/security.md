@@ -6,100 +6,46 @@ This guide covers RBAC configuration, GitHub token scopes, and security best pra
 
 ## Controller RBAC
 
-The kardinal-promoter controller requires a `ClusterRole` and `ClusterRoleBinding`. The Helm chart creates these automatically, but here is the full manifest for reference or manual installation:
+The Helm chart creates the controller's RBAC from `chart/kardinal-promoter/templates/_rbac.tpl`.
+Object names come from the chart's full name, which is `kardinal-promoter` for a release named
+`kardinal-promoter`:
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kardinal-promoter-controller
-rules:
-  # kardinal CRDs
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - pipelines
-      - bundles
-      - promotionsteps
-      - policygates
-      - prstatuses
-      - rollbackpolicies
-      - metricchecks
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - pipelines/status
-      - bundles/status
-      - promotionsteps/status
-      - policygates/status
-      - prstatuses/status
-      - rollbackpolicies/status
-      - metricchecks/status
-    verbs: ["get", "update", "patch"]
-  - apiGroups: ["kardinal.io"]
-    resources:
-      - pipelines/finalizers
-      - bundles/finalizers
-      - promotionsteps/finalizers
-    verbs: ["update"]
+| Object | Where | Holds |
+|---|---|---|
+| ServiceAccount `kardinal-promoter` | Release namespace | The controller identity |
+| ClusterRole `kardinal-promoter-manager-role`, ClusterRoleBinding `kardinal-promoter-manager-rolebinding` | Cluster (default) | The namespaced rules in every namespace, plus the cluster-scoped rules |
+| Role and RoleBinding `kardinal-promoter-manager-role` / `-manager-rolebinding`, ClusterRole and binding `kardinal-promoter-cluster-scoped` | Namespace mode (`controller.watchNamespace`) | The namespaced rules in the watched namespace; the cluster-scoped rules |
+| Role and RoleBinding `kardinal-promoter-leader-election` | Release namespace | The leader-election Lease and the `kardinal-version` ConfigMap |
+| ClusterRoles `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` | Cluster | Bound (with RoleBindings only) to the ServiceAccount kro impersonates for each Graph (`graph.serviceAccountName`, default `kardinal-graph`) |
+| ClusterRole `kardinal-promoter-kro-watch` | Cluster | Lets kro watch the kinds a Graph renders; aggregated into kro's role when kro uses `rbac.mode=aggregation` |
 
-  # kro Graph CRDs
-  - apiGroups: ["kro.run"]
-    resources: ["graphs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+What the namespaced rules grant:
 
-  # Graph applier identity: kro applies each Graph as its
-  # spec.serviceAccountName (default kardinal-graph). The controller creates
-  # that ServiceAccount and binds it to the two Graph ClusterRoles.
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["get", "create"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["rolebindings"]
-    verbs: ["get", "create", "update", "delete"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles"]
-    resourceNames: ["kardinal-graph-applier", "kardinal-graph-reader"]
-    verbs: ["bind"]
+| Resources | Verbs | Why |
+|---|---|---|
+| `secrets` | get, list, watch | Pipeline `spec.git.secretRef` and the SCM token Secret. In cluster mode this is **every Secret in the cluster**, because the rule is in a ClusterRole |
+| `events` | get, list, watch, create, patch | Events from every reconciler |
+| `configmaps` | get, list, watch | Cached reads; the only write is the `kardinal-version` ConfigMap |
+| All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
+| `auditevents` | get, list, watch, create | Audit records are append-only |
+| `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
+| `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, create, update, delete; bind | The Graph identity |
+| `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
+| `batch` `jobs` | get, list, watch, create, delete | Only with `rbac.integrationTestJobs=true` |
 
-  # Read workload status (health checks)
-  - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+The cluster-scoped rules cover `changewindows` (read, and status writes) and, with
+`ui.auth.tokenReview=true`, `tokenreviews` and `subjectaccessreviews` (create).
 
-  # GitHub token secret
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get"]
+To see the exact rules for your values:
 
-  # Events
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch"]
-
-  # Leader election + version ConfigMap
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "create", "update", "patch"]
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "create", "update", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kardinal-promoter-controller
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kardinal-promoter-controller
-subjects:
-  - kind: ServiceAccount
-    name: kardinal-promoter-controller
-    namespace: kardinal-system
+```bash
+helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+  --namespace kardinal-system -f my-values.yaml \
+  --show-only templates/clusterrole.yaml
 ```
+
+To keep Secret access out of other namespaces, run in namespace mode
+(`controller.watchNamespace`), which turns the namespaced rules into a Role in that namespace.
 
 ---
 
@@ -238,9 +184,9 @@ installs, using RBAC to restrict writes.
 
 #### Additional isolation steps
 
-1. Apply a `NetworkPolicy` to restrict each `kardinal-*` namespace pod egress to the Kubernetes API server only
-2. Use separate GitHub App installations per team (when using OIDC) so token blast radius is bounded
-3. Use separate GitHub token `Secrets` in each team namespace — never share a token across namespace installs
+1. Keep `networkPolicy.enabled=true` and narrow `networkPolicy.ingressFrom.*` for each install (see [NetworkPolicy](#networkpolicy))
+2. Give each team its own SCM token, scoped to that team's GitOps repositories, so a leaked token only reaches one team's repos
+3. Keep each team's token `Secret` in that team's namespace — never share a token across namespace installs
 
 ---
 
@@ -304,7 +250,7 @@ ISO 27001, and FedRAMP audit trail requirements.
 | `PromotionSucceeded` | Health check passed; PromotionStep reached Verified |
 | `PromotionFailed` | PromotionStep reached Failed state |
 | `PromotionSuperseded` | A newer Bundle superseded an in-flight promotion |
-| `GateEvaluated` | PolicyGate changed readiness state (blocked or unblocked) |
+| `GateEvaluated` | PolicyGate instance first evaluated, and every later change of readiness (blocked or unblocked); one record per change |
 | `RollbackStarted` | `onHealthFailure: rollback` triggered a rollback Bundle |
 
 ### Fields on every event

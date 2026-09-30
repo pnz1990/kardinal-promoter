@@ -115,8 +115,8 @@ kubectl get pods -n kro-system
 | `service.webhookPort` | `8083` | Webhook (`/webhook/scm`) and Bundle API port (container and Service) |
 | `controller.watchNamespace` | `""` | Namespace-scoped mode (`--watch-namespace`). Must equal the release namespace |
 | `controller.policyNamespaces` | `[]` | Namespaces with org-level PolicyGates (`--policy-namespaces`; default `platform-policies`) |
-| `controller.shard` | `""` | `--shard` (see [Distributed mode](distributed-mode.md)) |
-| `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers |
+| `controller.shard` | `""` | `--shard`: this controller reconciles only PromotionSteps labelled with the shard, but still runs every other reconciler. Not a way to deploy a shard agent (see [Distributed mode](distributed-mode.md)) |
+| `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts` |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
 | `rbac.integrationTestJobs` | `false` | Grant Job create/delete (the `integration-test` step) |
@@ -242,7 +242,14 @@ kubectl delete crd \
   promotionsteps.kardinal.io \
   policygates.kardinal.io \
   prstatuses.kardinal.io \
-  rollbackpolicies.kardinal.io
+  rollbackpolicies.kardinal.io \
+  metricchecks.kardinal.io \
+  scheduleclocks.kardinal.io \
+  changewindows.kardinal.io \
+  subscriptions.kardinal.io \
+  notificationhooks.kardinal.io \
+  promotiontemplates.kardinal.io \
+  auditevents.kardinal.io
 
 # Optional: remove kro and its CRDs (only if nothing else uses kro)
 helm uninstall kro -n kro-system
@@ -257,24 +264,30 @@ kubectl delete namespace kro-system
 
 ## RBAC requirements
 
-The kardinal-promoter controller's `ServiceAccount` requires:
+The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its RBAC. In summary:
 
-| Resource | Verbs |
+| Resources | Verbs |
 |---|---|
-| `pipelines`, `bundles`, `promotionsteps`, `policygates`, `prstatuses`, `rollbackpolicies` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
-| `graphs.kro.run` | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` |
-| `serviceaccounts` | `get`, `create` (Graph identity) |
-| `rolebindings` | `get`, `create`, `update`, `delete` (Graph identity; `delete` removes reader bindings no Graph needs) |
-| `clusterroles` | `bind`, limited to `kardinal-graph-applier` and `kardinal-graph-reader` |
-| `deployments`, `services`, `pods` | `get`, `list`, `watch` |
-| `secrets` | `get` (GitHub token secret only) |
-| `events` | `create`, `patch` |
-| `configmaps` | `get`, `create`, `update` (leader election + version ConfigMap) |
+| All `kardinal.io` kinds and their `/status` | Full CRUD (`auditevents`: get, list, watch, create) |
+| `graphs.kro.run` | Full CRUD; get on `graphs/status` |
+| `serviceaccounts`, `rolebindings` | get, create; get, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs) |
+| `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
+| `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
+| `secrets` | get, list, watch. In the default cluster mode this covers **every Secret in the cluster** |
+| `configmaps` | get, list, watch; the `kardinal-version` ConfigMap is written through the leader-election Role |
+| `leases` | Leader election, through a Role in the release namespace |
+| `events` | get, list, watch, create, patch |
+
+Optional rules: `rbac.argocdApplicationsWrite` (patch Applications), `rbac.integrationTestJobs`
+(create and delete Jobs), and `ui.auth.tokenReview` (create TokenReviews and
+SubjectAccessReviews). The full list of objects and rules is in
+[Security: Controller RBAC](guides/security.md#controller-rbac). Set `controller.watchNamespace`
+to turn the namespaced rules into a Role in one namespace.
 
 kro does not apply a Graph's children with its own identity. It impersonates the Graph's
 `spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
-controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-graph-applier`
-(in the Graph namespace) and `kardinal-graph-reader` (in each namespace a health `ref` node reads,
+controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-promoter-graph-applier`
+(in the Graph namespace) and `kardinal-promoter-graph-reader` (in each namespace a health `ref` node reads,
 limited to the Graph's own namespace and `graph.readerNamespaces`). Reader bindings that no Graph
 in the namespace needs any more are deleted.
 See G5 in the [Graph capability ledger](design/16-graph-capability-ledger.md).
@@ -286,10 +299,10 @@ list them and delete any in a namespace that is not the Graph's own and not in
 
 ```bash
 kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \
-  -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name | grep kardinal-graph-reader-
+  -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name | grep graph-reader-
 ```
 
-Both `ClusterRole` and `ClusterRoleBinding` resources are created automatically by the Helm chart.
+The Helm chart creates all of these ClusterRoles, Roles and bindings.
 
 ---
 

@@ -126,7 +126,7 @@ func genQuickReference(root *cobra.Command, outPath string) error {
 	b.WriteString("     Design ref: docs/design/41-published-docs-freshness.md -->\n\n")
 	b.WriteString("!!! note \"Auto-generated\"\n")
 	b.WriteString("    Generated from the kardinal CLI source. Every command is documented.\n")
-	b.WriteString("    See [detailed reference pages](reference/cli/) for flags and examples.\n\n")
+	b.WriteString("    See [detailed reference pages](reference/cli/kardinal.md) for flags and examples.\n\n")
 	b.WriteString("| Command | Description |\n")
 	b.WriteString("|---|---|\n")
 
@@ -135,7 +135,7 @@ func genQuickReference(root *cobra.Command, outPath string) error {
 	}
 
 	b.WriteString("\nFor full flag documentation, examples, and output formats, see the\n")
-	b.WriteString("[individual command pages](reference/cli/).\n")
+	b.WriteString("[individual command pages](reference/cli/kardinal.md).\n")
 	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", outPath, err)
 	}

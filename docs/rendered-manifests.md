@@ -212,8 +212,11 @@ of truth. You cannot recover the cluster state from Git if `targetRevision` was 
 committed. The Argo CD Application object becomes your source of truth instead of Git,
 which defeats auditability and disaster recovery.
 
-kardinal-promoter never mutates Argo CD Application objects directly. All promotions
-write to Git first.
+With the `kustomize` and `helm` update strategies, kardinal-promoter only writes to Git
+and never touches the Argo CD Application. The exception is `update.strategy: argocd`,
+which patches the Application's `spec.source.helm.valuesObject` directly instead of
+committing (see [Argo CD native promotion](argocd-native-promotion.md)); use it only
+where that trade-off is acceptable.
 
 ## Examples
 

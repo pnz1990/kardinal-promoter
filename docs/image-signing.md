@@ -20,7 +20,9 @@ assurance: only images signed by your CI pipeline reach production.
 
 ## Prerequisites
 
-- `cosign` must be available in `$PATH` inside the controller's container image.
+- `cosign` must be on `$PATH` in the controller container. The published controller image
+  does not include it (the runtime image has only `kustomize`), so the step needs a custom
+  image built from the Dockerfile with cosign added.
   See [Installing cosign](https://docs.sigstore.dev/cosign/system_config/installation/).
 - Images must be signed at build time using `cosign sign` (keyless OIDC or key-based).
 

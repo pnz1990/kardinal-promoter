@@ -6,7 +6,7 @@ Thank you for your interest in contributing to kardinal-promoter!
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.26+ (the exact toolchain is pinned in `go.mod`)
 - `kubectl` and a Kubernetes cluster (kind recommended for local development)
 - `helm` for chart-related changes
 
@@ -64,7 +64,7 @@ PR titles must follow [Conventional Commits](https://www.conventionalcommits.org
 
 ## Code Standards
 
-- No bare `errors.New` — use `fmt.Errorf("context: %w", err)`
+- Wrap errors with context: `fmt.Errorf("context: %w", err)`. Use `errors.New` only for package-level sentinel errors (`var ErrX = errors.New(...)`) and permanent step failures
 - Use `zerolog.Ctx(ctx)` for logging — no `fmt.Println`
 - Table-driven tests with `testify/assert` and `require`
 - No `util.go`, `helpers.go`, or `common.go` filenames

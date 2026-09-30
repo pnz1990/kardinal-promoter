@@ -13,7 +13,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `Freight` | `Bundle` CRD | One Bundle per artifact version; carries provenance |
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
-| `VerifiedIn` / approval required | `approvalMode: pr-review` on environment | PR approval required before HealthChecking |
+| `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
 | `AnalysisTemplate` | `MetricCheck` CRD | Prometheus / custom queries with pass/fail thresholds |
 | `ClusterStage` | `Pipeline` with `namespace` per env | Multi-cluster via kubeconfig Secret |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
@@ -103,17 +103,21 @@ metadata:
   name: my-app
 spec:
   git:
-    repoURL: https://github.com/myorg/gitops-repo.git
-    credentialSecret: github-token
+    url: https://github.com/myorg/gitops-repo.git
+    branch: main
+    secretRef:
+      name: github-token
   environments:
     - name: test
-      branch: env/test
-      approvalMode: auto
-      updateStrategy: kustomize
+      path: environments/test    # a directory on spec.git.branch (see the note below)
+      approval: auto
+      update:
+        strategy: kustomize
     - name: prod
-      branch: env/prod
-      approvalMode: pr-review    # requires PR merge (Kargo: Stage with approval)
-      updateStrategy: kustomize
+      path: environments/prod
+      approval: pr-review        # requires PR merge (Kargo: Stage with approval)
+      update:
+        strategy: kustomize
       dependsOn:
         - test                    # explicit sequencing (Kargo: sources.stages)
   policyNamespaces:
@@ -130,9 +134,14 @@ spec:
   type: image
   image:
     registry: ghcr.io/myorg/my-app
-    tagFilter: "^1\\..*"         # semver-compatible regex
-  interval: 2m
+    tagFilter: '^1\.\d+\.\d+$'   # 1.x.y semantic versions; the highest is promoted
+    interval: 2m
 ```
+
+kardinal writes every environment to a directory on one branch. Kargo pipelines that
+keep one branch per environment (`env/test`, `env/prod`) need their manifests moved to
+`environments/<name>/` on the base branch first: `spec.git.layout: branch` is accepted by
+the API but not implemented, and a promotion with it fails at `git-clone`.
 
 ---
 
@@ -144,9 +153,9 @@ Kargo Stages are individual resources; kardinal collapses them into a single Pip
 
 For each Kargo Stage:
 1. Add an entry to `spec.environments[]` in the Pipeline
-2. Copy `approvalMode` from Stage's approval configuration:
-   - Auto-promotion → `approvalMode: auto`
-   - Manual approval → `approvalMode: pr-review`
+2. Set `approval` from the Stage's approval configuration:
+   - Auto-promotion → `approval: auto`
+   - Manual approval → `approval: pr-review`
 3. Translate `sources.stages: [upstream]` → `dependsOn: [upstream]`
 
 ### Step 2: Convert Warehouses to Subscriptions
@@ -159,6 +168,13 @@ kubectl get warehouse my-app -n kargo-demo -o yaml
 # Translate repoURL → spec.image.registry
 # Translate semverConstraint → spec.image.tagFilter (Go regex)
 ```
+
+When every tag matching `tagFilter` is a semantic version, the highest version is
+selected (Kargo `SemVer`). A filter that matches exactly one tag tracks that tag's
+digest (Kargo `Digest`). Other tag sets are ordered by image build time (Kargo
+`NewestBuild`), limited to 50 matching tags. Subscriptions only poll public
+repositories; Warehouses that use registry credentials should create Bundles from CI
+instead. See [Subscription](../subscription.md).
 
 ### Step 3: Remove Kargo `Promotion` objects (if any)
 
@@ -192,18 +208,16 @@ kind: MetricCheck
 metadata:
   name: success-rate
   namespace: platform-policies
-  labels:
-    kardinal.io/applies-to: prod
 spec:
+  provider: prometheus
   query: |
     sum(rate(http_requests_total{status=~"2.."}[5m])) /
     sum(rate(http_requests_total[5m]))
   prometheusURL: http://prometheus.monitoring.svc:9090
   threshold:
-    operator: ">="
+    operator: gte   # one of lt, gt, lte, gte, eq
     value: 0.95
-  recheckInterval: 1m
-  windowDuration: 5m
+  interval: 1m
 ```
 
 ### Step 5: Convert AnalysisRunArguments to PolicyGate CEL expressions
@@ -220,7 +234,9 @@ metadata:
   labels:
     kardinal.io/applies-to: prod
 spec:
-  expression: "metrics.successRate >= 0.95"
+  # metrics.<MetricCheck name>.result is "Pass" when the threshold holds;
+  # .value is the raw value as a string (use double(...) to compare it).
+  expression: 'metrics["success-rate"].result == "Pass"'
   message: "Success rate below 95%"
   recheckInterval: 1m
 ```
@@ -229,7 +245,7 @@ spec:
 
 ```bash
 # Install kardinal
-helm install kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system --create-namespace
 
 # Apply your Pipeline
@@ -260,8 +276,8 @@ helm uninstall kargo -n kargo
 |---|---|---|
 | Image watching | Warehouse `image` subscription | `Subscription` CRD with `type: image` |
 | Git watching | Warehouse `git` subscription | `Subscription` CRD with `type: git` |
-| Auto-promotion | `promotionTemplate` | `approvalMode: auto` |
-| Manual approval | `Stage` with `promotionMechanisms.gitUpdateMechanisms` | `approvalMode: pr-review` |
+| Auto-promotion | `promotionTemplate` | `approval: auto` |
+| Manual approval | `Stage` with `promotionMechanisms.gitUpdateMechanisms` | `approval: pr-review` |
 | Stage sequencing | `requestedFreight.sources.stages` | `dependsOn` |
 | Parallel stages (fan-out) | Multiple Stages with same upstream | Multiple environments with same `dependsOn` |
 | Argo Rollouts | `argoRollouts` promotion mechanism | `health.type: argoRollouts` |
@@ -271,7 +287,7 @@ helm uninstall kargo -n kargo
 | Rollback | Manual re-promotion of older Freight | `kardinal rollback my-app --env prod` |
 | Evidence / audit | Promotion annotations | PR body with structured evidence + `kardinal history` |
 | DAG visualization | Kargo UI (separate install) | Built-in React UI (embedded in controller) |
-| Multi-cluster | `ClusterStage` + RBAC | `Pipeline` environments with `kubeconfig` Secret |
+| Multi-cluster | `ClusterStage` + RBAC | Argo CD hub: `health.type: argocd` reads each Application in the hub (`health.cluster` kubeconfig Secrets are not implemented) |
 
 ---
 

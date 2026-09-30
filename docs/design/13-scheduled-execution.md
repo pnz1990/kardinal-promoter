@@ -1,7 +1,10 @@
 # 13: Scheduled Execution — Hourly Autonomous Loop via GitHub Actions
 
-> Status: Active | Created: 2026-04-19
-> Applies to: kardinal-promoter
+> Status: Retired (2026-09-29). `.github/workflows/otherness-scheduled.yml` was deleted (#1247),
+> so nothing runs the loop on a schedule. Historical design; the workflow it described also
+> differed from this page (it ran hourly, had no `actions: write` permission and no
+> `X-OAuth-Scopes` preflight). Do not follow it.
+> Created: 2026-04-19
 
 ---
 
@@ -121,7 +124,7 @@ If secrets expire or need rotation:
 
 - ✅ **Workflow step syntax CI-validation** — the `otherness-scheduled.yml` "Install otherness agent files" step has failed repeatedly with bash syntax errors (7 consecutive runs failed 2026-04-21 00:40–06:43 UTC, see PR #943). The root cause: sequential edits by agents corrupt multi-branch if/else/fi blocks, and there is no automated check that catches this before merge. Add a CI job (or pre-merge check in `ci.yml`) that runs `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/otherness-scheduled.yml'))"` + `bash -n` on the extracted `run:` scripts. Every workflow step that contains bash should be syntax-verified before merge. A broken scheduled workflow means **the loop ships zero work** for hours without any human noticing — this is the highest-impact single reliability failure mode. (PR #943) ⚠️ NOTE: PR #943 fixed the bash syntax error. It did NOT add a `bash -n` CI guard. The `yaml.safe_load` CI step covers YAML structure only — bash errors inside `run:` blocks pass YAML validation. The actual `bash -n` CI guard is unimplemented; see the corresponding 🔲 item in doc 12 (`bash -n CI guard for otherness-scheduled.yml`).
 
-- ✅ **PDCA coverage must never be 0/0 — flag as BROKEN when it is** — the PDCA workflow now checks `TOTAL == 0` in the `Post PDCA evidence` step: if no scenarios ran, posts `[PDCA BROKEN — no scenarios executed; workflow failed before reaching scenario step]` to Issue #1 and adds `needs-human` label to Issue #413. Normal runs (TOTAL > 0) are unaffected. (PR #1000, 2026-04-21)
+- ✅ **PDCA coverage must never be 0/0 — flag as BROKEN when it is** — the PDCA workflow now checks `TOTAL == 0` in the `Post PDCA evidence` step: if no scenarios ran, posts `[PDCA BROKEN — no scenarios executed; workflow failed before reaching scenario step]` to Issue #1 and adds `needs-human` label to Issue #413. Normal runs (TOTAL > 0) are unaffected. (PR #1000, 2026-04-21) **Update (2026-09-29):** the `Post PDCA evidence` step now puts `Status: NO CHECKS RAN` in its normal Issue #1 comment and fails the job (exit 1). It no longer posts a separate `[PDCA BROKEN]` comment or adds the `needs-human` label.
 
 - ✅ **Single-page health dashboard at Issue #1** — SM §4f-health-snapshot now maintains
   a single comment on `REPORT_ISSUE` with sentinel `<!-- otherness-health-snapshot -->`.

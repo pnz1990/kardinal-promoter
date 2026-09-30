@@ -10,7 +10,7 @@ To add your organization, open a pull request with a new row in the table below.
 
 | Organization | Use Case | Environment | Added |
 |---|---|---|---|
-| kardinal-promoter (self) | PDCA validation loop — promotes `kardinal-test-app` through `kardinal-demo` (env/test → env/uat → env/prod) on every 6-hour cycle. Serves as continuous integration proof that all 7 journeys work end-to-end. | kind (single-cluster) + EKS (multi-cluster) | 2026-04-21 |
+| kardinal-promoter (self) | Nightly PDCA workflow (`.github/workflows/pdca.yml`) — promotes `kardinal-test-app` through `kardinal-demo` (env/test → env/uat → env/prod) on a kind cluster. It has not run since 2026-07-17. | kind (single-cluster) | 2026-04-21 |
 
 ---
 
@@ -23,7 +23,7 @@ The PDCA validation loop that runs on this repository is the first public adopte
 3. A PR is opened for `prod` (pr-review approval required)
 4. Policy gates validate schedule, soak time, and bundle provenance
 
-This demonstrates all 7 validated journeys defined in `docs/aide/definition-of-done.md`.
+No journey in `docs/aide/definition-of-done.md` has live-cluster evidence yet; see its Journey Status table.
 
 ---
 

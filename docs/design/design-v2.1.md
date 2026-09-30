@@ -1,5 +1,22 @@
 # kardinal-promoter: Technical Design Document
 
+> **Superseded, historical (2026-09-29).** This is the pre-upstream-kro design and its core
+> claims no longer match the product. Read [concepts](../concepts.md) and
+> [architecture](../architecture.md) for how kardinal works, and
+> [16-graph-capability-ledger](16-graph-capability-ledger.md) for how it uses kro. Known
+> differences include:
+> - `propagateWhen` and `now()` do not exist in kro (ledger G1).
+> - The PromotionStep spec and status fields below are not the real ones
+>   (`api/v1alpha1/promotionstep_types.go`).
+> - Health is not auto-detected, `health.argocd{}` sub-fields are rejected by the CRD, and
+>   `health.cluster` is not used.
+> - Merge detection polls through the PRStatus reconciler; it is not webhook-only.
+> - The metric names are not the real ones (`pkg/reconciler/observability/metrics.go`).
+> - There is no `/var/cache/kardinal`; the chart mounts an `emptyDir` at `/tmp`.
+> - The UI is not read-only.
+> - Skip permission is the PolicyGate `spec.skipPermission` bool; there is no `SkipDenied`.
+> - The Bundle API uses a Bearer token only, limited to 60 requests a minute per token.
+>
 > Version: 2.1
 > Date: 2026-04-09
 > License: Apache 2.0
@@ -426,9 +443,11 @@ environments:
 ```bash
 kardinal-agent \
   --shard=eu-cluster \
-  --control-plane-kubeconfig=/etc/kardinal/kubeconfig \
-  --git-cache-dir=/var/cache/kardinal
+  --kubeconfig=/etc/kardinal/kubeconfig
 ```
+
+(`--control-plane-kubeconfig` and `--git-cache-dir` were never implemented. `--kubeconfig` is
+controller-runtime's standard flag, and it points at the control plane.)
 
 The agent uses the control plane kubeconfig to watch and update PromotionStep CRDs. It uses local cluster credentials (or kubeconfig Secrets) for health checks.
 

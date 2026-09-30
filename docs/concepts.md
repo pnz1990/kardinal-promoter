@@ -218,7 +218,7 @@ spec:
 
 - **Org-level gates** (namespace `platform-policies`) are injected into every Pipeline that targets the matching environment. Teams cannot remove them.
 - **Team-level gates** (team namespace) are added alongside org gates. Teams can add their own restrictions.
-- The `kardinal.io/applies-to` label determines which environments the gate blocks. Comma-separated for multiple: `prod-eu,prod-us`.
+- The `kardinal.io/applies-to` label names the environment the gate blocks. A label value cannot contain a comma, so a gate blocks one environment; create one gate per environment to block several.
 
 ### CEL context
 
@@ -227,17 +227,16 @@ PolicyGate expressions are evaluated against a context that includes:
 | Attribute | Type | Example |
 |---|---|---|
 | `bundle.version` | string | "1.29.0" |
-| `bundle.labels.*` | map | bundle.labels.hotfix == true |
+| `bundle.labels` | map of string | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
 | `bundle.provenance.author` | string | "dependabot[bot]" |
 | `bundle.provenance.commitSHA` | string | "abc123" |
-| `bundle.intent.target` | string | "prod" |
+| `bundle.intent.targetEnvironment` | string | "prod" |
 | `schedule.isWeekend` | bool | false |
 | `schedule.hour` | int | 14 |
 | `schedule.dayOfWeek` | string | "Tuesday" |
 | `environment.name` | string | "prod" |
-| `environment.approval` | string | "pr-review" |
 
-Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`), and previously deployed version (`previousBundle.version`). See the [CEL context reference](policy-gates.md#cel-context) for the full list.
+Additional attributes are available including metrics results (`metrics.*`), upstream soak time (`bundle.upstreamSoakMinutes`, `upstream.<env>.soakMinutes`) and change windows (`changewindow.*`). Referencing an attribute that does not exist blocks the gate. See the [CEL context reference](reference/cel-context.md) for the full list.
 
 ### Inspecting gates
 
@@ -306,7 +305,7 @@ health:
 
 A Subscription watches external sources and auto-creates Bundles. This is an alternative to the CI webhook for teams that want fully passive promotion triggers.
 
-**Image Subscription** (watches OCI registries for new image tags):
+**Image Subscription** (watches a public OCI repository for new images):
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -318,7 +317,7 @@ spec:
   pipeline: my-app
   image:
     registry: ghcr.io/myorg/my-app
-    tagFilter: "^sha-"
+    tagFilter: "^main$"          # one moving tag: a new Bundle for each new digest
     interval: 5m
 ```
 
@@ -335,11 +334,13 @@ spec:
   git:
     repoURL: https://github.com/myorg/app-config
     branch: main
-    pathGlob: "configs/my-app/**"
     interval: 5m
 ```
 
-When a new image tag or Git commit is discovered, a Bundle of the appropriate type (`image` or `config`) is created automatically.
+The first poll records the current digest or commit as a baseline. After that, each new
+image or commit creates a Bundle of the matching type (`image` or `config`) in the
+Subscription's own namespace. Only public repositories are supported. See
+[Subscription](subscription.md) for tag selection rules and limits.
 
 ## Rendered Manifests
 

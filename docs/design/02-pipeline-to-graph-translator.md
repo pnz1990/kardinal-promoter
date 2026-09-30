@@ -1,6 +1,18 @@
 # 02: Pipeline-to-Graph Translator
 
-> Status: Comprehensive
+> Status: Historical (checked against the code on 2026-09-29). Several parts differ from the
+> code; `pkg/translator/translator.go` and `pkg/graph/builder.go` are the reference. Known
+> differences:
+> - The package holds `doc.go` and `translator.go`; the Graph is built in `pkg/graph`.
+> - `propagateWhen` and `now()` do not exist in kro. Dependents wait through `resolvableWhen`
+>   guards in their templates (ledger G1).
+> - PromotionStep carries `spec.upstreamStates` and `spec.requiredGates`, not
+>   `upstreamVerified`/`upstreamEnvironment`.
+> - Skip permission is the PolicyGate `spec.skipPermission` bool, checked in Go
+>   (`pkg/graph/skip.go`); a denied skip fails the Bundle. There is no `SkipDenied` node.
+> - A Pipeline change mid-flight updates the Graph in place; it is not immutable (ledger G6).
+> - Per-region steps use the `region` variable, not `${item}`.
+> - [design-v2.1](design-v2.1.md), cited below, is itself superseded.
 > Depends on: 01-graph-integration
 > Blocks: 03-promotionstep-reconciler, 04-policygate-reconciler
 

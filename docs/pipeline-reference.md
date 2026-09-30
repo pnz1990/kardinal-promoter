@@ -18,17 +18,14 @@ spec:
     provider: <string>                  # Not read; the controller's --scm-provider flag selects the SCM
     secretRef:
       name: <string>                    # Secret containing the Git token
-    webhookMode: <string>               # "webhook" (default) or "polling"
-    pollInterval: <duration>            # Poll interval when webhookMode: polling (default: "30s")
 
   environments:                         # Ordered list of environments
     - name: <string>                    # Environment name (must be unique within the Pipeline)
       path: <string>                    # Path in the GitOps repo (default: "environments/<name>")
       dependsOn: [<string>, ...]        # Environments this one depends on (default: previous in list)
       update:
-        strategy: <string>              # "kustomize" (default), "helm", "replace" (future)
-      approval: <string>               # "auto" (default) or "pr-review"
-        # pr: <bool>                    # For approval: auto, set pr: true to create audit PRs
+        strategy: <string>              # "kustomize" (default), "helm" or "argocd"
+      approval: <string>                # "auto" (default) or "pr-review"
       health:
         type: <string>                  # "resource" (default), "argocd", "flux", "argoRollouts", "flagger"
         resource:                       # When type: resource
@@ -97,7 +94,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `path` | No | `environments/<name>` | Directory in the GitOps repo containing the environment's manifests. It must be relative and stay inside the repository: absolute paths, `..` segments and symlinks that point outside the checkout fail the step. |
 | `dependsOn` | No | Previous environment | List of environment names that must be Verified before this one starts. Default: sequential ordering (each depends on the previous). Specifying `dependsOn` enables parallel fan-out. |
 | `wave` | No | 0 (sequential) | Assigns this environment to a numbered deployment wave (K-06). Environments with the same wave number are promoted in parallel. A wave depends on every environment of the next lower wave, and on the environment without a wave listed before it. Gaps in the numbers are allowed. Composable with `dependsOn`. See [Wave Topology](#wave-topology-k-06). |
-| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`. |
+| `update.strategy` | No | `kustomize` | How to update image references in manifests. `kustomize`: edits the `images:` list of the environment's `kustomization.yaml` the way `kustomize edit set image` does. `helm`: patches a configurable path in `values.yaml`. `argocd`: patches the Argo CD Application's `spec.source.helm.valuesObject` directly, with no Git commit or PR (`approval: pr-review` fails the step); see [Argo CD native promotion](argocd-native-promotion.md). |
 | `approval` | No | `auto` | `auto`: push directly to the target branch, no PR. `pr-review`: open a PR with promotion evidence, wait for human merge. |
 | `health.type` | No | auto-detected | Health verification adapter. Auto-detected on startup if omitted: checks for Argo CD Application CRD, then Flux Kustomization CRD, then falls back to Deployment condition. |
 | `health.timeout` | No | `10m` | How long to wait for health verification before marking the step as Failed. |

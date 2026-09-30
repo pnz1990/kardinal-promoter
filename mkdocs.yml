@@ -5,6 +5,21 @@ repo_url: https://github.com/pnz1990/kardinal-promoter
 repo_name: pnz1990/kardinal-promoter
 edit_uri: edit/main/docs/
 
+# docs/aide/ holds the project's agent process files; they are not user documentation.
+exclude_docs: |
+  aide/
+
+# Design docs and the per-command CLI pages are reached through links, not the nav.
+not_in_nav: |
+  /design/
+  /reference/cli/
+
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    anchors: warn
+
 theme:
   name: material
   palette:
@@ -52,9 +67,6 @@ plugins:
       fallback_to_build_date: true
   - minify:
       minify_html: true
-  - gen-files:
-      scripts:
-        - docs/gen_ref_pages.py
 
 markdown_extensions:
   - admonition
@@ -93,7 +105,11 @@ nav:
     - CI Integration: ci-integration.md
     - PR Evidence: pr-evidence.md
     - Custom Steps: custom-steps.md
+    - Image Signing: image-signing.md
     - Rendered Manifests: rendered-manifests.md
+    - Argo CD Native Promotion: argocd-native-promotion.md
+    - Subscriptions: subscription.md
+    - Notifications: notifications.md
     - Multi-Cluster: distributed-mode.md
     - SCM Providers: scm-providers.md
     - Advanced Patterns: advanced-patterns.md
@@ -102,6 +118,7 @@ nav:
     - Migrating from Kargo: guides/migrating-from-kargo.md
   - Reference:
     - CLI Reference: cli-reference.md
+    - CLI Commands: reference/cli/kardinal.md
     - Pipeline CRD: pipeline-reference.md
     - API Reference: reference/api.md
     - CEL Context: reference/cel-context.md
@@ -110,6 +127,7 @@ nav:
   - Architecture:
     - Overview: architecture.md
     - Graph Coverage: graph-coverage.md
+    - Demo Validation: demo-validation.md
   - Comparison: comparison.md
   - Roadmap: roadmap.md
   - Changelog: changelog.md
@@ -118,5 +136,3 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/pnz1990/kardinal-promoter
-  version:
-    provider: mike

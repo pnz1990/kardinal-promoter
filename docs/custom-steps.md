@@ -213,8 +213,9 @@ environment.
 Check that your server is reachable from the controller pod:
 
 ```bash
-kubectl exec -n kardinal-system deploy/kardinal-controller -- \
-  curl -s http://custom-step-server.my-ns.svc.cluster.local/healthz
+# The controller image is Alpine-based: it has busybox wget, not curl.
+kubectl exec -n kardinal-system deploy/kardinal-promoter -- \
+  wget -qO- http://custom-step-server.my-ns.svc.cluster.local/healthz
 ```
 
 ### Step fails with "missing input webhook.url"

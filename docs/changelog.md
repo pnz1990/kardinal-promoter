@@ -85,7 +85,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [v0.7.0] — 2026-04-17
+## [v0.7.0] — 2026-04-16
 
 **WatchKind O(1) health checks, Graph controller fork 81c5a03 upgrade, reactive PromotionStep reconciler, graph-first cleanup**
 
@@ -151,12 +151,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **K-01: Contiguous healthy soak** — `bake.minutes` + `bake.policy: reset-on-alarm` on environment spec; `BakeElapsedMinutes` and `BakeResets` tracked in PromotionStep status
 - **K-02: Pre-deploy gate type** — `when: pre-deploy` on PolicyGate spec; blocks PromotionStep in `Waiting` state before `git-clone` starts
 - **K-03: Auto-rollback with ABORT vs ROLLBACK distinction** — `onHealthFailure: rollback | abort | none` per environment
-- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL function evaluates to `true` when the window is active/blocking
+- **K-04: ChangeWindow CRD** — blackout and recurring allowed-hours windows; `changewindow["name"]` CEL map variable is `true` when the window is active/blocking
 - **K-05: Bundle.status.metrics** — commitToFirstStageMinutes, commitToProductionMinutes, bakeResets, operatorInterventions; `kardinal metrics` CLI command
 - **K-06: Wave topology** — `wave: N` field on environment spec; Wave N automatically depends on all Wave N-1 stages
 - **K-07: Integration test step** — built-in `integration-test` step runs a Kubernetes Job as part of the promotion sequence
 - **K-08: PR review gate** — `bundle.pr["staging"].isApproved` and `.approvalCount` in CEL context via PRStatus CRD
-- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; override record in Bundle status and PR evidence body
+- **K-09: `kardinal override` with audit record** — emergency gate override with mandatory reason + time limit; the override is recorded in the gate's `spec.overrides[]`, and the gate reason shows it in the PR evidence body
 - **K-10: Cross-stage history CEL** — `upstream.<env>.soakMinutes`, `.recentSuccessCount`, `.recentFailureCount`, `.lastPromotedAt` in gate expressions
 - **UI control plane** — all 7 UI issues shipped (#462–#468): fleet health dashboard, pipeline ops view, per-stage bake countdown, in-UI actions (pause/resume/rollback/override), release metrics bar, bundle timeline, policy gate detail panel
 
@@ -167,15 +167,15 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [v0.4.0] — 2026-04-12
+## [v0.4.0] — 2026-04-11
 
 **Distributed Mode, Argo Rollouts delegation, graph purity, K-series features**
 
 ### Added
 
 - **Distributed mode** — `--shard` flag routes PromotionSteps to matching shard agents; supports multi-cluster deployments where each spoke cluster runs its own agent
-- **Argo Rollouts delivery delegation** — `delivery.delegate: argo-rollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource
-- **GitLab + Forgejo/Gitea SCM providers** — `scm.provider: gitlab` and `scm.provider: forgejo` in Pipeline spec
+- **Argo Rollouts delivery delegation** — `delivery.delegate: argoRollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource
+- **GitLab + Forgejo/Gitea SCM providers** — selected per controller with `--scm-provider gitlab` or `--scm-provider forgejo` (also `gitea`)
 - **PRStatus CRD** — makes PR merge/close signal observable by the Graph (eliminates 6 GitHub API call paths from the reconciler hot path)
 - **RollbackPolicy CRD** — auto-rollback threshold comparison moved to dedicated reconciler
 - **Graph purity milestone** — all 41 Graph-independent logic leaks eliminated (see `docs/design/11-graph-purity-tech-debt.md`)
@@ -189,7 +189,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [v0.3.0] — 2026-04-12
+## [v0.3.0] — 2026-04-11
 
 **Observability: embedded UI, PR evidence, GitHub Actions**
 
@@ -211,7 +211,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [v0.2.1] — 2026-04-12
+## [v0.2.1] — 2026-04-11
 
 **Graph Purity: all Graph-independent logic leaks eliminated**
 
@@ -258,7 +258,7 @@ kardinal-promoter now executes the [AWS Platform Engineering on EKS workshop](ht
 
 ---
 
-## [v0.1.0] — 2026-04-11
+## [v0.1.0] — 2026-04-10
 
 **Foundation: CRDs, Controller, Graph Integration, PolicyGate**
 

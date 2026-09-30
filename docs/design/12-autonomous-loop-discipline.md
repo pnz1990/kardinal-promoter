@@ -1,7 +1,10 @@
 # 12: Autonomous Loop Discipline — Zero Human Dependencies in Steady State
 
-> Status: Active | Created: 2026-04-18
-> Applies to: kardinal-promoter agent sessions
+> Status: Retired (2026-09-29). The otherness agent loop this doc governed was removed with
+> `.github/workflows/otherness-scheduled.yml` (#1247). Historical design; the code and the
+> process differ. Do not follow it. In particular, never bypass branch protection: a PR that
+> cannot merge normally waits for a human.
+> Created: 2026-04-18
 
 ---
 
@@ -17,9 +20,9 @@ three specific scenarios — everything else the agent resolves autonomously.
 
 Everything outside these three is an agent failure, not a design constraint:
 
-1. **Token has no admin rights** — the GitHub token cannot modify branch protection.
-   Symptom: 403 on `PATCH repos/{owner}/{repo}/branches/main/protection`.
-   Fix: configure the token with admin rights. Until fixed: post once, do not repeat.
+1. **A PR cannot merge without bypassing branch protection** — for example it needs an
+   approval from another account. Post `[NEEDS HUMAN]` once and wait for a human merge.
+   Never use `gh pr merge --admin` and never change branch protection.
 
 2. **Genuine value judgment required** — the agent cannot determine correctness
    without product knowledge the human hasn't encoded yet. Example: two competing
@@ -30,46 +33,23 @@ Everything outside these three is an agent failure, not a design constraint:
    the agent cannot diagnose a failing CI step because it requires access to a
    credential, external service, or environment the agent cannot reach.
 
-Everything else — merge conflicts, branch protection, test failures, spec ambiguity,
-review requirements — the agent resolves autonomously.
+Everything else — merge conflicts, test failures, spec ambiguity — the agent resolves
+autonomously. Review requirements and branch protection are never bypassed.
 
 ---
 
-## Autonomous merge protocol (in priority order)
+## Merge protocol
 
 When `gh pr merge $PR_NUM --squash --delete-branch` fails:
 
-### Step 1 — Try `--admin`
-```bash
-gh pr merge $PR_NUM --repo $REPO --squash --delete-branch --admin
-```
-If this fails with "Pull request is not mergeable": check CI, fix, retry.
-If this fails with "Must be approved by someone other than the author" or similar:
-proceed to Step 2.
+- "Pull request is not mergeable": check CI, fix, retry.
+- A required review or any other protection rule blocks it: this is scenario 1. Post
+  `[NEEDS HUMAN: merge-blocked — <the exact error>]` once and move on.
 
-### Step 2 — Disable `enforce_admins`, merge, re-enable
-```bash
-# Disable — returns 200 if token has admin rights, 403 if not
-RESULT=$(gh api -X PATCH "repos/$REPO/branches/main/protection" \
-  --field enforce_admins=false 2>&1)
-if echo "$RESULT" | grep -q '"enforce_admins":.*false\|200'; then
-  gh pr merge $PR_NUM --repo $REPO --squash --delete-branch --admin
-  # Always re-enable, even on merge failure
-  gh api -X PATCH "repos/$REPO/branches/main/protection" --field enforce_admins=true
-else
-  echo "[QA] Cannot disable enforce_admins (403) — token lacks admin rights"
-  # This is valid [NEEDS HUMAN] scenario 1. Post once and move on.
-fi
-```
-
-### Step 3 — If branch protection requires a specific reviewer account
-
-This means the project requires a second GitHub account. This is valid scenario 1.
-Post `[NEEDS HUMAN: merge-blocked — branch protection requires reviewer with write access.
-Token: $(gh api user --jq .login). Branch protection: require_code_owner_reviews=$(gh api
-repos/$REPO/branches/main/protection --jq .required_pull_request_reviews.require_code_owner_reviews)]`
-
-Do not post `[NEEDS HUMAN]` for any other merge failure scenario.
+The earlier version of this section told the agent to retry with `--admin`, then to
+disable `enforce_admins`, merge, and re-enable it. That bypasses required review and can
+leave `main` unprotected when the re-enable step fails. It was removed; the agent token
+must not have admin rights.
 
 ---
 
@@ -95,13 +75,13 @@ in-review items using the autonomous merge protocol. If all are genuinely unmerg
 
 ## Present (✅)
 
-- ✅ **qa.md §3e — 3-step autonomous merge protocol** (`_merge_pr()` function):
+- ❌ **Withdrawn — do not reimplement.** qa.md §3e — 3-step autonomous merge protocol (`_merge_pr()` function):
   normal → `--admin` → clear branch protection (PUT) → restore. Never posts
   `[NEEDS HUMAN: pr-approval-required]` before attempting all three steps.
   `_RESTORE_TRAP` with `trap ... EXIT` ensures branch protection is always restored.
   Implemented in `~/.otherness/agents/phases/qa.md §3e`.
 
-- ✅ **qa.md §3e — enforce_admins toggle error handling**: The `_RESTORE_TRAP`
+- ❌ **Withdrawn with the merge protocol above.** qa.md §3e — enforce_admins toggle error handling: The `_RESTORE_TRAP`
   environment variable captures the restore curl command; `trap "$_RESTORE_TRAP" EXIT`
   fires on both normal exit and error. Explicit `eval "$_RESTORE_TRAP"` + `trap - EXIT`
   on normal exit. Implemented alongside the 3-step protocol in qa.md §3e.
@@ -110,7 +90,7 @@ in-review items using the autonomous merge protocol. If all are genuinely unmerg
   queue generation is skipped and the queue-gen lock is released immediately. Prevents
   saturating the review queue when items accumulate. Implemented in coord.md §1c.
 
-- ✅ **standalone.md HARD RULES — `[NEEDS HUMAN]` as last resort**: The HARD RULES
+- ❌ **Withdrawn with the merge protocol above.** standalone.md HARD RULES — `[NEEDS HUMAN]` as last resort: The HARD RULES
   section states: "Before posting `[NEEDS HUMAN]` for any merge failure: attempt all 3
   steps in qa.md §3e. Only post `[NEEDS HUMAN]` when step 3 fails with a specific error
   (403 = no admin rights). Log the exact error." Implemented in standalone.md §HARD RULES.
@@ -252,10 +232,9 @@ in-review items using the autonomous merge protocol. If all are genuinely unmerg
 
 ## Zone 1 — Obligations
 
-**O1 — The autonomous merge protocol is attempted before any `[NEEDS HUMAN]` post.**
-No PR may be labeled `[NEEDS HUMAN: pr-approval-required]` until the agent has tried:
-(a) `--admin` merge, (b) enforce_admins disable + merge. If (b) fails with 403, that
-is valid scenario 1. Log the specific HTTP error in the [NEEDS HUMAN] post.
+**O1 — Branch protection is never bypassed.**
+No `--admin` merge and no change to branch protection. A PR blocked by a protection rule
+gets one `[NEEDS HUMAN]` post with the specific error.
 
 **O2 — `[NEEDS HUMAN]` posts are unique per PR, not per cycle.**
 If the agent already posted `[NEEDS HUMAN]` for PR #N in a previous cycle, it does
@@ -265,9 +244,8 @@ not post again in the next cycle. It checks existing comments before posting.
 If in-review items >= 3 and none can be merged (scenario 1 confirmed), no new
 work items are generated. The session enters standby.
 
-**O4 — enforce_admins is always restored.**
-Any session that sets enforce_admins=false must set it back to true before the
-bash block exits — including on failure. This is non-negotiable.
+**O4 — The agent token has no admin rights.**
+It cannot change branch protection, so there is nothing to restore.
 
 ---
 

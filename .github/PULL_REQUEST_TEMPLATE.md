@@ -2,8 +2,7 @@
 
 ## Item Reference
 
-- **Item**: `docs/aide/items/<NNN-item-name>.md`
-- **Spec**: `.specify/specs/<feature>/spec.md`
+- **Spec** (optional): `.specify/specs/<feature>/spec.md`
 - **Design doc**: `docs/design/<feature>.md`
 
 ## What this implements

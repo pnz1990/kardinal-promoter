@@ -31,6 +31,11 @@ kind: Pipeline
 metadata:
   name: my-app
 spec:
+  # Required by the CRD even though the argocd strategy makes no git commits.
+  git:
+    url: https://github.com/myorg/my-app-gitops
+    secretRef:
+      name: github-token
   environments:
     - name: test
       approval: auto

@@ -79,9 +79,9 @@ interface CELToken { type: CELTokenType; text: string }
 
 const CEL_KEYWORDS = new Set(['true', 'false', 'null', 'in', 'has', 'all', 'exists', 'map', 'filter', 'exists_one', 'type'])
 const CEL_KRO_FUNCTIONS = new Set([
-  'json.marshal', 'json.unmarshal', 'maps.merge', 'lists.setAtIndex',
-  'lists.insertAtIndex', 'lists.removeAtIndex', 'random.seededInt',
-  'schedule.isWeekend', 'lowerAscii', 'contains', 'startsWith', 'endsWith',
+  'json.marshal', 'json.unmarshal', 'lists.setAtIndex',
+  'lists.insertAtIndex', 'lists.removeAtIndex', 'random.seededInt', 'random.seededString',
+  'changewindow.isAllowed', 'changewindow.isBlocked', 'lowerAscii', 'contains', 'startsWith', 'endsWith',
   'matches', 'size', 'int', 'uint', 'double', 'string', 'bytes', 'duration', 'timestamp',
 ])
 

@@ -503,24 +503,27 @@ kardinal get pipelines --all-namespaces
 
 ## Journey Status
 
-Updated by the coordinator after each batch.
-
 **Rule (Issue #418):** A journey is only marked ✅ when:
-1. Its `TestJourneyN` test passes in CI on main branch (automated evidence), OR
-2. A `[PDCA AUTOMATED]` comment on Issue #1 confirms live cluster validation with real images
-3. Every code example in the relevant doc page runs without error
+1. A `[PDCA AUTOMATED]` comment on Issue #1 reports the journey's scenario as passed on a live
+   kind cluster with a real `kardinal-test-app` image, OR
+2. A `[LIVE CLUSTER VALIDATED]` comment on Issue #1 gives the commands, their output, the
+   cluster version and the image SHA (AGENTS.md §Journey Validation Standard)
 
-Manual coordinator comments alone do NOT count as evidence.
+and every code example in the relevant doc page runs without error.
+
+A passing `TestJourneyN` test is not evidence: those tests run the reconcilers against a fake
+Kubernetes client, without the translator, the kro Graph or a cluster. Manual coordinator
+comments alone do not count either.
 
 | Journey | Status | Last checked | Notes |
 |---|---|---|---|
-| 1: Quickstart | ✅ | 2026-04-13 | TestJourney1Quickstart PASS in CI (E2E run 24362344722). TestPRBodyDocumentedFields adds PR body field coverage (PR #438). |
-| 2: Multi-cluster fleet | ✅ | 2026-04-14 | TestJourney2MultiClusterFleet PASS — dependsOn fan-out: test → pre-prod → [prod-eu, prod-us] parallel. PR #488. Real multi-cluster E2E tracked in #245. |
-| 3: Policy governance | ✅ | 2026-04-13 | TestJourney3PolicyGovernance PASS in CI (E2E run 24362344722). No-weekend and soak gates verified. |
-| 4: Rollback | ✅ | 2026-04-13 | TestJourney4Rollback PASS in CI (E2E run 24362344722). Auto-rollback + manual rollback + pause/resume complete. |
-| 5: CLI workflow | ✅ | 2026-04-13 | TestJourney5CLI PASS in CI (E2E run 24363674266). Binary built in CI step; version, policy simulate, policy test all verified. |
-| 6: Rendered manifests | ✅ | 2026-04-13 | TestJourney6RenderedManifests PASS in CI (E2E run 24363674266). layout:branch step sequence with kustomize-build verified. |
-| 7: Multi-tenant self-service | ✅ | 2026-04-14 | TestJourney7MultiTenantSelfService PASS — namespace isolation, org gate inheritance, all-namespaces listing verified. ApplicationSet + Pipeline Helm template in examples/multi-tenant/. PR #489. |
+| 1: Quickstart | unverified | 2026-09-29 | Fake-client test only (`TestJourney1Quickstart`). The PDCA workflow has not reported scenario 1 as passed. |
+| 2: Multi-cluster fleet | unverified | 2026-09-29 | Fake-client test only (`TestJourney2MultiClusterFleet`). No multi-cluster run on record (#245). |
+| 3: Policy governance | unverified | 2026-09-29 | Fake-client test only (`TestJourney3PolicyGovernance`). |
+| 4: Rollback | unverified | 2026-09-29 | Fake-client test only (`TestJourney4Rollback`). |
+| 5: CLI workflow | unverified | 2026-09-29 | `TestJourney5CLI` runs `version`, `policy simulate` and `policy test` from the built CLI with no cluster, and skips if the binary is missing. |
+| 6: Rendered manifests | unverified | 2026-09-29 | `TestJourney6RenderedManifests` only checks `DefaultSequenceForBundle`; it builds no Graph and no Bundle. |
+| 7: Multi-tenant self-service | unverified | 2026-09-29 | Fake-client test only (`TestJourney7MultiTenantSelfService`); a fake client enforces no RBAC. |
 
 ---
 
@@ -548,18 +551,21 @@ Manual coordinator comments alone do NOT count as evidence.
 
 ## The Acceptance Test Suite
 
-When a journey is marked ✅, it means the following passes in CI on a kind cluster:
+A journey is ✅ only with live-cluster evidence (see Journey Status). The Makefile targets
+below run without a cluster: they prove reconciler logic, not that the product works on a cluster.
 
 ```bash
-make test-e2e-journey-1    # quickstart end-to-end
-make test-e2e-journey-2    # multi-cluster fleet (simulated)
-make test-e2e-journey-3    # policy governance (time gate + soak gate + team gate)
-make test-e2e-journey-4    # rollback
-make test-e2e-journey-5    # CLI commands
-make test-e2e-journey-6    # rendered manifests (branch layout + kustomize-build)
-make test-e2e-journey-7    # multi-tenant self-service (ApplicationSet + Pipeline provisioning)
+make test-e2e-journey-1    # TestJourney1Quickstart (fake client)
+make test-e2e-journey-2    # TestJourney2MultiClusterFleet (fake client)
+make test-e2e-journey-3    # TestJourney3PolicyGovernance (fake client)
+make test-e2e-journey-4    # TestJourney4Rollback (fake client)
+make test-e2e-journey-5    # TestJourney5CLI (built CLI, no cluster)
+make test-e2e              # all five of the above
 ```
 
-These E2E tests are the final arbiter of project completeness.
+Journeys 6 and 7 have no Makefile target (`go test ./test/e2e/... -run 'TestJourney6|TestJourney7'`).
+Live-cluster evidence comes from the PDCA workflow (`.github/workflows/pdca.yml`) or from
+`make e2e-setup` followed by `make test-e2e-kind`.
+
 Unit tests are necessary but not sufficient.
-A feature is done when its journey test passes.
+A feature is done when its journey has live-cluster evidence.
