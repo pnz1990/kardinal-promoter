@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# The run scripts rely on -e and -o pipefail, and test/hack/release_test.go
+# runs them the same way.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # Every check that can stop a release runs here, before the tests and with
   # a read-only token, so a bad tag fails before anything is pushed.
@@ -34,7 +40,8 @@ jobs:
       # is built only from a commit on main.
       - name: Check that the tagged commit is on main
         run: |
-          # A tag checkout does not always create origin/main, so fetch it.
+          # Fetch main explicitly, so the check does not depend on which refs
+          # actions/checkout fetched for the tag.
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "::error::tag ${GITHUB_REF_NAME} points to ${GITHUB_SHA}, which is not on main. Tag a commit on main."
@@ -46,12 +53,17 @@ jobs:
       # latest tag, and the GitHub release is marked prerelease and not latest.
       # The chart has no floating tag; helm skips a prerelease chart unless
       # given --version or --devel.
+      # The tag must be strict SemVer 2.0 without build metadata. helm package
+      # rejects anything else, but only after the image is pushed and signed.
       - name: Set version and release channel from tag
         id: version
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::tag ${VERSION} is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE"
+          NUM='(0|[1-9][0-9]*)'
+          IDENT='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          SEMVER="^v${NUM}\.${NUM}\.${NUM}(-${IDENT}(\.${IDENT})*)?$"
+          if ! [[ "$VERSION" =~ $SEMVER ]]; then
+            echo "::error::tag ${VERSION} is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE (SemVer 2.0, no leading zeros, no build metadata)"
             exit 1
           fi
           IMAGE=ghcr.io/pnz1990/kardinal-promoter/controller
@@ -84,7 +96,15 @@ jobs:
         run: |
           # The section runs from its heading to the next "## " heading or
           # "---" rule. Headings are "## [v1.2.3] — date" or "## v1.2.3".
+          # Inside a ``` or ~~~ code block, "## " and "---" are content.
           NOTES=$(awk -v v="$VERSION" '
+            {
+              line = $0
+              sub(/^[[:space:]]+/, "", line)
+              mark = substr(line, 1, 3)
+            }
+            fence == "" && (mark == "```" || mark == "~~~") { fence = mark; if (found) print; next }
+            fence != "" { if (mark == fence) fence = ""; if (found) print; next }
             /^## / { if (found) exit; found = ($2 == "[" v "]" || $2 == v); next }
             /^---[[:space:]]*$/ { if (found) exit }
             found { print }

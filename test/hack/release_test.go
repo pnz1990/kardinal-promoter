@@ -24,11 +24,12 @@ import (
 const releaseWorkflowPath = ".github/workflows/release.yml"
 
 type releaseStep struct {
-	ID   string         `json:"id"`
-	Name string         `json:"name"`
-	Uses string         `json:"uses"`
-	Run  string         `json:"run"`
-	With map[string]any `json:"with"`
+	ID   string            `json:"id"`
+	Name string            `json:"name"`
+	Uses string            `json:"uses"`
+	Run  string            `json:"run"`
+	With map[string]any    `json:"with"`
+	Env  map[string]string `json:"env"`
 }
 
 type releaseJob struct {
@@ -64,16 +65,28 @@ func (j releaseJob) step(t *testing.T, id string) releaseStep {
 	return releaseStep{}
 }
 
-func releaseJobs(t *testing.T) map[string]releaseJob {
+type releaseWorkflow struct {
+	Defaults struct {
+		Run struct {
+			Shell string `json:"shell"`
+		} `json:"run"`
+	} `json:"defaults"`
+	Jobs map[string]releaseJob `json:"jobs"`
+}
+
+func readReleaseWorkflow(t *testing.T) releaseWorkflow {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), releaseWorkflowPath))
 	require.NoError(t, err)
-	var wf struct {
-		Jobs map[string]releaseJob `json:"jobs"`
-	}
+	var wf releaseWorkflow
 	require.NoError(t, yaml.Unmarshal(data, &wf))
 	require.Contains(t, wf.Jobs, "preflight")
-	return wf.Jobs
+	return wf
+}
+
+func releaseJobs(t *testing.T) map[string]releaseJob {
+	t.Helper()
+	return readReleaseWorkflow(t).Jobs
 }
 
 // preflightScript returns the run: script of the preflight step whose name
@@ -100,8 +113,8 @@ var isolatedGitEnv = []string{
 	"GIT_COMMITTER_EMAIL=test@example.com",
 }
 
-// runReleaseStep runs a release.yml run: script the way Actions does (bash -e
-// -o pipefail) in dir. It returns the output and the values the script wrote
+// runReleaseStep runs a release.yml run: script the way Actions runs it with
+// the workflow's "shell: bash" default (bash -e -o pipefail) in dir. It returns the output and the values the script wrote
 // to $GITHUB_OUTPUT.
 func runReleaseStep(t *testing.T, dir, script string, env ...string) (string, map[string]string, error) {
 	t.Helper()
@@ -236,11 +249,23 @@ func TestReleaseChannelFromVersion(t *testing.T) {
 			tags: []string{image + ":v0.9.0-rc.1"}},
 		{tag: "v0.10.0-alpha.0", prerelease: "true", makeLatest: "false", chart: "0.10.0-alpha.0",
 			tags: []string{image + ":v0.10.0-alpha.0"}},
+		{tag: "v1.0.0-0.3.7", prerelease: "true", makeLatest: "false", chart: "1.0.0-0.3.7",
+			tags: []string{image + ":v1.0.0-0.3.7"}},
+		{tag: "v1.0.0-x-y.01a", prerelease: "true", makeLatest: "false", chart: "1.0.0-x-y.01a",
+			tags: []string{image + ":v1.0.0-x-y.01a"}},
 		{tag: "v0.9", wantErr: true},
 		{tag: "0.9.0", wantErr: true},
 		{tag: "v0.9.0+build.1", wantErr: true},
 		{tag: "v0.9.0-rc.1;id", wantErr: true},
 		{tag: "v0.9.0.1", wantErr: true},
+		// helm package rejects these, but only after the image is pushed.
+		{tag: "v0.9.0-rc..1", wantErr: true},
+		{tag: "v0.9.0-rc.01", wantErr: true},
+		{tag: "v0.9.0-.", wantErr: true},
+		{tag: "v0.9.0-", wantErr: true},
+		{tag: "v01.2.3", wantErr: true},
+		{tag: "v1.02.3", wantErr: true},
+		{tag: "v1.2.03", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.tag, func(t *testing.T) {
@@ -265,12 +290,44 @@ func TestReleaseChannelFromVersion(t *testing.T) {
 }
 
 // changelogFixture has the heading styles the notes step must accept, in the
-// order docs/changelog.md uses: newest first, "---" between sections.
-const changelogFixture = `# Changelog
+// order docs/changelog.md uses: newest first, "---" between sections. The
+// v0.9.1-rc.1 section has code blocks with "---" and "## " lines, like an
+// upgrade note with YAML and shell comments. In the literal, three single
+// quotes stand for a code fence, because a Go raw string cannot hold a
+// backquote.
+var changelogFixture = strings.ReplaceAll(`# Changelog
 
 ## [Unreleased]
 
 - not released yet
+
+---
+
+## [v0.9.1-rc.1] — 2026-11-15
+
+### Upgrade
+
+'''yaml
+apiVersion: v1
+kind: ConfigMap
+---
+apiVersion: v1
+kind: Secret
+'''
+
+- Then run:
+
+  '''bash
+  ## x
+  kubectl apply -f crds.yaml
+  '''
+
+~~~
+## [v0.7.9] — not a heading
+---
+~~~
+
+- after the code blocks
 
 ---
 
@@ -302,7 +359,13 @@ const changelogFixture = `# Changelog
 ---
 
 [Unreleased]: https://github.com/pnz1990/kardinal-promoter/compare/v0.9.0...HEAD
-`
+`, "'''", "```")
+
+const rc1UpgradeNotes = "### Upgrade\n\n" +
+	"```yaml\napiVersion: v1\nkind: ConfigMap\n---\napiVersion: v1\nkind: Secret\n```\n\n" +
+	"- Then run:\n\n  ```bash\n  ## x\n  kubectl apply -f crds.yaml\n  ```\n\n" +
+	"~~~\n## [v0.7.9] — not a heading\n---\n~~~\n\n" +
+	"- after the code blocks"
 
 func TestReleaseNotesFromChangelog(t *testing.T) {
 	script := preflightScript(t, "Release notes from docs/changelog.md")
@@ -316,11 +379,13 @@ func TestReleaseNotesFromChangelog(t *testing.T) {
 		wantErr bool
 	}{
 		{version: "v0.9.0", want: "- final notes"},
+		{version: "v0.9.1-rc.1", want: rc1UpgradeNotes},
 		{version: "v0.9.0-rc.1", want: "### Added\n\n- rc feature"},
 		{version: "v0.8.2", want: "- bare heading notes"},
 		{version: "v0.8.1", want: "- v0.8.1 notes"},
 		{version: "v0.8.0", wantErr: true},
 		{version: "v0.7.0", wantErr: true},
+		{version: "v0.7.9", wantErr: true}, // only inside a code block
 		{version: "v0.9", wantErr: true},
 	}
 	for _, tt := range tests {
@@ -340,13 +405,37 @@ func TestReleaseNotesFromChangelog(t *testing.T) {
 
 var changelogVersionHeading = regexp.MustCompile(`(?m)^## \[(v[0-9][^\]]*)\]`)
 
+// withoutCodeBlocks drops the ``` and ~~~ blocks of a markdown text, the way
+// the notes step ignores them when it looks for section boundaries.
+func withoutCodeBlocks(text string) string {
+	var out []string
+	fence := ""
+	for _, line := range strings.Split(text, "\n") {
+		mark := strings.TrimSpace(line)
+		if len(mark) > 3 {
+			mark = mark[:3]
+		}
+		switch {
+		case fence == "" && (mark == "```" || mark == "~~~"):
+			fence = mark
+		case fence != "":
+			if mark == fence {
+				fence = ""
+			}
+		default:
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 // TestReleaseNotesForEveryChangelogVersion runs the notes step on the real
 // docs/changelog.md: every released version has a section the step can read.
 func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
 	script := preflightScript(t, "Release notes from docs/changelog.md")
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "changelog.md"))
 	require.NoError(t, err)
-	matches := changelogVersionHeading.FindAllStringSubmatch(string(data), -1)
+	matches := changelogVersionHeading.FindAllStringSubmatch(withoutCodeBlocks(string(data)), -1)
 	require.NotEmpty(t, matches)
 
 	// The two tags that point to merge commits outside main say so.
@@ -361,7 +450,7 @@ func TestReleaseNotesForEveryChangelogVersion(t *testing.T) {
 			require.NoError(t, err, out)
 			notes := got["notes"]
 			require.NotEmpty(t, notes)
-			assert.NotRegexp(t, `(?m)^## `, notes, "the notes must stop at the next version")
+			assert.NotRegexp(t, `(?m)^## `, withoutCodeBlocks(notes), "the notes must stop at the next version")
 			if sha, ok := offMain[version]; ok {
 				assert.Contains(t, notes, sha)
 			}
@@ -378,8 +467,27 @@ var pinnedAction = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
 // decided and that nothing in release.yml still builds notes from git log or
 // pushes latest on its own.
 func TestReleaseWorkflowWiring(t *testing.T) {
-	jobs := releaseJobs(t)
+	wf := readReleaseWorkflow(t)
+	jobs := wf.Jobs
 	preflight := jobs["preflight"]
+
+	t.Run("run scripts use bash -e -o pipefail", func(t *testing.T) {
+		assert.Equal(t, "bash", wf.Defaults.Run.Shell,
+			"runReleaseStep runs the scripts as the workflow does only with defaults.run.shell: bash")
+	})
+
+	t.Run("preflight outputs come from its steps", func(t *testing.T) {
+		assert.Equal(t, map[string]string{
+			"version":       "${{ steps.version.outputs.version }}",
+			"chart-version": "${{ steps.version.outputs.chart-version }}",
+			"prerelease":    "${{ steps.version.outputs.prerelease }}",
+			"make-latest":   "${{ steps.version.outputs.make-latest }}",
+			"image-tags":    "${{ steps.version.outputs.image-tags }}",
+			"notes":         "${{ steps.notes.outputs.notes }}",
+		}, preflight.Outputs)
+		assert.Equal(t, map[string]string{"VERSION": "${{ steps.version.outputs.version }}"},
+			preflight.step(t, "notes").Env)
+	})
 
 	t.Run("preflight runs first, read-only", func(t *testing.T) {
 		assert.Empty(t, preflight.needs())
