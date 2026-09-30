@@ -53,7 +53,7 @@ The advantage of building on Graph directly (rather than on RGD) is that there i
 
 2. **Artifacts, not diffs.** Promotions track versioned, immutable Bundles with build provenance (commit SHA, CI run URL, author, image digest), not opaque Git diffs.
 
-3. **Works with existing GitOps tools.** No dependency on Argo CD or Flux. Integrates with both via pluggable health adapters that auto-detect installed CRDs. Also works without a GitOps tool (falls back to Deployment condition checks).
+3. **Works with existing GitOps tools.** No dependency on Argo CD or Flux. Integrates with both via pluggable health adapters, selected by `health.type` (no CRD auto-detection is implemented; the default is the Deployment check, which works without a GitOps tool).
 
 4. **Rollback is a forward promotion.** Rolling back to a previous version creates a new Bundle targeting the rollback version and runs it through the same pipeline, same policy gates, same PR flow.
 
@@ -348,8 +348,8 @@ Promotion is a Git write. Git has no cluster boundary. Each cluster has its own 
 For health verification across clusters:
 
 - **Argo CD hub-spoke model:** Argo CD Applications for all clusters live in the hub. The controller reads Application health from the hub cluster. No cross-cluster API calls needed.
-- **Flux per-cluster model:** Each cluster runs its own Flux. Health verification uses a `cluster` field on the environment config that references a kubeconfig Secret for the remote cluster.
-- **Bare Kubernetes:** Same as Flux. Remote kubeconfig Secret.
+- **Flux per-cluster model:** Each cluster runs its own Flux. Health verification uses a `cluster` field on the environment config that references a kubeconfig Secret for the remote cluster. **Not implemented:** a non-empty `health.cluster` fails the PromotionStep (2026-09 audit, C13b-design-05).
+- **Bare Kubernetes:** Same as Flux. Remote kubeconfig Secret. **Not implemented**, as above.
 
 Parallel fan-out to multiple regions is expressed via `dependsOn` on the Pipeline CRD:
 
@@ -770,11 +770,10 @@ health:
 health:
   type: flux
   flux: { name: my-app-prod, namespace: flux-system }
-# or for remote clusters:
+# or for remote clusters (the Application lives in the hub; health.cluster is not implemented):
 health:
   type: argocd
   argocd: { name: my-app-prod-us-east }
-  cluster: prod-us-east  # references a kubeconfig Secret
 ```
 
 Environment ordering defaults to sequential. For parallel fan-out, use `dependsOn`:
@@ -1287,9 +1286,9 @@ On in-flight failure (PromotionStep `status.state = "Failed"`), Graph stops all 
 | Feature | Detail |
 |---|---|
 | kardinal-ui | Embedded UI: promotion DAG, policy nodes, provenance, PR links |
-| Health: Argo CD | argocd adapter (auto-detected) |
-| Health: Flux | flux adapter (auto-detected) |
-| Health: remote cluster | cluster field referencing kubeconfig Secret |
+| Health: Argo CD | argocd adapter (selected by `health.type`) |
+| Health: Flux | flux adapter (selected by `health.type`) |
+| Health: remote cluster | cluster field referencing kubeconfig Secret (not implemented; rejected at reconcile) |
 | kardinal init | Generate Pipeline from 8-line config |
 | GitHub Action | kardinal-dev/create-bundle-action |
 | Controller metrics | /metrics endpoint |

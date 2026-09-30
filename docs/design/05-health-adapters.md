@@ -4,6 +4,21 @@
 > Depends on: 01-graph-integration (for CRD types)
 > Blocks: nothing (consumed by 03-promotionstep-reconciler via the health-check step)
 
+> **Implementation differs from this design (2026-09 audit).** The user-facing contract is
+> [docs/health-adapters.md](../health-adapters.md). In short:
+> - There is no auto-detection. An omitted `health.type` means `resource` (or the
+>   `delivery.delegate` value), see `pkg/health/options.go:EffectiveType`.
+> - Adapters verify the promoted revision, not only health: Argo CD and Flux compare the
+>   synced/applied revision with the commit kardinal pushed or merged; the resource adapter
+>   requires the Bundle images, a current `observedGeneration` and a finished rollout, and
+>   treats `ProgressDeadlineExceeded` as a terminal failure. Flagger `Failed` is terminal.
+> - Results are healthy, progressing, unhealthy or terminal; only unhealthy results count
+>   toward `status.consecutiveHealthFailures`.
+> - Remote-cluster checks (`health.cluster`, the Remote Cluster Client Management section)
+>   are not implemented: a non-empty `health.cluster` fails the PromotionStep. Adapters read
+>   the cluster that holds the PromotionSteps (a kardinal-agent included, since it uses one
+>   client configuration); a remote workload can be verified through an Argo CD hub Application.
+
 ## Purpose
 
 Health adapters verify that a GitOps tool (or Kubernetes itself) has successfully applied a promoted manifest change. The PromotionStep reconciler calls the health adapter during the HealthChecking state. Each adapter watches a different Kubernetes resource type and defines its own criteria for "healthy."
@@ -61,6 +76,8 @@ type HealthStatus struct {
 ```
 
 ## Auto-Detection
+
+> Not implemented; see the note at the top of this document.
 
 On controller startup and every 5 minutes, the registry checks which adapter CRDs are installed:
 
@@ -269,6 +286,8 @@ Watches a Flagger Canary phase.
 | Failed | Unhealthy |
 
 ## Remote Cluster Client Management
+
+> Not implemented; a non-empty `health.cluster` fails the PromotionStep. See the note at the top of this document.
 
 When `health.cluster` is set on an environment, the adapter uses a dynamic client created from a kubeconfig Secret.
 

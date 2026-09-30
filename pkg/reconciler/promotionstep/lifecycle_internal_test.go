@@ -115,8 +115,8 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 				var ps v1alpha1.PromotionStep
 				require.NoError(t, c.Get(ctx, key, &ps))
 				ps.Status.State = StateHealthChecking
-				_, err := r.applyHealthFailurePolicy(ctx, zerolog.Nop(), &ps, pipeline, env,
-					"resource", "deployment unavailable", client.MergeFrom(ps.DeepCopy()))
+				_, err := r.applyHealthFailurePolicy(ctx, zerolog.Nop(), ps.DeepCopy(), &ps, env,
+					"resource", "deployment unavailable")
 				require.NoError(t, err)
 			}
 
@@ -135,6 +135,9 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			if tc.wantState == StateAbortedByAlarm {
 				assert.Empty(t, rollbacks, "no rollback Bundle when there is nothing safe to roll back to")
 				assert.Contains(t, got.Status.Message, "human intervention required")
+				if tc.failingIsRollback {
+					assert.Contains(t, got.Status.Message, "Bundle app-v2 is a rollback and is not rolled back again")
+				}
 				return
 			}
 			require.Len(t, rollbacks, 1, "one rollback Bundle, however often the step is reconciled")

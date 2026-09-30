@@ -195,8 +195,10 @@ type healthInjector struct {
 }
 
 // inject adds a ref node for each of envs (the environments the Graph
-// promotes) whose health.type is set: metadata.name for a single object,
-// metadata.selector for a collection. The node ID is "health" plus the
+// promotes) that configures health (healthConfigured). The node reads the
+// object health.OptionsForEnv selects, which is the one the PromotionStep
+// reconciler checks: metadata.name for a single object, metadata.selector for
+// a collection. The node ID is "health" plus the
 // camelCase environment name, with a number appended if another node already
 // has that ID. It returns the namespace of each added node by node ID.
 func (h healthInjector) inject(pipeline *kardinalv1alpha1.Pipeline, g *graph.Graph,
@@ -215,12 +217,14 @@ func (h healthInjector) inject(pipeline *kardinalv1alpha1.Pipeline, g *graph.Gra
 
 	injected := map[string]string{}
 	for _, env := range pipeline.Spec.Environments {
-		if env.Health.Type == "" || !inGraph[env.Name] {
+		if !healthConfigured(env) || !inGraph[env.Name] {
 			continue
 		}
-		log := h.log.With().Str("environment", env.Name).Str("healthType", env.Health.Type).Logger()
+		// The same type and target the PromotionStep reconciler checks.
+		opts := health.OptionsForEnv(pipeline.Name, env)
+		log := h.log.With().Str("environment", env.Name).Str("healthType", opts.Type).Logger()
 
-		spec, err := health.WatchNodeTemplate(env.Health.Type, healthOptsForEnv(pipeline.Name, env))
+		spec, err := health.WatchNodeTemplate(opts.Type, opts)
 		if err != nil {
 			log.Warn().Err(err).Msg("no health ref node: unknown health type")
 			continue
@@ -315,55 +319,16 @@ func stringMapToInterface(in map[string]string) map[string]interface{} {
 	return out
 }
 
-// healthOptsForEnv builds the health.CheckOptions for a given environment using
-// the same name conventions as the PromotionStep reconciler's handleHealthChecking.
-//
-// Convention (matches promotionstep/reconciler.go handleHealthChecking):
-//   - resource: Deployment name = pipeline.Name, namespace = env.Name
-//     (overridden by env.Health.Resource.Name/Namespace when set)
-//   - argocd:   Application name = pipeline.Name + "-" + env.Name, namespace = "argocd"
-//   - flux:     Kustomization name = pipeline.Name + "-" + env.Name, namespace = "flux-system"
-//   - argoRollouts: Rollout name = pipeline.Name, namespace = env.Name
-//   - flagger:  Canary name = pipeline.Name, namespace = env.Name
-func healthOptsForEnv(pipelineName string, env kardinalv1alpha1.EnvironmentSpec) health.CheckOptions {
-	// Resolve the resource name and namespace for type=resource.
-	// When env.Health.Resource is set, it overrides the default pipeline/env convention
-	// so operators can health-check a resource with a different name or in a different namespace.
-	resourceName := pipelineName
-	resourceNS := env.Name
-	if env.Health.Resource != nil {
-		if env.Health.Resource.Name != "" {
-			resourceName = env.Health.Resource.Name
-		}
-		if env.Health.Resource.Namespace != "" {
-			resourceNS = env.Health.Resource.Namespace
-		}
-	}
-	return health.CheckOptions{
-		Type: env.Health.Type,
-		Resource: health.ResourceConfig{
-			Name:          resourceName,
-			Namespace:     resourceNS,
-			Condition:     "Available",
-			LabelSelector: env.Health.LabelSelector, // non-nil → WatchKind mode
-		},
-		ArgoCD: health.ArgoCDConfig{
-			Name:      pipelineName + "-" + env.Name,
-			Namespace: "argocd",
-		},
-		Flux: health.FluxConfig{
-			Name:      pipelineName + "-" + env.Name,
-			Namespace: "flux-system",
-		},
-		ArgoRollouts: health.ArgoRolloutsConfig{
-			Name:      pipelineName,
-			Namespace: env.Name,
-		},
-		Flagger: health.FlaggerConfig{
-			Name:      pipelineName,
-			Namespace: env.Name,
-		},
-	}
+// healthConfigured reports whether env selects a health adapter itself
+// (health.type, or a delivery.delegate other than "none"). Only those
+// environments get a health ref node. An environment that sets neither is
+// still verified by the PromotionStep reconciler with the default adapter
+// (health.DefaultType); the Graph node is observational only (ledger gap G3),
+// and a default Deployment ref for every environment of every Pipeline would
+// mostly be dropped by the --graph-reader-namespaces filter.
+func healthConfigured(env kardinalv1alpha1.EnvironmentSpec) bool {
+	d := env.Delivery.Delegate
+	return env.Health.Type != "" || (d != "" && d != "none")
 }
 
 // collectGates lists PolicyGate templates from the org policy namespaces

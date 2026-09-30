@@ -55,6 +55,11 @@ func TestPause_FreezeGateHoldsStep(t *testing.T) {
 			step := makeStep("step-test", "nginx-demo", "bundle-1", "test")
 			step.Status.State = tc.state
 			objs := []client.Object{step, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")}
+			if tc.state == "WaitingForMerge" {
+				// A step waiting for its merge always has a PRStatus (C03-promotionstep-30).
+				step.Spec.PRStatusRef = "prs"
+				objs = append(objs, openPRStatus("prs", "org/repo", 42))
+			}
 			if tc.gate != nil {
 				objs = append(objs, tc.gate.DeepCopy())
 			}

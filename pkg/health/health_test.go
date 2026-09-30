@@ -47,6 +47,7 @@ func TestDeploymentAdapter_Healthy(t *testing.T) {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx", Namespace: "prod"},
 		Status: appsv1.DeploymentStatus{
+			Replicas: 1, UpdatedReplicas: 1, ReadyReplicas: 1, AvailableReplicas: 1,
 			Conditions: []appsv1.DeploymentCondition{
 				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue, Reason: "MinimumReplicasAvailable"},
 			},

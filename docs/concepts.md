@@ -165,7 +165,7 @@ For multi-cluster deployments where some clusters are behind firewalls, environm
       approval: pr-review
 ```
 
-In standalone mode (single binary), the shard field is ignored and all PromotionSteps are reconciled locally.
+The `shard` value becomes the `kardinal.io/shard` label on the environment's PromotionSteps. The control-plane controller skips labelled steps, so an environment with a `shard` makes progress only while a kardinal-agent started with `--shard <value>` is running. Leave `shard` unset in standalone mode.
 
 ### How it works under the hood
 
@@ -279,27 +279,19 @@ When the skip is allowed, the permission's expression is evaluated in front of t
 
 ## Health Verification
 
-After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. The `health.type` field is required in every Pipeline environment. Health adapters are pluggable.
+After a promotion is applied (manifests written to Git), kardinal-promoter verifies that the target environment is healthy. Health adapters are pluggable. A step reaches Verified only when the environment runs the promoted revision, not merely when it is healthy.
 
 | Adapter | What it checks | When to use |
 |---|---|---|
-| `resource` | Deployment Available condition | Clusters without a GitOps tool |
-| `argocd` | Argo CD Application health + sync status | Argo CD users |
-| `flux` | Flux Kustomization Ready condition | Flux users |
+| `resource` | Deployment runs the Bundle images, is fully rolled out and `Available` | Clusters without a GitOps tool |
+| `argocd` | Argo CD Application healthy and synced to the promoted commit | Argo CD users |
+| `flux` | Flux Kustomization `Ready` with `lastAppliedRevision` at the promoted commit | Flux users |
 | `argoRollouts` | Argo Rollouts Rollout phase | Canary/blue-green deployments |
-| `flagger` | Flagger Canary phase | Canary deployments |
+| `flagger` | Flagger Canary phase (`Failed` fails the step at once) | Canary deployments |
 
-`health.type` must be set explicitly in each Pipeline environment — there is no auto-detection. This prevents misconfigurations from being silently masked.
+When `health.type` is omitted the adapter is `resource`, or the `delivery.delegate` value when that is set. kardinal does not probe the cluster for installed CRDs. See [Health Adapters](health-adapters.md) for the target defaults and overrides.
 
-For multi-cluster deployments where the workload is in a different cluster, add a `cluster` field referencing a kubeconfig Secret:
-
-```yaml
-health:
-  type: argocd
-  argocd:
-    name: my-app-prod-us
-  cluster: prod-us-cluster    # kubeconfig Secret name
-```
+`health.cluster` (checking a workload in another cluster through a kubeconfig Secret) is not supported; a non-empty value fails the step. Adapters read objects in the cluster that holds the PromotionSteps; to verify a workload in another cluster, check its Argo CD Application in the hub (`type: argocd`).
 
 ## Subscription
 
@@ -411,10 +403,11 @@ kardinal-promoter writes an immutable `AuditEvent` CRD for each key promotion li
 
 | Action | When |
 |---|---|
-| `PromotionStarted` | A Bundle moves from Pending to Promoting |
+| `PromotionStarted` | A PromotionStep starts promoting (enters Promoting) |
 | `PromotionSucceeded` | Health check passes and the step reaches Verified |
-| `PromotionFailed` | The step reaches Failed state |
+| `PromotionFailed` | The step reaches Failed or AbortedByAlarm |
 | `PromotionSuperseded` | A newer Bundle supersedes an in-flight promotion |
+| `RollbackStarted` | A health alarm with `onHealthFailure: rollback` starts a rollback |
 
 ```bash
 # List all audit events across namespaces
