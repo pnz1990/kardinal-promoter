@@ -33,6 +33,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	sigs_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -412,6 +414,23 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 		r.failed = true
 		return r
 	}
+	// The Ready condition is the controller's verdict on the spec; the phase
+	// only follows the Bundles, so a refused Pipeline can still show Ready.
+	ready := meta.FindStatusCondition(p.Status.Conditions, "Ready")
+	switch {
+	case ready == nil || ready.ObservedGeneration < p.Generation:
+		r.icon = doctorWarn
+		r.warned = true
+		r.detail = "not yet reconciled by the controller"
+		r.hint = "Check that the controller is running and watches this namespace."
+		return r
+	case ready.Status != metav1.ConditionTrue:
+		r.icon = doctorFail
+		r.failed = true
+		r.detail = fmt.Sprintf("Ready=%s (%s): %s", ready.Status, ready.Reason, ready.Message)
+		r.hint = "Fix the Pipeline spec; 'kardinal validate -f <your-pipeline.yaml>' reports the same problems."
+		return r
+	}
 	// Pipeline phases: Ready, Degraded, Promoting, Unknown (api/v1alpha1/pipeline_types.go).
 	switch p.Status.Phase {
 	case "Ready", "Promoting":
@@ -422,9 +441,9 @@ func checkPipelineHealth(ctx context.Context, client sigs_client.Client, ns, nam
 		r.warned = true
 		r.detail = "status: Degraded"
 	default:
-		r.icon = doctorWarn
-		r.warned = true
-		r.detail = "status: Unknown (not yet reconciled)"
+		// Unknown is the phase before the first Bundle.
+		r.icon = doctorPass
+		r.detail = "status: Unknown (spec valid, no Bundle yet)"
 	}
 	return r
 }
