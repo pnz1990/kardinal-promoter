@@ -18,7 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2247,7 +2247,7 @@ func TestBundleReconciler_EmitsAvailableEvent(t *testing.T) {
 	s := newScheme()
 	c := indexedBuilder(s).WithObjects(b).WithStatusSubresource(b).Build()
 
-	fakeRecorder := record.NewFakeRecorder(10)
+	fakeRecorder := events.NewFakeRecorder(10)
 	r := &bundle.Reconciler{Client: c, Recorder: fakeRecorder}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -2282,7 +2282,7 @@ func TestBundleReconciler_EmitsPromotingEvent(t *testing.T) {
 	s := newScheme()
 	c := indexedBuilder(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
 
-	fakeRecorder := record.NewFakeRecorder(10)
+	fakeRecorder := events.NewFakeRecorder(10)
 	translator := &mockTranslator{graphName: "nginx-demo-v1-graph"}
 	r := &bundle.Reconciler{Client: c, Translator: translator, Recorder: fakeRecorder}
 
@@ -2333,7 +2333,7 @@ func TestBundleReconciler_EmitsSupersededEvent(t *testing.T) {
 	s := newScheme()
 	c := indexedBuilder(s).WithObjects(pipeline, b1, b2).WithStatusSubresource(b1, b2).Build()
 
-	fakeRecorder := record.NewFakeRecorder(10)
+	fakeRecorder := events.NewFakeRecorder(10)
 	r := &bundle.Reconciler{Client: c, Recorder: fakeRecorder}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{

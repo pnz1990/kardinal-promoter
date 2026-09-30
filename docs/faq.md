@@ -61,7 +61,7 @@ The Helm chart creates the necessary `ClusterRole`. The minimum permissions are:
 - `get/list/watch/create/update/patch/delete` on `graphs.kro.run`
 - `get/list/watch` on `deployments`, `pods`, `services`
 - `get` on `secrets` (GitHub token secret only)
-- `create/patch` on `events`
+- `create/patch` on `events.k8s.io` `events` (reconciler Events) and on core `events` (leader election)
 - `get/create/update` on `configmaps` (leader election)
 
 See [Security Guide](guides/security.md) for a full RBAC manifest.
