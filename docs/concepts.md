@@ -156,7 +156,7 @@ Both prod regions promote in parallel after staging is verified.
 
 Each environment runs the default promotion sequence (clone, update image, commit, push/PR, health check). The sequence is inferred from `update.strategy` and `approval`.
 
-> **Not implemented yet.** `spec.environments[].steps` is reserved for custom step sequences, but the controller cannot run them yet: a Pipeline that sets `steps` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. See [Custom Promotion Steps](custom-steps.md).
+kardinal has no custom step engine. A Pipeline that sets `spec.environments[].steps` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. For image signature checks and tests, see [Pipeline Reference: Promotion Steps](pipeline-reference.md#promotion-steps).
 
 ### Distributed mode and sharding
 
@@ -198,7 +198,7 @@ Use `kardinal get steps <pipeline>` to see all active PromotionSteps.
 
 ## PromotionTemplate
 
-> **Not implemented yet.** The `PromotionTemplate` CRD is installed, and `spec.environments[].promotionTemplate` is reserved for referencing one, but the controller cannot run a template's steps yet. A Pipeline that sets `promotionTemplate` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. Every environment runs the default promotion sequence. See [Custom Promotion Steps](custom-steps.md).
+> **Not implemented yet.** The `PromotionTemplate` CRD is installed, and `spec.environments[].promotionTemplate` is reserved for referencing one, but the controller cannot run a template's steps yet. A Pipeline that sets `promotionTemplate` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. Every environment runs the default promotion sequence. See [Pipeline Reference: Promotion Steps](pipeline-reference.md#promotion-steps).
 
 ## PolicyGate
 

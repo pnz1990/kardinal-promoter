@@ -72,9 +72,9 @@ All of the following are implemented and shipped:
 - `wave: N` field on environment spec — Wave N stages automatically depend on all Wave N-1 stages
 - Composable with explicit `dependsOn`
 
-**K-07: Integration test step**
-- Built-in `integration-test` step runs a Kubernetes Job and watches it; a failed or timed-out Job fails the step (there is no per-step `onFailure` policy)
-- Not selectable yet: it runs only from a custom step sequence (`spec.environments[].steps`), which the controller rejects as not implemented
+**K-07: Integration test step (removed)**
+- The `integration-test` step could run only from a custom step sequence (`spec.environments[].steps`), which kardinal does not support, so it is removed
+- Run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` (see [Image signatures and tests](pipeline-reference.md#image-signatures-and-tests))
 
 **K-08: PR review gate**
 - `bundle.pr["staging"].isApproved` and `bundle.pr["staging"].approvalCount` in CEL context

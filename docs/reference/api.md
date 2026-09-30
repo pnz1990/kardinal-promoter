@@ -133,7 +133,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value` and `metrics.&lt;name&gt;.result`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
+MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -150,6 +150,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
 | `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
+| `status.validUntil` | string (date-time) |  | ValidUntil is when the current result goes stale: lastEvaluatedAt plus three intervals, and at least 30s. The MetricCheck reconciler writes it with each evaluation. A PolicyGate evaluated after this time, or when it is unset, sees metrics.&lt;name&gt;.result as "Stale" and metrics.&lt;name&gt;.stale as true, so a result that is no longer refreshed cannot pass a gate. |
 
 ## NotificationHook
 
@@ -240,13 +241,13 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].name` | string | yes | Name is the environment identifier (e.g. "test", "uat", "prod"). It must be a DNS label (lower-case letters, digits and '-', at most 63 characters): it names a Graph node, derived objects and, for the resource, argoRollouts and flagger health checks, a namespace. |
 | `spec.environments[].onHealthFailure` | string |  | OnHealthFailure controls what the reconciler does when health fails during bake or health checking (K-03). "rollback": create a rollback Bundle at the previous version; step → RollingBack. "abort": freeze the step; state → AbortedByAlarm; requires human intervention. "none" (default): step → Failed; downstream stops. One of: `rollback`, `abort`, `none`. Default: `none`. |
 | `spec.environments[].path` | string |  | Path is the subdirectory within the GitOps repository for this environment. Used when spec.git.layout is "directory". Defaults to "environments/&lt;name&gt;". |
-| `spec.environments[].promotionTemplate` | object |  | PromotionTemplate is reserved for a shared step sequence and is not implemented yet. A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate". See docs/custom-steps.md. |
+| `spec.environments[].promotionTemplate` | object |  | PromotionTemplate is reserved for a shared step sequence and is not implemented yet. A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate". See docs/pipeline-reference.md#promotion-steps. |
 | `spec.environments[].promotionTemplate.name` | string | yes | Name is the PromotionTemplate resource name. |
 | `spec.environments[].promotionTemplate.namespace` | string |  | Namespace is the namespace of the PromotionTemplate. If empty, the Pipeline's own namespace is used. |
 | `spec.environments[].regions` | []string |  | Regions is reserved for multi-region fan-out (issue #612) and is NOT implemented. With two or more regions the translator stamps out one PromotionStep per region (spec.region), but every region would edit the same path and push the same branch, so the PromotionStep reconciler fails such steps with "environments[].regions fan-out is not implemented". Declare one environment per region instead (for example prod-us, prod-eu). When empty or only one region is listed, the field has no effect. |
 | `spec.environments[].shard` | string |  | Shard pins this environment to a specific kardinal-controller agent shard in distributed mode. Leave empty for single-controller deployments. |
 | `spec.environments[].stepTimeoutSeconds` | integer |  | StepTimeoutSeconds is the maximum number of seconds a single promotion step (git-clone, kustomize-set-image, open-pr, etc.) may run before the reconciler cancels it via context.WithTimeout and marks the PromotionStep as Failed. When not set or 0 (default), no per-step timeout is applied. Useful for restricting execution in restricted-egress environments where git-clone against a slow SCM host can block the reconciler indefinitely. |
-| `spec.environments[].steps` | []object |  | Steps is reserved for a custom step sequence and is not implemented yet: the controller always runs the default sequence (see DefaultSequenceForBundle). A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate", instead of silently running the default steps. See docs/custom-steps.md. |
+| `spec.environments[].steps` | []object |  | Steps is reserved for a custom step sequence and is not implemented yet: the controller always runs the default sequence (see DefaultSequenceForBundle). A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate", instead of silently running the default steps. See docs/pipeline-reference.md#promotion-steps. |
 | `spec.environments[].steps[].uses` | string | yes | Uses identifies the step to execute (built-in name or custom name). |
 | `spec.environments[].steps[].webhook` | object |  | Webhook configures the HTTP endpoint for custom (non-built-in) steps. Required when Uses does not match any registered built-in step. |
 | `spec.environments[].steps[].webhook.secretRef` | object |  | SecretRef references a Kubernetes Secret whose "Authorization" key is sent as the Authorization header. |

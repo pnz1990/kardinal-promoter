@@ -1,7 +1,7 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: kardinal-test-app
+  name: flux-demo
   namespace: default
 spec:
   # Git repo managed by Flux — kardinal writes kustomize patches;
@@ -15,7 +15,7 @@ spec:
 
   environments:
     # test: auto-promote, Flux health check
-    # Flux Kustomization name is derived: <pipeline>-<env> = kardinal-test-app-test
+    # Flux Kustomization name is derived: <pipeline>-<env> = flux-demo-test
     # namespace defaults to flux-system
     - name: test
       path: environments/test
@@ -26,7 +26,7 @@ spec:
         type: flux
 
     # uat: auto-promote, Flux health check with 10-minute bake
-    # Flux Kustomization name: kardinal-test-app-uat
+    # Flux Kustomization name: flux-demo-uat
     - name: uat
       path: environments/uat
       update:
@@ -39,7 +39,7 @@ spec:
         type: flux
 
     # prod: PR review required, Flux health check with 60-minute bake
-    # Flux Kustomization name: kardinal-test-app-prod
+    # Flux Kustomization name: flux-demo-prod
     - name: prod
       path: environments/prod
       update:

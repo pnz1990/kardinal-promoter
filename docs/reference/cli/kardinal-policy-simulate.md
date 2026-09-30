@@ -11,7 +11,9 @@ pipeline's namespace plus the policy namespaces, matched by the
 kardinal.io/applies-to label) and evaluates each one with the controller's
 PolicyGate reconciler, against a Bundle that has promoted through every
 upstream environment. Metrics, change windows and promotion history are read
-from the cluster; nothing is written to it.
+from the cluster; nothing is written to it. Metric results are used as they
+are now at every simulated time: a MetricCheck result is "Stale" only if it is
+stale now.
 
 --time is UTC: a weekday and an hour ("Saturday 3pm", "tue 10:00",
 "15 Friday") or an RFC 3339 timestamp. The weekday is its next occurrence

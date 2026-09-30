@@ -1,7 +1,7 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: kardinal-test-app
+  name: flagger-demo
   namespace: default
 spec:
   git:
@@ -43,6 +43,7 @@ spec:
     # Flagger intercepts the Deployment and creates a canary.
     # kardinal waits for the Canary phase to reach "Succeeded" before
     # marking the promotion as Verified.
+    # Canary name is derived: <pipeline> = flagger-demo, namespace = <env> = prod
     - name: prod
       path: environments/prod
       update:

@@ -149,8 +149,8 @@ The step creates intermediate maps as needed if they do not exist.
 
 When a Bundle contains multiple images, the `argocd-set-image` step uses the **first image
 with a non-empty tag**. Setting different tags for different keys in one promotion is not
-supported: it would need a custom step sequence, and `spec.environments[].steps` is not
-implemented yet (a Pipeline that sets it is rejected; see [Custom Steps](custom-steps.md)).
+supported. kardinal has no custom step sequence to do it (a Pipeline that sets
+`spec.environments[].steps` is rejected; see [Promotion Steps](pipeline-reference.md#promotion-steps)).
 
 ---
 

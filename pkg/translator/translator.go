@@ -226,7 +226,7 @@ func (h healthInjector) inject(pipeline *kardinalv1alpha1.Pipeline, g *graph.Gra
 
 		spec, err := health.WatchNodeTemplate(opts.Type, opts)
 		if err != nil {
-			log.Warn().Err(err).Msg("no health ref node: unknown health type")
+			log.Warn().Err(err).Msg("no health ref node")
 			continue
 		}
 		if h.served != nil && !h.served(spec.APIVersion, spec.Kind) {

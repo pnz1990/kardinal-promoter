@@ -171,6 +171,64 @@ func TestLogsStaticOutput(t *testing.T) {
 	assert.Contains(t, out, "all done")
 }
 
+// TestLogsStepTable checks the per-step table static output prints from
+// status.steps: aligned STEP/STATE/DURATION/MESSAGE columns, durations in
+// seconds with one decimal, "-" for a step with no duration, and no table at
+// all when status.steps is empty (#974, #1318).
+func TestLogsStepTable(t *testing.T) {
+	tests := []struct {
+		name  string
+		steps []v1alpha1.StepStatus
+		want  [][]string // fields of each table row after the header and rule; nil means no table
+	}{
+		{
+			name: "durations and an unfinished step",
+			steps: []v1alpha1.StepStatus{
+				{Name: "git-clone", State: "Completed", Message: "cloned", DurationMs: 1200},
+				{Name: "open-pr", State: "Pending"},
+			},
+			want: [][]string{
+				{"git-clone", "Completed", "1.2s", "cloned"},
+				{"open-pr", "Pending", "-"},
+			},
+		},
+		{
+			name:  "nil steps prints no steps block",
+			steps: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := explainStep("demo", "b1", "prod", "Verified", "", policyTestNow)
+			step.Status.Steps = tt.steps
+			var buf bytes.Buffer
+			require.NoError(t, logsFn(&buf, policyClient(t, step), "default", "demo", "", ""))
+			out := buf.String()
+			require.Contains(t, out, "=== demo/prod (b1) [Verified] ===")
+
+			if tt.want == nil {
+				assert.NotContains(t, out, "steps:")
+				assert.NotContains(t, out, "DURATION")
+				return
+			}
+
+			_, table, found := strings.Cut(out, "  steps:\n")
+			require.True(t, found, out)
+			lines := strings.Split(strings.TrimRight(table, "\n"), "\n")
+			require.Len(t, lines, 2+len(tt.want), out)
+			assert.Equal(t, []string{"STEP", "STATE", "DURATION", "MESSAGE"}, strings.Fields(lines[0]))
+			assert.Equal(t, []string{"----", "-----", "--------", "-------"}, strings.Fields(lines[1]))
+			durCol := strings.Index(lines[0], "DURATION")
+			for i, row := range tt.want {
+				line := lines[2+i]
+				assert.Equal(t, row, strings.Fields(line))
+				assert.Equal(t, durCol, strings.Index(line, " "+row[2])+1,
+					"DURATION column is aligned in %q", line)
+			}
+		})
+	}
+}
+
 // C09b-cli-17: --follow prints each state change once: a step with sub-steps
 // prints its transition, and a terminal step next to a running one does not
 // repeat on every poll.

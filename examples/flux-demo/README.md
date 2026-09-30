@@ -38,10 +38,10 @@ kubectl apply -f examples/flux-demo/pipeline.yaml
 
 # 4. Verify Flux is reconciling
 kubectl get kustomizations -n flux-system
-# NAME                          READY   STATUS
-# kardinal-test-app-test        True    Applied revision: main/...
-# kardinal-test-app-uat         True    Applied revision: main/...
-# kardinal-test-app-prod        True    Applied revision: main/...
+# NAME             READY   STATUS
+# flux-demo-test   True    Applied revision: main/...
+# flux-demo-uat    True    Applied revision: main/...
+# flux-demo-prod   True    Applied revision: main/...
 ```
 
 ## Trigger a Promotion
@@ -52,7 +52,7 @@ LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
 # Create a bundle
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
+kardinal create bundle flux-demo --image $TEST_IMAGE
 
 # Watch the promotion
 kardinal get pipelines
@@ -80,9 +80,9 @@ health:
   timeout: 20m               # default: 10m
 ```
 
-The adapter always looks for a Kustomization named `<pipeline>-<env>`
-(`kardinal-test-app-prod`) in the `flux-system` namespace. The name and
-namespace cannot be overridden.
+The adapter looks for a Kustomization named `<pipeline>-<env>` (`flux-demo-prod`)
+in the `flux-system` namespace. To check a different one, set `health.flux.name`
+and `health.flux.namespace` on the environment.
 
 ## Validation
 
@@ -97,8 +97,8 @@ bash scripts/demo-validate.sh
 ## Expected Output
 
 ```
-test  | Flux Kustomization kardinal-test-app-test  | Ready=True, generation=2 matches
-uat   | Flux Kustomization kardinal-test-app-uat   | Ready=True, generation=2 matches
+test  | Flux Kustomization flux-demo-test  | Ready=True, generation=2 matches
+uat   | Flux Kustomization flux-demo-uat   | Ready=True, generation=2 matches
 prod  | PR #42 open — waiting for merge
 ```
 
@@ -106,6 +106,6 @@ prod  | PR #42 open — waiting for merge
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Promotion stuck at HealthChecking | Flux Kustomization `Ready=False` | `kubectl describe kustomization kardinal-test-app-test -n flux-system` |
+| Promotion stuck at HealthChecking | Flux Kustomization `Ready=False` | `kubectl describe kustomization flux-demo-test -n flux-system` |
 | `observedGeneration` lag | Flux reconcile interval | Default 1m; reduce to `interval: 30s` for faster iteration |
 | Kustomization not found | Flux CRD not installed | `flux install` or apply `flux-kustomizations.yaml` |

@@ -112,13 +112,6 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["flagger.app"]
   resources: ["canaries"]
   verbs: ["get", "list", "watch"]
-{{- if .Values.rbac.integrationTestJobs }}
-# rbac.integrationTestJobs: the integration-test step runs a Job and deletes
-# it when done.
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["get", "list", "watch", "create", "delete"]
-{{- end }}
 {{- end }}
 
 {{- define "kardinal-promoter.rules.cluster" -}}

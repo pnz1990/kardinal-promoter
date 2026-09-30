@@ -119,7 +119,7 @@ kubectl get pods -n kro-system
 | `controller.tlsCertFile` / `tlsKeyFile` | `""` | TLS for the UI and webhook servers. Paths inside the container: mount the certificate Secret with `controller.extraVolumes` / `extraVolumeMounts` |
 | `controller.extraArgs` / `extraEnv` / `extraVolumes` / `extraVolumeMounts` | `[]` | Extra controller args, env vars, volumes and mounts |
 | `rbac.argocdApplicationsWrite` | `false` | Grant `patch` on Argo CD Applications (the `argocd` update strategy) |
-| `rbac.integrationTestJobs` | `false` | Grant Job create/delete (the `integration-test` step) |
+| `rbac.integrationTestJobs` | `false` | Deprecated, no effect, removed in v0.10. The `integration-test` step was removed, so the chart grants no Job access |
 | `resources.limits.cpu` | `500m` | CPU limit |
 | `resources.limits.memory` | `128Mi` | Memory limit |
 | `resources.requests.cpu` | `10m` | CPU request |
@@ -278,9 +278,8 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 | `leases` | Leader election, through a Role in the release namespace |
 | `events` | get, list, watch, create, patch |
 
-Optional rules: `rbac.argocdApplicationsWrite` (patch Applications), `rbac.integrationTestJobs`
-(create and delete Jobs), and `ui.auth.tokenReview` (create TokenReviews and
-SubjectAccessReviews). The full list of objects and rules is in
+Optional rules: `rbac.argocdApplicationsWrite` (patch Applications) and `ui.auth.tokenReview`
+(create TokenReviews and SubjectAccessReviews). The full list of objects and rules is in
 [Security: Controller RBAC](guides/security.md#controller-rbac). Set `controller.watchNamespace`
 to turn the namespaced rules into a Role in one namespace.
 

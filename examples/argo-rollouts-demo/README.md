@@ -61,7 +61,7 @@ kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: kardinal-test-app-uat
+  name: argo-rollouts-demo-uat
   namespace: argocd
 spec:
   project: default
@@ -84,9 +84,9 @@ EOF
 kubectl apply -f examples/argo-rollouts-demo/pipeline.yaml
 
 # Verify Rollout is initialized
-kubectl argo rollouts get rollout kardinal-test-app -n prod
+kubectl argo rollouts get rollout argo-rollouts-demo -n prod
 # NAME                   KIND     IMAGE                                    TAG       HASH      REPLICAS
-# kardinal-test-app      Rollout  ghcr.io/pnz1990/kardinal-test-app  sha-...  xxxxx     3/3
+# argo-rollouts-demo     Rollout  ghcr.io/pnz1990/kardinal-test-app  sha-...  xxxxx     3/3
 ```
 
 ## Trigger a Promotion
@@ -96,13 +96,13 @@ LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
 # Create bundle — starts promotion through test → uat → prod
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
+kardinal create bundle argo-rollouts-demo --image $TEST_IMAGE
 
 # Watch test and uat auto-promote
 kardinal get pipelines
 
 # Merge the prod PR when it opens, then watch the rollout
-kubectl argo rollouts get rollout kardinal-test-app -n prod --watch
+kubectl argo rollouts get rollout argo-rollouts-demo -n prod --watch
 # Shows canary progression: 10% → 30% → 60% → 100%
 
 # kardinal detects Rollout.status.phase=Healthy → marks prod Verified
@@ -130,24 +130,25 @@ health:
   timeout: 30m        # must exceed total canary step duration (default: 10m)
 ```
 
-The adapter always looks for a Rollout named after the Pipeline
-(`kardinal-test-app`) in a namespace named after the environment (`prod`).
-The name and namespace cannot be overridden.
+The adapter looks for a Rollout named after the Pipeline (`argo-rollouts-demo`)
+in a namespace named after the environment (`prod`). To check a different one,
+set `health.argoRollouts.name` and `health.argoRollouts.namespace` on the
+environment.
 
 ## Manual Canary Control
 
 ```bash
 # Pause the canary manually (override kardinal schedule)
-kubectl argo rollouts pause kardinal-test-app -n prod
+kubectl argo rollouts pause argo-rollouts-demo -n prod
 
 # Resume
-kubectl argo rollouts resume kardinal-test-app -n prod
+kubectl argo rollouts resume argo-rollouts-demo -n prod
 
 # Promote immediately (skip remaining steps)
-kubectl argo rollouts promote kardinal-test-app -n prod
+kubectl argo rollouts promote argo-rollouts-demo -n prod
 
 # Abort (Rollout.status.phase → Degraded → kardinal opens rollback PR)
-kubectl argo rollouts abort kardinal-test-app -n prod
+kubectl argo rollouts abort argo-rollouts-demo -n prod
 ```
 
 ## Validation
@@ -167,4 +168,4 @@ bash scripts/demo-validate.sh
 | Promotion stuck at `HealthChecking` | Rollout phase is `Paused` | Check step durations; use `kubectl argo rollouts resume` if manual pause |
 | `Rollout not found` | Rollout CR not applied | `kubectl apply -f examples/argo-rollouts-demo/rollout.yaml` |
 | Rollout immediately `Degraded` | readinessProbe failing | Check pod logs; verify `/health` endpoint |
-| kardinal shows `Failed` | Rollout reached `Degraded` | `kubectl argo rollouts get rollout kardinal-test-app -n prod` |
+| kardinal shows `Failed` | Rollout reached `Degraded` | `kubectl argo rollouts get rollout argo-rollouts-demo -n prod` |
