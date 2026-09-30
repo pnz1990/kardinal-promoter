@@ -228,19 +228,6 @@ func main() {
 			"to be installed separately. Also readable from "+
 			"KARDINAL_PIPELINE_ADMISSION_WEBHOOK=true environment variable.")
 
-	// --bundle-admission-webhook mounts the Bundle ValidatingAdmissionWebhook
-	// handler at POST /webhook/validate/bundle: it denies creating a Bundle
-	// whose spec.provenance.ciRunURL is not empty or an absolute http(s) URL,
-	// the bundle API's check. Like the Pipeline webhook it needs a
-	// ValidatingWebhookConfiguration (operation CREATE) installed separately.
-	var bundleAdmissionWebhook bool
-	flag.BoolVar(&bundleAdmissionWebhook, "bundle-admission-webhook",
-		os.Getenv("KARDINAL_BUNDLE_ADMISSION_WEBHOOK") == "true",
-		"Enable the ValidatingAdmissionWebhook handler that checks spec.provenance.ciRunURL "+
-			"of new Bundles at POST /webhook/validate/bundle. Requires a "+
-			"ValidatingWebhookConfiguration to be installed separately. Also readable from "+
-			"KARDINAL_BUNDLE_ADMISSION_WEBHOOK=true environment variable.")
-
 	// --watch-namespace limits the controller's informer cache to a single namespace.
 	// When empty (default), the controller watches all namespaces (cluster-wide mode).
 	// When set, the controller watches only that namespace — suitable for multi-tenant
@@ -494,7 +481,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 
-	// Webhook server: SCM webhooks, bundle API, Pipeline and Bundle admission.
+	// Webhook server: SCM webhooks, bundle API, Pipeline admission.
 	webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
 	if webhookSecret == "" {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
@@ -522,10 +509,6 @@ func main() {
 	if pipelineAdmissionWebhook {
 		mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
 		logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
-	}
-	if bundleAdmissionWebhook {
-		mux.HandleFunc("/webhook/validate/bundle", admissionpkg.BundleWebhookHandler(logger))
-		logger.Info().Msg("bundle admission webhook enabled at /webhook/validate/bundle")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
 	// caches sync, a bind failure stops the controller, and shutdown drains

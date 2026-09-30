@@ -65,7 +65,8 @@ func isTerminal(w io.Writer) bool {
 }
 
 // colorState wraps a PromotionStep state or a PolicyGate state
-// (graph.GateState) with an ANSI color, as the UI's health chips do:
+// (graph.GateState) with an ANSI color. Like the UI's health chips, Waiting
+// uses the Pending color of its palette (yellow here, slate grey in the UI):
 //   - Verified / Pass                                               → green
 //   - Failed / AbortedByAlarm / Block                               → red
 //   - Pending / Waiting / Promoting / WaitingForMerge / HealthChecking /

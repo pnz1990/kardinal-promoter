@@ -263,10 +263,10 @@ func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
 // and the PR body and the UI render as a link. It must be empty or an absolute
 // http or https URL with a host, without user info (credentials would be
 // published in every PR body) and without whitespace or control characters.
-// The bundle API and the Bundle admission webhook refuse to create a Bundle
-// that fails it; they do not check updates, so existing Bundles keep working.
-// Promote and rollback drop such a URL when they copy provenance, and the PR
-// body does not link one. Errors do not echo the URL.
+// The bundle API refuses to create a Bundle that fails it. Bundles created
+// another way, or before this check, can still hold such a URL: promote and
+// rollback drop it when they copy provenance, and the PR body and the UI do
+// not render it. Errors do not echo the URL or any part of it.
 func ValidateCIRunURL(raw string) error {
 	if raw == "" {
 		return nil
@@ -276,11 +276,9 @@ func ValidateCIRunURL(raw string) error {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		var uerr *url.Error
-		if errors.As(err, &uerr) {
-			err = uerr.Err // url.Error repeats the whole URL
-		}
-		return fmt.Errorf("provenance.ciRunURL is not a valid URL: %w", err)
+		// Not wrapped: url.Parse errors quote the URL or parts of it, such as
+		// the "port" of https://user:token/x.
+		return fmt.Errorf("provenance.ciRunURL is not a valid URL")
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return fmt.Errorf("provenance.ciRunURL must be an absolute http or https URL")

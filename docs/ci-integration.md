@@ -273,15 +273,10 @@ empty or an absolute `http://` or `https://` URL with a host, without user info
 (`https://user@host/...`), spaces or control characters.
 
 - The [Bundle API](#webhook-endpoint-reference) returns `400` for any other value.
-- Bundles created directly (`kubectl apply`, your own client) are checked only
-  when the Bundle admission webhook is enabled: start the controller with
-  `--bundle-admission-webhook` (or `KARDINAL_BUNDLE_ADMISSION_WEBHOOK=true`), then install a
-  `ValidatingWebhookConfiguration` for `bundles.kardinal.io`, operation `CREATE`, that calls
-  `POST /webhook/validate/bundle` on the webhook port (`8083`, served over TLS with
-  `--tls-cert-file`). The chart does not create it.
-- Existing Bundles are not checked, and updating them is always allowed. If an existing Bundle's
-  `ciRunURL` fails the check, the PR body shows `—` and the UI shows it as plain text. Promote
-  and rollback (CLI, UI and automatic) leave it out of the Bundle they create.
+- Bundles created directly (`kubectl apply`, your own client) and existing Bundles are not
+  checked. Where such a Bundle's `ciRunURL` fails the check, the PR body and the UI show `—`
+  instead of a link, and promote and rollback (CLI, UI and automatic) leave it out of the
+  Bundle they create.
 
 ## Multi-Image Bundles
 

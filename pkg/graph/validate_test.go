@@ -480,7 +480,8 @@ func TestValidateSecretRef(t *testing.T) {
 
 // TestValidateCIRunURL: a new Bundle's ciRunURL is empty or an absolute
 // http(s) URL without user info, whitespace or control characters. Errors do
-// not echo the URL.
+// not echo the URL or any part of it (url.Parse errors quote the "port" of
+// https://user:token/x).
 func TestValidateCIRunURL(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -509,6 +510,7 @@ func TestValidateCIRunURL(t *testing.T) {
 		{name: "no-break space", url: "https://ci.example.com/ 1", wantErr: "whitespace or control"},
 		{name: "bad escape", url: "https://ci.example.com/%zz", wantErr: "not a valid URL"},
 		{name: "bad host", url: "https://[::1/runs", wantErr: "not a valid URL"},
+		{name: "credential parsed as a port", url: "https://user:s3cret/x", wantErr: "not a valid URL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -520,7 +522,7 @@ func TestValidateCIRunURL(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			assert.Contains(t, err.Error(), "provenance.ciRunURL")
-			for _, secret := range []string{"s3cret", "evil.example", "ci.example.com", "runs"} {
+			for _, secret := range []string{"s3cret", "evil.example", "ci.example.com", "runs", "zz", "::1"} {
 				assert.NotContains(t, err.Error(), secret, "the error must not echo the URL")
 			}
 		})

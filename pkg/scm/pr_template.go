@@ -98,8 +98,8 @@ var mdCellReplacer = strings.NewReplacer("|", `\|`, "\r\n", " ", "\n", " ", "\r"
 
 // ciRunLink renders the CI Run cell of the provenance table: a link when raw
 // passes graph.ValidateCIRunURL (an absolute http(s) URL), "—" otherwise. The
-// bundle API and the admission webhook check new Bundles, but a Bundle created
-// before, or with the webhook off, may hold anything: an empty ciRunURL must
+// bundle API checks new Bundles, but a Bundle created another way or before
+// that check may hold anything: an empty ciRunURL must
 // not render an empty "[CI run]()" link, another scheme (javascript:, a
 // relative path) is not linked, and the characters of a valid URL that could
 // end the link or the table cell (")", "|", "<", a backtick) are
