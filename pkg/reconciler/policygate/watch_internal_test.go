@@ -25,15 +25,17 @@ import (
 func TestMetricCheckResultChanged(t *testing.T) {
 	base := func() *kardinalv1alpha1.MetricCheck {
 		t0 := metav1.NewTime(time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC))
+		validUntil := metav1.NewTime(t0.Add(3 * time.Minute))
 		return &kardinalv1alpha1.MetricCheck{
 			ObjectMeta: metav1.ObjectMeta{Name: "error-rate", Namespace: "default", Generation: 1},
 			Status: kardinalv1alpha1.MetricCheckStatus{
-				Result: "Pass", LastValue: "0.01", LastEvaluatedAt: &t0,
+				Result: "Pass", LastValue: "0.01", LastEvaluatedAt: &t0, ValidUntil: &validUntil,
 			},
 		}
 	}
 	tests := []struct {
 		name   string
+		old    func(mc *kardinalv1alpha1.MetricCheck)
 		mutate func(mc *kardinalv1alpha1.MetricCheck)
 		want   bool
 	}{
@@ -44,10 +46,29 @@ func TestMetricCheckResultChanged(t *testing.T) {
 		{name: "result", want: true, mutate: func(mc *kardinalv1alpha1.MetricCheck) { mc.Status.Result = "Fail" }},
 		{name: "value", want: true, mutate: func(mc *kardinalv1alpha1.MetricCheck) { mc.Status.LastValue = "0.02" }},
 		{name: "spec", want: true, mutate: func(mc *kardinalv1alpha1.MetricCheck) { mc.Generation = 2 }},
+		// #1302: an evaluation that makes a stale result fresh passes, even
+		// with the same result and value.
+		{name: "stale to fresh", want: true, mutate: func(mc *kardinalv1alpha1.MetricCheck) {
+			t1 := metav1.NewTime(mc.Status.LastEvaluatedAt.Add(4 * time.Minute))
+			mc.Status.LastEvaluatedAt = &t1
+		}},
+		{name: "no validUntil before (upgrade)", want: true, old: func(mc *kardinalv1alpha1.MetricCheck) {
+			mc.Status.ValidUntil = nil
+		}, mutate: func(mc *kardinalv1alpha1.MetricCheck) {
+			t1 := metav1.NewTime(mc.Status.LastEvaluatedAt.Add(time.Minute))
+			mc.Status.LastEvaluatedAt = &t1
+		}},
+		{name: "fresh at validUntil", want: false, mutate: func(mc *kardinalv1alpha1.MetricCheck) {
+			t1 := *mc.Status.ValidUntil
+			mc.Status.LastEvaluatedAt = &t1
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			oldMC, newMC := base(), base()
+			if tt.old != nil {
+				tt.old(oldMC)
+			}
 			tt.mutate(newMC)
 			assert.Equal(t, tt.want, metricCheckResultChanged.Update(event.UpdateEvent{ObjectOld: oldMC, ObjectNew: newMC}))
 		})
@@ -84,4 +105,26 @@ func TestMetricCheckRequests(t *testing.T) {
 	require.Len(t, reqs, 1)
 	assert.Equal(t, "default", reqs[0].Namespace)
 	assert.Equal(t, "app-v1-prod-error-rate", reqs[0].Name)
+}
+
+// TestExprRefersToMetric covers the stale-metric note in status.reason (#1302):
+// it names a metric only when the expression refers to it.
+func TestExprRefersToMetric(t *testing.T) {
+	tests := []struct {
+		expr, name string
+		want       bool
+	}{
+		{expr: `metrics["error-rate"].result == "Pass"`, name: "error-rate", want: true},
+		{expr: `metrics['error-rate'].result == "Pass"`, name: "error-rate", want: true},
+		{expr: `metrics.latency.result == "Pass"`, name: "latency", want: true},
+		{expr: `metrics.latency_p99.result == "Pass"`, name: "latency", want: false},
+		{expr: `metrics.latency_p99.result == "Pass" && metrics.latency.stale`, name: "latency", want: true},
+		{expr: `metrics["error-rate"].result == "Pass"`, name: "rate", want: false},
+		{expr: `!schedule.isWeekend`, name: "error-rate", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expr+"/"+tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, exprRefersToMetric(tt.expr, tt.name))
+		})
+	}
 }

@@ -135,7 +135,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value` and `metrics.&lt;name&gt;.result`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
+MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -152,6 +152,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
 | `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
+| `status.validUntil` | string (date-time) |  | ValidUntil is when the current result goes stale: lastEvaluatedAt plus three intervals, and at least 30s. The MetricCheck reconciler writes it with each evaluation. A PolicyGate evaluated after this time, or when it is unset, sees metrics.&lt;name&gt;.result as "Stale" and metrics.&lt;name&gt;.stale as true, so a result that is no longer refreshed cannot pass a gate. |
 
 ## NotificationHook
 
