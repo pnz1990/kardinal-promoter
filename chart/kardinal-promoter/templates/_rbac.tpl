@@ -22,7 +22,12 @@ rules exist for. A new client call needs a row there and a rule here.
 */}}
 
 {{- define "kardinal-promoter.rules.namespaced" -}}
-# Events from every reconciler.
+# Events from every reconciler (events.k8s.io/v1 recorder).
+- apiGroups: ["events.k8s.io"]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# core/v1 Events: the UI step event list reads them (the API server serves the
+# events.k8s.io Events there too), and leader election writes them.
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["get", "list", "watch", "create", "patch"]

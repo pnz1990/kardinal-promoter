@@ -24,7 +24,8 @@ What the namespaced rules grant:
 | Resources | Verbs | Why |
 |---|---|---|
 | `secrets` | get | Pipeline `spec.git.secretRef` and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
-| `events` | get, list, watch, create, patch | Events from every reconciler |
+| `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
+| `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | `configmaps` | get, list, watch | Cached reads; the only write is the `kardinal-version` ConfigMap |
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
 | `auditevents` | get, list, watch, create | Audit records are append-only |

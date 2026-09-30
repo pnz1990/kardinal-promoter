@@ -252,6 +252,32 @@ spec:
 
 ---
 
+## Token check at startup
+
+When a token is set, the controller checks it once at startup, in the background, and
+logs what it finds. This also runs in Helm installs, where the token comes from the
+watched Secret. The check never stops the controller from starting.
+
+| Provider | Call | Logged as a warning |
+|---|---|---|
+| GitHub / GitHub Enterprise | `GET /user` | token rejected (401); a classic PAT without `repo` or `public_repo`; a fine-grained PAT or GitHub App token, whose permissions the call cannot show |
+| GitLab | `GET /api/v4/personal_access_tokens/self` | token rejected; no `api` scope |
+| Forgejo / Gitea | `GET /api/v1/user` | token rejected |
+| Bitbucket Cloud, Azure DevOps | none | not checked; an info line says so, and token problems show on the first promotion step |
+
+Find the warnings with:
+
+```bash
+kubectl logs -n kardinal-system -l app.kubernetes.io/name=kardinal-promoter \
+  | grep "SCM TOKEN SCOPE WARNING"
+```
+
+A network or HTTP error from the check is logged at debug level only. The token itself is
+never logged. A token loaded later by the Secret watcher (after a rotation) is not
+checked.
+
+---
+
 ## Credential rotation (zero-downtime)
 
 kardinal-promoter supports rotating SCM credentials at runtime without restarting the controller or
