@@ -8,8 +8,8 @@ This guide covers installing kardinal-promoter in a Kubernetes cluster using Hel
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Kubernetes | ≥ 1.28 | kind, EKS, GKE, or any conformant cluster. Older than 1.30: see [Kubernetes < 1.30](#kubernetes-130) |
-| kubectl | ≥ 1.28 | Matches your cluster version |
+| Kubernetes | ≥ 1.29 | kind, EKS, GKE, or any conformant cluster. CI tests 1.35, 1.36 and 1.37; the upgrade was tested on 1.29 and 1.33. Older than 1.30: see [Kubernetes < 1.30](#kubernetes-130) |
+| kubectl | ≥ 1.29 | Within one minor of your cluster |
 | Helm | ≥ 3.14 | `brew install helm`. 3.14 adds `--reset-then-reuse-values`, used by [Upgrade](#upgrade) |
 | GitHub token | — | Personal access token with `repo` scope |
 | kro | ≥ 0.10.0-rc.0 | Graph controller with the `GraphKind` feature gate — see [Install kro](#install-kro) |

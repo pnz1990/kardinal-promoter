@@ -51,7 +51,9 @@ fails the step. Use one Bundle per chart image, or kustomize.
 
 ### What are the minimum cluster requirements?
 
-- Kubernetes 1.28+
+- Kubernetes 1.29+. On 1.29, `hack/install-kro.sh` exits 1 but kro works; see
+  [Kubernetes < 1.30](installation.md#kubernetes-130). CI runs the live e2e suites on the
+  three newest minors, currently 1.35, 1.36 and 1.37.
 - [kro](installation.md#install-kro) v0.10.0-rc.0+ with the Graph controller (`GraphKind` feature gate)
 - A GitHub (or GitLab) personal access token with `repo` write scope
 

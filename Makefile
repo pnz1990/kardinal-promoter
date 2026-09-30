@@ -31,7 +31,7 @@ KIND_CLUSTER ?= kardinal-e2e
         install-kro setup-e2e-env setup-e2e-env-fast \
         e2e-setup e2e-teardown kind-up kind-down \
         test-e2e test-e2e-kind test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
-        test-e2e-journey-4 test-e2e-journey-5 \
+        test-e2e-journey-4 test-e2e-journey-5 e2e-up e2e-down test-e2e-live \
         tools help
 
 all: generate build test lint
@@ -150,6 +150,25 @@ e2e-setup: ## Create kind cluster + install kro + kardinal built from this check
 
 e2e-teardown: ## Convenience: tear down the e2e kind cluster
 	KIND_CLUSTER=$(KIND_CLUSTER) bash hack/e2e-teardown.sh
+
+## Live e2e suites (test/e2e/live, test/e2e/README.md): a kind cluster per
+## suite with real git servers, GitOps engines and the controller built from
+## this checkout.
+## KIND_K8S picks the Kubernetes minor (e.g. 1.37; default kind-config.yaml's),
+## COUNT the go test -count and RUN the go test -run pattern (default the suite's).
+SUITE ?= core
+KIND_K8S ?=
+COUNT ?= 1
+RUN ?=
+
+e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
+	KIND_CLUSTER=kardinal-e2e-$(SUITE) KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)
+
+test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fails on any skip
+	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) RUN='$(RUN)' bash hack/e2e/run.sh $(SUITE)
+
+e2e-down: ## Delete the kind cluster of live suite SUITE
+	kind delete cluster --name kardinal-e2e-$(SUITE)
 
 ## Journey tests — each journey maps to docs/aide/definition-of-done.md.
 # test-e2e-journey-N run the fake-client journey tests (no cluster).

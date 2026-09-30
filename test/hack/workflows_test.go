@@ -111,7 +111,7 @@ func TestKindClustersUseOneSupportedNodeImage(t *testing.T) {
 			require.Len(t, images, 1, "kind-config.yaml must set exactly one node image")
 			minor, err := strconv.Atoi(images[0][1])
 			require.NoError(t, err)
-			assert.GreaterOrEqual(t, minor, 30, "kro's graphs.kro.run CRD needs Kubernetes 1.30 or newer: %s", images[0][0])
+			assert.GreaterOrEqual(t, minor, 30, "hack/install-kro.sh needs Kubernetes 1.30 or newer (kro's graphrevisions CRD uses selectableFields): %s", images[0][0])
 			assert.NotEmpty(t, images[0][2], "pin the node image by digest, as the kind release notes list it: %s", images[0][0])
 		} else {
 			for _, img := range images {
@@ -197,6 +197,54 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(data), "@latest", "%s installs a floating version", rel)
 	}
+}
+
+var kindNodeKey = regexp.MustCompile(`^KIND_NODE_1_(\d+)$`)
+
+// TestKindNodeMatrixIsPinned checks the KIND_NODE_1_<minor> images in
+// hack/tool-versions.env that the live e2e matrix boots: at least three
+// minors, each image digest-pinned with the minor its key names and new
+// enough for kro, kind-config.yaml using one of them, and kubectl within its
+// one minor of skew of every one.
+func TestKindNodeMatrixIsPinned(t *testing.T) {
+	tv := toolVersions(t)
+	kubectl := semver.FindStringSubmatch(tv["KUBECTL_VERSION"])
+	require.NotNil(t, kubectl, "KUBECTL_VERSION")
+	kubectlMinor, err := strconv.Atoi(kubectl[1])
+	require.NoError(t, err)
+
+	images := map[string]bool{}
+	for k, v := range tv {
+		m := kindNodeKey.FindStringSubmatch(k)
+		if m == nil {
+			continue
+		}
+		images[v] = true
+		img := kindNodeImage.FindStringSubmatch(v)
+		if !assert.NotNil(t, img, "%s=%s is not a kindest/node image", k, v) {
+			continue
+		}
+		assert.Equal(t, v, img[0], "%s=%s: only the image, nothing else", k, v)
+		assert.Equal(t, m[1], img[1], "%s=%s: the image's minor must match the key", k, v)
+		assert.NotEmpty(t, img[2], "%s=%s: pin the image by digest", k, v)
+		minor, err := strconv.Atoi(img[1])
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, minor, 30, "%s: hack/install-kro.sh needs Kubernetes 1.30 or newer (kro's graphrevisions CRD uses selectableFields)", k)
+		assert.LessOrEqual(t, abs(minor-kubectlMinor), 1, "%s: KUBECTL_VERSION %s is more than one minor away", k, tv["KUBECTL_VERSION"])
+	}
+	assert.GreaterOrEqual(t, len(images), 3, "the live e2e matrix runs on three Kubernetes minors")
+
+	cfg, err := os.ReadFile(filepath.Join(repoRoot(t), "test/e2e/kind-config.yaml"))
+	require.NoError(t, err)
+	node := kindNodeImage.FindString(string(cfg))
+	assert.True(t, images[node], "kind-config.yaml's node image %s must be one of the KIND_NODE_* images", node)
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // workflowStepNamed returns the step of workflow rel whose name starts with

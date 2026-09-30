@@ -46,3 +46,6 @@ ITEM.md
 *.log
 .claude/agents/
 
+
+# Live e2e state: env file, generated credentials, failure diagnostics
+/test/e2e/results/
