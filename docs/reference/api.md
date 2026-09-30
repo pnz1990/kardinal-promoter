@@ -407,14 +407,14 @@ RollbackPolicy monitors consecutive health-check failures on a PromotionStep and
 
 `kardinal.io/v1alpha1`
 
-ScheduleClock is an Owned node that writes a timestamp to status.tick on a configurable interval, generating Kubernetes watch events. PolicyGates with schedule.* expressions reference the ScheduleClock in their Graph scope; each tick causes the Graph controller to re-evaluate all dependant nodes. One ScheduleClock per cluster is sufficient. Deploy to kardinal-system. This CRD eliminates the ctrl.Result{RequeueAfter} timer loop in the PolicyGate reconciler (PG-4 in docs/design/11-graph-purity-tech-debt.md).
+ScheduleClock writes a timestamp to status.tick on a configurable interval, generating Kubernetes watch events. Each tick makes the PolicyGate reconciler re-evaluate every gate instance except those of finished Bundles, so schedule.* expressions see time pass. One ScheduleClock per cluster is sufficient. Deploy to kardinal-system. Each gate is also re-evaluated every spec.recheckInterval; without a ScheduleClock that is the only periodic re-evaluation.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | ScheduleClockSpec defines the desired state of a ScheduleClock. |
 | `spec.interval` | string |  | Interval is how often the ScheduleClock updates status.tick. Uses Go duration format (e.g. "1m", "30s"). Minimum recommended value is 30s; sub-minute precision is rarely needed for business-hour gates. Default: `1m`. |
 | `status` | object |  | ScheduleClockStatus defines the observed state of a ScheduleClock. |
-| `status.tick` | string |  | Tick is the RFC3339 timestamp written by the reconciler on every interval. PolicyGate nodes that reference this ScheduleClock in their Graph scope will re-evaluate their readyWhen expressions each time Tick changes, because the Graph controller watches all nodes in scope for watch events. This is the sole purpose of this field: to generate Kubernetes watch events on a regular interval so that time-based PolicyGate expressions are re-evaluated without a dedicated recheckAfter primitive in kro. |
+| `status.tick` | string |  | Tick is the RFC3339 timestamp written by the reconciler on every interval. The PolicyGate reconciler watches every ScheduleClock: each time Tick changes, it re-evaluates every PolicyGate instance in the cluster except those of finished Bundles, so time-based expressions such as schedule.isWeekend see time pass. A gate does not reference the clock. This is the sole purpose of this field. |
 
 ## Subscription
 
