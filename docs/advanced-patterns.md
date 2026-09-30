@@ -317,14 +317,18 @@ removes the Pipeline and its Bundles are garbage-collected.
 When a new Bundle is created while an existing Bundle is still promoting through the
 same Pipeline, the older Bundle is superseded:
 
-1. The old Bundle's in-progress PromotionSteps are cancelled.
-2. The old Bundle's status is set to `Superseded`.
-3. The old Bundle's Graph is deleted (and its PromotionStep CRs are cascade-deleted).
-4. The new Bundle starts promoting from the beginning.
+1. The old Bundle's status is set to `Superseded`, which is final.
+2. Its unfinished PromotionSteps are failed. A PR one of them opened that is still open
+   is closed with a comment noting it was superseded.
+3. Its Graph, PromotionSteps and PolicyGates are kept as history. The Graph creates no
+   new PromotionStep (for a Graph built before this behaviour, only a step created at the
+   moment of supersession), and its PolicyGates are no longer evaluated: they keep the
+   status they had when the Bundle was superseded.
+4. A step created just before supersession that never started is failed with
+   "superseded before this step started" and writes no AuditEvent.
+5. The new Bundle starts promoting from the beginning.
 
-Open PRs from the superseded Bundle are **not automatically closed**. The controller
-adds a comment to the old PR noting it has been superseded. The reviewer should close
-the old PR manually.
+Deleting the superseded Bundle deletes its Graph and everything the Graph created.
 
 ```bash
 # Check which Bundles were superseded

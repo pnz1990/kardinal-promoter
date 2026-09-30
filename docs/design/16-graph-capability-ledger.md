@@ -78,6 +78,10 @@ classifies that as data-pending (`pkg/graphengine/runtime/errors.go:43-49`): the
 Unresolved, nothing is created or pruned, and kro retries on the next watch event.
 `spec.upstreamStates` and `spec.requiredGates` of each PromotionStep are built this way
 (`pkg/graph/builder.go` `resolvableWhen`, `verifiedCond`, `buildPromotionStepNode`).
+So is `spec.bundleName`, on `bundle.status.phase != "Superseded"`, which stops a
+Superseded Bundle's Graph from creating steps (E2E-R20). A node that already exists and
+turns Unresolved is neither re-applied nor pruned (`executor/simple.go:318-324`,
+`pkg/controller/graph/tracking.go:102-106`), so its object stays as history.
 
 Verified on kind: `uat` was created only after `test` was Verified; `prod` stayed absent
 while `require-uat-soak` was not ready.
@@ -308,6 +312,14 @@ These are not gaps, but the translator has to work around them.
   can never become ready keeps the Graph `Ready=False` forever. This happened with
   `PRStatus` nodes for auto environments, which never open a PR. The builder now adds
   `status.merged == true` only for `pr-review` environments.
+- **A Graph cannot be suspended.** The `kro.run/reconcile: suspended` annotation
+  (`api/v1alpha1/groupversion_info.go:36-55`) is read only by the instance controller
+  (`pkg/controller/instance/controller.go:317`), not the Graph controller. Deleting the
+  Graph deletes every managed resource (`pkg/controller/graph/controller.go`
+  `reconcileDelete`), and a node whose `includeWhen` turns false is pruned
+  (`executor/simple.go:289-296`). To stop a Superseded Bundle's Graph while keeping its
+  steps and gates, every step node holds on `bundle.status.phase` through `resolvableWhen`
+  (G1).
 - **Data-pending classification is by error text** (`runtime/errors.go:43-49`). G1's
   workaround depends on `index out of bounds` staying in that list.
 - **Graph `Ready` is a live aggregate.** A gate node's `readyWhen` (`status.ready == true`)

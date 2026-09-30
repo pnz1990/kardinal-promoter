@@ -655,6 +655,8 @@ func verifiedCond(upstreamID string, regions int) string {
 // Gating: spec.upstreamStates and spec.requiredGates only resolve once every
 // upstream PromotionStep is Verified and every PolicyGate is ready (see
 // resolvableWhen). Until then kro does not create this PromotionStep.
+// spec.bundleName holds every step, roots included, once the Bundle is
+// Superseded.
 //
 // Multi-region fan-out (issue #612): when envSpec.Regions has ≥2 entries, the
 // returned node uses kro's forEach with a "region" iterator. kro stamps out
@@ -696,9 +698,17 @@ func buildPromotionStepNode(
 
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
-		// bundleName: live CEL reference to the Bundle ref node metadata.name (#622).
-		// Enables the Graph to react to Bundle changes without regenerating the spec.
-		"bundleName":  "${bundle.metadata.name}",
+		// bundleName: live CEL reference to the Bundle ref node (#622). It only
+		// resolves while the Bundle is not Superseded, so a Superseded Bundle's
+		// Graph creates no new PromotionStep when a gate or upstream later turns
+		// ready (E2E-R20). kro re-reads the ref and watches it on every apply
+		// (executor/simple.go applyRef), so the hold takes effect on the next
+		// reconcile. Steps that already exist become Unresolved: kro neither
+		// re-applies nor prunes them (executor/simple.go Apply, controller/graph/
+		// tracking.go diffManagedResources), so they stay as history. includeWhen
+		// is not used because an excluded node is pruned. Failed is not held:
+		// a Failed Bundle can return to Promoting.
+		"bundleName":  resolvableWhen(`bundle.status.phase != "Superseded"`, "bundle.metadata.name"),
 		"environment": envName,
 		"stepType":    stepType,
 		// prStatusRef points to the companion PRStatus node.
