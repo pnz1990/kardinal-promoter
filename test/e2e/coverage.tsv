@@ -156,27 +156,27 @@ WEBHOOK-NOSECRET-01	live	scm-forgejo	todo	webhook	without --webhook-secret, POST
 WEBHOOK-NONMERGE-01	live	scm-forgejo	todo	webhook	non-merge events (opened, closed without merge, push) return 204 and change nothing	cmd/kardinal-controller/webhook.go:118-121
 WEBHOOK-HEALTH-01	live	core	todo	webhook	GET /webhook/scm/health reports webhookConfigured and eventsProcessed	cmd/kardinal-controller/webhook.go:142
 WEBHOOK-SECRET-01	live	scm-forgejo	todo	webhook	webhook secret is read once at startup; changing it needs a restart	cmd/kardinal-controller/main.go:117; pkg/scm/dynamic.go:35-48
-GATE-CEL-01	live	core	todo	gates	team PolicyGate CEL expression blocks the env step while false and releases it when true	docs/policy-gates.md:13-66; pkg/reconciler/policygate/reconciler.go:292-414
-GATE-CEL-02	live	core	todo	gates	invalid or non-bool CEL expression fails closed with a reason in status	docs/policy-gates.md:149-168; pkg/reconciler/policygate/cel_evaluator.go
-GATE-CEL-03	live	core	todo	gates	CEL cost limit and evaluation bounds stop runaway expressions (fail closed)	docs/policy-gates.md:258-330
-GATE-LIB-01	live	core	todo	gates	CEL library functions (json, maps, lists, random, omit) evaluate in gates	docs/policy-gates.md:258-330; pkg/reconciler/policygate/cel_evaluator.go:114-118; pkg/cel/library
-GATE-ATTR-01	live	core	todo	gates	documented CEL attributes (bundle.*, environment.name, labels, intent) are populated	docs/policy-gates.md:153-214; docs/reference/cel-context.md; pkg/reconciler/policygate/reconciler.go:310-339; pkg/reconciler/policygate/reconciler.go:406-408
-GATE-SCHED-01	live	core	todo	gates	schedule.* (UTC hour, dayOfWeek) time gates block and pass on the clock	docs/policy-gates.md:169-198; pkg/reconciler/policygate/reconciler.go:401-405
-GATE-CLOCK-01	live	core	todo	gates	ScheduleClock kardinal-clock ticks (interval clamped to 5s) and re-evaluates time gates with no other event	docs/policy-gates.md:467-488; chart/kardinal-promoter/templates/scheduleclock.yaml
-GATE-SOAK-01	live	core	todo	gates	bundle.upstreamSoakMinutes holds prod until the upstream env has been Verified N minutes	docs/policy-gates.md:169-198; pkg/reconciler/policygate/reconciler.go:371-377; pkg/reconciler/bundle/reconciler.go:1160-1167
-GATE-UPSTREAM-01	live	core	todo	gates	upstream.<env>.* history attributes (recentSuccessCount, lastPromotedAt) gate on upstream results	docs/policy-gates.md:199-213; pkg/reconciler/policygate/reconciler.go:358-363
-GATE-PR-01	live	core	todo	gates	bundle.pr.* (isApproved, approvalCount) from the env PR gate the promotion	docs/policy-gates.md:214-257; pkg/reconciler/policygate/reconciler.go:381-386
-GATE-ORG-01	live	core	todo	gates	org gates in platform-policies with kardinal.io/applies-to are injected into matching Pipelines and cannot be removed by the team	docs/policy-gates.md:89-108; docs/policy-gates.md:129-148
-GATE-TEAM-01	live	core	todo	gates	team gates in the Pipeline namespace apply only to that team's matching envs	docs/policy-gates.md:109-128
-GATE-POLNS-01	live	core	todo	gates	Pipeline spec.policyNamespaces adds extra gate namespaces	api/v1alpha1/pipeline_types.go:52-58; docs/guides/security.md:116-133
-GATE-PREDEPLOY-01	live	core	todo	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:498-503; pkg/reconciler/promotionstep/reconciler.go:1100-1117
-GATE-RECHECK-01	live	core	todo	gates	recheckInterval (default 5m, min 10s) re-evaluates gates periodically	docs/policy-gates.md:432-466
-GATE-FINISHED-01	live	core	todo	gates	gates of settled or Superseded Bundles are no longer evaluated	docs/policy-gates.md:489-497; pkg/reconciler/policygate/reconciler.go:136-139
-GATE-OVERRIDE-01	live	core	todo	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:533; pkg/reconciler/policygate/reconciler.go:147-159; pkg/reconciler/policygate/reconciler.go:148
-GATE-OVERRIDE-02	live	core	todo	gates	expired override or override for another stage (kardinal.io/environment label) does not unblock	pkg/reconciler/policygate/reconciler.go:147-159
-GATE-AUDIT-01	live	core	todo	gates	GateEvaluated AuditEvent on first evaluation and on every readiness flip	docs/guides/security.md:264-273; pkg/reconciler/policygate/audit.go:60
+GATE-CEL-01	live	core	covered	gates	team PolicyGate CEL expression blocks the env step while false and releases it when true	docs/policy-gates.md:13-66; pkg/reconciler/policygate/reconciler.go:292-414
+GATE-CEL-02	live	core	covered	gates	invalid or non-bool CEL expression fails closed with a reason in status	docs/policy-gates.md:149-168; pkg/reconciler/policygate/cel_evaluator.go
+GATE-CEL-03	live	core	covered	gates	CEL cost limit and evaluation bounds stop runaway expressions (fail closed)	docs/policy-gates.md:258-330
+GATE-LIB-01	live	core	covered	gates	CEL library functions (json, maps, lists, random, strings) evaluate in gates	docs/policy-gates.md:258-330; pkg/reconciler/policygate/cel_evaluator.go:114-118; pkg/cel/library
+GATE-ATTR-01	live	core	covered	gates	documented CEL attributes (bundle.*, environment.name, labels, intent) are populated	docs/policy-gates.md:153-214; docs/reference/cel-context.md; pkg/reconciler/policygate/reconciler.go:310-339; pkg/reconciler/policygate/reconciler.go:406-408
+GATE-SCHED-01	live	core	covered	gates	schedule.* (UTC hour, dayOfWeek) time gates block and pass on the clock	docs/policy-gates.md:169-198; pkg/reconciler/policygate/reconciler.go:401-405
+GATE-CLOCK-01	live	core	covered	gates	ScheduleClock kardinal-clock ticks (interval clamped to 5s) and re-evaluates time gates with no other event	docs/policy-gates.md:467-488; chart/kardinal-promoter/templates/scheduleclock.yaml
+GATE-SOAK-01	live	core	covered	gates	bundle.upstreamSoakMinutes holds prod until the upstream env has been Verified N minutes	docs/policy-gates.md:169-198; pkg/reconciler/policygate/reconciler.go:371-377; pkg/reconciler/bundle/reconciler.go:1160-1167
+GATE-UPSTREAM-01	live	core	covered	gates	upstream.<env>.* history attributes (recentSuccessCount, lastPromotedAt) gate on upstream results	docs/policy-gates.md:199-213; pkg/reconciler/policygate/reconciler.go:358-363
+GATE-PR-01	live	core	covered	gates	bundle.pr.* (isApproved, approvalCount) from the env PR gate the promotion	docs/policy-gates.md:214-257; pkg/reconciler/policygate/reconciler.go:381-386
+GATE-ORG-01	live	core	covered	gates	org gates in platform-policies with kardinal.io/applies-to are injected into matching Pipelines and cannot be removed by the team	docs/policy-gates.md:89-108; docs/policy-gates.md:129-148
+GATE-TEAM-01	live	core	covered	gates	team gates in the Pipeline namespace apply only to that team's matching envs	docs/policy-gates.md:109-128
+GATE-POLNS-01	live	core	covered	gates	Pipeline spec.policyNamespaces adds extra gate namespaces	api/v1alpha1/pipeline_types.go:52-58; docs/guides/security.md:116-133
+GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:498-503; pkg/reconciler/promotionstep/reconciler.go:1100-1117
+GATE-RECHECK-01	live	core	covered	gates	recheckInterval (default 5m, min 10s) re-evaluates gates periodically	docs/policy-gates.md:432-466
+GATE-FINISHED-01	live	core	covered	gates	gates of settled or Superseded Bundles are no longer evaluated	docs/policy-gates.md:489-497; pkg/reconciler/policygate/reconciler.go:136-139
+GATE-OVERRIDE-01	live	core	covered	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:533; pkg/reconciler/policygate/reconciler.go:147-159; pkg/reconciler/policygate/reconciler.go:148
+GATE-OVERRIDE-02	live	core	covered	gates	expired override or override for another stage (kardinal.io/environment label) does not unblock	pkg/reconciler/policygate/reconciler.go:147-159
+GATE-AUDIT-01	live	core	covered	gates	GateEvaluated AuditEvent on first evaluation and on every readiness flip	docs/guides/security.md:264-273; pkg/reconciler/policygate/audit.go:60
 GATE-MESSAGE-01	live	core	todo	gates	gate spec.message is shown to the user when the gate blocks	docs/policy-gates.md:27; pkg/reconciler/policygate/reconciler.go:175-208; cmd/kardinal/cmd/policy.go:364
-GATE-REJECT-01	live	core	todo	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:25
+GATE-REJECT-01	live	core	covered	gates	PolicyGate spec.selector or a name over 63 chars is rejected by the API server with a what-to-do message	docs/changelog.md:25
 METRIC-01	live	prometheus	todo	metriccheck	MetricCheck runs a PromQL query against Prometheus and records Pass/Fail using lt/gt/lte/gte/eq on a scalar or one-element vector	api/v1alpha1/metriccheck_types.go:13-16; pkg/reconciler/metriccheck/prometheus.go:153-174
 METRIC-02	live	prometheus	todo	metriccheck	metrics.<name> in a gate expression blocks promotion when the MetricCheck fails	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:343-353
 METRIC-03	live	prometheus	todo	metriccheck	result older than validUntil (max(3x interval, 30s)) reads Stale and the gate fails closed	pkg/reconciler/metriccheck
@@ -184,10 +184,10 @@ METRIC-04	live	prometheus	todo	metriccheck	query error, empty result or multi-el
 METRIC-05	live	prometheus	todo	metriccheck	interval default 1m, minimum 10s; re-query on interval	api/v1alpha1/metriccheck_types.go
 METRIC-06	live	prometheus	todo	metriccheck	prometheusURL to loopback, link-local or metadata addresses is refused by the egress guard	docs/guides/security.md:371-405; pkg/egress/guard.go:65-88
 METRIC-07	live	prometheus	todo	metriccheck	MetricCheck supports custom query providers beyond Prometheus	docs/guides/migrating-from-kargo.md:17; api/v1alpha1/metriccheck_types.go:13-16
-CW-01	live	core	todo	changewindow	blackout ChangeWindow blocks via changewindow.isBlocked()/isAllowed() in gate CEL	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:390-397; pkg/reconciler/policygate/cel_evaluator.go:124-156
-CW-02	live	core	todo	changewindow	recurring ChangeWindow (allowedDays, allowedHours, timezone with embedded tzdata)	api/v1alpha1/changewindow_types.go:20-62; pkg/reconciler/changewindow/window.go:92-201
-CW-03	live	core	todo	changewindow	invalid ChangeWindow spec sets Valid=False/InvalidSpec and the window blocks	pkg/reconciler/changewindow/window.go:92-201
-CW-04	live	core	todo	changewindow	ChangeWindow requeues at the next boundary plus 1s (cap 1h) so gates flip without another event	pkg/reconciler/changewindow
+CW-01	live	core	covered	changewindow	blackout ChangeWindow blocks via changewindow.isBlocked()/isAllowed() in gate CEL	docs/policy-gates.md:342-383; pkg/reconciler/policygate/reconciler.go:390-397; pkg/reconciler/policygate/cel_evaluator.go:124-156
+CW-02	live	core	covered	changewindow	recurring ChangeWindow (allowedDays, allowedHours, timezone with embedded tzdata)	api/v1alpha1/changewindow_types.go:20-62; pkg/reconciler/changewindow/window.go:92-201
+CW-03	live	core	covered	changewindow	invalid ChangeWindow spec sets Valid=False/InvalidSpec and the window blocks	pkg/reconciler/changewindow/window.go:92-201
+CW-04	live	core	covered	changewindow	ChangeWindow requeues at the next boundary plus 1s (cap 1h) so gates flip without another event	pkg/reconciler/changewindow
 RB-PREV-01	live	core	todo	rollback	manual rollback creates a Bundle with rollbackOf for the previous Verified Bundle and promotes it through the env	docs/rollback.md:5-13; docs/rollback.md:32-44; pkg/lifecycle/rollback.go:100
 RB-TO-01	live	core	todo	rollback	rollback --to <bundle> restores a specific earlier version	docs/rollback.md:45-54; cmd/kardinal/cmd/rollback.go:40
 RB-RESTORE-01	live	core	todo	rollback	images the target Bundle does not name are left as they are	docs/rollback.md:14-29
@@ -198,10 +198,10 @@ RB-POLICY-01	live	core	todo	rollback	RollbackPolicy failureThreshold (default 3)
 RB-POLICY-02	live	core	todo	rollback	RollbackPolicy refusal sets RollbackRefused and a Warning Event; nothing requeues afterward	docs/rollback.md:106-122
 RB-MULTI-01	live	core	todo	rollback	multi-environment rollback walks the envs the rolled-back Bundle reached	docs/rollback.md:172-180
 RB-AUDIT-01	live	core	todo	rollback	RollbackStarted AuditEvent when onHealthFailure: rollback fires	docs/guides/security.md:264-273; pkg/reconciler/promotionstep/audit.go:31-35
-PAUSE-01	live	core	todo	pause	paused Pipeline holds new steps via freeze-<pipeline> gate and a Paused condition	docs/rollback.md:192-200; pkg/lifecycle/pause.go:45
-PAUSE-02	live	core	todo	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:197
-PAUSE-03	live	core	todo	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:200
-PAUSE-04	live	core	todo	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:134-138
+PAUSE-01	live	core	covered	pause	paused Pipeline holds new steps via freeze-<pipeline> gate and a Paused condition	docs/rollback.md:192-200; pkg/lifecycle/pause.go:45
+PAUSE-02	live	core	covered	pause	in-flight WaitingForMerge/HealthChecking steps finish; others hold at the next safe point	docs/rollback.md:197
+PAUSE-03	live	core	covered	pause	resume deletes the freeze gate and held steps continue	docs/rollback.md:200
+PAUSE-04	live	core	covered	pause	setting spec.paused directly (kubectl) has the same effect as kardinal pause	docs/pipeline-reference.md:134-138
 SUB-OCI-01	live	subscriptions	todo	subscription	image Subscription polls a public OCI registry; a new matching tag creates Bundle <sub>-<tag>-<digest8>	docs/subscription.md:33-77; pkg/source/oci.go
 SUB-OCI-02	live	subscriptions	todo	subscription	tagFilter semver/regex picks the tag; no match (or over 50 non-semver tags) gives phase Error	docs/subscription.md:78-100; pkg/source/oci.go
 SUB-OCI-03	live	subscriptions	todo	subscription	digest-tracked tag (^main$): a new digest on the same tag creates a new Bundle	docs/subscription.md:78-100
