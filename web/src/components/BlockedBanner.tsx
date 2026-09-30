@@ -7,7 +7,7 @@
 // Shows count of blocked PolicyGates with a "Show blocked" button to highlight them.
 
 interface BlockedBannerProps {
-  /** Number of blocked PolicyGate nodes. */
+  /** Number of PolicyGate nodes holding the bundle back (GraphNode.holding). */
   blockedCount: number
   /** Whether the highlight filter is currently active. */
   highlightActive: boolean

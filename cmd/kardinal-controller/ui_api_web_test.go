@@ -124,7 +124,7 @@ func TestUIAPI_Gates_LabelFields(t *testing.T) {
 		{
 			name:   "template",
 			labels: nil,
-			want:   uiGateResponse{Name: "g", Namespace: "default", Expression: "true", Template: true},
+			want:   uiGateResponse{Name: "g", Namespace: "default", Expression: "true", Template: true, State: "Pending"},
 		},
 		{
 			name: "instance",
@@ -136,7 +136,7 @@ func TestUIAPI_Gates_LabelFields(t *testing.T) {
 			},
 			want: uiGateResponse{
 				Name: "g", Namespace: "default", Expression: "true",
-				Pipeline: "app", Bundle: "app-1", Environment: "prod",
+				Pipeline: "app", Bundle: "app-1", Environment: "prod", State: "Pending",
 			},
 		},
 	}

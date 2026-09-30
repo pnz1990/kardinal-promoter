@@ -6,7 +6,7 @@
 // The API client is mocked with the shapes the Go handlers return.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, within } from '@testing-library/react'
-import type { Bundle, Pipeline, PolicyGate } from './types'
+import type { Bundle, GraphResponse, Pipeline, PolicyGate } from './types'
 
 vi.mock('@dagrejs/dagre', () => {
   function MockGraph(this: Record<string, unknown>) {
@@ -23,6 +23,8 @@ const h = vi.hoisted(() => {
     gates: [] as unknown[],
     // Optional hook to delay a getGraph response (stale-response tests).
     graphDelay: undefined as undefined | ((bundle: string) => Promise<void>),
+    // Optional graph returned instead of graphFor(bundle) (blocked-banner tests).
+    graph: undefined as unknown,
   }
   const graphFor = (b: string) => ({
     nodes: [{ id: `${b}-step`, type: 'PromotionStep', label: `env-of-${b}`, environment: `env-of-${b}`, state: 'Verified' }],
@@ -34,7 +36,7 @@ const h = vi.hoisted(() => {
     listBundles: vi.fn(async (p: string) => state.bundles[p] ?? []),
     getGraph: vi.fn(async (b: string) => {
       if (state.graphDelay) await state.graphDelay(b)
-      return graphFor(b)
+      return state.graph ?? graphFor(b)
     }),
     getSteps: vi.fn(async () => []),
     getStepEvents: vi.fn(async () => []),
@@ -74,6 +76,7 @@ beforeEach(() => {
   h.state.bundles = { app: [bundle('b-new', 'Promoting', 1), bundle('b-old', 'Superseded', 2)] }
   h.state.gates = []
   h.state.graphDelay = undefined
+  h.state.graph = undefined
   for (const fn of Object.values(h.api)) fn.mockClear()
   localStorage.clear()
   window.history.replaceState(null, '', '/ui/#pipeline=app')
@@ -233,9 +236,9 @@ describe('App header', () => {
 describe('App policy gates panel', () => {
   it('shows only the gates of the shown bundle and ignores templates', async () => {
     h.state.gates = [
-      { name: 'no-weekend', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true },
-      { name: 'no-weekend-b-new-prod', namespace: 'default', expression: '!schedule.isWeekend', ready: true, pipeline: 'app', bundle: 'b-new', environment: 'prod' },
-      { name: 'other-gate', namespace: 'default', expression: 'true', ready: false, pipeline: 'other', bundle: 'o-1', environment: 'prod' },
+      { name: 'no-weekend', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
+      { name: 'no-weekend-b-new-prod', namespace: 'default', expression: '!schedule.isWeekend', ready: true, state: 'Pass', pipeline: 'app', bundle: 'b-new', environment: 'prod' },
+      { name: 'other-gate', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true, pipeline: 'other', bundle: 'o-1', environment: 'prod' },
     ] as PolicyGate[]
     render(<App />)
     await flush()
@@ -245,3 +248,60 @@ describe('App policy gates panel', () => {
   })
 })
 
+
+// E2E-R19: the banner, "Show blocked" and the gates-panel chip count only the
+// gates the UI API marks holding (graph.GateHolds, the rule blockerCount uses).
+// A not-ready gate that does not hold the bundle is shown as Waiting.
+describe('App blocked banner counts only holding gates (E2E-R19)', () => {
+  // The bundle is health-checking in test; the prod soak gate was evaluated
+  // not ready. The graph and gates handlers return it as they do on a cluster.
+  function gateCase(holding: boolean) {
+    const gateNode = {
+      id: 'soak-b-new-prod', type: 'PolicyGate', label: 'soak', environment: 'prod',
+      state: holding ? 'Block' : 'Waiting', lastEvaluatedAt: new Date().toISOString(),
+      ...(holding ? { holding: true } : {}),
+    }
+    h.state.graph = {
+      nodes: [
+        { id: 'b-new-test', type: 'PromotionStep', label: 'test', environment: 'test', state: 'HealthChecking' },
+        gateNode,
+      ],
+      edges: [{ from: 'b-new-test', to: 'soak-b-new-prod' }],
+    } as GraphResponse
+    h.state.gates = [{
+      name: 'soak-b-new-prod', namespace: 'default', expression: 'upstream.test.soakMinutes >= 30',
+      ready: false, reason: 'soak 0m < 30m', pipeline: 'app', bundle: 'b-new', environment: 'prod',
+      state: holding ? 'Block' : 'Waiting', ...(holding ? { holding: true } : {}),
+    }] as PolicyGate[]
+  }
+
+  it('shows 0 blocked and the gate as waiting when the bundle has not reached the gate', async () => {
+    gateCase(false)
+    render(<App />)
+    await flush()
+    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
+    expect(screen.getByText('1 waiting')).toBeInTheDocument()
+    expect(screen.getByLabelText('soak — Waiting')).toBeInTheDocument()
+  })
+
+  it('shows 0 blocked for a Failed bundle', async () => {
+    h.state.bundles = { app: [bundle('b-new', 'Failed', 1)] }
+    gateCase(false)
+    render(<App />)
+    await flush()
+    expect(screen.queryByText(/blocking promotion/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Show blocked' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/\d+ blocked/)).not.toBeInTheDocument()
+  })
+
+  it('shows 1 blocked when the gate holds the bundle', async () => {
+    gateCase(true)
+    render(<App />)
+    await flush()
+    expect(screen.getByText('1 PolicyGate blocking promotion')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Show blocked' })).toBeInTheDocument()
+    expect(screen.getByText('1 blocked')).toBeInTheDocument()
+  })
+})

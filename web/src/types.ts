@@ -108,6 +108,10 @@ export interface GraphNode {
   /** ISO timestamp when the PromotionStep was created — used for elapsed timers (#330).
    *  Set on PromotionStep nodes only. */
   startedAt?: string
+  /** PolicyGate nodes: true when the gate holds the bundle back, the rule the
+   *  pipeline's blockerCount uses (graph.GateHolds, decided by the UI API).
+   *  The node's state is then 'Block'; see GateState for the others (E2E-R19). */
+  holding?: boolean
 }
 
 export interface GraphEdge {
@@ -161,6 +165,14 @@ export interface StepStatus {
   message?: string
 }
 
+/**
+ * PolicyGate state from the UI API (gateUIState in ui_api.go):
+ * Pass (ready), Block (holds the bundle back; only these count as blocked),
+ * Superseded (its bundle was superseded; final), Pending (not evaluated yet),
+ * Waiting (not ready, not holding the bundle; E2E-R19).
+ */
+export type GateState = 'Pass' | 'Block' | 'Superseded' | 'Pending' | 'Waiting'
+
 export interface PolicyGate {
   name: string
   namespace: string
@@ -174,6 +186,12 @@ export interface PolicyGate {
   environment?: string
   /** True for a PolicyGate template: never evaluated for a bundle, always ready=false. */
   template?: boolean
+  /** True when this gate instance holds its bundle back (graph.GateHolds, decided
+   *  by the UI API). Its state is then 'Block'. */
+  holding?: boolean
+  /** The state to show, decided by the UI API (gateUIState), the same as the
+   *  gate's node in the bundle graph. */
+  state: GateState
   /** #502: Override history from spec.overrides[]. */
   overrides?: PolicyGateOverride[]
 }

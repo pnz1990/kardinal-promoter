@@ -5,8 +5,8 @@
 // the bundle on screen, each with its state and CEL expression (#340). App
 // passes only that bundle's gate instances, never the templates.
 import { useState, useEffect } from 'react'
-import type { PolicyGate } from '../types'
-import { HealthChip } from './HealthChip'
+import type { GateState, PolicyGate } from '../types'
+import { HealthChip, healthChipColors, type HealthState } from './HealthChip'
 
 interface Props {
   gates: PolicyGate[]
@@ -27,30 +27,58 @@ function formatAge(iso: string | undefined): string {
   }
 }
 
-/** Collapsed summary chip: X blocked / Y total */
+/**
+ * The state shown for a gate, decided by the UI API (gateUIState) so it
+ * matches the DAG node. Only Block holds the bundle back, the rule the
+ * sidebar's Blocked count uses (E2E-R19).
+ */
+function gateState(gate: PolicyGate): GateState {
+  return gate.state
+}
+
+const count = (gates: PolicyGate[], ...states: GateState[]) =>
+  gates.filter(g => states.includes(gateState(g))).length
+
+/**
+ * Collapsed summary chip: N blocked, else N waiting (not ready, not holding
+ * the bundle, or not evaluated yet), else N superseded, else N passing.
+ */
 function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
-  const blocked = gates.filter(g => !g.ready).length
+  const blocked = count(gates, 'Block')
+  const waiting = count(gates, 'Waiting', 'Pending')
+  const superseded = count(gates, 'Superseded')
   const total = gates.length
   if (total === 0) return null
+  // meaning: read by screen readers and shown on hover.
+  const [health, label, meaning]: [HealthState, string, string | undefined] = blocked > 0
+    ? ['Error', `${blocked} blocked`, undefined]
+    : waiting > 0
+    ? ['Pending', `${waiting} waiting`, 'not ready, not holding the bundle']
+    : superseded > 0
+    ? ['Unknown', `${superseded} superseded`, 'bundle superseded, not evaluated again']
+    : ['Ready', `${total} passing`, undefined]
+  const { bg, text, border } = healthChipColors(health)
   return (
-    <span style={{
+    <span title={meaning} style={{
       fontSize: '0.65rem',
-      background: blocked > 0 ? 'var(--color-error-bg)' : 'var(--color-success-bg)',
-      color: blocked > 0 ? 'var(--color-error)' : 'var(--color-success)',
-      border: `1px solid ${blocked > 0 ? 'var(--color-error)' : 'var(--color-success)'}`,
+      background: bg,
+      color: text,
+      border: `1px solid ${border}`,
       borderRadius: '4px',
       padding: '1px 6px',
       marginLeft: '0.5rem',
     }}>
-      {blocked > 0 ? `${blocked} blocked` : `${total} passing`}
+      {label}
+      {meaning && <span className="sr-only">, {meaning}</span>}
     </span>
   )
 }
 
 export function PolicyGatesPanel({ gates, loading }: Props) {
-  const blockedCount = gates.filter(g => !g.ready).length
-  // #524: auto-expand when any gates are blocked — the blocked state is the most
-  // important information on screen and should not be hidden behind a click.
+  const blockedCount = count(gates, 'Block')
+  // #524: auto-expand when any gate holds the bundle — the blocked state is the
+  // most important information on screen and should not be hidden behind a
+  // click. A waiting gate is not what the bundle waits on, so it does not.
   const [open, setOpen] = useState(false)
   useEffect(() => {
     if (blockedCount > 0) setOpen(true)
@@ -126,7 +154,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <HealthChip
-                  state={gate.ready ? 'Pass' : 'Block'}
+                  state={gateState(gate)}
                   nodeType="PolicyGate"
                   size="sm"
                 />
@@ -152,7 +180,10 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
                 </code>
               )}
               {!gate.ready && gate.reason && (
-                <div style={{ fontSize: '0.7rem', color: 'var(--color-error)' }}>
+                <div style={{
+                  fontSize: '0.7rem',
+                  color: gateState(gate) === 'Block' ? 'var(--color-error)' : 'var(--color-text-muted)',
+                }}>
                   {gate.reason}
                 </div>
               )}

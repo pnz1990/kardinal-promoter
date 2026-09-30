@@ -454,6 +454,15 @@ kardinal policy test my-gate.yaml
 kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 ```
 
+In the UI, the pipeline page's "PolicyGate blocking promotion" banner, its **Show blocked** filter
+and the "blocked" count on the Policy Gates panel include only gates that hold the Bundle back, the
+same rule as the Blocked label and the Blockers column: the Bundle has reached the gate's
+environment (every upstream environment is Verified and the environment has no step yet), or a
+`pre-deploy` gate holds its `Pending` step. A gate that is not ready but does not hold the Bundle,
+because its environment is not reached yet or the Bundle failed (it can still retry), is shown as
+**Waiting** (grey) instead of **Block** (red). A superseded Bundle's gates that are not ready are
+shown as **Superseded**: they are not evaluated again.
+
 ## Emergency Overrides (K-09)
 
 Use `kardinal override` to force-pass a PolicyGate with a mandatory audit record.

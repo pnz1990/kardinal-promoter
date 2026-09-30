@@ -562,12 +562,18 @@ func TestUIAPI_GateApprove_RetriesConflicts(t *testing.T) {
 	}
 }
 
-// E2E-R18: blockerCount counts only the active bundle's not-ready gates in
-// environments it has reached (every upstream Verified) and not started, the
-// gates kardinal status lists as blocking. A soak gate on prod does not count
-// while the bundle is still in test, so the sidebar says Promoting, not
-// Blocked (j6-supersede.log, ui.log:97).
-func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
+// gateHoldCase is one state of bundle app-b2 on the Pipeline test -> uat ->
+// prod: objs are its Bundle, steps and gates; want is how many of its gates
+// hold it back (graph.GateHolds).
+type gateHoldCase struct {
+	name string
+	objs []client.Object
+	want int
+}
+
+// gateHoldCases returns the Pipeline and the bundle states the UI API's
+// holding rule is tested with.
+func gateHoldCases() (*v1alpha1.Pipeline, []gateHoldCase) {
 	now := metav1.NewTime(time.Now().Add(-10 * time.Minute))
 	pipeline := &v1alpha1.Pipeline{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default"},
 		Spec: v1alpha1.PipelineSpec{Environments: []v1alpha1.EnvironmentSpec{
@@ -595,11 +601,7 @@ func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
 			uiStep("default", "s-test", "app-b2", "test", "Verified"),
 			uiStep("default", "s-uat", "app-b2", "uat", "Verified")}
 	}
-	tests := []struct {
-		name string
-		objs []client.Object
-		want int
-	}{
+	return pipeline, []gateHoldCase{
 		{
 			// checkPreDeployGates keeps the step Pending, before git.
 			name: "pre-deploy gate holds the Pending prod step",
@@ -663,13 +665,27 @@ func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
 			want: 0,
 		},
 	}
+}
+
+// gateHoldClient builds a fake client with the Pipeline and a copy of objs.
+func gateHoldClient(pipeline *v1alpha1.Pipeline, objs []client.Object) client.Client {
+	all := []client.Object{pipeline.DeepCopy()}
+	for _, o := range objs {
+		all = append(all, o.DeepCopyObject().(client.Object))
+	}
+	return fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(all...).Build()
+}
+
+// E2E-R18: blockerCount counts only the active bundle's not-ready gates in
+// environments it has reached (every upstream Verified) and not started, the
+// gates kardinal status lists as blocking. A soak gate on prod does not count
+// while the bundle is still in test, so the sidebar says Promoting, not
+// Blocked (j6-supersede.log, ui.log:97).
+func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
+	pipeline, tests := gateHoldCases()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs := []client.Object{pipeline.DeepCopy()}
-			for _, o := range tt.objs {
-				objs = append(objs, o.DeepCopyObject().(client.Object))
-			}
-			c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(objs...).Build()
+			c := gateHoldClient(pipeline, tt.objs)
 			rec := uiReadGet(t, c, "/api/v1/ui/pipelines")
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 			var resp []uiPipelineResponse
@@ -677,6 +693,141 @@ func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
 			require.Len(t, resp, 1)
 			assert.Equal(t, "app-b2", resp[0].ActiveBundleName)
 			assert.Equal(t, tt.want, resp[0].BlockerCount)
+		})
+	}
+}
+
+// E2E-R19: the pipeline page counted every not-ready gate node as blocking,
+// so a bundle still in test, or one that Failed, showed "1 PolicyGate
+// blocking promotion" next to a Promoting or Degraded sidebar
+// (e2e/logs4/r18a.log:69, r17a.log:99). The graph and gates endpoints now
+// mark the gates that hold the bundle with the rule blockerCount uses, and a
+// gate that was evaluated not ready but holds nothing is Waiting, not Block.
+func TestUIAPI_GateHolding_MatchesBlockerCount(t *testing.T) {
+	evaluated := metav1.NewTime(time.Now().Add(-time.Minute))
+	pipeline, tests := gateHoldCases()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := make([]client.Object, 0, len(tt.objs))
+			for _, o := range tt.objs {
+				o = o.DeepCopyObject().(client.Object)
+				if g, ok := o.(*v1alpha1.PolicyGate); ok {
+					g.Status.LastEvaluatedAt = &evaluated
+				}
+				objs = append(objs, o)
+			}
+			c := gateHoldClient(pipeline, objs)
+
+			rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-b2/graph")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var graph struct {
+				Nodes []map[string]any `json:"nodes"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &graph))
+			holdingNodes := 0
+			for _, n := range graph.Nodes {
+				if n["type"] != "PolicyGate" {
+					continue
+				}
+				if n["holding"] == true {
+					holdingNodes++
+					assert.Equal(t, "Block", n["state"], n["id"])
+				} else {
+					assert.Equal(t, "Waiting", n["state"], n["id"])
+				}
+			}
+			assert.Equal(t, tt.want, holdingNodes, "graph PolicyGate nodes with holding=true")
+
+			rec = uiReadGet(t, c, "/api/v1/ui/gates")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var gates []map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &gates))
+			holdingGates := 0
+			for _, g := range gates {
+				if g["holding"] == true {
+					holdingGates++
+					assert.Equal(t, "Block", g["state"], g["name"])
+				} else {
+					assert.Equal(t, "Waiting", g["state"], g["name"])
+				}
+			}
+			assert.Equal(t, tt.want, holdingGates, "gates with holding=true")
+		})
+	}
+}
+
+// The graph node and the gate list give a gate instance the same state
+// (gateUIState). A holding gate is Block even before its first evaluation, so
+// the DAG agrees with the banner; a Superseded bundle's gates are Superseded,
+// which is final, while a Failed bundle's gates wait because it can retry.
+func TestUIAPI_GateState(t *testing.T) {
+	evaluated := metav1.NewTime(time.Now().Add(-time.Minute))
+	pipeline, _ := gateHoldCases()
+	bundle := func(phase string) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-b2", Namespace: "default"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+			Status:     v1alpha1.BundleStatus{Phase: phase},
+		}
+	}
+	gate := func(ready, wasEvaluated bool) *v1alpha1.PolicyGate {
+		g := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", ready)
+		if wasEvaluated {
+			g.Status.LastEvaluatedAt = &evaluated
+		}
+		return g
+	}
+	verifiedUpstream := []client.Object{
+		uiStep("default", "s-test", "app-b2", "test", "Verified"),
+		uiStep("default", "s-uat", "app-b2", "uat", "Verified"),
+	}
+	inTest := []client.Object{uiStep("default", "s-test", "app-b2", "test", "HealthChecking")}
+	tests := []struct {
+		name        string
+		bundlePhase string
+		steps       []client.Object
+		gate        *v1alpha1.PolicyGate
+		wantState   string
+		wantHolding bool
+	}{
+		{"ready", "Promoting", verifiedUpstream, gate(true, true), "Pass", false},
+		{"holding, evaluated", "Promoting", verifiedUpstream, gate(false, true), "Block", true},
+		{"holding, not evaluated yet", "Promoting", verifiedUpstream, gate(false, false), "Block", true},
+		{"not reached, evaluated", "Promoting", inTest, gate(false, true), "Waiting", false},
+		{"not reached, not evaluated yet", "Promoting", inTest, gate(false, false), "Pending", false},
+		{"Failed bundle, evaluated", "Failed", verifiedUpstream, gate(false, true), "Waiting", false},
+		{"Superseded bundle, evaluated", "Superseded", verifiedUpstream, gate(false, true), "Superseded", false},
+		{"Superseded bundle, not evaluated yet", "Superseded", inTest, gate(false, false), "Superseded", false},
+		{"Superseded bundle, ready", "Superseded", verifiedUpstream, gate(true, true), "Pass", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := append([]client.Object{bundle(tt.bundlePhase), tt.gate}, tt.steps...)
+			c := gateHoldClient(pipeline, objs)
+
+			rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-b2/graph")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var graph struct {
+				Nodes []map[string]any `json:"nodes"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &graph))
+			var node map[string]any
+			for _, n := range graph.Nodes {
+				if n["type"] == "PolicyGate" {
+					node = n
+				}
+			}
+			require.NotNil(t, node, "graph has the gate node")
+			assert.Equal(t, tt.wantState, node["state"], "graph node state")
+			assert.Equal(t, tt.wantHolding, node["holding"] == true, "graph node holding")
+
+			rec = uiReadGet(t, c, "/api/v1/ui/gates")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var gates []map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &gates))
+			require.Len(t, gates, 1)
+			assert.Equal(t, tt.wantState, gates[0]["state"], "gate list state")
+			assert.Equal(t, tt.wantHolding, gates[0]["holding"] == true, "gate list holding")
 		})
 	}
 }
