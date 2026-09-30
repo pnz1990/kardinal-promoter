@@ -169,10 +169,11 @@ func TestCore_NewerBundleSupersedes(t *testing.T) {
 	newer := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 
 	e.WaitBundlePhase(t, a.ns, older, "Superseded", promoteTimeout)
-	// The older step notices on its next WaitingForMerge poll (30s).
-	ps := e.WaitStepState(t, a.ns, pipelineName, older, "prod", "Failed", 2*time.Minute)
+	// The PromotionStep reconciler watches Bundles, so the older step fails and
+	// its PR closes at once, not on the next 30s WaitingForMerge poll.
+	ps := e.WaitStepState(t, a.ns, pipelineName, older, "prod", "Failed", 15*time.Second)
 	assert.Contains(t, ps.Status.Message, "superseded")
-	e.WaitPRState(t, a.repo, olderPR.Number, "closed", time.Minute)
+	e.WaitPRState(t, a.repo, olderPR.Number, "closed", 15*time.Second)
 	assert.Len(t, e.PRComments(t, a.repo, olderPR.Number, "kardinal closed this PR: bundle "+older+" was superseded"), 1)
 
 	e.WaitStepState(t, a.ns, pipelineName, newer, "test", "Verified", promoteTimeout)
