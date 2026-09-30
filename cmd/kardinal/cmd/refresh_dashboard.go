@@ -89,7 +89,8 @@ port 8082 first (see "Accessing the UI" in docs/installation.md).
 
 Example:
   kardinal dashboard
-  kardinal dashboard --address http://localhost:8082`,
+  kubectl -n kardinal-system port-forward svc/kardinal-promoter 9090:8082 &
+  kardinal dashboard --address http://localhost:9090/ui/`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return dashboardFn(cmd.OutOrStdout(), uiAddress, noOpen)
 		},
