@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -288,4 +289,46 @@ func (e *Env) WaitExplainGate(t *testing.T, ns, pipeline, env, name, state strin
 		return ok && got == state, r
 	})
 	return row
+}
+
+// EnsureNamespace creates the namespace name if it does not exist and never
+// deletes it: shared namespaces such as PolicyNamespace outlive every test.
+// Tests put only their own uniquely named objects in it.
+func (e *Env) EnsureNamespace(t *testing.T, name string) {
+	t.Helper()
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	if err := e.Client.Create(context.Background(), ns); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create namespace %s: %v", name, err)
+	}
+}
+
+// GateInstanceName is the name the Graph gives the instance of the template
+// templateNS/template for bundle's env ("<gate>-<namespace>-<env>--<bundle>",
+// pkg/graph gateNodeK8sName). It holds for lowercase names that are not
+// hash-shortened, which every test name is. Use it when gates of the same name
+// come from several namespaces, so the template label alone is ambiguous.
+func GateInstanceName(templateNS, template, env, bundle string) string {
+	return fmt.Sprintf("%s-%s-%s--%s", template, templateNS, env, bundle)
+}
+
+// WaitGateNamed waits until the gate instance ns/name exists and satisfies
+// match, and returns it.
+func (e *Env) WaitGateNamed(t *testing.T, ns, name string, timeout time.Duration, what string,
+	match func(*v1alpha1.PolicyGate) bool) *v1alpha1.PolicyGate {
+	t.Helper()
+	var g v1alpha1.PolicyGate
+	Eventually(t, timeout, fmt.Sprintf("gate %s %s", name, what), func(ctx context.Context) (bool, string) {
+		if err := e.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &g); err != nil {
+			return false, err.Error()
+		}
+		return match(&g), DescribeGate(&g)
+	})
+	return &g
+}
+
+// Evaluated matches a gate evaluated to ready with a reason containing reason.
+func Evaluated(ready bool, reason string) func(*v1alpha1.PolicyGate) bool {
+	return func(g *v1alpha1.PolicyGate) bool {
+		return g.Status.LastEvaluatedAt != nil && g.Status.Ready == ready && strings.Contains(g.Status.Reason, reason)
+	}
 }

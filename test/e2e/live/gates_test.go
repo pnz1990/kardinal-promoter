@@ -7,6 +7,8 @@ package live
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -537,5 +540,299 @@ func TestGate_PRReviewAttributes(t *testing.T) {
 	e.WaitStepState(t, a.ns, pipelineName, second, "staging", "Verified", promoteTimeout)
 	e.WaitGateReady(t, a.ns, second, "prod", "staging-approved", true, "= true", gateTimeout)
 	e.WaitStepState(t, a.ns, pipelineName, second, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V3)
+}
+
+// orgEnv is an environment name no other test uses. An org gate in the shared
+// PolicyNamespace applies to every Pipeline in the cluster that has its
+// environment, so each test's org gates name their own environment.
+func orgEnv(t *testing.T) string {
+	t.Helper()
+	b := make([]byte, 4)
+	_, err := rand.Read(b)
+	require.NoError(t, err)
+	return "org-" + hex.EncodeToString(b)
+}
+
+// TestGate_OrgGatesMandatory checks that an org gate in platform-policies is
+// injected into a Pipeline with its environment, and only that environment,
+// and that the team cannot remove or weaken it: not with a passing team gate
+// of the same name, not with a spec.policyNamespaces list that leaves
+// platform-policies out, and not by deleting the instance (the Graph
+// recreates it). The org gate alone decides when the environment promotes.
+//
+// Covers GATE-ORG-01.
+func TestGate_OrgGatesMandatory(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	env := orgEnv(t)
+	e.EnsureNamespace(t, framework.PolicyNamespace)
+	org := framework.Gate(framework.PolicyNamespace, env+"-open", env, openExpr, recheck)
+	org.Labels["kardinal.io/scope"] = "org"
+	e.CreateGate(t, org)
+
+	a := newArgoApp(t, e, "test", env)
+	e.CreateGate(t, framework.Gate(a.ns, org.Name, env, "true", recheck))
+	p := a.pipeline(nil)
+	p.Spec.PolicyNamespaces = []string{e.Namespace(t)}
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "test", "Verified", promoteTimeout)
+	orgName := framework.GateInstanceName(framework.PolicyNamespace, org.Name, env, bundle)
+	g := e.WaitGateNamed(t, a.ns, orgName, gateTimeout, "blocking", framework.Evaluated(false, "= false"))
+	assert.Equal(t, "org", g.Labels["kardinal.io/scope"])
+	e.WaitGateNamed(t, a.ns, framework.GateInstanceName(a.ns, org.Name, env, bundle), gateTimeout,
+		"passing", framework.Evaluated(true, "= true"))
+	onTest, err := e.GateInstances(ctx, a.ns, bundle, "test", org.Name)
+	require.NoError(t, err)
+	assert.Empty(t, onTest, "the org gate applies only to %s", env)
+	e.NoStep(t, a.ns, pipelineName, bundle, env, holdFor)
+
+	require.NoError(t, e.Client.Delete(ctx, g))
+	e.WaitGateNamed(t, a.ns, orgName, 2*time.Minute, "recreated and blocking", func(n *v1alpha1.PolicyGate) bool {
+		return n.UID != g.UID && framework.Evaluated(false, "= false")(n)
+	})
+	e.NoStep(t, a.ns, pipelineName, bundle, env, holdFor)
+	assertEnvAt(t, a, env, fixtures.V1)
+
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateNamed(t, a.ns, orgName, gateTimeout, "open", framework.Evaluated(true, "= true"))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, env, "Verified", promoteTimeout)
+	assertEnvAt(t, a, env, fixtures.V2)
+}
+
+// TestGate_TeamGatesScoped checks that a team gate applies only to its own
+// team's Pipelines and only to the environment it names: team A's prod gate
+// holds team A's prod, but not A's test and not team B's prod.
+//
+// Covers GATE-TEAM-01.
+func TestGate_TeamGatesScoped(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "test", "prod")
+	b := newArgoApp(t, e, "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "team-a-prod", "prod", openExpr, recheck))
+	a.apply(t, a.pipeline(nil))
+	b.apply(t, b.pipeline(nil))
+
+	bundleA := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	bundleB := e.CreateBundle(t, b.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitStepState(t, b.ns, pipelineName, bundleB, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, b, "prod", fixtures.V2)
+	var inB v1alpha1.PolicyGateList
+	require.NoError(t, e.Client.List(ctx, &inB, client.InNamespace(b.ns)))
+	assert.Empty(t, inB.Items, "team A's gate has no instance in team B's namespace")
+
+	e.WaitStepState(t, a.ns, pipelineName, bundleA, "test", "Verified", promoteTimeout)
+	onTest, err := e.GateInstances(ctx, a.ns, bundleA, "test", "team-a-prod")
+	require.NoError(t, err)
+	assert.Empty(t, onTest, "the gate applies only to prod")
+	e.WaitGateReady(t, a.ns, bundleA, "prod", "team-a-prod", false, "= false", gateTimeout)
+	e.NoStep(t, a.ns, pipelineName, bundleA, "prod", holdFor)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+
+	e.SetBundleLabel(t, a.ns, bundleA, openLabel, "true")
+	e.WaitStepState(t, a.ns, pipelineName, bundleA, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGate_PolicyNamespacesAddGates checks spec.policyNamespaces: a gate in a
+// listed namespace holds the Pipeline's prod until it passes, and a gate in a
+// namespace the Pipeline does not list is never applied, although it would
+// block forever.
+//
+// Covers GATE-POLNS-01.
+func TestGate_PolicyNamespacesAddGates(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	listed, unlisted := e.Namespace(t), e.Namespace(t)
+	e.CreateGate(t, framework.Gate(listed, "shared-open", "prod", openExpr, recheck))
+	e.CreateGate(t, framework.Gate(unlisted, "unlisted-never", "prod", "false", recheck))
+	p := a.pipeline(nil)
+	p.Spec.PolicyNamespaces = []string{listed}
+	a.apply(t, p)
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	shared := framework.GateInstanceName(listed, "shared-open", "prod", bundle)
+	e.WaitGateNamed(t, a.ns, shared, gateTimeout, "blocking", framework.Evaluated(false, "= false"))
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", holdFor)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateNamed(t, a.ns, shared, gateTimeout, "open", framework.Evaluated(true, "= true"))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+	never, err := e.GateInstances(context.Background(), a.ns, bundle, "prod", "unlisted-never")
+	require.NoError(t, err)
+	assert.Empty(t, never, "a namespace the Pipeline does not list adds no gate")
+}
+
+// TestGate_HoldsStepBeforeStart checks the pre-start gate check. A paused
+// Pipeline lets the Graph create prod's step (its gate passes) but holds it
+// Pending. The gate then turns false; after resume the step still does not
+// start, and says which gate it waits for. Nothing is pushed and no PR opens.
+// When the gate passes again the step starts on an evaluation no older than
+// itself.
+//
+// Covers GATE-PREDEPLOY-01.
+func TestGate_HoldsStepBeforeStart(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "not-closed", "prod", `!("e2e-closed" in bundle.labels)`, recheck))
+	a.apply(t, a.pipeline(nil))
+	assert.Contains(t, e.MustKardinal(t, a.ns, "pause", pipelineName), "Pipeline "+pipelineName+" paused.")
+
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	gate := e.WaitGateReady(t, a.ns, bundle, "prod", "not-closed", true, "= true", gateTimeout)
+	e.WaitStepMessage(t, a.ns, pipelineName, bundle, "prod", "Pending", "pipeline "+pipelineName+" is paused", time.Minute)
+	e.SetBundleLabel(t, a.ns, bundle, "e2e-closed", "true")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "not-closed", false, "= false", gateTimeout)
+
+	assert.Contains(t, e.MustKardinal(t, a.ns, "resume", pipelineName), "Pipeline "+pipelineName+" resumed.")
+	resumed := time.Now()
+	waiting := "waiting for gate " + gate.Name
+	e.WaitStepMessage(t, a.ns, pipelineName, bundle, "prod", "Pending", waiting, 90*time.Second)
+	t.Logf("the held step saw the resume after %s", time.Since(resumed).Round(time.Second))
+	e.StepHeld(t, a.ns, pipelineName, bundle, "prod", waiting, holdFor)
+	assertEnvAt(t, a, "prod", fixtures.V1)
+	prs, err := e.Git.PullRequests(ctx, a.repo)
+	require.NoError(t, err)
+	assert.Empty(t, prs)
+
+	e.SetBundleLabel(t, a.ns, bundle, "e2e-closed", "")
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	g, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "not-closed")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.False(t, g.Status.LastEvaluatedAt.Before(&ps.CreationTimestamp),
+		"the step started on an evaluation at or after its creation (%s)", ps.CreationTimestamp)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGate_RecheckInterval checks spec.recheckInterval: a gate asking for 1s
+// is re-evaluated every 10s, the minimum, with no other event; a gate that
+// sets none gets the 5m default. The periodic re-evaluation sees the label
+// that opens the gate.
+//
+// Covers GATE-RECHECK-01.
+func TestGate_RecheckInterval(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	ctx := context.Background()
+	a := newArgoApp(t, e, "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "fast-recheck", "prod", openExpr, "1s"))
+	defaulted := framework.Gate(a.ns, "default-recheck", "prod", "true", "")
+	e.CreateGate(t, defaulted)
+	assert.Equal(t, "5m", defaulted.Spec.RecheckInterval, "the API server defaults recheckInterval")
+	a.apply(t, a.pipeline(nil))
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
+	e.WaitGateReady(t, a.ns, bundle, "prod", "fast-recheck", false, "= false", gateTimeout)
+	d, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "default-recheck")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "5m", d.Spec.RecheckInterval)
+
+	clockMu.Lock()
+	evals := evaluations(t, e, a.ns, bundle, "prod", "fast-recheck", 35*time.Second)
+	clockMu.Unlock()
+	t.Logf("evaluations in 35s: %v", evals)
+	// Every 10s gives three or four in 35s, plus at most one from the chart
+	// clock's tick; every 1s would give over thirty.
+	assert.GreaterOrEqual(t, len(evals), 3, "the gate is re-evaluated periodically")
+	assert.LessOrEqual(t, len(evals), 5, "1s is raised to the 10s minimum")
+	var tenSecondGaps int
+	for i := 1; i < len(evals); i++ {
+		if gap := evals[i].Sub(evals[i-1]); gap >= 9*time.Second && gap <= 12*time.Second {
+			tenSecondGaps++
+		}
+	}
+	assert.GreaterOrEqual(t, tenSecondGaps, 2, "evaluations %v", evals)
+	e.NoStep(t, a.ns, pipelineName, bundle, "prod", time.Second)
+
+	e.SetBundleLabel(t, a.ns, bundle, openLabel, "true")
+	e.WaitGateReady(t, a.ns, bundle, "prod", "fast-recheck", true, "= true", 15*time.Second)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	assertEnvAt(t, a, "prod", fixtures.V2)
+}
+
+// TestGate_FinishedBundlesNotEvaluated checks that the gates of finished
+// Bundles stop being evaluated: a Verified Bundle whose Graph is ready, and a
+// Superseded one. The newest Bundle's gate, with the same recheckInterval,
+// keeps being evaluated over the same time, and promotes once opened.
+//
+// Covers GATE-FINISHED-01.
+func TestGate_FinishedBundlesNotEvaluated(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "prod")
+	e.CreateGate(t, framework.Gate(a.ns, "open", "prod", openExpr, recheck))
+	a.apply(t, a.pipeline(nil))
+
+	verified := e.CreateBundleObject(t, &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns, Labels: map[string]string{openLabel: "true"}},
+		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
+			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}},
+	})
+	e.WaitStepState(t, a.ns, pipelineName, verified, "prod", "Verified", promoteTimeout)
+	framework.Eventually(t, 2*time.Minute, "Bundle "+verified+" Verified with GraphReady", func(ctx context.Context) (bool, string) {
+		var b v1alpha1.Bundle
+		if err := e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: verified}, &b); err != nil {
+			return false, err.Error()
+		}
+		return b.Status.Phase == "Verified" && meta.IsStatusConditionTrue(b.Status.Conditions, "GraphReady"),
+			fmt.Sprintf("phase=%s conditions=%v", b.Status.Phase, b.Status.Conditions)
+	})
+
+	superseded := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V1)
+	e.WaitGateReady(t, a.ns, superseded, "prod", "open", false, "= false", gateTimeout)
+	latest := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
+	e.WaitBundlePhase(t, a.ns, superseded, "Superseded", time.Minute)
+	e.WaitGateReady(t, a.ns, latest, "prod", "open", false, "= false", gateTimeout)
+
+	evaluated := func(ctx context.Context, bundle string) (time.Time, error) {
+		g, ok, err := e.GateInstance(ctx, a.ns, bundle, "prod", "open")
+		switch {
+		case err != nil:
+			return time.Time{}, err
+		case !ok || g.Status.LastEvaluatedAt == nil:
+			return time.Time{}, fmt.Errorf("gate of %s not evaluated", bundle)
+		}
+		return g.Status.LastEvaluatedAt.Time, nil
+	}
+	ctx := context.Background()
+	frozen := map[string]time.Time{}
+	for _, b := range []string{verified, superseded} {
+		at, err := evaluated(ctx, b)
+		require.NoError(t, err)
+		frozen[b] = at
+	}
+	latestEvals := map[time.Time]bool{}
+	framework.Consistently(t, 30*time.Second, "finished Bundles' gates not re-evaluated", func(ctx context.Context) (bool, string) {
+		for b, want := range frozen {
+			at, err := evaluated(ctx, b)
+			if err != nil {
+				return false, err.Error()
+			}
+			if !at.Equal(want) {
+				return false, fmt.Sprintf("gate of %s evaluated again at %s (was %s)", b, at, want)
+			}
+		}
+		at, err := evaluated(ctx, latest)
+		if err != nil {
+			return false, err.Error()
+		}
+		latestEvals[at] = true
+		return true, ""
+	})
+	assert.GreaterOrEqual(t, len(latestEvals), 3, "the in-flight Bundle's gate kept being evaluated")
+
+	e.SetBundleLabel(t, a.ns, latest, openLabel, "true")
+	e.WaitStepState(t, a.ns, pipelineName, latest, "prod", "Verified", promoteTimeout)
 	assertEnvAt(t, a, "prod", fixtures.V3)
 }
