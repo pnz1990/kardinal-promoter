@@ -87,12 +87,58 @@ kube_secret() {
     --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
 }
 
+# mirror_of IMAGE prints mirror.gcr.io's copy of a Docker Hub image
+# (docker.io/..., public.ecr.aws/docker/library/...), or nothing.
+mirror_of() {
+  case "$1" in
+    public.ecr.aws/docker/library/*) echo "mirror.gcr.io/library/${1#public.ecr.aws/docker/library/}" ;;
+    docker.io/*) echo "mirror.gcr.io/${1#docker.io/}" ;;
+  esac
+}
+
+# pull_retry CMD... IMAGE runs CMD IMAGE, then CMD with IMAGE's mirror, for
+# up to five rounds with growing pauses, and prints the reference that
+# worked: registries rate-limit shared CI runners (public.ecr.aws and Docker
+# Hub answer 429).
+pull_retry() {
+  local img=${*: -1} m src try
+  local cmd=("${@:1:$#-1}") srcs=("${*: -1}")
+  m=$(mirror_of "$img")
+  [ -z "$m" ] || srcs+=("$m")
+  for try in 1 2 3 4 5; do
+    for src in "${srcs[@]}"; do
+      if "${cmd[@]}" "$src" >/dev/null 2>&1; then
+        echo "$src"
+        return 0
+      fi
+    done
+    log "pulling $img failed (round $try of 5)"
+    [ "$try" -eq 5 ] || sleep $((try * 10))
+  done
+  return 1
+}
+
+# pull_images IMAGE... pulls images into the kind node before a component's
+# pods need them (pods with imagePullPolicy IfNotPresent then start from the
+# node's copy). A mirror's copy is tagged with the original name.
+pull_images() {
+  local node="$KIND_CLUSTER-control-plane" img src
+  for img in "$@"; do
+    docker exec "$node" crictl inspecti -q "$img" >/dev/null 2>&1 && continue
+    src=$(pull_retry docker exec "$node" crictl pull "$img") || die "can't pull $img"
+    [ "$src" = "$img" ] || docker exec "$node" ctr -n k8s.io images tag --force "$src" "$img" >/dev/null
+  done
+}
+
 # load_image IMAGE puts a local or pullable image into the kind node.
 # `kind load` fails on hosts whose containerd snapshotter it can't detect;
 # piping docker save into the node's ctr works everywhere.
 load_image() {
-  local img=$1 node="$KIND_CLUSTER-control-plane"
-  docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null
+  local img=$1 node="$KIND_CLUSTER-control-plane" src
+  if ! docker image inspect "$img" >/dev/null 2>&1; then
+    src=$(pull_retry docker pull -q "$img") || die "can't pull $img"
+    [ "$src" = "$img" ] || docker tag "$src" "$img"
+  fi
   if ! kind load docker-image "$img" --name "$KIND_CLUSTER" >/dev/null 2>&1; then
     docker save "$img" | docker exec -i "$node" ctr -n k8s.io images import - >/dev/null
   fi
