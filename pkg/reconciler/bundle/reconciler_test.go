@@ -33,6 +33,14 @@ func newScheme() *runtime.Scheme {
 	return s
 }
 
+// indexedBuilder returns a fake client builder with the spec.pipeline Bundle
+// index the reconciler lists siblings through.
+func indexedBuilder(s *runtime.Scheme) *fake.ClientBuilder {
+	return fake.NewClientBuilder().
+		WithScheme(s).
+		WithIndex(&kardinalv1alpha1.Bundle{}, "spec.pipeline", bundle.BundlePipelineIndex)
+}
+
 // mockTranslator is a test double for BundleTranslator.
 type mockTranslator struct {
 	graphName string
@@ -61,8 +69,7 @@ func TestBundleReconciler_SetsAvailablePhase(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(b).
 		WithStatusSubresource(b).
 		Build()
@@ -109,8 +116,7 @@ func TestBundleReconciler_AvailableToPromoting(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -133,8 +139,11 @@ func TestBundleReconciler_AvailableToPromoting(t *testing.T) {
 	assert.Equal(t, "Promoting", got.Status.Phase)
 }
 
-// TestBundleReconciler_TranslationError sets bundle to Failed when Translator errors.
-func TestBundleReconciler_TranslationError(t *testing.T) {
+// TestBundleReconciler_TranslationErrorStaysAvailable verifies that a failed
+// Graph create on a valid Pipeline (API or RBAC error) keeps the Bundle
+// Available with the error in the Ready condition and returns the error, so
+// controller-runtime retries with backoff (C02-bundle-05).
+func TestBundleReconciler_TranslationErrorStaysAvailable(t *testing.T) {
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 		Spec: kardinalv1alpha1.PipelineSpec{
@@ -148,8 +157,7 @@ func TestBundleReconciler_TranslationError(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -166,7 +174,12 @@ func TestBundleReconciler_TranslationError(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{
 		Name: "nginx-demo-v1", Namespace: "default",
 	}, &got))
-	assert.Equal(t, "Failed", got.Status.Phase)
+	assert.Equal(t, "Available", got.Status.Phase, "a transient translate error must not fail the bundle")
+	ready := findCondition(got.Status.Conditions, "Ready")
+	require.NotNil(t, ready)
+	assert.Equal(t, metav1.ConditionFalse, ready.Status)
+	assert.Equal(t, "TranslationError", ready.Reason)
+	assert.Contains(t, ready.Message, assert.AnError.Error())
 }
 
 // TestBundleReconciler_NoTranslatorSkipsPromotion verifies that Available
@@ -183,8 +196,7 @@ func TestBundleReconciler_NoTranslatorSkipsPromotion(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
+	c := indexedBuilder(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
 
 	r := &bundle.Reconciler{Client: c} // no Translator
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -201,9 +213,14 @@ func TestBundleReconciler_NoTranslatorSkipsPromotion(t *testing.T) {
 	assert.Equal(t, "Available", got.Status.Phase)
 }
 
-// TestBundleReconciler_Idempotent verifies that reconciling an already-Available
-// bundle twice is safe.
+// TestBundleReconciler_Idempotent verifies that reconciling an Available
+// bundle twice promotes it once and leaves it Promoting (C02-bundle-23: the
+// fixture has its Pipeline, so the bundle is not deleted as an orphan).
 func TestBundleReconciler_Idempotent(t *testing.T) {
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
 	b := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
@@ -211,26 +228,29 @@ func TestBundleReconciler_Idempotent(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+	c := indexedBuilder(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
 
-	r := &bundle.Reconciler{Client: c}
+	translator := &mockTranslator{graphName: "nginx-demo-nginx-demo-v1"}
+	r := &bundle.Reconciler{Client: c, Translator: translator}
 
-	_, err := r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
-	})
-	require.NoError(t, err)
-
-	_, err = r.Reconcile(context.Background(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
-	})
-	require.NoError(t, err)
+	var got kardinalv1alpha1.Bundle
+	for i := range 2 {
+		_, err := r.Reconcile(context.Background(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+		})
+		require.NoError(t, err)
+		require.NoError(t, c.Get(context.Background(),
+			types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &got), "reconcile %d", i+1)
+		assert.Equal(t, "Promoting", got.Status.Phase, "reconcile %d", i+1)
+		translator.called = false
+	}
+	assert.Equal(t, "nginx-demo-nginx-demo-v1", got.Status.GraphRef)
 }
 
 // TestBundleReconciler_NotFound verifies that a missing Bundle returns no error.
 func TestBundleReconciler_NotFound(t *testing.T) {
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := indexedBuilder(s).Build()
 
 	r := &bundle.Reconciler{Client: c}
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -248,8 +268,13 @@ func TestBundleReconciler_PromotingPhaseIsNoOp(t *testing.T) {
 		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
 	}
 
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
+	}
+
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+	c := indexedBuilder(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
 
 	translator := &mockTranslator{graphName: "graph"}
 	r := &bundle.Reconciler{Client: c, Translator: translator}
@@ -259,6 +284,11 @@ func TestBundleReconciler_PromotingPhaseIsNoOp(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, translator.called, "Translator must NOT be called for Promoting bundles")
+
+	var got kardinalv1alpha1.Bundle
+	require.NoError(t, c.Get(context.Background(),
+		types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"}, &got), "bundle must not be deleted")
+	assert.Equal(t, "Promoting", got.Status.Phase)
 }
 
 // TestBundleReconciler_SelfSupersession verifies the BU-1 fix: self-supersession.
@@ -287,8 +317,7 @@ func TestBundleReconciler_SelfSupersession(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(oldBundle, newBundleObj).
 		WithStatusSubresource(oldBundle, newBundleObj).
 		Build()
@@ -337,8 +366,7 @@ func TestBundleReconciler_NewBundleBecomesAvailableWithoutSupersedingSiblings(t 
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(oldBundle, newBundleObj).
 		WithStatusSubresource(oldBundle, newBundleObj).
 		Build()
@@ -394,8 +422,7 @@ func TestBundleReconciler_Supersession_DifferentPipeline(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(otherPipeline, nginxPipeline, otherPipelineBundle, newerNginxBundle).
 		WithStatusSubresource(otherPipelineBundle, newerNginxBundle).
 		Build()
@@ -437,8 +464,7 @@ func TestBundleReconciler_SelfSupersession_AlreadySupersededSkipped(t *testing.T
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(alreadySuperseded, newBundleObj).
 		WithStatusSubresource(alreadySuperseded, newBundleObj).
 		Build()
@@ -453,103 +479,6 @@ func TestBundleReconciler_SelfSupersession_AlreadySupersededSkipped(t *testing.T
 	var gotOld kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v0", Namespace: "default"}, &gotOld))
 	assert.Equal(t, "Superseded", gotOld.Status.Phase)
-}
-
-// TestStartupReconciliation_IsNoOp verifies that Start() is a no-op in the
-// PRStatus CRD architecture. WaitingForMerge re-check is now handled by
-// the PRStatusReconciler polling GitHub and the Graph Watch node propagating
-// when status.merged == true. No SCM polling occurs at startup.
-func TestStartupReconciliation_IsNoOp(t *testing.T) {
-	ps := &kardinalv1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-wfm", Namespace: "default"},
-		Spec: kardinalv1alpha1.PromotionStepSpec{
-			PipelineName: "nginx-demo",
-			BundleName:   "bundle-1",
-			Environment:  "prod",
-			StepType:     "pr-review",
-		},
-		Status: kardinalv1alpha1.PromotionStepStatus{
-			State: "WaitingForMerge",
-			PRURL: "https://github.com/owner/repo/pull/42",
-			Outputs: map[string]string{
-				"prNumber": "42",
-			},
-		},
-	}
-
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(ps).
-		WithStatusSubresource(ps).
-		Build()
-
-	// Start() is now a no-op — PRStatus CRD architecture handles polling.
-	r := &bundle.Reconciler{Client: c}
-
-	err := r.Start(context.Background())
-	require.NoError(t, err)
-
-	// State must be unchanged — Start() no longer mutates PromotionStep status.
-	var updated kardinalv1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-wfm", Namespace: "default"}, &updated))
-	assert.Equal(t, "WaitingForMerge", updated.Status.State,
-		"Start() must not mutate PromotionStep state — PRStatusReconciler handles polling")
-}
-
-// TestStartupReconciliation_SkipsCompletedBundles verifies that PromotionSteps
-// not in WaitingForMerge state are unaffected by startup.
-func TestStartupReconciliation_SkipsCompletedBundles(t *testing.T) {
-	// Step already succeeded — should NOT be touched.
-	psSucceeded := &kardinalv1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-done", Namespace: "default"},
-		Status: kardinalv1alpha1.PromotionStepStatus{
-			State:   "Succeeded",
-			PRURL:   "https://github.com/owner/repo/pull/10",
-			Outputs: map[string]string{"prNumber": "10"},
-		},
-	}
-	// Step in HealthChecking — should NOT be touched.
-	psHealthChecking := &kardinalv1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{Name: "step-hc", Namespace: "default"},
-		Status: kardinalv1alpha1.PromotionStepStatus{
-			State:   "HealthChecking",
-			PRURL:   "https://github.com/owner/repo/pull/11",
-			Outputs: map[string]string{"prNumber": "11"},
-		},
-	}
-
-	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(psSucceeded, psHealthChecking).
-		WithStatusSubresource(psSucceeded, psHealthChecking).
-		Build()
-
-	// Start() is a no-op; states must be unchanged.
-	r := &bundle.Reconciler{Client: c}
-
-	err := r.Start(context.Background())
-	require.NoError(t, err)
-
-	// States must be unchanged.
-	var gotDone kardinalv1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-done", Namespace: "default"}, &gotDone))
-	assert.Equal(t, "Succeeded", gotDone.Status.State)
-
-	var gotHC kardinalv1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "step-hc", Namespace: "default"}, &gotHC))
-	assert.Equal(t, "HealthChecking", gotHC.Status.State)
-}
-
-// TestStartupReconciliation_NoSCMProvider verifies that Start() is a no-op
-// when SCMProvider is nil (preserved for backward compatibility).
-func TestStartupReconciliation_NoSCMProvider(t *testing.T) {
-	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &bundle.Reconciler{Client: c} // no SCMProvider needed
-	err := r.Start(context.Background())
-	require.NoError(t, err)
 }
 
 // TestBundleReconciler_ConfigBundleDoesNotSupersedeImageBundle verifies that a
@@ -581,8 +510,7 @@ func TestBundleReconciler_ConfigBundleDoesNotSupersedeImageBundle(t *testing.T) 
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 		Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
 	}
-	c := fake.NewClientBuilder().
-		WithScheme(sch).
+	c := indexedBuilder(sch).
 		WithObjects(nginxPipeline2, imagBundle, configBundle).
 		WithStatusSubresource(imagBundle, configBundle).
 		Build()
@@ -623,8 +551,7 @@ func TestBundleReconciler_ConfigBundleSupersededByNewConfigBundle(t *testing.T) 
 	}
 
 	sch := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(sch).
+	c := indexedBuilder(sch).
 		WithObjects(oldConfig, newConfig).
 		WithStatusSubresource(oldConfig, newConfig).
 		Build()
@@ -670,8 +597,7 @@ func TestBundleReconciler_PausedPipelineNoLongerBlocksInReconciler(t *testing.T)
 	translator := &mockTranslator{graphName: "graph-1"}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -712,8 +638,7 @@ func TestBundleReconciler_ResumedPipeline(t *testing.T) {
 	translator := &mockTranslator{graphName: "graph-1"}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -769,8 +694,7 @@ func TestBundleReconciler_SyncEvidenceFromPromotionStep(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(&kardinalv1alpha1.Pipeline{
 			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 			Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
@@ -843,8 +767,7 @@ func TestBundleReconciler_SyncEvidence_RequeuesWhileSoaking(t *testing.T) {
 		Status: kardinalv1alpha1.PromotionStepStatus{State: "WaitingForMerge"},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(&kardinalv1alpha1.Pipeline{
 			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 			Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
@@ -906,8 +829,7 @@ func TestBundleReconciler_MetricsPersistedWhenLastStepVerifies(t *testing.T) {
 		}
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(&kardinalv1alpha1.Pipeline{
 			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 			Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
@@ -965,8 +887,7 @@ func TestBundleReconciler_SyncEvidence_Idempotent(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(&kardinalv1alpha1.Pipeline{
 			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 			Spec:       kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}}},
@@ -999,19 +920,18 @@ func TestBundleReconciler_SyncEvidence_Idempotent(t *testing.T) {
 // parent Pipeline no longer exists, the Bundle self-deletes to avoid orphaned resources (#270).
 // This mirrors the PromotionStep orphan guard (#248).
 func TestBundleReconciler_OrphanGuard_SelfDeletesWhenPipelineGone(t *testing.T) {
-	// Bundle references a pipeline that does not exist.
+	// Bundle was promoted with a pipeline that has since been deleted.
 	b := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-bundle", Namespace: "default"},
 		Spec: kardinalv1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: "deleted-pipeline",
 		},
-		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
+		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting", GraphRef: "deleted-pipeline-my-bundle"},
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(b).
 		WithStatusSubresource(b).
 		Build()
@@ -1049,8 +969,7 @@ func TestBundleReconciler_OrphanGuard_NoDeleteWhenPipelineExists(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -1098,8 +1017,7 @@ func TestBundleReconciler_PromotingBundleSupersededByNewerPromoting(t *testing.T
 		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, oldBundle, newBundle).
 		WithStatusSubresource(oldBundle, newBundle).
 		Build()
@@ -1145,8 +1063,7 @@ func TestBundleReconciler_SameSecondSupersession(t *testing.T) {
 		Status: kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, bundleAaa, bundleZzz).
 		WithStatusSubresource(bundleAaa, bundleZzz).
 		Build()
@@ -1196,7 +1113,7 @@ func TestBundleReconciler_ConcurrentBundleSupersession(t *testing.T) {
 		}
 	}
 
-	builder := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline)
+	builder := indexedBuilder(s).WithObjects(pipeline)
 	statusSubresources := make([]client.Object, 5)
 	for i, b := range bundles {
 		builder = builder.WithObjects(b)
@@ -1276,7 +1193,7 @@ func TestBundleReconciler_MetricsComputedOnVerified(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).
+	c := indexedBuilder(scheme).
 		WithObjects(myPipeline, myBundle).
 		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
 		Build()
@@ -1303,20 +1220,14 @@ func TestBundleReconciler_MetricsComputedOnVerified(t *testing.T) {
 
 // mockGraphChecker is a test double for bundle.GraphChecker.
 type mockGraphChecker struct {
-	exists       bool
-	err          error
-	callCount    int
-	deleteCalled bool
+	exists    bool
+	err       error
+	callCount int
 }
 
 func (m *mockGraphChecker) GraphExists(_ context.Context, _, _ string) (bool, error) {
 	m.callCount++
 	return m.exists, m.err
-}
-
-func (m *mockGraphChecker) DeleteGraph(_ context.Context, _, _ string) error {
-	m.deleteCalled = true
-	return nil
 }
 
 // TestBundleReconciler_GraphRefStoredOnPromotion verifies that Bundle.status.graphRef
@@ -1334,8 +1245,7 @@ func TestBundleReconciler_GraphRefStoredOnPromotion(t *testing.T) {
 		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme()).
+	c := indexedBuilder(newScheme()).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -1376,8 +1286,7 @@ func TestBundleReconciler_GraphRecreatedAfterDeletion(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme()).
+	c := indexedBuilder(newScheme()).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -1415,8 +1324,7 @@ func TestBundleReconciler_GraphNotRecreatedWhenPresent(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme()).
+	c := indexedBuilder(newScheme()).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -1451,8 +1359,7 @@ func TestBundleReconciler_GraphCheckerErrorIsNonFatal(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(newScheme()).
+	c := indexedBuilder(newScheme()).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -1471,24 +1378,18 @@ func TestBundleReconciler_GraphCheckerErrorIsNonFatal(t *testing.T) {
 
 // --- Pipeline spec change detection tests (#626) ---
 
-// mockGraphCheckerV2 is a GraphChecker that also counts deletions, so tests can
-// assert that a pipeline spec change never deletes the Graph.
+// mockGraphCheckerV2 is a GraphChecker that counts existence checks. The
+// reconciler has no way to delete a Graph (kro would delete every
+// PromotionStep with it), so a spec change can only re-translate in place.
 type mockGraphCheckerV2 struct {
 	exists      bool
 	existsErr   error
 	existsCount int
-	deleteCount int
-	deleteErr   error
 }
 
 func (m *mockGraphCheckerV2) GraphExists(_ context.Context, _, _ string) (bool, error) {
 	m.existsCount++
 	return m.exists, m.existsErr
-}
-
-func (m *mockGraphCheckerV2) DeleteGraph(_ context.Context, _, _ string) error {
-	m.deleteCount++
-	return m.deleteErr
 }
 
 // TestBundleReconciler_PipelineSpecChange_UpdatesGraphInPlace verifies that when a Pipeline
@@ -1526,7 +1427,7 @@ func TestBundleReconciler_PipelineSpecChange_UpdatesGraphInPlace(t *testing.T) {
 	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
 	checker := &mockGraphCheckerV2{exists: true} // graph exists but spec is stale
 
-	c := fake.NewClientBuilder().WithScheme(scheme).
+	c := indexedBuilder(scheme).
 		WithObjects(pipeline, bndl).
 		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
 		Build()
@@ -1543,8 +1444,6 @@ func TestBundleReconciler_PipelineSpecChange_UpdatesGraphInPlace(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, translator.called, "Graph must be re-translated when Pipeline spec hash changes")
-	assert.Equal(t, 0, checker.deleteCount,
-		"Graph must not be deleted: kro would delete every PromotionStep with it")
 
 	// Bundle status must have updated hash
 	var updated kardinalv1alpha1.Bundle
@@ -1589,7 +1488,7 @@ func TestBundleReconciler_PipelineSpecUnchanged_NoDelete(t *testing.T) {
 	checker := &mockGraphCheckerV2{exists: true}
 	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).
+	c := indexedBuilder(scheme).
 		WithObjects(pipeline, bndl).
 		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
 		Build()
@@ -1605,8 +1504,6 @@ func TestBundleReconciler_PipelineSpecUnchanged_NoDelete(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, 0, checker.deleteCount,
-		"Graph must NOT be deleted when Pipeline spec is unchanged")
 	assert.False(t, translator.called, "Graph must not be re-translated when Pipeline spec is unchanged")
 }
 
@@ -1634,7 +1531,7 @@ func TestBundleReconciler_PipelineSpecHashStoredOnPromotion(t *testing.T) {
 	}
 
 	translator := &mockTranslator{graphName: "my-app-my-app-v1"}
-	c := fake.NewClientBuilder().WithScheme(scheme).
+	c := indexedBuilder(scheme).
 		WithObjects(pipeline, bndl).
 		WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
 		Build()
@@ -1682,8 +1579,7 @@ func TestBundleReconciler_EmptyPipelineSpecHash_NoGraphDeletion(t *testing.T) {
 		},
 	}
 
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
+	c := indexedBuilder(scheme).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -1701,16 +1597,14 @@ func TestBundleReconciler_EmptyPipelineSpecHash_NoGraphDeletion(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Graph must NOT be deleted when PipelineSpecHash is empty.
-	assert.False(t, gc.deleteCalled,
-		"Graph must NOT be deleted when PipelineSpecHash is empty — empty means uninitialized, not changed (#789)")
-
 	// The stored hash MUST be updated so subsequent reconciles don't trigger deletion.
 	var updated kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(),
 		types.NamespacedName{Name: "my-app-v1", Namespace: "default"}, &updated))
 	assert.NotEmpty(t, updated.Status.PipelineSpecHash,
 		"PipelineSpecHash must be saved after first reconcile to prevent future spurious deletions")
+	assert.False(t, translator.called, "an empty hash is recorded, not treated as a spec change")
+	assert.Equal(t, "Promoting", updated.Status.Phase)
 }
 
 // TestBundleReconciler_HistoryGC_DeletesOldestTerminal verifies that when a new Bundle
@@ -1888,8 +1782,8 @@ func TestBundleReconciler_HistoryGC_DefaultLimit(t *testing.T) {
 		client.MatchingFields{"spec.pipeline": "my-app"},
 	))
 	// 50 terminal + 1 new (Available) = 51 total remaining
-	assert.LessOrEqual(t, len(remaining.Items), 51,
-		"total bundles must be at most 51 (50 terminal + 1 new Available)")
+	assert.Len(t, remaining.Items, 51,
+		"exactly 50 terminal bundles plus the new Available one must remain")
 }
 
 // TestBundleReconciler_HistoryGC_NonTerminalNotDeleted verifies that non-terminal
@@ -1988,8 +1882,7 @@ func TestBundleConditions_Available(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(b).
 		WithStatusSubresource(b).
 		Build()
@@ -2025,8 +1918,7 @@ func TestBundleConditions_Promoting(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -2048,31 +1940,39 @@ func TestBundleConditions_Promoting(t *testing.T) {
 	assert.Equal(t, "Promoting", ready.Reason, "Ready.Reason must be Promoting")
 }
 
-// TestBundleConditions_Failed verifies that a Bundle has Ready=False/Failed and
-// Failed=True when translation fails.
+// TestBundleConditions_Failed verifies that a failed PromotionStep moves a
+// Promoting Bundle to Failed with Ready=False/Failed and Failed=True/StepFailed
+// naming the environment and the step's message (C02-bundle-02).
 func TestBundleConditions_Failed(t *testing.T) {
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-pipe", Namespace: "default"},
+		Spec: kardinalv1alpha1.PipelineSpec{
+			Environments: []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}, {Name: "prod"}},
+		},
 	}
 	b := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "cond-fail", Namespace: "default"},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "test-pipe"},
-		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting", GraphRef: "test-pipe-cond-fail"},
+	}
+	ps := &kardinalv1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{Name: "cond-fail-test", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/bundle": "cond-fail"}},
+		Spec:   kardinalv1alpha1.PromotionStepSpec{PipelineName: "test-pipe", BundleName: "cond-fail", Environment: "test"},
+		Status: kardinalv1alpha1.PromotionStepStatus{State: "Failed", Message: "git push rejected"},
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(pipeline, b).
-		WithStatusSubresource(b).
+	c := indexedBuilder(s).
+		WithObjects(pipeline, b, ps).
+		WithStatusSubresource(b, ps).
 		Build()
 
-	r := &bundle.Reconciler{Client: c, Translator: &mockTranslator{err: fmt.Errorf("simulated translation failure")}}
+	r := &bundle.Reconciler{Client: c}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "cond-fail", Namespace: "default"},
 	})
-	// Reconcile returns the translation error.
-	assert.Error(t, err)
+	require.NoError(t, err)
 
 	var got kardinalv1alpha1.Bundle
 	require.NoError(t, c.Get(context.Background(),
@@ -2086,9 +1986,11 @@ func TestBundleConditions_Failed(t *testing.T) {
 	assert.Equal(t, "Failed", ready.Reason)
 
 	failed := findCondition(got.Status.Conditions, "Failed")
-	require.NotNil(t, failed, "Failed condition must be present after translation error")
+	require.NotNil(t, failed, "Failed condition must be present after a step failure")
 	assert.Equal(t, metav1.ConditionTrue, failed.Status)
-	assert.Equal(t, "TranslationError", failed.Reason)
+	assert.Equal(t, "StepFailed", failed.Reason)
+	assert.Contains(t, failed.Message, "environment test")
+	assert.Contains(t, failed.Message, "git push rejected")
 }
 
 // TestBundleConditions_Superseded verifies that Ready=False/Superseded is set
@@ -2161,8 +2063,7 @@ func TestBundleConditions_NoDuplicates(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b).
 		Build()
@@ -2221,8 +2122,7 @@ func TestBundleReconciler_MaxConcurrentPromotions_CapEnforced(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b1, b2).
 		WithStatusSubresource(b1, b2).
 		Build()
@@ -2256,14 +2156,6 @@ func TestBundleReconciler_MaxConcurrentPromotions_ZeroIsUnlimited(t *testing.T) 
 			MaxConcurrentPromotions: 0, // 0 = unlimited
 		},
 	}
-	// Multiple bundles already Promoting.
-	for i := 1; i <= 5; i++ {
-		_ = &kardinalv1alpha1.Bundle{
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("nginx-demo-v%d", i), Namespace: "default"},
-			Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-			Status:     kardinalv1alpha1.BundleStatus{Phase: "Promoting"},
-		}
-	}
 	b := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v6", Namespace: "default"},
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
@@ -2280,8 +2172,7 @@ func TestBundleReconciler_MaxConcurrentPromotions_ZeroIsUnlimited(t *testing.T) 
 	}
 
 	s := newScheme()
-	builder := fake.NewClientBuilder().
-		WithScheme(s).
+	builder := indexedBuilder(s).
 		WithObjects(pipeline, b).
 		WithStatusSubresource(b)
 	for i := range promotingSiblings {
@@ -2323,8 +2214,7 @@ func TestBundleReconciler_MaxConcurrentPromotions_CapNotReached(t *testing.T) {
 	}
 
 	s := newScheme()
-	c := fake.NewClientBuilder().
-		WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(pipeline, b1, b2).
 		WithStatusSubresource(b1, b2).
 		Build()
@@ -2355,7 +2245,7 @@ func TestBundleReconciler_EmitsAvailableEvent(t *testing.T) {
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
 	}
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+	c := indexedBuilder(s).WithObjects(b).WithStatusSubresource(b).Build()
 
 	fakeRecorder := record.NewFakeRecorder(10)
 	r := &bundle.Reconciler{Client: c, Recorder: fakeRecorder}
@@ -2390,7 +2280,7 @@ func TestBundleReconciler_EmitsPromotingEvent(t *testing.T) {
 		Status:     kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
+	c := indexedBuilder(s).WithObjects(pipeline, b).WithStatusSubresource(b).Build()
 
 	fakeRecorder := record.NewFakeRecorder(10)
 	translator := &mockTranslator{graphName: "nginx-demo-v1-graph"}
@@ -2441,7 +2331,7 @@ func TestBundleReconciler_EmitsSupersededEvent(t *testing.T) {
 		Status: kardinalv1alpha1.BundleStatus{Phase: "Available"},
 	}
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, b1, b2).WithStatusSubresource(b1, b2).Build()
+	c := indexedBuilder(s).WithObjects(pipeline, b1, b2).WithStatusSubresource(b1, b2).Build()
 
 	fakeRecorder := record.NewFakeRecorder(10)
 	r := &bundle.Reconciler{Client: c, Recorder: fakeRecorder}
@@ -2468,7 +2358,7 @@ func TestBundleReconciler_NoRecorderNoPanic(t *testing.T) {
 		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
 	}
 	s := newScheme()
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(b).WithStatusSubresource(b).Build()
+	c := indexedBuilder(s).WithObjects(b).WithStatusSubresource(b).Build()
 
 	// Recorder is nil — must not panic.
 	r := &bundle.Reconciler{Client: c}
@@ -2507,7 +2397,7 @@ func TestBundleReconciler_NoMetricsUntilEveryPipelineEnvVerified(t *testing.T) {
 			Status: kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		}
 	}
-	c := fake.NewClientBuilder().WithScheme(s).
+	c := indexedBuilder(s).
 		WithObjects(&kardinalv1alpha1.Pipeline{
 			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
 			Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{

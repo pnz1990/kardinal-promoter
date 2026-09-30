@@ -30,6 +30,7 @@ package rollbackpolicy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -44,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
@@ -189,15 +191,26 @@ func stepBundle(step *v1alpha1.PromotionStep) string {
 
 // ensureRollbackBundle creates a rollback Bundle if one doesn't already exist.
 // Returns the name of the rollback Bundle (new or existing), or "" if not needed.
+//
+// The rollback is planned by lifecycle.PlanRollback, the planner shared with
+// `kardinal rollback`, the UI and onHealthFailure=rollback: it restores the
+// artifacts of the most recent Bundle, other than spec.bundleRef, that was
+// Verified in the environment, and never re-promotes the failing image. When
+// there is nothing safe to roll back to, or spec.bundleRef is itself a
+// rollback (a failing rollback does not start another), no Bundle is created
+// (C04-gates-06).
 func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logger,
 	rp *v1alpha1.RollbackPolicy) (string, error) {
-	// Check if a rollback Bundle already exists for this bundle.
+	// Reuse a rollback of this Bundle created before this planner existed:
+	// those have no kardinal.io/rollback-from annotation and recorded the
+	// failing Bundle in provenance.rollbackOf.
 	var existingBundles v1alpha1.BundleList
 	if err := r.List(ctx, &existingBundles, client.InNamespace(rp.Namespace)); err != nil {
 		return "", fmt.Errorf("list bundles: %w", err)
 	}
 	for _, b := range existingBundles.Items {
-		if b.Labels["kardinal.io/rollback"] == "true" &&
+		if b.Labels[lifecycle.LabelRollback] == "true" &&
+			b.Annotations[lifecycle.AnnotationRollbackFrom] == "" &&
 			b.Spec.Provenance != nil &&
 			b.Spec.Provenance.RollbackOf == rp.Spec.BundleRef {
 			log.Debug().
@@ -206,49 +219,50 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 			return b.Name, nil
 		}
 	}
+	// Reuse a rollback of this Bundle in this environment from either
+	// automatic path (this one or onHealthFailure=rollback).
+	existing, err := lifecycle.FindRollback(ctx, r.Client, rp.Namespace,
+		rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
+	if err != nil {
+		return "", fmt.Errorf("find rollback of bundle %s: %w", rp.Spec.BundleRef, err)
+	}
+	if existing != "" {
+		log.Debug().Str("existing_rollback", existing).Msg("rollback bundle already exists, reusing")
+		return existing, nil
+	}
 
-	// Load the original Bundle to copy its spec.
-	var originalBundle v1alpha1.Bundle
-	if err := r.Get(ctx, client.ObjectKey{Name: rp.Spec.BundleRef, Namespace: rp.Namespace},
-		&originalBundle); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Warn().Str("bundleRef", rp.Spec.BundleRef).Msg("original bundle not found, cannot create rollback")
+	rollbackName := lifecycle.AutoRollbackName(rp.Spec.BundleRef, "policy")
+	plan, err := lifecycle.PlanRollback(ctx, r.Client, lifecycle.RollbackRequest{
+		Namespace:   rp.Namespace,
+		Pipeline:    rp.Spec.PipelineName,
+		Environment: rp.Spec.Environment,
+		FromBundle:  rp.Spec.BundleRef,
+		Actor:       "kardinal-controller (auto-rollback via RollbackPolicy)",
+		Name:        rollbackName,
+		Reason:      "AutoRollback",
+		Now:         r.now(),
+		Automatic:   true,
+	})
+	if err != nil {
+		if errors.Is(err, lifecycle.ErrConflict) || errors.Is(err, lifecycle.ErrInvalid) ||
+			errors.Is(err, lifecycle.ErrNotFound) {
+			log.Warn().Err(err).
+				Str("bundleRef", rp.Spec.BundleRef).
+				Str("environment", rp.Spec.Environment).
+				Msg("auto-rollback: nothing safe to roll back to; no rollback bundle created, human intervention required")
 			return "", nil
 		}
-		return "", fmt.Errorf("get bundle %s: %w", rp.Spec.BundleRef, err)
+		return "", fmt.Errorf("plan rollback of bundle %s: %w", rp.Spec.BundleRef, err)
 	}
 
-	// Create the rollback Bundle.
-	now := r.now()
-	rollbackName := fmt.Sprintf("%s-rollback-%d", originalBundle.Spec.Pipeline, now.Unix()%100000)
-	rollbackBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rollbackName,
-			Namespace: rp.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/pipeline": originalBundle.Spec.Pipeline,
-				"kardinal.io/rollback": "true",
-			},
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     originalBundle.Spec.Type,
-			Pipeline: originalBundle.Spec.Pipeline,
-			Images:   originalBundle.Spec.Images,
-			Provenance: &v1alpha1.BundleProvenance{
-				RollbackOf: originalBundle.Name,
-				Timestamp:  metav1.NewTime(now),
-				Author:     "kardinal-controller (auto-rollback via RollbackPolicy)",
-			},
-		},
-	}
-
-	if err := r.Create(ctx, rollbackBundle); err != nil {
+	if err := r.Create(ctx, plan.Bundle); err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("create rollback bundle: %w", err)
 	}
 
 	log.Info().
 		Str("rollback_bundle", rollbackName).
-		Str("original_bundle", originalBundle.Name).
+		Str("original_bundle", rp.Spec.BundleRef).
+		Str("rollback_to", plan.Target.Name).
 		Int("failures", rp.Status.ConsecutiveFailures).
 		Str("pipeline", rp.Spec.PipelineName).
 		Str("environment", rp.Spec.Environment).

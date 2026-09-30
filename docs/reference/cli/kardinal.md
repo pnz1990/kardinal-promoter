@@ -19,7 +19,6 @@ It communicates with the Kubernetes API server to read and write CRDs.
 
 ### SEE ALSO
 
-* [kardinal approve](kardinal-approve.md)	 - Approve a Bundle for promotion, bypassing upstream gate requirements
 * [kardinal audit](kardinal-audit.md)	 - Audit log commands — view and summarize promotion events
 * [kardinal completion](kardinal-completion.md)	 - Generate shell completion scripts
 * [kardinal create](kardinal-create.md)	 - Create kardinal resources
@@ -34,9 +33,9 @@ It communicates with the Kubernetes API server to read and write CRDs.
 * [kardinal logs](kardinal-logs.md)	 - Show promotion step execution logs for a pipeline (Kargo parity)
 * [kardinal metrics](kardinal-metrics.md)	 - Show promotion metrics (DORA-style) for a pipeline
 * [kardinal override](kardinal-override.md)	 - Force-pass a PolicyGate with a mandatory audit record (K-09)
-* [kardinal pause](kardinal-pause.md)	 - Pause a pipeline, preventing new promotions from starting
+* [kardinal pause](kardinal-pause.md)	 - Pause a pipeline: no new promotion steps start, in-flight ones hold at the next safe point
 * [kardinal policy](kardinal-policy.md)	 - Manage and evaluate promotion policy gates
-* [kardinal promote](kardinal-promote.md)	 - Trigger promotion of a pipeline to a specific environment
+* [kardinal promote](kardinal-promote.md)	 - Promote the Bundle verified upstream into an environment
 * [kardinal refresh](kardinal-refresh.md)	 - Force re-reconciliation of a Pipeline (Kargo parity)
 * [kardinal resume](kardinal-resume.md)	 - Resume a paused pipeline
 * [kardinal rollback](kardinal-rollback.md)	 - Roll back a pipeline environment to a previous Bundle
