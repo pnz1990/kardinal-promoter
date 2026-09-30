@@ -8,8 +8,9 @@
 > - `propagateWhen` and `now()` do not exist in kro (ledger G1).
 > - The PromotionStep spec and status fields below are not the real ones
 >   (`api/v1alpha1/promotionstep_types.go`).
-> - Health is not auto-detected, `health.argocd{}` sub-fields are rejected by the CRD, and
->   `health.cluster` is not used.
+> - Health is not auto-detected. The `health.<adapter>` blocks only select the target (name
+>   and namespace, plus kind and condition for `resource`), and a non-empty `health.cluster` fails the PromotionStep (remote-cluster
+>   checks are not implemented).
 > - Merge detection polls through the PRStatus reconciler; it is not webhook-only.
 > - The metric names are not the real ones (`pkg/reconciler/observability/metrics.go`).
 > - There is no `/var/cache/kardinal`; the chart mounts an `emptyDir` at `/tmp`.

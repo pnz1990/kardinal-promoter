@@ -10,8 +10,12 @@
 > - Evidence reaches the Bundle through the Bundle reconciler (`handleSyncEvidence`), not
 >   `copyEvidenceToBundle`.
 > - `propagateWhen` does not exist in kro (ledger G1).
-> - There is no Pipeline reconciler. Rollback Bundles are created by the RollbackPolicy
->   reconciler and, for auto-rollback, by the PromotionStep reconciler.
+> - The Pipeline reconciler (`pkg/reconciler/pipeline`) does not create rollbacks. Rollback
+>   Bundles are built by `pkg/lifecycle` and created by `kardinal rollback` or the UI, by the
+>   RollbackPolicy reconciler and, for `onHealthFailure: rollback`, by the PromotionStep
+>   reconciler.
+> - Health checks follow `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm,
+>   `rollback` → RollingBack) on timeout or a terminal result; see the Health Check section.
 > - The kardinal-agent is not shipped (see [07](07-distributed-architecture.md)).
 > Depends on: 01-graph-integration, 02-pipeline-to-graph-translator, 08-promotion-steps-engine
 > Blocks: nothing (leaf node, but the workhorse)

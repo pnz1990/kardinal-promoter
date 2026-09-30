@@ -17,15 +17,15 @@ some leaks were never catalogued. The table below is the current state.
 
 ### Current status (2026-09-29)
 
-Checked against `main` at db9627f. "Accepted" means the logic stays in a reconciler that
+Checked against `main` at 3805f6a. "Accepted" means the logic stays in a reconciler that
 writes its result to its own CRD status, because kro has no primitive for it (ledger
 [G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph)).
 
 | ID | What is still in the code | State |
 |---|---|---|
 | CEL-2 / PG-2 | The PolicyGate reconciler lists MetricCheck objects in Go (`buildMetricsContext`). | Still present |
-| PS-4 / SCM-2 | `handleWaitingForMergeViaDirectSCM` in the PromotionStep reconciler still calls `GetPRStatus` when a step has no PRStatus object. | Still present; open PR #1249 removes this path |
-| PS-6 / PS-7 | The PromotionStep reconciler still creates the auto-rollback Bundle (`buildRollbackBundle`). | Still present |
+| PS-4 / SCM-2 | `handleWaitingForMergeViaDirectSCM` in the PromotionStep reconciler called `GetPRStatus` when a step had no PRStatus object. | Done: removed by #1249 (3805f6a); merge state comes only from the PRStatus CRD |
+| PS-6 / PS-7 | The PromotionStep reconciler still creates the auto-rollback Bundle (`createAutoRollback` in `pkg/reconciler/promotionstep/lifecycle.go`, built by `pkg/lifecycle`). | Still present |
 | ST-5 / ST-6 | The `kustomize-build` step runs the `kustomize` binary (`execKustomizeBuilder` in `pkg/steps/steps/kustomize_build.go`), although #494 is closed. | Still present |
 | GB-2 | Skip permissions are still checked in Go when the Graph is built (`ValidateSkipPermissions` in `pkg/graph/skip.go`). Only the gate expressions run on the Graph. | Partial |
 | CLI-1 / CLI-2 / CLI-3 | The CLI no longer imports `pkg/cel`: `policy simulate` and `policy test` run the controller's PolicyGate reconciler against an in-memory client (`cmd/kardinal/cmd/policy_eval.go`). The UI validate-cel endpoint calls `policygate.ValidateExpression` (`cmd/kardinal-controller/ui_api.go`, #1248). | Done |
