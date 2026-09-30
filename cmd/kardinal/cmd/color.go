@@ -68,9 +68,8 @@ func isTerminal(w io.Writer) bool {
 // (graph.GateState) with an ANSI color. Like the UI's health chips, Waiting
 // uses the Pending color of its palette (yellow here, slate grey in the UI):
 //   - Verified / Pass                                               → green
-//   - Failed / AbortedByAlarm / Block                               → red
-//   - Pending / Waiting / Promoting / WaitingForMerge / HealthChecking /
-//     RollingBack                                                   → yellow
+//   - Failed / AbortedByAlarm / RollingBack / Block                 → red
+//   - Pending / Waiting / Promoting / WaitingForMerge / HealthChecking → yellow
 //   - anything else, such as Superseded                             → no color
 func (c colorizer) colorState(state string) string {
 	if !c.enabled {
@@ -79,9 +78,9 @@ func (c colorizer) colorState(state string) string {
 	switch state {
 	case "Pass", "Verified":
 		return ansiGreen + state + ansiReset
-	case "Block", "Failed", "AbortedByAlarm":
+	case "Block", "Failed", "AbortedByAlarm", "RollingBack":
 		return ansiRed + state + ansiReset
-	case "Pending", "Waiting", "Promoting", "WaitingForMerge", "HealthChecking", "RollingBack":
+	case "Pending", "Waiting", "Promoting", "WaitingForMerge", "HealthChecking":
 		return ansiYellow + state + ansiReset
 	default:
 		return state

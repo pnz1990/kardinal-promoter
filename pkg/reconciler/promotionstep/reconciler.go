@@ -70,7 +70,9 @@ const (
 	// StateAbortedByAlarm — terminal: health alarm with onHealthFailure=abort (K-03).
 	// Requires human intervention to resume or rollback.
 	StateAbortedByAlarm = "AbortedByAlarm"
-	// StateRollingBack — rollback Bundle created; step waits for rollback to complete (K-03).
+	// StateRollingBack — terminal: health alarm with onHealthFailure=rollback
+	// created a rollback Bundle (K-03). The step takes no further action; the
+	// rollback Bundle's own step carries the promotion on.
 	StateRollingBack = "RollingBack"
 
 	// requeueWaitForMerge is how often to requeue while waiting for a PR merge.

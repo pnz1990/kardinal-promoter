@@ -42,7 +42,7 @@ func TestColorizer_Forced(t *testing.T) {
 		"Promoting":       ansiYellow,
 		"WaitingForMerge": ansiYellow,
 		"HealthChecking":  ansiYellow,
-		"RollingBack":     ansiYellow,
+		"RollingBack":     ansiRed,
 	}
 	for state, color := range cases {
 		assert.Equal(t, color+state+ansiReset, cr.colorState(state), state)
