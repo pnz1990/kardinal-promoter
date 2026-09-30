@@ -619,11 +619,12 @@ func TestFluxAdapter_NotFound(t *testing.T) {
 
 // TestFluxAdapter_GenerationFieldsRequired verifies that a Kustomization
 // missing metadata.generation or status.observedGeneration is Progressing: a
-// missing field must not read as 0 and match the other one (#1279).
+// missing field must not read as 0 and match the other one (#1279). Ready=False
+// still fails at once.
 func TestFluxAdapter_GenerationFieldsRequired(t *testing.T) {
-	ready := []interface{}{map[string]interface{}{"type": "Ready", "status": "True"}}
 	tests := []struct {
 		name       string
+		ready      string
 		generation interface{}
 		observed   interface{}
 		want       wantKind
@@ -634,6 +635,8 @@ func TestFluxAdapter_GenerationFieldsRequired(t *testing.T) {
 		{name: "generation missing", observed: int64(0), want: isProgressing, reason: "metadata.generation not set"},
 		{name: "observedGeneration missing", generation: int64(1), want: isProgressing,
 			reason: "status.observedGeneration not set"},
+		{name: "observedGeneration missing, Ready=False", ready: "False", generation: int64(1), want: isUnhealthy,
+			reason: "Ready=False"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -641,7 +644,12 @@ func TestFluxAdapter_GenerationFieldsRequired(t *testing.T) {
 			if tt.generation != nil {
 				meta["generation"] = tt.generation
 			}
-			status := map[string]interface{}{"conditions": ready}
+			ready := tt.ready
+			if ready == "" {
+				ready = "True"
+			}
+			status := map[string]interface{}{"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": ready}}}
 			if tt.observed != nil {
 				status["observedGeneration"] = tt.observed
 			}

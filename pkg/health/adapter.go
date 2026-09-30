@@ -519,13 +519,6 @@ func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatu
 	if readyCond == nil {
 		return progressing("Ready condition not found"), nil
 	}
-	// A missing field would read as 0 and make 0 == 0 look reconciled.
-	if !generationFound {
-		return progressing("metadata.generation not set"), nil
-	}
-	if !observedFound {
-		return progressing("status.observedGeneration not set: Flux has not reconciled this generation"), nil
-	}
 
 	readyStatus, _ := readyCond["status"].(string)
 	state := fmt.Sprintf("Ready=%s, observedGen=%d, generation=%d", readyStatus, observedGen, generation)
@@ -534,6 +527,13 @@ func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatu
 	}
 	if readyStatus == "False" {
 		return unhealthy(state), nil
+	}
+	// A missing field would read as 0 and make 0 == 0 look reconciled.
+	if !generationFound {
+		return progressing("metadata.generation not set"), nil
+	}
+	if !observedFound {
+		return progressing("status.observedGeneration not set: Flux has not reconciled this generation"), nil
 	}
 	if readyStatus != "True" || observedGen != generation {
 		return progressing(state), nil

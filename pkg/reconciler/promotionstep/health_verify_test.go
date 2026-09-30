@@ -253,7 +253,8 @@ func fluxKustomization(name, commit string) *unstructured.Unstructured {
 // TestFluxWaitsForTheMergeCommit proves #1307: a flux check of a pr-review
 // step waits while the merge commit is unknown, instead of passing on a
 // Kustomization Ready on the previous commit, and health.timeout then applies
-// onHealthFailure with that reason.
+// onHealthFailure with that reason. A step with no changes opened no PR, so
+// it does not wait.
 func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 	flux := v1alpha1.HealthConfig{Type: "flux", Timeout: "1m"}
 	prReview := v1alpha1.EnvironmentSpec{Name: "prod", Approval: "pr-review", Health: flux}
@@ -288,6 +289,11 @@ func TestFluxWaitsForTheMergeCommit(t *testing.T) {
 			hc: healthCase{env: prReview, prsRef: "prs", objs: []client.Object{merged(newSHA)},
 				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
 			wantState: "HealthChecking", wantMsg: "waiting for " + newSHA[:7]},
+		{name: "no changes: no PR to wait for",
+			hc: healthCase{env: prReview, status: v1alpha1.PromotionStepStatus{
+				Outputs: map[string]string{"noChanges": "true"}},
+				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
+			wantState: "Verified", wantMsg: "via flux"},
 		{name: "auto approval is unchanged",
 			hc: healthCase{env: v1alpha1.EnvironmentSpec{Name: "prod", Health: flux},
 				dynObjs: []runtime.Object{fluxKustomization("p-prod", oldSHA)}},
