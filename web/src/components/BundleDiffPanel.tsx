@@ -244,7 +244,8 @@ export function BundleDiffPanel({ bundleA, bundleB, onClose }: Props) {
 }
 
 function DiffCell({ value, changed, isLink, full }: { value: string | null; changed: boolean; isLink?: boolean; full?: boolean }) {
-  if (!value) {
+  // A CI run URL that isCIRunURL rejects is not shown: it can hold credentials.
+  if (!value || (isLink && !isCIRunURL(value))) {
     return <span style={{ fontSize: '0.75rem', color: 'var(--color-text-faint)' }}>—</span>
   }
   if (full) {
@@ -260,7 +261,7 @@ function DiffCell({ value, changed, isLink, full }: { value: string | null; chan
       </span>
     )
   }
-  if (isLink && isCIRunURL(value)) {
+  if (isLink) {
     return (
       <a
         href={value}

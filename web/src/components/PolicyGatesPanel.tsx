@@ -28,7 +28,7 @@ function formatAge(iso: string | undefined): string {
 }
 
 /**
- * The state shown for a gate, decided by the UI API (gateUIState) so it
+ * The state shown for a gate, decided by the UI API (graph.GateState) so it
  * matches the DAG node. Only Block holds the bundle back, the rule the
  * sidebar's Blocked count uses (E2E-R19).
  */

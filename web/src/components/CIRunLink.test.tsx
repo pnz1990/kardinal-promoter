@@ -12,33 +12,32 @@
 // limitations under the License.
 
 // CIRunLink.test.tsx — the bundle header links provenance.ciRunURL only when
-// it is an http(s) URL (E2E-R22).
+// it is an http(s) URL, and shows "—" otherwise, never the value (E2E-R22).
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { CIRunLink } from './CIRunLink'
 
 describe('CIRunLink', () => {
   it.each([
-    { name: 'https', url: 'https://github.com/o/r/actions/runs/1', href: 'https://github.com/o/r/actions/runs/1' },
-    { name: 'http', url: 'http://jenkins.local:8080/job/1', href: 'http://jenkins.local:8080/job/1' },
-    { name: 'javascript', url: 'javascript:alert(document.domain)', text: 'javascript:alert(document.domain)' },
-    { name: 'data', url: 'data:text/html,<script>alert(1)</script>', text: 'data:text/html,<script>alert(1)</script>' },
-    { name: 'relative', url: '/o/r/actions/runs/1', text: '/o/r/actions/runs/1' },
-    { name: 'user info', url: 'https://github.com@evil.example/1', text: 'https://github.com@evil.example/1' },
-    {
-      name: 'long text is shortened',
-      url: 'javascript:' + 'a'.repeat(60),
-      text: 'javascript:' + 'a'.repeat(28) + '…',
-    },
-  ])('$name', ({ url, href, text }) => {
-    render(<CIRunLink url={url} />)
-    if (href) {
+    { name: 'https', url: 'https://github.com/o/r/actions/runs/1', linked: true },
+    { name: 'http', url: 'http://jenkins.local:8080/job/1', linked: true },
+    { name: 'javascript', url: 'javascript:alert(document.domain)', linked: false },
+    { name: 'data', url: 'data:text/html,<script>alert(1)</script>', linked: false },
+    { name: 'relative', url: '/o/r/actions/runs/1', linked: false },
+    { name: 'user info', url: 'https://u:s3cret@ci.example.com/1', linked: false },
+    { name: 'credential parsed as a port', url: 'https://user:s3cret/x', linked: false },
+    { name: 'whitespace', url: 'https://ci.example.com/1 [x](y)', linked: false },
+  ])('$name', ({ url, linked }) => {
+    const { container } = render(<CIRunLink url={url} />)
+    if (linked) {
       const link = screen.getByRole('link', { name: 'CI run ↗' })
-      expect(link).toHaveAttribute('href', href)
+      expect(link).toHaveAttribute('href', url)
       expect(link).toHaveAttribute('rel', 'noopener noreferrer')
-    } else {
-      expect(screen.queryByRole('link')).not.toBeInTheDocument()
-      expect(screen.getByText(text!)).toBeInTheDocument()
+      return
     }
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+    expect(screen.getByText('CI run: —')).toBeInTheDocument()
+    expect(container.innerHTML).not.toContain(url.slice(0, 12))
+    expect(container.innerHTML).not.toContain('s3cret')
   })
 })

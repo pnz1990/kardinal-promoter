@@ -124,7 +124,7 @@ const STEPS = {
 
 // Gate instances belong to one bundle (ui_api.go uiGateResponse: pipeline, bundle,
 // environment). The template is what the user wrote; the UI must not count it.
-// state and holding are what ui_api.go's gateUIState and graph.GateHolds give
+// state and holding are what graph.GateState and graph.GateHolds give
 // them; only a Block (holding) gate counts as blocked (E2E-R19).
 const GATES = [
   { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },

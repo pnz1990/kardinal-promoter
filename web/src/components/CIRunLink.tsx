@@ -12,10 +12,9 @@
 // limitations under the License.
 
 // CIRunLink.tsx — a Bundle's provenance.ciRunURL in the bundle header.
-// Only a URL that passes isCIRunURL is linked; anything else is shown as text.
+// Only a URL that passes isCIRunURL is linked. Anything else is shown as "—",
+// as in the PR body, and never as text: it can hold credentials.
 import { isCIRunURL } from '../prLink'
-
-const MAX_TEXT = 40
 
 export function CIRunLink({ url }: { url: string }) {
   if (isCIRunURL(url)) {
@@ -31,13 +30,12 @@ export function CIRunLink({ url }: { url: string }) {
       </a>
     )
   }
-  const text = url.length > MAX_TEXT ? url.slice(0, MAX_TEXT - 1) + '…' : url
   return (
     <span
       style={{ color: 'var(--color-text-muted)', fontSize: '0.78rem' }}
       title="Not linked: the CI run URL is not an http(s) URL"
     >
-      CI run: <span style={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{text}</span>
+      CI run: —
     </span>
   )
 }
