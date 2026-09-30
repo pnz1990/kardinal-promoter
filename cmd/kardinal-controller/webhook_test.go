@@ -125,6 +125,50 @@ func TestWebhook_MarksPRStatusMerged_OnMerge(t *testing.T) {
 	assert.NotNil(t, updatedPRS.Status.LastCheckedAt, "PRStatus.status.lastCheckedAt should be set")
 }
 
+// TestWebhook_RecordsMergeCommit verifies that the webhook writes the merge
+// commit together with status.merged, fills it in when polling recorded the
+// merge first, and never replaces one already recorded (#1307).
+func TestWebhook_RecordsMergeCommit(t *testing.T) {
+	const sha = "e7ddb9e5a1b2c3d4e5f60718293a4b5c6d7e8f90"
+	tests := []struct {
+		name   string
+		status v1alpha1.PRStatusStatus
+		event  string
+		want   string
+	}{
+		{name: "open PR", status: v1alpha1.PRStatusStatus{Open: true}, event: sha, want: sha},
+		{name: "merged by polling without the commit", status: v1alpha1.PRStatusStatus{Merged: true},
+			event: sha, want: sha},
+		{name: "commit already recorded", status: v1alpha1.PRStatusStatus{Merged: true, MergeCommitSHA: "d7d4d8a"},
+			event: sha, want: "d7d4d8a"},
+		{name: "event without the commit", status: v1alpha1.PRStatusStatus{Open: true}, want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prs := &v1alpha1.PRStatus{
+				ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+				Spec:       v1alpha1.PRStatusSpec{PRNumber: 42, Repo: "owner/repo"},
+				Status:     tc.status,
+			}
+			c := fake.NewClientBuilder().WithScheme(webhookScheme()).
+				WithObjects(prs).WithStatusSubresource(prs).Build()
+			mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+				EventType: "pull_request", Action: "closed", Merged: true,
+				PRNumber: 42, RepoFullName: "owner/repo", MergeCommitSHA: tc.event,
+			}}
+			w := httptest.NewRecorder()
+			newWebhookServerWithConfig(mockSCM, c, zerolog.Nop(), true).Handler()(w,
+				httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader([]byte(`{}`))))
+			assert.Equal(t, http.StatusNoContent, w.Code)
+
+			var got v1alpha1.PRStatus
+			require.NoError(t, c.Get(context.Background(), client.ObjectKeyFromObject(prs), &got))
+			assert.True(t, got.Status.Merged)
+			assert.Equal(t, tc.want, got.Status.MergeCommitSHA)
+		})
+	}
+}
+
 // TestWebhook_RejectsInvalidSignature verifies that a webhook with an invalid
 // HMAC signature returns 401.
 func TestWebhook_RejectsInvalidSignature(t *testing.T) {
