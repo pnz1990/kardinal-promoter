@@ -243,9 +243,9 @@ On controller restart, the controller lists all open PRs with the `kardinal` lab
 
 ### Symptom: "429 Too Many Requests" from webhook endpoint
 
-The Bundle creation rate limit (100 req/min per Pipeline) has been exceeded. This typically means CI is creating Bundles faster than the controller can process them.
+The Bundle API allows 60 requests per minute. There is one token, so every CI job and every Pipeline shares that limit, and every request with the right token counts, including ones rejected with `400`. The window is a fixed minute kept in the controller process.
 
-Reduce CI frequency or increase the rate limit via controller configuration.
+The limit cannot be changed. Create fewer Bundles (for example one per merge to main rather than one per push), or retry after the minute is over. The create-bundle GitHub Action does not retry a `429`.
 
 ## Graph controller issues
 

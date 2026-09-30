@@ -295,7 +295,7 @@ helm uninstall kargo -n kargo
 
 **Bundle supersession:** When a new Bundle is created while an older one is still Promoting, kardinal supersedes the older Bundle (marks it `Superseded`). Kargo allows multiple in-flight Freights simultaneously. To maintain Kargo-like behavior, set `spec.maxConcurrentBundles: 2` on the Pipeline (near-term feature).
 
-**Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline and Bundles live in the same namespace; Subscriptions can be in any namespace.
+**Namespace model:** Kargo Projects map to Kubernetes Namespaces in both systems. In kardinal, the Pipeline, its Bundles and the Subscriptions that feed it live in the same namespace: a Subscription creates Bundles only in its own namespace, for a Pipeline there (a different `spec.namespace` sets the Subscription to phase `Error`).
 
 **GitOps repo structure:** kardinal's `kustomize` update strategy modifies `kustomization.yaml` files exactly like Kargo's git update mechanism. The `rendered-manifests` strategy (committing rendered YAML) has no direct Kargo equivalent.
 

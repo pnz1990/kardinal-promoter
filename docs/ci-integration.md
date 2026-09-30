@@ -135,6 +135,7 @@ build:
   script:
     - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - echo "IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA | cut -d@ -f2)" >> build.env
   artifacts:
     reports:
       dotenv: build.env
@@ -148,13 +149,12 @@ promote:
         -H "Content-Type: application/json" \
         -d "{
           \"pipeline\": \"my-app\",
-          \"artifacts\": {
-            \"images\": [{
-              \"name\": \"my-app\",
-              \"reference\": \"$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA\",
-              \"digest\": \"$IMAGE_DIGEST\"
-            }]
-          },
+          \"type\": \"image\",
+          \"images\": [{
+            \"repository\": \"$CI_REGISTRY_IMAGE\",
+            \"tag\": \"$CI_COMMIT_SHA\",
+            \"digest\": \"$IMAGE_DIGEST\"
+          }],
           \"provenance\": {
             \"commitSHA\": \"$CI_COMMIT_SHA\",
             \"ciRunURL\": \"$CI_PIPELINE_URL\",
@@ -251,6 +251,9 @@ in any namespace the controller watches, so treat it like a deploy credential. W
 `--watch-namespace` set, Bundles can only be created in that namespace (`403` otherwise).
 
 Rate limiting: 60 requests per minute. There is one token, so all callers share the limit.
+Every request with the right token counts, including ones rejected with `400`; a request
+over the limit gets `429`. The window is a fixed minute kept in the controller process, and
+the limit cannot be changed.
 
 ### kubectl access
 
