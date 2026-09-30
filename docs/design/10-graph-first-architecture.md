@@ -3,6 +3,10 @@
 > Status: Active — governs all implementation decisions
 > Created: 2026-04-10
 > Authors: Architecture session
+> Last corrected: 2026-09-29 against upstream kro v0.10.0-rc.0. The questions below use
+> kro's real node kinds (`template` and `ref` nodes, `readyWhen`, `includeWhen`, `forEach`).
+> Where kro cannot do something yet, the gap is in
+> [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 
 > **See also**: `docs/design/11-graph-purity-tech-debt.md` — complete catalog of every known logic leak, with GitHub issues and elimination paths. That document is the authoritative index of architecture debt. This document states the principles; that document tracks the violations.
 
@@ -42,8 +46,8 @@ L2: kardinal APIs (built on Graph)
     — PolicyGate CR:    a Kubernetes resource representing a gate's evaluation result
     — Bundle CR:        the artifact being promoted
     — Pipeline CR:      the user-facing intent that the translator converts to a Graph
-    — All of these are either Watch nodes or Owned nodes in the Graph
-    — All logic is expressed as CEL expressions on node readyWhen/propagateWhen
+    — PromotionStep and PolicyGate are owned (`template`) nodes; health objects are `ref` nodes
+    — All logic is expressed as CEL expressions on node templates, readyWhen and includeWhen
     — OR delegated to a reconciler that writes to the CR's status (and Graph watches)
 
 L3: kardinal customer APIs
@@ -63,18 +67,24 @@ The critical invariant:
 
 ### For every new feature, ask these questions in order:
 
-**Q1. Can this be a Watch node?**
+**Q1. Can this be a `ref` node?**
 
-A Watch node (`ShapeWatch`) reads an existing Kubernetes resource into the Graph scope.
-The resource's fields become available in CEL expressions. No creation, no ownership.
+A `ref` node reads an existing Kubernetes resource into the Graph scope. kro does not
+create or own it. Its fields become available to the CEL expressions of nodes that
+depend on it.
 
-Examples:
-- "Block if bundle author is dependabot" → Watch the Bundle CR, check
-  `bundleNode.metadata.annotations['kardinal.io/author']` in `readyWhen`
-- "Block if change freeze is active" → Watch a `ChangeFreeze` CR managed by an admin,
-  check `freeze.status.active == false` in `readyWhen`
-- "Block if manual approval is pending" → Watch an `Approval` CR, check
-  `approval.status.approved == true` in `readyWhen`
+Two kro limits shape how a `ref` node can block a promotion:
+
+- `readyWhen` may only reference the node itself (ledger
+  [G3](16-graph-capability-ledger.md#g3-readywhen-may-only-reference-the-node-itself)).
+- `readyWhen` does not hold back dependents in a standalone Graph (ledger
+  [G1](16-graph-capability-ledger.md#g1-readywhen-does-not-gate-dependents-in-a-standalone-graph)).
+  kardinal instead puts the condition inside a value the dependent needs
+  (`resolvableWhen` in `pkg/graph/builder.go`), so the dependent stays unresolved until
+  the condition holds.
+
+Example: the health checks. `pkg/health/watch_node.go` adds a `ref` node for the
+Deployment, Argo CD Application or Flux Kustomization, with a self-only `readyWhen`.
 
 **Q2. Can this be an Owned node whose status is written by a reconciler?**
 
@@ -84,23 +94,25 @@ The Graph watches `status.ready` via `readyWhen`.
 
 This is the correct pattern for:
 - Time-based gates: the PolicyGate reconciler calls `time.Now()`, writes `status.ready`
-- Metric gates: a MetricGate reconciler queries Prometheus, writes `status.ready`
-- External approval: a webhook handler updates `status.approved`, Graph watches it
+- Metric gates: the MetricCheck reconciler queries Prometheus and writes its result to
+  `MetricCheck` status; PolicyGate expressions read it as `metrics.<name>`
 
 **Q3. Can this be expressed as a CEL extension on the Graph's CEL environment?**
 
-Custom CEL libraries (`quantity.parse()`, string utilities) can be registered on the
-Graph's CEL environment via `WithCustomDeclarations`. This is appropriate for
-**stateless, cheap, synchronous** computations.
+**Not available to kardinal today.** kro's Graph controller builds its own CEL
+environment, and the Graph API has no way to register extra functions.
+(`WithCustomDeclarations` in kro's `pkg/cel/environment.go` is an internal Go option with
+test-only callers.) The gap is ledger
+[G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph). Until kro exposes
+Graph CEL extensions, use Q2. If it does, this path fits **stateless, cheap,
+synchronous** computations.
 
 > **Current status of `schedule.*`:** `schedule.isWeekend`, `schedule.hour`,
 > `schedule.dayOfWeek` are **NOT yet implemented as CEL library extensions**.
 > They are plain map variables injected into the PolicyGate CEL context by the
 > PolicyGate reconciler. They are available in PolicyGate expressions only — they
 > do NOT work in kro Graph `readyWhen` or template expressions.
-> Registering them as a proper Q3 CEL library on the Graph DefaultEnvironment is
-> tracked in `docs/design/11-graph-purity-tech-debt.md` §ScheduleClock Implementation
-> (design goal, not yet shipped).
+> Making them a Graph CEL library depends on G8 above.
 
 This is **not** appropriate for:
 - HTTP calls (blocks reconcile loop)
@@ -124,23 +136,24 @@ evaluation in kardinal is either:
 > **Note on `pkg/cel/`:** There is no `pkg/cel/NewCELEnvironment()` function.
 > The CEL environment for PolicyGate evaluation is constructed in
 > `pkg/reconciler/policygate/cel_evaluator.go:newEvaluator()` using `cel.NewEnv()`
-> directly, importing `github.com/kubernetes-sigs/kro/pkg/cel/library` extensions.
+> directly, importing kardinal's own `pkg/cel/library` (a copy adapted from kro's
+> `pkg/cel/library`; kardinal does not import kro's module for CEL).
 > `pkg/cel/` contains only the library sub-package, conversion utilities, and
 > sentinels — it is not a facade with a constructor. Any new feature that needs CEL
 > evaluation must call `cel.NewEnv(...)` directly with explicit library imports, as
 > done in `cel_evaluator.go`. The `pkg/cel/` directory must not grow.
 
-There is no separate "kardinal CEL evaluator" at steady state. `pkg/cel` in its
-current form exists as a transitional artifact (see Known Exceptions below) and
-must be eliminated by migrating to one of the patterns above.
+The PolicyGate evaluator is the one accepted exception: it is a reconciler that
+writes its result to PolicyGate status (pattern 1). See Known Exceptions below.
 
 ---
 
 ## Upstream Contribution Policy
 
-One capability is currently missing from kro that would eliminate an existing
-workaround. A second was resolved via the `ScheduleClock` pattern. The full list of
-Graph gaps is [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
+The Graph gaps that force kardinal workarounds are G1-G8 in
+[16-graph-capability-ledger.md](16-graph-capability-ledger.md), each with its proposed
+upstream contribution. The two items below are from the original design; the
+`recheckAfter` one was resolved without kro.
 
 ### ~~Contribution 1: `recheckAfter`~~ — RESOLVED via ScheduleClock pattern (#641)
 
@@ -153,10 +166,12 @@ Graph gaps is [16-graph-capability-ledger.md](16-graph-capability-ledger.md).
 ~~**Problem:** Time-based and metric-based gates need periodic re-evaluation.
 Currently the PolicyGate reconciler implements this via `ctrl.Result{RequeueAfter: N}`...~~
 
-The kardinal solution: `ScheduleClock` is an Owned node reconciler that writes
-`status.tick` on a configurable interval, generating real Kubernetes watch events.
-PolicyGate nodes that need periodic re-evaluation Watch the `ScheduleClock` object —
-no `recheckAfter` primitive required.
+The kardinal solution: the chart creates a `ScheduleClock` object, and the ScheduleClock
+reconciler writes `status.tick` on a configurable interval, generating real Kubernetes
+watch events. It is not a Graph node. The PolicyGate reconciler watches ScheduleClock
+objects and re-queues every PolicyGate on each tick
+(`pkg/reconciler/policygate/reconciler.go` `SetupWithManager`) — no `recheckAfter`
+primitive required.
 
 If contributing upstream is desired, the target is
 [kubernetes-sigs/kro](https://github.com/kubernetes-sigs/kro). It is not blocking any kardinal work.
@@ -205,11 +220,9 @@ reconciler to evaluate policy expressions.
 
 **Remaining work**: None. pkg/cel is now library-only. The library package imports are allowed.
 
-**Resolution target:** `recheckAfter` contribution to kro + migration sprint.
-
-**Current status:** Accepted transitional workaround. Must not grow. Must not be
-referenced by any new code. New gate types must use the Watch node or Owned node
-pattern.
+**Current status:** The PolicyGate CEL evaluator in `pkg/reconciler/policygate` is an
+accepted exception (ledger G8). It must not grow. New gate types must use the `ref`
+node or owned node pattern.
 
 ---
 
@@ -220,7 +233,7 @@ These are violations that **QA must block** and **engineers must not implement**
 | Anti-pattern | Why it's wrong | Correct approach |
 |---|---|---|
 | Business logic evaluated outside a Graph node or reconciler that writes to CRD status | Violates Graph-first — logic becomes invisible to the DAG | Express as readyWhen on a `ref` node, or resolvability gating on an owned (`template`) node |
-| New usage of `pkg/cel` in any package other than `pkg/reconciler/policygate` | Spreads the transitional workaround | Use Graph CEL extensions or Watch nodes |
+| New usage of `pkg/cel` in any package other than `pkg/reconciler/policygate` | Spreads the exception | Use a reconciler that writes CRD status, or a `ref` node |
 | Reconciler that makes decisions based on fields NOT in a CRD status it owns | Hidden state outside the Graph's observable layer | Write all decisions to CRD status; Graph reads status |
 | CEL expression that calls external HTTP API inside a `FunctionBinding` | Blocks the Graph controller reconcile loop; no retry/backoff | Use a dedicated reconciler + CRD status pattern |
 | Dependency between nodes expressed as in-memory state rather than CRD fields | Invisible to Graph, breaks restart safety | Represent dependency as Graph edge + CRD reference |

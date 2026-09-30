@@ -20,7 +20,7 @@ metadata:
   namespace: <string>                   # platform-policies (org) or team namespace
   labels:
     kardinal.io/scope: <string>         # "org" or "team"
-    kardinal.io/applies-to: <string>    # comma-separated environment names
+    kardinal.io/applies-to: <string>    # one environment name
     kardinal.io/type: <string>          # "gate" (default) or "skip-permission"
 spec:
   expression: <string>                  # CEL expression
@@ -74,7 +74,7 @@ spec:
 
 ### Team-level gates
 
-Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. Teams can add restrictions but cannot bypass org gates.
+Created in the team's own namespace. Team gates are additive: they are injected alongside org gates. A team Pipeline can add restrictions but cannot remove or weaken org gates. The escape hatch is [`kardinal override`](#emergency-overrides-k-09): it patches the gate instances in the Pipeline namespace, so anyone with `patch` on PolicyGates there can force-pass an org gate for a limited time, with the reason recorded. Grant that verb only to the people allowed to break glass.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -94,14 +94,16 @@ spec:
 
 ### Matching
 
-The `kardinal.io/applies-to` label determines which environments a gate blocks. It supports comma-separated values:
+The `kardinal.io/applies-to` label names the one environment a gate blocks:
 
 ```yaml
 labels:
   kardinal.io/applies-to: prod                    # blocks "prod" only
-  kardinal.io/applies-to: prod-us,prod-eu          # blocks both prod regions
-  kardinal.io/applies-to: staging,prod             # blocks staging and prod
 ```
+
+A label value cannot contain a comma, so the API server rejects a list such as
+`prod-us,prod-eu`. To block several environments, create one PolicyGate per environment,
+each with its own `kardinal.io/applies-to` value.
 
 The controller reads gates from these places:
 1. The `--policy-namespaces` flag namespaces (default: `platform-policies`). These are the org policy namespaces.

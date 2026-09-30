@@ -1,6 +1,12 @@
 # 14 — v0.6.0 Roadmap Items
 
-> Status: Complete | Created: 2026-04-20 | Closed: 2026-04-20
+> Status: Historical (closed 2026-04-20; checked against the code on 2026-09-29). Created: 2026-04-20.
+> Corrections:
+> - No released tag contains the kardinal-agent. `cmd/kardinal-agent` was added on 2026-04-20,
+>   after v0.6.0 (2026-04-14) and v0.8.1 (2026-04-17), and it is still not shipped (see
+>   [07](07-distributed-architecture.md)).
+> - The auto-rollback field is `autoRollbackRateMillis`, not `autoRollbackRate`.
+> - `changewindow.isAllowed` lives in `pkg/reconciler/policygate/cel_evaluator.go`.
 > Milestone: v0.6.0
 
 ---

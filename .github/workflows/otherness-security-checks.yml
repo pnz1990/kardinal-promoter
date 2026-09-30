@@ -61,7 +61,7 @@ jobs:
             gh pr comment $PR_NUMBER --repo $REPO --body "$SECURITY_BODY" 2>/dev/null || true
           else
             echo "::error::AGENTS.md modified by non-collaborator ($AUTHOR, permission=$PERM). This is a security risk."
-            BLOCK_BODY="🚫 Security block: AGENTS.md was modified by $AUTHOR, who does not have collaborator access. The autonomous agent reads AGENTS.md on every run, so this change could inject instructions that run with repository credentials. See docs/design/27-security-model.md M8."
+            BLOCK_BODY="🚫 Security block: AGENTS.md was modified by $AUTHOR, who does not have collaborator access. The autonomous agent reads AGENTS.md on every run, so this change could inject instructions that run with repository credentials. See the M8 job in .github/workflows/otherness-security-checks.yml."
             gh pr comment $PR_NUMBER --repo $REPO --body "$BLOCK_BODY" 2>/dev/null || true
             exit 1
           fi

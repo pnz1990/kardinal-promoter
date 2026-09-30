@@ -439,4 +439,3 @@ gh workflow run demo-validate.yml --repo pnz1990/kardinal-promoter
 gh workflow run demo-validate.yml --repo pnz1990/kardinal-promoter \
   -f scenario=11
 ```
-**health.type defaults to `resource`** when omitted (`delivery.delegate`, when set, takes precedence). There is no auto-detection by probing for CRDs. See `pkg/health/options.go:EffectiveType()`.

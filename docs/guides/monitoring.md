@@ -77,6 +77,23 @@ These are controller-runtime's admission webhook metrics. The Bundle API
 
 ---
 
+## kardinal Metrics
+
+The controller registers these on the same `/metrics` endpoint
+(`pkg/reconciler/observability/metrics.go`):
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `kardinal_bundles_total` | Counter | `phase` | Bundle phase transitions, labelled by the phase entered |
+| `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
+| `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
+| `kardinal_pr_duration_seconds` | Histogram | — | Time from PR open (WaitingForMerge) to merge |
+| `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step |
+| `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
+| `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
+
+---
+
 ## Go Runtime Metrics
 
 Standard Go runtime metrics are also exposed:
@@ -115,6 +132,30 @@ rate(controller_runtime_reconcile_total{controller="promotionstep"}[5m])
 rate(controller_runtime_reconcile_total{controller="policygate"}[5m])
 ```
 
+### Promotion failure ratio
+
+```promql
+# Fraction of PromotionSteps that ended Failed in the last hour
+sum(increase(kardinal_steps_total{result="failed"}[1h]))
+/
+sum(increase(kardinal_steps_total[1h]))
+```
+
+### Gates blocking promotions
+
+```promql
+# Share of PolicyGate evaluations that blocked
+sum(rate(kardinal_gate_evaluations_total{result="blocked"}[15m]))
+/
+sum(rate(kardinal_gate_evaluations_total[15m]))
+```
+
+### PR review latency P90
+
+```promql
+histogram_quantile(0.9, sum by (le) (rate(kardinal_pr_duration_seconds_bucket[1d])))
+```
+
 ### Controller health: reconcile latency P99
 
 ```promql
@@ -149,16 +190,29 @@ kardinal metrics --pipeline my-app --env prod --days 30
 
 Output:
 ```
-PIPELINE   ENV    PERIOD   DEPLOY_FREQ   LEAD_TIME     FAIL_RATE   ROLLBACKS
-my-app     prod   30d      2.1/day       45m avg       3.2%        1
+METRIC                 VALUE     NOTES
+pipeline               my-app    (last 30 days)
+target_env             prod
+bundles_total          64
+deployment_frequency   2.10/day  (63 verified in target env)
+lead_time_avg          45m12s    (creation → prod verified, 63 samples)
+change_fail_rate       3.1%      (2 failed / 64 total)
+rollback_count         1
 ```
 
 | Metric | Description |
 |---|---|
-| `DEPLOY_FREQ` | Bundles successfully promoted to the target environment per day |
-| `LEAD_TIME` | Average time from Bundle creation to target environment verification |
-| `FAIL_RATE` | Percentage of Bundles that reached `Failed` state |
-| `ROLLBACKS` | Number of rollback Bundles in the period |
+| `bundles_total` | Bundles created in the window |
+| `deployment_frequency` | PromotionSteps Verified in `--env` per day |
+| `lead_time_avg` | Mean time from Bundle creation to Verified in `--env` |
+| `change_fail_rate` | Failed Bundles divided by `bundles_total` |
+| `rollback_count` | Rollback Bundles in the window |
+
+With the defaults (`--env` omitted, so the Pipeline's last environment, and `--days 30`)
+the command prints the controller's own figures from `Pipeline.status.deploymentMetrics`
+instead, when they are present: `rollouts_last_30d`, `p50_commit_to_prod`,
+`p90_commit_to_prod`, `auto_rollback_rate`, `operator_intervention_rate` and
+`stale_prod_days`, over the last 30 Bundles Verified in the last environment.
 
 ---
 
@@ -212,7 +266,7 @@ groups:
           severity: critical
         annotations:
           summary: "kardinal-promoter controller is not scraping"
-          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#controller-not-running"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#start-here-kardinal-doctor"
 
       - alert: KardinalHighReconcileErrors
         expr: |
@@ -224,7 +278,7 @@ groups:
           severity: warning
         annotations:
           summary: "kardinal {{ $labels.controller }} reconcile error rate elevated"
-          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#reconcile-errors"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#promotion-is-stuck"
 
       - alert: KardinalWorkQueueBacklog
         expr: workqueue_depth{name=~"bundle|promotionstep|policygate"} > 100
@@ -233,7 +287,7 @@ groups:
           severity: warning
         annotations:
           summary: "kardinal work queue depth > 100 for {{ $labels.name }}"
-          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#work-queue-backlog"
+          runbook_url: "https://pnz1990.github.io/kardinal-promoter/troubleshooting/#graph-controller-issues"
 ```
 
 ---
@@ -301,5 +355,5 @@ service:
 ## Further Reading
 
 - [Security Guide](security.md) — network policy, RBAC
-- [CLI Reference](../cli-reference.md#kardinal-metrics) — `kardinal metrics` DORA command
+- [`kardinal metrics`](../reference/cli/kardinal-metrics.md) — DORA command reference
 - [Troubleshooting](../troubleshooting.md) — debugging stuck promotions

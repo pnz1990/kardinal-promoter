@@ -1,6 +1,22 @@
 # 03: PromotionStep Reconciler
 
-> Status: Comprehensive
+> Status: Historical (checked against the code on 2026-09-29). Several parts differ from the
+> code; `api/v1alpha1/promotionstep_types.go` and `pkg/reconciler/promotionstep/` are the
+> reference. Known differences:
+> - These status fields do not exist: `prMerged`, `prClosed`, `stepOutputs`, `failedAt`,
+>   `verifiedAt`, `evidence`, `delegatedTo`.
+> - Merge detection goes through the PRStatus CRD and its reconciler, not a webhook that sets
+>   `prMerged`.
+> - Evidence reaches the Bundle through the Bundle reconciler (`handleSyncEvidence`), not
+>   `copyEvidenceToBundle`.
+> - `propagateWhen` does not exist in kro (ledger G1).
+> - The Pipeline reconciler (`pkg/reconciler/pipeline`) does not create rollbacks. Rollback
+>   Bundles are built by `pkg/lifecycle` and created by `kardinal rollback` or the UI, by the
+>   RollbackPolicy reconciler and, for `onHealthFailure: rollback`, by the PromotionStep
+>   reconciler.
+> - Health checks follow `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm,
+>   `rollback` → RollingBack) on timeout or a terminal result; see the Health Check section.
+> - The kardinal-agent is not shipped (see [07](07-distributed-architecture.md)).
 > Depends on: 01-graph-integration, 02-pipeline-to-graph-translator, 08-promotion-steps-engine
 > Blocks: nothing (leaf node, but the workhorse)
 

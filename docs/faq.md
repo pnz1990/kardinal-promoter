@@ -126,7 +126,7 @@ Each reconciler is idempotent and safe to re-run after a crash.
 
 5. **Check controller logs**:
    ```bash
-   kubectl logs -n kardinal-system deployment/kardinal-promoter-controller -f
+   kubectl logs -n kardinal-system deployment/kardinal-promoter -f
    ```
 
 ### How do I manually approve a blocked bundle?

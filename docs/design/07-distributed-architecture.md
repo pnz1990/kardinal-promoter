@@ -28,7 +28,7 @@ No reconciler logic changes between modes. The distributed architecture is a dep
 ### kardinal-controller (control plane)
 
 Runs in the control plane cluster. Contains:
-- Pipeline reconciler: watches Pipeline + Bundle CRDs, generates Graphs, validates skip permissions
+- Bundle reconciler: generates each Bundle's Graph (through the translator), validates skip permissions
 - PolicyGate reconciler: evaluates CEL expressions on PolicyGate instances
 - Bundle lifecycle: detects new Bundles, manages superseding, garbage collection
 - PromotionStep reconciler: handles PromotionSteps WITHOUT a shard label (local environments)
@@ -177,6 +177,14 @@ rules:
 ```
 
 The agent cannot: create or delete PromotionSteps, create or delete Bundles, access PolicyGates, access Pipelines, access Graphs, access Secrets in the control plane.
+
+> **Out of date (2026-09-29).** This Role and the list above describe the original design.
+> The PromotionStep reconciler on `main` also reads Pipelines, PolicyGates, PRStatus
+> objects and the Git token Secret, deletes orphaned PromotionSteps, and creates the
+> auto-rollback Bundle. It no longer writes Bundle status: the Bundle reconciler copies
+> the evidence. The agent is not shipped with an image or chart yet, so there is no
+> tested agent Role; the permissions the reconciler uses are in the controller's
+> `chart/kardinal-promoter/templates/clusterrole.yaml`.
 
 ### Git and SCM credentials
 

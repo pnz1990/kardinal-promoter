@@ -282,5 +282,5 @@ kardinal policy test my-gate.yaml
 ## See Also
 
 - [Policy Gates](../policy-gates.md) — PolicyGate CRD reference
-- [CLI Reference: policy simulate](../cli-reference.md#kardinal-policy-simulate) — simulate gate evaluation
+- [CLI Reference: policy simulate](cli/kardinal-policy-simulate.md) — simulate gate evaluation
 - [AGENTS.md CEL section](https://github.com/pnz1990/kardinal-promoter/blob/main/AGENTS.md) — kro library function catalog

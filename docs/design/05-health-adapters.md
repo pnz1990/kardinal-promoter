@@ -7,7 +7,12 @@
 > **Implementation differs from this design (2026-09 audit).** The user-facing contract is
 > [docs/health-adapters.md](../health-adapters.md). In short:
 > - There is no auto-detection. An omitted `health.type` means `resource` (or the
->   `delivery.delegate` value), see `pkg/health/options.go:EffectiveType`.
+>   `delivery.delegate` value), see `pkg/health/options.go:EffectiveType`. The Auto-Detection
+>   section and tests 11-13 below are historical.
+> - The package is `adapter.go` (the `Adapter` interface and all five adapters), `options.go`
+>   (`EffectiveType`, `OptionsForEnv`), `images.go` (Bundle image matching), `watch_node.go`
+>   (Graph Watch-node templates) and `doc.go`. There is no `registry.go` or `remote.go`.
+> - The `Adapter` interface has only `Check` and `Name`; there is no `Available()`.
 > - Adapters verify the promoted revision, not only health: Argo CD and Flux compare the
 >   synced/applied revision with the commit kardinal pushed or merged; the resource adapter
 >   requires the Bundle images, a current `observedGeneration` and a finished rollout, and

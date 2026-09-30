@@ -9,14 +9,14 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ## Currently Available (v0.8.1+)
 
-> v0.8.1 released 2026-04-17. Includes supply chain hardening (trivy, cosign, SBOM, SLSA) and DX improvements. For the full feature list see the [changelog](changelog.md).
+> v0.8.1 released 2026-04-17. Adds supply chain hardening to the release workflow: cosign keyless signing, an SBOM attestation, SLSA provenance, and a trivy scan that reports HIGH and CRITICAL CVEs without failing the release. For the full feature list see the [changelog](changelog.md).
 
 All of the following are implemented and shipped:
 
 **Core promotion engine**
 - Pipeline CRD with DAG-native stage ordering and fan-out
 - Bundle CRD with image and config artifact types
-- PolicyGate CRD with CEL expressions (kro library: schedule, soak, metrics, upstream, changewindow)
+- PolicyGate CRD with CEL expressions over bundle, schedule, environment, upstream soak, metrics and changewindow context, plus the `json`, `maps`, `lists` and `random` functions adapted from kro's CEL library
 - PromotionStep reconciler — full git-clone → kustomize/helm → commit → PR → merge → health loop
 - Graph-first architecture via kro Graph (see [Graph Coverage](graph-coverage.md) for what is not on the Graph yet)
 
@@ -32,15 +32,16 @@ All of the following are implemented and shipped:
 - `argoRollouts` — Argo Rollouts Rollout phase
 - `flagger` — Flagger Canary phase
 
-**SCM providers**
+**SCM providers** (one per controller, chosen with `--scm-provider`)
 - GitHub (webhooks + polling)
 - GitLab (webhooks + polling)
 - Forgejo/Gitea (webhooks + polling)
+- Bitbucket Cloud and Azure DevOps (webhooks + polling; newer and less tested)
 
 **Gates and policies**
 - CEL context: schedule, bundle metadata, upstream soak time, metrics, changewindow
 - MetricCheck CRD (PromQL-based metric injection into CEL)
-- Org-level gates (mandatory, cannot be bypassed by teams)
+- Org-level gates (mandatory: a team Pipeline cannot remove or weaken them; `kardinal override` can force-pass one for a limited time with a recorded reason, so restrict `patch` on PolicyGates in team namespaces)
 - Team-level gates (additive)
 - SkipPermission gates
 
@@ -51,7 +52,7 @@ All of the following are implemented and shipped:
 
 **K-02: Pre-deploy gate type**
 - `when: pre-deploy` on PolicyGate spec — evaluated before `git-clone` starts
-- Blocks PromotionStep in `Waiting` state without opening a PR
+- The PromotionStep stays `Pending` with the message `waiting for pre-deploy gate: <name>` and no PR is opened
 
 **K-03: Auto-rollback with ABORT vs ROLLBACK distinction**
 - `onHealthFailure: rollback | abort | none` on environment spec
@@ -64,7 +65,7 @@ All of the following are implemented and shipped:
 - `ScheduleClock` CRD drives time-based re-evaluation via Kubernetes watch events
 
 **K-05: Deployment metrics**
-- `Bundle.status.metrics` — commitToFirstStageMinutes, commitToProductionMinutes, bakeResets, operatorInterventions
+- `Bundle.status.metrics` — commitToProductionMinutes, bakeResets, operatorInterventions
 - `kardinal metrics` CLI command displays per-Bundle DORA metrics
 
 **K-06: Wave topology**
@@ -72,16 +73,16 @@ All of the following are implemented and shipped:
 - Composable with explicit `dependsOn`
 
 **K-07: Integration test step**
-- Built-in `integration-test` step runs a Kubernetes Job as part of the promotion
-- Watches completion; a failed or timed-out Job fails the promotion (there is no per-step `onFailure` policy)
+- Built-in `integration-test` step runs a Kubernetes Job and watches it; a failed or timed-out Job fails the step (there is no per-step `onFailure` policy)
+- Not selectable yet: it runs only from a custom step sequence (`spec.environments[].steps`), which the controller rejects as not implemented
 
 **K-08: PR review gate**
 - `bundle.pr["staging"].isApproved` and `bundle.pr["staging"].approvalCount` in CEL context
 - Reads `PRStatus` CRD; no external SCM API calls in the reconciler hot path
 
 **K-09: `kardinal override` with audit record**
-- `kardinal override` patches PolicyGate with a time-limited override
-- Override record written to Bundle status and surfaced in PR evidence body
+- `kardinal override` adds a time-limited override to the gate instances of the stage
+- The override stays in the instance's `spec.overrides[]`; while it is active the gate reason (`OVERRIDDEN by ...`) shows in the PR evidence gate table and in `kardinal explain`
 
 **K-10: Subscription CRD (passive Bundle creation)**
 - `Subscription` CRD definition complete; reconciler creates Bundles on new artifacts
@@ -102,15 +103,15 @@ All of the following are implemented and shipped:
 
 **CLI** — full command set: `get`, `explain`, `create`, `promote`, `rollback`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
-**UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Approving a bundle and overriding a gate are CLI-only (`kardinal approve`, `kardinal override`)
+**UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Overriding a gate is CLI-only (`kardinal override`)
 
-**Distributed mode** — shard routing: `shard:` field on Pipeline environments routes PromotionSteps to the correct controller instance. The `kardinal-agent` standalone binary for spoke clusters is available (PR #886).
+**Distributed mode (experimental)** — shard routing: the `shard:` field on Pipeline environments labels PromotionSteps, and a `kardinal-agent --shard <name>` process reconciles only the steps for its shard. The agent is built from `cmd/kardinal-agent` but is not published as an image or chart, and it uses one API server for PromotionSteps and health checks. See [Distributed Mode](distributed-mode.md).
 
 **Multi-tenant self-service** — ApplicationSet + Pipeline template bootstrap; team onboarding by committing a folder to Git; org PolicyGates automatically inherited; namespace isolation enforced by RBAC.
 
 **Subscription CRD + source watchers** — `OCIWatcher` polls container registries; `GitWatcher` polls Git branches; Bundles are created automatically on new images or commits. No CI pipeline integration needed.
 
-**Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` persisted by the PipelineReconciler: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate`.
+**Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` persisted by the PipelineReconciler: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRateMillis`, `operatorInterventionRateMillis`.
 
 **`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates:
 
@@ -123,11 +124,11 @@ changewindow.isBlocked("holiday-freeze")    # true when the window IS currently 
 
 **`kardinal get pipelines --watch`** — real-time promotion progress with live table refresh. (#629)
 
-**`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, the kro Graph controller, RBAC, and GitHub token. (#607)
+**`kardinal doctor`** — pre-flight cluster health check: the controller's `kardinal-version` ConfigMap, the kardinal CRDs, the kro controller Pod and Graph CRD, the controller's GitHub token Secret, and optionally one Pipeline (`--pipeline`). (#607)
 
 **Shell completion** — bash, zsh, fish, and PowerShell completion via `kardinal completion <shell>`. (#606)
 
-**PrometheusRule CRD in Helm chart** — 6 pre-built alerting rules: promotion stuck, high rollback rate, policy gate blocked, SCM errors. (#621)
+**PrometheusRule CRD in Helm chart** — 5 pre-built alerting rules: controller down, high reconcile error rate, Bundle reconciler stalled, work-queue backlog, slow PolicyGate reconciles. (#621)
 
 ---
 
@@ -150,7 +151,7 @@ The UI work from #462–#468 shipped in v0.5.0–v0.6.0. This is what the UI sho
 - **Bundle promotion timeline (#466)** — the 10 newest bundles, colored by phase; shift-click a second bundle to compare images, environments, and provenance side by side
 - **Policy gates (#468)** — a panel with each gate of the bundle on screen, its state, and its CEL expression; click a gate for the highlighted expression, when it was last evaluated, and a syntax check
 
-Not in the UI: approving a bundle and overriding a gate (use `kardinal approve` and `kardinal override`), the bake countdown, and gate override history (see `kardinal explain` or `kubectl get policygate <name> -o yaml`).
+Not in the UI: overriding a gate (use `kardinal override`), the bake countdown, and gate override history (see `kardinal explain` or `kubectl get policygate <name> -o yaml`).
 
 ---
 

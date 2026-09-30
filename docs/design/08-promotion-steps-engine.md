@@ -1,6 +1,19 @@
 # 08: Promotion Steps Engine
 
-> Status: Comprehensive
+> Status: Historical (checked against the code on 2026-09-29). Several parts differ from the
+> code; `pkg/steps/` and [custom-steps](../custom-steps.md) are the reference. Known
+> differences:
+> - The engine is `pkg/steps` (`engine.go`, `registry.go`, `step.go`, `custom.go`,
+>   `defaults.go`) with built-ins in `pkg/steps/steps/`. There is no `RunStep` and no
+>   `status.stepOutputs`.
+> - Default steps come from `DefaultSequenceForBundle` (`pkg/steps/defaults.go`), not
+>   `InferDefaultSteps`.
+> - Merge detection goes through the PRStatus CRD, not a `prMerged` webhook.
+> - Custom steps read their config from `state.Inputs`, and they do retry
+>   (`scheduleRetry` in `pkg/steps/custom.go`).
+> - `environments[].steps` and `environments[].promotionTemplate` are rejected by
+>   `graph.Build`: the controller always runs the default sequence. The PromotionTemplate
+>   CRD exists but cannot be used.
 > Depends on: 01-graph-integration, 03-promotionstep-reconciler
 > Blocks: 09-config-only-promotions (config-merge is a step)
 

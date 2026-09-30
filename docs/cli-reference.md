@@ -6,7 +6,7 @@
 
 !!! note "Auto-generated"
     Generated from the kardinal CLI source. Every command is documented.
-    See [detailed reference pages](reference/cli/) for flags and examples.
+    See [detailed reference pages](reference/cli/kardinal.md) for flags and examples.
 
 | Command | Description |
 |---|---|
@@ -46,4 +46,4 @@
 | [`kardinal version`](reference/cli/kardinal-version.md) | Print the CLI, controller, and kro (Graph) versions |
 
 For full flag documentation, examples, and output formats, see the
-[individual command pages](reference/cli/).
+[individual command pages](reference/cli/kardinal.md).

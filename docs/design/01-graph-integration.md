@@ -1,6 +1,18 @@
 # 01: Graph Integration Layer
 
-> Status: Comprehensive
+> Status: Historical (checked against the code on 2026-09-29). This spec predates the move to
+> upstream kro and several parts differ from the code. For how kardinal uses kro today, read
+> [16-graph-capability-ledger](16-graph-capability-ledger.md). Known differences:
+> - `pkg/graph/testing.go` does not exist.
+> - Graph conditions are kro upstream's (`Accepted`, `ResourcesConverged`, `Ready`), not the
+>   Ready reasons listed here.
+> - Node templates are maps (`pkg/graph/types.go`), not `RawExtension`.
+> - PromotionStep carries `spec.upstreamStates` and `spec.requiredGates`, not
+>   `upstreamVerified`/`upstreamEnvironment`.
+> - The Graph name comes from `graphNameFrom` (`pkg/graph/names.go`).
+> - Skipped environments are left out of the Graph by the builder, not gated with
+>   `includeWhen` (ledger G2).
+> - There is no Tier 2 nightly job.
 > Depends on: nothing (foundation)
 > Blocks: all other specs
 

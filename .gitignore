@@ -55,3 +55,4 @@ terraform/eks-e2e/terraform.tfstate.backup
 terraform/eks-e2e/terraform.tfvars
 # otherness working-tree artifacts — stored on _state branch
 .otherness/handoff.md
+.otherness/state.json

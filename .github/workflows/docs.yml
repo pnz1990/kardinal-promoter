@@ -79,18 +79,10 @@ jobs:
           cache: pip
 
       - name: Install MkDocs and plugins
-        run: |
-          pip install \
-            mkdocs-material==9.5.* \
-            mkdocs-gen-files==0.5.* \
-            mkdocs-literate-nav==0.6.* \
-            mkdocs-section-index==0.3.* \
-            mkdocs-minify-plugin==0.8.* \
-            "mkdocs-git-revision-date-localized-plugin==1.2.*" \
-            pymdown-extensions==10.*
+        run: pip install -r docs/requirements.txt
 
       - name: Build docs
-        run: mkdocs build --verbose
+        run: mkdocs build --strict --verbose
         env:
           MKDOCS_GIT_COMMITTERS_APIKEY: ${{ secrets.GITHUB_TOKEN }}
 
@@ -165,15 +157,7 @@ jobs:
           cache: pip
 
       - name: Install MkDocs and plugins
-        run: |
-          pip install \
-            mkdocs-material==9.5.* \
-            mkdocs-gen-files==0.5.* \
-            mkdocs-literate-nav==0.6.* \
-            mkdocs-section-index==0.3.* \
-            mkdocs-minify-plugin==0.8.* \
-            "mkdocs-git-revision-date-localized-plugin==1.2.*" \
-            pymdown-extensions==10.*
+        run: pip install -r docs/requirements.txt
 
       - name: Configure Git for deploy
         run: |

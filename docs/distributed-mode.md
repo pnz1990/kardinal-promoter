@@ -1,44 +1,59 @@
 # Distributed Mode
 
-kardinal-promoter supports a distributed deployment model where multiple controller instances
-run in separate clusters, each responsible for a named _shard_ of PromotionSteps.
+kardinal-promoter can split PromotionStep work across several processes, each responsible
+for a named _shard_ of PromotionSteps. The main controller handles Bundles, Pipelines,
+PolicyGates and Graphs; a shard agent (`kardinal-agent --shard <name>`) runs only the
+PromotionStep reconciler, for the steps labelled with its shard.
+
+!!! warning "Experimental: shard agents are not shipped"
+    - The release publishes no `kardinal-agent` image and the chart cannot deploy one. Build
+      the binary from `cmd/kardinal-agent` (`make build` writes `bin/kardinal-agent`) and
+      package it yourself.
+    - The agent uses one Kubernetes client configuration (in-cluster, or `KUBECONFIG`) for
+      everything. It reads and writes PromotionSteps on the hub API server, and its health
+      checks read the same API server, not the cluster it runs in. For remote environments
+      use `health.type: argocd` with an Argo CD in the hub that manages the spoke clusters.
+    - Do not use the chart value `controller.shard` to run a shard. It starts
+      `kardinal-controller --shard`, which filters only PromotionSteps: it still runs the
+      Bundle, Pipeline, PolicyGate and other reconcilers and the UI and webhook servers, and
+      it uses the same leader-election Lease (`kardinal-promoter-leader`) as the main
+      controller.
 
 ## Architecture
 
 ```mermaid
 graph TB
     subgraph "Hub Cluster (main)"
-        Hub["kardinal-controller\n(no shard — handles Bundle/Pipeline/PolicyGate)"]
-        K8sHub["Kubernetes API\n(CRDs: Bundle, Pipeline, Graph, PromotionStep)"]
+        Hub["kardinal-controller\n(no shard: Bundle/Pipeline/PolicyGate/Graph,\nand PromotionSteps with no shard label)"]
+        K8sHub["Kubernetes API\n(CRDs: Bundle, Pipeline, Graph, PromotionStep;\nArgo CD Applications)"]
         Hub <-->|"read/write CRDs"| K8sHub
     end
 
-    subgraph "Spoke Cluster: EU"
-        AgentEU["kardinal-controller\n--shard cluster-eu"]
-        K8sEU["Kubernetes API\n(PromotionStep shard=cluster-eu)"]
-        ArgoEU["ArgoCD / Flux\n(prod-eu Applications)"]
-        AgentEU -->|"read PromotionSteps\nwith shard=cluster-eu"| K8sHub
-        AgentEU <-->|"write health status"| K8sHub
-        AgentEU <-->|"check sync status"| ArgoEU
+    subgraph "Shard agent: EU"
+        AgentEU["kardinal-agent\n--shard cluster-eu"]
+        AgentEU <-->|"PromotionSteps with shard=cluster-eu,\nhealth checks"| K8sHub
     end
 
-    subgraph "Spoke Cluster: US"
-        AgentUS["kardinal-controller\n--shard cluster-us"]
-        ArgoUS["ArgoCD / Flux\n(prod-us Applications)"]
-        AgentUS -->|"read PromotionSteps\nwith shard=cluster-us"| K8sHub
-        AgentUS <-->|"write health status"| K8sHub
-        AgentUS <-->|"check sync status"| ArgoUS
+    subgraph "Shard agent: US"
+        AgentUS["kardinal-agent\n--shard cluster-us"]
+        AgentUS <-->|"PromotionSteps with shard=cluster-us,\nhealth checks"| K8sHub
     end
 
     GitHub["GitHub\n(GitOps repo)"]
-    Hub -->|"open PRs"| GitHub
-    AgentEU -->|"push branches\nfor prod-eu"| GitHub
-    AgentUS -->|"push branches\nfor prod-us"| GitHub
+    Hub -->|"push branches, open PRs\nfor unsharded environments"| GitHub
+    AgentEU -->|"push branches, open PRs\nfor prod-eu"| GitHub
+    AgentUS -->|"push branches, open PRs\nfor prod-us"| GitHub
 ```
 
-**Key insight**: The Hub cluster holds all CRDs. Shard agents connect to the Hub API server
-to read their assigned PromotionSteps and write status updates. Git credentials stay in each
-spoke cluster.
+**Key insight**: The hub cluster holds all CRDs. Each shard agent connects to the hub API
+server, runs the promotion steps (Git, PR, health check) for its PromotionSteps, and writes
+their status there. The agent's own SCM token (`--github-token` or `GITHUB_TOKEN`) stays
+wherever the agent runs; a Pipeline `git.secretRef` is read from the hub.
+
+Only the hub controller runs the PRStatus reconciler. It detects merges of the PRs that agents
+open, by polling with the hub's SCM token or through the hub's `/webhook/scm` endpoint. So
+`approval: pr-review` in a sharded environment needs a hub SCM token that can read the
+GitOps repository, or SCM webhooks pointed at the hub.
 
 ## When to Use Distributed Mode
 
@@ -61,21 +76,22 @@ outweighs the cost.
 |---|---|---|
 | Clusters needed | 1 | 1 hub + N spokes |
 | Controller instances | 1 | 1 + N |
-| Cross-cluster connectivity | Not needed | Hub → spoke API server |
-| Credential isolation | Centralized | Per-spoke |
+| Cross-cluster connectivity | Not needed | Each agent → hub API server |
+| Credential isolation | Centralized | Per agent (its own SCM token) |
 | Observability | Single log stream | Multiple log streams |
 | Upgrade complexity | Low | Medium (upgrade hub + all agents) |
 
 ## How Sharding Works
 
-Each PromotionStep carries a `kardinal.io/shard` label. When a controller starts with
-`--shard <name>`, it processes **only** the steps whose shard label matches. Steps for
-other shards are skipped silently. The shard name must be a valid label value (at most 63
-characters: letters, digits, `-`, `_` and `.`); `kardinal-agent` exits at startup if it
-is not.
+A PromotionStep of an environment with a `shard` carries the `kardinal.io/shard` label.
+A process started with `--shard <name>` watches **only** the steps whose shard label
+matches; steps for other shards and steps with no shard label are skipped. The shard name
+must be a valid label value (at most 63 characters: letters, digits, `-`, `_` and `.`);
+`kardinal-agent` exits at startup if it is not.
 
-The Graph controller (which creates PromotionSteps) assigns the shard label based on the
-`shard` field in the Pipeline environment spec:
+The Graph builder copies the `shard` field of the Pipeline environment into the label of
+the environment's PromotionStep template, and the kro Graph controller creates the step
+with it:
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1
@@ -83,18 +99,15 @@ kind: Pipeline
 metadata:
   name: rollouts-demo
 spec:
+  git:
+    url: https://github.com/myorg/gitops   # one repository for every environment
+    branch: main
   environments:
     - name: prod-eu
-      shard: cluster-eu       # ← this agent handles prod-eu steps
-      git:
-        url: https://github.com/myorg/gitops
-        branch: main
+      shard: cluster-eu       # ← the cluster-eu agent handles prod-eu steps
       approval: pr-review
     - name: prod-us
-      shard: cluster-us       # ← this agent handles prod-us steps
-      git:
-        url: https://github.com/myorg/gitops
-        branch: main
+      shard: cluster-us       # ← the cluster-us agent handles prod-us steps
       approval: pr-review
 ```
 
@@ -107,36 +120,36 @@ reconciliation, PolicyGate evaluation, and Graph generation. It does NOT process
 PromotionStep reconciliation for sharded steps.
 
 ```bash
-helm install kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
 ```
 
-### Shard agent (per remote cluster)
+### Shard agent
 
-Each remote cluster runs a controller configured with its shard name:
+Run one `kardinal-agent` per shard, pointed at the hub API server. There is no published
+image or chart for it (see the warning at the top of this page), so the command below
+assumes you built and packaged `bin/kardinal-agent` yourself and mounted the hub kubeconfig
+from the next section at `/etc/kardinal/hub/kubeconfig`:
 
 ```bash
-helm install kardinal oci://ghcr.io/pnz1990/charts/kardinal-promoter \
-  --namespace kardinal-system \
-  --create-namespace \
-  --set github.secretRef.name=github-token \
-  --set controller.shard=cluster-eu
+KUBECONFIG=/etc/kardinal/hub/kubeconfig \
+GITHUB_TOKEN="<token for prod-eu>" \
+  kardinal-agent --shard=cluster-eu
 ```
 
-!!! warning "No hub kubeconfig value yet"
-    The chart has no value for a separate hub kubeconfig (earlier versions of this page
-    documented `controller.remoteKubeconfig`, which the chart never read; it is now rejected
-    by the chart's values schema). The controller uses one Kubernetes client configuration
-    (in-cluster, or `KUBECONFIG`) for both PromotionSteps and health checks, so a shard
-    controller must reach the PromotionSteps and the workloads it checks through the same
-    API server.
+The agent serves metrics on `:8085` and health probes on `:8086`. Leader election is off by
+default; with `--leader-elect` the Lease is named `kardinal-agent-<shard>`.
 
-## RBAC for Remote Agent Service Account
+## RBAC for the Shard Agent on the Hub
 
-The shard agent needs a service account on the Hub cluster with narrow permissions.
-Create a `ClusterRole` on the Hub that allows the agent to read/write only PromotionSteps:
+The agent needs a ServiceAccount on the hub. Its client caches every kind it reads, so each
+read needs `get`, `list` and `watch` across the cluster, Secrets included. The rules below
+follow the PromotionStep reconciler's API calls: it patches steps and their status, deletes
+orphaned steps, creates and patches PRStatus objects, creates AuditEvents, Events and (for
+`onHealthFailure: rollback`) Bundles, and reads Pipelines, PolicyGates, Secrets and the
+health objects:
 
 ```yaml
 # Apply on the HUB cluster
@@ -149,31 +162,49 @@ metadata:
     kardinal.io/component: shard-agent
 rules:
   - apiGroups: ["kardinal.io"]
-    resources:
-      - promotionsteps
-    verbs: ["get", "list", "watch", "update", "patch"]
+    resources: ["promotionsteps"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
   - apiGroups: ["kardinal.io"]
-    resources:
-      - promotionsteps/status
+    resources: ["promotionsteps/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["kardinal.io"]
-    resources:
-      - promotionsteps/finalizers
-    verbs: ["update"]
-  # Read Pipelines and Bundles (needed to build context)
+    resources: ["prstatuses"]
+    verbs: ["get", "list", "watch", "create", "patch"]
   - apiGroups: ["kardinal.io"]
-    resources:
-      - pipelines
-      - bundles
+    resources: ["pipelines", "policygates"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["bundles"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["auditevents"]
+    verbs: ["create"]
+  # Pipeline git.secretRef Secrets. The cached client lists and watches every
+  # Secret it can see, so this is cluster-wide read access to Secrets.
+  - apiGroups: [""]
+    resources: ["secrets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources:
-      - secrets
-    verbs: ["get"]  # GitHub token secret only
-  - apiGroups: [""]
-    resources:
-      - events
+    resources: ["events"]
     verbs: ["create", "patch"]
+  # Health adapters: keep only the kinds your environments use.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  # patch is needed only for update.strategy: argocd, which patches the
+  # Application's image overrides. Drop it otherwise.
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["flagger.app"]
+    resources: ["canaries"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -187,29 +218,38 @@ subjects:
   - kind: ServiceAccount
     name: kardinal-shard-agent
     namespace: kardinal-system
-    # The shard agent authenticates using a kubeconfig created from this SA token
 ```
 
-Generate the kubeconfig for the shard agent:
+With `--leader-elect`, also grant `leases` (`coordination.k8s.io`) in the namespace the agent
+runs in on the hub. If the agent logs `forbidden`, compare the verb and resource in the
+message with this list.
+
+Generate a kubeconfig for the agent:
 
 ```bash
-# On the HUB cluster: create SA token and kubeconfig
+# On the HUB cluster: create the ServiceAccount and a kubeconfig that uses its token
 kubectl create serviceaccount kardinal-shard-agent -n kardinal-system
-TOKEN=$(kubectl create token kardinal-shard-agent -n kardinal-system --duration=8760h)
+TOKEN=$(kubectl create token kardinal-shard-agent -n kardinal-system --duration=720h)
 kubectl config view --flatten --minify > /tmp/hub-kubeconfig.yaml
-# Replace the user credentials in the kubeconfig with the SA token
-kubectl create secret generic hub-kubeconfig \
+kubectl --kubeconfig /tmp/hub-kubeconfig.yaml config set-credentials kardinal-shard-agent --token="$TOKEN"
+kubectl --kubeconfig /tmp/hub-kubeconfig.yaml config set-context --current --user=kardinal-shard-agent
+
+# On the SPOKE cluster: store it as a Secret for the agent to mount
+kubectl --context spoke-cluster-eu create secret generic hub-kubeconfig \
   --namespace kardinal-system \
-  --from-file=kubeconfig=/tmp/hub-kubeconfig.yaml \
-  --context=spoke-cluster-eu  # apply on the SPOKE cluster
+  --from-file=kubeconfig=/tmp/hub-kubeconfig.yaml
+rm /tmp/hub-kubeconfig.yaml
 ```
+
+A token from `kubectl create token` is not renewed, and the API server may shorten the
+requested duration. Recreate the Secret and restart the agent before the token expires.
 
 ## Integration with ArgoCD Hub-Spoke
 
 In a hub-spoke setup, a single ArgoCD installation manages multiple downstream clusters.
-kardinal-promoter uses the same hub: the Pipeline controller reads ArgoCD Application
-health from the hub cluster, while the shard agent handles Git operations for the
-downstream cluster.
+kardinal-promoter uses the same hub: with `health.type: argocd`, the health check of a
+PromotionStep reads the environment's Application from the hub API server. For a sharded
+environment the shard agent runs that check along with the Git and PR steps.
 
 See `examples/multi-cluster-fleet/` for a complete example.
 
@@ -225,10 +265,10 @@ kubectl get promotionstep <step-name> -o jsonpath='{.metadata.labels.kardinal\.i
 # Expected: cluster-eu
 ```
 
-**Check 2**: Verify the agent is running with the right shard flag:
-```bash
-kubectl logs -n kardinal-system deployment/kardinal-shard-agent-eu | grep "shard"
-# Expected: {"level":"info","shard":"cluster-eu","msg":"controller started in distributed mode"}
+**Check 2**: Verify the agent is running with the right shard flag. Its first log line
+names the shard:
+```
+{"level":"info","shard":"cluster-eu","version":"...","time":"...","message":"[kardinal-agent] starting"}
 ```
 
 **Check 3**: Verify RBAC on the Hub — the agent SA must have `list/watch` on PromotionSteps:
@@ -256,18 +296,15 @@ Pipeline environment spec — the `shard` field must exactly match the controlle
 
 ## Observability
 
-When a controller is running in sharded mode, it logs a startup message:
+A shard agent logs its shard at startup (see Check 2 above). `kardinal-controller` started
+with `--shard` logs `controller started in distributed mode` with a `shard` field, and
+`controller started in standalone mode` without one.
 
-```
-{"level":"info","shard":"cluster-eu","msg":"controller started in distributed mode"}
-```
-
-Steps skipped due to shard mismatch are logged at debug level:
-
-```
-{"level":"debug","step":"step-prod-eu","step_shard":"cluster-eu","our_shard":"cluster-us","msg":"skipping step — shard mismatch"}
-```
+Steps for other shards never reach the reconciler: the watch filters them by label. A step
+that is requeued directly is skipped with a debug-level line (`--log-level debug`) that has
+`promotionstep`, `step_shard` and `our_shard` fields.
 
 Monitor agents independently with the standard [controller metrics](guides/monitoring.md).
-Each shard agent exposes its own `:8080/metrics` endpoint.
+Each shard agent serves its own metrics on `:8085/metrics` (`--metrics-bind-address`); the
+main controller serves them on `:8080`.
 

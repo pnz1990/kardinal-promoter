@@ -212,19 +212,34 @@ integration testing before merging to main.
 The simplest approach is to create a Bundle with `intent.targetEnvironment: staging` from a
 feature branch CI workflow. The Bundle promotes only up to staging, not to prod.
 
+The [create-bundle action](ci-integration.md#github-action) has no intent input, so
+post the Bundle to the Bundle API directly:
+
 ```yaml
 # feature branch GitHub Actions
 - name: Create feature Bundle
-  uses: kardinal-dev/create-bundle-action@v1
-  with:
-    pipeline: my-app
-    image: ghcr.io/myorg/my-app:feature-auth-${{ github.sha }}
-    token: ${{ secrets.KARDINAL_TOKEN }}
-    target: staging          # stop at staging, do not promote to prod
+  env:
+    KARDINAL_TOKEN: ${{ secrets.KARDINAL_TOKEN }}
+  run: |
+    curl -fsS -X POST https://kardinal.example.com/api/v1/bundles \
+      -H "Authorization: Bearer $KARDINAL_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "pipeline": "my-app",
+        "type": "image",
+        "images": [{"repository": "ghcr.io/myorg/my-app", "tag": "feature-auth-${{ github.sha }}"}],
+        "intent": {"targetEnvironment": "staging"}
+      }'
 ```
 
-The Bundle is marked `Verified` when staging is healthy. It does not supersede the
-main-branch Bundle in prod (different intent target).
+The Bundle is marked `Verified` when staging is healthy.
+
+Supersession ignores the intent: a newer Bundle of the same type in the same Pipeline
+supersedes every older Bundle that is still promoting. A feature Bundle created while a
+main-branch Bundle is on its way to prod therefore stops that promotion, and the next
+main-branch Bundle stops the feature Bundle. To keep them apart, give feature branches
+their own Pipeline (for example `my-app-feature`, with only the test and staging
+environments) and create the feature Bundles in that Pipeline.
 
 ### Pattern: Skip environment for hotfixes
 
@@ -325,45 +340,51 @@ supersede an in-flight config Bundle, and vice versa.
 
 ## Webhook Responsiveness
 
-kardinal-promoter detects PR merges via GitHub webhooks for fast response. Without
-webhooks, the controller polls for PR status on reconcile.
+kardinal-promoter detects PR merges through SCM webhooks for fast response. Without
+webhooks, the controller polls each open PR every 30 seconds.
 
 ### Setting up webhooks
+
+The webhook endpoint is `/webhook/scm` on port 8083 of the `kardinal-promoter` Service. It
+checks each event against the controller's webhook secret (an HMAC signature for GitHub and
+Forgejo, a shared token for GitLab). The secret is set with `--webhook-secret` or
+`KARDINAL_WEBHOOK_SECRET` (with the chart, `webhook.secretRef.name`). With no secret set,
+the endpoint rejects every event and merges are detected by polling only.
 
 In the GitHub repository settings:
 
 ```
-Payload URL: https://kardinal.example.com/webhooks
+Payload URL: https://<host>:8083/webhook/scm
 Content type: application/json
-Secret: <same as WEBHOOK_SECRET env var on controller>
-Events: Pull requests (pull_request), Pushes (push)
+Secret: <the controller's webhook secret>
+Events: Pull requests (pull_request)
 ```
 
+The `https://` URL needs controller TLS (`controller.tlsCertFile` and `controller.tlsKeyFile`)
+or an Ingress that terminates TLS in front of port 8083; without either, the endpoint is plain
+`http://`.
+
+Only merged `pull_request` events advance a promotion. See SCM Providers for
+[GitLab](scm-providers.md#webhook-configuration_1) and
+[Forgejo](scm-providers.md#webhook-configuration_2).
+
 With webhooks configured, the controller advances the promotion within seconds of
-PR merge. Without webhooks, advancement happens within 30 seconds (next reconcile).
+PR merge. Without webhooks, advancement happens at the next poll (within about 30 seconds).
 
 ### Local development with webhooks
 
 For local clusters or clusters behind firewalls, use a webhook forwarding service:
 
 ```bash
-# Using smee.io
+# Using smee.io, with port 8083 forwarded to localhost:
+#   kubectl port-forward -n kardinal-system svc/kardinal-promoter 8083:8083
 npm install --global smee-client
 smee --url https://smee.io/your-channel-id \
-     --target http://localhost:8081/webhooks
+     --target http://localhost:8083/webhook/scm
 ```
 
-Or configure the Pipeline to use polling:
-
-```yaml
-spec:
-  git:
-    webhookMode: polling    # disable webhook, use periodic polling
-    pollInterval: 30s       # default: 30s (GitHub rate limit: 5000 req/h)
-```
-
-The polling mode is less responsive but works in environments where inbound webhooks
-are not possible.
+Or skip webhooks: leave the webhook secret unset and the controller polls open PRs. There is
+no Pipeline field for this; polling is always on.
 
 ## Namespace Sprawl Management
 

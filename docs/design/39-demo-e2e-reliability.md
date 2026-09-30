@@ -1,6 +1,6 @@
 # 39: Demo E2E Reliability — No Flaky Tests, No Ignored CI
 
-> Status: Active | Created: 2026-04-20
+> Status: Active | Created: 2026-04-20 | Validation section corrected 2026-09-29
 > Applies to: kardinal-promoter
 
 ---
@@ -41,7 +41,7 @@ The fix has two parts:
 - ✅ Fixed `examples/argo-rollouts-demo/pipeline.yaml` — removed `health.argoRollouts{}` and `health.argocd{}`
 - ✅ Fixed `examples/multi-cluster-fleet/pipeline.yaml` — removed `health.argoRollouts{}` (×2)
 - ✅ Fixed `examples/flagger-demo/pipeline.yaml` — removed `health.flagger{}`
-- ✅ `ci.yml` build job: added "Validate demo and example manifests against CRD schema" step — fails if any manifest references an unknown health sub-field
+- ✅ `ci.yml` build job: added "Validate demo and example manifests against CRD schema" step. The first version only checked `health` sub-keys against a fixed list. Since #1247 it runs `go test ./test/examples/...` (`TestExampleManifestsMatchCRDSchemas`), which checks every kardinal.io object in `examples/`, `demo/` and `test/pdca/` against the generated CRD schemas
 
 ---
 
@@ -51,8 +51,8 @@ The fix has two parts:
 
 - ✅ 39.1 — PDCA scenario for schema drift: add a PDCA scenario that creates a Pipeline manifest with an unknown field and asserts that `ci.yml` fails with the expected error. This makes the CI validation step itself testable. (PR #931)
 - ✅ 39.2 — Update `README.md` examples section: the README may also reference the old `health.argoRollouts{}` syntax. Audit all docs for stale field references. (PR #898)
-- ✅ 39.3 — Add kubeconform to `Makefile` as a `make validate-manifests` target so contributors can run it locally before pushing. (PR #1001, 2026-04-21)
-- ✅ 39.4 — Fix PDCA S1 flap: `readyz` probe now gates on informer cache sync — pod reports Ready only after the cache is populated and reconcilers can process events. `helm --wait` now guarantees reconciliation is active before tests run. S1 timeout increased from 5min (20×15s) to 7.5min (30×15s) as defense-in-depth. Root cause: `healthz.Ping` was used for `/readyz`, allowing the pod to report Ready before `WaitForCacheSync` completed (~5min on resource-constrained CI runners). (PR #1132, 2026-04-23)
+- ✅ 39.3 — `make validate-manifests` lets contributors run the check locally before pushing. (PR #1001, 2026-04-21) It runs the same Go test as CI; kubeconform is not used.
+- ✅ 39.4 — Fix PDCA S1 flap: `readyz` probe now gates on informer cache sync — pod reports Ready only after the cache is populated and reconcilers can process events. `helm --wait` now guarantees reconciliation is active before tests run. The S1 wait stays at 5 minutes (`wait_state … test 300` in pdca.yml). Root cause: `healthz.Ping` was used for `/readyz`, allowing the pod to report Ready before `WaitForCacheSync` completed (~5min on resource-constrained CI runners). (PR #1132, 2026-04-23)
 
 ---
 
@@ -67,19 +67,19 @@ them, not bypass them with `--admin`.
 It is not path-filtered. Every push rebuilds the validation to catch drift introduced by
 API changes that don't touch `demo/`.
 
-**O3 — The `health` schema is the source of truth.**
-`api/v1alpha1/pipeline_types.go` `HealthSpec` struct defines the allowed fields. Any
-manifest field not present in that struct is an error, not a documentation omission.
+**O3 — The generated CRD schema is the source of truth.**
+The Go API types in `api/v1alpha1/` (for `health`, the `HealthConfig` struct in
+`pipeline_types.go`) generate the schemas in `config/crd/bases/`. Any manifest field the
+schema does not define is an error, not a documentation omission.
 
 ---
 
 ## Zone 2 — Implementer's judgment
 
-- The CI manifest validation uses Python+yaml parse (no cluster needed) rather than
-  `kubectl --dry-run` (requires a running cluster). The Python check is sufficient for
-  detecting unknown fields; it does not validate field values, only field names.
-- kubeconform would be the ideal long-term solution (full JSON Schema validation). It is
-  listed as a Future item (39.3) but the Python fallback is sufficient for now.
+- The CI manifest validation needs no cluster. `test/examples` decodes each manifest and
+  validates it against the generated CRD schemas with the apiextensions schema validator
+  (unknown fields, enums, patterns), instead of `kubectl --dry-run`, which needs a cluster.
+  kubeconform is not needed.
 
 ---
 

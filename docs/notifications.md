@@ -18,8 +18,8 @@ metadata:
   namespace: default
 spec:
   webhook:
-    # HTTPS URL to POST the notification payload to.
-    url: https://hooks.slack.com/services/T.../B.../...
+    # HTTPS URL to POST the notification payload to (see §Slack example).
+    url: https://hooks.slack.com/triggers/T.../...
     # Optional Authorization header value (for Bearer token auth).
     # Stored in plain text in the spec; see §Authorization.
     # authorizationHeader: "Bearer my-secret-token"
@@ -114,7 +114,7 @@ metadata:
   namespace: default
 spec:
   webhook:
-    url: https://hooks.slack.com/services/T.../B.../...
+    url: https://hooks.slack.com/triggers/T.../...   # Workflow Builder webhook trigger
   events:
     - Bundle.Failed
     - PolicyGate.Blocked
@@ -122,8 +122,12 @@ spec:
   pipelineSelector: nginx-prod  # only prod pipeline failures
 ```
 
-Slack incoming webhooks accept any JSON payload and display the `message` field.
-To get a Slack webhook URL: Settings → Integrations → Incoming Webhooks in your Slack workspace.
+The payload has no `text` or `blocks` key, so a classic Slack incoming webhook
+(`https://hooks.slack.com/services/...`) rejects it with HTTP 400 and the delivery is
+retried and then given up on (§Delivery). Use a Slack Workflow Builder webhook trigger
+instead (`https://hooks.slack.com/triggers/...`): declare `event`, `pipeline`, `bundle`
+and `message` as its variables and post them from a workflow step. Any relay that reshapes
+the JSON works too.
 
 ---
 

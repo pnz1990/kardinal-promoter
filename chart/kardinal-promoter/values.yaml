@@ -300,6 +300,11 @@ demo:
   # <fullname>-github-token when github.token is set), else "github-token".
   secretRef:
     name: ""
+  git:
+    # -- GitOps repository the demo Pipeline pushes to (spec.git.url).
+    # The token needs write access to it, so point this at your fork of
+    # pnz1990/kardinal-demo.
+    url: "https://github.com/pnz1990/kardinal-demo"
 
 # -- PrometheusRule for Prometheus Operator.
 # Creates a PrometheusRule CR with pre-built alerting rules for kardinal-promoter.

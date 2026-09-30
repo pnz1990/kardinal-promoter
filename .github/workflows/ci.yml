@@ -39,8 +39,7 @@ jobs:
           errors, checked = [], 0
           for pattern in ('*.yml', '*.yaml'):
               for f in pathlib.Path('.').rglob(pattern):
-                  if skip_dirs & set(f.parts) or f.parts[:2] == ('.specify', 'extensions') \
-                          or f.name == 'mkdocs.yml':
+                  if skip_dirs & set(f.parts) or f.name == 'mkdocs.yml':
                       continue
                   checked += 1
                   try:
@@ -65,7 +64,6 @@ jobs:
             "docs/aide/team.yml"
             "AGENTS.md"
             ".specify/memory/constitution.md"
-            "otherness-config.yaml"
           )
           missing=()
           for f in "${required[@]}"; do

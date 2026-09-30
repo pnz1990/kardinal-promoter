@@ -1,6 +1,18 @@
 # 04: PolicyGate Reconciler
 
-> Status: Comprehensive
+> Status: Historical (checked against the code on 2026-09-30). Several parts differ from the
+> code; `pkg/reconciler/policygate/` and [policy-gates](../policy-gates.md) are the reference.
+> Known differences:
+> - The package holds `audit.go`, `cel_evaluator.go`, `doc.go` and `reconciler.go`.
+> - There is no `NewCELEnvironment`. `newEvaluator` in `cel_evaluator.go` declares the
+>   variables `bundle`, `schedule`, `environment`, `metrics`, `upstream` and `changewindow`.
+>   There are no `previousBundle`, `delegation`, `externalApproval`, `contracts` or
+>   `targetDrift` variables.
+> - `bundle.upstreamSoakMinutes` is the smallest `soakMinutes` among the environments directly
+>   upstream of the gated environment in the Pipeline DAG
+>   (`directUpstreamSoakMinutes` in `reconciler.go`).
+> - Templates are not ignored: `reconcileTemplate` compiles their expression and writes the
+>   result to status.
 > Depends on: 01-graph-integration
 > Blocks: nothing (leaf node)
 
@@ -198,7 +210,7 @@ func (r *PolicyGateReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 ```
 
-The `RequeueAfter` ensures the gate is re-evaluated at `recheckInterval` even if no cluster state changes. This is the workaround for Graph not having native timer-based re-evaluation (see Section 3.5 of design-v2.1.md). The status write triggers a Graph watch event, causing Graph to re-check the `readyWhen` expression.
+The `RequeueAfter` ensures the gate is re-evaluated at `recheckInterval` even if no cluster state changes. This is the workaround for Graph not having timer-based re-evaluation (see [16-graph-capability-ledger](16-graph-capability-ledger.md), G8). The status write triggers a Graph watch event, and the dependent PromotionStep's `resolvableWhen` guard re-reads the gate's status (ledger G1).
 
 ## Timer-Based Re-evaluation
 

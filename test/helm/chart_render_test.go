@@ -883,6 +883,38 @@ func TestChartGitHubTokenNotPlaintext(t *testing.T) {
 	assert.Error(t, err, "github.secretRef.namespace outside the release namespace must fail:\n%s", out)
 }
 
+// ── C14a-specify-169: the demo Pipeline's git repo is configurable ────────────
+
+// TestChartDemoGitURLConfigurable: the demo Pipeline pushes to spec.git.url,
+// so users must be able to point it at a fork they can write to.
+func TestChartDemoGitURLConfigurable(t *testing.T) {
+	gitURL := func(docs []renderedDoc) string {
+		t.Helper()
+		pipelines := docsOfKind(docs, "Pipeline")
+		require.Len(t, pipelines, 1, "demo.enabled=true renders one Pipeline")
+		var p struct {
+			Spec struct {
+				Git struct {
+					URL string `json:"url"`
+				} `json:"git"`
+			} `json:"spec"`
+		}
+		require.NoError(t, json.Unmarshal(pipelines[0].raw, &p))
+		return p.Spec.Git.URL
+	}
+
+	assert.Equal(t, "https://github.com/pnz1990/kardinal-demo",
+		gitURL(render(t, "kardinal-promoter", "--set", "demo.enabled=true")),
+		"default is the reference repo")
+
+	const fork = "https://github.com/example/kardinal-demo"
+	assert.Equal(t, fork,
+		gitURL(render(t, "kardinal-promoter", "--set", "demo.enabled=true", "--set", "demo.git.url="+fork)))
+
+	out, err := helmTemplate(t, "kardinal-promoter", "--set", "demo.enabled=true", "--set", "demo.git.url=")
+	assert.Error(t, err, "an empty demo.git.url must fail:\n%s", out)
+}
+
 // ── C08-api-config-31: logLevel sets both loggers ─────────────────────────────
 
 func TestChartLogLevelSetsBothLoggers(t *testing.T) {

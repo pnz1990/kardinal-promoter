@@ -5,12 +5,28 @@ This guide walks you through setting up your first promotion pipeline with kardi
 ## Fast Start — under 10 minutes
 
 No GitOps repo setup required. Install with `demo.enabled=true` and you get a pre-configured
-Pipeline targeting the [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo)
-reference repository — ready to promote immediately.
+Pipeline named `demo` in the release namespace. It pushes to the repository in
+`demo.git.url`, which defaults to the
+[`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) reference repository.
+Your token cannot write to that repository, so fork it first and set `demo.git.url` to the fork.
+
+Before you start, the cluster needs:
+
+- kro with the `GraphKind` feature gate (step 1 below).
+- Argo CD with one Application per environment: `kardinal-test-app-test`, `kardinal-test-app-uat`
+  and `kardinal-test-app-prod` in the `argocd` namespace. The demo Pipeline checks health
+  through them. Create them with the ApplicationSet in
+  [Create Argo CD Applications](#create-argo-cd-applications).
 
 ```bash
-# 1. Store the token in a Secret, then install with demo mode
-#    (no GitOps repo setup required)
+# 0. Fork the demo GitOps repo (your GITHUB_PAT needs write access to the fork)
+gh repo fork pnz1990/kardinal-demo --clone=false
+DEMO_REPO=https://github.com/<your-user>/kardinal-demo
+
+# 1. Install kro (from a kardinal-promoter checkout)
+bash hack/install-kro.sh
+
+# 2. Store the token in a Secret, then install with demo mode
 kubectl create namespace kardinal-system
 kubectl create secret generic github-token \
   --namespace kardinal-system \
@@ -19,24 +35,27 @@ kubectl create secret generic github-token \
 helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
   --namespace kardinal-system \
   --set demo.enabled=true \
+  --set demo.git.url=$DEMO_REPO \
   --set github.secretRef.name=github-token
 
-# 2. Verify the demo Pipeline is running
-kardinal get pipelines
-# NAME   PHASE     ENVIRONMENTS   AGE
-# demo   Waiting   test,uat,prod  10s
+# 3. Check the demo Pipeline (it lives in the release namespace)
+kardinal get pipelines -n kardinal-system
+# PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE
+# demo       -        -      -     -      0     10s
 
-# 3. Trigger the first promotion (get the latest test-app SHA from CI)
+# 4. Trigger the first promotion (get the latest test-app SHA from CI)
 SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-kardinal create bundle demo --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
+kardinal create bundle demo -n kardinal-system \
+  --image ghcr.io/pnz1990/kardinal-test-app:sha-${SHA}
 ```
 
-The demo Pipeline uses the reference `kardinal-demo` GitOps repo (already has the correct
-Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
+The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already has the
+correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
 
 !!! note "Estimated time: under 10 minutes on a fresh kind cluster"
-    Prerequisites: kind cluster, `helm`, `kubectl`, `kardinal`, and a GitHub PAT
-    with `repo` write access to `pnz1990/kardinal-demo` (or your fork).
+    Prerequisites: kind cluster, `helm`, `kubectl`, `kardinal`, Argo CD, and a GitHub PAT
+    with write access to the repository in `demo.git.url`. Point the ApplicationSet
+    `repoURL` in [Create Argo CD Applications](#create-argo-cd-applications) at the same fork.
 
 ---
 
@@ -117,20 +136,21 @@ Verify the installation:
 ```bash
 kubectl get pods -n kardinal-system
 # NAME                                              READY   STATUS    RESTARTS   AGE
-# kardinal-promoter-controller-7f8d9c-xxxxx         1/1     Running   0          30s
+# kardinal-promoter-7f8d9c5b6d-x2k9q               1/1     Running   0          30s
 
 kubectl get pods -n kro-system
 # NAME                              READY   STATUS    RESTARTS   AGE
-# graph-controller-7d4b8f9f5-xk2pq  1/1     Running   0          30s
+# kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 
 kardinal version
-# CLI:        v0.1.0
-# Controller: v0.1.0
+# CLI:        v0.8.1
+# Controller: v0.8.1
+# Graph:      kro v0.10.0-rc.0
 ```
 
 ## Set up your GitOps repo
 
-This quickstart uses [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) as the GitOps target repository. It already has the required directory structure with environment branches. Fork it or use it directly.
+This quickstart uses [`pnz1990/kardinal-demo`](https://github.com/pnz1990/kardinal-demo) as the GitOps target repository. It already has one directory per environment on `main`. Fork it: kardinal pushes to this repository, so the token needs write access to it.
 
 The repository structure:
 
@@ -168,7 +188,7 @@ spec:
     spec:
       project: default
       source:
-        repoURL: https://github.com/pnz1990/kardinal-demo
+        repoURL: https://github.com/pnz1990/kardinal-demo   # your fork
         targetRevision: main
         path: environments/{{env}}
       destination:
@@ -212,7 +232,7 @@ Then apply it:
 kubectl apply -f pipeline.yaml
 ```
 
-Or apply `examples/quickstart/pipeline.yaml` directly:
+Or apply `examples/quickstart/pipeline.yaml` from a checkout (`kubectl apply -f examples/quickstart/pipeline.yaml`). This is the same Pipeline with the Argo CD Application names spelled out:
 
 ```bash
 cat <<EOF | kubectl apply -f -
@@ -263,15 +283,15 @@ Verify the Pipeline was created:
 
 ```bash
 kardinal get pipelines
-# PIPELINE              BUNDLE   TEST   UAT   PROD   AGE
-# kardinal-test-app     --       --     --    --     10s
+# PIPELINE            BUNDLE   TEST   UAT   PROD   SUB   AGE
+# kardinal-test-app   -        -      -     -      0     10s
 ```
 
 !!! tip "Troubleshooting: Pipeline not appearing"
     If the pipeline doesn't appear, check that the controller is running:
     ```bash
     kubectl get pods -n kardinal-system
-    kubectl logs -n kardinal-system deployment/kardinal-promoter-controller | tail -20
+    kubectl logs -n kardinal-system deployment/kardinal-promoter | tail -20
     ```
 
 ## Create your first Bundle
@@ -318,8 +338,8 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                          TEST       UAT              PROD   AGE
-# kardinal-test-app   kardinal-test-app-sha-abc1234   Verified   HealthChecking   -      2m
+# PIPELINE            BUNDLE                    TEST       UAT              PROD   SUB   AGE
+# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   -      0     2m
 
 # See the steps of the active Bundle
 kardinal get steps kardinal-test-app
@@ -340,7 +360,7 @@ kardinal explain kardinal-test-app --env prod
     If the test environment stays in `HealthChecking` for more than a few minutes:
     ```bash
     kubectl get deployment kardinal-test-app -n kardinal-test-app-test
-    kubectl describe argoapp kardinal-test-app-test -n argocd
+    kubectl describe application kardinal-test-app-test -n argocd
     ```
     Check that ArgoCD has synced the environment and the deployment is healthy.
 
@@ -357,7 +377,9 @@ kardinal get steps kardinal-test-app
 
 Go to your GitHub repo ([pnz1990/kardinal-demo](https://github.com/pnz1990/kardinal-demo)). You will see a PR titled:
 
-> **[kardinal] Promote kardinal-test-app sha-abc1234 to prod**
+> **[kardinal] Promote kardinal-test-app-x7k2p to prod**
+
+(`kardinal create bundle` names the Bundle `<pipeline>-<random suffix>`.)
 
 The PR body contains:
 - The artifact being promoted (image reference, digest)
@@ -369,8 +391,8 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE              BUNDLE          TEST       UAT        PROD       AGE
-# kardinal-test-app     sha-abc1234     Verified   Verified   Verified   8m
+# PIPELINE            BUNDLE                    TEST       UAT        PROD       SUB   AGE
+# kardinal-test-app   kardinal-test-app-x7k2p   Verified   Verified   Verified   0     8m
 ```
 
 The promotion is complete.
@@ -411,6 +433,8 @@ kardinal explain kardinal-test-app --env prod
 
 Add a step to your CI pipeline that creates a Bundle after building and pushing your image.
 
+The Bundle API (`POST /api/v1/bundles`) listens on port 8083 of the `kardinal-promoter` Service and is off until you set `bundleAPI.tokenSecretRef.name`. Expose it to CI yourself (for example with an Ingress); `kardinal.example.com` below stands for that address. See [CI integration](ci-integration.md#webhook-token).
+
 **GitHub Actions example:**
 
 ```yaml
@@ -433,5 +457,5 @@ Add a step to your CI pipeline that creates a Bundle after building and pushing 
 ## Next steps
 
 - [Core Concepts](concepts.md): deeper dive into Bundles, Pipelines, PolicyGates, and health adapters
-- [Multi-Cluster Fleet Example](../examples/multi-cluster-fleet/): parallel prod regions with Argo Rollouts canary
-- [Design Document](design/design-v2.1.md): full technical design
+- [Multi-Cluster Fleet Example](https://github.com/pnz1990/kardinal-promoter/tree/main/examples/multi-cluster-fleet): parallel prod regions with Argo Rollouts canary
+- [Architecture](architecture.md): how the controller works

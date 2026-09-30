@@ -6,13 +6,13 @@
 
 ## Purpose
 
-kardinal-ui is an embedded web UI served by the kardinal-controller binary. It renders the promotion DAG with per-node state, PolicyGate evaluations, Bundle provenance, and PR links. It is read-only; all mutations go through CRDs (CLI, kubectl, webhook).
+kardinal-ui is an embedded web UI served by the kardinal-controller binary. It renders the promotion DAG with per-node state, PolicyGate evaluations, Bundle provenance, and PR links. It can also write: create a Bundle, promote or roll back an environment, and pause or resume a Pipeline (see [Interaction Model](#interaction-model)). Authentication is off unless a flag enables it (see [Authentication](#authentication)).
 
 ## Technical Stack
 
 - **Frontend:** React 19 + TypeScript + Vite
 - **Bundling:** Static assets built to `web/dist/`, embedded in the Go binary via `go:embed`
-- **Serving:** Go HTTP handler at `/ui` (configurable via `--ui-listen-address` for port separation)
+- **Serving:** Go `net/http` handler at `/ui/` on its own listener (`--ui-listen-address`, default `:8082`)
 - **Data:** Reads Kubernetes CRDs via a backend API proxy. No direct browser-to-API-server connection (avoids CORS and auth complexity).
 - **Architecture:** Same pattern as kro-ui. Single binary, no separate frontend deployment.
 
@@ -20,30 +20,24 @@ kardinal-ui is an embedded web UI served by the kardinal-controller binary. It r
 
 ```
 web/
-  embed.go              # go:embed all:dist
-  dist/                 # built frontend assets (index.html, JS, CSS)
+  embed.go              # go:embed all:dist → web.Assets
+  dist/                 # built frontend (index.html, JS, CSS), committed; rebuilt by `make ui`
   src/
     main.tsx            # React entry point
-    App.tsx             # Router, layout
-    pages/
-      PipelineList.tsx  # Pipeline overview (all pipelines with current Bundle per env)
-      PipelineDetail.tsx # DAG view for a specific Pipeline + Bundle
-      BundleList.tsx    # Bundle history for a Pipeline
-      BundleDetail.tsx  # Single Bundle with per-environment evidence
+    App.tsx             # layout, pipeline and node selection, polling
+    api/client.ts       # /api/v1/ui client: bearer token, timeouts
+    types.ts            # TypeScript types matching the API JSON
+    usePolling.ts       # polling hook (also useUrlState.ts, useKeyboardShortcuts.ts, ...)
     components/
-      DAGGraph.tsx      # DAG renderer (nodes + edges)
-      DAGNode.tsx       # PromotionStep or PolicyGate node
-      NodeDetail.tsx    # Side panel with node details
-      HealthBadge.tsx   # Health status indicator
-      PolicyGateCard.tsx # Gate expression + evaluation result
-      PRLink.tsx        # Link to GitHub/GitLab PR
-      BundleProvenance.tsx # Commit, CI run, author display
-    lib/
-      api.ts            # Backend API client
-      types.ts          # TypeScript types matching CRD specs
-      dag.ts            # DAG layout computation (dagre)
-    hooks/
-      usePolling.ts     # Polling hook for data refresh
+      DAGView.tsx       # DAG renderer (dagre layout + SVG)
+      PipelineList.tsx  # all Pipelines with the current Bundle per environment
+      PipelineLaneView.tsx # stage lanes with promote / roll back actions
+      NodeDetail.tsx    # side panel: step details, PR link, provenance, gate CEL
+      BundleTimeline.tsx # Bundle history and compare
+      PolicyGatesPanel.tsx # gates with expression and result
+      ActionBar.tsx     # pause / resume
+      HealthChip.tsx    # health status indicator
+  test/e2e/journeys/    # Playwright journeys (001-011)
 ```
 
 ## Backend API Proxy
@@ -76,7 +70,7 @@ Phase 2+ may add WebSocket support for real-time updates:
 - On change, broadcast to connected WebSocket clients
 - UI receives updates and patches the local state
 
-For Phase 1, 5-second polling is sufficient. The API proxy caches responses for 2 seconds to reduce API server load.
+For Phase 1, 5-second polling is sufficient. The API has no response cache; each request reads through the controller's client.
 
 ## DAG Rendering
 
@@ -159,7 +153,7 @@ Single Bundle view with:
 
 ## Embedded Architecture
 
-The frontend is built during CI (`bun run build` or `npm run build`) and the output (`web/dist/`) is embedded in the Go binary:
+The frontend is built with `make ui` (`npm ci && npm run build` in `web/`) and the output (`web/dist/`) is embedded in the Go binary:
 
 ```go
 // web/embed.go
@@ -168,59 +162,42 @@ package web
 import "embed"
 
 //go:embed all:dist
-var DistFS embed.FS
+var Assets embed.FS
 ```
 
-The controller serves it:
+`cmd/kardinal-controller/main.go` passes `fs.Sub(web.Assets, "dist")` to `newUIHandler` (`cmd/kardinal-controller/ui_auth.go`). That builds a `net/http` ServeMux with:
 
-```go
-// internal/server/server.go
-func (s *Server) setupRoutes() {
-    // API routes
-    s.router.Route("/api/v1", func(r chi.Router) {
-        r.Route("/bundles", s.bundleWebhookRoutes)
-        r.Route("/ui", s.uiAPIRoutes)
-    })
+- `/api/v1/ui/*`, registered by `RegisterRoutes` in `cmd/kardinal-controller/ui_api.go`
+- `/ui/`, an `http.FileServer` over the assets that serves files and `index.html` but never lists a directory
 
-    // Webhook route
-    s.router.Post("/webhooks", s.handleSCMWebhook)
+There is no SPA fallback: the UI keeps its state in the URL hash (`#pipeline=<name>&node=<id>`), so every page is `/ui/`. The mux is wrapped, from the inside out, in the auth middleware (when enabled), a request body limit, the CORS and Host check, and security headers (CSP, anti-framing, nosniff).
 
-    // Metrics
-    s.router.Handle("/metrics", promhttp.Handler())
+The SCM webhook and the Bundle API are on a separate ServeMux in `main.go`, on the webhook listener:
 
-    // SPA fallback: serve index.html for all unmatched routes under /ui
-    s.router.Handle("/ui/*", s.spaHandler())
-}
-
-func (s *Server) spaHandler() http.Handler {
-    fs, _ := fs.Sub(web.DistFS, "dist")
-    fileServer := http.FileServer(http.FS(fs))
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        // Try to serve the file. If not found, serve index.html (SPA routing).
-        path := strings.TrimPrefix(r.URL.Path, "/ui")
-        if _, err := fs.Open(path); err != nil {
-            r.URL.Path = "/"
-        }
-        fileServer.ServeHTTP(w, r)
-    })
-}
-```
+- `/webhook/scm` and `/webhook/scm/health`
+- `/api/v1/bundles`, only when `--bundle-api-token` is set
+- `/webhook/validate/pipeline`, only when the Pipeline admission webhook is enabled
 
 ## Port Separation
 
-Default: all endpoints on `:8080`.
+| Listener | Flag | Default | Serves |
+|---|---|---|---|
+| Metrics | `--metrics-bind-address` | `:8080` | `/metrics` |
+| Probes | `--health-probe-bind-address` | `:8081` | `/healthz`, `/readyz` |
+| UI | `--ui-listen-address` | `:8082` | `/ui/*`, `/api/v1/ui/*` |
+| Webhook | `--webhook-bind-address` | `:8083` | `/webhook/*`, `/api/v1/bundles` |
 
-With `--ui-listen-address=:8081`:
-- `:8080` serves `/api/v1/bundles`, `/webhooks`, `/metrics`
-- `:8081` serves `/ui/*` and `/api/v1/ui/*`
-
-This allows exposing the UI to browser users (VPN) while restricting the API to CI networks (firewall rules on port 8080).
+This allows exposing the UI to browser users (VPN) while restricting the webhook and Bundle API to CI and SCM networks. `--tls-cert-file` and `--tls-key-file` switch both the UI and webhook listeners to TLS.
 
 ## Authentication
 
-Phase 1: No authentication on the UI. The controller reads CRDs on behalf of all UI users using its own ServiceAccount. This is acceptable when the UI is accessed via VPN or internal network.
+The UI API has three modes. Static assets at `/ui/*` are public in all of them (they hold no data).
 
-Phase 2+: Add optional OIDC authentication. The UI redirects unauthenticated users to an OIDC provider. The controller validates the token and scopes CRD reads to the user's Kubernetes RBAC permissions.
+- **Off (default).** The controller logs `UI API authentication disabled` and reads and writes with its own ServiceAccount. To limit DNS rebinding, `/api/` requests are accepted only when the Host is `localhost`, `127.0.0.1`, `::1` or a name in `--ui-allowed-hosts` (the chart adds the Service DNS names).
+- **Static token** (`--ui-auth-token`, env `KARDINAL_UI_TOKEN`). Every `/api/v1/ui/*` request needs `Authorization: Bearer <token>`. It takes precedence over TokenReview.
+- **TokenReview** (`--ui-tokenreview-auth`, chart `ui.auth.tokenReview`, default `false`). Bearer tokens are checked with a TokenReview, and every object the API reads or writes is authorized with a SubjectAccessReview for the caller. It fails closed.
+
+The web client asks for a token on `401` and keeps it in `sessionStorage`. CORS is same-origin unless `--cors-allowed-origins` is set. OIDC is not implemented. User setup is in [the security guide](../guides/security.md#ui-api-access-control).
 
 ## Interaction Model
 
@@ -263,7 +240,7 @@ Backend API tests (Go):
 7. `/api/v1/ui/pipelines` returns correct structure.
 8. `/api/v1/ui/pipelines/:name/graph` returns nodes with status.
 9. `/api/v1/ui/bundles/:name` returns evidence.
-10. SPA fallback: unmatched routes serve index.html.
+10. Static assets: `/ui/` serves `index.html` and never lists a directory.
 
 ---
 
@@ -312,7 +289,7 @@ The following capabilities are declared in `docs/aide/vision.md` §F8 but not ye
 
 ### UI authentication gaps (competitive/security pressure — 2026-04-20)
 
-The embedded UI (`cmd/kardinal-controller/ui_api.go`) currently serves all endpoints with **no authentication**. The UI listen address (`:8082`) is bound to all interfaces. A platform team at a Series B company would fail this in a security review on day one.
+When this section was written, the embedded UI (`cmd/kardinal-controller/ui_api.go`) served all endpoints with **no authentication**. Authentication is still off by default (see [Authentication](#authentication)); the items below added the opt-in modes. The UI listen address (`:8082`) binds all interfaces. A platform team at a Series B company would fail this in a security review on day one.
 
 - ✅ **UI API authentication** — `--ui-auth-token` flag (env: `KARDINAL_UI_TOKEN`) added to `main.go`. When set, all `/api/v1/ui/*` routes require `Authorization: Bearer <token>`. Static `/ui/*` assets bypass auth. Constant-time comparison via `crypto/subtle`. Default is open (no token) for backwards compatibility. Implemented in PR #909.
 - ✅ **TLS for UI and webhook HTTP servers** — `--tls-cert-file` / `--tls-key-file` flags (env: `KARDINAL_TLS_CERT_FILE` / `KARDINAL_TLS_KEY_FILE`) added to `main.go`. When both are set, `http.ListenAndServeTLS` is used for both the UI server (`:8082`) and webhook server (`:8083`). Falls back to plain HTTP when neither is set (backwards compatible). Helm values `controller.tlsCertFile` and `controller.tlsKeyFile` support cert-manager volume mount pattern. Implemented in PR #911. **Update (audit remediation, 2026-09-29):** `listenAndServeWithTLS()` is replaced by `httpServer` (`cmd/kardinal-controller/http_server.go`), a manager Runnable: both servers start after the informer caches sync, have read/write/idle timeouts, drain in-flight requests on shutdown, and a bind or serve error stops the controller instead of only being logged. Setting only one of the two TLS flags is now a startup error instead of a silent fallback to plain HTTP.
@@ -341,7 +318,7 @@ All interactive elements must pass axe-core checks in CI. Specific rules enforce
 - `nested-interactive`: no button inside button or anchor inside button
 - `aria-live` regions on status displays that update asynchronously
 
-The axe-core Playwright check runs in CI as a separate test file (`web/tests/a11y.spec.ts`).
+The axe-core Playwright check runs in CI as a separate test file (`web/test/e2e/journeys/009-accessibility.spec.ts`).
 New UI PRs that introduce axe violations will fail CI.
 
 ### URL routing

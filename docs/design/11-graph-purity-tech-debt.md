@@ -2,7 +2,7 @@
 
 > Status: Active — every logic leak is tracked here
 > Related: `docs/design/10-graph-first-architecture.md`
-> Last audited: 2026-04-14
+> Last audited: 2026-04-14. Status corrected on 2026-09-29: see [Current status](#current-status-2026-09-29).
 
 ---
 
@@ -10,10 +10,31 @@
 
 **Read this document at the start of every queue generation. It overrides any other scope.**
 
-### Milestone v0.2.1: COMPLETE
+### Milestone v0.2.1: issues closed, leaks not all gone
 
-All 41 Graph-independent logic leaks have been eliminated (issues #131–#155 resolved).
-The v0.2.1 queue is closed. Do not re-open these items.
+Issues #131–#155 are closed, but some of the leaks they tracked are still in the code, and
+some leaks were never catalogued. The table below is the current state.
+
+### Current status (2026-09-29)
+
+Checked against `main` at 3805f6a. "Accepted" means the logic stays in a reconciler that
+writes its result to its own CRD status, because kro has no primitive for it (ledger
+[G8](16-graph-capability-ledger.md#g8-logic-still-outside-the-graph)).
+
+| ID | What is still in the code | State |
+|---|---|---|
+| CEL-2 / PG-2 | The PolicyGate reconciler lists MetricCheck objects in Go (`buildMetricsContext`). | Still present |
+| PS-4 / SCM-2 | `handleWaitingForMergeViaDirectSCM` in the PromotionStep reconciler called `GetPRStatus` when a step had no PRStatus object. | Done: removed by #1249 (3805f6a); merge state comes only from the PRStatus CRD |
+| PS-6 / PS-7 | The PromotionStep reconciler still creates the auto-rollback Bundle (`createAutoRollback` in `pkg/reconciler/promotionstep/lifecycle.go`, built by `pkg/lifecycle`). | Still present |
+| ST-5 / ST-6 | The `kustomize-build` step runs the `kustomize` binary (`execKustomizeBuilder` in `pkg/steps/steps/kustomize_build.go`), although #494 is closed. | Still present |
+| GB-2 | Skip permissions are still checked in Go when the Graph is built (`ValidateSkipPermissions` in `pkg/graph/skip.go`). Only the gate expressions run on the Graph. | Partial |
+| CLI-1 / CLI-2 / CLI-3 | The CLI no longer imports `pkg/cel`: `policy simulate` and `policy test` run the controller's PolicyGate reconciler against an in-memory client (`cmd/kardinal/cmd/policy_eval.go`). The UI validate-cel endpoint calls `policygate.ValidateExpression` (`cmd/kardinal-controller/ui_api.go`, #1248). | Done |
+| PG-1 / PG-4 | The PolicyGate reconciler still requeues on a timer (`RequeueAfter: recheckInterval`, default 5m). ScheduleClock ticks add re-evaluation; they do not replace the timer. | Accepted |
+| — (not catalogued) | The PolicyGate reconciler reads other CRDs in Go: ChangeWindows (`buildChangeWindowContext`), PRStatus (`buildPRContext`) and Bundles (`buildUpstreamContextWithHistory`). | Accepted |
+| — (not catalogued) | The Bundle reconciler computes soak time with `time.Now` and requeues every minute while Promoting (`soakRequeue`). | Accepted |
+| — (not catalogued) | The PRStatus reconciler polls the SCM API every 30 s (`requeuePollInterval`); SCM webhooks only shorten the wait. | Accepted |
+| — (not catalogued) | Reconcilers make external HTTP calls: NotificationHook (webhook delivery), Subscription (registry and Git Smart HTTP reads in `pkg/source`), MetricCheck (Prometheus). Each writes the result to its own status. | Accepted |
+| — (not catalogued) | The `verify-image` step runs the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Accepted |
 
 ### What to work on now
 
@@ -21,7 +42,7 @@ Active open items are tracked in GitHub issues. Check the current open issue lis
 The remaining logic leaks require either:
 1. kro upstream changes (labeled `blocked-on-upstream`; gaps logged in
    [16-graph-capability-ledger.md](16-graph-capability-ledger.md)) — do not workaround
-2. Large architectural work: go-git migration (#495, complete), kustomize library migration (#494, complete)
+2. Large architectural work: go-git migration (#495, complete), kustomize library migration (#494, closed, but `kustomize-build` still runs the binary)
 
 **Note:** Flat DAG compilation (#496) was evaluated and closed as architecturally unsound.
 See §Flat DAG Compilation — Why It Does Not Work below.
@@ -50,14 +71,14 @@ Everything else is the Graph. The Graph handles sequencing, fan-out, fan-in, con
 
 ## One Permitted Exception (Transitional)
 
-`pkg/cel/` is a documented transitional workaround. See `docs/design/10-graph-first-architecture.md` §Known Exceptions. It must not grow. It will be deleted once `recheckAfter` lands in kro.
+The PolicyGate CEL evaluator in `pkg/reconciler/policygate` is the accepted exception. See `docs/design/10-graph-first-architecture.md` §Known Exceptions and ledger G8. It must not grow.
 
 ---
 
 ## Fixable Without Graph Changes (Milestone v0.2.1 — COMPLETE)
 
-All 41 fixable leaks below were resolved in v0.2.1. Issues #131–#155 are closed.
-This section is preserved for historical reference.
+Issues #131–#155 are closed, but not every leak below is gone: see
+[Current status](#current-status-2026-09-29). This section is preserved for historical reference.
 
 ### CRITICAL (fix first)
 
@@ -81,7 +102,7 @@ This section is preserved for historical reference.
 | ST-5 / ST-6 | #144 | `exec.Command("kustomize")` in reconcile path | Use `kyaml`/`sigs.k8s.io/kustomize` library; no binary deps |
 | ST-7 / ST-8 / ST-9 / SCM-5 | #144 | `git` host-local operations | Use `go-git` library; no shell-out; add `status.workdir` |
 | GB-2 | #145 | `validateSkipPermissions()` at Graph-build time in Go | Move to Graph `includeWhen` expression |
-| BU-1 / BU-4 | #146 | `supersedeSiblings()` in Go loop | Dedicated supersession reconciler watching Pipeline.status |
+| BU-1 / BU-4 | #146 | `supersedeSiblings()` in Go loop (now `isSuperseededByNewer` / `markSuperseded` in `pkg/reconciler/bundle/reconciler.go`) | Dedicated supersession reconciler watching Pipeline.status |
 | WH-1 / WH-2 | #147 | Reconciler work in HTTP handler; triplicated URL parsing | Webhook only writes PRStatus CRD; consolidate URL parsing |
 
 ### MEDIUM
@@ -118,7 +139,7 @@ be contributed upstream — but kardinal no longer requires it as a prerequisite
 |---|---|---|---|
 | PG-1 / PG-4 | #138 | `recheckAfter` on Graph nodes | Nice-to-have — superseded by `ScheduleClock` pattern |
 | GB-5 | #138 | Explicit `dependsOn` edges | Nice-to-have — positional workaround is correct today |
-| HE-1 / HE-2 / HE-3 | #136 | `ShapeWatch` for external K8s resources | Superseded by Aggregated API (#456) |
+| HE-1 / HE-2 / HE-3 | #136 | Watch external K8s resources | Done with kro `ref` nodes (`pkg/health/watch_node.go`); cross-node readiness is ledger G3 |
 
 ---
 
@@ -128,15 +149,14 @@ be contributed upstream — but kardinal no longer requires it as a prerequisite
 
 **The pre-upstream Graph controller's author suggested gating on a time-based trigger node.**
 
-The `ScheduleClock` CRD is an Owned node whose sole job is writing `status.tick = time.Now()`
-on a configurable interval. This fires a real Kubernetes watch event. PolicyGate nodes that
-reference `clock` in their dependency scope re-evaluate their gating expressions on
-every tick — including `schedule.isWeekend()` and `schedule.hour()` functions.
+The chart creates one `ScheduleClock` object. The ScheduleClock reconciler writes
+`status.tick` on a configurable interval, which fires a real Kubernetes watch event. It is
+not a Graph node. The PolicyGate reconciler watches ScheduleClock objects and re-queues every
+PolicyGate on each tick, so `schedule.*` expressions are re-evaluated. `schedule.*` stays a
+map in the PolicyGate CEL context: kro has no way to add functions to the Graph's CEL
+environment (ledger G8).
 
-Register `schedule.*` as CEL library extensions on the Graph's `DefaultEnvironment` (Q3 — 
-stateless, cheap, synchronous). No `recheckAfter` Graph primitive required.
-
-See §ScheduleClock Implementation below for the full spec.
+See §ScheduleClock Implementation below.
 
 ### #132 (step-as-Graph-node): **closed — not viable**
 
@@ -149,9 +169,9 @@ adding `status.steps[]` to PromotionStep (no architecture change needed).
 ### #130 and #68 (eliminate pkg/cel): **partially complete — schedule.* library untracked**
 
 `pkg/cel/` no longer has an `environment.go` or a `NewCELEnvironment()` constructor — that
-was deleted in #701 and the CEL environment construction moved to
+was deleted in #487 and the CEL environment construction moved to
 `pkg/reconciler/policygate/cel_evaluator.go`. What remains in `pkg/cel/` is:
-- `library/` — the kro library sub-package (ALLOWED — imported by cel_evaluator.go)
+- `library/` — kardinal's copy of kro's CEL library (ALLOWED — imported by cel_evaluator.go)
 - `conversion/` and `sentinels/` — utilities
 
 The schedule.* CEL library extension (Part 2 of the ScheduleClock design) was tracked in
@@ -168,16 +188,15 @@ a kardinal implementation task. Journey 2 test can be written once Stage 14 ship
 
 ---
 
-## ScheduleClock Implementation — #138 Unblocked (Design Goal, Not Yet Shipped)
+## ScheduleClock Implementation — #138
 
-> **Status: Design approved. `ScheduleClock` CRD and reconciler are implemented.**
-> **`schedule.*` CEL library extension (Part 2 below) is NOT yet implemented.**
-> **Current state: `schedule.*` values are map variables in the PolicyGate reconciler,**
-> **not CEL library functions on the Graph DefaultEnvironment. See issue #616.**
+> **Status: Part 1 (the `ScheduleClock` CRD and reconciler) is implemented. Parts 2 and 3
+> were not built and cannot be on upstream kro:** the Graph API has no way to add CEL
+> functions (ledger G8), and the translator does not add a clock node to any Graph.
+> `schedule.*` values are map variables in the PolicyGate reconciler. Parts 2 and 3 are
+> described below as the original design.
 >
-> Closes: #138, #130, #68 (eliminates `pkg/cel` entirely) — pending Part 2
 > Suggested by: the pre-upstream Graph controller's author
-> Architecture: ✅ Pure — Q2 (Owned node) + Q3 (CEL library extension)
 
 ### Problem
 
@@ -187,16 +206,16 @@ event fires, so the Graph never re-evaluates these nodes.
 
 > **Current workaround (in production today):** The PolicyGate reconciler injects
 > `schedule.*` as a plain map variable into the CEL evaluation context. The
-> `ScheduleClock` reconciler re-enqueues all PolicyGates on each tick, triggering
-> re-evaluation. This works, but `schedule.*` is not available in Graph
-> `readyWhen`/`propagateWhen` expressions — only in the PolicyGate CEL context.
+> PolicyGate reconciler watches ScheduleClock objects and re-enqueues all PolicyGates on
+> each tick, triggering re-evaluation. This works, but `schedule.*` is not available in Graph
+> `readyWhen` or template expressions — only in the PolicyGate CEL context.
 
 ### Solution
 
 **Two parts that compose:**
 
-**1. `ScheduleClock` CRD** — an Owned node that writes a timestamp on a fixed interval,
-generating real Kubernetes watch events:
+**1. `ScheduleClock` CRD** — a CR (created by the chart, not a Graph node) whose reconciler
+writes a timestamp on a fixed interval, generating real Kubernetes watch events:
 
 ```go
 // Copyright 2026 The kardinal-promoter Authors.
@@ -234,38 +253,21 @@ status:
   tick: "2026-04-13T14:00:00Z"   # updated every interval
 ```
 
-**2. `schedule.*` CEL library on Graph DefaultEnvironment** — stateless functions
-**(NOT YET IMPLEMENTED — design goal, tracked in issue #616):**
+**2. `schedule.*` CEL library on the Graph's CEL environment** — not built. It needs a
+way to register functions on kro's Graph CEL environment, which the Graph API does not
+have (ledger G8). No `pkg/cel/schedule` package exists.
 
-```go
-// pkg/cel/schedule/library.go  ← does not exist yet
-// Registered on the Graph's DefaultEnvironment via WithCustomDeclarations.
-// schedule.isWeekend() — true if Saturday or Sunday UTC
-// schedule.hour()      — current UTC hour (0-23)
-// schedule.dayOfWeek() — "Monday", "Tuesday", ...
-```
+**3. Graph builder wires a clock dependency** into every PolicyGate node whose expression
+contains `schedule.` — not built. The original design used a `propagateWhen` field, which
+kro does not have.
 
-**3. Graph builder wires clock dependency** — any PolicyGate node whose expression
-contains `schedule.` gets an automatic data-flow reference to the `ScheduleClock` node:
+### What Parts 2 and 3 would have eliminated
 
-```yaml
-# Generated by the Pipeline translator for a PolicyGate with schedule.* expression
-- id: noWeekendDeploys
-  template:
-    apiVersion: kardinal.io/v1alpha1
-    kind: PolicyGate
-    ...
-  propagateWhen:
-    - "${!schedule.isWeekend() && kardinal_clock.status.tick != ''}"
-    #                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    #  clock reference creates a data-flow edge — re-evaluated on every tick
-```
-
-### What this eliminates (when Part 2 ships)
-
-- `ctrl.Result{RequeueAfter: N}` timer loop in PolicyGate reconciler (already eliminated — ScheduleClock handles this)
 - All inline `time.Now()` / weekday/hour map computation in `policygate/reconciler.go`
 - `schedule.*` scope limited to PolicyGate (once it's a Graph CEL library, it's available everywhere)
+
+The PolicyGate `RequeueAfter` timer was not eliminated either; see
+[Current status](#current-status-2026-09-29).
 
 ### One ScheduleClock per cluster is sufficient
 
@@ -367,10 +369,10 @@ If an aggregated API provider for GitHub were contributed to kro, kardinal could
 |---|---|---|
 | `GetPRStatus()` in reconciler hot path (#133) | Live GitHub API call in 5 code paths | Watch node on `GithubArtifact` for the PR branch |
 | `PRStatus` CRD reconciler (#133) | kardinal-owned reconciler calls GitHub | Replaced by `GithubArtifact` Watch node |
-| `git clone` in step engine (#140) | `exec.Command("git clone")` | Watch node on `GithubArtifact` for repo path |
+| `git clone` in step engine (#140) | go-git clone in the step engine (the `exec.Command` was removed in #495) | Watch node on `GithubArtifact` for repo path |
 | `EnsureLabels()` repo config (#149) | Removed; it was never called. GitHub creates labels on first use | — |
 | `PAT-in-Secret` auth model | User manages PAT lifecycle | OAuth device flow via `GithubAuthentication` |
-| Subscription CRD polling (#18 planned) | Polling reconciler with `time.After` | Watch node on `GithubArtifact` where `status.sha` changes → create Bundle |
+| Subscription CRD polling | Polling reconciler (`pkg/reconciler/subscription`) that requeues on `spec.interval` | Watch node on `GithubArtifact` where `status.sha` changes → create Bundle |
 
 This single aggregated API adoption PR would close issues **#128, #133, #140, #143, #149**
 and unblock the Subscription CRD implementation as a clean Watch node.
@@ -408,7 +410,6 @@ contributing upstream for the benefit of the broader kro ecosystem. New Graph ga
 |---|---|---|
 | `recheckAfter` on Graph nodes | `ScheduleClock` CRD pattern | #134 |
 | Explicit `dependsOn` edges | Positional naming workaround (acceptable) | #134 |
-| `ShapeWatch` for external K8s resources | Aggregated API provider (#456) | #131 |
-| CEL schedule library in DefaultEnvironment | `pkg/cel/schedule` registered via `WithCustomDeclarations` | #126 |
+| Graph CEL extension functions (for example a `schedule` library) | `schedule.*` map in the PolicyGate context (ledger G8) | #126 |
 | `startAfterMinutes` on Graph edges | Sequential waves (deferred) | #454 |
 | Aggregated API provider (GitHub) | `PRStatus` CRD workaround (#133) until landed | #456 |

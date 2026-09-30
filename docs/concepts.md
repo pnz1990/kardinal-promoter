@@ -218,7 +218,7 @@ spec:
 
 - **Org-level gates** (namespace `platform-policies`) are injected into every Pipeline that targets the matching environment. Teams cannot remove them.
 - **Team-level gates** (team namespace) are added alongside org gates. Teams can add their own restrictions.
-- The `kardinal.io/applies-to` label determines which environments the gate blocks. Comma-separated for multiple: `prod-eu,prod-us`.
+- The `kardinal.io/applies-to` label names the environment the gate blocks. A label value cannot contain a comma, so a gate blocks one environment; create one gate per environment to block several.
 
 ### CEL context
 

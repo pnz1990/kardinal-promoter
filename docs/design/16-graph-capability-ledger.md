@@ -100,8 +100,8 @@ still run, wired to the skipped environment's upstream.
 
 **kro today.** An excluded node excludes everything that depends on it.
 `pkg/graphengine/runtime/node.go:127-150` (`IsIgnored`: "any of its dependencies is
-ignored (contagious propagation)"), applied by the executor at `simple.go:55` and
-`simple.go:293`.
+ignored (contagious propagation)"), applied by the executor's `IsIgnored` call at `simple.go:275` and the skip block at
+`simple.go:289-296`.
 
 **kardinal workaround.** Skipping is resolved statically when the Graph is built. The builder
 drops skipped environments and rewires their dependents to the nearest non-skipped upstream
@@ -181,8 +181,9 @@ in the namespaces its ref nodes point to (`argocd`, `flux-system`, app namespace
 
 **kro today.** A Graph cannot create its own identity. It would have to create a
 ServiceAccount and RoleBindings while running as that same identity. kro also checks
-`watch` for every ref kind with a SelfSubjectAccessReview under the impersonated identity
-(`impersonation.go:157-199`, `CanWatch`). Separately, kro's own metadata informers watch
+`watch` with a SelfSubjectAccessReview under the impersonated identity before it opens a
+drift watch on a kind (`impersonation.go:157-199`, `CanWatch`); a denied review skips that
+watch instead of failing the Graph. Separately, kro's own metadata informers watch
 every namespace (`pkg/watch/manager.go:226-232`), so kro itself needs cluster-wide
 list/watch on every kind a Graph uses.
 
@@ -288,8 +289,9 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 These are not gaps, but the translator has to work around them.
 
 - **Node ID grammar.** IDs must match `^[A-Za-z][A-Za-z0-9]*$` and must not be reserved
-  (`pkg/graphengine/compiler/validation.go:28-51`: `graph`, `kro`, `each`, `item`,
-  `items`, `object`, `self`, `this`, `context`, `status`, `spec`, `metadata`, CEL keywords).
+  (`pkg/graphengine/compiler/validation.go:28-51`: `apiVersion`, `kind`, `metadata`,
+  `namespace`, `spec`, `status`, `graph`, `graphengine`, `kro`, `each`, `item`, `items`,
+  `object`, `self`, `this`, `context`, CEL keywords).
   The PromotionStep node ID is the environment name in camelCase (`test`, `uat`,
   `prod`); PRStatus, health and gate nodes carry a prefix. kardinal also uses `bundle` as
   a node ID. **Open kardinal bug:** a Pipeline environment named `bundle`, `status`,

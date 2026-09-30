@@ -411,6 +411,16 @@
               "type": "string"
             }
           }
+        },
+        "git": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         }
       }
     },

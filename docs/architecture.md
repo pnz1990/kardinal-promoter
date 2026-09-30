@@ -28,7 +28,7 @@ graph TD
         PGR -->|"readyWhen"| GraphAdv["Graph advances<br/>to next environment"]
         Steps -->|"Verified"| GraphAdv
 
-        Steps -->|"Failed"| Rollback["Rollback PR<br/>(kardinal/rollback label)"]
+        Steps -->|"Failed, with onHealthFailure: rollback"| Rollback["Rollback Bundle<br/>(PR labelled kardinal/rollback)"]
     end
 
     kubectl["kubectl / kardinal CLI / UI"] -->|"reads/writes"| Bundle
@@ -83,8 +83,13 @@ kardinal-promoter does **not** implement graph coordination itself. It delegates
 The `PromotionStepReconciler` runs a sequence of built-in steps for each environment:
 
 ```
-kustomize-set-image  →  git-commit  →  open-pr  →  wait-for-merge  →  health-check
+git-clone  →  kustomize-set-image  →  git-commit  →  git-push  →  [open-pr  →  wait-for-merge]  →  health-check
 ```
+
+`open-pr` and `wait-for-merge` run only for `approval: pr-review`. `update.strategy: helm`
+uses `helm-set-image` instead of `kustomize-set-image`, config Bundles use `config-merge`,
+and `update.strategy: argocd` runs only `argocd-set-image` and `health-check`
+(`pkg/steps/defaults.go`).
 
 Built-in step implementations:
 
@@ -94,14 +99,15 @@ Built-in step implementations:
 | `kustomize-set-image` | Edits the environment's `kustomization.yaml` `images:` list the way `kustomize edit set image` does (no binary needed) |
 | `kustomize-build` | Runs `kustomize build` on the environment path and writes `rendered-<env>.yaml` to the checkout. It is only in the `layout: branch` sequence, which is not implemented yet and fails at `git-clone`, so it never runs today |
 | `helm-set-image` | Updates `values.yaml` image tag for Helm-based repos |
+| `argocd-set-image` | Patches the Argo CD Application's image override directly, with no Git commit (`update.strategy: argocd`) |
 | `config-merge` | Copies the environment directory of the Bundle's `configRef` commit over the environment directory (config Bundles). Files deleted in the config commit are not deleted |
 | `git-commit` | Commits the working tree changes. When nothing changed it records that, and the later steps skip the push and the PR |
 | `git-push` | `pr-review`: force-pushes `kardinal/<bundle>/<env>`, so a re-run after a restart replaces the earlier push. `auto`: pushes the base branch; if it moved, the sequence restarts from a fresh clone (at most 3 times) |
 | `open-pr` | Opens a pull request via the SCM provider with promotion evidence |
 | `wait-for-merge` | Polls `PRStatus` until the PR is merged or closed |
 | `health-check` | Queries Kubernetes Deployment readiness or ArgoCD/Flux/Rollouts/Flagger sync status |
-| `integration-test` | Runs a Kubernetes Job as part of the promotion; waits for completion |
-| `custom-step` | Calls a user-defined webhook with the promotion context |
+| `integration-test` | Runs a Kubernetes Job as part of the promotion; waits for completion. Not in any default sequence |
+| Webhook steps | Call a user-defined webhook with the promotion context. Not in any default sequence |
 
 Only the steps of the default sequence run today. `integration-test`, `verify-image` and webhook steps can be selected only through `spec.environments[].steps`, which is not implemented yet: a Pipeline that sets it is rejected (see [Custom Steps](custom-steps.md)).
 
@@ -122,7 +128,11 @@ Abstracts Git hosting operations. Current implementations:
 |---|---|
 | GitHub | GA |
 | GitLab | Beta |
-| Forgejo/Gitea | Beta |
+| Forgejo, Gitea | Beta |
+| Bitbucket Cloud, Azure DevOps | Newer, less tested |
+
+The provider is chosen for the whole controller with `--scm-provider`; see
+[SCM Providers](scm-providers.md).
 
 ### Health Adapters (`pkg/health`)
 
@@ -160,7 +170,7 @@ sequenceDiagram
     kro->>K8s: advance DAG → create PromotionStep[test] steps
     K8s->>PS: reconcile PromotionStep[test]
     PS->>PS: image update → commit → open PR → wait merge → health check
-    PS->>K8s: status.phase = Verified
+    PS->>K8s: status.state = Verified
     kro->>kro: readyWhen satisfied → advance to uat
     Note over kro,PS: Repeat for uat → prod
     kro->>K8s: Graph.status.state = Verified
@@ -171,8 +181,8 @@ sequenceDiagram
 
 ## How kardinal Relates to ArgoCD and Flux
 
-kardinal-promoter is **GitOps-agnostic**: it does not communicate with ArgoCD or Flux
-during promotion. Instead:
+kardinal-promoter is **GitOps-agnostic**: with the `kustomize` and `helm` update strategies
+it only writes to Git. Instead of talking to Argo CD or Flux:
 
 1. `PromotionStepReconciler` opens a Git pull request with the updated image reference.
 2. A human (or automated process) merges the PR.
@@ -181,6 +191,10 @@ during promotion. Instead:
    before advancing the DAG.
 
 This means kardinal works with any GitOps engine — or even without one (raw Kubernetes deployments).
+
+The exception is `update.strategy: argocd`, which patches the Argo CD `Application`
+directly instead of committing to Git. It needs the chart's
+`rbac.argocdApplicationsWrite=true` (see [Argo CD native promotion](argocd-native-promotion.md)).
 
 ---
 
@@ -193,13 +207,16 @@ All state is stored in Kubernetes CRDs:
 | `Pipeline` | Defines environments, update strategy, SCM config |
 | `Bundle` | Immutable deployment unit; created by CI |
 | `PromotionStep` | Per-environment promotion progress; owned by Graph |
-| `PolicyGate` | Policy check template (cluster-scoped or namespace-scoped) |
+| `PolicyGate` | Namespaced policy check: templates, and the per-Bundle instances the Graph creates |
 | `PRStatus` | Tracks GitHub/GitLab PR open/merged/closed state |
 | `RollbackPolicy` | Consecutive-failure rollback trigger for one Bundle in one environment (user-created; see [Rollback](rollback.md#autorollback-is-not-implemented)) |
 | `MetricCheck` | Prometheus query check, created as a DAG node |
 | `ScheduleClock` | Writes `status.tick` on a configurable interval; enables time-based policy gates |
 | `ChangeWindow` | Cluster-scoped blackout/recurring allow windows for pipeline promotions |
 | `Subscription` | Watches OCI registries or Git repos; auto-creates Bundles on new artifacts |
+| `PromotionTemplate` | Reserved for a shared step sequence; `spec.environments[].promotionTemplate` is not implemented yet and is rejected |
+| `NotificationHook` | Sends promotion events to a webhook URL |
+| `AuditEvent` | Append-only record of promotion events (see [Security](guides/security.md#audit-logging)) |
 
 The controller is **stateless**: it can be restarted at any time without data loss. All
 state is recovered by re-reading CRDs.
