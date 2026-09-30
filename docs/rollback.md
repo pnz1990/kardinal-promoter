@@ -66,12 +66,36 @@ spec:
 |---|---|
 | `none` (default) | `Failed`; downstream environments stop |
 | `abort` | `AbortedByAlarm`; a human must intervene |
-| `rollback` | A rollback Bundle is created (`spec.provenance.rollbackOf`, label `kardinal.io/rollback: "true"`) and the step moves to `RollingBack` |
+| `rollback` | A rollback Bundle is created with the artifacts of the Bundle verified before the failing one in this environment (the selection in [How Rollback Works](#how-rollback-works)), and the step moves to `RollingBack`. With nothing safe to roll back to, the step is `AbortedByAlarm` and nothing is created |
 
-**When it applies.** The controller applies `onHealthFailure` when a health check fails during a bake window with `bake.policy: fail-on-alarm`. Other failures only mark the step `Failed`; they do not create a rollback Bundle:
+**When it applies.** The controller applies `onHealthFailure` when:
 
-- **Health timeout.** If a PromotionStep does not pass its health check within `health.timeout` (default: 10m), the step is marked `Failed`.
-- **Delegated rollout failure.** A `Degraded` Argo Rollouts or Flagger rollout counts as an unhealthy check, so the step is marked `Failed` at `health.timeout`, or sooner under `fail-on-alarm`.
+- the PromotionStep has no Healthy check within `health.timeout` (default: 10m);
+- the health adapter reports a terminal result (Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed`);
+- a health check fails during a bake window with `bake.policy: fail-on-alarm`.
+
+A rollback Bundle (label `kardinal.io/rollback: "true"` or `spec.provenance.rollbackOf` set) is not rolled back again: when its own health check fails with `rollback` set, the step is `AbortedByAlarm` instead, so rollbacks do not chain.
+
+### What counts as a failed health check
+
+Each health check has one of four results (see [Timings and failures](health-adapters.md#timings-and-failures)):
+
+| Result | Examples | Counts in `consecutiveHealthFailures` | Applies `onHealthFailure` |
+|---|---|---|---|
+| Healthy | The promoted revision runs and is available | No (resets it to 0) | No |
+| Waiting | A rollout in progress, including new pods that are not available yet; Argo CD or Flux not synced to the promoted commit yet; Argo Rollouts `Progressing` or `Paused`; Flagger `Progressing` | No | No |
+| Unhealthy | A Deployment whose rollout finished but whose pods became unavailable; Argo CD `Degraded`; Flux `Ready=False`; Argo Rollouts `Degraded`; target not found | Yes, once per check | Only during a bake window with `fail-on-alarm` |
+| Failed | Deployment `ProgressDeadlineExceeded`; Flagger canary `Failed` | Yes | Yes, at once |
+
+### Health timeout
+
+If a PromotionStep has no Healthy check within `health.timeout` (default: 10m) of entering `HealthChecking`, the timeout is a health failure: it increments `status.consecutiveHealthFailures` and applies `onHealthFailure`, as a Failed result does. The step message is `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: <last check>`. The timeout does not apply once a `bake` window has started.
+
+A new image whose pods crash-loop is the common case. Kubernetes reports such a Deployment as still rolling out (`Progressing=True`, reason `ReplicaSetUpdated`) until its `progressDeadlineSeconds` (default: 600s) passes, so every check before that is Waiting. The step then fails at `health.timeout`, or earlier when `ProgressDeadlineExceeded` is reported first. To fail sooner, set the Deployment's `progressDeadlineSeconds` below `health.timeout`.
+
+### Delegation failure
+
+A Flagger canary `Failed` is a Failed result: `onHealthFailure` applies at once. An Argo Rollouts `Degraded` phase is Unhealthy: each check counts, and `onHealthFailure` applies at the health timeout, or sooner under `bake.policy: fail-on-alarm`.
 
 In all cases, the Graph stops all downstream nodes automatically (Graph does not advance past a Failed node). Use `kardinal rollback` to roll back manually.
 

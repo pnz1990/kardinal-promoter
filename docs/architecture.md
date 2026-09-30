@@ -51,7 +51,7 @@ The controller manager runs these reconcilers:
 | `PromotionStepReconciler` | `PromotionStep` | Runs the steps engine: git-clone → image update → PR → health check |
 | `PolicyGateReconciler` | `PolicyGate` (instances) | Evaluates CEL expression; writes `status.ready` |
 | `MetricCheckReconciler` | `MetricCheck` | Queries Prometheus; writes result to status |
-| `PRStatusReconciler` | `PRStatus` | Polls SCM for PR merge/close signal; writes `status.merged` |
+| `PRStatusReconciler` | `PRStatus` | Polls SCM for PR merge/close signal; writes `status.merged`, `status.mergeCommitSHA` and, for a 401/403/404/410, `status.pollError` |
 | `RollbackPolicyReconciler` | `RollbackPolicy` | Reads one Bundle's PromotionSteps in one environment; creates a rollback Bundle at the failure threshold |
 | `ScheduleClockReconciler` | `ScheduleClock` | Writes `status.tick` on a configurable interval for time-based gates |
 | `ChangeWindowReconciler` | `ChangeWindow` | Writes `status.active` and requeues at the next window boundary |

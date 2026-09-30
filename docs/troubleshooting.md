@@ -105,11 +105,15 @@ The health adapter has not reported the environment as healthy.
 kubectl get promotionstep my-app-v1-29-0-prod -o yaml
 ```
 
+`status.message` names the adapter and its last result. `waiting for <adapter>` means the rollout is still in progress; `unhealthy via <adapter>` means the target is not healthy, and `status.consecutiveHealthFailures` counts those checks.
+
 Common causes:
-- Argo CD Application has not synced yet (check Application sync status)
+- Argo CD Application has not synced the promoted commit yet (`revision=<old>, waiting for <new>`; check the Application sync status and revision)
+- Flux has not applied the promoted commit yet (`lastAppliedRevision=<old>, waiting for <new>`)
+- The Deployment still runs the previous image (`not updated yet`) or has not finished rolling out
 - Deployment pods are crash-looping (check pod logs)
 - Health timeout is too short for slow deploys (increase `health.timeout`)
-- The health adapter is using the wrong resource name (check `health.type` and the resource config)
+- The health adapter is checking the wrong object (check `health.type` and the `health.resource`, `health.argocd` or `health.flux` override; see [Health Adapters](health-adapters.md))
 
 ### Symptom: PolicyGate shows "CEL error"
 
@@ -194,14 +198,9 @@ Common causes:
 
 Same as above but for Flux. Check `kubectl get kustomizations -n flux-system`.
 
-### Symptom: Remote cluster health check fails with "connection refused"
+### Symptom: PromotionStep fails with "health.cluster is not supported"
 
-The kubeconfig Secret for the remote cluster contains invalid or expired credentials.
-
-```bash
-# Test the kubeconfig
-KUBECONFIG=<(kubectl get secret prod-cluster -o jsonpath='{.data.kubeconfig}' | base64 -d) kubectl get pods
-```
+Remote-cluster health checks through a kubeconfig Secret are not implemented, so an environment that sets `health.cluster` fails instead of checking the local cluster. Remove `health.cluster`. To verify a workload in another cluster, check its Argo CD Application in the controller's cluster (`health.type: argocd`). See [Health Adapters](health-adapters.md#remote-clusters).
 
 ## Webhook issues
 
@@ -361,7 +360,7 @@ kubectl create secret generic github-token \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-The controller will automatically retry the failed step on the next reconcile (within 30 seconds).
+A step that returns an error is retried with backoff (10s, 20s, 40s, 80s, then 2m) up to 5 times; `status.message` shows `retrying in <d> (<n>/5)`. Rotate the token within that window and the step continues. After the last retry the PromotionStep is Failed; create a new Bundle to promote again.
 
 ### Symptom: "get PR status failed: HTTP 401", "HTTP 403" or "HTTP 404" on a PromotionStep
 
@@ -375,6 +374,17 @@ The controller will automatically retry the failed step on the next reconcile (w
 
 Polling again cannot fix these, so the step is marked as a permanent failure. A 403 rate limit,
 429, 5xx or network error keeps the step waiting and it is retried every 30 seconds.
+
+A step already in `WaitingForMerge` learns about the merge from its PRStatus. When the PRStatus
+poll gets one of these errors, it writes it to `status.pollError` and the step fails with
+`PR #<n> cannot be polled: <error>`:
+
+```bash
+kubectl get prstatus -o custom-columns=NAME:.metadata.name,PR:.spec.prNumber,ERROR:.status.pollError
+```
+
+The PRStatus keeps polling every 5 minutes and clears `pollError` once a poll succeeds, but the
+failed step does not resume. Fix the token or the repository, then create a new Bundle.
 
 ### Symptom: "403 rate limit exceeded" or "429 Too Many Requests" in controller logs
 

@@ -90,8 +90,12 @@ spec:
                               minLength: 1
                               type: string
                             namespace:
-                              description: Namespace is the Secret namespace. If empty,
-                                the Pipeline's namespace is used.
+                              description: |-
+                                Namespace is the Secret namespace. If empty, the Pipeline's namespace is used.
+                                For spec.git.secretRef it must be empty or equal to the Pipeline's namespace:
+                                the controller refuses to read a Secret from another namespace and fails the
+                                PromotionStep with a clear message, so a Pipeline author cannot borrow another
+                                team's credentials.
                               type: string
                           required:
                           - name

@@ -403,8 +403,8 @@ health:
     namespace: prod
 ```
 
-The controller verifies that the Deployment's `Available` condition is `True` after
-pushing to Git. You are responsible for ensuring Git changes reach the cluster (e.g.,
+The controller verifies that the Deployment runs the Bundle images, has finished rolling
+out and is `Available` after pushing to Git. You are responsible for ensuring Git changes reach the cluster (e.g.,
 via CI, Flux Receiver webhooks, or ArgoCD App-of-Apps).
 
 ### With Flux
@@ -417,7 +417,8 @@ health:
     namespace: flux-system
 ```
 
-Auto-detected if Flux CRDs are installed. Waits for Kustomization `Ready=True`.
+Set `type: flux` explicitly (there is no auto-detection). Waits for Kustomization `Ready=True`
+with `lastAppliedRevision` at the promoted commit.
 
 ### Mixing GitOps tools across environments
 
