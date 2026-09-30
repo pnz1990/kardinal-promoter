@@ -834,9 +834,10 @@ func buildPolicyGateNode(
 		"recheckInterval": gate.Spec.RecheckInterval,
 	}
 	// when is copied only when set: the CRD defaults it to post-deploy, and an
-	// empty string would fail the enum.
-	if gate.Spec.When != "" {
-		templateSpec["when"] = gate.Spec.When
+	// empty string would fail the enum. It is deprecated and has no effect
+	// (#1323); the copy keeps the instance a faithful copy of the template.
+	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: copied unchanged, no behaviour depends on it
+		templateSpec["when"] = gate.Spec.When //nolint:staticcheck // SA1019: as above
 	}
 
 	return GraphNode{

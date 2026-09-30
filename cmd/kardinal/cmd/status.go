@@ -53,8 +53,8 @@ commit; "none" when no change has landed yet), the PolicyGates holding it back
 (with CEL expression and current reason), and open PR URLs. A gate is listed
 as blocking only while it holds the bundle back: it is not ready and either
 every upstream environment is Verified for that bundle and the bundle has no
-PromotionStep in the gate's environment yet, or it is a pre-deploy gate that
-the bundle's Pending PromotionStep there waits on. A gate of an environment
+PromotionStep in the gate's environment yet, or the bundle's Pending
+PromotionStep there waits on it. A gate of an environment
 the bundle has not reached yet is not listed. This is the first command to
 run when a promotion is stuck.
 
@@ -221,7 +221,7 @@ func statusPipelineWriter(w io.Writer, c sigs_client.Client, ns, pipeline string
 	// and holds that Bundle back there (graph.GateHolds, the rule the UI's
 	// blockerCount uses): it is not ready, and either the Bundle has no step
 	// there yet and every upstream step is Verified, or a Pending step there
-	// waits on it as a pre-deploy gate (E2E-R18).
+	// waits on it (E2E-R18).
 	byName := make(map[string]*v1alpha1.Bundle, len(bundles.Items))
 	for i := range bundles.Items {
 		byName[bundles.Items[i].Name] = &bundles.Items[i]

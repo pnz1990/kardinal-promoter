@@ -365,8 +365,8 @@ func TestExplain_GateStates(t *testing.T) {
 		return explainGateInstance("demo", "b1", "prod", "require-uat-soak", "bundle.upstreamSoakMinutes >= 30",
 			ready, evaluated, "bundle.upstreamSoakMinutes >= 30")
 	}
-	preDeploy := gate(false, true)
-	preDeploy.Spec.When = "pre-deploy"
+	postDeploy := gate(false, true)
+	postDeploy.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 	started := gate(false, true)
 	failed := gate(false, true)
 	superseded := gate(false, true)
@@ -383,8 +383,9 @@ func TestExplain_GateStates(t *testing.T) {
 		{name: "not reached, evaluated", phase: "Promoting", gate: gate(false, true), steps: inTest(), want: "Waiting"},
 		{name: "not reached, not evaluated yet", phase: "Promoting", gate: gate(false, false), steps: inTest(), want: "Pending"},
 		{
-			name: "pre-deploy gate holds its Pending step", phase: "Promoting", gate: preDeploy,
-			steps: upstreamVerified("Pending", preDeploy), want: "Block",
+			// #1323: spec.when has no effect.
+			name: "post-deploy gate holds its Pending step", phase: "Promoting", gate: postDeploy,
+			steps: upstreamVerified("Pending", postDeploy), want: "Block",
 		},
 		{
 			name: "gate of a step that started", phase: "Promoting", gate: started,

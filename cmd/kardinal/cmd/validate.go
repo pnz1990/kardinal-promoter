@@ -228,16 +228,32 @@ func validatePolicyGate(out io.Writer, file string, data []byte) error {
 		}
 	}
 
+	// Warnings do not fail validation.
+	var warnings []string
+	if gate.Spec.When != "" { //nolint:staticcheck // SA1019: warn that the deprecated field is set (#1323)
+		warnings = append(warnings, "spec.when is deprecated and has no effect: every gate is re-checked "+
+			"right before its PromotionStep starts; remove it")
+	}
+
 	if len(errs) > 0 {
 		_, _ = fmt.Fprintf(out, "✗ %s is invalid:\n", file)
 		for _, e := range errs {
 			_, _ = fmt.Fprintf(out, "  - %s\n", e)
 		}
+		printValidateWarnings(out, warnings)
 		return fmt.Errorf("validation failed")
 	}
 
 	_, _ = fmt.Fprintf(out, "✓ %s is valid\n", file)
+	printValidateWarnings(out, warnings)
 	return nil
+}
+
+// printValidateWarnings prints each warning under a file's result line.
+func printValidateWarnings(out io.Writer, warnings []string) {
+	for _, w := range warnings {
+		_, _ = fmt.Fprintf(out, "  ! warning: %s\n", w)
+	}
 }
 
 func hasUnnamedEnv(p kardinalv1alpha1.Pipeline) bool {

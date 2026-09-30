@@ -47,14 +47,15 @@ type PolicyGateSpec struct {
 	// +optional
 	Selector *metav1.LabelSelector `json:"selector,omitempty"`
 
-	// When (K-02). Every gate on an environment holds that environment's
-	// PromotionStep back until the gate is ready: the Graph does not create the
-	// step before then, whatever the value of this field.
-	// "pre-deploy": the PromotionStep reconciler also re-checks the gate right
-	//   before git operations start; if it is not ready, the step stays in
-	//   Pending and no git-clone begins.
-	// "post-deploy" (default): no additional check. The gate is not evaluated
-	//   again after the deployment.
+	// When has no effect. Every gate on an environment is re-checked right
+	// before that environment's PromotionStep starts: the step stays in
+	// Pending, with no git operation, until each gate it requires exists, is
+	// ready, and was evaluated at or after the step was created. A step that
+	// has started is not stopped by a gate that turns false later.
+	//
+	// Deprecated: remove this field. Every gate is re-checked before its
+	// PromotionStep starts, whatever the value; pre-deploy and post-deploy
+	// behave the same.
 	// +kubebuilder:validation:Enum=pre-deploy;post-deploy
 	// +kubebuilder:default=post-deploy
 	// +optional

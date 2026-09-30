@@ -16,7 +16,7 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **Parallel environments** | Yes — native fan-out + `wave:` topology | No | No — DAG on roadmap |
 | **Policy gates** | CEL (kro library: schedule, upstream soak, metrics, cross-stage, PR review) | Manual approval only | CommitStatus-based webhook checks |
 | **Cross-stage policy** | Yes — gate can read upstream soak, history, metrics, PR approval state | No | No |
-| **Pre-deploy gates** | Yes — `when: pre-deploy` blocks before git-clone starts | No | No |
+| **Pre-deploy gates** | Yes — every gate is re-checked, on a result newer than the step, right before git-clone starts | No | No |
 | **PR evidence body** | Structured (image, digest, CI run, commit and author; each gate's result and reason; upstream health-check times) | None — tracked in Kargo UI | Git diff only |
 | **GitOps engine support** | ArgoCD, Flux, raw Kubernetes | ArgoCD (primary), others partial | ArgoCD, Flux, any |
 | **SCM providers** | GitHub, GitLab, Forgejo/Gitea; Bitbucket Cloud and Azure DevOps (experimental, one provider per controller) | GitHub, GitLab | GitHub |

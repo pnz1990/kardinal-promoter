@@ -330,7 +330,7 @@ func TestBuild_GateInstanceSpec(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tpl := makePolicyGate("no-weekend-deploy", "platform-policies", "prod", "!schedule.isWeekend")
-			tpl.Spec.When = tt.when
+			tpl.Spec.When = tt.when //nolint:staticcheck // SA1019: the deprecated field is still copied
 			tpl.Spec.Overrides = []kardinalv1alpha1.PolicyGateOverride{{Reason: "P0 hotfix", Stage: "prod"}}
 			res, err := graph.NewBuilder().Build(graph.BuildInput{
 				Pipeline:    makeLinearPipeline("app", "prod"),
