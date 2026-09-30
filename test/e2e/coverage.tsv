@@ -270,26 +270,26 @@ CLI-VALIDATE-01	live	cli	todo	cli	validate -f rejects what the API server reject
 CLI-COMPLETION-01	live	cli	todo	cli	completion bash|zsh|fish	cmd/kardinal/cmd/completion.go:24
 CLI-APPROVE-01	deprecated	cli	todo	cli	approve fails and points to kardinal override	cmd/kardinal/cmd/approve.go:32; docs/changelog.md:63
 CLI-EMERGENCY-01	deprecated	cli	todo	cli	rollback --emergency has no effect and prints a deprecation notice	cmd/kardinal/cmd/rollback.go:73-74; docs/changelog.md:63
-UIAPI-PIPELINES-01	live	ui	todo	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:268
-UIAPI-BUNDLES-01	live	ui	todo	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:439
-UIAPI-GRAPH-01	live	ui	todo	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:519
-UIAPI-STEPS-01	live	ui	todo	ui-api	GET bundles/{b}/steps	cmd/kardinal-controller/ui_api.go:776
-UIAPI-GATES-01	live	ui	todo	ui-api	GET gates with holding/blockerCount	cmd/kardinal-controller/ui_api.go:862
-UIAPI-EVENTS-01	live	ui	todo	ui-api	GET steps/{ns}/{n}/events (count, first/last timestamp); 404 for a missing step	cmd/kardinal-controller/ui_api.go:1208
-UIAPI-PROMOTE-01	live	ui	todo	ui-api	POST promote	cmd/kardinal-controller/ui_lifecycle.go:59
-UIAPI-ROLLBACK-01	live	ui	todo	ui-api	POST rollback	cmd/kardinal-controller/ui_lifecycle.go:130
-UIAPI-PAUSE-01	live	ui	todo	ui-api	POST pause and resume	cmd/kardinal-controller/ui_lifecycle.go:200; cmd/kardinal-controller/ui_lifecycle.go:206
-UIAPI-APPROVE-01	live	ui	todo	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1052
-UIAPI-VALIDATECEL-01	live	ui	todo	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1004
-UIAPI-CREATE-01	live	ui	todo	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1366-1441
-UIAPI-LOCAL-01	live	ui	todo	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:24
-UIAPI-HOST-01	live	ui	todo	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:571-614; cmd/kardinal-controller/ui_hosts.go
-UIAPI-TOKEN-01	live	ui	todo	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:457-480
-UIAPI-TR-01	live	ui	todo	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:481-555; pkg/uiauth/tokenreview.go
-UIAPI-CORS-01	live	ui	todo	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:564-570
-UIAPI-TLS-01	live	ui	todo	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:644-707
-UIAPI-HEADERS-01	live	ui	todo	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:629-643; cmd/kardinal-controller/ui_security_headers.go:31-60
-UIAPI-BODY-01	live	ui	todo	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:67-103
+UIAPI-PIPELINES-01	live	ui	covered	ui-api	GET /api/v1/ui/pipelines lists pipelines with env status	cmd/kardinal-controller/ui_api.go:268
+UIAPI-BUNDLES-01	live	ui	covered	ui-api	GET pipelines/{p}/bundles	cmd/kardinal-controller/ui_api.go:439
+UIAPI-GRAPH-01	live	ui	covered	ui-api	GET bundles/{b}/graph returns nodes, edges and PR links	cmd/kardinal-controller/ui_api.go:519
+UIAPI-STEPS-01	live	ui	covered	ui-api	GET bundles/{b}/steps	cmd/kardinal-controller/ui_api.go:776
+UIAPI-GATES-01	live	ui	covered	ui-api	GET gates with holding/blockerCount	cmd/kardinal-controller/ui_api.go:862
+UIAPI-EVENTS-01	live	ui	covered	ui-api	GET steps/{ns}/{n}/events (count, first/last timestamp); 404 for a missing step	cmd/kardinal-controller/ui_api.go:1208
+UIAPI-PROMOTE-01	live	ui	covered	ui-api	POST promote	cmd/kardinal-controller/ui_lifecycle.go:59
+UIAPI-ROLLBACK-01	live	ui	covered	ui-api	POST rollback	cmd/kardinal-controller/ui_lifecycle.go:130
+UIAPI-PAUSE-01	live	ui	covered	ui-api	POST pause and resume	cmd/kardinal-controller/ui_lifecycle.go:200; cmd/kardinal-controller/ui_lifecycle.go:206
+UIAPI-APPROVE-01	live	ui	covered	ui-api	POST gates/[{ns}/]{name}/approve writes an override	cmd/kardinal-controller/ui_api.go:1052
+UIAPI-VALIDATECEL-01	live	ui	covered	ui-api	POST validate-cel returns compile errors	cmd/kardinal-controller/ui_api.go:1004
+UIAPI-CREATE-01	live	ui	covered	ui-api	POST bundles creates a Bundle from the UI	cmd/kardinal-controller/ui_api.go:1366-1441
+UIAPI-LOCAL-01	live	ui	covered	ui-api	with no UI auth mode, non-loopback clients or requests with proxy headers get 403	cmd/kardinal-controller/ui_peer.go:33-71; docs/installation.md:161-200; docs/changelog.md:24
+UIAPI-HOST-01	live	ui	covered	ui-api	Host not in ui.allowedHosts gets 403 (DNS rebinding)	docs/guides/security.md:571-614; cmd/kardinal-controller/ui_hosts.go
+UIAPI-TOKEN-01	live	ui	covered	ui-api	static UI token: missing or wrong bearer gets 401 with WWW-Authenticate; correct token 200	docs/guides/security.md:457-480
+UIAPI-TR-01	live	ui	covered	ui-api	TokenReview mode: 401 invalid token, 403 when SubjectAccessReview denies, 503 when review fails; 30s cache	docs/guides/security.md:481-555; pkg/uiauth/tokenreview.go
+UIAPI-CORS-01	live	ui	covered	ui-api	CORS: allowed origin reflected, others 403, OPTIONS preflight 200	docs/guides/security.md:564-570
+UIAPI-TLS-01	live	ui	covered	ui-api	TLS on UI and webhook servers; cert without key is a startup error	docs/guides/security.md:644-707
+UIAPI-HEADERS-01	live	ui	covered	ui-api	browser security headers (CSP, nosniff, frame deny)	docs/guides/security.md:629-643; cmd/kardinal-controller/ui_security_headers.go:31-60
+UIAPI-BODY-01	live	ui	covered	ui-api	request body over 1 MiB rejected	cmd/kardinal-controller/ui_auth.go:67-103
 UI-STATIC-01	live	ui	todo	ui	/ui/ serves the embedded web app	docs/installation.md:161-200
 UI-LIST-01	live	ui	todo	ui	pipeline sidebar (PAUSED/Blocked/Degraded) and fleet health bar with filters	docs/roadmap.md:133
 UI-DAG-01	live	ui	todo	ui	promotion DAG with per-env state, PR badge and tooltip	docs/roadmap.md:133
