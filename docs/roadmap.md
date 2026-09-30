@@ -50,9 +50,9 @@ All of the following are implemented and shipped:
 - `BakeElapsedMinutes` and `BakeResets` tracked in PromotionStep status
 - Bake timer resets on health alarm when `policy=reset-on-alarm`
 
-**K-02: Pre-deploy gate type**
-- `when: pre-deploy` on PolicyGate spec — re-checked right before `git-clone` starts
-- Every gate already holds back the creation of its environment's PromotionStep; if a pre-deploy gate has turned false by the time the step starts, the step stays `Pending` with the message `waiting for pre-deploy gate: <name>` and no PR is opened
+**K-02: Gates re-checked before a step starts**
+- Every gate holds back the creation of its environment's PromotionStep, and is re-checked right before `git-clone` starts: the step starts only on a ready result evaluated at or after the step was created. Otherwise it stays `Pending` with the message `waiting for gate <name>` (or `... to be re-evaluated`) and no PR is opened
+- `when` on the PolicyGate spec is deprecated and has no effect: `pre-deploy` and `post-deploy` behave the same
 
 **K-03: Auto-rollback with ABORT vs ROLLBACK distinction**
 - `onHealthFailure: rollback | abort | none` on environment spec
