@@ -34,6 +34,11 @@ import (
 // creating the gate wakes every PromotionStep in the namespace (the
 // PromotionStep reconciler watches PolicyGates), so resume takes effect at
 // once.
+//
+// Only kardinal's own gate counts (IsFreezeGate). A PolicyGate a user named
+// freeze-<pipeline> neither holds steps nor is deleted by resume; pausing
+// while it exists fails with ErrConflict, and the Pipeline reconciler reports
+// it in the Paused condition, so the pipeline is never silently left running.
 
 // FreezeGateName returns the name of the freeze PolicyGate of a pipeline.
 func FreezeGateName(pipeline string) string {
@@ -76,16 +81,52 @@ func DesiredFreezeGate(p *v1alpha1.Pipeline) *v1alpha1.PolicyGate {
 	return gate
 }
 
-// EnsureFreezeGate creates the freeze gate of p if it does not exist.
+// IsFreezeGate reports whether gate is kardinal's freeze gate of pipeline: it
+// has the freeze gate's name and either the kardinal.io/freeze=true label or a
+// controller owner reference to the Pipeline. Any other PolicyGate with that
+// name belongs to a user and is not a pause.
+func IsFreezeGate(gate *v1alpha1.PolicyGate, pipeline string) bool {
+	if gate.Name != FreezeGateName(pipeline) {
+		return false
+	}
+	if gate.Labels[LabelFreeze] == "true" {
+		return true
+	}
+	owner := metav1.GetControllerOf(gate)
+	return owner != nil && owner.Kind == "Pipeline" && owner.Name == pipeline &&
+		owner.APIVersion == v1alpha1.GroupVersion.String()
+}
+
+// EnsureFreezeGate creates the freeze gate of p if it does not exist. When a
+// PolicyGate that is not kardinal's freeze gate already has the name, nothing
+// would hold the pipeline, so it returns ErrConflict naming that gate.
 func EnsureFreezeGate(ctx context.Context, c client.Client, p *v1alpha1.Pipeline) error {
-	if err := c.Create(ctx, DesiredFreezeGate(p)); err != nil && !apierrors.IsAlreadyExists(err) {
+	err := c.Create(ctx, DesiredFreezeGate(p))
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create freeze gate for pipeline %s: %w", p.Name, err)
+	}
+	var gate v1alpha1.PolicyGate
+	if err := c.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: FreezeGateName(p.Name)}, &gate); err != nil {
+		return fmt.Errorf("get freeze gate for pipeline %s: %w", p.Name, err)
+	}
+	if !IsFreezeGate(&gate, p.Name) {
+		return FreezeGateConflict(p.Name)
 	}
 	return nil
 }
 
+// FreezeGateConflict is the ErrConflict returned when a user PolicyGate has
+// the freeze gate's name.
+func FreezeGateConflict(pipeline string) error {
+	return fmt.Errorf("PolicyGate %s already exists and is not kardinal's freeze gate (no %s=true label, not owned by the Pipeline), so pipeline %s is NOT paused; rename or delete that PolicyGate: %w",
+		FreezeGateName(pipeline), LabelFreeze, pipeline, ErrConflict)
+}
+
 // RemoveFreezeGate deletes the freeze gate of a pipeline. A PolicyGate with the
-// same name that is not labelled kardinal.io/freeze=true is left alone.
+// same name that is not kardinal's freeze gate (IsFreezeGate) is left alone.
 func RemoveFreezeGate(ctx context.Context, c client.Client, ns, pipeline string) error {
 	var gate v1alpha1.PolicyGate
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: FreezeGateName(pipeline)}, &gate); err != nil {
@@ -94,7 +135,7 @@ func RemoveFreezeGate(ctx context.Context, c client.Client, ns, pipeline string)
 		}
 		return fmt.Errorf("get freeze gate for pipeline %s: %w", pipeline, err)
 	}
-	if gate.Labels[LabelFreeze] != "true" {
+	if !IsFreezeGate(&gate, pipeline) {
 		return nil
 	}
 	if err := c.Delete(ctx, &gate); err != nil && !apierrors.IsNotFound(err) {
@@ -103,7 +144,8 @@ func RemoveFreezeGate(ctx context.Context, c client.Client, ns, pipeline string)
 	return nil
 }
 
-// IsPaused reports whether the freeze gate of a pipeline exists.
+// IsPaused reports whether the freeze gate of a pipeline exists. A user
+// PolicyGate with the same name is not a pause.
 func IsPaused(ctx context.Context, c client.Reader, ns, pipeline string) (bool, error) {
 	var gate v1alpha1.PolicyGate
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: FreezeGateName(pipeline)}, &gate); err != nil {
@@ -112,11 +154,13 @@ func IsPaused(ctx context.Context, c client.Reader, ns, pipeline string) (bool, 
 		}
 		return false, fmt.Errorf("get freeze gate for pipeline %s: %w", pipeline, err)
 	}
-	return gate.Labels[LabelFreeze] == "true", nil
+	return IsFreezeGate(&gate, pipeline), nil
 }
 
 // Pause sets spec.paused on the Pipeline and creates its freeze gate. It is
-// idempotent. It returns ErrNotFound when the Pipeline does not exist.
+// idempotent. It returns ErrNotFound when the Pipeline does not exist, and
+// ErrConflict when a user PolicyGate has the freeze gate's name (spec.paused
+// stays set, so the pause takes effect once that gate is renamed or deleted).
 func Pause(ctx context.Context, c client.Client, ns, pipeline string) error {
 	p, err := setPaused(ctx, c, ns, pipeline, true)
 	if err != nil {

@@ -8,7 +8,9 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -28,6 +30,16 @@ import (
 const (
 	reasonValid            = "Valid"
 	reasonValidationFailed = "ValidationFailed"
+)
+
+// The Paused condition is set while spec.paused is true and removed when it is
+// not. True/FreezeGateActive: the freeze gate holds new promotions.
+// False/FreezeGateNameConflict: a user PolicyGate has the freeze gate's name,
+// so nothing holds the pipeline until that gate is renamed or deleted.
+const (
+	conditionPaused              = "Paused"
+	reasonFreezeGateActive       = "FreezeGateActive"
+	reasonFreezeGateNameConflict = "FreezeGateNameConflict"
 )
 
 // Reconciler watches Pipeline objects, validates them, and sets status.conditions
@@ -58,8 +70,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// spec.paused is the request; the freeze gate is what the PromotionStep
 	// reconciler reads. Converging here makes a plain spec edit pause too, and
 	// recreates a freeze gate deleted by hand while the pipeline is paused.
-	if err := r.convergeFreezeGate(ctx, &p); err != nil {
+	desiredPaused, err := r.convergeFreezeGate(ctx, &p)
+	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if desiredPaused != nil && desiredPaused.Status == metav1.ConditionFalse {
+		log.Warn().Str("reason", desiredPaused.Reason).Msg(desiredPaused.Message)
 	}
 
 	desired := r.validate(&p)
@@ -92,7 +108,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	condMatch := conditionMatches(p.Status.Conditions, desired)
 	phaseMatch := p.Status.Phase == desiredPhase
 	metricsMatch := deploymentMetricsEqual(p.Status.DeploymentMetrics, desiredMetrics)
-	if condMatch && phaseMatch && metricsMatch {
+	pausedMatch := meta.FindStatusCondition(p.Status.Conditions, conditionPaused) == nil
+	if desiredPaused != nil {
+		pausedMatch = conditionMatches(p.Status.Conditions, *desiredPaused)
+	}
+	if condMatch && phaseMatch && metricsMatch && pausedMatch {
 		log.Debug().
 			Str("reason", desired.Reason).
 			Str("phase", desiredPhase).
@@ -104,6 +124,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	p.Status.Phase = desiredPhase
 	// SetStatusCondition keeps lastTransitionTime unless the status changes.
 	meta.SetStatusCondition(&p.Status.Conditions, desired)
+	if desiredPaused != nil {
+		meta.SetStatusCondition(&p.Status.Conditions, *desiredPaused)
+	} else {
+		meta.RemoveStatusCondition(&p.Status.Conditions, conditionPaused)
+	}
 	p.Status.DeploymentMetrics = desiredMetrics
 
 	if err := r.Status().Patch(ctx, &p, patch); err != nil {
@@ -120,18 +145,43 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 }
 
 // convergeFreezeGate creates the freeze gate of a paused pipeline and deletes
-// it when the pipeline is not paused.
-func (r *Reconciler) convergeFreezeGate(ctx context.Context, p *kardinalv1alpha1.Pipeline) error {
-	if p.Spec.Paused {
-		if err := lifecycle.EnsureFreezeGate(ctx, r.Client, p); err != nil {
-			return fmt.Errorf("pause: %w", err)
+// it when the pipeline is not paused. It returns the desired Paused condition,
+// nil when the pipeline is not paused. A user PolicyGate with the freeze gate's
+// name is not an error to retry: it is reported as Paused=False until the user
+// renames or deletes it (the PolicyGate watch then re-enqueues the Pipeline).
+func (r *Reconciler) convergeFreezeGate(ctx context.Context, p *kardinalv1alpha1.Pipeline) (*metav1.Condition, error) {
+	if !p.Spec.Paused {
+		if err := lifecycle.RemoveFreezeGate(ctx, r.Client, p.Namespace, p.Name); err != nil {
+			return nil, fmt.Errorf("resume: %w", err)
 		}
+		return nil, nil
+	}
+	err := lifecycle.EnsureFreezeGate(ctx, r.Client, p)
+	switch {
+	case errors.Is(err, lifecycle.ErrConflict):
+		return &metav1.Condition{
+			Type: conditionPaused, Status: metav1.ConditionFalse, Reason: reasonFreezeGateNameConflict,
+			Message: err.Error(), ObservedGeneration: p.Generation,
+		}, nil
+	case err != nil:
+		return nil, fmt.Errorf("pause: %w", err)
+	}
+	return &metav1.Condition{
+		Type: conditionPaused, Status: metav1.ConditionTrue, Reason: reasonFreezeGateActive,
+		Message:            fmt.Sprintf("new promotions are held by PolicyGate %s", lifecycle.FreezeGateName(p.Name)),
+		ObservedGeneration: p.Generation,
+	}, nil
+}
+
+// pipelineForFreezeGate maps a PolicyGate named freeze-<pipeline> to that
+// Pipeline. Mapping by name, not owner, also re-enqueues the Pipeline when a
+// user gate blocking its freeze gate is renamed or deleted.
+func pipelineForFreezeGate(_ context.Context, obj client.Object) []ctrl.Request {
+	name, ok := strings.CutPrefix(obj.GetName(), lifecycle.FreezeGateName(""))
+	if !ok || name == "" {
 		return nil
 	}
-	if err := lifecycle.RemoveFreezeGate(ctx, r.Client, p.Namespace, p.Name); err != nil {
-		return fmt.Errorf("resume: %w", err)
-	}
-	return nil
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: obj.GetNamespace(), Name: name}}}
 }
 
 // Step states that DerivePhase reports as Degraded.
@@ -274,9 +324,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kardinalv1alpha1.Pipeline{}).
-		// The freeze gate is owned by its Pipeline, so deleting it by hand
-		// while the pipeline is paused re-enqueues the Pipeline.
-		Owns(&kardinalv1alpha1.PolicyGate{}).
+		// Deleting the freeze gate by hand while the pipeline is paused, or
+		// removing a user gate that has its name, re-enqueues the Pipeline.
+		Watches(&kardinalv1alpha1.PolicyGate{}, handler.EnqueueRequestsFromMapFunc(pipelineForFreezeGate)).
 		// Enqueue the pipeline named by spec.pipelineName whenever a PromotionStep changes.
 		Watches(&kardinalv1alpha1.PromotionStep{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []ctrl.Request {

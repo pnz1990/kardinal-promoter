@@ -276,3 +276,57 @@ func TestPipelineLifecycle_FreezeGateFollowsSpecPaused(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.Get(ctx, gateKey, &gate), "a user gate without the freeze label is not deleted")
 }
+
+// TestPipelineLifecycle_PausedCondition: a paused Pipeline reports Paused=True
+// while its freeze gate holds it. A user PolicyGate named freeze-<pipeline>
+// used to disable the pause silently; it is now Paused=False with reason
+// FreezeGateNameConflict (no error, no retry loop), and the pause takes effect
+// once the user gate is gone. Resume removes the condition.
+func TestPipelineLifecycle_PausedCondition(t *testing.T) {
+	ctx := context.Background()
+	p := makePipelineWithEnvs("app", "default", "test", "prod")
+	p.UID = "uid-app"
+	p.Spec.Paused = true
+	user := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: lifecycle.FreezeGateName("app"), Namespace: "default"},
+		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "true"},
+	}
+	c := newClientWithIndex(newPipelineScheme(), p, user)
+	gateKey := types.NamespacedName{Namespace: "default", Name: lifecycle.FreezeGateName("app")}
+
+	got, err := reconcilePipeline(t, c, "app")
+	require.NoError(t, err, "a name conflict is reported, not retried")
+	cond := meta.FindStatusCondition(got.Status.Conditions, "Paused")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	assert.Equal(t, "FreezeGateNameConflict", cond.Reason)
+	assert.Contains(t, cond.Message, "freeze-app")
+	var gate kardinalv1alpha1.PolicyGate
+	require.NoError(t, c.Get(ctx, gateKey, &gate))
+	assert.Equal(t, "true", gate.Spec.Expression, "the user's gate is not changed")
+	paused, err := lifecycle.IsPaused(ctx, c, "default", "app")
+	require.NoError(t, err)
+	assert.False(t, paused)
+
+	again, err := reconcilePipeline(t, c, "app")
+	require.NoError(t, err)
+	assert.Equal(t, got.ResourceVersion, again.ResourceVersion, "a second reconcile writes nothing")
+
+	require.NoError(t, c.Delete(ctx, &gate))
+	got, err = reconcilePipeline(t, c, "app")
+	require.NoError(t, err)
+	cond = meta.FindStatusCondition(got.Status.Conditions, "Paused")
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionTrue, cond.Status)
+	assert.Equal(t, "FreezeGateActive", cond.Reason)
+	paused, err = lifecycle.IsPaused(ctx, c, "default", "app")
+	require.NoError(t, err)
+	assert.True(t, paused, "with the user gate gone the pause takes effect")
+
+	got.Spec.Paused = false
+	require.NoError(t, c.Update(ctx, &got))
+	got, err = reconcilePipeline(t, c, "app")
+	require.NoError(t, err)
+	assert.Nil(t, meta.FindStatusCondition(got.Status.Conditions, "Paused"), "resume removes the condition")
+	require.NotNil(t, meta.FindStatusCondition(got.Status.Conditions, "Ready"))
+}

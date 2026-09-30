@@ -107,6 +107,86 @@ func TestRemoveFreezeGate_LeavesUserGateAlone(t *testing.T) {
 		"resume must not delete a user gate that happens to share the name")
 }
 
+// TestIsFreezeGate: only kardinal's own gate (the freeze label, or a
+// controller owner reference to the Pipeline) is a freeze gate.
+func TestIsFreezeGate(t *testing.T) {
+	isController := true
+	owner := func(kind, name string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{APIVersion: v1alpha1.GroupVersion.String(), Kind: kind, Name: name, UID: "u", Controller: &isController}}
+	}
+	tests := []struct {
+		name string
+		gate v1alpha1.PolicyGate
+		want bool
+	}{
+		{name: "freeze label", want: true, gate: v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{
+			Name: "freeze-app", Labels: map[string]string{lifecycle.LabelFreeze: "true"}}}},
+		{name: "owned by the pipeline", want: true, gate: v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{
+			Name: "freeze-app", OwnerReferences: owner("Pipeline", "app")}}},
+		{name: "user gate with the name", gate: v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "freeze-app"}}},
+		{name: "owned by another pipeline", gate: v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{
+			Name: "freeze-app", OwnerReferences: owner("Pipeline", "other")}}},
+		{name: "owned by something else", gate: v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{
+			Name: "freeze-app", OwnerReferences: owner("Graph", "app")}}},
+		{name: "another name", gate: v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{
+			Name: "freeze-other", Labels: map[string]string{lifecycle.LabelFreeze: "true"}}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, lifecycle.IsFreezeGate(&tc.gate, "app"))
+		})
+	}
+}
+
+// TestPause_UserGateWithTheFreezeNameIsAConflict: a user PolicyGate named
+// freeze-<pipeline> used to make pause a silent no-op (EnsureFreezeGate
+// ignored AlreadyExists and IsPaused saw no label). Pause now fails with
+// ErrConflict naming the gate, leaves spec.paused set so the pause applies once
+// the gate is gone, and never changes the user's gate.
+func TestPause_UserGateWithTheFreezeNameIsAConflict(t *testing.T) {
+	ctx := context.Background()
+	userGate := &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "freeze-app", Namespace: ns},
+		Spec:       v1alpha1.PolicyGateSpec{Expression: "!schedule.isWeekend"},
+	}
+	c := newClient(t, pipeline("app", "test"), userGate)
+
+	err := lifecycle.Pause(ctx, c, ns, "app")
+	require.ErrorIs(t, err, lifecycle.ErrConflict)
+	assert.Contains(t, err.Error(), "freeze-app")
+	assert.Contains(t, err.Error(), "NOT paused")
+
+	var p v1alpha1.Pipeline
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "app"}, &p))
+	assert.True(t, p.Spec.Paused)
+	var gate v1alpha1.PolicyGate
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "freeze-app"}, &gate))
+	assert.Equal(t, "!schedule.isWeekend", gate.Spec.Expression, "the user's gate is not changed")
+	paused, err := lifecycle.IsPaused(ctx, c, ns, "app")
+	require.NoError(t, err)
+	assert.False(t, paused)
+}
+
+// TestFreezeGate_OwnedWithoutLabel: a gate owned by the Pipeline counts as
+// its freeze gate even when the label was removed, so it still holds and
+// resume still deletes it.
+func TestFreezeGate_OwnedWithoutLabel(t *testing.T) {
+	ctx := context.Background()
+	p := pipeline("app", "test")
+	p.UID = "uid-app"
+	gate := lifecycle.DesiredFreezeGate(p)
+	delete(gate.Labels, lifecycle.LabelFreeze)
+	c := newClient(t, p, gate)
+
+	paused, err := lifecycle.IsPaused(ctx, c, ns, "app")
+	require.NoError(t, err)
+	assert.True(t, paused)
+	require.NoError(t, lifecycle.EnsureFreezeGate(ctx, c, p))
+	require.NoError(t, lifecycle.RemoveFreezeGate(ctx, c, ns, "app"))
+	var got v1alpha1.PolicyGate
+	assert.True(t, apierrors.IsNotFound(c.Get(ctx, types.NamespacedName{Namespace: ns, Name: "freeze-app"}, &got)))
+}
+
 // TestSetPaused_WritesOnlyThePipeline: SetPaused, the UI's pause and resume,
 // sets spec.paused and leaves the freeze gate to the Pipeline reconciler, so
 // the caller needs only get and update on the Pipeline. A conflict with a
