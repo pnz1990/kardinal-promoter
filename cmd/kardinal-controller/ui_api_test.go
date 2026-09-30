@@ -595,8 +595,9 @@ func TestUIAPI_ListPipelines_PausedBadge(t *testing.T) {
 }
 
 // TestUIAPI_ListPipelines_OpsFields verifies that the operations table fields
-// (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt, cdLevel) are
+// (blockerCount, failedStepCount, inventoryAgeDays, lastMergedAt) are
 // populated correctly from active Bundle, PolicyGate, and PromotionStep CRDs (#462).
+// cdLevel is gone: it counted spec.policyGates, which gates nothing (#1269).
 func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	now := metav1.Now()
 	p := &v1alpha1.Pipeline{
@@ -607,11 +608,6 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 				{Name: "test"},
 				{Name: "prod-eu", DependsOn: []string{"test"}},
 				{Name: "prod-us", DependsOn: []string{"test"}},
-			},
-			// 2 pipeline-level gates → cdLevel = "mostly-cd"
-			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
-				{Name: "gate-1"},
-				{Name: "gate-2"},
 			},
 		},
 		Status: v1alpha1.PipelineStatus{Phase: "Ready"},
@@ -675,12 +671,12 @@ func TestUIAPI_ListPipelines_OpsFields(t *testing.T) {
 	var resp []uiPipelineResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Len(t, resp, 1)
+	assert.NotContains(t, w.Body.String(), "cdLevel", "cdLevel counted spec.policyGates and is removed (#1269)")
 
 	got := resp[0]
 	assert.Equal(t, "my-app", got.Name)
 	assert.Equal(t, 2, got.BlockerCount, "2 blocking PolicyGates")
 	assert.Equal(t, 1, got.FailedStepCount, "1 Failed PromotionStep")
-	assert.Equal(t, "mostly-cd", got.CDLevel, "2 pipeline-level gates → mostly-cd")
 	// InventoryAgeDays should be 0 (bundle just created)
 	require.NotNil(t, got.InventoryAgeDays, "just-created bundle → inventoryAgeDays is sent")
 	assert.Equal(t, 0, *got.InventoryAgeDays, "just-created bundle → 0 days inventory age")

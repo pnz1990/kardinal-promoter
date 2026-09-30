@@ -213,8 +213,14 @@ func PlanRollback(ctx context.Context, c client.Reader, req RollbackRequest) (*R
 			break
 		}
 		if plan.Target == nil {
-			return nil, fmt.Errorf("rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in %s (deployed now: %s); pick one with --to: %w",
-				req.Environment, plan.CurrentName, ErrConflict)
+			// The --to hint is for a person; an automatic rollback reports
+			// the refusal in a status condition or Event.
+			hint := "; pick one with --to"
+			if req.Automatic {
+				hint = ""
+			}
+			return nil, fmt.Errorf("rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in %s (deployed now: %s)%s: %w",
+				req.Environment, plan.CurrentName, hint, ErrConflict)
 		}
 	}
 
@@ -437,14 +443,7 @@ func loadEnvHistory(ctx context.Context, c client.Reader, ns, pipeline, env stri
 	if err := c.List(ctx, &steps, client.InNamespace(ns), client.MatchingLabels{LabelPipeline: pipeline}); err != nil {
 		return nil, fmt.Errorf("list promotion steps of pipeline %s: %w", pipeline, err)
 	}
-	h := &envHistory{byBundle: map[string][]v1alpha1.PromotionStep{}}
-	for _, s := range steps.Items {
-		if s.Spec.PipelineName != pipeline || s.Spec.Environment != env || s.Spec.BundleName == "" {
-			continue
-		}
-		h.byBundle[s.Spec.BundleName] = append(h.byBundle[s.Spec.BundleName], s)
-	}
-	return h, nil
+	return historyOf(steps.Items, pipeline, env), nil
 }
 
 // deployed returns the Bundle whose change landed last in the environment: the

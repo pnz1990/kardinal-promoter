@@ -113,8 +113,8 @@ func logsFollowFn(ctx context.Context, w io.Writer, c sigs_client.Client, ns, pi
 
 		for _, s := range filtered {
 			label := s.Spec.Environment
-			if s.Spec.Region != "" {
-				label += "/" + s.Spec.Region
+			if s.Spec.Region != "" { //nolint:staticcheck // SA1019: labels steps from a Graph built before regions were removed
+				label += "/" + s.Spec.Region //nolint:staticcheck // SA1019: labels steps from a Graph built before regions were removed
 			}
 			if newSteps := s.Status.Steps; len(newSteps) > cursor[s.Name] {
 				for _, step := range newSteps[cursor[s.Name]:] {

@@ -38,10 +38,9 @@ func TestPipelineRoundtrip(t *testing.T) {
 		},
 		Spec: v1alpha1.PipelineSpec{
 			Git: v1alpha1.PipelineGit{
-				URL:      "https://github.com/myorg/gitops.git",
-				Branch:   "main",
-				Layout:   "directory",
-				Provider: "github",
+				URL:    "https://github.com/myorg/gitops.git",
+				Branch: "main",
+				Layout: "directory",
 				SecretRef: &v1alpha1.SecretRef{
 					Name:      "github-token",
 					Namespace: "default",
@@ -67,9 +66,6 @@ func TestPipelineRoundtrip(t *testing.T) {
 					Shard:     "prod-cluster",
 				},
 			},
-			PolicyGates: []v1alpha1.PipelinePolicyGateRef{
-				{Name: "no-weekend-deploys", Namespace: "platform-policies"},
-			},
 			Paused:       false,
 			HistoryLimit: 20,
 		},
@@ -87,7 +83,6 @@ func TestPipelineRoundtrip(t *testing.T) {
 	assert.Equal(t, "https://github.com/myorg/gitops.git", got.Spec.Git.URL)
 	assert.Equal(t, "main", got.Spec.Git.Branch)
 	assert.Equal(t, "directory", got.Spec.Git.Layout)
-	assert.Equal(t, "github", got.Spec.Git.Provider)
 	require.NotNil(t, got.Spec.Git.SecretRef)
 	assert.Equal(t, "github-token", got.Spec.Git.SecretRef.Name)
 
@@ -109,10 +104,6 @@ func TestPipelineRoundtrip(t *testing.T) {
 	assert.Equal(t, "argoRollouts", e2.Delivery.Delegate)
 	assert.Equal(t, []string{"uat"}, e2.DependsOn)
 	assert.Equal(t, "prod-cluster", e2.Shard)
-
-	require.Len(t, got.Spec.PolicyGates, 1)
-	assert.Equal(t, "no-weekend-deploys", got.Spec.PolicyGates[0].Name)
-	assert.Equal(t, "platform-policies", got.Spec.PolicyGates[0].Namespace)
 
 	assert.False(t, got.Spec.Paused)
 	assert.Equal(t, 20, got.Spec.HistoryLimit)
@@ -245,9 +236,6 @@ func TestPolicyGateRoundtrip(t *testing.T) {
 			Message:         "Production deployments are blocked on weekends",
 			RecheckInterval: "5m",
 			SkipPermission:  true,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"policy/scope": "org"},
-			},
 		},
 	}
 
@@ -260,8 +248,6 @@ func TestPolicyGateRoundtrip(t *testing.T) {
 	assert.Equal(t, "!schedule.isWeekend", got.Spec.Expression)
 	assert.Equal(t, "5m", got.Spec.RecheckInterval)
 	assert.True(t, got.Spec.SkipPermission)
-	require.NotNil(t, got.Spec.Selector)
-	assert.Equal(t, "org", got.Spec.Selector.MatchLabels["policy/scope"])
 }
 
 // ---------------------------------------------------------------------------
@@ -287,10 +273,6 @@ func TestPromotionStepRoundtrip(t *testing.T) {
 			BundleName:   "nginx-demo-v1",
 			Environment:  "prod",
 			StepType:     "open-pr",
-			Inputs: map[string]string{
-				"repo":   "myorg/gitops",
-				"branch": "kardinal/promote-nginx-demo-v1-prod",
-			},
 		},
 	}
 
@@ -304,9 +286,6 @@ func TestPromotionStepRoundtrip(t *testing.T) {
 	assert.Equal(t, "prod", got.Spec.Environment)
 	assert.Equal(t, "nginx-demo", got.Spec.PipelineName)
 	assert.Equal(t, "nginx-demo-v1", got.Spec.BundleName)
-	require.NotNil(t, got.Spec.Inputs)
-	assert.Equal(t, "myorg/gitops", got.Spec.Inputs["repo"])
-	assert.Equal(t, "kardinal/promote-nginx-demo-v1-prod", got.Spec.Inputs["branch"])
 }
 
 // TestPromotionStepStatusState verifies that status.state (not status.phase)

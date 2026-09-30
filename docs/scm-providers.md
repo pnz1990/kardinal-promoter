@@ -231,9 +231,9 @@ status is `completed`.
 ## Pipeline CRD configuration
 
 The controller uses one SCM provider for every Pipeline, chosen by `--scm-provider`
-(or `KARDINAL_SCM_PROVIDER`). `spec.git.provider` is **not read**: it does not select a
-provider, and the CRD accepts only `github` or `gitlab` there. Leave it unset. The
-repository comes from `spec.git.url`.
+(or `KARDINAL_SCM_PROVIDER`). `spec.git.provider` is **deprecated and ignored**: it does
+not select a provider, and the CRD accepts only `github` or `gitlab` there. Leave it
+unset. The repository comes from `spec.git.url`.
 
 ```yaml
 apiVersion: kardinal.io/v1alpha1

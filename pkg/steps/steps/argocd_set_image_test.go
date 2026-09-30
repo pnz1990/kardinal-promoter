@@ -97,7 +97,6 @@ func TestArgoCDSetImageStep_Success(t *testing.T) {
 		Bundle: v1alpha1.BundleSpec{
 			Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/app", Tag: "1.29.0"}},
 		},
-		Inputs:  map[string]string{},
 		Outputs: map[string]string{},
 	}
 
@@ -142,7 +141,6 @@ func TestArgoCDSetImageStep_Idempotent(t *testing.T) {
 		Bundle: v1alpha1.BundleSpec{
 			Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/myorg/app", Tag: "1.29.0"}},
 		},
-		Inputs:  map[string]string{},
 		Outputs: map[string]string{},
 	}
 
@@ -171,7 +169,6 @@ func TestArgoCDSetImageStep_NilK8sClient(t *testing.T) {
 			},
 		},
 		Bundle:  v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Tag: "1.0.0"}}},
-		Inputs:  map[string]string{},
 		Outputs: map[string]string{},
 	}
 
@@ -200,7 +197,6 @@ func TestArgoCDSetImageStep_MissingApplicationName(t *testing.T) {
 			},
 		},
 		Bundle:  v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Tag: "1.0.0"}}},
-		Inputs:  map[string]string{},
 		Outputs: map[string]string{},
 	}
 
@@ -210,7 +206,7 @@ func TestArgoCDSetImageStep_MissingApplicationName(t *testing.T) {
 	result, execErr := step.Execute(context.Background(), state)
 	require.Error(t, execErr)
 	assert.Equal(t, parentsteps.StepFailed, result.Status)
-	assert.Contains(t, result.Message, "argocd.application input is required")
+	assert.Contains(t, result.Message, "update.argocd.application is required")
 }
 
 // TestArgoCDSetImageStep_ApplicationNotFound verifies O6: not found → StepFailed with "not found".
@@ -230,7 +226,6 @@ func TestArgoCDSetImageStep_ApplicationNotFound(t *testing.T) {
 			},
 		},
 		Bundle:  v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Tag: "1.0.0"}}},
-		Inputs:  map[string]string{},
 		Outputs: map[string]string{},
 	}
 
@@ -243,10 +238,11 @@ func TestArgoCDSetImageStep_ApplicationNotFound(t *testing.T) {
 	assert.Contains(t, result.Message, "not found")
 }
 
-// TestArgoCDSetImageStep_InputsMapOverridesConfig verifies that Inputs map values
-// take precedence over Environment.Update.ArgoCD config.
-func TestArgoCDSetImageStep_InputsMapOverridesConfig(t *testing.T) {
-	app := makeArgoCDApp("custom-ns", "override-app", map[string]interface{}{
+// TestArgoCDSetImageStep_UsesUpdateConfig verifies that the Application name,
+// namespace and imageKey all come from update.argocd, with no defaults applied
+// when they are set.
+func TestArgoCDSetImageStep_UsesUpdateConfig(t *testing.T) {
+	app := makeArgoCDApp("custom-ns", "custom-app", map[string]interface{}{
 		"app": map[string]interface{}{"version": "old"},
 	})
 
@@ -261,20 +257,14 @@ func TestArgoCDSetImageStep_InputsMapOverridesConfig(t *testing.T) {
 		Environment: v1alpha1.EnvironmentSpec{
 			Update: v1alpha1.UpdateConfig{
 				ArgoCD: &v1alpha1.ArgoCDUpdateConfig{
-					Application: "wrong-app",
-					Namespace:   "wrong-ns",
-					ImageKey:    "wrong.key",
+					Application: "custom-app",
+					Namespace:   "custom-ns",
+					ImageKey:    "app.version",
 				},
 			},
 		},
 		Bundle: v1alpha1.BundleSpec{
 			Images: []v1alpha1.ImageRef{{Tag: "2.0.0"}},
-		},
-		// Inputs override the config.
-		Inputs: map[string]string{
-			"argocd.application": "override-app",
-			"argocd.namespace":   "custom-ns",
-			"argocd.imageKey":    "app.version",
 		},
 		Outputs: map[string]string{},
 	}
@@ -286,7 +276,15 @@ func TestArgoCDSetImageStep_InputsMapOverridesConfig(t *testing.T) {
 	require.NoError(t, execErr)
 	assert.Equal(t, parentsteps.StepSuccess, result.Status)
 	assert.Equal(t, "2.0.0", result.Outputs["imageTag"])
-	assert.Equal(t, "override-app", result.Outputs["argocdApplication"])
+	assert.Equal(t, "custom-app", result.Outputs["argocdApplication"])
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(argoCDAppGVK)
+	require.NoError(t, k8s.Get(context.Background(), client.ObjectKey{Namespace: "custom-ns", Name: "custom-app"}, got))
+	version, found, err := unstructured.NestedString(got.Object, "spec", "source", "helm", "valuesObject", "app", "version")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "2.0.0", version)
 }
 
 // TestDefaultSequenceForBundle_ArgoCDStrategy verifies O8:
@@ -310,8 +308,8 @@ func TestDefaultSequenceForBundle_ArgoCDStrategy(t *testing.T) {
 }
 
 // TestArgoCDSetImageStep_RejectsPRReview verifies approval: pr-review is not
-// bypassed by the argocd strategy, and config Bundles are not silently
-// dropped (C05-steps-11).
+// bypassed by the argocd strategy, and config and mixed Bundles are not
+// silently dropped (C05-steps-11, #1281).
 func TestArgoCDSetImageStep_RejectsPRReview(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -321,6 +319,12 @@ func TestArgoCDSetImageStep_RejectsPRReview(t *testing.T) {
 	}{
 		{"pr-review", "pr-review", v1alpha1.BundleSpec{Images: []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2"}}}, "cannot honour approval: pr-review"},
 		{"config bundle", "auto", v1alpha1.BundleSpec{Type: "config", ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "abc"}}, "config Bundles are not supported"},
+		// #1281: a mixed Bundle's config change would be skipped too.
+		{"mixed bundle", "auto", v1alpha1.BundleSpec{
+			Type:      "mixed",
+			Images:    []v1alpha1.ImageRef{{Repository: "r/app", Tag: "2"}},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "abc"},
+		}, "mixed Bundles are not supported"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -339,7 +343,6 @@ func TestArgoCDSetImageStep_RejectsPRReview(t *testing.T) {
 					},
 				},
 				Bundle:  tc.bundle,
-				Inputs:  map[string]string{},
 				Outputs: map[string]string{},
 			}
 			step, err := parentsteps.Lookup("argocd-set-image")

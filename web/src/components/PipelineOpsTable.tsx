@@ -16,7 +16,6 @@ type SortColumn =
   | 'failedStepCount'
   | 'inventoryAgeDays'
   | 'lastMergedAt'
-  | 'cdLevel'
 
 type SortDir = 'asc' | 'desc'
 
@@ -53,19 +52,6 @@ function inventoryColor(days: number | undefined): string {
   return 'var(--color-success)'
 }
 
-/** CD level label with color. */
-function cdLevelBadge(level: string | undefined) {
-  const map: Record<string, { label: string; color: string }> = {
-    'full-cd': { label: 'Full CD', color: 'var(--color-success)' },
-    'mostly-cd': { label: 'Mostly CD', color: 'var(--color-accent)' },
-    'manual': { label: 'Manual', color: 'var(--color-warning)' },
-  }
-  const { label, color } = map[level ?? ''] ?? { label: '—', color: 'var(--color-text-muted)' }
-  return (
-    <span style={{ color, fontSize: '0.75rem', fontWeight: 600 }}>{label}</span>
-  )
-}
-
 const CELL: React.CSSProperties = {
   padding: '0.45rem 0.75rem',
   borderBottom: '1px solid var(--color-border-muted)',
@@ -100,7 +86,6 @@ const COLUMNS: Column[] = [
   { key: 'failedStepCount', label: 'Failed Steps', title: 'PromotionSteps in Failed state' },
   { key: 'inventoryAgeDays', label: 'Inventory Age', title: 'Days since latest bundle was created' },
   { key: 'lastMergedAt', label: 'Last Merge', title: 'When the last environment reached Verified' },
-  { key: 'cdLevel', label: 'CD Level', title: 'Automation level based on number of policy gates' },
 ]
 
 export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSelect, loading, error }: Props) {
@@ -150,11 +135,6 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
         case 'lastMergedAt':
           cmp = (a.lastMergedAt ?? '').localeCompare(b.lastMergedAt ?? '')
           break
-        case 'cdLevel': {
-          const cdOrder: Record<string, number> = { 'full-cd': 0, 'mostly-cd': 1, 'manual': 2 }
-          cmp = (cdOrder[a.cdLevel ?? ''] ?? 99) - (cdOrder[b.cdLevel ?? ''] ?? 99)
-          break
-        }
       }
       return sortDir === 'asc' ? cmp : -cmp
     })
@@ -352,11 +332,6 @@ export function PipelineOpsTable({ pipelines, selected, selectedNamespace, onSel
                     <span title={p.lastMergedAt ?? 'Never merged'} style={{ color: 'var(--color-text-muted)' }}>
                       {relativeTime(p.lastMergedAt)}
                     </span>
-                  </td>
-
-                  {/* CD level */}
-                  <td style={CELL}>
-                    {cdLevelBadge(p.cdLevel)}
                   </td>
                 </tr>
               )

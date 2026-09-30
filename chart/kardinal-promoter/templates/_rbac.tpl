@@ -13,8 +13,9 @@ makes the call. Each helper is a YAML list at column 0; include it under
                     <fullname>-manager-role in controller.watchNamespace.
   rules.cluster     cluster-scoped kinds. Cluster mode: the same ClusterRole.
                     Namespace mode: ClusterRole <fullname>-cluster-scoped.
-  rules.release     the controller's own namespace (leader election and the
-                    kardinal-version ConfigMap). Role <fullname>-leader-election.
+  rules.release     the controller's own namespace (leader election, the
+                    kardinal-version ConfigMap and the SCM token Secret). Role
+                    <fullname>-leader-election.
 
 test/helm/chart_render_test.go (controllerAccess) lists each API call these
 rules exist for. A new client call needs a row there and a rule here.
@@ -31,9 +32,11 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["events"]
   verbs: ["get", "list", "watch", "create", "patch"]
 # Pipeline git credentials (spec.git.secretRef) and the SCM token Secret.
+# get only: Secret reads bypass the cache (manager_options.go uncachedObjects)
+# and every reader uses Get, so the controller cannot list or watch Secrets.
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get"]
 # The cached client lists and watches ConfigMaps; the only write is the
 # kardinal-version ConfigMap (rules.release).
 - apiGroups: [""]
@@ -47,7 +50,6 @@ rules exist for. A new client call needs a row there and a rule here.
     - policygates
     - rollbackpolicies
     - subscriptions
-    - promotiontemplates
     - promotionsteps
     - prstatuses
     - metricchecks
@@ -61,7 +63,6 @@ rules exist for. A new client call needs a row there and a rule here.
     - policygates/status
     - rollbackpolicies/status
     - subscriptions/status
-    - promotiontemplates/status
     - promotionsteps/status
     - prstatuses/status
     - metricchecks/status
@@ -154,4 +155,12 @@ rules exist for. A new client call needs a row there and a rule here.
   resources: ["configmaps"]
   resourceNames: ["kardinal-version"]
   verbs: ["get", "update", "patch"]
+{{- with include "kardinal-promoter.githubSecretName" . }}
+# The SCM token Secret, polled by the SecretWatcher to reload a rotated token.
+# Rendered only when a name is set: empty resourceNames would mean every Secret.
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: [{{ . | quote }}]
+  verbs: ["get"]
+{{- end }}
 {{- end }}

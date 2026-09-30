@@ -36,7 +36,6 @@ spec:
     url: {{ required "demo.git.url is required (your fork of pnz1990/kardinal-demo)" .Values.demo.git.url | quote }}
     branch: main
     layout: directory
-    provider: github
     secretRef:
       name: {{ $secretName | quote }}
   environments:

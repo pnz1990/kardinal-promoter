@@ -10,7 +10,6 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -21,7 +20,7 @@ import (
 const supersededHold = `${[bundle.metadata.name].filter(x_, bundle.status.phase != "Superseded")[0]}`
 
 // TestBuilder_StepsHeldOnceBundleSuperseded verifies that every PromotionStep
-// node, including roots and forEach nodes, resolves spec.bundleName only while
+// node, including roots, resolves spec.bundleName only while
 // the Bundle is not Superseded (E2E-R20). Without it a Superseded Bundle's
 // Graph kept creating steps whenever a gate or upstream turned ready.
 func TestBuilder_StepsHeldOnceBundleSuperseded(t *testing.T) {
@@ -36,17 +35,6 @@ func TestBuilder_StepsHeldOnceBundleSuperseded(t *testing.T) {
 	}{
 		{name: "single root env", pipeline: makeLinearPipeline("one", "test"), steps: 1},
 		{name: "linear with prod gate", pipeline: gated, gates: []kardinalv1alpha1.PolicyGate{gate}, steps: 3},
-		{
-			name: "multi-region forEach",
-			pipeline: &kardinalv1alpha1.Pipeline{
-				ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "default"},
-				Spec: kardinalv1alpha1.PipelineSpec{Environments: []kardinalv1alpha1.EnvironmentSpec{
-					{Name: "test"},
-					{Name: "prod", Regions: []string{"us-east-1", "eu-west-1"}},
-				}},
-			},
-			steps: 2,
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

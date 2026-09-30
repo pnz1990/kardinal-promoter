@@ -27,8 +27,12 @@ type PipelineSpec struct {
 	// +listMapKey=name
 	Environments []EnvironmentSpec `json:"environments"`
 
-	// PolicyGates lists org- or team-level PolicyGate references that apply to
-	// every promotion in this pipeline.
+	// PolicyGates is not implemented, and the API server rejects a non-empty
+	// list. Org gates apply through the kardinal.io/applies-to label.
+	//
+	// Deprecated: remove the field; label org PolicyGates with
+	// kardinal.io/applies-to instead.
+	// +kubebuilder:validation:XValidation:rule="size(self) == 0",message="spec.policyGates is not implemented; remove it (org gates use the kardinal.io/applies-to label)"
 	// +optional
 	PolicyGates []PipelinePolicyGateRef `json:"policyGates,omitempty"`
 
@@ -88,9 +92,11 @@ type PipelineGit struct {
 	// +optional
 	Layout string `json:"layout,omitempty"`
 
-	// Provider is the SCM provider.
+	// Provider is ignored. One controller serves one SCM, chosen with its
+	// --scm-provider flag.
+	//
+	// Deprecated: ignored; the controller's --scm-provider flag selects the provider.
 	// +kubebuilder:validation:Enum=github;gitlab
-	// +kubebuilder:default=github
 	// +optional
 	Provider string `json:"provider,omitempty"`
 
@@ -115,7 +121,10 @@ type SecretRef struct {
 }
 
 // EnvironmentSpec defines one environment in a Pipeline.
+// +kubebuilder:validation:XValidation:rule="!(has(self.update) && has(self.update.strategy) && self.update.strategy == 'argocd' && has(self.approval) && self.approval == 'pr-review')",message="environments[]: update.strategy argocd patches the Application directly and cannot honour approval: pr-review; use approval: auto with a PolicyGate, or a git-based strategy (kustomize or helm) for a reviewed promotion"
 // +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
+// +kubebuilder:validation:XValidation:rule="!has(self.steps) || size(self.steps) == 0",message="environments[].steps is not supported: kardinal has no custom step engine and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
+// +kubebuilder:validation:XValidation:rule="!has(self.promotionTemplate)",message="environments[].promotionTemplate is not supported: the PromotionTemplate CRD was removed and every environment runs the default step sequence; remove it (see docs/pipeline-reference.md#promotion-steps)"
 // +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed"
 type EnvironmentSpec struct {
 	// Name is the environment identifier (e.g. "test", "uat", "prod").
@@ -170,8 +179,14 @@ type EnvironmentSpec struct {
 	// +optional
 	Wave int `json:"wave,omitempty"`
 
-	// Shard pins this environment to a specific kardinal-controller agent shard
-	// in distributed mode. Leave empty for single-controller deployments.
+	// Shard was the agent shard of distributed mode, which was removed. A
+	// non-empty value sets the Pipeline Ready=False (reason NotImplemented)
+	// and fails the environment's PromotionSteps with "shard is not
+	// supported".
+	//
+	// Deprecated: remove shard; the controller reconciles every environment.
+	// For workloads in other clusters, use the Argo CD or Flux hub (see
+	// docs/distributed-mode.md).
 	// +optional
 	Shard string `json:"shard,omitempty"`
 
@@ -207,17 +222,24 @@ type EnvironmentSpec struct {
 	// +optional
 	Layout string `json:"layout,omitempty"`
 
-	// Steps is reserved for a custom step sequence and is not implemented yet:
-	// the controller always runs the default sequence (see
-	// DefaultSequenceForBundle). A Pipeline that sets it is rejected when a
-	// Bundle is translated and by "kardinal validate", instead of silently
-	// running the default steps. See docs/pipeline-reference.md#promotion-steps.
+	// Steps is not supported. kardinal has no custom step engine: every
+	// environment runs the default step sequence (see DefaultSequenceForBundle).
+	// The API server rejects a Pipeline that sets it, and so do Graph
+	// translation and "kardinal validate".
+	//
+	// Deprecated: remove it; the step sequence follows the Bundle type,
+	// update.strategy, approval and layout. See docs/pipeline-reference.md#promotion-steps.
+	//
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
 
-	// PromotionTemplate is reserved for a shared step sequence and is not
-	// implemented yet. A Pipeline that sets it is rejected when a Bundle is
-	// translated and by "kardinal validate". See docs/pipeline-reference.md#promotion-steps.
+	// PromotionTemplate is not supported, and the PromotionTemplate CRD was
+	// removed. The API server rejects a Pipeline that sets it, and so do Graph
+	// translation and "kardinal validate".
+	//
+	// Deprecated: remove it; every environment runs the default step sequence.
+	// See docs/pipeline-reference.md#promotion-steps.
+	//
 	// +optional
 	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
 
@@ -239,25 +261,26 @@ type EnvironmentSpec struct {
 	// +optional
 	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
 
-	// Regions is reserved for multi-region fan-out (issue #612) and is NOT
-	// implemented. With two or more regions the translator stamps out one
-	// PromotionStep per region (spec.region), but every region would edit the
-	// same path and push the same branch, so the PromotionStep reconciler fails
-	// such steps with "environments[].regions fan-out is not implemented".
-	// Declare one environment per region instead (for example prod-us, prod-eu).
-	// When empty or only one region is listed, the field has no effect.
+	// Regions is not supported: every region would edit the same path and push
+	// the same branch. With two or more regions the Pipeline is Ready=False
+	// (reason NotImplemented) and every Bundle fails when its Graph is built
+	// with "regions is not supported". One region has no effect.
+	//
+	// Deprecated: declare one environment per region (prod-us, prod-eu) and
+	// use wave.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
 }
 
-// PromotionTemplateRef is a reference to a PromotionTemplate CR.
+// PromotionTemplateRef is the shape of the deprecated
+// spec.environments[].promotionTemplate field. The PromotionTemplate CRD it
+// named was removed; a Pipeline that sets the field is rejected.
 type PromotionTemplateRef struct {
-	// Name is the PromotionTemplate resource name.
+	// Name is the name of a PromotionTemplate (the CRD was removed).
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
-	// Namespace is the namespace of the PromotionTemplate.
-	// If empty, the Pipeline's own namespace is used.
+	// Namespace is the namespace of the PromotionTemplate (the CRD was removed).
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
@@ -289,7 +312,8 @@ type BakeConfig struct {
 	Policy string `json:"policy,omitempty"`
 }
 
-// WebhookConfig defines the HTTP webhook endpoint for a custom promotion step.
+// WebhookConfig is the shape of the deprecated spec.environments[].steps[].webhook
+// field. The custom webhook step was removed; nothing calls this endpoint.
 type WebhookConfig struct {
 	// URL is the HTTP(S) endpoint to POST to.
 	// +kubebuilder:validation:MinLength=1
@@ -306,16 +330,14 @@ type WebhookConfig struct {
 	SecretRef *SecretRef `json:"secretRef,omitempty"`
 }
 
-// StepSpec declares a custom or built-in step override in a Pipeline environment.
-// When Uses matches a built-in step name the built-in takes precedence.
-// When Uses is an unknown name the Webhook config is required.
+// StepSpec is the shape of the deprecated spec.environments[].steps field. A
+// Pipeline that sets steps is rejected; see EnvironmentSpec.Steps.
 type StepSpec struct {
-	// Uses identifies the step to execute (built-in name or custom name).
+	// Uses names a step.
 	// +kubebuilder:validation:MinLength=1
 	Uses string `json:"uses"`
 
-	// Webhook configures the HTTP endpoint for custom (non-built-in) steps.
-	// Required when Uses does not match any registered built-in step.
+	// Webhook was the endpoint of a custom webhook step, which was removed.
 	// +optional
 	Webhook *WebhookConfig `json:"webhook,omitempty"`
 }
@@ -394,11 +416,15 @@ type HealthConfig struct {
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
 
-	// Cluster is reserved for remote-cluster health checks and is NOT implemented.
-	// A non-empty value fails the PromotionStep with "health.cluster is not
-	// supported" instead of silently checking the local cluster. To verify a
-	// workload in another cluster, use the argocd adapter against its Application
-	// in the Argo CD hub.
+	// Cluster is not supported: kardinal checks health only in the cluster it
+	// runs in. A non-empty value sets the Pipeline Ready=False (reason
+	// NotImplemented) and fails the PromotionStep with "health.cluster is not
+	// supported" instead of silently checking the local cluster.
+	//
+	// Deprecated: remove cluster. To verify a workload in another cluster,
+	// check its Argo CD Application (health.type: argocd) or Flux
+	// Kustomization (health.type: flux) in the hub cluster kardinal runs in;
+	// see docs/health-adapters.md#remote-clusters.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
 

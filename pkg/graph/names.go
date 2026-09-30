@@ -28,10 +28,6 @@ const (
 	maxGraphNameLen = validation.LabelValueMaxLength
 	// maxObjectNameLen is the metadata.name limit for the generated objects.
 	maxObjectNameLen = validation.DNS1123SubdomainMaxLength
-	// maxRegionLen is the longest region name (a DNS-1123 label, see
-	// validateEnvironments) that kro appends to a multi-region PromotionStep
-	// name at render time.
-	maxRegionLen = validation.DNS1123LabelMaxLength
 	// nameHashLen is the number of hex characters of the hash suffix.
 	nameHashLen = 8
 )
@@ -91,17 +87,11 @@ func graphNameFrom(pipeline, bundle string) string {
 
 // promotionStepK8sName returns the PromotionStep metadata.name
 // "<pipeline>-<bundle>-<env>", hash-suffixed when the environment name is not
-// a slug (for example "Prod" or "prod_eu") or the name is too long. For a
-// multi-region environment the caller appends "-${region}", so the base leaves
-// room for a region name.
-func promotionStepK8sName(pipeline, bundle, env string, multiRegion bool) string {
-	max := maxObjectNameLen
-	if multiRegion {
-		max -= maxRegionLen + 1
-	}
+// a slug (for example "Prod" or "prod_eu") or the name is too long.
+func promotionStepK8sName(pipeline, bundle, env string) string {
 	preferred := pipeline + "-" + slugify(bundle) + "-" + slugify(env)
 	return boundedName(preferred, isSlug(bundle) && isSlug(env),
-		nameKey("step", pipeline, bundle, env), max)
+		nameKey("step", pipeline, bundle, env), maxObjectNameLen)
 }
 
 // prStatusNodeName generates the CEL-safe node ID for a PRStatus node.

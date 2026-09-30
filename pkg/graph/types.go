@@ -77,7 +77,7 @@ type GraphNode struct {
 
 	// ForEach expands the node into a collection. Each entry holds exactly one
 	// iterator name mapped to a CEL expression that yields a list, for example
-	// {"region": "${[\"us-east-1\",\"eu-west-1\"]}"}.
+	// {"item": "${[\"a\",\"b\"]}"}. The builder does not emit it.
 	ForEach []map[string]string `json:"forEach,omitempty"`
 }
 

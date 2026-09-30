@@ -55,6 +55,16 @@ type RollbackPolicyStatus struct {
 	// LastEvaluatedAt is the timestamp of the most recent reconcile evaluation.
 	// +optional
 	LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
+
+	// Conditions holds status conditions. RollbackRefused is True when the
+	// failure threshold was reached but no rollback Bundle was created because
+	// the rollback planner refused (the message says why, for example when no
+	// earlier Bundle was Verified in the environment). It is False once a
+	// rollback Bundle is created. Roll back by hand with kardinal rollback.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -63,6 +73,7 @@ type RollbackPolicyStatus struct {
 // +kubebuilder:printcolumn:name="ShouldRollback",type=boolean,JSONPath=`.status.shouldRollback`
 // +kubebuilder:printcolumn:name="Failures",type=integer,JSONPath=`.status.consecutiveFailures`
 // +kubebuilder:printcolumn:name="Threshold",type=integer,JSONPath=`.spec.failureThreshold`
+// +kubebuilder:printcolumn:name="Refused",type=string,JSONPath=`.status.conditions[?(@.type=="RollbackRefused")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // RollbackPolicy monitors consecutive health-check failures on a PromotionStep

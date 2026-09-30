@@ -34,12 +34,6 @@ type AuditEventSpec struct {
 	// +kubebuilder:validation:Enum=PromotionStarted;PromotionSucceeded;PromotionFailed;PromotionSuperseded;RollbackStarted;RollbackSucceeded;HealthCheckFailed;GateBlocked;GateEvaluated
 	Action string `json:"action"`
 
-	// Actor is the identity that triggered the action.
-	// For automated promotions this is the controller service account.
-	// For human-initiated actions (rollback, override) this is the author from Bundle provenance.
-	// +optional
-	Actor string `json:"actor,omitempty"`
-
 	// Outcome describes the result of the action.
 	// Valid values: "Success", "Failure", "Pending".
 	// +kubebuilder:validation:Enum=Success;Failure;Pending
@@ -48,10 +42,6 @@ type AuditEventSpec struct {
 	// Message is a human-readable description of the event.
 	// +optional
 	Message string `json:"message,omitempty"`
-
-	// BundleImage is the container image tag being promoted, if applicable.
-	// +optional
-	BundleImage string `json:"bundleImage,omitempty"`
 }
 
 // AuditEvent is an immutable record of a single promotion event.

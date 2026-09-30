@@ -36,7 +36,9 @@ type PRStatusStatus struct {
 	Merged bool `json:"merged,omitempty"`
 
 	// Open is true when the pull request is still open (not merged, not closed).
-	// Set to false when the PR is closed or merged.
+	// Set to false when the PR is closed or merged. A closed PR is still polled
+	// for 5 minutes (see closedAt), so open can turn true again when it is
+	// reopened.
 	// +optional
 	Open bool `json:"open,omitempty"`
 
@@ -70,6 +72,22 @@ type PRStatusStatus struct {
 	// Transient errors (429, 5xx, network) are only logged and retried.
 	// +optional
 	PollError string `json:"pollError,omitempty"`
+
+	// ClosedAt is when the PRStatus reconciler first saw the PR closed without
+	// merging. The PR is still polled for 5 minutes after this time: a poll
+	// that sees it open again clears closedAt, and the PromotionStep keeps
+	// waiting for the merge.
+	// +optional
+	ClosedAt *metav1.Time `json:"closedAt,omitempty"`
+
+	// ClosedFinal is true once the PR was still closed 5 minutes after
+	// closedAt. The reconciler then stops polling it and, once this is saved,
+	// comments on the PR (best-effort, not retried); the PromotionStep waiting
+	// for it fails. A closed PRStatus
+	// (open=false with lastCheckedAt set) that has no closedAt was written by
+	// an older release and counts as final too.
+	// +optional
+	ClosedFinal bool `json:"closedFinal,omitempty"`
 }
 
 // +kubebuilder:object:root=true

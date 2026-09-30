@@ -126,6 +126,7 @@ func TestNewUIHandler_SecurityHeaders(t *testing.T) {
 
 			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
 			req.Host = "localhost:8082"
+			req.RemoteAddr = "127.0.0.1:54321" // kubectl port-forward
 			if tt.host != "" {
 				req.Host = tt.host
 			}

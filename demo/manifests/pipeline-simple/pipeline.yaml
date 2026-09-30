@@ -5,7 +5,7 @@
 # Topology:
 #   test (auto, kind-kardinal-dev)
 #    └→ uat (auto, kind-kardinal-dev)
-#        └→ prod (PR review, kind-kardinal-prod or EKS)
+#        └→ prod (PR review, kind-kardinal-prod)
 #               ↑ guarded by: no-weekend-deploys, require-uat-soak, no-bot-deploys
 #
 # Features exercised:
@@ -30,7 +30,6 @@ spec:
     url: https://github.com/pnz1990/kardinal-demo
     branch: main
     layout: directory
-    provider: github
     secretRef:
       name: github-token
 

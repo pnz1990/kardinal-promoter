@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
@@ -38,20 +39,18 @@ func init() {
 // promotion path: teams that store application config inside the ArgoCD Application
 // (rather than a GitOps repo) can use this step without restructuring their setup.
 //
-// Required inputs (from PromotionStep.Spec.Inputs or Environment.Update.ArgoCD):
-//   - argocd.application: name of the ArgoCD Application resource
-//
-// Optional inputs:
-//   - argocd.namespace: namespace of the Application (default: "argocd")
-//   - argocd.imageKey: dot-path within valuesObject where the tag is written
+// Configuration comes from the environment's update.argocd:
+//   - application (required): name of the ArgoCD Application resource
+//   - namespace: namespace of the Application (default: "argocd")
+//   - imageKey: dot-path within valuesObject where the tag is written
 //     (default: "image.tag")
 //
 // The step is idempotent: patching the same tag twice is a no-op with StepSuccess.
 // No git operations are performed — the entire promotion is a single Kubernetes patch.
 //
 // Because nothing is reviewed, the step refuses to run for an environment
-// with approval: pr-review (C05-steps-11), and for config Bundles, which it
-// cannot apply.
+// with approval: pr-review (C05-steps-11), and for config and mixed Bundles,
+// whose Git config change it cannot apply (#1281).
 type argoCDSetImageStep struct{}
 
 // argoCDPRReviewRejected is the failure message for argocd + pr-review.
@@ -67,8 +66,8 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: argoCDPRReviewRejected},
 			parentsteps.Permanent(errors.New(argoCDPRReviewRejected))
 	}
-	if state.Bundle.Type == "config" {
-		msg := "argocd-set-image: config Bundles are not supported by update.strategy argocd"
+	if state.Bundle.Type == "config" || state.Bundle.Type == "mixed" {
+		msg := "argocd-set-image: " + state.Bundle.Type + " Bundles are not supported by update.strategy argocd"
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: msg}, parentsteps.Permanent(errors.New(msg))
 	}
 	// O4: K8sClient is required.
@@ -79,33 +78,26 @@ func (s *argoCDSetImageStep) Execute(ctx context.Context, state *parentsteps.Ste
 		}, fmt.Errorf("argocd-set-image: K8sClient is required")
 	}
 
-	// Resolve inputs: prefer Inputs map (from PromotionStep.Spec.Inputs),
-	// fall back to Environment.Update.ArgoCD config fields.
-	appName := state.Inputs["argocd.application"]
-	if appName == "" && state.Environment.Update.ArgoCD != nil {
-		appName = state.Environment.Update.ArgoCD.Application
+	var cfg v1alpha1.ArgoCDUpdateConfig
+	if state.Environment.Update.ArgoCD != nil {
+		cfg = *state.Environment.Update.ArgoCD
 	}
+	appName := cfg.Application
 
 	// O5: Application name is required.
 	if appName == "" {
 		return parentsteps.StepResult{
 			Status:  parentsteps.StepFailed,
-			Message: "argocd-set-image: argocd.application input is required",
-		}, parentsteps.Permanent(fmt.Errorf("argocd-set-image: argocd.application input is required"))
+			Message: "argocd-set-image: update.argocd.application is required",
+		}, parentsteps.Permanent(errors.New("argocd-set-image: update.argocd.application is required"))
 	}
 
-	namespace := state.Inputs["argocd.namespace"]
-	if namespace == "" && state.Environment.Update.ArgoCD != nil && state.Environment.Update.ArgoCD.Namespace != "" {
-		namespace = state.Environment.Update.ArgoCD.Namespace
-	}
+	namespace := cfg.Namespace
 	if namespace == "" {
 		namespace = "argocd"
 	}
 
-	imageKey := state.Inputs["argocd.imageKey"]
-	if imageKey == "" && state.Environment.Update.ArgoCD != nil && state.Environment.Update.ArgoCD.ImageKey != "" {
-		imageKey = state.Environment.Update.ArgoCD.ImageKey
-	}
+	imageKey := cfg.ImageKey
 	if imageKey == "" {
 		imageKey = "image.tag"
 	}

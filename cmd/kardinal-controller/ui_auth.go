@@ -92,6 +92,11 @@ func newUIHandler(k8s client.Client, assets fs.FS, auth uiAuthConfig, corsAllowe
 	// off, every /api/ request to any other Host is refused (DNS rebinding).
 	authEnabled := auth.staticToken != "" || tokenReview
 	handler = applyCORSMiddleware(handler, corsAllowedOrigins, hosts, authEnabled, log)
+	// With auth off, /api/ answers loopback peers only (kubectl port-forward),
+	// whatever the Host header says (#1262).
+	if !authEnabled {
+		handler = requireLocalUIPeer(handler)
+	}
 	// Anti-framing, CSP and nosniff on every UI response, refusals included
 	// (C10b-web-09).
 	return withUISecurityHeaders(handler)

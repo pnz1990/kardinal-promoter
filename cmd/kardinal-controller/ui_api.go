@@ -76,9 +76,6 @@ type uiPipelineResponse struct {
 	// LastMergedAt is the RFC3339 timestamp of the last env that reached Verified.
 	// Empty string when no environment has been verified yet.
 	LastMergedAt string `json:"lastMergedAt,omitempty"`
-	// CDLevel summarises how automated this pipeline is.
-	// "full-cd" = no manual gates, "mostly-cd" = 1–2 gates, "manual" = 3+ gates.
-	CDLevel string `json:"cdLevel,omitempty"`
 }
 
 // uiEnvironmentNode is the static topology shape for one environment in a Pipeline.
@@ -377,7 +374,6 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 			Phase:            pipelinePhase(&p),
 			EnvironmentCount: len(p.Spec.Environments),
 			Paused:           p.Spec.Paused,
-			CDLevel:          pipelineCDLevel(&p),
 		}
 		// #525: build static environment topology from Pipeline.Spec so the UI can render
 		// the DAG even when no Bundle is actively promoting.
@@ -751,8 +747,8 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 
 // pipelineEnvDeps returns the Pipeline's environments in execution order and
 // the environments each one waits for, using the Graph builder's rules. An
-// invalid topology (admission rejects cycles) falls back to a chain in list
-// order so the UI still renders.
+// invalid topology (the Pipeline is Ready=False for a cycle) falls back to a
+// chain in list order so the UI still renders.
 func pipelineEnvDeps(pl *v1alpha1.Pipeline) ([]string, map[string][]string) {
 	order, orderErr := graphpkg.EnvironmentOrder(pl)
 	deps, depsErr := graphpkg.EnvironmentDependencies(pl)
@@ -993,21 +989,6 @@ func pipelinePhase(p *v1alpha1.Pipeline) string {
 		}
 	}
 	return "Initializing"
-}
-
-// pipelineCDLevel returns a human-readable CD automation level for the pipeline (#462).
-// Derived from the number of PolicyGate references in the pipeline spec.
-// "full-cd" = 0 gates (fully automated), "mostly-cd" = 1–2 gates, "manual" = 3+ gates.
-func pipelineCDLevel(p *v1alpha1.Pipeline) string {
-	gateCount := len(p.Spec.PolicyGates)
-	switch {
-	case gateCount == 0:
-		return "full-cd"
-	case gateCount <= 2:
-		return "mostly-cd"
-	default:
-		return "manual"
-	}
 }
 
 // handleValidateCEL compiles a PolicyGate expression while the

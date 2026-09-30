@@ -4,7 +4,6 @@
 package graph
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -42,10 +41,6 @@ type BuildResult struct {
 	// topological order, after targetEnvironment and skipEnvironments.
 	Environments []string
 }
-
-// regionIterator is the forEach iterator name of a multi-region
-// PromotionStep node. ValidateNodeIDs rejects a node with this ID.
-const regionIterator = "region"
 
 // DefaultGraphServiceAccount is the ServiceAccount (in the Pipeline's
 // namespace) that kro impersonates when it applies a kardinal Graph.
@@ -107,6 +102,9 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	if len(filteredEnvs) == 0 {
 		return nil, fmt.Errorf("build: all environments skipped")
 	}
+	if err := validateBundleStrategy(input.Pipeline, input.Bundle, filteredEnvs); err != nil {
+		return nil, err
+	}
 
 	// Step 3: validate skip permissions. The error reaches Bundle.status
 	// through the Translate error (phase Failed, reason TranslationError).
@@ -124,10 +122,7 @@ func (b *Builder) build(input BuildInput) (*BuildResult, error) {
 	}
 
 	// Step 5 & 6: build nodes and wire edges
-	nodes, err := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
-	if err != nil {
-		return nil, err
-	}
+	nodes := buildNodes(input.Pipeline, input.Bundle, filteredEnvs, deps, gatesByEnv, skipGates)
 	if err := ValidateNodeIDs(nodes); err != nil {
 		return nil, err
 	}
@@ -495,7 +490,7 @@ func matchGatesByEnv(filteredEnvs []string,
 func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
 	filteredEnvs []string, deps map[string][]string,
 	gatesByEnv map[string][]kardinalv1alpha1.PolicyGate,
-	skipGates map[string][]skipPermissionGate) ([]GraphNode, error) {
+	skipGates map[string][]skipPermissionGate) []GraphNode {
 	// Build env spec map for quick lookup
 	envSpecMap := make(map[string]kardinalv1alpha1.EnvironmentSpec)
 	for _, e := range pipeline.Spec.Environments {
@@ -509,15 +504,6 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 	filteredSet := make(map[string]bool, len(filteredEnvs))
 	for _, e := range filteredEnvs {
 		filteredSet[e] = true
-	}
-
-	// Environments that fan out per region become forEach collections;
-	// dependents must reference them with collection expressions.
-	regionCount := make(map[string]int)
-	for _, e := range filteredEnvs {
-		if n := len(envSpecMap[e].Regions); n >= 2 {
-			regionCount[CELSafeSlug(e)] = n
-		}
 	}
 
 	var nodes []GraphNode
@@ -580,18 +566,13 @@ func buildNodes(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bu
 		nodes = append(nodes, prStatusNode)
 
 		// PromotionStep node — node ID must be a valid CEL identifier.
-		// When the environment declares ≥2 regions, emit a forEach node so that
-		// kro stamps out one PromotionStep per region (issue #612).
-		stepNode, err := buildPromotionStepNode(
-			pipelineName, envName, stepNodeID, envSpec, bundle, upstreams, regionCount, gateNodeIDs, prStatusNodeID,
+		stepNode := buildPromotionStepNode(
+			pipelineName, envName, stepNodeID, bundle, upstreams, gateNodeIDs, prStatusNodeID,
 		)
-		if err != nil {
-			return nil, err
-		}
 		nodes = append(nodes, stepNode)
 	}
 
-	return nodes, nil
+	return nodes
 }
 
 // filteredDeps returns the upstream dependencies of envName, filtered to only
@@ -635,14 +616,7 @@ func resolvableWhen(cond, value string) string {
 }
 
 // verifiedCond returns the CEL condition "upstream PromotionStep is Verified".
-// For a forEach (multi-region) upstream the node is a list; every region must
-// be Verified, and the size check keeps a not-yet-expanded collection from
-// passing vacuously.
-func verifiedCond(upstreamID string, regions int) string {
-	if regions >= 2 {
-		return fmt.Sprintf(`size(%s) == %d && %s.all(s_, s_.status.state == "Verified")`,
-			upstreamID, regions, upstreamID)
-	}
+func verifiedCond(upstreamID string) string {
 	return fmt.Sprintf(`%s.status.state == "Verified"`, upstreamID)
 }
 
@@ -650,7 +624,6 @@ func verifiedCond(upstreamID string, regions int) string {
 // nodeID is the CEL-safe identifier used in CEL expressions.
 // k8sName is the Kubernetes resource name (hyphens) for metadata.name.
 // prStatusNodeID is the node ID of the companion PRStatus node.
-// regionCount maps multi-region upstream node IDs to their region count.
 //
 // Gating: spec.upstreamStates and spec.requiredGates only resolve once every
 // upstream PromotionStep is Verified and every PolicyGate is ready (see
@@ -658,29 +631,21 @@ func verifiedCond(upstreamID string, regions int) string {
 // spec.bundleName holds every step, roots included, once the Bundle is
 // Superseded.
 //
-// Multi-region fan-out (issue #612): when envSpec.Regions has ≥2 entries, the
-// returned node uses kro's forEach with a "region" iterator. kro stamps out
-// one PromotionStep per region named <pipeline>-<bundle>-<env>-<region>, each
-// with spec.region set to the region name.
+// There is no per-region fan-out: Build rejects two or more
+// spec.environments[].regions (see RegionsNotSupported) and ignores one.
 func buildPromotionStepNode(
 	pipelineName, envName, nodeID string,
-	envSpec kardinalv1alpha1.EnvironmentSpec,
 	bundle *kardinalv1alpha1.Bundle,
 	upstreams []string,
-	regionCount map[string]int,
 	gateNodeIDs []string,
 	prStatusNodeID string,
-) (GraphNode, error) {
+) GraphNode {
 	// Determine step type based on bundle type
 	stepType := defaultStepType(bundle.Spec.Type)
 
 	// metadata.name is a DNS-1123 subdomain: "<pipeline>-<bundle>-<env>",
 	// hash-suffixed when the Bundle or environment name is not a slug.
-	multiRegion := len(envSpec.Regions) >= 2
-	k8sResourceName := promotionStepK8sName(pipelineName, bundle.Name, envName, multiRegion)
-	if multiRegion {
-		k8sResourceName += "-${" + regionIterator + "}"
-	}
+	k8sResourceName := promotionStepK8sName(pipelineName, bundle.Name, envName)
 
 	// Build the PromotionStep resource template
 	templateMeta := map[string]interface{}{
@@ -691,11 +656,6 @@ func buildPromotionStepNode(
 			"kardinal.io/environment": envName,
 		},
 	}
-	if envSpec.Shard != "" {
-		labels := templateMeta["labels"].(map[string]interface{})
-		labels["kardinal.io/shard"] = envSpec.Shard
-	}
-
 	templateSpec := map[string]interface{}{
 		"pipelineName": pipelineName,
 		// bundleName: live CEL reference to the Bundle ref node (#622). It only
@@ -723,7 +683,7 @@ func buildPromotionStepNode(
 	if len(upstreams) > 0 {
 		upstreamRefs := make([]interface{}, len(upstreams))
 		for i, up := range upstreams {
-			upstreamRefs[i] = resolvableWhen(verifiedCond(up, regionCount[up]), `"Verified"`)
+			upstreamRefs[i] = resolvableWhen(verifiedCond(up), `"Verified"`)
 		}
 		templateSpec["upstreamStates"] = upstreamRefs
 	}
@@ -742,10 +702,6 @@ func buildPromotionStepNode(
 		templateSpec["requiredGates"] = gateRefs
 	}
 
-	if multiRegion {
-		templateSpec["region"] = "${" + regionIterator + "}"
-	}
-
 	template := map[string]interface{}{
 		"apiVersion": "kardinal.io/v1alpha1",
 		"kind":       "PromotionStep",
@@ -761,18 +717,7 @@ func buildPromotionStepNode(
 		},
 	}
 
-	// Multi-region fan-out: forEach over a CEL list literal of the region
-	// names (issue #612). json.Marshal output is valid CEL for string lists.
-	if multiRegion {
-		regionsJSON, err := json.Marshal(envSpec.Regions)
-		if err != nil {
-			return GraphNode{}, fmt.Errorf("build: environment %q: encode regions: %w", envName, err)
-		}
-		node.ForEach = []map[string]string{{regionIterator: "${" + string(regionsJSON) + "}"}}
-		node.ReadyWhen = []string{`${each.status.state == "Verified"}`}
-	}
-
-	return node, nil
+	return node
 }
 
 // buildPolicyGateNode builds a Graph node for a PolicyGate instance.

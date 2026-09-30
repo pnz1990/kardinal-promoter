@@ -6,7 +6,7 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 
 | Feature | How it's exercised |
 |---|---|
-| GitHub SCM provider | `spec.git.provider: github` |
+| GitHub SCM provider | the controller's default `--scm-provider` (github) |
 | Structured PR evidence body | Prod PR body contains image digest, CI run URL, gate results, soak time |
 | PR review gate | `approval: pr-review` on prod — requires GitHub review before merge |
 | PolicyGate: schedule | `!schedule.isWeekend` — blocks Saturday/Sunday UTC |
@@ -68,10 +68,12 @@ kardinal get pipelines
 
 # 3. Check what's gating prod
 kardinal explain github-demo --env prod
-# ENVIRONMENT   TYPE         NAME                 STATE   EXPRESSION                                      REASON
-# prod          PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true
-# prod          PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-abc1234: !schedule.isWeekend = true
-# prod          PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = false
+# ENVIRONMENT   BUNDLE              TYPE         NAME                 STATE   EXPRESSION                                      REASON
+# prod          github-demo-9tptr   PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true
+# prod          github-demo-9tptr   PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-abc1234: !schedule.isWeekend = true
+# prod          github-demo-9tptr   PolicyGate   uat-soak-gate        Block   upstream.uat.soakMinutes >= 30                  bundle.version=sha-abc1234: upstream.uat.soakMinutes >= 30 = false
+#
+# prod   deployed: none
 
 # 4. After UAT bake completes (30+ min), prod PR opens automatically
 # The PR body includes:
