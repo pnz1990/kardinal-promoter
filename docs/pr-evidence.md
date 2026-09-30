@@ -12,7 +12,7 @@ For environments with `approval: pr-review`, kardinal-promoter opens a pull requ
 
 For rollbacks:
 ```
-[kardinal] Rollback <environment> to <bundle> (reverts <rollbackOf>)
+[kardinal] Rollback <environment> to <bundle> (restores <rollbackOf>)
 ```
 
 `<bundle>` is the Bundle name, for example `my-app-x7k2p` (`kardinal create bundle` names

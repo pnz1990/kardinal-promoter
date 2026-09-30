@@ -118,11 +118,14 @@ type mockSCMProvider struct {
 	// repos records the repository argument of every OpenPR, GetPRStatus
 	// and AddLabelsToPR call.
 	repos []string
+	// titles records the title argument of every OpenPR call.
+	titles []string
 }
 
-func (m *mockSCMProvider) OpenPR(_ context.Context, repo, _, _, _, _ string) (string, int, error) {
+func (m *mockSCMProvider) OpenPR(_ context.Context, repo, title, _, _, _ string) (string, int, error) {
 	m.openPRCalls++
 	m.repos = append(m.repos, repo)
+	m.titles = append(m.titles, title)
 	return m.prURL, m.prNumber, m.openPRErr
 }
 
@@ -537,6 +540,54 @@ func TestOpenPRStep_NormalBundleDoesNotHaveRollbackLabel(t *testing.T) {
 		"normal promotion PR must NOT have kardinal/rollback label")
 	assert.Contains(t, mockSCM.addedLabels, "kardinal/promotion",
 		"normal promotion PR must have kardinal/promotion label")
+}
+
+// TestOpenPRStep_RollbackTitleAndLabels verifies the rollback PR title names
+// the Bundle whose state is restored (spec.provenance.rollbackOf) as restored,
+// not reverted, and that rollback PRs carry kardinal/rollback in addition to
+// kardinal/promotion, as docs/rollback.md and docs/pr-evidence.md say (E2E-R06).
+func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
+	tests := []struct {
+		name       string
+		bundle     string
+		rollbackOf string
+		wantTitle  string
+		wantLabels []string
+	}{
+		{
+			name:       "promotion",
+			bundle:     "kardinal-test-app-b5mt9",
+			wantTitle:  "[kardinal] Promote kardinal-test-app-b5mt9 to prod",
+			wantLabels: []string{"kardinal", "kardinal/promotion"},
+		},
+		{
+			name:       "rollback names the restored bundle",
+			bundle:     "kardinal-test-app-rollback-bkgwk",
+			rollbackOf: "kardinal-test-app-dq92z",
+			wantTitle:  "[kardinal] Rollback prod to kardinal-test-app-rollback-bkgwk (restores kardinal-test-app-dq92z)",
+			wantLabels: []string{"kardinal", "kardinal/promotion", "kardinal/rollback"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSCM := &mockSCMProvider{prURL: "https://github.com/owner/repo/pull/28", prNumber: 28}
+			state := makeState(t, &mockGitClient{}, mockSCM)
+			state.BundleName = tt.bundle
+			state.Outputs["branch"] = "kardinal/" + tt.bundle + "/prod"
+			state.Bundle.Provenance = &v1alpha1.BundleProvenance{RollbackOf: tt.rollbackOf, Author: "ci"}
+
+			step, err := parentsteps.Lookup("open-pr")
+			require.NoError(t, err)
+			result, err := step.Execute(context.Background(), state)
+			require.NoError(t, err)
+			require.Equal(t, parentsteps.StepSuccess, result.Status)
+
+			require.Len(t, mockSCM.titles, 1)
+			assert.Equal(t, tt.wantTitle, mockSCM.titles[0])
+			assert.NotContains(t, mockSCM.titles[0], "reverts")
+			assert.ElementsMatch(t, tt.wantLabels, mockSCM.addedLabels)
+		})
+	}
 }
 
 func TestLookup_UnknownStep_FallsBackToCustom(t *testing.T) {
