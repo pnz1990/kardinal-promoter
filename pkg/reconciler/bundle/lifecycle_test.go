@@ -648,7 +648,7 @@ func TestLifecycle_CapCountedUncached(t *testing.T) {
 		Build()
 	// The cache lags: a Bundle listed in lagging still shows Available.
 	lagging := map[string]bool{}
-	cached := interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
+	cached := interceptor.NewClient(base, interceptor.Funcs{
 		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if err := cl.List(ctx, list, opts...); err != nil {
 				return err
