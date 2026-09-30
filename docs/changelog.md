@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A superseded Bundle's PR closes at once** — the controller closed it at the step's next merge poll, up to 30 seconds later, and the PR could be merged in that window, changing the environment with no PromotionStep tracking it
+
 ---
 
 ## [v0.9.0-rc.1] — 2026-09-30
