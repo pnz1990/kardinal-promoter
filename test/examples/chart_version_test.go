@@ -21,11 +21,15 @@ const chartURL = "oci://ghcr.io/pnz1990/charts/kardinal-promoter"
 // chartVersionFlag matches the --version value of a helm command.
 var chartVersionFlag = regexp.MustCompile(`--version[= ](\S+)`)
 
+// cliDownload matches the release tag of a documented CLI download URL.
+var cliDownload = regexp.MustCompile(`github\.com/pnz1990/kardinal-promoter/releases/download/([^/\s]+)/`)
+
 // TestDocumentedChartCommandsPinVersion checks that every documented helm
 // command on the published chart names a version. Without --version helm
 // picks the newest final chart, so a user of a release candidate would
 // install, or upgrade down to, an older release. All pins name the same
-// version (or the <version> placeholder), so a release changes them together.
+// version (or the <version> placeholder), so a release changes them together,
+// and every documented CLI download names the same release.
 func TestDocumentedChartCommandsPinVersion(t *testing.T) {
 	root := repoRoot(t)
 	files := []string{"README.md", "chart/kardinal-promoter/values.yaml"}
@@ -45,12 +49,16 @@ func TestDocumentedChartCommandsPinVersion(t *testing.T) {
 	}))
 
 	versions := map[string][]string{}
+	downloads := map[string][]string{}
 	found := 0
 	for _, rel := range files {
 		data, err := os.ReadFile(filepath.Join(root, rel))
 		require.NoError(t, err)
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
+			if m := cliDownload.FindStringSubmatch(line); m != nil {
+				downloads[m[1]] = append(downloads[m[1]], fmt.Sprintf("%s:%d", rel, i+1))
+			}
 			if !strings.Contains(line, chartURL) {
 				continue
 			}
@@ -72,5 +80,12 @@ func TestDocumentedChartCommandsPinVersion(t *testing.T) {
 		}
 	}
 	require.Greater(t, found, 10, "too few chart commands found; is the scan broken?")
-	assert.Len(t, versions, 1, "documented chart commands pin different versions: %v", versions)
+	if assert.Len(t, versions, 1, "documented chart commands pin different versions: %v", versions) {
+		for v := range versions {
+			require.NotEmpty(t, downloads, "no documented CLI download found; is the scan broken?")
+			for tag, where := range downloads {
+				assert.Equal(t, "v"+v, tag, "CLI download at %v names a different release than the chart pin", where)
+			}
+		}
+	}
 }
