@@ -14,25 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// promotesCLIFeatureDiff moves a user-visible CLI item from Future to Present
-// in a design doc.
-const promotesCLIFeatureDiff = `diff --git a/docs/design/41-published-docs-freshness.md b/docs/design/41-published-docs-freshness.md
---- a/docs/design/41-published-docs-freshness.md
-+++ b/docs/design/41-published-docs-freshness.md
-@@ -1,1 +1,1 @@
--- 🔲 kardinal CLI command foo — new flag
-+- ✅ kardinal CLI command foo — new flag (PR #1, 2026-01-01)
-diff --git a/pkg/foo/foo.go b/pkg/foo/foo.go
-`
-
-const userDocsDiff = `diff --git a/docs/cli-reference.md b/docs/cli-reference.md
---- a/docs/cli-reference.md
-+++ b/docs/cli-reference.md
-@@ -1,1 +1,1 @@
--old
-+new
-`
-
 // runWithFakes runs `bash <script> args...` with the given fake executables
 // first on PATH.
 func runWithFakes(t *testing.T, script string, fakes map[string]string, env []string, args ...string) (string, error) {
@@ -50,35 +31,6 @@ func runWithFakes(t *testing.T, script string, fakes map[string]string, env []st
 	}, env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
-}
-
-func TestQADocsGateReadsThePRDiff(t *testing.T) {
-	tests := []struct {
-		name     string
-		diff     string
-		wantFail bool
-		wantOut  string
-	}{
-		{"feature promoted without docs is WRONG", promotesCLIFeatureDiff, true, "WRONG"},
-		{"feature promoted with a docs/ change passes", promotesCLIFeatureDiff + userDocsDiff, false, "PASS"},
-		{"diff without transitions passes", userDocsDiff, false, "no Future→Present transitions"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			diffFile := filepath.Join(t.TempDir(), "pr.diff")
-			require.NoError(t, os.WriteFile(diffFile, []byte(tt.diff), 0o644))
-			fakeGH := "#!/usr/bin/env bash\ncat \"$FAKE_DIFF\"\n"
-
-			out, err := runWithFakes(t, filepath.Join(repoRoot(t), "scripts", "qa-docs-gate.sh"),
-				map[string]string{"gh": fakeGH}, []string{"FAKE_DIFF=" + diffFile}, "1", "o/r")
-			if tt.wantFail {
-				require.Error(t, err, out)
-			} else {
-				require.NoError(t, err, out)
-			}
-			assert.Contains(t, out, tt.wantOut)
-		})
-	}
 }
 
 const fakeGo = `#!/usr/bin/env bash

@@ -67,6 +67,11 @@ the solution you have in mind.
 3. Ensure `go build ./...`, `go test ./... -race`, and `go vet ./...` all pass.
 4. Open a pull request against `main`.
 
+A PR from anyone other than the maintainer that changes `AGENTS.md`, `CLAUDE.md`, `.claude/`,
+`.github/workflows/` or `.github/actions/` fails the **agent instructions guard** check. Those
+files are instructions for coding agents or run with repository secrets, so the maintainer makes
+those changes; describe what you need in an issue or in the PR.
+
 PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/):
 `feat(scope): description`, `fix(scope): description`, `chore(scope): description`.
 
@@ -83,48 +88,10 @@ PR titles must follow [Conventional Commits](https://www.conventionalcommits.org
 // Licensed under the Apache License, Version 2.0
 ```
 
-## QA Process
-
-### QA Docs Gate
-
-`scripts/qa-docs-gate.sh` is run during QA review (Phase 3, §3b) to verify that
-user-visible features include updated documentation:
-
-```bash
-# Run against a PR number
-PR_NUM=1234 ./scripts/qa-docs-gate.sh
-
-# Or pass as an argument
-./scripts/qa-docs-gate.sh 1234 pnz1990/kardinal-promoter
-```
-
-**Exit codes:**
-- `0` — all checks pass, or the script was skipped (missing PR number, no `gh` CLI)
-- `1` — **WRONG finding**: a user-visible feature (CLI command, CRD field, UI page) was
-  promoted from `🔲 Future` to `✅ Present` in a design doc, but no corresponding
-  `docs/` file was added or updated
-
-**When is it skipped (Layer 1 auto-documented exemption)?**
-
-The script does not block when the changed feature is already documented by auto-generated
-files (`docs/cli-reference.md` updated by CI, API docs from code comments, etc.).
-See `scripts/qa-docs-gate.sh` header comments for the full Layer 1 exemption list.
-
-**When to invoke it:**
-
-The QA reviewer runs this script after the spec conformance check (§3b) on any PR that:
-- Adds a new CLI subcommand or flag
-- Adds or changes a CRD spec field visible to users
-- Adds a new UI page or changes an existing UI workflow
-- Moves a `🔲 Future` item to `✅ Present` in any `docs/design/` file
-
 ## Community
 
-Questions and discussions:
-
-- **GitHub Issues**: bug reports and feature requests
-- **GitHub Discussions**: getting started help, show & tell, Q&A
-  (coming soon — see [issue #979](https://github.com/pnz1990/kardinal-promoter/issues/979))
+Questions, bugs and ideas: open a [GitHub Issue](https://github.com/pnz1990/kardinal-promoter/issues)
+(label `question` for questions).
 
 ## License
 

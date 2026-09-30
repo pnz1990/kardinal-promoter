@@ -120,6 +120,5 @@ graph LR
 ## Community
 
 - **GitHub Issues** — [report bugs or request features](https://github.com/pnz1990/kardinal-promoter/issues)
-- **GitHub Discussions** — Q&A, show & tell, and feature ideas (coming soon — see [CONTRIBUTING.md](https://github.com/pnz1990/kardinal-promoter/blob/main/CONTRIBUTING.md))
 - **Contributing** — read [CONTRIBUTING.md](https://github.com/pnz1990/kardinal-promoter/blob/main/CONTRIBUTING.md) before opening a PR
 
