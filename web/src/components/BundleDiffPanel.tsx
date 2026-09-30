@@ -12,6 +12,7 @@
 import { useRef } from 'react'
 import type { Bundle, ImageRef } from '../types'
 import { useModalFocus } from '../useModalFocus'
+import { isCIRunURL } from '../prLink'
 
 interface Props {
   bundleA: Bundle
@@ -259,7 +260,7 @@ function DiffCell({ value, changed, isLink, full }: { value: string | null; chan
       </span>
     )
   }
-  if (isLink && /^https?:\/\//i.test(value)) {
+  if (isLink && isCIRunURL(value)) {
     return (
       <a
         href={value}

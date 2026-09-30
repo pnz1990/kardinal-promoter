@@ -106,3 +106,20 @@ describe('BundleDiffPanel — keyboard (C10a-web-17)', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 })
+
+// E2E-R22: the CI Run cell links only a URL that isCIRunURL accepts.
+describe('BundleDiffPanel — CI Run link', () => {
+  it.each([
+    { name: 'https is linked', url: 'https://ci.example.com/1', linked: true },
+    { name: 'javascript is text', url: 'javascript:alert(1)', linked: false },
+    { name: 'user info is text', url: 'https://u@ci.example.com/1', linked: false },
+  ])('$name', ({ url, linked }) => {
+    render(<BundleDiffPanel bundleA={makeBundle({ name: 'a', provenance: { ciRunURL: url } })} bundleB={makeBundle({ name: 'b' })} onClose={vi.fn()} />)
+    const cell = screen.getByText(url)
+    if (linked) {
+      expect(cell.closest('a')).toHaveAttribute('href', url)
+    } else {
+      expect(cell.closest('a')).toBeNull()
+    }
+  })
+})

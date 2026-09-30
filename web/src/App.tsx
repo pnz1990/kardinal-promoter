@@ -35,6 +35,7 @@ import { CreateBundleButton } from './components/CreateBundleDialog'
 import EmptyState from './components/EmptyState'
 import PromotionErrorsPanel from './components/PromotionErrorsPanel'
 import CopyButton from './components/CopyButton'
+import { CIRunLink } from './components/CIRunLink'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { api } from './api/client'
 import { usePolling } from './usePolling'
@@ -631,15 +632,7 @@ export function App() {
                     {activeBundle.provenance?.ciRunURL && (
                       <>
                         <span style={{ color: 'var(--color-text-faint)' }}>·</span>
-                        <a
-                          href={activeBundle.provenance.ciRunURL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ color: 'var(--color-accent)', fontSize: '0.78rem' }}
-                          title="CI run"
-                        >
-                          CI run ↗
-                        </a>
+                        <CIRunLink url={activeBundle.provenance.ciRunURL} />
                       </>
                     )}
                   </div>
