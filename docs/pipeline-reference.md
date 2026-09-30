@@ -58,7 +58,7 @@ spec:
       promotionTemplate:                # Reserved, not implemented yet: a Pipeline that sets it is rejected
         name: <string>
 
-  historyLimit: <int>                   # Number of Bundles to retain (default: 20)
+  historyLimit: <int>                   # Number of Bundles to retain (default: 50)
 ```
 
 ## Field Details
@@ -111,14 +111,26 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `promotionTemplate` | No | (none) | **Not implemented yet.** Reserved for a shared step sequence. It is rejected the same way as `steps`. |
 | `bake.minutes` | No | (none) | Contiguous-healthy soak window in minutes (K-01). When set, the step must observe healthy deployment status *continuously* for this many minutes before transitioning to Verified. A health alarm resets the timer. |
 | `bake.policy` | No | `reset-on-alarm` | What to do when health fails during the bake window. `reset-on-alarm`: reset the elapsed timer to 0, stay in HealthChecking. `fail-on-alarm`: immediately apply `onHealthFailure` policy. |
-| `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle at the previous image version; step → RollingBack (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). |
+| `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
 | `regions` | No | (none) | **Not implemented** (#612). With two or more regions the translator stamps out one PromotionStep per region, but every region would edit the same path and push the same branch, so those PromotionSteps fail with `environments[].regions fan-out is not implemented`. Declare one environment per region instead (for example `prod-us` and `prod-eu`, with `dependsOn` or `wave`). With zero or one region the field has no effect. |
 
 ### spec.historyLimit
 
-Number of Bundles (and their associated Graph objects) to retain per Pipeline. Older Bundles are garbage-collected. The Git PR history is permanent regardless of this setting.
+Number of finished Bundles (Verified, Failed or Superseded) to retain per Pipeline. Older ones are garbage-collected, oldest first, when a new Bundle is created. `kardinal rollback` can only target a retained Bundle. The Git PR history is permanent regardless of this setting.
 
-Default: 20.
+Default: 50.
+
+### spec.paused
+
+When `true`, no PromotionStep of the Pipeline leaves `Pending`, and a step in `Promoting` holds before its next git step. Steps waiting for a PR merge or running a health check finish. The controller keeps a freeze PolicyGate named `freeze-<pipeline>` while the Pipeline is paused. `kardinal pause` / `kardinal resume` and the UI set this field. See [Pause and Resume](rollback.md#pause-and-resume).
+
+Default: `false`.
+
+### spec.maxConcurrentPromotions
+
+Maximum number of this Pipeline's Bundles in the `Promoting` phase at once. A Bundle over the cap stays `Available` with the `Ready` condition reason `WaitingForSlot`, and starts when a promoting Bundle becomes Verified, Failed or Superseded. `0` means no cap.
+
+Default: `0`.
 
 ## Health Check Defaults
 

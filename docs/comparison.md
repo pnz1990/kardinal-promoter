@@ -134,8 +134,8 @@ concept. GitOps Promoter has no DAG support.
 
 ### DORA metrics built-in
 
-`Bundle.status.metrics` records `commitToProductionMinutes`, `bakeResets`, and
-`operatorInterventions` for every promotion. The `kardinal metrics` CLI surfaces these
+`Bundle.status.metrics` records `commitToProductionMinutes` and `bakeResets` for every
+promotion (`operatorInterventions` is declared but not yet written). The `kardinal metrics` CLI surfaces these
 per pipeline. Neither Kargo nor GitOps Promoter tracks deployment efficiency metrics.
 
 ---

@@ -127,7 +127,7 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh }: Action
       {pendingAction === 'pause' && (
         <ConfirmDialog
           title="Pause pipeline?"
-          description={`This will stop all in-flight promotions for "${pipelineName}". Existing open PRs remain open.`}
+          description={`No new promotion step starts for "${pipelineName}", and steps that have not opened a PR yet stop before their next git step. Steps waiting for a PR merge or running health checks continue, and open PRs stay open.`}
           confirmLabel="Pause pipeline"
           danger
           onConfirm={handleConfirm}
@@ -139,7 +139,7 @@ export function ActionBar({ pipelineName, namespace, paused, onRefresh }: Action
       {pendingAction === 'resume' && (
         <ConfirmDialog
           title="Resume pipeline?"
-          description={`Promotion will restart for "${pipelineName}". All queued bundles will continue.`}
+          description={`Held promotion steps for "${pipelineName}" continue where they stopped.`}
           confirmLabel="Resume pipeline"
           onConfirm={handleConfirm}
           onCancel={() => setPendingAction(null)}

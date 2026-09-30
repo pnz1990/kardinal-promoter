@@ -424,7 +424,9 @@ func TestJourney3PolicyGovernance(t *testing.T) {
 // reporting the Deployment as rolling out (Progressing=True,
 // ReplicaSetUpdated), which is not a health failure, so the step fails when
 // health.timeout passes. The timeout counts as a health failure, and the
-// controller creates a rollback Bundle with kardinal.io/rollback=true. Both
+// RollbackPolicy creates a rollback Bundle with kardinal.io/rollback=true. The
+// rollback restores the Bundle verified in the environment before the failing
+// one (lifecycle.PlanRollback), so the fixture has one: nginx-demo-good. Both
 // Deployment strategies are covered: with RollingUpdate the old pod keeps
 // serving, with Recreate nothing is available.
 func TestJourney4Rollback(t *testing.T) {
@@ -435,6 +437,7 @@ func TestJourney4Rollback(t *testing.T) {
 
 func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 	s := journeyScheme(t)
+	t0 := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
 
 	pipeline := &v1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
@@ -452,11 +455,50 @@ func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 			},
 		},
 	}
+	goodBundle := &v1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "nginx-demo-good",
+			Namespace:         "default",
+			Labels:            map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+			CreationTimestamp: metav1.NewTime(t0),
+		},
+		Spec: v1alpha1.BundleSpec{
+			Type:     "image",
+			Pipeline: "nginx-demo",
+			Images:   []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}},
+		},
+		Status: v1alpha1.BundleStatus{Phase: "Superseded"},
+	}
+	goodStep := &v1alpha1.PromotionStep{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "step-prod-good",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(t0.Add(time.Minute)),
+			Labels: map[string]string{
+				"kardinal.io/pipeline":    "nginx-demo",
+				"kardinal.io/environment": "prod",
+			},
+		},
+		Spec: v1alpha1.PromotionStepSpec{
+			PipelineName: "nginx-demo",
+			BundleName:   "nginx-demo-good",
+			Environment:  "prod",
+			StepType:     "auto",
+		},
+		Status: v1alpha1.PromotionStepStatus{
+			State: "Verified",
+			Conditions: []metav1.Condition{{
+				Type: "Verified", Status: metav1.ConditionTrue, Reason: "Verified",
+				LastTransitionTime: metav1.NewTime(t0.Add(5 * time.Minute)),
+			}},
+		},
+	}
 	badBundle := &v1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-bad",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+			Name:              "nginx-demo-bad",
+			Namespace:         "default",
+			Labels:            map[string]string{"kardinal.io/pipeline": "nginx-demo"},
+			CreationTimestamp: metav1.NewTime(t0.Add(10 * time.Minute)),
 		},
 		Spec: v1alpha1.BundleSpec{
 			Type:     "image",
@@ -469,8 +511,9 @@ func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 	expired := metav1.NewTime(time.Now().Add(-time.Second))
 	step := &v1alpha1.PromotionStep{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "step-prod-bad",
-			Namespace: "default",
+			Name:              "step-prod-bad",
+			Namespace:         "default",
+			CreationTimestamp: metav1.NewTime(t0.Add(11 * time.Minute)),
 			Labels: map[string]string{
 				"kardinal.io/pipeline":    "nginx-demo",
 				"kardinal.io/environment": "prod",
@@ -536,7 +579,7 @@ func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, badBundle, step, unhealthyDeploy, rollbackPolicy).
+		WithObjects(pipeline, goodBundle, goodStep, badBundle, step, unhealthyDeploy, rollbackPolicy).
 		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}, &v1alpha1.RollbackPolicy{}).
 		Build()
 
@@ -591,7 +634,11 @@ func journey4Rollback(t *testing.T, strategy appsv1.DeploymentStrategyType) {
 	require.NotNil(t, rollbackBundle, "journey 4: rollback Bundle must be created after health failure")
 	assert.Equal(t, "true", rollbackBundle.Labels["kardinal.io/rollback"])
 	require.NotNil(t, rollbackBundle.Spec.Provenance)
-	assert.Equal(t, "nginx-demo-bad", rollbackBundle.Spec.Provenance.RollbackOf)
+	assert.Equal(t, "nginx-demo-good", rollbackBundle.Spec.Provenance.RollbackOf,
+		"the rollback target is the Bundle verified before the failing one")
+	assert.Equal(t, "nginx-demo-bad", rollbackBundle.Annotations["kardinal.io/rollback-from"])
+	require.Len(t, rollbackBundle.Spec.Images, 1)
+	assert.Equal(t, "1.29.0", rollbackBundle.Spec.Images[0].Tag, "the failing image is never re-promoted")
 	t.Logf("journey 4: rollback Bundle %q created, rollbackOf=%s ✅",
 		rollbackBundle.Name, rollbackBundle.Spec.Provenance.RollbackOf)
 	t.Log("Journey 4: Rollback — auto-rollback Bundle created with correct labels ✅")

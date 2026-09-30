@@ -43,6 +43,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -356,6 +357,9 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
 	}
+	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
+	}
 	if msg := unsupportedConfig(pipeline, findEnv(pipeline, ps.Spec.Environment), ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
@@ -427,6 +431,9 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	pipeline, err := r.loadPipeline(ctx, ps)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("load pipeline: %w", err)
+	}
+	if held, res, holdErr := r.holdIfPaused(ctx, log, ps); held {
+		return res, holdErr
 	}
 	bundle, err := r.loadBundle(ctx, ps)
 	if err != nil {
@@ -961,7 +968,8 @@ func (r *Reconciler) verify(ctx context.Context, base, ps *v1alpha1.PromotionSte
 // first Healthy result, and from handleBake when the bake policy is
 // fail-on-alarm.
 //
-// "rollback": creates a rollback Bundle, transitions step to RollingBack.
+// "rollback": creates a rollback Bundle to the Bundle verified before this one
+// and transitions step to RollingBack; AbortedByAlarm when there is none.
 // "abort":    transitions step to AbortedByAlarm (human intervention required).
 // "none":     transitions step to Failed (existing behavior).
 //
@@ -995,19 +1003,33 @@ func (r *Reconciler) applyHealthFailurePolicy(
 				"health alarm via %s (onHealthFailure=rollback): %s — Bundle %s is a rollback and is not rolled back again; human intervention required",
 				adapterName, reason, ps.Spec.BundleName))
 		}
-		// Create a rollback Bundle at the previous version.
-		// The rollback Bundle travels the full pipeline, restoring the prior state.
-		rollbackBundle := r.buildRollbackBundle(ps)
-		if createErr := r.Create(ctx, rollbackBundle); createErr != nil && !apierrors.IsAlreadyExists(createErr) {
-			return ctrl.Result{}, fmt.Errorf("create rollback bundle: %w", createErr)
+		// Roll the environment back to the Bundle verified before the failing
+		// one (createAutoRollback, the planner the CLI and UI use). The
+		// rollback Bundle sets intent.targetEnvironment to this environment,
+		// and its Graph keeps every environment upstream of it, so the old
+		// artifacts are promoted through those first, with their gates and
+		// soaks. Environments that are not upstream are not touched.
+		// RollingBack is terminal for this step: the rollback Bundle carries
+		// the environment from here. A refusal from the planner (nothing safe
+		// to roll back to) stops the step for a human.
+		rollbackName, refusal, rbErr := r.createAutoRollback(ctx, ps)
+		if rbErr != nil {
+			return ctrl.Result{}, rbErr
+		}
+		if refusal != nil {
+			log.Warn().Err(refusal).Str("env", ps.Spec.Environment).
+				Msg("health failure: nothing safe to roll back to, AbortedByAlarm")
+			return ctrl.Result{}, r.transition(ctx, base, ps, StateAbortedByAlarm, fmt.Sprintf(
+				"health alarm via %s (onHealthFailure=rollback): %s — no automatic rollback (%v); human intervention required",
+				adapterName, reason, refusal))
 		}
 		log.Info().
 			Str("env", ps.Spec.Environment).
-			Str("rollbackBundle", rollbackBundle.Name).
+			Str("rollbackBundle", rollbackName).
 			Msg("health failure: rollback Bundle created, state=RollingBack")
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateRollingBack, fmt.Sprintf(
 			"health alarm via %s (onHealthFailure=rollback): %s — rollback Bundle %s created",
-			adapterName, reason, rollbackBundle.Name))
+			adapterName, reason, rollbackName))
 
 	default: // "none" or unset
 		log.Info().Str("env", ps.Spec.Environment).Msg("health failure: Failed")
@@ -1016,33 +1038,12 @@ func (r *Reconciler) applyHealthFailurePolicy(
 	}
 }
 
-// isRollbackBundle reports whether b is a rollback Bundle, created by
-// onHealthFailure=rollback, a RollbackPolicy or `kardinal rollback`.
+// isRollbackBundle reports whether b is a rollback Bundle: one created by
+// onHealthFailure=rollback, a RollbackPolicy, `kardinal rollback` or the UI.
+// lifecycle.PlanRollback sets both the label and spec.provenance.rollbackOf;
+// either is enough.
 func isRollbackBundle(b *v1alpha1.Bundle) bool {
-	return b.Labels["kardinal.io/rollback"] == "true" || (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "")
-}
-
-// buildRollbackBundle creates a rollback Bundle for K-03.
-// The bundle is annotated with the original bundle name for audit trail.
-func (r *Reconciler) buildRollbackBundle(ps *v1alpha1.PromotionStep) *v1alpha1.Bundle {
-	rollbackName := ps.Spec.BundleName + "-rollback-alarm"
-	return &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rollbackName,
-			Namespace: ps.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/rollback": "true",
-				"kardinal.io/reason":   "AutoRollback",
-			},
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     "image",
-			Pipeline: ps.Spec.PipelineName,
-			Provenance: &v1alpha1.BundleProvenance{
-				RollbackOf: ps.Spec.BundleName,
-			},
-		},
-	}
+	return b.Labels[lifecycle.LabelRollback] == "true" || (b.Spec.Provenance != nil && b.Spec.Provenance.RollbackOf != "")
 }
 
 // checkPreDeployGates looks up all gates in ps.Spec.RequiredGates and returns

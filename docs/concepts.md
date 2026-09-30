@@ -26,7 +26,7 @@ kubectl apply -f bundle.yaml
 | Available | Discovered, not yet promoted to any environment |
 | Promoting | Actively being promoted through the pipeline |
 | Verified | Successfully promoted to all target environments |
-| Failed | A promotion step or health check failed |
+| Failed | A promotion step or health check failed, kro rejected the Graph, or the Pipeline, the Bundle intent or a PolicyGate cannot be built into a Graph (condition `InvalidSpec`, with the reason). A Failed Bundle promotes again when the failed step is retried or, for `InvalidSpec`, when the Pipeline changes |
 | Superseded | Replaced by a newer Bundle |
 
 ### Bundle supersession
@@ -393,7 +393,7 @@ human reviewer confirms the diff and gate compliance before the change lands.
 
 ### Missing `historyLimit`
 
-The default `historyLimit: 20` retains 20 Bundles per Pipeline. In high-frequency
+The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In high-frequency
 pipelines (multiple deployments per day), reduce this to `5`. The Git audit trail in
 GitHub is permanent regardless — only the CRD state in etcd is bounded.
 

@@ -122,15 +122,18 @@ type BundleStatus struct {
 
 	// GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG.
 	// Populated by the BundleReconciler when the Graph is first created.
-	// Used to detect Graph deletion and trigger recreation.
+	// Used to detect Graph deletion and trigger recreation. The Graph of a
+	// Bundle that failed promoting is not recreated (GraphSynced=False,
+	// reason GraphDeleted), so the failed artifacts are not promoted again;
+	// a Pipeline change rebuilds it.
 	// +optional
 	GraphRef string `json:"graphRef,omitempty"`
 
-	// PipelineSpecHash is the SHA-256 hash of the Pipeline spec at the time the
-	// Graph was last created for this Bundle. When the Bundle reconciler is
+	// PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused
+	// excluded) the Graph was last built from. When the Bundle reconciler is
 	// re-queued by a Pipeline watch event, it compares the current Pipeline spec
-	// hash to this field. A mismatch triggers Graph deletion so Translate
-	// recreates it with the updated spec.
+	// hash to this field. A mismatch re-translates the Graph in place with the
+	// updated spec.
 	// +optional
 	PipelineSpecHash string `json:"pipelineSpecHash,omitempty"`
 }

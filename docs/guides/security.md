@@ -488,9 +488,17 @@ The user needs these permissions:
 |---|---|
 | View pipelines, bundles, gates and steps | `get`, `list` on `pipelines`, `bundles`, `policygates`, `promotionsteps` (`kardinal.io`) |
 | View step events | `list` on `events` (core) |
-| Promote, roll back | `create` on `bundles` |
-| Pause, resume | `update`, `patch` on `pipelines` |
-| Approve a gate | `update`, `patch` on `policygates` |
+| Create a Bundle | `create` on `bundles` |
+| Promote | `get` on `pipelines`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
+| Roll back | `get` on `pipelines` and `bundles`; `list` on `promotionsteps` and `bundles`; `create` on `bundles` |
+| Pause, resume | `get`, `update` on `pipelines` |
+| Approve a gate | `get`, `update` on `policygates` |
+
+Each action is checked call by call, so it needs every verb in its row. Promote and roll
+back read the Pipeline and the environment's history before they create the Bundle. The
+reads are the view permissions, so a user who can view needs only the write verbs on top.
+Pause and resume only set `spec.paused` on the Pipeline. The controller manages the freeze
+gate itself, so the user needs no rights on `policygates` to pause.
 
 The list views read all namespaces, so the user needs a ClusterRole bound with a
 ClusterRoleBinding. When the controller runs with `--watch-namespace`, lists are checked
@@ -508,6 +516,20 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["list"]
+---
+# Bind this as well to let the user act: create Bundles, promote, roll back,
+# pause and resume Pipelines, and approve gates.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kardinal-ui-operator
+rules:
+  - apiGroups: ["kardinal.io"]
+    resources: ["bundles"]
+    verbs: ["create"]
+  - apiGroups: ["kardinal.io"]
+    resources: ["pipelines", "policygates"]
+    verbs: ["update"]
 ```
 
 ### Signing in from the browser

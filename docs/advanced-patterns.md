@@ -377,7 +377,7 @@ namespace.
    namespace per Pipeline. `kardinal-promoter` scopes Bundles by `kardinal.io/pipeline`
    label, not by namespace.
 
-2. **Set historyLimit**: the default `historyLimit: 20` retains the last 20 Bundles.
+2. **Set historyLimit**: the default `historyLimit: 50` retains the last 50 finished Bundles.
    For high-frequency teams, reduce to `5` to limit CRD count.
 
 3. **Monitor CRD count**: the controller exposes `kardinal_bundles_total{phase}`
@@ -464,7 +464,7 @@ always merge the production PR to confirm:
 
 ### Not setting `historyLimit`
 
-The default `historyLimit: 20` retains 20 Bundles per Pipeline. In active pipelines
+The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In active pipelines
 with frequent deployments, this creates many PromotionStep CRDs. If you deploy
 multiple times per day, set `historyLimit: 5`. The Git audit trail is permanent
 regardless of this setting.

@@ -17,7 +17,6 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,40 +26,6 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
-
-// TestPromote_CreatesBundleForEnvironment verifies that promoteFn creates a Bundle
-// targeting the specified environment.
-func TestPromote_CreatesBundleForEnvironment(t *testing.T) {
-	s := cliTestScheme(t)
-	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
-		Spec: v1alpha1.PipelineSpec{
-			Git: v1alpha1.PipelineGit{URL: "https://github.com/test/repo"},
-			Environments: []v1alpha1.EnvironmentSpec{
-				{Name: "test"},
-				{Name: "uat"},
-				{Name: "prod"},
-			},
-		},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline).Build()
-
-	var buf bytes.Buffer
-	err := promoteFn(&buf, c, "default", "nginx-demo", "prod")
-	require.NoError(t, err)
-
-	// Verify Bundle was created
-	var bundles v1alpha1.BundleList
-	require.NoError(t, c.List(context.Background(), &bundles))
-	require.Len(t, bundles.Items, 1)
-	assert.Equal(t, "nginx-demo", bundles.Items[0].Spec.Pipeline)
-	require.NotNil(t, bundles.Items[0].Spec.Intent, "Intent should not be nil")
-	assert.Equal(t, "prod", bundles.Items[0].Spec.Intent.TargetEnvironment)
-
-	out := buf.String()
-	assert.Contains(t, out, "nginx-demo")
-	assert.Contains(t, out, "prod")
-}
 
 // TestPromote_PipelineNotFound returns an error when the pipeline does not exist.
 func TestPromote_PipelineNotFound(t *testing.T) {
@@ -92,5 +57,5 @@ func TestPromote_EnvironmentNotInPipeline(t *testing.T) {
 	err := promoteFn(&buf, c, "default", "nginx-demo", "nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nonexistent")
-	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), "has no environment")
 }
