@@ -1109,7 +1109,9 @@ func TestUIAPI_ListBundles_ImagesIncluded(t *testing.T) {
 // a valid image creates a Bundle CRD and returns 201 (#917).
 func TestUIAPI_CreateBundle_Success(t *testing.T) {
 	s := uiScheme()
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(&v1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+	}).Build()
 	srv := newUIAPIServer(c, zerolog.Nop())
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)

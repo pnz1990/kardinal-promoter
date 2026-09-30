@@ -255,7 +255,7 @@ func TestUIAPI_PauseResume_SetsSpecPaused(t *testing.T) {
 // TestUIAPI_CreateBundle_StampsCreatedAt covers the UI half of C02-bundle-04:
 // Bundles created from the UI carry sub-second creation order.
 func TestUIAPI_CreateBundle_StampsCreatedAt(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(uiScheme()).Build()
+	c := fake.NewClientBuilder().WithScheme(uiScheme()).WithObjects(uiLcPipeline()).Build()
 	w := uiLcPost(t, c, "/api/v1/ui/bundles", `{"pipeline":"app","image":"ghcr.io/org/app:1"}`)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 	created := uiLcCreated(t, c)
