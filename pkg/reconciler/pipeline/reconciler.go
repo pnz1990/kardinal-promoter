@@ -225,8 +225,8 @@ var inFlightBundlePhases = map[string]bool{
 	"Promoting": true,
 }
 
-// DerivePhase computes the Pipeline.status.phase from the Bundles (those of
-// other pipelines are ignored) and the PromotionSteps of pipeline pipelineName:
+// DerivePhase computes the Pipeline.status.phase from the Bundles and the
+// PromotionSteps of pipeline pipelineName:
 //   - "Degraded"  — the newest Bundle in some environment is Failed,
 //     AbortedByAlarm or RollingBack there, or the newest Bundle of the
 //     Pipeline is Failed (it may have failed before any step was created)
@@ -235,59 +235,56 @@ var inFlightBundlePhases = map[string]bool{
 //     environment is not Verified there yet (E2E-R05)
 //   - "Ready"     — nothing is in flight and the newest Bundle is Verified in
 //     every environment it reached
-//   - "Unknown"   — no Bundle is in flight and no PromotionStep exists (the UI
-//     shows "Idle")
+//   - "Unknown"   — no Bundle is in flight and no PromotionStep counts (the
+//     UI shows "Idle")
 //
-// Each environment is judged by its newest Bundle only (newest step creation
-// time, ties broken by bundle name), and by every step that Bundle has there,
-// so a multi-region environment is Degraded when any region is, whatever the
-// List order. The newest Bundle of the Pipeline is chosen the same way.
+// Newest follows the rule the UI (ui_api.go) and the CLI (current_bundle.go)
+// use to pick the current Bundle: Superseded Bundles and their steps are
+// skipped (handleSuperseded fails a superseded Bundle's cancelled steps), and
+// Bundles are ordered by lifecycle.CompareCreation, the order supersession
+// uses. A step whose Bundle is not listed (another pipeline's, or being
+// deleted) is skipped too. Each environment is judged by every step its newest
+// Bundle has there, so a multi-region environment is Degraded when any region
+// is, whatever the List order.
 func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps []kardinalv1alpha1.PromotionStep) string {
-	type bundleAt struct {
-		name    string
-		created time.Time
-	}
-	newer := func(at, cur bundleAt) bool {
-		return at.created.After(cur.created) || (at.created.Equal(cur.created) && at.name > cur.name)
-	}
-
+	byName := make(map[string]*kardinalv1alpha1.Bundle, len(bundles))
 	inFlight := false
-	var newestBundle bundleAt
-	newestFailed := false
+	var newestBundle *kardinalv1alpha1.Bundle
 	for i := range bundles {
 		b := &bundles[i]
-		if b.Spec.Pipeline != pipelineName {
+		if b.Spec.Pipeline != pipelineName || b.Status.Phase == "Superseded" {
 			continue
 		}
+		byName[b.Name] = b
 		if inFlightBundlePhases[b.Status.Phase] {
 			inFlight = true
 		}
-		if at := (bundleAt{b.Name, b.CreationTimestamp.Time}); newestBundle.name == "" || newer(at, newestBundle) {
-			newestBundle = at
-			newestFailed = b.Status.Phase == "Failed"
+		if newestBundle == nil || lifecycle.CompareCreation(b, newestBundle) > 0 {
+			newestBundle = b
 		}
 	}
 
 	// Pass 1: the newest Bundle per environment.
-	type envKey struct{ pipeline, env string }
-	newest := make(map[envKey]bundleAt)
+	newest := make(map[string]*kardinalv1alpha1.Bundle)
 	for i := range steps {
 		s := &steps[i]
-		key := envKey{s.Spec.PipelineName, s.Spec.Environment}
-		at := bundleAt{s.Spec.BundleName, s.CreationTimestamp.Time}
-		if cur, ok := newest[key]; !ok || newer(at, cur) {
-			newest[key] = at
+		b, ok := byName[s.Spec.BundleName]
+		if !ok {
+			continue
+		}
+		if cur, ok := newest[s.Spec.Environment]; !ok || lifecycle.CompareCreation(b, cur) > 0 {
+			newest[s.Spec.Environment] = b
 		}
 	}
 
 	// Pass 2: every step of that Bundle in the environment counts.
-	hasDegraded := false
-	allVerified := true
+	counted, hasDegraded, allVerified := 0, false, true
 	for i := range steps {
 		s := &steps[i]
-		if newest[envKey{s.Spec.PipelineName, s.Spec.Environment}].name != s.Spec.BundleName {
+		if b, ok := newest[s.Spec.Environment]; !ok || b.Name != s.Spec.BundleName {
 			continue
 		}
+		counted++
 		if degradedStates[s.Status.State] {
 			hasDegraded = true
 		}
@@ -297,11 +294,11 @@ func DerivePhase(pipelineName string, bundles []kardinalv1alpha1.Bundle, steps [
 	}
 
 	switch {
-	case hasDegraded || newestFailed:
+	case hasDegraded || (newestBundle != nil && newestBundle.Status.Phase == "Failed"):
 		return "Degraded"
-	case inFlight || (len(steps) > 0 && !allVerified):
+	case inFlight || !allVerified:
 		return "Promoting"
-	case len(steps) > 0:
+	case counted > 0:
 		return "Ready"
 	default:
 		return "Unknown"

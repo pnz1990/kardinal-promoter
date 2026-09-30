@@ -244,59 +244,74 @@ func TestDerivePhase_NoSteps(t *testing.T) {
 	assert.Equal(t, "Unknown", pipeline.DerivePhase("app", []kardinalv1alpha1.Bundle{}, []kardinalv1alpha1.PromotionStep{}))
 }
 
+// phaseBundle returns a Bundle of pipeline "app" in phase, created at.
+func phaseBundle(name, phase string, at metav1.Time) kardinalv1alpha1.Bundle {
+	return kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: at},
+		Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+		Status:     kardinalv1alpha1.BundleStatus{Phase: phase},
+	}
+}
+
 // TestDerivePhase_AllVerified verifies that all-Verified steps yield Ready.
 func TestDerivePhase_AllVerified(t *testing.T) {
 	now := metav1.Now()
+	// A settled Bundle, so the steps alone decide.
+	settled := []kardinalv1alpha1.Bundle{phaseBundle("b1", "Verified", now)}
 	steps := []kardinalv1alpha1.PromotionStep{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "test"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 	}
-	assert.Equal(t, "Ready", pipeline.DerivePhase("app", nil, steps))
+	assert.Equal(t, "Ready", pipeline.DerivePhase("app", settled, steps))
 }
 
 // TestDerivePhase_OneFailed verifies that a Failed step yields Degraded.
 func TestDerivePhase_OneFailed(t *testing.T) {
 	now := metav1.Now()
+	// A settled Bundle, so the steps alone decide.
+	settled := []kardinalv1alpha1.Bundle{phaseBundle("b1", "Verified", now)}
 	steps := []kardinalv1alpha1.PromotionStep{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "test"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
 		},
 	}
-	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", nil, steps))
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", settled, steps))
 }
 
 // TestDerivePhase_Promoting verifies that a step still in flight yields
 // Promoting, not Unknown (E2E-R05).
 func TestDerivePhase_Promoting(t *testing.T) {
 	now := metav1.Now()
+	// A settled Bundle, so the steps alone decide.
+	settled := []kardinalv1alpha1.Bundle{phaseBundle("b1", "Verified", now)}
 	steps := []kardinalv1alpha1.PromotionStep{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-test", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "test"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "test"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "s-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "b1", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Promoting"},
 		},
 	}
-	assert.Equal(t, "Promoting", pipeline.DerivePhase("app", nil, steps))
+	assert.Equal(t, "Promoting", pipeline.DerivePhase("app", settled, steps))
 }
 
 // TestDerivePhase_MultiBundle_NewFailed_OldVerified verifies that when a new bundle
@@ -308,16 +323,17 @@ func TestDerivePhase_MultiBundle_NewFailed_OldVerified(t *testing.T) {
 		// Old bundle — Verified in prod
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "old-prod", Namespace: "default", CreationTimestamp: old},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "old", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Verified"},
 		},
 		// New bundle — Failed in prod
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "new-prod", Namespace: "default", CreationTimestamp: now},
-			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", Environment: "prod"},
+			Spec:       kardinalv1alpha1.PromotionStepSpec{PipelineName: "app", BundleName: "new", Environment: "prod"},
 			Status:     kardinalv1alpha1.PromotionStepStatus{State: "Failed"},
 		},
 	}
-	// Most recent step per env wins: new-prod is Failed → Degraded
-	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", nil, steps))
+	bundles := []kardinalv1alpha1.Bundle{phaseBundle("old", "Verified", old), phaseBundle("new", "Failed", now)}
+	// The newest Bundle per env wins: new is Failed in prod → Degraded
+	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps))
 }
