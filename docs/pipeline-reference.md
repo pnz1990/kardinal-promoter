@@ -50,8 +50,8 @@ spec:
       delivery:
         delegate: <string>              # "none" (default), "argoRollouts" (implemented), "flagger" (implemented)
       shard: <string>                   # Deprecated, not supported: must be empty (distributed mode was removed)
-      steps:                            # Reserved, not implemented yet: a Pipeline that sets it is rejected
-        - uses: <string>                #   (see docs/custom-steps.md)
+      steps:                            # Not supported: a Pipeline that sets it is rejected
+        - uses: <string>                #   (see Promotion Steps below)
       promotionTemplate:                # Reserved, not implemented yet: a Pipeline that sets it is rejected
         name: <string>
       waitForMergeTimeout: <duration>   # pr-review only: fail the step and close the PR after this (default: wait forever)
@@ -104,7 +104,7 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `health.labelSelector` | No | (none) | `health.type=resource` only. When set, **every** Deployment in the namespace that matches these labels must pass the health check. No match is unhealthy. Example: `{"app": "nginx", "kardinal.io/pipeline": "nginx-demo"}`. When unset, a single Deployment named after the Pipeline is checked. Ignored for `argocd`, `flux`, `argoRollouts`, and `flagger`. |
 | `delivery.delegate` | No | `none` | Progressive delivery delegation. `argoRollouts`: watch Argo Rollouts Rollout status after promotion. `flagger`: watch Flagger Canary status. `none`: instant deploy (rolling update). |
 | `shard` | No | (must be empty) | **Deprecated, not supported.** Distributed mode was removed. A non-empty value sets the Pipeline `Ready=False`, `kardinal validate` fails, and a PromotionStep left over from distributed mode fails with `shard is not supported`. Remove it; the controller reconciles every environment. See [Multi-Cluster](distributed-mode.md). |
-| `steps` | No | (inferred) | **Not implemented yet.** Reserved for a custom step sequence. The controller always runs the default sequence, which it infers from `update.strategy` and `approval`. A Pipeline that sets `steps` is rejected: `kardinal validate` reports it, and its Bundles fail with a message naming the environment. See [Custom Steps](custom-steps.md). |
+| `steps` | No | (none) | **Not supported.** kardinal has no custom step engine: the controller always runs the sequence it infers from `update.strategy` and `approval`. A Pipeline that sets `steps` is rejected: `kardinal validate` reports it, and its Bundles fail with a message naming the environment. See [Promotion Steps](#promotion-steps). |
 | `promotionTemplate` | No | (none) | **Not implemented yet.** Reserved for a shared step sequence. It is rejected the same way as `steps`. |
 | `waitForMergeTimeout` | No | (none) | `pr-review` only. How long the step may wait for its PR to merge, as a Go duration (`24h`, `72h`). When it expires, the step is marked `Failed` and the controller closes the PR, so a late merge cannot deliver the change. Unset or `0` waits forever. |
 | `stepTimeoutSeconds` | No | (none) | Maximum seconds one built-in step (`git-clone`, `kustomize-set-image`, `open-pr`, ...) may run. The step is cancelled and the error is handled like any other step error: a retryable error is retried with backoff, then the PromotionStep is marked `Failed`. Minimum 1. Unset means no per-step timeout. |
@@ -113,10 +113,10 @@ Duration fields (`health.timeout`, `waitForMergeTimeout`) must be Go durations s
 | `onHealthFailure` | No | `none` | What to do when `health.timeout` expires without a Healthy result, when the adapter reports a terminal failure (Deployment `ProgressDeadlineExceeded`, Flagger `Failed`), or when health fails during bake with `policy: fail-on-alarm` (K-03). `none`: step → Failed (default behavior). `abort`: step → AbortedByAlarm; requires human intervention. `rollback`: create a rollback Bundle with the artifacts of the Bundle verified before the failing one in this environment; step → RollingBack, or AbortedByAlarm when there is nothing safe to roll back to (a step of a rollback Bundle → AbortedByAlarm instead, so rollbacks do not chain). See [Automatic Rollback](rollback.md#automatic-rollback). |
 | `regions` | No | (none) | **Deprecated, not supported.** Declare one environment per region instead (for example `prod-us` and `prod-eu`) and promote them in parallel with `wave` or `dependsOn`; each gets its own path, PR, gates and health check. Two or more regions set the Pipeline `Ready=False`, `kardinal validate` fails, and every Bundle fails when its Graph is built with `regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`. A single region is accepted and ignored. |
 
-**Reserved and unsupported fields.** `steps`, `promotionTemplate`, `autoRollback`,
-`layout: branch` (on `spec.git` or an environment) and a `health.resource.kind` other than
-`Deployment` are not implemented; `regions` with two or more entries, `shard` and
-`health.cluster` are deprecated and not supported. A Bundle fails when it reaches an
+**Reserved and unsupported fields.** `promotionTemplate`, `autoRollback`, `layout: branch`
+(on `spec.git` or an environment) and a `health.resource.kind` other than `Deployment` are
+not implemented; `steps` is not supported (kardinal has no custom step engine); `regions`
+with two or more entries, `shard` and `health.cluster` are deprecated and not supported. A Bundle fails when it reaches an
 environment that uses one (`steps`, `promotionTemplate` and two or more `regions` fail it
 when its Graph is built; a `health.resource.kind` fails the step after the change merged,
 during the health check). `kardinal validate` reports each of them, and the controller sets
@@ -268,62 +268,63 @@ promotion whose Pipeline or environment sets `layout: branch`, before it changes
 
 See [Rendered Manifests](rendered-manifests.md) for the planned design.
 
-## Integration Test Step (K-07)
+## Promotion Steps
 
-> **Not reachable yet.** A step outside the default sequence runs only when it is listed in `spec.environments[].steps`, and `steps` is not implemented yet. A Pipeline that sets it is rejected (see [Custom Steps](custom-steps.md)). This section describes the step for when `steps` ships.
+Every environment runs a fixed step sequence. The controller picks it from the Bundle type,
+`update.strategy`, `approval` and `layout` (`pkg/steps/defaults.go`):
 
-The `integration-test` built-in step creates a Kubernetes Job in the target environment namespace, waits for it to complete, and writes the result to the step output accumulator. This is the most powerful quality gate after bake time — running real tests against the actual deployed service.
+| Case | Steps |
+|---|---|
+| Image Bundle, `update.strategy: kustomize` (default) | `git-clone`, `kustomize-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Image Bundle, `update.strategy: helm` | `git-clone`, `helm-set-image`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| Config Bundle | `git-clone`, `config-merge`, `git-commit`, `git-push`, [`open-pr`, `wait-for-merge`,] `health-check` |
+| `update.strategy: argocd` | `argocd-set-image`, `health-check` |
 
-### Configuration
+`open-pr` and `wait-for-merge` run only with `approval: pr-review`. `layout: branch` is not
+implemented and fails at `git-clone`. [Architecture: Steps Engine](architecture.md#steps-engine-pkgsteps)
+describes each step.
 
-```yaml
-steps:
-  - uses: integration-test
-```
+kardinal has no custom step engine. `spec.environments[].steps` and
+`spec.environments[].promotionTemplate` cannot change the sequence: a Pipeline that sets
+either is rejected (`kardinal validate` reports it, and its Bundles fail with a message
+naming the environment).
 
-The step reads its config from `PromotionStep.spec.inputs`:
+### How `kustomize-set-image` matches images
 
-| Input key | Required | Default | Description |
-|---|---|---|---|
-| `integration_test.image` | Yes | | Container image to run (e.g., `ghcr.io/myorg/integration-tests:latest`) |
-| `integration_test.command` | No | container default | Space-separated command and args (e.g., `./run-tests.sh --env staging`) |
-| `integration_test.timeout` | No | `30m` | Maximum time to wait for Job completion (Go duration, e.g., `10m`, `1h`) |
+kustomize matches an `images` entry on its `name` only, against the image name in the
+manifests. So `kustomize-set-image` always writes, or updates, an entry whose `name` is the
+full repository (for example `name: ghcr.io/org/app`), as `kustomize edit set image` does.
+That entry rewrites manifests that use `image: ghcr.io/org/app`.
 
-### Behavior
+Entries that point at the repository under another name get the same tag or digest, so
+manifests that use that name keep promoting:
 
-1. **First call**: creates a `batch/v1 Job` in the environment namespace and returns `Pending` (reconciler requeues in 15s).
-2. **Subsequent calls**: re-checks Job status. Returns `Pending` while running, `Success` when Job succeeds, `Failed` when Job fails.
-3. **Timeout**: if `integration_test.timeout` elapses, the Job is deleted and the step returns `Failed`.
-4. **Idempotent**: multiple reconcile iterations never create duplicate Jobs (deterministic Job name from bundle+env).
-5. **Cleanup**: Jobs use `ttlSecondsAfterFinished: 3600` so they self-delete after 1 hour.
-6. **RBAC**: the controller needs `create` and `delete` on `batch` Jobs in the environment namespace. The Helm chart grants this with `--set rbac.integrationTestJobs=true`.
+- an entry whose `newName` is the repository (for example `name: app`,
+  `newName: ghcr.io/org/app`, as older kardinal versions wrote it);
+- an older short-name entry (`name: app`, no `newName`), when only one Bundle image has that
+  short name. It also gets `newName: ghcr.io/org/app`.
 
-### Outputs
+A short-name entry whose `newName` points at another repository is left alone.
 
-On success, the step populates:
-- `integration_test.result`: `"passed"`
-- `integration_test.job`: the Job name
-- `integration_test.elapsed`: time taken (e.g., `"2m34s"`)
+### Image signatures and tests
 
-On failure:
-- `integration_test.result`: `"failed"`
-- `integration_test.job`: the Job name
+Checks that must hold for the running workload belong where it runs, not in the promoter:
 
-### Example
-
-```yaml
-environments:
-  - name: test
-    steps:
-      - uses: git-clone
-      - uses: kustomize-set-image
-      - uses: git-commit
-      - uses: git-push
-      - uses: health-check
-      - uses: integration-test   # runs after health check passes
-```
-
-`examples/integration-test/pipeline.yaml` shows the environment layout; its `steps` block is commented out until the field is implemented.
+- **Image signatures.** Enforce them at admission in the cluster that runs the pods, with
+  [Sigstore policy-controller](https://docs.sigstore.dev/policy-controller/overview/) or
+  [Kyverno `verifyImages`](https://kyverno.io/docs/policy-types/cluster-policy/verify-images/).
+  A check in the promoter is bypassed by anyone who can push to the GitOps repository;
+  admission is not.
+- **Tests after a deploy.** Run them as an Argo CD
+  [PostSync hook](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/) Job and
+  set `health.type: argocd`. Argo CD keeps the sync operation open while the hook runs and
+  marks it failed when a PostSync hook fails. The argocd adapter is healthy only when the
+  Application is Healthy and Synced on the promoted revision and its last operation is
+  `Succeeded` (or there is none), so the step waits for the tests; a `Failed` or `Error`
+  operation is a health failure and applies `onHealthFailure`.
+- **Metric checks.** Create a `MetricCheck` and read it from a PolicyGate on the next
+  environment, for example `metrics["error-rate"].result == "Pass"`. See
+  [Policy Gates: Metric-based](policy-gates.md#metric-based).
 
 ## Examples
 

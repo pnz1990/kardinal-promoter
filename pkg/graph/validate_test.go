@@ -233,6 +233,55 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 
 }
 
+// TestBuild_RejectsBundleWithoutItsArtifacts is #1285: a Bundle whose type
+// needs images and has none, or needs configRef.commitSHA and has none, fails
+// Build with ErrInvalid (InvalidSpec on the Bundle) before any environment is
+// promoted. Before, an empty image Bundle "succeeded" in every environment
+// with no images to update.
+func TestBuild_RejectsBundleWithoutItsArtifacts(t *testing.T) {
+	images := []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}}
+	commit := &kardinalv1alpha1.ConfigRef{CommitSHA: "abc123"}
+	tests := []struct {
+		name    string
+		spec    kardinalv1alpha1.BundleSpec
+		wantErr string
+	}{
+		{name: "image without images", spec: kardinalv1alpha1.BundleSpec{Type: "image"},
+			wantErr: `bundle "app-x7k2m": type "image" requires at least one entry in images`},
+		{name: "no type counts as image", spec: kardinalv1alpha1.BundleSpec{},
+			wantErr: `type "image" requires at least one entry in images`},
+		{name: "image with only a config commit", spec: kardinalv1alpha1.BundleSpec{Type: "image", ConfigRef: commit},
+			wantErr: `type "image" requires at least one entry in images`},
+		{name: "config without configRef", spec: kardinalv1alpha1.BundleSpec{Type: "config", Images: images},
+			wantErr: `type "config" requires configRef.commitSHA`},
+		{name: "config with a repo and no commit",
+			spec:    kardinalv1alpha1.BundleSpec{Type: "config", ConfigRef: &kardinalv1alpha1.ConfigRef{GitRepo: "https://g/cfg"}},
+			wantErr: `type "config" requires configRef.commitSHA`},
+		{name: "mixed without images", spec: kardinalv1alpha1.BundleSpec{Type: "mixed", ConfigRef: commit},
+			wantErr: `type "mixed" requires at least one entry in images`},
+		{name: "mixed without a commit", spec: kardinalv1alpha1.BundleSpec{Type: "mixed", Images: images},
+			wantErr: `type "mixed" requires configRef.commitSHA`},
+		{name: "image", spec: kardinalv1alpha1.BundleSpec{Type: "image", Images: images}},
+		{name: "config", spec: kardinalv1alpha1.BundleSpec{Type: "config", ConfigRef: commit}},
+		{name: "mixed", spec: kardinalv1alpha1.BundleSpec{Type: "mixed", Images: images, ConfigRef: commit}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := makeBundle("app-x7k2m", "app")
+			tt.spec.Pipeline = "app"
+			b.Spec = tt.spec
+			_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: makeLinearPipeline("app", "test", "prod"), Bundle: b})
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, graph.ErrInvalid)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 // TestBuild_GateNameBackstop verifies that a gate whose name cannot go into
 // the instance's kardinal.io/gate-template label fails only the Graphs that
 // place it, and that the error names the gate, its namespace and the

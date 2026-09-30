@@ -1,7 +1,9 @@
 apiVersion: flagger.app/v1beta1
 kind: Canary
 metadata:
-  name: kardinal-test-app
+  # The flagger health check looks up the Canary named after the Pipeline
+  # (flagger-demo) in the environment's namespace (prod).
+  name: flagger-demo
   namespace: prod
 spec:
   # Reference to the Deployment that Flagger manages

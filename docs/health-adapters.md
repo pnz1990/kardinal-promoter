@@ -131,7 +131,7 @@ health:
 
 **Healthy when:** all of these are met:
 - `Ready=True` in `status.conditions`
-- `status.observedGeneration` equals `metadata.generation` (the controller has reconciled the latest spec)
+- `status.observedGeneration` equals `metadata.generation` (the controller has reconciled the latest spec). A Kustomization missing either field waits.
 - `status.lastAppliedRevision` is the promoted commit (Flux reports `<branch>@sha1:<commit>`, or `<branch>/<commit>` before Flux 2.0). A revision that is not a git commit (an OCI or Helm source) cannot be compared: the check passes with "(revision not verified)" in the message.
 
 **When to use:** Any cluster managed by Flux.
@@ -145,16 +145,16 @@ health:
 | `Ready=True`, older commit applied | Wait |
 | `Ready=True`, a later commit applied (another push to the same branch reached Flux before it fetched ours) | Wait, then `onHealthFailure` at `health.timeout`: unlike `argocd`, this adapter has no image check to fall back on. Give each environment its own branch, or use the `resource` adapter |
 | `Ready=Unknown` (reconciling) or generation not observed yet | Wait |
+| `approval: pr-review` and the merge commit is not known yet | Wait, then `onHealthFailure` at `health.timeout` (see below) |
 | `Ready=False` (reconciliation failed or stalled) | Unhealthy (counts as a health failure) |
 | Not found | Unhealthy (counts as a health failure) |
 
-**Known limitation: the commit is not always known.** The adapter compares `lastAppliedRevision` only when the controller knows the promoted commit. For a direct push that is the pushed commit. For a PR it is the merge commit, which the controller asks the SCM provider for after the merge. Until it has one, the check does not compare revisions, and a Kustomization that is `Ready=True` on the **previous** commit passes, so the step can be Verified before Flux applies the change. There is no image check to fall back on, unlike `argocd` and `resource`. The commit is unknown when:
+**The promoted commit must be known.** For a direct push it is the pushed commit. For a PR (`approval: pr-review`) it is the merge commit: the SCM webhook records it with the merge for GitHub and GitLab, and otherwise the controller asks the SCM provider for it after the merge. Until it is known, the check waits with `merge commit of the PR not known yet`, because a Kustomization that is `Ready=True` on the **previous** commit would otherwise pass: there is no image check to fall back on, unlike `argocd` and `resource`. If the commit never becomes known, `health.timeout` applies `onHealthFailure` with that reason. That happens when:
 
 - the provider does not return one (for example an Azure DevOps PR without `lastMergeCommit`, or a Bitbucket PR whose `merge_commit` is empty);
-- the lookup keeps failing for 10 minutes after the merge, after which the controller stops asking;
-- the merge is reported by a webhook and the health check runs before the next poll records the merge commit.
+- the lookup keeps failing for 10 minutes after the merge, after which the controller stops asking.
 
-Until this is fixed, use `argocd` or `resource` where a stale Verified matters, or add a `bake` window longer than the Kustomization's `interval`: when Flux applies the change inside the window, any check that is not Healthy restarts the window (or, with `bake.policy: fail-on-alarm`, applies `onHealthFailure`).
+For those providers, use `argocd` or `resource`.
 
 ## Adapter: argoRollouts
 
@@ -203,6 +203,8 @@ health:
 | `Progressing`, `WaitingPromotion`, `Promoting`, `Finalising` | Wait |
 | `Succeeded` | Healthy |
 | `Failed` | **Failed at once**: Flagger rolled the canary back, so `onHealthFailure` applies without waiting for the timeout |
+
+The step message carries the message of the Canary's `Promoted` condition, for example why Flagger rolled it back.
 
 **Limitation:** like `argoRollouts`, the adapter checks the phase, not the revision. A Canary that is still `Succeeded` from the previous release can report Verified before Flagger detects the change.
 

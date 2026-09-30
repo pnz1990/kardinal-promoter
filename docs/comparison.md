@@ -30,8 +30,8 @@ This page compares kardinal-promoter with the two most similar tools in the GitO
 | **UI dashboard** | Embedded UI: fleet health bar, ops table, pipeline lane and DAG, bundle timeline and comparison, policy gates with CEL expressions, metrics bar; create bundle, pause/resume, promote and roll back from the UI (approve and gate override are CLI-only) | Polished Kargo UI | No UI |
 | **Metric-gated promotions** | Yes (`MetricCheck` CRD + PromQL) | No | No |
 | **DORA metrics** | Yes — `Bundle.status.metrics`, `kardinal metrics` CLI | No | No |
-| **Integration test step** | Not yet — the `integration-test` step is built, but a Pipeline cannot select it until `spec.environments[].steps` is implemented | No | No |
-| **Image signature verification** | Not yet — the `verify-image` step (cosign) is built, but a Pipeline cannot select it until `spec.environments[].steps` is implemented | No | No |
+| **Integration test step** | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | No | No |
+| **Image signature verification** | No — use admission-time verification in the workload cluster (Sigstore policy-controller or Kyverno `verifyImages`; [how](pipeline-reference.md#image-signatures-and-tests)) | No | No |
 | **Emergency gate override** | Yes — `kardinal override` with mandatory reason + audit record | No | No |
 | **Outbound event notifications** | Yes — `NotificationHook` CRD fires HTTP webhooks on Bundle.Verified, PolicyGate.Blocked, PromotionStep.Failed; optional auth header; pipeline selector | Yes (Kargo via Argo Notifications) | No |
 | **Multi-cluster** | Argo CD hub-spoke (health read from hub Applications); `health.cluster` kubeconfig Secrets not implemented | Yes | Yes |
@@ -138,8 +138,8 @@ concept. GitOps Promoter has no DAG support.
 
 ### DORA metrics built-in
 
-`Bundle.status.metrics` records `commitToProductionMinutes` and `bakeResets` for every
-promotion (`operatorInterventions` is declared but not yet written). The `kardinal metrics` CLI surfaces these
+`Bundle.status.metrics` records `commitToProductionMinutes`, `bakeResets` and `operatorInterventions`
+(the `kardinal override` entries on the Bundle's gates) for every promotion. The `kardinal metrics` CLI surfaces these
 per pipeline. Neither Kargo nor GitOps Promoter tracks deployment efficiency metrics.
 
 ---

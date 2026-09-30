@@ -79,8 +79,8 @@ kubectl apply -f examples/flagger-demo/canary.yaml
 
 # Wait for Flagger to initialize the canary
 kubectl get canary -n prod -w
-# NAME                READY   STATUS       WEIGHT   LASTTRANSITIONTIME
-# kardinal-test-app   True    Initialized  0        2026-04-18T...
+# NAME           READY   STATUS       WEIGHT   LASTTRANSITIONTIME
+# flagger-demo   True    Initialized  0        2026-04-18T...
 
 # 4. Apply the Pipeline
 kubectl apply -f examples/flagger-demo/pipeline.yaml
@@ -92,16 +92,16 @@ kubectl apply -f examples/flagger-demo/pipeline.yaml
 LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
 TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
+kardinal create bundle flagger-demo --image $TEST_IMAGE
 kardinal get pipelines
 # After test+uat auto-promote, a PR opens for prod.
 # Merge the PR — Flagger starts the canary.
 
 # Watch the canary
-kubectl describe canary kardinal-test-app -n prod
+kubectl describe canary flagger-demo -n prod
 # Events:
 #   Normal  Synced  Starting canary analysis for ...
-#   Normal  Synced  Advance kardinal-test-app.prod canary weight 5
+#   Normal  Synced  Advance flagger-demo.prod canary weight 5
 #   ...
 #   Normal  Synced  Copying kardinal-test-app.prod template spec ...
 #   Normal  Synced  Promotion completed! Scaling down ...
@@ -133,9 +133,10 @@ health:
   timeout: 30m          # must exceed Flagger's canary analysis duration
 ```
 
-The adapter always looks for a Canary named after the Pipeline
-(`kardinal-test-app`) in a namespace named after the environment (`prod`).
-The name and namespace cannot be overridden.
+The adapter looks for a Canary named after the Pipeline (`flagger-demo`) in a
+namespace named after the environment (`prod`). To check a different one, set
+`health.flagger.name` and `health.flagger.namespace` on the environment. The
+Canary's `targetRef` is the Deployment `kardinal-test-app`.
 
 ## Without a Service Mesh (simplified metrics)
 
@@ -156,6 +157,6 @@ bash scripts/demo-validate.sh
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Canary not found` | Canary CR not applied | `kubectl apply -f examples/flagger-demo/canary.yaml` |
-| Canary stuck in `Progressing` | Metric check failing | `kubectl describe canary kardinal-test-app -n prod` → check events |
+| Canary stuck in `Progressing` | Metric check failing | `kubectl describe canary flagger-demo -n prod` → check events |
 | `Failed` immediately | Deployment not responding | Check pod logs in `prod` namespace |
 | Promotion never starts | PR not merged | Merge the prod PR to trigger Flagger |

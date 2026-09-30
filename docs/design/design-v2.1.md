@@ -1153,7 +1153,7 @@ Next: Add to your CI:
 | Command | Description |
 |---|---|
 | `kardinal rollback <pipeline> --env <env>` | Promote previous Bundle |
-| `kardinal rollback ... --emergency` | Emergency rollback with priority label |
+| `kardinal rollback ... --emergency` | Deprecated (#1288): has no effect; use `kardinal override` to pass a blocking gate |
 | `kardinal pause <pipeline>` | Inject PolicyGate with `expression: "false"` |
 | `kardinal resume <pipeline>` | Remove freeze gate |
 | `kardinal history <pipeline>` | Promotion history with evidence |

@@ -217,13 +217,13 @@ type EnvironmentSpec struct {
 	// the controller always runs the default sequence (see
 	// DefaultSequenceForBundle). A Pipeline that sets it is rejected when a
 	// Bundle is translated and by "kardinal validate", instead of silently
-	// running the default steps. See docs/custom-steps.md.
+	// running the default steps. See docs/pipeline-reference.md#promotion-steps.
 	// +optional
 	Steps []StepSpec `json:"steps,omitempty"`
 
 	// PromotionTemplate is reserved for a shared step sequence and is not
 	// implemented yet. A Pipeline that sets it is rejected when a Bundle is
-	// translated and by "kardinal validate". See docs/custom-steps.md.
+	// translated and by "kardinal validate". See docs/pipeline-reference.md#promotion-steps.
 	// +optional
 	PromotionTemplate *PromotionTemplateRef `json:"promotionTemplate,omitempty"`
 

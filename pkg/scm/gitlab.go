@@ -203,9 +203,10 @@ func (g *GitLabProvider) ParseWebhookEvent(payload []byte, signature string) (We
 	var raw struct {
 		ObjectKind string `json:"object_kind"`
 		ObjectAttr struct {
-			IID    int    `json:"iid"`
-			State  string `json:"state"`
-			Action string `json:"action"`
+			IID            int    `json:"iid"`
+			State          string `json:"state"`
+			Action         string `json:"action"`
+			MergeCommitSHA string `json:"merge_commit_sha"`
 		} `json:"object_attributes"`
 		Project struct {
 			PathWithNamespace string `json:"path_with_namespace"`
@@ -216,7 +217,10 @@ func (g *GitLabProvider) ParseWebhookEvent(payload []byte, signature string) (We
 	}
 
 	if raw.ObjectKind == "merge_request" && (raw.ObjectAttr.Action == "merge" || raw.ObjectAttr.State == "merged") {
-		return mergedPREvent(raw.Project.PathWithNamespace, raw.ObjectAttr.IID), nil
+		event := mergedPREvent(raw.Project.PathWithNamespace, raw.ObjectAttr.IID)
+		// null for a fast-forward merge; the PRStatus reconciler then asks the API.
+		event.MergeCommitSHA = raw.ObjectAttr.MergeCommitSHA
+		return event, nil
 	}
 	return WebhookEvent{
 		EventType:    raw.ObjectKind,

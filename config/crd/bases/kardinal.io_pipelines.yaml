@@ -307,7 +307,7 @@ spec:
                       description: |-
                         PromotionTemplate is reserved for a shared step sequence and is not
                         implemented yet. A Pipeline that sets it is rejected when a Bundle is
-                        translated and by "kardinal validate". See docs/custom-steps.md.
+                        translated and by "kardinal validate". See docs/pipeline-reference.md#promotion-steps.
                       properties:
                         name:
                           description: Name is the PromotionTemplate resource name.
@@ -360,7 +360,7 @@ spec:
                         the controller always runs the default sequence (see
                         DefaultSequenceForBundle). A Pipeline that sets it is rejected when a
                         Bundle is translated and by "kardinal validate", instead of silently
-                        running the default steps. See docs/custom-steps.md.
+                        running the default steps. See docs/pipeline-reference.md#promotion-steps.
                       items:
                         description: |-
                           StepSpec declares a custom or built-in step override in a Pipeline environment.

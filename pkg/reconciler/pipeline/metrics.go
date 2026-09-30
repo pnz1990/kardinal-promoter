@@ -143,8 +143,9 @@ func ComputeDeploymentMetrics(
 	rollbackRateMillis := ratioMillis(rollbackCount, sampleSize)
 
 	// --- Operator intervention rate ---
-	// Counts bundles whose status.metrics.operatorInterventions is set. Nothing
-	// writes that field yet, so the rate is 0 until it is populated.
+	// Counts bundles with at least one PolicyGate override: the Bundle
+	// reconciler writes status.metrics.operatorInterventions when the Bundle
+	// becomes Verified (#1308).
 	interventionCount := 0
 	for _, vb := range verified {
 		if vb.bundle.Status.Metrics != nil && vb.bundle.Status.Metrics.OperatorInterventions > 0 {

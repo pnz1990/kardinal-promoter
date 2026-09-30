@@ -14,9 +14,9 @@ This example demonstrates every GitHub-specific feature of kardinal-promoter: st
 | PolicyGate: bundle metadata | `bundle.provenance.author != "dependabot[bot]"` |
 | `kardinal explain` | Shows all three gates, CEL expressions, and current values |
 | `kardinal policy simulate` | Simulate gate results for any time/context |
-| Emergency override | `kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys --reason "..."` |
+| Emergency override | `kardinal override github-demo --stage prod --gate no-weekend-deploys --reason "..."` |
 | Auto-rollback | `onHealthFailure: rollback` opens rollback PR if prod health fails |
-| Rollback PR | `kardinal rollback kardinal-test-app --env prod` opens PR with `kardinal/rollback` label |
+| Rollback PR | `kardinal rollback github-demo --env prod` opens PR with `kardinal/rollback` label |
 
 ## Prerequisites
 
@@ -34,8 +34,9 @@ kubectl create namespace kardinal-test-app-prod
 kubectl create secret generic github-token \
   --from-literal=token=$GITHUB_TOKEN
 
-# 2. Apply ArgoCD Applications (kardinal-test-app-{test,uat,prod}, the names
-#    the argocd health check derives from this Pipeline)
+# 2. Apply the quickstart's Argo CD Applications (kardinal-test-app-{test,uat,prod}).
+#    They sync the kardinal-demo paths this Pipeline promotes into, and
+#    health.argocd.name in pipeline.yaml points at them.
 kubectl apply -f examples/quickstart/argocd-applications.yaml
 
 # 3. Apply Pipeline and PolicyGates
@@ -58,15 +59,15 @@ TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 # 1. Create bundle (simulates CI trigger)
 # The CLI records no CI provenance; a Bundle created by CI (the create-bundle
 # action or POST /api/v1/bundles) carries the commit SHA and CI run URL.
-kardinal create bundle kardinal-test-app --image "$TEST_IMAGE"
+kardinal create bundle github-demo --image "$TEST_IMAGE"
 
 # 2. Watch test auto-promote
 kardinal get pipelines
-# NAME                 TEST      UAT       PROD
-# kardinal-test-app    Verified  Baking    Gated
+# NAME          TEST      UAT       PROD
+# github-demo   Verified  Baking    Gated
 
 # 3. Check what's gating prod
-kardinal explain kardinal-test-app --env prod
+kardinal explain github-demo --env prod
 # ENVIRONMENT   TYPE         NAME                 STATE   EXPRESSION                                      REASON
 # prod          PolicyGate   no-bot-deploys       Pass    bundle.provenance.author != "dependabot[bot]"   bundle.version=sha-abc1234: bundle.provenance.author != "dependabot[bot]" = true
 # prod          PolicyGate   no-weekend-deploys   Pass    !schedule.isWeekend                             bundle.version=sha-abc1234: !schedule.isWeekend = true
@@ -89,7 +90,7 @@ gh pr merge <PR_NUMBER> --repo pnz1990/kardinal-demo --squash
 
 ```bash
 # Test the weekend gate
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 2pm" --soak-minutes 45
+kardinal policy simulate --pipeline github-demo --env prod --time "Saturday 2pm" --soak-minutes 45
 # RESULT: BLOCKED
 # Blocked by: no-weekend-deploys
 # Message: "Block deployments on Saturday and Sunday UTC"
@@ -99,7 +100,7 @@ kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturda
 # no-weekend-deploys:   BLOCK   (!schedule.isWeekend = false)
 # uat-soak-gate:        PASS    (upstream.uat.soakMinutes >= 30 = true)
 
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" --soak-minutes 45
+kardinal policy simulate --pipeline github-demo --env prod --time "Tuesday 10am" --soak-minutes 45
 # RESULT: PASS
 ```
 
@@ -114,7 +115,7 @@ When a hotfix must be deployed despite a failing gate:
 ```bash
 # Force-pass the failing gate for the Bundle waiting on it; creates an audit record.
 # --gate is the name of the PolicyGate you applied (as `kardinal explain` shows it).
-kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys \
+kardinal override github-demo --stage prod --gate no-weekend-deploys \
   --reason "Critical security fix CVE-2026-1234 — approved by on-call lead"
 
 # The override is recorded in spec.overrides of the Bundle's instance of the gate
@@ -133,14 +134,14 @@ kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys \
 # kardinal opens a PR reverting the image to the previous version
 
 # Option 2: Manual rollback
-kardinal rollback kardinal-test-app --env prod
+kardinal rollback github-demo --env prod
 # Opens a PR with:
 #   - label: kardinal/rollback
-#   - title: "revert(prod): roll back kardinal-test-app to sha-<previous>"
+#   - title: "revert(prod): roll back github-demo to sha-<previous>"
 #   - body: original evidence + rollback reason
 
 # After merging the rollback PR, promote back to good state:
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
+kardinal create bundle github-demo --image $TEST_IMAGE
 ```
 
 ## PR Evidence Body Structure
@@ -150,7 +151,7 @@ Every production PR opened by kardinal includes:
 ```markdown
 ## kardinal Promotion Evidence
 
-**Bundle**: kardinal-test-app@sha-9349a3f
+**Bundle**: github-demo@sha-9349a3f
 **Image**: ghcr.io/pnz1990/kardinal-test-app:sha-9349a3f
 **Image digest**: sha256:deadbeef...
 **CI Run**: https://github.com/pnz1990/kardinal-test-app/actions/runs/123456

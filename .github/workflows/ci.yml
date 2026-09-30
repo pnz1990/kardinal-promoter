@@ -166,7 +166,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
           version: v2.11.4
 
@@ -181,9 +181,8 @@ jobs:
           # Scan with the toolchain pinned in go.mod so stdlib fixes stay in sync.
           go-version-file: go.mod
       - name: Run govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+        # make vuln installs govulncheck at the Makefile's GOVULNCHECK_VERSION.
+        run: make vuln
 
   # ── go.sum integrity ─────────────────────────────────────────────────────────
   go-sum-integrity:
@@ -208,7 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Scan filesystem for HIGH/CRITICAL CVEs
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -254,25 +253,53 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - uses: oven-sh/setup-bun@v2
+      - name: Check Apache 2.0 headers (web sources)
+        run: |
+          missing=$(grep -rL "Licensed under the Apache License" \
+            --include="*.ts" --include="*.tsx" --include="*.mjs" \
+            --exclude-dir=node_modules --exclude-dir=dist \
+            web/src web/test web/*.ts 2>/dev/null || true)
+          if [ -n "$missing" ]; then
+            echo "Missing Apache 2.0 header:"
+            echo "$missing"
+            exit 1
+          fi
+      # npm and web/package-lock.json are the only package manager and lockfile:
+      # the Dockerfile, `make ui` and dependabot use them too. Node matches the
+      # Dockerfile's node image.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Install dependencies
-        run: bun install
+        run: npm ci
         working-directory: web
       - name: Type check
-        run: bun run typecheck
+        # tsc -b checks src (tsconfig.app.json) and the Vite/Playwright configs
+        # (tsconfig.node.json).
+        run: npm run typecheck
         working-directory: web
       - name: Build
-        run: bun run build
+        run: npm run build
         working-directory: web
+      - name: Check web/dist is up to date
+        # go:embed ships the committed web/dist, so it must match a fresh build.
+        run: |
+          if [ -n "$(git status --porcelain -- web/dist)" ]; then
+            echo "web/dist differs from a fresh build. Run 'make ui' and commit web/dist:"
+            git status --short -- web/dist
+            exit 1
+          fi
       - name: Unit tests
-        run: bun run test
+        run: npm test
         working-directory: web
       - name: E2E tests (Playwright)
         # Playwright E2E tests now pass reliably (#632). Removing continue-on-error
         # so failures block CI and provide a real regression signal.
         run: |
-          bunx playwright install chromium --with-deps
-          bun run test:e2e
+          npx playwright install chromium --with-deps
+          npm run test:e2e
         working-directory: web
         env:
           CI: "true"

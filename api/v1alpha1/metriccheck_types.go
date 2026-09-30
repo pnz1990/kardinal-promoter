@@ -60,6 +60,15 @@ type MetricCheckStatus struct {
 	// +optional
 	LastEvaluatedAt *metav1.Time `json:"lastEvaluatedAt,omitempty"`
 
+	// ValidUntil is when the current result goes stale: lastEvaluatedAt plus
+	// three intervals, and at least 30s. The MetricCheck reconciler writes it
+	// with each evaluation. A PolicyGate evaluated after this time, or when it
+	// is unset, sees metrics.<name>.result as "Stale" and
+	// metrics.<name>.stale as true, so a result that is no longer refreshed
+	// cannot pass a gate.
+	// +optional
+	ValidUntil *metav1.Time `json:"validUntil,omitempty"`
+
 	// Result is the evaluation result: "Pass" or "Fail".
 	// Empty when no evaluation has completed.
 	// +kubebuilder:validation:Enum=Pass;Fail
@@ -76,7 +85,8 @@ type MetricCheckStatus struct {
 // MetricCheck is a Prometheus-backed metric gate.
 // The MetricCheckReconciler queries Prometheus, evaluates the threshold,
 // and writes the result to status. PolicyGate CEL expressions reference
-// these results via `metrics.<name>.value` and `metrics.<name>.result`.
+// these results via `metrics.<name>.value`, `metrics.<name>.result` and
+// `metrics.<name>.stale`.
 //
 // MetricCheck objects are typically created alongside PolicyGates that
 // reference them. MetricCheck is namespaced and must be in the same

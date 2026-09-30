@@ -46,10 +46,10 @@ func cliTestScheme(t *testing.T) *runtime.Scheme {
 // TestCreateBundle_CreatesBundle verifies that createBundleFn creates a Bundle CRD.
 func TestCreateBundle_CreatesBundle(t *testing.T) {
 	s := cliTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(policyPipeline("nginx-demo", "test")).Build()
 
 	var buf bytes.Buffer
-	err := createBundleFn(&buf, c, "default", "nginx-demo", []string{"nginx:1.25"}, "image")
+	err := createBundleFn(&buf, c, "default", "nginx-demo", createBundleOptions{Images: []string{"nginx:1.25"}, Type: "image"})
 	require.NoError(t, err)
 
 	var bundles v1alpha1.BundleList
@@ -68,7 +68,7 @@ func TestCreateBundle_CreatesBundle(t *testing.T) {
 // invalid characters are rejected before creating a Bundle (#283).
 func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
 	s := cliTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).Build()
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(policyPipeline("nginx-demo", "test")).Build()
 
 	tests := []struct {
 		image   string
@@ -82,7 +82,7 @@ func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
 	}
 	for _, tc := range tests {
 		var buf bytes.Buffer
-		err := createBundleFn(&buf, c, "default", "nginx-demo", []string{tc.image}, "image")
+		err := createBundleFn(&buf, c, "default", "nginx-demo", createBundleOptions{Images: []string{tc.image}, Type: "image"})
 		if tc.wantErr {
 			require.Error(t, err, "image %q must be rejected", tc.image)
 		} else {
@@ -571,9 +571,9 @@ func TestImageRepoPattern(t *testing.T) {
 		})
 	}
 
-	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).Build()
+	c := fake.NewClientBuilder().WithScheme(cliTestScheme(t)).WithObjects(policyPipeline("demo", "test")).Build()
 	var buf bytes.Buffer
-	require.NoError(t, createBundleFn(&buf, c, "default", "demo", []string{"localhost:5000/kardinal-test-app:sha-abc1234"}, "image"))
+	require.NoError(t, createBundleFn(&buf, c, "default", "demo", createBundleOptions{Images: []string{"localhost:5000/kardinal-test-app:sha-abc1234"}, Type: "image"}))
 	var bundles v1alpha1.BundleList
 	require.NoError(t, c.List(context.Background(), &bundles))
 	require.Len(t, bundles.Items, 1)
@@ -590,7 +590,7 @@ func TestCreateBundle_DryRun_ListsEnvironmentsAndGates(t *testing.T) {
 		policyGate("team-soak", "default", "uat", "upstream.test.soakMinutes >= 5"),
 	)
 	var buf bytes.Buffer
-	require.NoError(t, createBundleDryRun(&buf, c, "default", "demo", []string{"ghcr.io/org/app:sha-abc1234"}, "image"))
+	require.NoError(t, createBundleDryRun(&buf, c, "default", "demo", createBundleOptions{Images: []string{"ghcr.io/org/app:sha-abc1234"}, Type: "image"}))
 	assert.Contains(t, buf.String(), "Environments in promotion order:\n"+
 		"  • test\n"+
 		"  • uat (gates: team-soak)\n"+

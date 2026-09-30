@@ -23,6 +23,14 @@ go test ./... -race -count=1 -timeout 120s
 go vet ./...
 ```
 
+The embedded UI in `web/` uses npm and `web/package-lock.json` only. The controller
+embeds the committed `web/dist`, so after changing `web/` run `make ui` and commit
+`web/dist`; CI fails when it differs from a fresh build.
+
+```bash
+cd web && npm ci && npm run typecheck && npm test && npm run build
+```
+
 ### Run Locally
 
 ```bash

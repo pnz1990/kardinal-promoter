@@ -912,7 +912,16 @@ func (r *Reconciler) handleSyncEvidence(ctx context.Context, log zerolog.Logger,
 			if err == nil && allVerified(b.Status.Environments, expected) {
 				b.Status.Phase = phaseVerified
 				if b.Status.Metrics == nil {
-					b.Status.Metrics = computeBundleMetrics(b, expected, steps)
+					// The metrics are written once, so a failed read is
+					// retried rather than recorded as zero interventions.
+					var gates kardinalv1alpha1.PolicyGateList
+					if err := r.List(ctx, &gates,
+						client.InNamespace(b.Namespace),
+						client.MatchingLabels{"kardinal.io/bundle": b.Name},
+					); err != nil {
+						return ctrl.Result{}, fmt.Errorf("list gate instances for bundle %s: %w", b.Name, err)
+					}
+					b.Status.Metrics = computeBundleMetrics(b, expected, steps, gates.Items)
 				}
 				setBundleCondition(b, condReady, metav1.ConditionTrue, "Verified", "all environments verified")
 				n := len(expected)
@@ -1205,10 +1214,14 @@ func allVerified(envs []kardinalv1alpha1.EnvironmentStatus, expected []string) b
 //
 // K-05: commitToProductionMinutes is the time from Bundle creation to the last
 // expected environment reaching HealthCheckedAt. bakeResets sums the bake
-// resets of the Bundle's PromotionSteps.
-// Graph-first: reads CRD status only; the result is written to Bundle status.
+// resets of the Bundle's PromotionSteps. operatorInterventions counts the
+// entries in spec.overrides of the Bundle's gate instances (the PolicyGates
+// labelled kardinal.io/bundle=<name>): kardinal override appends one entry per
+// override, and the Graph never copies a template's overrides to an instance
+// (#1308).
+// Graph-first: reads CRD fields only; the result is written to Bundle status.
 func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
-	steps []kardinalv1alpha1.PromotionStep) *kardinalv1alpha1.BundleMetrics {
+	steps []kardinalv1alpha1.PromotionStep, gates []kardinalv1alpha1.PolicyGate) *kardinalv1alpha1.BundleMetrics {
 	checked := make(map[string]time.Time, len(b.Status.Environments))
 	for _, e := range b.Status.Environments {
 		if e.HealthCheckedAt != nil {
@@ -1227,6 +1240,11 @@ func computeBundleMetrics(b *kardinalv1alpha1.Bundle, expected []string,
 	}
 	for i := range steps {
 		m.BakeResets += steps[i].Status.BakeResets
+	}
+	for i := range gates {
+		if gates[i].Labels["kardinal.io/bundle"] == b.Name {
+			m.OperatorInterventions += len(gates[i].Spec.Overrides)
+		}
 	}
 	return m
 }

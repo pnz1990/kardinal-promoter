@@ -94,12 +94,12 @@ func customStepsUnimplemented(e *kardinalv1alpha1.EnvironmentSpec) string {
 	if len(e.Steps) > 0 {
 		return fmt.Sprintf("environment %q declares %d steps; spec.environments[].steps is "+
 			"not implemented yet (the controller always runs the default step sequence), so "+
-			"remove it; see docs/custom-steps.md", e.Name, len(e.Steps))
+			"remove it; see docs/pipeline-reference.md#promotion-steps", e.Name, len(e.Steps))
 	}
 	if e.PromotionTemplate != nil {
 		return fmt.Sprintf("environment %q references PromotionTemplate %q; "+
 			"spec.environments[].promotionTemplate is not implemented yet (the controller always "+
-			"runs the default step sequence), so remove it; see docs/custom-steps.md",
+			"runs the default step sequence), so remove it; see docs/pipeline-reference.md#promotion-steps",
 			e.Name, e.PromotionTemplate.Name)
 	}
 	return ""

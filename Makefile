@@ -6,6 +6,9 @@ CONTROLLER_GEN_VERSION ?= v0.17.3
 GOLANGCI_LINT          ?= $(LOCALBIN)/golangci-lint
 GOLANGCI_LINT_VERSION  ?= v2.11.4
 GOVULNCHECK            ?= $(LOCALBIN)/govulncheck
+GOVULNCHECK_VERSION    ?= v1.8.0
+STATICCHECK            ?= $(LOCALBIN)/staticcheck
+STATICCHECK_VERSION    ?= v0.8.1
 LOCALBIN               ?= $(shell pwd)/bin
 
 # Build
@@ -69,15 +72,10 @@ vet:
 	$(GO) vet ./...
 
 ## lint-local: run go vet + staticcheck locally (faster than golangci-lint, catches QF1008-class issues)
-## Install staticcheck: go install honnef.co/go/tools/cmd/staticcheck@latest
-lint-local:
+## staticcheck is installed into bin/ at STATICCHECK_VERSION.
+lint-local: $(STATICCHECK)
 	$(GO) vet ./...
-	@if command -v staticcheck >/dev/null 2>&1; then \
-		staticcheck ./...; \
-	else \
-		echo "staticcheck not found — install with: go install honnef.co/go/tools/cmd/staticcheck@latest"; \
-		exit 1; \
-	fi
+	$(STATICCHECK) ./...
 
 lint: $(GOLANGCI_LINT)
 	$(GOLANGCI_LINT) run ./...
@@ -193,9 +191,12 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 	GOBIN=$(LOCALBIN) $(GO) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 $(GOVULNCHECK): $(LOCALBIN)
-	GOBIN=$(LOCALBIN) $(GO) install golang.org/x/vuln/cmd/govulncheck@latest
+	GOBIN=$(LOCALBIN) $(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
-tools: $(CONTROLLER_GEN) $(GOLANGCI_LINT) $(GOVULNCHECK)
+$(STATICCHECK): $(LOCALBIN)
+	GOBIN=$(LOCALBIN) $(GO) install honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION)
+
+tools: $(CONTROLLER_GEN) $(GOLANGCI_LINT) $(GOVULNCHECK) $(STATICCHECK)
 
 ## Help
 help:

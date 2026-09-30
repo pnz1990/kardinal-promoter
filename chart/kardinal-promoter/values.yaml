@@ -196,7 +196,9 @@ rbac:
   # -- patch on argoproj.io Applications, for the argocd update strategy
   # (update.strategy: argocd).
   argocdApplicationsWrite: false
-  # -- batch Jobs create/delete, for the integration-test step.
+  # -- Deprecated, no effect, removed in v0.10. The integration-test step was
+  # removed, so the chart no longer grants batch Jobs access. Kept so existing
+  # --set rbac.integrationTestJobs=... keeps passing the values schema.
   integrationTestJobs: false
 
 # -- kro Graph integration.
