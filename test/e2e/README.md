@@ -35,6 +35,7 @@ passed.
 |---|---|---|
 | `core` | Forgejo, Argo CD | `TestCore_*` |
 | `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*` |
+| `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 
 ## Coverage
 

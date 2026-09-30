@@ -10,6 +10,7 @@
 # Suites (test/e2e/README.md lists the tests each one runs):
 #   core    Forgejo + Argo CD
 #   gitea   Gitea + Argo CD
+#   delivery Forgejo + Argo CD + Argo Rollouts + Flagger
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -31,6 +32,8 @@ case "$SUITE" in
   core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh)
     RUN='^Test(Core|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_' ;;
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM)_' ;;
+  delivery) COMPONENTS=("giteafamily.sh forgejo" argocd.sh rollouts.sh flagger.sh)
+    RUN='^Test(Rollouts|Flagger|Delivery)_' ;;
   *)
     echo "unknown suite $SUITE" >&2
     exit 1
