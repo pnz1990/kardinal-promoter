@@ -38,7 +38,7 @@ All state lives in Kubernetes CRDs. There is no external database.
 
 ## Status
 
-**v0.8.1** — alpha, in active development. APIs (`kardinal.io/v1alpha1`) may change between minor releases. See the [changelog](docs/changelog.md) for what shipped.
+**v0.9.0-rc.1** (release candidate; latest final release: v0.8.1) — alpha, in active development. APIs (`kardinal.io/v1alpha1`) may change between minor releases. See the [changelog](docs/changelog.md) for what shipped.
 See the [full documentation](https://pnz1990.github.io/kardinal-promoter/) and [changelog](docs/changelog.md).
 
 ## Documentation

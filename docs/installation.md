@@ -58,7 +58,7 @@ kubectl create secret generic github-token \
 ### 2. Install with Helm
 
 ```bash
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --create-namespace \
   --set github.secretRef.name=github-token
@@ -84,6 +84,22 @@ kubectl get pods -n kardinal-system
 kubectl get pods -n kro-system
 # NAME                              READY   STATUS    RESTARTS   AGE
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
+```
+
+### 3. Install the CLI
+
+Download the `kardinal` binary of the same release. The release has builds for Linux and
+macOS (`amd64`, `arm64`) and `kardinal-windows-amd64.exe`.
+
+```bash
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+curl -Lo kardinal "https://github.com/pnz1990/kardinal-promoter/releases/download/v0.9.0-rc.1/kardinal-${OS}-${ARCH}"
+chmod +x kardinal && sudo mv kardinal /usr/local/bin/
+kardinal version
+# CLI:        v0.9.0-rc.1
+# Controller: v0.9.0-rc.1
+# Graph:      kro v0.10.0-rc.0
 ```
 
 ---
@@ -204,7 +220,7 @@ helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version <version
 Then upgrade the release:
 
 ```bash
-helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --reuse-values
 ```

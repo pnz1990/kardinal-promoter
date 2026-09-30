@@ -8,49 +8,90 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **Upstream kro Graph** — kardinal now runs on upstream kro `kro.run/v1alpha1` Graph (v0.10.0-rc.0, `GraphKind` feature gate) instead of the forked Graph controller. The chart no longer bundles a Graph controller; install kro with `hack/install-kro.sh`. Pipeline changes update the Graph in place instead of re-running Verified environments. See [Graph Coverage](graph-coverage.md)
-- **Promotion lifecycle fixes** — a Bundle becomes `Verified` when every environment it targets is Verified, and `Failed` when a step fails or kro rejects the Graph; a Pipeline, intent or PolicyGate that cannot be built into a Graph fails the Bundle with the `InvalidSpec` condition instead of retrying forever, and a Failed Bundle retries after its Pipeline changes, and deleting its Graph no longer re-runs it; `intent.targetEnvironment` Bundles finish; the Graph's Accepted/Ready conditions are surfaced on the Bundle; `maxConcurrentPromotions` counts only promoting Bundles; supersession orders Bundles created in the same second by the `kardinal.io/created-at` annotation. Upgrade note: in-flight Bundles are re-translated once after upgrading
-- **Rollback restores the previous verified Bundle** — `kardinal rollback`, the UI, `onHealthFailure: rollback` and RollbackPolicy share one implementation: the target is the most recent Bundle, other than the current one, that was Verified in the environment; the rollback Bundle copies its images and config ref; `--to` must name a Bundle that was Verified in the environment; the failing image is never promoted again, a Bundle that was already rolled back from is never picked again, the automatic paths do not roll back a rollback, and nothing is created when there is nothing safe to roll back to. Like any Bundle with a target environment, a rollback first goes through every environment upstream of the target, so those environments are rolled back too. See [Rollback](rollback.md#multi-environment-rollback)
-- **Promote copies the Bundle verified upstream** — `kardinal promote` and the UI Promote button copy the artifacts of the newest Bundle Verified in every upstream environment, and refuse instead of creating a Bundle without images
-- **Pause holds promotions** — `kardinal pause` and the UI stop new steps and hold in-flight ones at the next safe point; resume continues them. The Pipeline reconciler keeps the `freeze-<pipeline>` gate in step with `spec.paused` and reports it in a `Paused` condition; a PolicyGate of that name that kardinal does not own is left alone and the condition is False with reason `FreezeGateNameConflict`. See [Pause and Resume](rollback.md#pause-and-resume). Upgrade note: a Pipeline paused from the old UI, or by setting `spec.paused: true` directly, had no freeze gate, so it was not actually paused; after upgrading the reconciler creates the gate and that Pipeline stops promoting. Run `kardinal resume <pipeline>` for any Pipeline that should keep running (`kubectl get pipelines -o custom-columns=NAME:.metadata.name,PAUSED:.spec.paused` lists them)
-- **`kardinal approve` is deprecated** — it never bypassed anything; it now fails and points to `kardinal override`
-- **Digest references** — `kardinal create bundle --image repo@sha256:...` records a digest, not a tag
-- **Pipeline status** — the Pipeline `Ready` condition is True once the spec is valid (False with the reason for duplicate names, unknown `dependsOn`, a cycle or a `git.secretRef` in another namespace, and False with reason `NotImplemented` when a reserved field such as `steps` or `layout: branch` is set) instead of staying `Initializing`; `status.phase` is `Promoting` while a Bundle is in flight or held by a PolicyGate, so the UI no longer shows such a Pipeline as Idle, and follows the same newest Bundle as the UI and CLI (Superseded Bundles and their steps are skipped); `historyLimit` defaults to 50 (the docs said 20)
-- **`kardinal override` works on real gate names** — it patched nothing and exited 1 for any gate whose instance name is over 63 characters (all of them in practice); it now patches a named instance directly, and for a template name patches that gate's instances in the pipeline's in-progress Bundles
-- **`explain`, `status` and `get pipelines` describe the current Bundle** — the newest Bundle that is not Superseded, as in the UI; a Failed Bundle is shown only in environments it reached, gates that are not ready (including skip-permission gates) are listed first, and an old Bundle's error is hidden once a newer Bundle exists. `audit summary` counts rollback Bundles
-- **PolicyGate `when` documented as it behaves** — every gate holds its environment's PromotionStep back until it is ready; `pre-deploy` adds a re-check right before git-clone and `post-deploy` adds nothing (#1323 tracks real post-deploy semantics)
-- **Subscription digest label** — `kardinal.io/source-digest` keeps the first 63 characters of the digest instead of the last 63, so it matches the digest's prefix. Bundles labelled by older releases still deduplicate. Downgrade note: an older controller does not recognise the new label and its Subscription goes to Error instead of creating a duplicate Bundle
-- **Rollback PR title** — reads "(restores <bundle>)" instead of "(reverts <bundle>)"; rollback PRs carry `kardinal/rollback` in addition to `kardinal/promotion`
-- **UI blocked banner counts only gates that hold the Bundle** — the pipeline page's blocking-promotion banner, **Show blocked** and the Policy Gates panel's "blocked" count use the rule behind the Blocked label and the Blockers column; a gate that is not ready but does not hold the Bundle (its environment not reached yet, or the Bundle failed) is shown as Waiting instead of Block, and a superseded Bundle's gates as Superseded. The UI API's bundle graph and gate list give each gate the same `state` and mark the ones holding the Bundle with `holding`. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates)
-- **A Superseded Bundle stops promoting** — its Graph could still create a PromotionStep when a gate or upstream turned ready later, for example after a controller restart re-evaluated its soak gate. Every step node now resolves only while its Bundle is not Superseded, so the Graph creates no new step and keeps the existing ones; the Bundle's PolicyGates are no longer evaluated and keep their last status; a step created just before supersession that never started is failed without a `PromotionSuperseded` AuditEvent, so `kardinal audit summary` no longer counts it. Upgrade note: a Graph built before the upgrade keeps its old spec, so it can still create a step at the moment its Bundle is superseded; that step fails without an AuditEvent, and the Graph's PolicyGates are frozen like any other Superseded Bundle's. The supersession docs also said the Graph was deleted and PRs were left open; neither was true
-- **`GraphReady` after completion** — a Verified Bundle's `GraphReady` condition turns True once kro marks its Graph ready, instead of staying False
-- **`kardinal explain` gate states match the UI** — a gate that is not ready is **Block** only while it holds the Bundle (the rule behind the UI's Blocked label); otherwise it is **Waiting** (evaluated, environment not reached or Bundle failed), **Pending** (not evaluated yet) or **Superseded**, as in the UI. Waiting is colored like Pending (yellow), Superseded is uncolored. See [Inspecting PolicyGates](policy-gates.md#inspecting-policygates)
-- **PR body CI run link** — the provenance table no longer renders an empty `[CI run]()` link when the Bundle has provenance without `ciRunURL`; the cell is `—`, as it is for a URL that is not `http(s)`, and a `ciRunURL` can no longer break the table or add markup. An empty commit or author is `—` too. See [PR Evidence](pr-evidence.md#artifact-provenance)
-- **`provenance.ciRunURL` is checked on Bundle creation** — the Bundle API returns `400` unless it is empty or an absolute `http(s)` URL without user info, spaces or control characters. Bundles created another way or before the check are not rejected, but the PR body, the UI bundle header and the bundle comparison show `—` instead of linking such a URL, and promote and rollback do not copy it. See [Provenance](ci-integration.md#provenance)
-- **`kardinal validate`** — skips non-kardinal kinds such as Namespace, so the shipped quickstart and demo gate files validate, and reports the same unimplemented fields as the Pipeline status and the admission webhook (which warns)
-- **UI API access control** — bearer-token auth with `--ui-auth-token` (#924) or Kubernetes TokenReview (#1015); CORS limited with `--cors-allowed-origins` (#940); TLS with `--tls-cert-file` / `--tls-key-file` (#937); the UI warns on an insecure connection (#941)
-- **Bitbucket Cloud and Azure DevOps SCM providers** (#1035, #1040)
-- **NotificationHook CRD** — outbound webhook notifications for promotion events (#942)
-- **`argocd-set-image` step** — promotes by setting the image on the Argo CD Application, without git operations (#966)
-- **Create Bundle from GitHub Actions** — composite action in `.github/actions/create-bundle` (#953); the UI has a Create Bundle dialog (#950)
-- **`maxConcurrentPromotions`** — per-Pipeline cap on Bundles promoting at once (#1059)
-- **`stepTimeoutSeconds`** — per-environment limit on how long a promotion step runs (#1123)
-- **`environment.waitForMergeTimeout`** — fails a PromotionStep whose PR is not merged in time; no timeout by default (#906, #908)
-- **`health.resource`** — names the Deployment the resource health adapter checks, when it differs from the pipeline name or namespace (#1117)
-- **Bundle history limit** — old Bundles beyond `historyLimit` are deleted (#919)
-- **Bundle `status.conditions`** — set on every phase transition (#991)
-- **SCM credential rotation without restart** — the controller picks up a changed token Secret (#994, #1060); it checks the token's scopes at startup (#996)
-- **Namespace-scoped install** — chart value `controller.watchNamespace` (#1024)
-- **Chart `demo.enabled`** — quickstart mode (#1043); **Grafana dashboard** — chart value `grafanaDashboard.enabled` ships the dashboard as a ConfigMap (#1139)
-- **Metrics** — step duration, gate blocking time and PromotionStep age (#992)
-- **Readiness** — `/readyz` fails until the informer caches have synced (#1147)
-- **CLI** — `kardinal get subscriptions` and a SUB column in `get pipelines` (#948); `kardinal logs` shows a per-step table (#1012) and streams with `--follow` (#1124); `kardinal status` lists in-flight promotions per pipeline (#997); `kardinal get pipelines` shows `dependsOn` errors (#1071); `kardinal init --scaffold-gitops` and `--demo` (#1022); `kardinal delete bundle <name>` (#851)
-- **`kubectl get` printer columns** — Bundle shows Type, Pipeline, Phase, Age; PromotionStep (`ps`) shows Pipeline, Env, Bundle, State, Age (#903)
-- **UI** — skeleton loading states (#784), `/` focuses the pipeline filter (#800), virtual scrolling for lists over 50 pipelines (#817)
-- **Demo coverage for every health adapter** — examples and tests for resource, argocd, flux, argoRollouts and flagger (#821)
-- **RBAC** — the ClusterRole and Role grant access to NotificationHooks and AuditEvents (#1095)
-- **Fixed: Bundle requeue hot loop** — a 1 ms `RequeueAfter` is now at least 500 ms (#988)
-- **Fixed: `AbortedByAlarm` and `RollingBack` steps no longer reset to Pending** — the PromotionStep reconciler handles both states (#789)
+---
+
+## [v0.9.0-rc.1] — 2026-09-30
+
+**Release candidate: kardinal runs on upstream kro Graph. Breaking changes: read [Upgrading from v0.8.1](https://pnz1990.github.io/kardinal-promoter/installation/#upgrading-from-v081) first.**
+
+Pin the version: without `--version 0.9.0-rc.1`, `helm install` and `helm upgrade` pick v0.8.1. The CLI is on the release page (`kardinal-<os>-<arch>`).
+
+### Before you upgrade
+
+1. Install kro v0.10.0-rc.0 with the `GraphKind` feature gate (`hack/install-kro.sh`). The chart no longer bundles a Graph controller.
+2. On Kubernetes older than 1.30, first remove the fields the API server now rejects from stored objects (list below). These clusters do not ratchet CRD validation, so every update to such an object fails, the controller's status writes included.
+3. Apply the new CRDs by hand, before the controller: Helm never updates CRDs. Without them, new status fields are dropped on save.
+4. Remove `controller.shard` from your values file, even if it is empty. The chart rejects it.
+5. Check the controller's UI exposure: with no UI auth mode set, the UI API answers only `kubectl port-forward` clients.
+
+The API server now rejects: `spec.environments[].steps` (non-empty), `promotionTemplate`, `autoRollback`, `update.strategy: argocd` with `approval: pr-review`, a reserved environment name (such as `kind`, `spec` or `bundle`), a non-empty `spec.policyGates`, a PolicyGate `spec.selector`, and a PolicyGate name over 63 characters. The fields were ignored or failed only at promotion time; a reserved name clashes with kro Graph node IDs.
+
+### Changed
+
+- **Upstream kro Graph** — kardinal renders one upstream kro `kro.run/v1alpha1` Graph per Bundle, instead of using a forked Graph controller. Pipeline changes update the Graph in place instead of re-running Verified environments. In-flight Bundles are re-translated once after upgrading. What still runs outside the Graph: [Graph Coverage](https://pnz1990.github.io/kardinal-promoter/graph-coverage/)
+- **Gates are re-checked before a step starts** — a PromotionStep starts only when every gate it requires is ready, with a result evaluated at or after the step was created. A step that has started is not stopped by a gate that turns false later. Messages: `waiting for gate <name>` and `waiting for gate <name> to be re-evaluated`. `PolicyGate.spec.when` is deprecated and has no effect. Right after the upgrade, a Pending step whose gate results are older than the step waits for the next evaluation; the controller re-evaluates every gate when it starts
+- **Stale MetricCheck results fail closed** — MetricCheck has `status.validUntil` (three intervals after the evaluation, at least 30s). After it, gates see `metrics.<name>.result` as `"Stale"`, `.value` as `""` and `.stale` as `true`. Expressions written as `result != "Fail"` pass on a stale result; write `result == "Pass"`. Right after the upgrade every MetricCheck is stale until its first evaluation
+- **Pause holds promotions** — `kardinal pause` and the UI stop new steps and hold in-flight ones at the next safe point; resume continues them within a minute. The Pipeline reconciler keeps the `freeze-<pipeline>` gate in step with `spec.paused` and reports it in a `Paused` condition. A Pipeline paused from the old UI, or with `spec.paused: true` set directly, had no freeze gate and was not actually paused; after upgrading it stops promoting. Run `kardinal resume <pipeline>` for any that should keep running (`kubectl get pipelines -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,PAUSED:.spec.paused`)
+- **Rollback restores the previous verified Bundle** — `kardinal rollback`, the UI, `onHealthFailure: rollback` and RollbackPolicy share one implementation. The target is the most recent other Bundle Verified in the environment; the rollback restores every image the deployed Bundle changed, using the environment's history for images the target does not name, and refuses when one cannot be found. `--to` must name a Bundle Verified in the environment and of the same type. A rolled-back image is never promoted again, the automatic paths never roll back a rollback, and a rollback also goes through the environments upstream of the target. Rollback PR titles say "(restores <bundle>)" and carry `kardinal/rollback`. A refused auto-rollback shows as `RollbackRefused=True` on the RollbackPolicy, a Warning Event and a `Refused` column. See [Rollback](https://pnz1990.github.io/kardinal-promoter/rollback/)
+- **`kardinal promote`** copies the artifacts of the newest Bundle Verified in every upstream environment, and refuses instead of creating a Bundle without images
+- **A Superseded Bundle stops promoting** — its Graph creates no new step, its gates keep their last status, and a step that never started is failed without an AuditEvent. A Graph built before the upgrade can still create one step at the moment its Bundle is superseded; that step fails the same way. Gates of Verified Bundles are no longer evaluated either
+- **UI API is local-only without auth** — with no UI auth mode set, `/api/` answers only local clients (`kubectl port-forward`). Through an Ingress, NodePort or LoadBalancer it returns `403`: set `ui.auth.tokenReview=true` or `ui.auth.tokenSecretRef.name`. Behind a service-mesh sidecar, set an auth mode too
+- **Egress guard** — NotificationHook webhooks and MetricCheck Prometheus URLs can no longer reach loopback, link-local (cloud metadata), unspecified or multicast addresses. The check runs on the resolved address at connect time, and, when `HTTP(S)_PROXY` is set, on the target before it goes to the proxy, so the controller pod then needs DNS for the target hosts. Private addresses and cluster Services still work
+- **Controller Events** use `events.k8s.io/v1`, with an action and a note of at most 1024 bytes. Custom RBAC must allow create and patch on `events.k8s.io` events. Repeated events merge within about 6 minutes, and the UI's event count refreshes every 30 minutes
+- **Secret RBAC is `get` only** — the controller never lists or watches Secrets; the release-namespace Role gets `get` on the SCM token Secret by name
+- **Flux health on `pr-review` steps** waits for the PR's merge commit instead of passing on a Kustomization Ready on the previous commit; the GitHub and GitLab webhooks record the merge commit. **Argo CD health** is not ready while a sync is running or has failed. Flux waits for `observedGeneration`; Flagger messages include Flagger's reason
+- **PRStatus** — a PR closed without merging can be reopened within 5 minutes and the promotion continues. After that kardinal comments once, stops polling and fails the step (`closedAt`, `closedFinal`)
+- **Bundle lifecycle** — a Bundle is `Verified` when every environment it targets is Verified and `Failed` when a step fails or kro rejects the Graph. A Pipeline, intent or PolicyGate that cannot be built into a Graph fails the Bundle with `InvalidSpec` instead of retrying forever, and so does a Bundle without the artifacts its type needs (including a `mixed` Bundle created with kubectl without `configRef.commitSHA`). A Failed Bundle retries after its Pipeline changes. `intent.targetEnvironment` Bundles finish. The Graph's `Accepted` and `Ready` conditions show on the Bundle; `GraphReady` turns True when a Verified Bundle's Graph is ready. `maxConcurrentPromotions` counts only promoting Bundles, read from the API server. Bundles created in the same second are ordered by `kardinal.io/created-at`
+- **Pipeline status** — `Ready` is True once the spec is valid, and False with the reason otherwise (duplicate names, unknown `dependsOn`, a cycle, a `git.secretRef` in another namespace, or `NotImplemented` for `layout: branch`, `shard` or two or more `regions`). `status.phase` is `Promoting` while a Bundle is in flight or held by a gate. `historyLimit` defaults to 50
+- **`kardinal explain`, `status` and `get pipelines`** describe the current Bundle (the newest that is not Superseded, as in the UI). `explain` and `status <pipeline>` add a BUNDLE column and show the Bundle deployed in an environment the current Bundle has not reached: scripts that parse columns by position need an update. Gate states match the UI: **Block** only while the gate holds the Bundle, otherwise **Waiting**, **Pending** or **Superseded**. The UI's blocked banner, **Show blocked** and the gate panel count only gates that hold the Bundle
+- **`kardinal override`** works on real gate instance names (it patched nothing for any name over 63 characters) and, for a template name, patches that gate's instances in the pipeline's in-progress Bundles. `Bundle.status.metrics.operatorInterventions` counts overrides
+- **`kardinal create bundle`** applies the same checks as `POST /api/v1/bundles` and adds `--config-commit`, `--config-repo`, `--commit`, `--author` and `--ci-run-url`. `--image repo@sha256:...` records a digest. `provenance.ciRunURL` must be an absolute `http(s)` URL; the PR body, UI and bundle comparison show `—` instead of linking anything else
+- **Subscription digest label** `kardinal.io/source-digest` keeps the first 63 characters of the digest. Older labels still deduplicate; an older controller does not recognise the new label
+- **Example Pipelines** github-demo, flagger-demo, flux-demo and argo-rollouts-demo are named after their directories instead of `kardinal-test-app`. If you applied one, delete the old `kardinal-test-app` Pipeline and the old-named Kustomizations, Canary, Rollout and Application, and re-apply the example
+
+### Removed
+
+- **Distributed mode** — `kardinal-agent`, `--shard` / `KARDINAL_SHARD` and the chart value `controller.shard`. The controller reconciles every PromotionStep. `shard` on an environment sets the Pipeline `Ready=False`
+- **Per-region fan-out** — `regions` and `PromotionStep.spec.region` are deprecated. Two or more regions fail at Graph build; declare one environment per region and use `wave`
+- **The Pipeline admission webhook** (`--pipeline-admission-webhook`, `POST /webhook/validate/pipeline`). The controller exits at startup when it is set: remove the setting and delete your ValidatingWebhookConfiguration. Invalid Pipelines are marked `Ready=False` instead
+- **The PromotionTemplate CRD and `PromotionStep.spec.inputs`**, and the custom `webhook`, `verify-image` and `integration-test` steps. No Pipeline could run them. Helm does not delete CRDs: run `kubectl delete crd promotiontemplates.kardinal.io --ignore-not-found` (only clusters that ran a build from `main` have it). For image signatures, use admission-time verification; for tests, Argo CD PostSync hooks or MetricCheck gates. See [Image signatures and tests](https://pnz1990.github.io/kardinal-promoter/pipeline-reference/#image-signatures-and-tests)
+- **Never-written fields** — AuditEvent `spec.actor` and `spec.bundleImage`; Bundle `status.metrics.autoRollbacks`, `status.environments[].prMergedAt`, `.mergedBy` and `.gateResults`. The UI "CD Level" column, "Full CD" counter and `cdLevel` in `/api/v1/ui/pipelines` are gone (they counted `spec.policyGates`)
+- **The EKS e2e Terraform** and `make eks-up`, `eks-down` and `setup-multi-cluster-env`. If you created `kardinal-e2e-prod` with them, destroy it from an older checkout
+
+### Deprecated
+
+- `PolicyGate.spec.when`, `spec.environments[].health.cluster` (still rejected: use an Argo CD or Flux hub), `regions`, `Pipeline.spec.git.provider` (ignored: the controller's `--scm-provider` / Helm `scm.provider` selects the provider), `kardinal rollback --emergency` (no effect: use `kardinal override`), `kardinal approve` (fails and points to `kardinal override`), and the chart values `rbac.integrationTestJobs` (no effect, removed in v0.10) and `validatingAdmissionPolicy.enabled` (no effect)
+
+### Added
+
+- **SCM providers** — Bitbucket Cloud and Azure DevOps (#1035, #1040)
+- **UI API access control** — a static bearer token (`ui.auth.tokenSecretRef`) or Kubernetes TokenReview (`ui.auth.tokenReview`); CORS with `--cors-allowed-origins`; TLS with `--tls-cert-file` / `--tls-key-file`; the UI warns on an insecure connection (#924, #1015, #940, #937, #941)
+- **NotificationHook CRD** — outbound webhooks on Bundle Verified, PolicyGate Blocked and PromotionStep Failed (#942)
+- **`update.strategy: argocd`** — sets the image on the Argo CD Application without git operations (`argocd-set-image`, #966)
+- **Create Bundle from GitHub Actions** — `.github/actions/create-bundle` (#953); the UI has a Create Bundle dialog (#950)
+- **Pipeline and environment limits** — `maxConcurrentPromotions` (#1059), `stepTimeoutSeconds` (#1123), `waitForMergeTimeout` (#906, #908), `historyLimit` (#919)
+- **`health.resource`** names the Deployment the resource adapter checks (#1117)
+- **Chart** — `controller.watchNamespace` for a namespace-scoped install (#1024), `demo.enabled` (#1043), `grafanaDashboard.enabled` (#1139), `serviceMonitor.enabled` with `interval` and `labels` (#1268)
+- **SCM token** — a changed token Secret is picked up without a restart (#994, #1060); the startup scope check runs in Helm installs too, in the background (#996, #1275). Bitbucket and Azure DevOps have no startup check
+- **Metrics** — step duration, gate blocking time and PromotionStep age (#992); `/readyz` fails until the caches have synced (#1147)
+- **CLI** — `get subscriptions` and a SUB column in `get pipelines` (#948); `logs` per-step table and `--follow` (#1012, #1124); `status` in-flight promotions (#997); `init --scaffold-gitops` and `--demo` (#1022); `delete bundle` (#851); `doctor` prints a version-pinned install command
+- **`kubectl get` printer columns** for Bundle and PromotionStep (#903)
+- **UI** — skeleton loading states (#784), `/` focuses the pipeline filter (#800), virtual scrolling over 50 pipelines (#817)
+- **Examples** for every health adapter: resource, argocd, flux, argoRollouts and flagger (#821)
+
+### Fixed
+
+- Bundle requeue hot loop: a 1 ms `RequeueAfter` is now at least 500 ms (#988)
+- `AbortedByAlarm` and `RollingBack` steps no longer reset to Pending (#789)
+- The PR body's CI run cell no longer renders an empty link; an empty commit or author is `—`
+- `kardinal validate` skips non-kardinal kinds and reports the same unimplemented fields as the Pipeline status
+- The ClusterRole and Role grant access to NotificationHooks and AuditEvents (#1095)
+
+### Release and CI
+
+- Releases are cut only from tags on `main`. A prerelease gets no `latest` image tag and is not marked latest. The notes come from this changelog
+- GitHub Actions are pinned to commit SHAs; kind, kubectl and argocd downloads are checked by sha256
+- The web UI builds with npm only, and CI fails when the committed `web/dist` differs from a fresh build
 
 ---
 
@@ -125,7 +166,6 @@ The v0.8.1 tag points to `bd2bcf3`, a merge commit that is not on main. Its tree
 - **Bundle reconciler watches Pipeline changes** — Graph is regenerated when Pipeline spec changes (new environments, updated policyNamespaces, changed git config). Previously Pipeline changes were invisible to in-flight Bundles (#634)
 - **Subscription deduplication under HA** — uses label selector (`kardinal.io/source-digest`) instead of status field comparison; safe under concurrent reconciles and multiple controller replicas (#636)
 - **CEL documentation accuracy** — corrected false claims about `pkg/cel/NewCELEnvironment()` (does not exist) and `schedule.*` (map variable, not CEL library function) in design docs and code comments (#631)
-- **Shell completion** — bash, zsh, fish, and PowerShell completion scripts via `kardinal completion <shell>` (#606)
 - **`kardinal doctor`** — pre-flight cluster health check: validates CRD installation, the Graph controller, RBAC, and GitHub token before first use (#607)
 - **Graceful shutdown** — controller drains in-flight reconcile loops on SIGTERM; no promotion steps interrupted by pod restarts (#605)
 - **PodDisruptionBudget + topology spread** — minAvailable: 1 PDB and `topologySpreadConstraints` in Helm chart for HA deployments (#598)
@@ -150,6 +190,7 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 - **OCI + Git source watchers** — `OCIWatcher` and `GitWatcher` Subscription reconcilers poll registries and Git branches, creating Bundles on new images/commits (#491, #493)
 - **Pipeline deployment metrics** — `Pipeline.status.deploymentMetrics` aggregated by `PipelineReconciler`: `rolloutsLast30Days`, `p50CommitToProdMinutes`, `p90CommitToProdMinutes`, `autoRollbackRate` (#498, #511)
 - **`changewindow.isAllowed()` / `changewindow.isBlocked()` CEL functions** — named-argument helpers for ChangeWindow gates (#506)
+- **ScheduleClock CRD** — writes `status.tick` on a configurable interval to drive time-based policy gate re-evaluation via real Kubernetes watch events; replaces the `ctrl.Result{RequeueAfter}` timer loop pattern (#484)
 - **Graph controller fork upgraded to `948ad6c`** — DNS-1123 node ID validation, drift timers (30 min), propagation hash includes `propagateWhen` state
 - **Cardinal logo** — added across docs site, UI sidebar, and README (#515)
 
@@ -199,8 +240,6 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 
 - **Argo Rollouts delivery delegation** — `delivery.delegate: argoRollouts` in Pipeline env spec hands off rollout progression to an existing `Rollout` resource (#197)
 - **GitLab + Forgejo/Gitea SCM providers** — selected per controller with `--scm-provider gitlab` or `--scm-provider forgejo` (also `gitea`)
-- **PRStatus CRD** — makes PR merge/close signal observable by the Graph (eliminates 6 GitHub API call paths from the reconciler hot path)
-- **RollbackPolicy CRD** — auto-rollback threshold comparison moved to dedicated reconciler
 - **Graph purity milestone** — all 41 Graph-independent logic leaks eliminated (see `docs/design/11-graph-purity-tech-debt.md`)
 - **K-01–K-11** — all Pipeline Expressiveness features (see v0.5.0 above for full list; initial implementation in this release)
 
@@ -243,7 +282,6 @@ The v0.6.0 tag points to `369be4c`, a merge commit that is not on main. Its tree
 
 - **PRStatus CRD** — replaces in-reconciler GitHub API polling for PR state
 - **RollbackPolicy CRD** — moves auto-rollback threshold logic out of PromotionStepReconciler
-- **ScheduleClock CRD** — writes `status.tick` on a configurable interval to drive time-based policy gate re-evaluation via real Kubernetes watch events; replaces the `ctrl.Result{RequeueAfter}` timer loop pattern
 - **Health Watch nodes** — for each environment with `health.type`, the Graph watches the health resource (Deployment, Argo CD Application, Flux Kustomization, Argo Rollout, Flagger Canary) (#191, #194)
 - **Promote command** — `kardinal promote` creates a Bundle from the last verified image (#160)
 - **UI: 5s polling and bundle history** — the UI refreshes every 5 seconds and lists earlier Bundles of the selected pipeline (#170)

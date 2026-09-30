@@ -174,6 +174,18 @@ const (
 	doctorFail = "❌"
 )
 
+// installCommand is the helm command that installs the chart matching a CLI
+// version. A release CLI pins --version: without it helm picks the newest
+// final chart, which is older than a release candidate. A dev build has no
+// published chart to match, so it gets no --version.
+func installCommand(cliVersion, controllerNS string) string {
+	cmd := "helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter"
+	if v := strings.TrimPrefix(cliVersion, "v"); v != "" && !strings.Contains(v, "dev") {
+		cmd += " --version " + v
+	}
+	return cmd + " --namespace " + controllerNS + " --create-namespace"
+}
+
 func checkController(ctx context.Context, client sigs_client.Client, controllerNS string) doctorResult {
 	r := doctorResult{label: "Controller reachable"}
 	var cm corev1.ConfigMap
@@ -182,8 +194,7 @@ func checkController(ctx context.Context, client sigs_client.Client, controllerN
 	case apierrors.IsNotFound(err):
 		r.icon = doctorFail
 		r.detail = fmt.Sprintf("kardinal-version ConfigMap not found in %s", controllerNS)
-		r.hint = "Installed elsewhere? Use --controller-namespace. Install: helm upgrade --install kardinal-promoter " +
-			"oci://ghcr.io/pnz1990/charts/kardinal-promoter --namespace " + controllerNS + " --create-namespace"
+		r.hint = "Installed elsewhere? Use --controller-namespace. Install: " + installCommand(buildInfoVersion(), controllerNS)
 		r.failed = true
 		return r
 	case err != nil:

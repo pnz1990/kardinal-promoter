@@ -96,7 +96,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | ID | Issue | Description | Fix Approach |
 |---|---|---|---|
 | PG-3 | #133 | `buildUpstreamContext()` soakMinutes via `time.Since` | Add `status.soakMinutes` to PromotionStep; Watch node reads it |
-| PS-2 / BU-2 | #139 | `Pipeline.Spec.Paused` in two reconcilers | Done: no reconciler reads `spec.paused`; the step holds on the freeze gate (Accepted in the current status table) |
+| PS-2 / BU-2 | #139 | `Pipeline.Spec.Paused` in two reconcilers | Done: only the Pipeline reconciler reads `spec.paused`, to create or delete the freeze gate; the step holds on the freeze gate (Accepted in the current status table) |
 | PS-5 | #140 | Health check timeout via `time.Since` | Add `status.healthCheckExpiry` to PromotionStep |
 | PS-9 | #141 | `copyEvidenceToBundle()` cross-CRD mutation | Invert: Bundle reconciler reads PromotionStep status |
 | HE-4 | #143 | `AutoDetector` CRD probing at runtime | Remove AutoDetector; require explicit `health.type` |

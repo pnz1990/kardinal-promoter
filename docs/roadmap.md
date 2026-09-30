@@ -7,9 +7,9 @@ This page describes what is currently available in kardinal-promoter and what is
 
 ---
 
-## Currently Available (v0.8.1+)
+## Currently Available (v0.9.0-rc.1)
 
-> v0.8.1 released 2026-04-17. Adds supply chain hardening to the release workflow: cosign keyless signing, an SBOM attestation, SLSA provenance, and a trivy scan that reports HIGH and CRITICAL CVEs without failing the release. For the full feature list see the [changelog](changelog.md).
+> v0.9.0-rc.1 released 2026-09-30, a release candidate. kardinal runs on upstream kro Graph (v0.10.0-rc.0), and unfinished features (distributed mode, regions, custom steps, PromotionTemplate, the admission webhook) are removed. The latest final release is v0.8.1. For the full list and the upgrade steps see the [changelog](changelog.md).
 
 All of the following are implemented and shipped:
 

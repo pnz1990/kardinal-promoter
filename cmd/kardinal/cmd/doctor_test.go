@@ -137,6 +137,28 @@ func TestCheckController_ControllerNamespace(t *testing.T) {
 	assert.Contains(t, r.hint, "--controller-namespace")
 }
 
+// The install hint pins the chart to a release CLI's version, so a v0.9.0-rc.1
+// CLI does not suggest the newest final chart.
+func TestInstallCommand(t *testing.T) {
+	tests := []struct {
+		name, version, want string
+	}{
+		{"release candidate", "v0.9.0-rc.1",
+			"helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 --namespace kardinal-system --create-namespace"},
+		{"final", "v0.9.0",
+			"helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0 --namespace kardinal-system --create-namespace"},
+		{"dev build", "v0.1.0-dev",
+			"helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --namespace kardinal-system --create-namespace"},
+		{"empty", "",
+			"helm upgrade --install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --namespace kardinal-system --create-namespace"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, installCommand(tc.version, "kardinal-system"))
+		})
+	}
+}
+
 func controllerDeployment(ns string, env ...corev1.EnvVar) *appsv1.Deployment {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Name: "kardinal-promoter", Namespace: ns,

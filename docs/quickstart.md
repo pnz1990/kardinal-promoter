@@ -32,7 +32,7 @@ kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system \
   --set demo.enabled=true \
   --set demo.git.url=$DEMO_REPO \
@@ -53,7 +53,8 @@ The demo Pipeline uses your fork of the `kardinal-demo` GitOps repo (it already 
 correct Kustomize layout). Test and uat environments promote automatically; prod opens a PR for review.
 
 !!! note "Estimated time: under 10 minutes on a fresh kind cluster"
-    Prerequisites: kind cluster, `helm`, `kubectl`, `kardinal`, Argo CD, and a GitHub PAT
+    Prerequisites: kind cluster, `helm`, `kubectl`, the `kardinal` CLI
+    ([Install the CLI](installation.md#3-install-the-cli)), Argo CD, and a GitHub PAT
     with write access to the repository in `demo.git.url`. Point the ApplicationSet
     `repoURL` in [Create Argo CD Applications](#create-argo-cd-applications) at the same fork.
 
@@ -90,7 +91,7 @@ graph LR
 ## Prerequisites
 
 - A Kubernetes cluster (kind, Docker Desktop, EKS, GKE, or any distribution)
-- [kardinal-promoter installed](#install-kardinal-promoter)
+- [kardinal-promoter installed](#install-kardinal-promoter), and the `kardinal` CLI ([Install the CLI](installation.md#3-install-the-cli))
 - [Argo CD installed](https://argo-cd.readthedocs.io/en/stable/getting_started/) (or Flux; this guide uses Argo CD)
 - A GitHub account with a personal access token (PAT) that has repo write access
 - A GitOps repository with Kustomize overlays (see [Set Up Your GitOps Repo](#set-up-your-gitops-repo))
@@ -119,14 +120,14 @@ kubectl create secret generic github-token \
   --namespace kardinal-system \
   --from-literal=token=$GITHUB_PAT
 
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace \
   --set github.secretRef.name=github-token
 
 # Option B: pass the token directly (development/testing only)
 # The chart stores it in Secret kardinal-promoter-github-token, but the token
 # also stays in the Helm release history.
-helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
+helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter --version 0.9.0-rc.1 \
   --namespace kardinal-system --create-namespace \
   --set github.token=$GITHUB_PAT
 ```
@@ -143,8 +144,8 @@ kubectl get pods -n kro-system
 # kro-7d4b8f9f5-xk2pq               1/1     Running   0          30s
 
 kardinal version
-# CLI:        v0.8.1
-# Controller: v0.8.1
+# CLI:        v0.9.0-rc.1
+# Controller: v0.9.0-rc.1
 # Graph:      kro v0.10.0-rc.0
 ```
 
