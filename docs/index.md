@@ -56,7 +56,7 @@ kardinal-promoter is a Kubernetes-native controller that automates software prom
 | Contiguous healthy soak (`bake.minutes`) | ✅ | ❌ elapsed only | ❌ elapsed only |
 | Wave topology for multi-region rollouts | ✅ | ❌ | ❌ |
 | Change freeze management (`ChangeWindow` CRD) | ✅ | ❌ | ❌ |
-| Pre-deploy gate type | ✅ | ❌ | ❌ |
+| Every gate re-checked before a step starts | ✅ | ❌ | ❌ |
 | DORA metrics built-in | ✅ | ❌ | ❌ |
 | Integration test step | No — run tests as an Argo CD PostSync hook with `health.type: argocd`, or gate on a `MetricCheck` ([how](pipeline-reference.md#image-signatures-and-tests)) | ❌ | ❌ |
 | Emergency override with audit record | ✅ | ❌ | ❌ |

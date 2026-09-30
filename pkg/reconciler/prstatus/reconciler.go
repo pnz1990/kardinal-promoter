@@ -32,7 +32,8 @@
 //     Transient errors (429, 5xx, network) are retried every 30 seconds.
 //   - The PromotionStep reconciler watches PRStatus and advances from
 //     WaitingForMerge when status.merged is true. The SCM webhook may set
-//     status.merged first; this reconciler then only fills in the merge commit.
+//     status.merged first, with status.mergeCommitSHA for GitHub and GitLab;
+//     this reconciler then only fills in a missing merge commit.
 //   - PolicyGate CEL reads the approval state as bundle.pr["<env>"].isApproved
 //     and bundle.pr["<env>"].approvalCount (K-08).
 //   - Polling is throttled: at most one poll per requeuePollInterval, and the
@@ -247,7 +248,7 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 // for mergeCommitWindow after the merge was recorded; after that, or when the
 // SCM provider cannot report merge commits, the argocd and resource health
 // checks fall back to checking the Bundle images; the flux check has no such
-// fallback and does not compare revisions (see docs/health-adapters.md).
+// fallback and waits until health.timeout (see docs/health-adapters.md).
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
 	if prs.Status.MergeCommitSHA != "" || prs.Spec.PRNumber == 0 || !r.canGetMergeCommit() {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")

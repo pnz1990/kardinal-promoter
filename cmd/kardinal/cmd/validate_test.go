@@ -74,6 +74,13 @@ func TestValidate_Documents(t *testing.T) {
 				"  namespace: platform-policies\nspec:\n  expression: \"!schedule.isWeekend\"\n",
 			wantOut: []string{"- skipped Namespace/platform-policies", "✓ f.yaml is valid"},
 		},
+		// #1323: spec.when has no effect; setting it warns but is valid.
+		{
+			name: "PolicyGate with the deprecated when field warns",
+			content: "apiVersion: kardinal.io/v1alpha1\nkind: PolicyGate\nmetadata:\n  name: g\n" +
+				"spec:\n  expression: \"!schedule.isWeekend\"\n  when: pre-deploy\n",
+			wantOut: []string{"✓ f.yaml is valid", "  ! warning: spec.when is deprecated and has no effect"},
+		},
 		{
 			name:    "a Pipeline of another API group is skipped",
 			content: "apiVersion: tekton.dev/v1\nkind: Pipeline\nmetadata:\n  name: build\nspec: {}\n---\n" + validPipelineDoc,

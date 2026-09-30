@@ -155,8 +155,9 @@ func (s *webhookServer) HealthHandler() http.HandlerFunc {
 }
 
 // markPRStatusMerged finds PRStatus CRDs matching the merged PR and sets
-// status.merged = true. The PromotionStep reconciler will detect the change on
-// its next reconcile and advance to HealthChecking.
+// status.merged = true, with status.mergeCommitSHA when the event carries it.
+// The PromotionStep reconciler will detect the change on its next reconcile
+// and advance to HealthChecking.
 //
 // This is the pure version of the old reconcileMergedPR — the webhook now only
 // writes to its own CRD (PRStatus) and does not touch PromotionStep status.
@@ -186,15 +187,22 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 			continue
 		}
 
-		// Already marked merged — idempotent skip.
-		if prs.Status.Merged {
+		// Already marked merged, and nothing to add — idempotent skip.
+		if prs.Status.Merged && (prs.Status.MergeCommitSHA != "" || event.MergeCommitSHA == "") {
 			continue
 		}
 
 		patch := client.MergeFrom(prs.DeepCopy())
-		prs.Status.Merged = true
-		prs.Status.Open = false
-		prs.Status.LastCheckedAt = &now
+		if !prs.Status.Merged {
+			prs.Status.Merged = true
+			prs.Status.Open = false
+			prs.Status.LastCheckedAt = &now
+		}
+		if prs.Status.MergeCommitSHA == "" {
+			// Written with merged, so the health check knows the commit from
+			// the start (#1307).
+			prs.Status.MergeCommitSHA = event.MergeCommitSHA
+		}
 
 		if patchErr := s.client.Status().Patch(ctx, prs, patch); patchErr != nil {
 			s.log.Error().Err(patchErr).
@@ -205,6 +213,7 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 		s.log.Info().
 			Str("prstatus", prs.Name).
 			Int("pr", event.PRNumber).
+			Str("mergeCommit", event.MergeCommitSHA).
 			Msg("PRStatus marked merged via webhook")
 	}
 	return nil

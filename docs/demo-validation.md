@@ -358,9 +358,11 @@ kubectl apply -f examples/argo-rollouts-demo/pipeline.yaml
 
 kubectl apply -f examples/github-demo/pipeline.yaml
 
-# Trigger promotions
+# Trigger a promotion. Each example Pipeline is named after its directory
+# (flux-demo, flagger-demo, argo-rollouts-demo, github-demo). They all promote
+# into the same kardinal-demo paths, so promote one at a time.
 LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-kardinal create bundle kardinal-test-app \
+kardinal create bundle flux-demo \
   --image "ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
 kardinal get pipelines
 ```

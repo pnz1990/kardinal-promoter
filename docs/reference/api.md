@@ -134,7 +134,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value` and `metrics.&lt;name&gt;.result`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
+MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -151,6 +151,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
 | `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
+| `status.validUntil` | string (date-time) |  | ValidUntil is when the current result goes stale: lastEvaluatedAt plus three intervals, and at least 30s. The MetricCheck reconciler writes it with each evaluation. A PolicyGate evaluated after this time, or when it is unset, sees metrics.&lt;name&gt;.result as "Stale" and metrics.&lt;name&gt;.stale as true, so a result that is no longer refreshed cannot pass a gate. |
 
 ## NotificationHook
 
@@ -325,7 +326,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.selector.matchExpressions[].values` | []string |  | values is an array of string values. If the operator is In or NotIn, the values array must be non-empty. If the operator is Exists or DoesNotExist, the values array must be empty. This array is replaced during a strategic merge patch. |
 | `spec.selector.matchLabels` | map[string]string |  | matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels map is equivalent to an element of matchExpressions, whose key field is "key", the operator is "In", and the values array contains only "value". The requirements are ANDed. |
 | `spec.skipPermission` | boolean |  | SkipPermission marks a skip-permission gate as granting skips. A Bundle may skip (intent.skipEnvironments) an environment an org gate applies to only when a gate labelled kardinal.io/type=skip-permission, with skipPermission true, in an org policy namespace, applies to that environment. Gates in other namespaces never grant a skip. The permission gate's expression is evaluated like any gate, in front of the next environment the Bundle promotes, so that environment waits until it is true. On any other gate this field has no effect. Default: `false`. |
-| `spec.when` | string |  | When (K-02). Every gate on an environment holds that environment's PromotionStep back until the gate is ready: the Graph does not create the step before then, whatever the value of this field. "pre-deploy": the PromotionStep reconciler also re-checks the gate right before git operations start; if it is not ready, the step stays in Pending and no git-clone begins. "post-deploy" (default): no additional check. The gate is not evaluated again after the deployment. One of: `pre-deploy`, `post-deploy`. Default: `post-deploy`. |
+| `spec.when` | string |  | When has no effect. Every gate on an environment is re-checked right before that environment's PromotionStep starts: the step stays in Pending, with no git operation, until each gate it requires exists, is ready, and was evaluated at or after the step was created. A step that has started is not stopped by a gate that turns false later. Deprecated: remove this field. Every gate is re-checked before its PromotionStep starts, whatever the value; pre-deploy and post-deploy behave the same. One of: `pre-deploy`, `post-deploy`. Default: `post-deploy`. |
 | `status` | object |  | PolicyGateStatus defines the observed state of a PolicyGate. |
 | `status.conditions` | []object |  | Conditions holds status conditions. |
 | `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |

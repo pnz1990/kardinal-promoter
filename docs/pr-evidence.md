@@ -108,6 +108,11 @@ kardinal-promoter detects PR merges in two ways:
 - **Polling**: the PRStatus reconciler checks each open PR every 30 seconds, so merges are
   picked up without webhooks and after a controller restart.
 
+Health checks compare the environment against the PR's merge commit. The GitHub and GitLab
+webhooks record it together with the merge. In every other case (other providers, no webhook,
+or a GitLab fast-forward merge, which reports none) the PRStatus reconciler asks the SCM API
+for it after the merge.
+
 ## Auto-Merge Environments
 
 For environments with `approval: auto`, no PR is created. The controller pushes directly to the target branch (or directory).

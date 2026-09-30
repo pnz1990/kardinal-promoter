@@ -92,9 +92,9 @@ func WatchNodeTemplate(healthType string, opts CheckOptions) (WatchNodeSpec, err
 	case "flux":
 		return watchNodeFlux(opts.Flux), nil
 	case "argoRollouts":
-		return watchNodeArgoRollouts(opts.ArgoRollouts), nil
+		return watchNodeArgoRollouts(opts.ArgoRollouts)
 	case "flagger":
-		return watchNodeFlagger(opts.Flagger), nil
+		return watchNodeFlagger(opts.Flagger)
 	case "":
 		return WatchNodeSpec{}, fmt.Errorf(
 			"health.type is required: set health.type to one of [resource, argocd, flux, argoRollouts, flagger]")
@@ -169,7 +169,9 @@ func watchNodeResourceWatchKind(cfg ResourceConfig) WatchNodeSpec {
 
 // watchNodeArgoCD builds a Watch node spec for an Argo CD Application.
 //
-// readyWhen: health=Healthy AND sync=Synced.
+// readyWhen: health=Healthy AND sync=Synced AND no sync operation is running
+// or has failed, as ArgoCDAdapter.Check decides it. status.operationState is
+// absent until the first sync operation.
 // HE-2 in docs/design/11-graph-purity-tech-debt.md.
 func watchNodeArgoCD(cfg ArgoCDConfig) WatchNodeSpec {
 	ns := cfg.Namespace
@@ -182,7 +184,9 @@ func watchNodeArgoCD(cfg ArgoCDConfig) WatchNodeSpec {
 		Name:       cfg.Name,
 		Namespace:  ns,
 		ReadyWhen: "healthNode.status.health.status == 'Healthy' && " +
-			"healthNode.status.sync.status == 'Synced'",
+			"healthNode.status.sync.status == 'Synced' && " +
+			"(!has(healthNode.status.operationState) || " +
+			"healthNode.status.operationState.phase == 'Succeeded')",
 		HealthType: "argocd",
 	}
 }
@@ -211,35 +215,35 @@ func watchNodeFlux(cfg FluxConfig) WatchNodeSpec {
 // watchNodeArgoRollouts builds a Watch node spec for an Argo Rollouts Rollout.
 //
 // readyWhen: status.phase == "Healthy".
-func watchNodeArgoRollouts(cfg ArgoRolloutsConfig) WatchNodeSpec {
-	ns := cfg.Namespace
-	if ns == "" {
-		ns = "default"
+// OptionsForEnv always sets the namespace, so an empty one is an error.
+func watchNodeArgoRollouts(cfg ArgoRolloutsConfig) (WatchNodeSpec, error) {
+	if cfg.Namespace == "" {
+		return WatchNodeSpec{}, fmt.Errorf("argoRollouts health: Rollout %q has no namespace", cfg.Name)
 	}
 	return WatchNodeSpec{
 		APIVersion: "argoproj.io/v1alpha1",
 		Kind:       "Rollout",
 		Name:       cfg.Name,
-		Namespace:  ns,
+		Namespace:  cfg.Namespace,
 		ReadyWhen:  "healthNode.status.phase == 'Healthy'",
 		HealthType: "argoRollouts",
-	}
+	}, nil
 }
 
 // watchNodeFlagger builds a Watch node spec for a Flagger Canary.
 //
 // readyWhen: status.phase == "Succeeded".
-func watchNodeFlagger(cfg FlaggerConfig) WatchNodeSpec {
-	ns := cfg.Namespace
-	if ns == "" {
-		ns = "default"
+// OptionsForEnv always sets the namespace, so an empty one is an error.
+func watchNodeFlagger(cfg FlaggerConfig) (WatchNodeSpec, error) {
+	if cfg.Namespace == "" {
+		return WatchNodeSpec{}, fmt.Errorf("flagger health: Canary %q has no namespace", cfg.Name)
 	}
 	return WatchNodeSpec{
 		APIVersion: "flagger.app/v1beta1",
 		Kind:       "Canary",
 		Name:       cfg.Name,
-		Namespace:  ns,
+		Namespace:  cfg.Namespace,
 		ReadyWhen:  "healthNode.status.phase == 'Succeeded'",
 		HealthType: "flagger",
-	}
+	}, nil
 }

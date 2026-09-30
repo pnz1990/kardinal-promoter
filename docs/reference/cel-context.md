@@ -125,10 +125,19 @@ The `metrics` map contains one entry per `MetricCheck` CRD in the same namespace
 
 | Field | Type | Example | Notes |
 |---|---|---|---|
-| `metrics.<name>.value` | string | `"0.005"` | Last queried metric value, as a string; `""` before the first evaluation or after a query error |
-| `metrics.<name>.result` | string | `"Pass"` | `"Pass"` or `"Fail"` — result of the MetricCheck threshold; `""` before the first evaluation |
+| `metrics.<name>.value` | string | `"0.005"` | Last queried metric value, as a string; `""` after a query error or when the result is stale |
+| `metrics.<name>.result` | string | `"Pass"` | `"Pass"` or `"Fail"` — result of the MetricCheck threshold; `"Stale"` when the result is stale |
+| `metrics.<name>.stale` | bool | `false` | `true` when the MetricCheck's `status.validUntil` is unset (for example before its first evaluation) or earlier than the gate's evaluation time |
 
-**Populated** when a `MetricCheck` CRD with the given name exists in the gate's namespace. `double("")` is an evaluation error, so a value-based gate blocks until the MetricCheck has a value.
+**Populated** when a `MetricCheck` CRD with the given name exists in the gate's namespace. `double("")` is an evaluation error, so a value-based gate blocks until the MetricCheck has a fresh value.
+
+**Staleness.** Each MetricCheck evaluation sets `status.validUntil` to the evaluation time plus
+`max(3 × interval, 30s)`. A result the gate reads after that time, or one without `validUntil`, is
+stale: `result` is `"Stale"`, `value` is `""` and `stale` is `true`, so `result == "Pass"` and
+value comparisons block, and the gate's `status.reason` ends with `metric "<name>" result is stale`.
+Compare with `== "Pass"`, not `!= "Fail"`: a stale result is neither. `kardinal policy simulate` judges
+staleness at the real current time, not at the simulated `--time`. See
+[Stale metric results](../policy-gates.md#stale-metric-results).
 
 ### Metrics examples
 

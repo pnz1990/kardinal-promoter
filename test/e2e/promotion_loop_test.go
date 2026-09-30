@@ -16,22 +16,17 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -188,117 +183,6 @@ func TestPromotionLoop_AutoApproval(t *testing.T) {
 		"auto-approval step should reach Verified; got %s: %s", finalStep.Status.State, finalStep.Status.Message)
 }
 
-// TestPromotionLoop_PRReview_ViaWebhook verifies the full loop for a pr-review
-// environment: PromotionStep → WaitingForMerge → webhook → HealthChecking → Verified.
-func TestPromotionLoop_PRReview_ViaWebhook(t *testing.T) {
-	s := promotionLoopScheme(t)
-	pipeline := &v1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
-		Spec: v1alpha1.PipelineSpec{
-			Git: v1alpha1.PipelineGit{URL: "https://github.com/owner/repo", Branch: "main"},
-			Environments: []v1alpha1.EnvironmentSpec{
-				{Name: "prod", Approval: "pr-review"},
-			},
-		},
-	}
-	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "bundle-pr", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-	}
-	step := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "step-prod",
-			Namespace: "default",
-			Labels:    map[string]string{"kardinal.io/pipeline": "nginx-demo"},
-		},
-		Spec: v1alpha1.PromotionStepSpec{
-			PipelineName: "nginx-demo",
-			BundleName:   "bundle-pr",
-			Environment:  "prod",
-			StepType:     "pr-review",
-		},
-	}
-
-	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(pipeline, bundle, step).
-		WithStatusSubresource(&v1alpha1.Bundle{}, &v1alpha1.PromotionStep{}).
-		Build()
-
-	mockSCM := &mockSCMForLoop{
-		prURL:    "https://github.com/owner/repo/pull/5",
-		prNumber: 5,
-		merged:   false,
-		open:     false,
-	}
-
-	rec := &psrec.Reconciler{
-		Client:    c,
-		SCM:       mockSCM,
-		GitClient: &mockGitForLoop{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
-	}
-
-	ctx := context.Background()
-	stepReq := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
-
-	// Run reconcile loop until WaitingForMerge.
-	for i := 0; i < 20; i++ {
-		result, err := rec.Reconcile(ctx, stepReq)
-		require.NoError(t, err)
-
-		var ps v1alpha1.PromotionStep
-		require.NoError(t, c.Get(ctx, stepReq.NamespacedName, &ps))
-		t.Logf("pre-webhook iteration %d: state=%s", i, ps.Status.State)
-
-		if ps.Status.State == "WaitingForMerge" || ps.Status.State == "Failed" || ps.Status.State == "Verified" {
-			break
-		}
-		if !result.Requeue && result.RequeueAfter == 0 { //nolint:staticcheck
-			break
-		}
-	}
-
-	var preWebhook v1alpha1.PromotionStep
-	require.NoError(t, c.Get(ctx, stepReq.NamespacedName, &preWebhook))
-	require.Equal(t, "WaitingForMerge", preWebhook.Status.State,
-		"step should be WaitingForMerge before webhook; got %s", preWebhook.Status.State)
-
-	// Simulate the webhook: mark PR as merged.
-	// Build a webhook handler backed by the same fake client.
-	webhookSrv := newTestWebhookServer(mockSCM, c, t)
-	handler := webhookSrv.Handler()
-
-	payload, _ := json.Marshal(map[string]interface{}{
-		"action": "closed",
-		"pull_request": map[string]interface{}{
-			"number": 5,
-			"merged": true,
-		},
-		"repository": map[string]interface{}{
-			"full_name": "owner/repo",
-		},
-	})
-	webhookReq := httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader(payload))
-	webhookReq.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	handler(w, webhookReq)
-	_ = w.Result()
-
-	// After webhook, step should be HealthChecking.
-	var afterWebhook v1alpha1.PromotionStep
-	require.NoError(t, c.Get(ctx, stepReq.NamespacedName, &afterWebhook))
-	require.Equal(t, "HealthChecking", afterWebhook.Status.State,
-		"webhook should have advanced to HealthChecking; got %s", afterWebhook.Status.State)
-
-	// Run reconcile one more time to advance to Verified (health-check stub).
-	_, err := rec.Reconcile(ctx, stepReq)
-	require.NoError(t, err)
-
-	var final v1alpha1.PromotionStep
-	require.NoError(t, c.Get(ctx, stepReq.NamespacedName, &final))
-	assert.Equal(t, "Verified", final.Status.State)
-}
-
 // TestPromotionLoop_Idempotency verifies that re-creating a PromotionStep does not
 // duplicate PRs (idempotency via prURL in outputs).
 func TestPromotionLoop_Idempotency(t *testing.T) {
@@ -387,57 +271,4 @@ func TestPromotionLoop_Idempotency(t *testing.T) {
 	assert.Equal(t, "Verified", final.Status.State)
 	// OpenPR must not be called (PR was already open).
 	assert.Equal(t, 0, mockSCM.openCalled, "open-pr must not be called when prURL is already in outputs")
-}
-
-// newTestWebhookServer is a test helper that builds a webhookServer using the
-// webhook.go implementation, avoiding the import of cmd/kardinal-controller.
-func newTestWebhookServer(scmProvider scm.SCMProvider, c client.Client, t *testing.T) *webhookServerForTest {
-	t.Helper()
-	return &webhookServerForTest{scm: scmProvider, client: c, log: zerolog.Nop()}
-}
-
-// webhookServerForTest is a local copy of webhook.go's reconcileMergedPR logic
-// for use in the e2e test without importing cmd/kardinal-controller.
-type webhookServerForTest struct {
-	scm    scm.SCMProvider
-	client client.Client
-	log    zerolog.Logger
-}
-
-func (s *webhookServerForTest) Handler() func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		event := scm.WebhookEvent{
-			EventType:    "pull_request",
-			Action:       "closed",
-			Merged:       true,
-			PRNumber:     5,
-			RepoFullName: "owner/repo",
-		}
-		ctx := r.Context()
-		var psList v1alpha1.PromotionStepList
-		if err := s.client.List(ctx, &psList); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		for i := range psList.Items {
-			ps := &psList.Items[i]
-			if ps.Status.State != "WaitingForMerge" {
-				continue
-			}
-			prNumStr := ps.Status.Outputs["prNumber"]
-			if prNumStr != "5" {
-				continue
-			}
-			patch := client.MergeFrom(ps.DeepCopy())
-			ps.Status.State = "HealthChecking"
-			ps.Status.Message = "PR #5 merged via webhook"
-			if err := s.client.Status().Patch(ctx, ps, patch); err != nil {
-				s.log.Error().Err(err).Msg("patch failed")
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-		}
-		_ = event
-		w.WriteHeader(http.StatusNoContent)
-	}
 }

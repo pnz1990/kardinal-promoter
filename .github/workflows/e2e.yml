@@ -50,14 +50,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Versions and sha256 sums: hack/tool-versions.env.
       - name: Install kind
         run: |
-          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
+          source hack/tool-versions.env
+          curl -fsSLo kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  kind" | sha256sum -c -
           chmod +x kind && sudo mv kind /usr/local/bin/
 
       - name: Install kubectl
         run: |
-          curl -fsSLO "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          source hack/tool-versions.env
+          curl -fsSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  kubectl" | sha256sum -c -
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/
 
       # hack/e2e-setup.sh creates the kind cluster, installs kro, builds the
@@ -113,7 +118,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: e2e-results-${{ github.run_id }}
           path: test/e2e/results/

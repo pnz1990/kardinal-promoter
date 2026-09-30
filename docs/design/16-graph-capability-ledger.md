@@ -144,8 +144,9 @@ the node itself").
   the PRStatus `status.mergeCommitSHA`) and requires Argo CD's synced revision or Flux's
   `lastAppliedRevision` to match it, and a Deployment to run the Bundle images
   (`pkg/health/adapter.go`, `pkg/reconciler/promotionstep/reconciler.go` `expectedRevision`).
-- **Still not solved in the Graph:** the ref health nodes keep the self-only
-  `Healthy && Synced` `readyWhen`, so Graph readiness alone can see the previous revision.
+- **Still not solved in the Graph:** the ref health nodes keep a self-only `readyWhen`
+  (for Argo CD: `Healthy`, `Synced` and no running or failed sync operation), so Graph
+  readiness alone can see the previous revision.
   Doing it in the Graph needs `app.status.sync.revision == step.status.outputs.commitSHA`,
   which is a cross-node `readyWhen`.
 
@@ -285,6 +286,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | PolicyGate CEL (`bundle.*`, `schedule.*`, `metrics.*`, `upstream.*`) | `pkg/reconciler/policygate` | Needs extension functions and data kro does not have (clock, metrics, upstream soak) | CEL extension hooks or custom function libraries in the Graph |
 | Git and SCM steps (clone, kustomize, push, open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | G3 (cross-node `readyWhen`) and G4 (optional kinds) | G3 and G4 fixes |
+| Holding an existing PromotionStep: pause (freeze gate) and the required-gate re-check before the step starts (#1300, #1313) | `holdIfPaused` and `checkRequiredGates` in `pkg/reconciler/promotionstep` | No primitive to hold an existing node without pruning it. `readyWhen` does not hold dependents in a standalone Graph; an Unresolved node leaves the existing object as it is; `includeWhen: false` prunes it; a ref to a missing object holds the whole Graph | A Graph-level "hold" on a node that keeps its object and blocks its dependents, or `GateReadiness` for standalone Graphs |
 
 ---
 
