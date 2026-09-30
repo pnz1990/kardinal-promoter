@@ -58,6 +58,7 @@ describe('kardinalStateToHealth', () => {
       ['Fail', 'Error'],
       ['Pending', 'Pending'],
       ['Waiting', 'Pending'], // E2E-R19: not ready, not holding the bundle
+      ['Superseded', 'Unknown'], // bundle superseded; not evaluated again
       ['SomeUnknown', 'Unknown'],
     ])('maps %s → %s', (state, expected) => {
       expect(kardinalStateToHealth(state, 'PolicyGate')).toBe(expected)
@@ -191,6 +192,15 @@ describe('HealthChip component', () => {
     const badge = getByText('PAUSED')
     expect(badge).toBeInTheDocument()
     expect(badge).toHaveClass('health-chip--paused')
+  })
+
+  it('PolicyGate Waiting is read as what it means, not "Waiting — Pending"', () => {
+    const { getByLabelText, queryByLabelText } = render(<HealthChip state="Waiting" nodeType="PolicyGate" />)
+    const chip = getByLabelText('Waiting — not ready, not holding the bundle')
+    expect(chip).toHaveClass('health-chip--pending')
+    // Also as text, since not every screen reader reads aria-label on a span.
+    expect(chip.querySelector('.sr-only')).toHaveTextContent('not ready, not holding the bundle')
+    expect(queryByLabelText('Waiting — Pending')).toBeNull()
   })
 
   it('PolicyGate Blocked renders as Error chip', () => {

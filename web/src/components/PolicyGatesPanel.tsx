@@ -5,7 +5,7 @@
 // the bundle on screen, each with its state and CEL expression (#340). App
 // passes only that bundle's gate instances, never the templates.
 import { useState, useEffect } from 'react'
-import type { PolicyGate } from '../types'
+import type { GateState, PolicyGate } from '../types'
 import { HealthChip, healthChipColors, type HealthState } from './HealthChip'
 
 interface Props {
@@ -28,29 +28,38 @@ function formatAge(iso: string | undefined): string {
 }
 
 /**
- * The state shown for a gate: Pass when ready, Block when it holds the bundle
- * back (holding, decided by the UI API with the rule the sidebar's Blocked
- * count uses), else Waiting: not ready, but not what the bundle waits on (E2E-R19).
+ * The state shown for a gate, decided by the UI API (gateUIState) so it
+ * matches the DAG node. Only Block holds the bundle back, the rule the
+ * sidebar's Blocked count uses (E2E-R19).
  */
-function gateState(gate: PolicyGate): 'Pass' | 'Block' | 'Waiting' {
-  if (gate.ready) return 'Pass'
-  return gate.holding ? 'Block' : 'Waiting'
+function gateState(gate: PolicyGate): GateState {
+  return gate.state
 }
 
-/** Collapsed summary chip: N blocked, else N waiting, else N passing. */
+const count = (gates: PolicyGate[], ...states: GateState[]) =>
+  gates.filter(g => states.includes(gateState(g))).length
+
+/**
+ * Collapsed summary chip: N blocked, else N waiting (not ready, not holding
+ * the bundle, or not evaluated yet), else N superseded, else N passing.
+ */
 function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
-  const blocked = gates.filter(g => gateState(g) === 'Block').length
-  const waiting = gates.filter(g => gateState(g) === 'Waiting').length
+  const blocked = count(gates, 'Block')
+  const waiting = count(gates, 'Waiting', 'Pending')
+  const superseded = count(gates, 'Superseded')
   const total = gates.length
   if (total === 0) return null
-  const [health, label, title]: [HealthState, string, string | undefined] = blocked > 0
+  // meaning: read by screen readers and shown on hover.
+  const [health, label, meaning]: [HealthState, string, string | undefined] = blocked > 0
     ? ['Error', `${blocked} blocked`, undefined]
     : waiting > 0
-    ? ['Pending', `${waiting} waiting`, 'Not ready, but not holding the bundle']
+    ? ['Pending', `${waiting} waiting`, 'not ready, not holding the bundle']
+    : superseded > 0
+    ? ['Unknown', `${superseded} superseded`, 'bundle superseded, not evaluated again']
     : ['Ready', `${total} passing`, undefined]
   const { bg, text, border } = healthChipColors(health)
   return (
-    <span title={title} style={{
+    <span title={meaning} style={{
       fontSize: '0.65rem',
       background: bg,
       color: text,
@@ -60,12 +69,13 @@ function GateSummaryChip({ gates }: { gates: PolicyGate[] }) {
       marginLeft: '0.5rem',
     }}>
       {label}
+      {meaning && <span className="sr-only">, {meaning}</span>}
     </span>
   )
 }
 
 export function PolicyGatesPanel({ gates, loading }: Props) {
-  const blockedCount = gates.filter(g => gateState(g) === 'Block').length
+  const blockedCount = count(gates, 'Block')
   // #524: auto-expand when any gate holds the bundle — the blocked state is the
   // most important information on screen and should not be hidden behind a
   // click. A waiting gate is not what the bundle waits on, so it does not.
@@ -172,7 +182,7 @@ export function PolicyGatesPanel({ gates, loading }: Props) {
               {!gate.ready && gate.reason && (
                 <div style={{
                   fontSize: '0.7rem',
-                  color: gate.holding ? 'var(--color-error)' : 'var(--color-text-muted)',
+                  color: gateState(gate) === 'Block' ? 'var(--color-error)' : 'var(--color-text-muted)',
                 }}>
                   {gate.reason}
                 </div>

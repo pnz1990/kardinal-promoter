@@ -124,11 +124,12 @@ const STEPS = {
 
 // Gate instances belong to one bundle (ui_api.go uiGateResponse: pipeline, bundle,
 // environment). The template is what the user wrote; the UI must not count it.
-// holding marks the instance that holds its bundle back (E2E-R19).
+// state and holding are what ui_api.go's gateUIState and graph.GateHolds give
+// them; only a Block (holding) gate counts as blocked (E2E-R19).
 const GATES = [
-  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, holding: true, reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
-  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
-  { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true },
+  { name: 'no-weekend-deploys-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: '!schedule.isWeekend', ready: false, holding: true, state: 'Block', reason: 'Today is a weekend', lastEvaluatedAt: new Date(Date.now() - 30_000).toISOString() },
+  { name: 'business-hours-kardinal-test-app-abc123-prod', namespace: 'default', pipeline: 'kardinal-test-app', bundle: 'kardinal-test-app-abc123', environment: 'prod', expression: 'schedule.hour >= 9 && schedule.hour < 17', ready: true, state: 'Pass', lastEvaluatedAt: new Date(Date.now() - 10_000).toISOString() },
+  { name: 'no-weekend-deploys', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

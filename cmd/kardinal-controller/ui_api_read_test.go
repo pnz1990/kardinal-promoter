@@ -746,9 +746,88 @@ func TestUIAPI_GateHolding_MatchesBlockerCount(t *testing.T) {
 			for _, g := range gates {
 				if g["holding"] == true {
 					holdingGates++
+					assert.Equal(t, "Block", g["state"], g["name"])
+				} else {
+					assert.Equal(t, "Waiting", g["state"], g["name"])
 				}
 			}
 			assert.Equal(t, tt.want, holdingGates, "gates with holding=true")
+		})
+	}
+}
+
+// The graph node and the gate list give a gate instance the same state
+// (gateUIState). A holding gate is Block even before its first evaluation, so
+// the DAG agrees with the banner; a Superseded bundle's gates are Superseded,
+// which is final, while a Failed bundle's gates wait because it can retry.
+func TestUIAPI_GateState(t *testing.T) {
+	evaluated := metav1.NewTime(time.Now().Add(-time.Minute))
+	pipeline, _ := gateHoldCases()
+	bundle := func(phase string) *v1alpha1.Bundle {
+		return &v1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: "app-b2", Namespace: "default"},
+			Spec:       v1alpha1.BundleSpec{Pipeline: "app"},
+			Status:     v1alpha1.BundleStatus{Phase: phase},
+		}
+	}
+	gate := func(ready, wasEvaluated bool) *v1alpha1.PolicyGate {
+		g := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", ready)
+		if wasEvaluated {
+			g.Status.LastEvaluatedAt = &evaluated
+		}
+		return g
+	}
+	verifiedUpstream := []client.Object{
+		uiStep("default", "s-test", "app-b2", "test", "Verified"),
+		uiStep("default", "s-uat", "app-b2", "uat", "Verified"),
+	}
+	inTest := []client.Object{uiStep("default", "s-test", "app-b2", "test", "HealthChecking")}
+	tests := []struct {
+		name        string
+		bundlePhase string
+		steps       []client.Object
+		gate        *v1alpha1.PolicyGate
+		wantState   string
+		wantHolding bool
+	}{
+		{"ready", "Promoting", verifiedUpstream, gate(true, true), "Pass", false},
+		{"holding, evaluated", "Promoting", verifiedUpstream, gate(false, true), "Block", true},
+		{"holding, not evaluated yet", "Promoting", verifiedUpstream, gate(false, false), "Block", true},
+		{"not reached, evaluated", "Promoting", inTest, gate(false, true), "Waiting", false},
+		{"not reached, not evaluated yet", "Promoting", inTest, gate(false, false), "Pending", false},
+		{"Failed bundle, evaluated", "Failed", verifiedUpstream, gate(false, true), "Waiting", false},
+		{"Superseded bundle, evaluated", "Superseded", verifiedUpstream, gate(false, true), "Superseded", false},
+		{"Superseded bundle, not evaluated yet", "Superseded", inTest, gate(false, false), "Superseded", false},
+		{"Superseded bundle, ready", "Superseded", verifiedUpstream, gate(true, true), "Pass", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := append([]client.Object{bundle(tt.bundlePhase), tt.gate}, tt.steps...)
+			c := gateHoldClient(pipeline, objs)
+
+			rec := uiReadGet(t, c, "/api/v1/ui/bundles/app-b2/graph")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var graph struct {
+				Nodes []map[string]any `json:"nodes"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &graph))
+			var node map[string]any
+			for _, n := range graph.Nodes {
+				if n["type"] == "PolicyGate" {
+					node = n
+				}
+			}
+			require.NotNil(t, node, "graph has the gate node")
+			assert.Equal(t, tt.wantState, node["state"], "graph node state")
+			assert.Equal(t, tt.wantHolding, node["holding"] == true, "graph node holding")
+
+			rec = uiReadGet(t, c, "/api/v1/ui/gates")
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			var gates []map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &gates))
+			require.Len(t, gates, 1)
+			assert.Equal(t, tt.wantState, gates[0]["state"], "gate list state")
+			assert.Equal(t, tt.wantHolding, gates[0]["holding"] == true, "gate list holding")
 		})
 	}
 }

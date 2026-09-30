@@ -48,9 +48,9 @@ The controller exposes a REST API at `/api/v1/ui/` that proxies CRD reads from t
 |---|---|---|
 | `GET /api/v1/ui/pipelines` | All Pipelines with the active Bundle and blocker/failed-step counts | Pipeline + Bundle + PolicyGate + PromotionStep |
 | `GET /api/v1/ui/pipelines/{name}/bundles` | Bundle history for a Pipeline | Bundle |
-| `GET /api/v1/ui/bundles/{name}/graph[?namespace=]` | Promotion DAG for one Bundle: one node per environment and per gate instance, edges from the Pipeline's dependencies (waves, `dependsOn`, else list order). Steps and gates come from the Bundle's namespace; `namespace` picks the Bundle when names repeat | Pipeline + Bundle + PromotionStep + PolicyGate |
+| `GET /api/v1/ui/bundles/{name}/graph[?namespace=]` | Promotion DAG for one Bundle: one node per environment and per gate instance, edges from the Pipeline's dependencies (waves, `dependsOn`, else list order). Gate nodes carry `state` and `holding` (as for `/gates`). Steps and gates come from the Bundle's namespace; `namespace` picks the Bundle when names repeat | Pipeline + Bundle + PromotionStep + PolicyGate |
 | `GET /api/v1/ui/bundles/{name}/steps[?namespace=]` | PromotionSteps of a Bundle, from the Bundle's namespace; `namespace` picks the Bundle when names repeat | Bundle + PromotionStep |
-| `GET /api/v1/ui/gates` | PolicyGates | PolicyGate |
+| `GET /api/v1/ui/gates` | PolicyGates, each with `state` (`Pass`, `Block`, `Superseded`, `Pending` or `Waiting`) and `holding` (the gate holds its Bundle back, `graph.GateHolds`, the rule behind the blocker count). Pipelines, Bundles and PromotionSteps are read only when a gate instance is not ready | PolicyGate, + Pipeline + Bundle + PromotionStep when a gate instance is not ready |
 | `GET /api/v1/ui/steps/{namespace}/{name}/events` | Events of that PromotionStep only; `404` when the step does not exist | PromotionStep + Event |
 | `POST /api/v1/ui/bundles`, `/promote`, `/rollback` | Create a Bundle | Bundle |
 | `POST /api/v1/ui/pause`, `/resume` | Pause or resume a Pipeline | Pipeline |

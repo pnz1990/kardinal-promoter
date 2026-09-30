@@ -42,6 +42,7 @@ export function kardinalStateToHealth(state: string, nodeType?: string): HealthS
       case 'Fail':   return 'Error'
       case 'Pending':
       case 'Waiting': return 'Pending' // not ready, not holding the bundle
+      case 'Superseded': return 'Unknown' // bundle superseded; not evaluated again
       default:       return 'Unknown'
     }
   }
@@ -106,6 +107,15 @@ export function healthChipColors(state: HealthState): { bg: string; text: string
   }
 }
 
+/**
+ * What a PolicyGate state means, for states whose health word would mislead a
+ * screen reader ("Waiting — Pending"). Read instead of the health word.
+ */
+const GATE_STATE_MEANING: Record<string, string> = {
+  Waiting: 'not ready, not holding the bundle',
+  Superseded: 'bundle superseded, not evaluated again',
+}
+
 interface HealthChipProps {
   /** Raw kardinal state string (e.g. 'Verified', 'WaitingForMerge', 'Pass', 'Block'). */
   state: string
@@ -127,15 +137,18 @@ export function HealthChip({ state, nodeType, label, size = 'sm' }: HealthChipPr
   const health = kardinalStateToHealth(state, nodeType)
   const stateClass = healthStateClass(health)
   const sizeClass = `health-chip--${size}`
+  const meaning = nodeType === 'PolicyGate' ? GATE_STATE_MEANING[state] : undefined
 
   return (
     <span
       className={`health-chip ${stateClass} ${sizeClass}`}
-      title={`${state} (${health})`}
-      aria-label={`${label ?? state} — ${health}`}
+      title={`${state} (${meaning ?? health})`}
+      aria-label={`${label ?? state} — ${meaning ?? health}`}
       data-health-state={health}
     >
       {label ?? state}
+      {/* aria-label on a span is not read by every screen reader. */}
+      {meaning && <span className="sr-only">, {meaning}</span>}
     </span>
   )
 }

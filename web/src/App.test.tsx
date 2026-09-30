@@ -236,9 +236,9 @@ describe('App header', () => {
 describe('App policy gates panel', () => {
   it('shows only the gates of the shown bundle and ignores templates', async () => {
     h.state.gates = [
-      { name: 'no-weekend', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true },
-      { name: 'no-weekend-b-new-prod', namespace: 'default', expression: '!schedule.isWeekend', ready: true, pipeline: 'app', bundle: 'b-new', environment: 'prod' },
-      { name: 'other-gate', namespace: 'default', expression: 'true', ready: false, pipeline: 'other', bundle: 'o-1', environment: 'prod' },
+      { name: 'no-weekend', namespace: 'default', expression: '!schedule.isWeekend', ready: false, template: true, state: 'Pending' },
+      { name: 'no-weekend-b-new-prod', namespace: 'default', expression: '!schedule.isWeekend', ready: true, state: 'Pass', pipeline: 'app', bundle: 'b-new', environment: 'prod' },
+      { name: 'other-gate', namespace: 'default', expression: 'true', ready: false, state: 'Block', holding: true, pipeline: 'other', bundle: 'o-1', environment: 'prod' },
     ] as PolicyGate[]
     render(<App />)
     await flush()
@@ -271,7 +271,7 @@ describe('App blocked banner counts only holding gates (E2E-R19)', () => {
     h.state.gates = [{
       name: 'soak-b-new-prod', namespace: 'default', expression: 'upstream.test.soakMinutes >= 30',
       ready: false, reason: 'soak 0m < 30m', pipeline: 'app', bundle: 'b-new', environment: 'prod',
-      ...(holding ? { holding: true } : {}),
+      state: holding ? 'Block' : 'Waiting', ...(holding ? { holding: true } : {}),
     }] as PolicyGate[]
   }
 
