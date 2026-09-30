@@ -207,9 +207,9 @@ Teams have no access to `platform-policies` namespace by default.
 A common requirement is promoting a feature branch to a temporary environment for
 integration testing before merging to main.
 
-### Pattern: Short-lived Bundle with intent.target
+### Pattern: Short-lived Bundle with intent.targetEnvironment
 
-The simplest approach is to create a Bundle with `intent.target: staging` from a
+The simplest approach is to create a Bundle with `intent.targetEnvironment: staging` from a
 feature branch CI workflow. The Bundle promotes only up to staging, not to prod.
 
 ```yaml
@@ -377,7 +377,7 @@ namespace.
    namespace per Pipeline. `kardinal-promoter` scopes Bundles by `kardinal.io/pipeline`
    label, not by namespace.
 
-2. **Set historyLimit**: the default `historyLimit: 20` retains the last 20 Bundles.
+2. **Set historyLimit**: the default `historyLimit: 50` retains the last 50 finished Bundles.
    For high-frequency teams, reduce to `5` to limit CRD count.
 
 3. **Monitor CRD count**: the controller exposes `kardinal_bundles_total{phase}`
@@ -403,8 +403,8 @@ health:
     namespace: prod
 ```
 
-The controller verifies that the Deployment's `Available` condition is `True` after
-pushing to Git. You are responsible for ensuring Git changes reach the cluster (e.g.,
+The controller verifies that the Deployment runs the Bundle images, has finished rolling
+out and is `Available` after pushing to Git. You are responsible for ensuring Git changes reach the cluster (e.g.,
 via CI, Flux Receiver webhooks, or ArgoCD App-of-Apps).
 
 ### With Flux
@@ -417,7 +417,8 @@ health:
     namespace: flux-system
 ```
 
-Auto-detected if Flux CRDs are installed. Waits for Kustomization `Ready=True`.
+Set `type: flux` explicitly (there is no auto-detection). Waits for Kustomization `Ready=True`
+with `lastAppliedRevision` at the promoted commit.
 
 ### Mixing GitOps tools across environments
 
@@ -463,7 +464,7 @@ always merge the production PR to confirm:
 
 ### Not setting `historyLimit`
 
-The default `historyLimit: 20` retains 20 Bundles per Pipeline. In active pipelines
+The default `historyLimit: 50` retains 50 finished Bundles per Pipeline. In active pipelines
 with frequent deployments, this creates many PromotionStep CRDs. If you deploy
 multiple times per day, set `historyLimit: 5`. The Git audit trail is permanent
 regardless of this setting.

@@ -30,16 +30,23 @@ package rollbackpolicy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 )
 
 const (
@@ -48,6 +55,10 @@ const (
 
 	// requeueInterval is how often to recheck when the PromotionStep is not found.
 	requeueInterval = 30 * time.Second
+
+	labelPipeline    = "kardinal.io/pipeline"
+	labelEnvironment = "kardinal.io/environment"
+	labelBundle      = "kardinal.io/bundle"
 )
 
 // Reconciler monitors a RollbackPolicy and triggers auto-rollback when the
@@ -82,29 +93,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	// Find the associated PromotionStep by pipeline+environment labels.
-	var stepList v1alpha1.PromotionStepList
-	if err := r.List(ctx, &stepList,
-		client.InNamespace(req.Namespace),
-		client.MatchingLabels{
-			"kardinal.io/pipeline":    rp.Spec.PipelineName,
-			"kardinal.io/environment": rp.Spec.Environment,
-		},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list promotionsteps: %w", err)
+	// Find the PromotionStep(s) of spec.bundleRef in this environment. Steps are
+	// per Bundle, so the bundle label is required: matching on pipeline and
+	// environment alone would read another Bundle's step (C04-gates-05).
+	failures, stepCount, err := r.bundleStepFailures(ctx, &rp)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	if len(stepList.Items) == 0 {
+	if stepCount == 0 {
 		log.Debug().
 			Str("pipeline", rp.Spec.PipelineName).
 			Str("environment", rp.Spec.Environment).
-			Msg("no PromotionStep found yet, requeueing")
+			Str("bundle", rp.Spec.BundleRef).
+			Msg("no PromotionStep found yet for the bundle, requeueing")
 		return ctrl.Result{RequeueAfter: requeueInterval}, nil
 	}
-
-	// Use the first matching PromotionStep (there should be at most one per env/pipeline).
-	step := &stepList.Items[0]
-	failures := step.Status.ConsecutiveHealthFailures
 
 	threshold := rp.Spec.FailureThreshold
 	if threshold <= 0 {
@@ -147,17 +150,67 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
 }
 
+// bundleStepFailures returns the highest status.consecutiveHealthFailures across
+// the PromotionSteps of spec.bundleRef in spec.environment, and how many such
+// steps exist. A multi-region environment has one step per region; any region
+// reaching the threshold triggers the rollback.
+func (r *Reconciler) bundleStepFailures(ctx context.Context, rp *v1alpha1.RollbackPolicy) (int, int, error) {
+	var stepList v1alpha1.PromotionStepList
+	if err := r.List(ctx, &stepList,
+		client.InNamespace(rp.Namespace),
+		client.MatchingLabels{
+			labelPipeline:    rp.Spec.PipelineName,
+			labelEnvironment: rp.Spec.Environment,
+		},
+	); err != nil {
+		return 0, 0, fmt.Errorf("list promotionsteps for bundle %s: %w", rp.Spec.BundleRef, err)
+	}
+	maxFailures, count := 0, 0
+	for i := range stepList.Items {
+		step := &stepList.Items[i]
+		if stepBundle(step) != rp.Spec.BundleRef {
+			continue
+		}
+		count++
+		if step.Status.ConsecutiveHealthFailures > maxFailures {
+			maxFailures = step.Status.ConsecutiveHealthFailures
+		}
+	}
+	return maxFailures, count, nil
+}
+
+// stepBundle returns the Bundle a PromotionStep promotes: spec.bundleName, or
+// the kardinal.io/bundle label when the spec field is empty. The spec field is
+// authoritative; steps created outside the Graph may not carry the label.
+func stepBundle(step *v1alpha1.PromotionStep) string {
+	if step.Spec.BundleName != "" {
+		return step.Spec.BundleName
+	}
+	return step.Labels[labelBundle]
+}
+
 // ensureRollbackBundle creates a rollback Bundle if one doesn't already exist.
 // Returns the name of the rollback Bundle (new or existing), or "" if not needed.
+//
+// The rollback is planned by lifecycle.PlanRollback, the planner shared with
+// `kardinal rollback`, the UI and onHealthFailure=rollback: it restores the
+// artifacts of the most recent Bundle, other than spec.bundleRef, that was
+// Verified in the environment, and never re-promotes the failing image. When
+// there is nothing safe to roll back to, or spec.bundleRef is itself a
+// rollback (a failing rollback does not start another), no Bundle is created
+// (C04-gates-06).
 func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logger,
 	rp *v1alpha1.RollbackPolicy) (string, error) {
-	// Check if a rollback Bundle already exists for this bundle.
+	// Reuse a rollback of this Bundle created before this planner existed:
+	// those have no kardinal.io/rollback-from annotation and recorded the
+	// failing Bundle in provenance.rollbackOf.
 	var existingBundles v1alpha1.BundleList
 	if err := r.List(ctx, &existingBundles, client.InNamespace(rp.Namespace)); err != nil {
 		return "", fmt.Errorf("list bundles: %w", err)
 	}
 	for _, b := range existingBundles.Items {
-		if b.Labels["kardinal.io/rollback"] == "true" &&
+		if b.Labels[lifecycle.LabelRollback] == "true" &&
+			b.Annotations[lifecycle.AnnotationRollbackFrom] == "" &&
 			b.Spec.Provenance != nil &&
 			b.Spec.Provenance.RollbackOf == rp.Spec.BundleRef {
 			log.Debug().
@@ -166,49 +219,50 @@ func (r *Reconciler) ensureRollbackBundle(ctx context.Context, log zerolog.Logge
 			return b.Name, nil
 		}
 	}
+	// Reuse a rollback of this Bundle in this environment from either
+	// automatic path (this one or onHealthFailure=rollback).
+	existing, err := lifecycle.FindRollback(ctx, r.Client, rp.Namespace,
+		rp.Spec.PipelineName, rp.Spec.Environment, rp.Spec.BundleRef)
+	if err != nil {
+		return "", fmt.Errorf("find rollback of bundle %s: %w", rp.Spec.BundleRef, err)
+	}
+	if existing != "" {
+		log.Debug().Str("existing_rollback", existing).Msg("rollback bundle already exists, reusing")
+		return existing, nil
+	}
 
-	// Load the original Bundle to copy its spec.
-	var originalBundle v1alpha1.Bundle
-	if err := r.Get(ctx, client.ObjectKey{Name: rp.Spec.BundleRef, Namespace: rp.Namespace},
-		&originalBundle); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Warn().Str("bundleRef", rp.Spec.BundleRef).Msg("original bundle not found, cannot create rollback")
+	rollbackName := lifecycle.AutoRollbackName(rp.Spec.BundleRef, "policy")
+	plan, err := lifecycle.PlanRollback(ctx, r.Client, lifecycle.RollbackRequest{
+		Namespace:   rp.Namespace,
+		Pipeline:    rp.Spec.PipelineName,
+		Environment: rp.Spec.Environment,
+		FromBundle:  rp.Spec.BundleRef,
+		Actor:       "kardinal-controller (auto-rollback via RollbackPolicy)",
+		Name:        rollbackName,
+		Reason:      "AutoRollback",
+		Now:         r.now(),
+		Automatic:   true,
+	})
+	if err != nil {
+		if errors.Is(err, lifecycle.ErrConflict) || errors.Is(err, lifecycle.ErrInvalid) ||
+			errors.Is(err, lifecycle.ErrNotFound) {
+			log.Warn().Err(err).
+				Str("bundleRef", rp.Spec.BundleRef).
+				Str("environment", rp.Spec.Environment).
+				Msg("auto-rollback: nothing safe to roll back to; no rollback bundle created, human intervention required")
 			return "", nil
 		}
-		return "", fmt.Errorf("get bundle %s: %w", rp.Spec.BundleRef, err)
+		return "", fmt.Errorf("plan rollback of bundle %s: %w", rp.Spec.BundleRef, err)
 	}
 
-	// Create the rollback Bundle.
-	now := r.now()
-	rollbackName := fmt.Sprintf("%s-rollback-%d", originalBundle.Spec.Pipeline, now.Unix()%100000)
-	rollbackBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rollbackName,
-			Namespace: rp.Namespace,
-			Labels: map[string]string{
-				"kardinal.io/pipeline": originalBundle.Spec.Pipeline,
-				"kardinal.io/rollback": "true",
-			},
-		},
-		Spec: v1alpha1.BundleSpec{
-			Type:     originalBundle.Spec.Type,
-			Pipeline: originalBundle.Spec.Pipeline,
-			Images:   originalBundle.Spec.Images,
-			Provenance: &v1alpha1.BundleProvenance{
-				RollbackOf: originalBundle.Name,
-				Timestamp:  metav1.NewTime(now),
-				Author:     "kardinal-controller (auto-rollback via RollbackPolicy)",
-			},
-		},
-	}
-
-	if err := r.Create(ctx, rollbackBundle); err != nil {
+	if err := r.Create(ctx, plan.Bundle); err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", fmt.Errorf("create rollback bundle: %w", err)
 	}
 
 	log.Info().
 		Str("rollback_bundle", rollbackName).
-		Str("original_bundle", originalBundle.Name).
+		Str("original_bundle", rp.Spec.BundleRef).
+		Str("rollback_to", plan.Target.Name).
 		Int("failures", rp.Status.ConsecutiveFailures).
 		Str("pipeline", rp.Spec.PipelineName).
 		Str("environment", rp.Spec.Environment).
@@ -226,8 +280,44 @@ func (r *Reconciler) now() time.Time {
 }
 
 // SetupWithManager registers the RollbackPolicyReconciler with controller-runtime.
+//
+// It watches PromotionStep so a threshold crossing is acted on when the step's
+// status changes, not only on the 30s requeue. Only spec or annotation changes
+// of the RollbackPolicy itself trigger a reconcile: its own status writes do not.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.RollbackPolicy{}).
+		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
+		Watches(&v1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(r.policiesForStep)).
 		Complete(r)
+}
+
+// policiesForStep maps a PromotionStep to the RollbackPolicies that monitor its
+// Bundle in its environment.
+func (r *Reconciler) policiesForStep(ctx context.Context, obj client.Object) []reconcile.Request {
+	step, ok := obj.(*v1alpha1.PromotionStep)
+	if !ok {
+		return nil
+	}
+	labels := step.GetLabels()
+	bundle := stepBundle(step)
+	if bundle == "" {
+		return nil
+	}
+	var list v1alpha1.RollbackPolicyList
+	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("promotionstep", obj.GetName()).
+			Msg("failed to list RollbackPolicies for PromotionStep event; relying on requeue")
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, rp := range list.Items {
+		if rp.Spec.BundleRef == bundle &&
+			rp.Spec.PipelineName == labels[labelPipeline] &&
+			rp.Spec.Environment == labels[labelEnvironment] {
+			reqs = append(reqs, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: rp.Name, Namespace: rp.Namespace},
+			})
+		}
+	}
+	return reqs
 }

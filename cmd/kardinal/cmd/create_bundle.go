@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,6 +30,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/translator"
 )
 
@@ -40,6 +42,9 @@ import (
 var imageRepoPattern = regexp.MustCompile(
 	`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?(?::[0-9]+)?/)?` +
 		`[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$`)
+
+// imageDigestPattern matches an OCI content digest (algorithm:encoded).
+var imageDigestPattern = regexp.MustCompile(`^[a-z0-9]+(?:[+._-][a-z0-9]+)*:[a-zA-Z0-9=_-]+$`)
 
 func newCreateCmd() *cobra.Command {
 	create := &cobra.Command{
@@ -89,19 +94,9 @@ Use --dry-run to preview the promotion graph without creating any resources.`,
 
 // createBundleFn is the testable implementation of create bundle.
 func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Client, ns, pipeline string, images []string, bundleType string) error {
-	var imageRefs []v1alpha1.ImageRef
-	for _, img := range images {
-		repo, tag := splitImageRef(img)
-		// Validate that the repository portion looks like a valid OCI image reference.
-		// This prevents silently-succeeding bundles with obviously wrong image strings
-		// (e.g. "not-valid-image@@@") that would later fail kustomize-set-image.
-		if repo != "" && !imageRepoPattern.MatchString(repo) {
-			return fmt.Errorf("invalid image repository %q: want [host[:port]/]path (e.g. ghcr.io/org/image)", repo)
-		}
-		imageRefs = append(imageRefs, v1alpha1.ImageRef{
-			Repository: repo,
-			Tag:        tag,
-		})
+	imageRefs, err := parseImageRefs(images)
+	if err != nil {
+		return err
 	}
 
 	bundle := &v1alpha1.Bundle{
@@ -115,6 +110,9 @@ func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 			Images:   imageRefs,
 		},
 	}
+	// Record sub-second creation order so supersession picks the newer of two
+	// Bundles created in the same second.
+	lifecycle.StampCreatedAt(bundle, time.Now())
 
 	if err := c.Create(context.Background(), bundle); err != nil {
 		return fmt.Errorf("create bundle for pipeline %s: %w", pipeline, err)
@@ -136,17 +134,9 @@ func createBundleFn(w interface{ Write([]byte) (int, error) }, c sigs_client.Cli
 // builds an in-memory Bundle, runs it through graph.Builder.Build, and prints
 // the resulting graph summary.
 func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName string, images []string, bundleType string) error {
-	// Validate images
-	var imageRefs []v1alpha1.ImageRef
-	for _, img := range images {
-		repo, tag := splitImageRef(img)
-		if repo != "" && !imageRepoPattern.MatchString(repo) {
-			return fmt.Errorf("invalid image repository %q: want [host[:port]/]path (e.g. ghcr.io/org/image)", repo)
-		}
-		imageRefs = append(imageRefs, v1alpha1.ImageRef{
-			Repository: repo,
-			Tag:        tag,
-		})
+	imageRefs, err := parseImageRefs(images)
+	if err != nil {
+		return err
 	}
 
 	// Fetch the Pipeline from the cluster (read-only — dry-run is cluster-aware but not cluster-mutating)
@@ -203,9 +193,15 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 		name, _ := labels["kardinal.io/gate-name"].(string)
 		gatesByEnv[env] = append(gatesByEnv[env], name)
 	}
-	for _, env := range pipe.Spec.Environments {
-		line := "  \u2022 " + env.Name
-		if g := gatesByEnv[env.Name]; len(g) > 0 {
+	// Promotion order is the dependsOn order the Graph follows, not the order
+	// the environments are declared in.
+	order, err := graph.PromotedEnvironments(&pipe, bundle)
+	if err != nil {
+		return fmt.Errorf("dry-run: environment order: %w", err)
+	}
+	for _, env := range order {
+		line := "  \u2022 " + env
+		if g := gatesByEnv[env]; len(g) > 0 {
 			sort.Strings(g)
 			line += " (gates: " + strings.Join(g, ", ") + ")"
 		}
@@ -216,29 +212,35 @@ func createBundleDryRun(w io.Writer, c sigs_client.Client, ns, pipelineName stri
 	return nil
 }
 
-// splitImageRef splits "repo:tag" or "repo@digest" into (repo, tag).
-func splitImageRef(img string) (string, string) {
-	// Handle digest first
-	for i, c := range img {
-		if c == '@' {
-			return img[:i], img[i+1:]
+// parseImageRefs turns --image values into ImageRefs. "repo@sha256:..." sets
+// Digest, not Tag, and "repo:tag@sha256:..." sets both.
+func parseImageRefs(images []string) ([]v1alpha1.ImageRef, error) {
+	var refs []v1alpha1.ImageRef
+	for _, img := range images {
+		repo, tag, digest := splitImageRef(img)
+		// Validate that the repository portion looks like a valid OCI image reference.
+		// This prevents silently-succeeding bundles with obviously wrong image strings
+		// (e.g. "not-valid-image@@@") that would later fail kustomize-set-image.
+		if repo != "" && !imageRepoPattern.MatchString(repo) {
+			return nil, fmt.Errorf("invalid image repository %q: want [host[:port]/]path (e.g. ghcr.io/org/image)", repo)
 		}
-	}
-	// Handle tag (last colon that doesn't have a slash after it = tag separator)
-	for i := len(img) - 1; i >= 0; i-- {
-		if img[i] == ':' && i > 0 {
-			rest := img[i+1:]
-			hasSlash := false
-			for _, ch := range rest {
-				if ch == '/' {
-					hasSlash = true
-					break
-				}
-			}
-			if !hasSlash {
-				return img[:i], rest
-			}
+		if digest != "" && !imageDigestPattern.MatchString(digest) {
+			return nil, fmt.Errorf("invalid image digest %q in %q: must look like sha256:<hex>", digest, img)
 		}
+		refs = append(refs, v1alpha1.ImageRef{Repository: repo, Tag: tag, Digest: digest})
 	}
-	return img, ""
+	return refs, nil
+}
+
+// splitImageRef splits "repo", "repo:tag", "repo@digest" or
+// "repo:tag@digest" into (repo, tag, digest). A colon before the last slash
+// is a registry port, not a tag separator.
+func splitImageRef(img string) (repo, tag, digest string) {
+	if i := strings.LastIndex(img, "@"); i >= 0 {
+		img, digest = img[:i], img[i+1:]
+	}
+	if i := strings.LastIndex(img, ":"); i > 0 && i > strings.LastIndex(img, "/") {
+		return img[:i], img[i+1:], digest
+	}
+	return img, "", digest
 }

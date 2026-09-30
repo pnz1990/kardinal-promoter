@@ -134,11 +134,16 @@ the node itself").
   `injectHealthNodes`). They feed Graph readiness, not the PromotionStep's own `readyWhen`.
 - The PromotionStep reconciler still runs the Go health adapter to move the step from
   HealthChecking to Verified (`pkg/health/adapter.go`).
-- **Not solved:** neither path checks the revision. The Argo CD check is
-  `Healthy && Synced && operation phase Succeeded` (`pkg/health/adapter.go:206-236`), so
-  right after a push it can report Verified for the previous revision. A revision-aware
-  check needs `app.status.sync.revision == step.status.outputs.commitSHA`, which is a
-  cross-node `readyWhen`.
+- **Solved in the reconciler (2026-09 audit, E2E-01):** the PromotionStep reconciler's
+  Go adapter now checks the revision. It records the pushed commit
+  (`status.outputs.commitSHA`) or the merge commit (`status.outputs.mergeCommitSHA`, or
+  the PRStatus `status.mergeCommitSHA`) and requires Argo CD's synced revision or Flux's
+  `lastAppliedRevision` to match it, and a Deployment to run the Bundle images
+  (`pkg/health/adapter.go`, `pkg/reconciler/promotionstep/reconciler.go` `expectedRevision`).
+- **Still not solved in the Graph:** the ref health nodes keep the self-only
+  `Healthy && Synced` `readyWhen`, so Graph readiness alone can see the previous revision.
+  Doing it in the Graph needs `app.status.sync.revision == step.status.outputs.commitSHA`,
+  which is a cross-node `readyWhen`.
 
 **Upstream contribution.** Allow `readyWhen` to reference nodes the node already depends
 on (its existing DAG edges), which keeps the ordering unambiguous. Alternatively, add
@@ -271,7 +276,7 @@ The detailed tracker is `docs/design/11-graph-purity-tech-debt.md`.
 | Logic | Where | Why not in the Graph | Possible kro primitive |
 |-------|-------|----------------------|------------------------|
 | Wall-clock time (`schedule.*`, soak) | `ScheduleClock` reconciler; `soakMinutes` in `pkg/reconciler/bundle/reconciler.go` `handleSyncEvidence` | CEL in kro has no `now()` and no time-based requeue | A `now` variable plus a Graph `resyncPeriod`, or a built-in clock node |
-| Soak time (`bundle.upstreamSoakMinutes`) | Bundle reconciler writes `status.environments[].soakMinutes` and requeues every minute while Promoting; PolicyGate reconciler takes the max | Same as above; also a cross-node read | Same as above |
+| Soak time (`bundle.upstreamSoakMinutes`) | Bundle reconciler writes `status.environments[].soakMinutes` and requeues every minute while Promoting; PolicyGate reconciler takes the minimum over the gated environment's direct upstreams | Same as above; also a cross-node read | Same as above |
 | PolicyGate CEL (`bundle.*`, `schedule.*`, `metrics.*`, `upstream.*`) | `pkg/reconciler/policygate` | Needs extension functions and data kro does not have (clock, metrics, upstream soak) | CEL extension hooks or custom function libraries in the Graph |
 | Git and SCM steps (clone, kustomize, push, open PR, merge detection) | `pkg/steps`, `pkg/scm`, PRStatus reconciler | Side effects on external systems; kro only applies Kubernetes objects | Out of scope for kro. The PromotionStep CR is the Graph-native boundary |
 | Health adapters (HealthChecking to Verified) | `pkg/health/adapter.go` via PromotionStep reconciler | G3 (cross-node `readyWhen`) and G4 (optional kinds) | G3 and G4 fixes |

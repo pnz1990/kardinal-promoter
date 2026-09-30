@@ -56,8 +56,9 @@ type PromotionStepSpec struct {
 	// Region identifies which geographic/cloud region this PromotionStep instance
 	// promotes into. Set by the kro Graph controller via forEach "${region}"
 	// substitution when the Pipeline environment has spec.regions with ≥2 entries.
-	// Empty for single-region environments. The reconciler uses this field when
-	// constructing region-scoped Git paths and PR labels (issue #612).
+	// Empty for single-region environments. Region fan-out is not implemented:
+	// the reconciler fails a step with a non-empty region instead of pushing the
+	// same change once per region (issue #612).
 	// +optional
 	Region string `json:"region,omitempty"`
 }
@@ -184,6 +185,18 @@ type PromotionStepStatus struct {
 	// health alarm during the current bake window (K-01).
 	// +optional
 	BakeResets int `json:"bakeResets,omitempty"`
+
+	// RetryCount is the number of consecutive step-engine errors retried in the
+	// current state. Reset when a step makes progress. When it reaches the retry
+	// limit the PromotionStep fails.
+	// +optional
+	RetryCount int `json:"retryCount,omitempty"`
+
+	// LastHealthCheckAt records when the health adapter was last called. Used to
+	// space health checks at the health-check interval regardless of how often
+	// the step is reconciled.
+	// +optional
+	LastHealthCheckAt *metav1.Time `json:"lastHealthCheckAt,omitempty"`
 
 	// Steps is the per-step execution history for this PromotionStep.
 	// Populated by the reconciler as each step in the sequence starts, completes, or fails.

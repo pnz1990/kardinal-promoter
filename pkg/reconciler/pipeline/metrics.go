@@ -28,14 +28,20 @@ package pipeline
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 )
 
-const metricsLookbackBundles = 30 // sample the last N Verified bundles
+// metricsLookbackBundles caps the lead-time and rate sample to the last N
+// bundles Verified in the final environment. RolloutsLast30Days is counted
+// over every bundle, not just the sample.
+const metricsLookbackBundles = 30
 
 // ComputeDeploymentMetrics computes aggregate promotion metrics for a pipeline
 // from the most recent Verified Bundles (up to metricsLookbackBundles).
@@ -43,7 +49,8 @@ const metricsLookbackBundles = 30 // sample the last N Verified bundles
 // Parameters:
 //   - pipeline: the Pipeline being reconciled
 //   - bundles: all Bundles in the pipeline namespace (will be filtered by pipeline name)
-//   - steps: all PromotionSteps for this pipeline (label-filtered by caller)
+//   - steps: the PromotionSteps of this pipeline (the caller lists them by the
+//     spec.pipelineName field index)
 //   - now: the current time (injected for testability; use time.Now() in production)
 //
 // Returns nil when there are no Verified bundles (metrics not yet meaningful).
@@ -91,24 +98,26 @@ func ComputeDeploymentMetrics(
 		return nil
 	}
 
-	// Sort newest-first by verified time, take the last metricsLookbackBundles.
+	// Sort newest-first by verified time.
 	sort.Slice(verified, func(i, j int) bool {
 		return verified[i].verifiedAt.After(verified[j].verifiedAt)
 	})
-	if len(verified) > metricsLookbackBundles {
-		verified = verified[:metricsLookbackBundles]
-	}
 
-	sampleSize := len(verified)
+	// --- Rollouts last 30 days --- counted over every bundle, before the
+	// sample is capped, so a team deploying more than once a day is not
+	// reported as exactly metricsLookbackBundles.
 	cutoff30d := now.Add(-30 * 24 * time.Hour)
-
-	// --- Rollouts last 30 days ---
 	rolloutsLast30 := 0
 	for _, vb := range verified {
 		if vb.verifiedAt.After(cutoff30d) {
 			rolloutsLast30++
 		}
 	}
+
+	if len(verified) > metricsLookbackBundles {
+		verified = verified[:metricsLookbackBundles]
+	}
+	sampleSize := len(verified)
 
 	// --- Lead time (commit → final env Verified) ---
 	leadMinutes := make([]int64, 0, sampleSize)
@@ -134,9 +143,8 @@ func ComputeDeploymentMetrics(
 	rollbackRateMillis := ratioMillis(rollbackCount, sampleSize)
 
 	// --- Operator intervention rate ---
-	// Uses Bundle.status.metrics.operatorInterventions when available; falls back to
-	// counting bundles with at least one PolicyGate override in their status.
-	// A dedicated field in BundleMetrics would improve precision in a future iteration.
+	// Counts bundles whose status.metrics.operatorInterventions is set. Nothing
+	// writes that field yet, so the rate is 0 until it is populated.
 	interventionCount := 0
 	for _, vb := range verified {
 		if vb.bundle.Status.Metrics != nil && vb.bundle.Status.Metrics.OperatorInterventions > 0 {
@@ -146,14 +154,11 @@ func ComputeDeploymentMetrics(
 	interventionRateMillis := ratioMillis(interventionCount, sampleSize)
 
 	// --- Stale prod days ---
-	// How many days since ANY verified promotion to final env?
-	// verified[0] is the most recent (sorted newest-first).
-	staleProdDays := -1 // -1 means never promoted
-	if len(verified) > 0 {
-		staleProdDays = int(now.Sub(verified[0].verifiedAt).Hours() / 24)
-		if staleProdDays < 0 {
-			staleProdDays = 0
-		}
+	// Days since the last promotion Verified in the final env. verified is
+	// non-empty here and sorted newest-first.
+	staleProdDays := int(now.Sub(verified[0].verifiedAt).Hours() / 24)
+	if staleProdDays < 0 {
+		staleProdDays = 0
 	}
 
 	computedAt := metav1.NewTime(now)
@@ -169,25 +174,34 @@ func ComputeDeploymentMetrics(
 	}
 }
 
-// finalEnvironment returns the name of the last environment in the pipeline spec.
-// This is the "prod" environment — the one whose Verified time drives lead time.
+// finalEnvironment returns the production environment whose Verified time
+// drives the metrics: a DAG sink (an environment nothing depends on). When the
+// pipeline fans out to several sinks, one named prod or production wins, else
+// the last sink in promotion order. An invalid ordering falls back to the last
+// list entry.
 func finalEnvironment(p *kardinalv1alpha1.Pipeline) string {
 	if len(p.Spec.Environments) == 0 {
 		return ""
 	}
-	return p.Spec.Environments[len(p.Spec.Environments)-1].Name
-}
-
-// extractVerifiedTime returns the time at which a PromotionStep reached Verified.
-// Uses the "Verified" condition's LastTransitionTime if present; falls back to
-// step creation time + a small buffer (avoids zero times in tests).
-func extractVerifiedTime(s *kardinalv1alpha1.PromotionStep) time.Time {
-	for _, c := range s.Status.Conditions {
-		if c.Type == "Verified" && !c.LastTransitionTime.IsZero() {
-			return c.LastTransitionTime.Time
+	sinks, err := graph.SinkEnvironments(p)
+	if err != nil || len(sinks) == 0 {
+		return p.Spec.Environments[len(p.Spec.Environments)-1].Name
+	}
+	for _, env := range sinks {
+		if n := strings.ToLower(env); n == "prod" || n == "production" {
+			return env
 		}
 	}
-	// Fallback: use creation time (will understate lead time but avoids zero).
+	return sinks[len(sinks)-1]
+}
+
+// extractVerifiedTime returns the time at which a PromotionStep reached
+// Verified: the Verified condition's transition time, else its creation time
+// (which understates lead time but is never zero).
+func extractVerifiedTime(s *kardinalv1alpha1.PromotionStep) time.Time {
+	if t, ok := lifecycle.VerifiedTime(s); ok {
+		return t
+	}
 	return s.CreationTimestamp.UTC()
 }
 

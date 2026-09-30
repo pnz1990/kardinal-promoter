@@ -25,7 +25,7 @@ metadata:
 spec:
   expression: <string>                  # CEL expression
   message: <string>                     # human-readable explanation shown when gate blocks
-  recheckInterval: <duration>           # how often to re-evaluate (default: "5m")
+  recheckInterval: <duration>           # how often to re-evaluate (default: "5m", minimum: "10s")
   when: <string>                        # "pre-deploy" or "post-deploy" (default: "post-deploy")
 ```
 
@@ -45,7 +45,7 @@ metadata:
   namespace: platform-policies
 spec:
   when: pre-deploy
-  expression: 'metrics.staging_error_rate.value < 0.01'
+  expression: 'double(metrics["staging-error-rate"].value) < 0.01'
   message: "Staging error rate is above 1% — do not start prod deployment"
   recheckInterval: 1m
 ```
@@ -112,44 +112,46 @@ Every matching PolicyGate from all three is added to the Graph. `spec.policyName
 
 ## CEL Context
 
-All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release.
+All PolicyGate expressions are evaluated against the following context. All attributes listed are available in the current release; a test evaluates every attribute and example on this page against the controller's real context. Referencing an attribute or map key that does not exist is an evaluation error, and the gate blocks (fail-closed). See the [CEL context reference](reference/cel-context.md) for the full list.
 
 ### Core attributes
 
 | Attribute | Type | Description | Example |
 |---|---|---|---|
+| `bundle.type` | string | Bundle type | `"image"` |
 | `bundle.version` | string | Image tag or semver | `"1.29.0"` |
-| `bundle.labels.*` | map[string]string | Bundle labels | `bundle.labels.hotfix == true` |
+| `bundle.labels` | map | Bundle `metadata.labels`; values are strings. Always a map (empty when the Bundle has no labels) | `has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"` |
 | `bundle.provenance.author` | string | Who triggered the CI build | `"dependabot[bot]"` |
 | `bundle.provenance.commitSHA` | string | Source commit | `"abc123"` |
 | `bundle.provenance.ciRunURL` | string | CI run link | `"https://..."` |
-| `bundle.intent.target` | string | Target environment | `"prod"` |
+| `bundle.intent.targetEnvironment` | string | `spec.intent.targetEnvironment` (empty when unset) | `"prod"` |
 | `schedule.isWeekend` | bool | Saturday or Sunday | `false` |
 | `schedule.hour` | int | Hour in UTC (0-23) | `14` |
 | `schedule.dayOfWeek` | string | Day name | `"Tuesday"` |
 | `environment.name` | string | Target environment name | `"prod"` |
-| `environment.approval` | string | Approval mode | `"pr-review"` |
 
 ### Metric and soak attributes
 
 | Attribute | Type | Description |
 |---|---|---|
-| `metrics.*` | float64 | MetricCheck results injected by name (requires a `MetricCheck` CRD targeting this environment) |
-| `bundle.upstreamSoakMinutes` | int | Minutes since upstream environment was verified |
-| `previousBundle.version` | string | Previously deployed version in this environment |
+| `metrics.<name>.value` | string | Last value of the `MetricCheck` named `<name>` in the gate's namespace, as a string (`""` after a query error). Convert with `double(...)` |
+| `metrics.<name>.result` | string | `"Pass"` or `"Fail"`: the MetricCheck's own threshold result |
+| `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
 
 ### Cross-stage history attributes (K-10)
 
 Available for all gates. The history is computed from Bundle CRD status across the last 10
 promotions for the pipeline — no external API calls. The lookup is scoped to the last 10
-Bundles by creation time.
+Bundles by creation time. `upstream` has an entry for every environment in this Bundle's
+status or in that history (not only the gated environment's upstreams); any other name is an
+evaluation error and the gate blocks.
 
 | Attribute | Type | Description |
 |---|---|---|
 | `upstream.<env>.recentSuccessCount` | int | Number of bundles with `Verified` status for `<env>` in the last 10 promotions |
 | `upstream.<env>.recentFailureCount` | int | Number of bundles with `Failed` status for `<env>` in the last 10 promotions |
 | `upstream.<env>.lastPromotedAt` | string | RFC3339 timestamp of the last successful promotion for `<env>` (empty string if never) |
-| `upstream.<env>.soakMinutes` | int | Minutes since the current bundle's health check for `<env>` (unchanged) |
+| `upstream.<env>.soakMinutes` | int | This Bundle's soak minutes in `<env>` (from `Bundle.status.environments[].soakMinutes`; 0 when the Bundle has no status for `<env>`) |
 
 ### PR review attributes (K-08)
 
@@ -179,7 +181,6 @@ expression: |
   upstream.staging.soakMinutes >= 60 &&
   upstream.staging.recentSuccessCount >= 3 &&
   !changewindow["holiday-freeze"]
-```
 
 # Block until the staging PR is approved
 expression: 'bundle.pr["staging"].isApproved'
@@ -192,22 +193,69 @@ expression: '!schedule.isWeekend && bundle.pr["staging"].isApproved'
 ```
 
 When no PRStatus exists for the named stage (e.g. the `open-pr` step has not run yet),
-`bundle.pr["staging"]` returns an empty map — `isApproved` evaluates to `false` (fail-closed).
+`bundle.pr` has no `"staging"` key, so `bundle.pr["staging"].isApproved` is an evaluation
+error and the gate blocks (fail-closed). To treat a missing PR as "not approved" without an
+error, write `"staging" in bundle.pr && bundle.pr["staging"].isApproved`.
 
 ### ChangeWindow attributes (K-04)
 
-The `changewindow` variable is a map populated from all `ChangeWindow` CRDs in the cluster.
-Active windows evaluate to `true`; inactive windows evaluate to `false`.
+A `ChangeWindow` is a cluster-scoped object that describes when promotions are blocked.
+It blocks nothing by itself: a PolicyGate blocks while a window it references is active.
+Reference windows from an org-level gate to freeze every pipeline with one object.
 
-Two equivalent syntaxes are available:
+```yaml
+# A one-off freeze: active from start (inclusive) to end (exclusive)
+apiVersion: kardinal.io/v1alpha1
+kind: ChangeWindow
+metadata:
+  name: q4-holiday-freeze        # cluster-scoped: no namespace
+spec:
+  type: blackout
+  start: "2026-12-20T00:00:00Z"
+  end: "2027-01-02T00:00:00Z"
+  reason: "Q4 holiday freeze"
+---
+# A recurring allowed window: active (blocking) outside Mon-Fri 09:00-17:00 in Los Angeles
+apiVersion: kardinal.io/v1alpha1
+kind: ChangeWindow
+metadata:
+  name: business-hours
+spec:
+  type: recurring
+  schedule:
+    timezone: America/Los_Angeles  # IANA name, default UTC
+    allowedDays: [Mon, Tue, Wed, Thu, Fri]  # empty = every day
+    allowedHours: "09:00-17:00"    # HH:MM-HH:MM, end exclusive; "24:00" allowed as end; empty = all day
+```
+
+For `recurring`, `schedule` lists when promotions are **allowed**; the window is active
+(blocking) at every other time. An overnight range such as `"22:00-02:00"` belongs to the
+day it starts on. A ChangeWindow with an invalid spec (end not after start, an unknown
+timezone, `timezone: Local`, an unknown day name) is treated as active, so gates that
+reference it block. Its `Valid` condition is `False` with reason `InvalidSpec` and a message
+that names the problem; `kubectl get changewindows` shows `VALID`, and `-o wide` adds the reason. The
+timezone database is compiled into the controller, so any IANA name works without tzdata in
+the image.
+
+The controller writes `status.active` and `status.reason` at every window boundary, and that
+write re-evaluates the gates that reference a window. Gates evaluate the window spec at their
+own evaluation time, so they never rely on a stale status.
+
+The `changewindow` variable maps each ChangeWindow name to whether it is active. Two
+equivalent syntaxes are available:
 
 | Syntax | Returns | Description |
 |---|---|---|
 | `changewindow["window-name"]` | bool | `true` when the window is currently active (blocking) |
 | `changewindow.isBlocked("window-name")` | bool | Same as above — method-call alias |
-| `changewindow.isAllowed("window-name")` | bool | `true` when the window is NOT active (passes during active window) |
+| `changewindow.isAllowed("window-name")` | bool | `true` when the window is NOT active |
 
-If the named window does not exist, `isBlocked` returns `false` and `isAllowed` returns `true` (fail-open for missing windows).
+Gates fail closed:
+
+- If the named window does not exist, every syntax is an evaluation error and the gate blocks
+  (`unknown ChangeWindow "..."`). A typo or a deleted window never allows a promotion.
+- If the controller cannot list ChangeWindows (for example missing RBAC), gates that
+  reference `changewindow` block with `context error: changewindow: list ChangeWindows: ...`.
 
 Examples:
 
@@ -218,8 +266,8 @@ expression: '!changewindow.isBlocked("q4-holiday-freeze")'
 # Equivalent legacy syntax
 expression: '!changewindow["q4-holiday-freeze"]'
 
-# Require no active freeze window
-expression: 'changewindow.isAllowed("q4-holiday-freeze") && schedule.hour >= 9 && schedule.hour < 17'
+# Only promote inside business hours, and never during the freeze
+expression: 'changewindow.isAllowed("business-hours") && !changewindow.isBlocked("q4-holiday-freeze")'
 ```
 
 ### Planned attributes (not yet available)
@@ -257,8 +305,8 @@ expression: "bundle.upstreamSoakMinutes >= 30"
 # Block automated dependency updates from reaching prod
 expression: 'bundle.provenance.author != "dependabot[bot]"'
 
-# Only allow bundles with a hotfix label
-expression: "bundle.labels.hotfix == true"
+# Only allow bundles with a hotfix label (label values are strings)
+expression: 'has(bundle.labels.hotfix) && bundle.labels.hotfix == "true"'
 
 # Block if the target is too many major versions ahead
 expression: 'bundle.version.startsWith("1.")'
@@ -267,11 +315,11 @@ expression: 'bundle.version.startsWith("1.")'
 ### Metric-based
 
 ```yaml
-# Require 99.5% success rate in the upstream environment
-expression: "metrics.successRate >= 0.995"
+# Require 99.5% success rate (MetricCheck "success-rate"; value is a string)
+expression: 'double(metrics["success-rate"].value) >= 0.995'
 
-# Block if latency is too high
-expression: "metrics.p99LatencyMs < 500"
+# Block while the "p99-latency" MetricCheck's own threshold fails
+expression: 'metrics["p99-latency"].result == "Pass"'
 ```
 
 ### Composite
@@ -332,13 +380,25 @@ PolicyGates are re-evaluated when any of the following occurs:
    objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide.
    This is the recommended pattern for time-based gates (`schedule.isWeekend`, `schedule.hour`, etc.).
 
-2. **`recheckInterval`** (fallback) — When no `ScheduleClock` is installed, the controller
-   re-evaluates gates at the configured `recheckInterval`. This is a polling fallback.
+2. **`recheckInterval`** — Each gate is also re-evaluated every `recheckInterval`, whether or not
+   a `ScheduleClock` is installed. Without a `ScheduleClock` this is the only periodic
+   re-evaluation. The minimum is `10s`: a smaller value is raised to `10s`.
+
+3. **MetricCheck result change** — When a `MetricCheck`'s result or value changes, the gates in
+   the same namespace whose expression reads `metrics` are re-evaluated at once.
+
+4. **ChangeWindow change** — When a `ChangeWindow` opens, closes or is edited, the gates whose
+   expression reads `changewindow` are re-evaluated at once.
+
+5. **Gate spec change** — Editing a gate's `spec` re-evaluates it. The controller's own status
+   writes do not.
 
 The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph and the
-dependent PromotionStep only read `status.ready`; they do not check how fresh it is. After a
-controller restart, a gate keeps its last `status.ready` until the controller re-evaluates it
-on the next tick or `recheckInterval`.
+dependent PromotionStep only read `status.ready`: they do not check how recent the evaluation
+is. While the controller is down, every gate keeps its last result, so a gate that was ready
+before the outage stays ready until the controller re-evaluates it. The controller re-evaluates every gate when it starts.
+`kardinal policy list`, `kardinal status` and the UI show when each gate was last evaluated, so a
+stale result is visible.
 
 ### ScheduleClock setup
 
@@ -366,7 +426,7 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 
 PolicyGates are injected into the Graph at Graph creation time (when the Bundle starts promoting). If a new org-level PolicyGate is added while a Bundle is mid-flight, it does not apply to that Bundle's existing Graph. It applies to all subsequent Bundles.
 
-To block an in-flight promotion, use `kardinal pause <pipeline>`, which injects a freeze gate that takes effect immediately.
+To stop promotions at once, use `kardinal pause <pipeline>`. No new step starts, and in-flight steps hold at the next safe point (steps waiting for a PR merge or running health checks finish). See [Pause and Resume](rollback.md#pause-and-resume).
 
 ## Inspecting PolicyGates
 
@@ -393,7 +453,7 @@ kardinal override my-app --stage prod --gate no-weekend-deploy \
   --reason "P0 hotfix — incident #4521" --expires-in 2h
 ```
 
-`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's Bundles have created for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates when a Bundle reaches the gate, so run the override while the Bundle waits on the gate. If no instance exists yet, the command fails and says so; it does not write to the template. The gate passes immediately until the override expires. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
+`--gate` takes the name of the PolicyGate you wrote, the template, as `kardinal explain` and `kardinal policy list` show it. The command records a `PolicyGateOverride` entry in `spec.overrides[]` of every instance of that gate that the pipeline's Bundles have created for the stage. With no `--stage`, it records the entry on the instances for every stage. The instances are the per-Bundle copies the Graph creates when a Bundle reaches the gate, so run the override while the Bundle waits on the gate. If no instance exists yet, the command fails and says so; it does not write to the template. The gate passes immediately until the override expires, and is re-evaluated about a second after the expiry. **Expired overrides are never deleted** — they remain as an immutable audit trail visible in:
 - `kubectl get policygate <name> -o yaml`
 - PR evidence body (OVERRIDDEN badge in policy compliance table)
 - `kardinal explain` output

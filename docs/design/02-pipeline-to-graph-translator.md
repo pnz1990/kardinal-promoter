@@ -211,7 +211,7 @@ If the Pipeline CRD is updated while a Bundle is mid-flight:
 | PolicyGate applies-to matches no environment in the Pipeline | Gate is ignored (not injected). No error. |
 | Two PolicyGates with the same name in different namespaces | Both are injected. Node IDs include the namespace to prevent collisions. |
 | dependsOn references a skipped environment | Error: Bundle set to Failed with reason "dependsOn references skipped environment." |
-| Circular dependsOn | Error: Bundle set to Failed with reason "Circular dependency detected." |
+| Circular dependsOn or waves listed out of order | Error: Bundle set to Failed with the `InvalidSpec` condition, reason `CircularDependency`. The message is the graph error, which names each edge of the cycle (dependsOn, wave or list order) and the fix. |
 
 ## Unit Tests
 

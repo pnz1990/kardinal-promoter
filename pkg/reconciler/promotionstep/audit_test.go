@@ -16,14 +16,20 @@
 package promotionstep
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -89,6 +95,45 @@ func TestWriteAuditEvent_Idempotent(t *testing.T) {
 	require.NoError(t, c.List(ctx, &aeList))
 	assert.Len(t, aeList.Items, 1, "idempotent: second write must not create a duplicate")
 	assert.Equal(t, "first", aeList.Items[0].Spec.Message, "first message must be preserved")
+}
+
+// TestWriteAuditEvent_LogsErrors proves C03-promotionstep-29: a failed
+// AuditEvent write (RBAC, quota) is logged through the context logger instead
+// of being dropped, and an AlreadyExists from a re-run reconcile is not.
+func TestWriteAuditEvent_LogsErrors(t *testing.T) {
+	gr := schema.GroupResource{Group: "kardinal.io", Resource: "auditevents"}
+	tests := []struct {
+		name    string
+		err     error
+		wantLog []string
+	}{
+		{name: "forbidden is logged", err: apierrors.NewForbidden(gr, "x", nil),
+			wantLog: []string{"failed to write AuditEvent", "forbidden", "PromotionFailed"}},
+		{name: "already exists is not logged", err: apierrors.NewAlreadyExists(gr, "x")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1alpha1.AddToScheme(scheme))
+			c := fakeclient.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error { return tt.err },
+			}).Build()
+			ps := &v1alpha1.PromotionStep{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "default",
+				Labels: map[string]string{"kardinal.io/pipeline": "p", "kardinal.io/bundle": "b", "kardinal.io/environment": "prod"}}}
+			var buf bytes.Buffer
+			logger := zerolog.New(&buf)
+			ctx := logger.WithContext(context.Background())
+
+			writeAuditEvent(ctx, c, ps, AuditActionPromotionFailed, AuditOutcomeFailure, "m")
+
+			if len(tt.wantLog) == 0 {
+				assert.Empty(t, buf.String())
+			}
+			for _, s := range tt.wantLog {
+				assert.Contains(t, buf.String(), s)
+			}
+		})
+	}
 }
 
 func TestWriteAuditEvent_NilClient(t *testing.T) {

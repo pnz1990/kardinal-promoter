@@ -466,7 +466,7 @@ jobs:
       # The cluster is already up but not used by these steps.
       - name: Setup Node.js for Playwright UI tests
         if: env.SCENARIO == 'all'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20'
           cache: 'npm'

@@ -1,6 +1,8 @@
 # subscription-image.yaml — OCI image subscription example.
-# Watches ghcr.io/pnz1990/kardinal-test-app for new tags matching "^sha-".
-# Creates a Bundle when a new tag is detected.
+# Watches the moving "main" tag of ghcr.io/pnz1990/kardinal-test-app.
+# The first poll records the current digest; each later push of "main" creates a
+# Bundle pinned to the new digest. sha-<commit> tags are not ordered, so a
+# "^sha-" filter only works while at most 50 tags match (see docs/subscription.md).
 #
 # Usage:
 #   kubectl apply -f subscription-image.yaml
@@ -15,5 +17,5 @@ spec:
   pipeline: kardinal-test-app
   image:
     registry: ghcr.io/pnz1990/kardinal-test-app
-    tagFilter: "^sha-"
+    tagFilter: "^main$"
     interval: 5m

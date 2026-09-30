@@ -104,18 +104,8 @@ func TestHealthCheckingWithRealAdapter_Healthy(t *testing.T) {
 		},
 		Status: v1alpha1.PromotionStepStatus{State: "HealthChecking"},
 	}
-	// A Deployment named "nginx-demo" in namespace "test" with Available=True.
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
-		Status: appsv1.DeploymentStatus{
-			Conditions: []appsv1.DeploymentCondition{
-				{
-					Type:   appsv1.DeploymentAvailable,
-					Status: corev1.ConditionTrue,
-				},
-			},
-		},
-	}
+	// A Deployment named "nginx-demo" in namespace "test", fully rolled out.
+	deploy := healthyDeployment("nginx-demo", "test")
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, ps, deploy).
@@ -262,15 +252,8 @@ func TestAutoRollback_TriggersAfterThreshold(t *testing.T) {
 			ConsecutiveHealthFailures: threshold - 1, // one more → increment to threshold
 		},
 	}
-	// Deployment still not healthy.
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "test"},
-		Status: appsv1.DeploymentStatus{
-			Conditions: []appsv1.DeploymentCondition{
-				{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse},
-			},
-		},
-	}
+	// Deployment rolled out the Bundle image but is not available.
+	deploy := withImage(degradedDeployment("nginx-demo", "test"), "ghcr.io/nginx/nginx:1.29.0")
 
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(pipeline, bundle, ps, deploy).

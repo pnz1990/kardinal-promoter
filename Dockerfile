@@ -8,7 +8,7 @@
 
 # ── Stage 1: UI builder ───────────────────────────────────────────────────────
 # The UI bundle is the same on every platform.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS ui-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS ui-builder
 
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
@@ -17,7 +17,7 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go builder ───────────────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH

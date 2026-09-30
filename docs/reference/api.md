@@ -94,20 +94,20 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.environments[].prMergedAt` | string (date-time) |  | PRMergedAt is when the promotion PR was merged. |
 | `status.environments[].prURL` | string |  | PRURL is the URL of the pull request opened for this promotion. |
 | `status.environments[].soakMinutes` | integer (int64) |  | SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt. Written by the BundleReconciler as part of its own CRD status write. The PolicyGate reconciler reads this field from Bundle.status.environments to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix). |
-| `status.graphRef` | string |  | GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG. Populated by the BundleReconciler when the Graph is first created. Used to detect Graph deletion and trigger recreation. |
+| `status.graphRef` | string |  | GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG. Populated by the BundleReconciler when the Graph is first created. Used to detect Graph deletion and trigger recreation. The Graph of a Bundle that failed promoting is not recreated (GraphSynced=False, reason GraphDeleted), so the failed artifacts are not promoted again; a Pipeline change rebuilds it. |
 | `status.metrics` | object |  | Metrics holds deployment efficiency metrics for this Bundle (K-05). Populated by the BundleReconciler when all environments reach Verified. |
 | `status.metrics.autoRollbacks` | integer |  | AutoRollbacks is the number of environments that auto-rolled back during this Bundle's promotion. |
 | `status.metrics.bakeResets` | integer |  | BakeResets is the total number of bake timer resets across all environments. High bake reset count indicates flaky health or over-sensitive bake windows. |
 | `status.metrics.commitToProductionMinutes` | integer (int64) |  | CommitToProductionMinutes is the time from Bundle creation to the last environment reaching Verified. Indicates total promotion pipeline latency. |
 | `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides applied during this Bundle's promotion across all environments. |
 | `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
-| `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec at the time the Graph was last created for this Bundle. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch triggers Graph deletion so Translate recreates it with the updated spec. |
+| `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
 
 ## ChangeWindow
 
 `kardinal.io/v1alpha1`
 
-ChangeWindow defines a time window during which promotions are blocked (K-04). When active, all pipeline promotions in the cluster are blocked by PolicyGates using the changewindow.isBlocked() CEL function.
+ChangeWindow defines a cluster-scoped time window during which promotions are blocked (K-04). A ChangeWindow blocks nothing by itself: a PolicyGate blocks while a window it references is active, for example !changewindow.isBlocked("holiday-freeze") or changewindow.isAllowed("business-hours"). A gate that names a ChangeWindow that does not exist blocks.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -115,13 +115,20 @@ ChangeWindow defines a time window during which promotions are blocked (K-04). W
 | `spec.end` | string (date-time) |  | End is when a blackout window ends (required for type: blackout). |
 | `spec.reason` | string |  | Reason is a human-readable explanation for this window. |
 | `spec.schedule` | object |  | Schedule configures a recurring allowed-hours window (for type: recurring). |
-| `spec.schedule.allowedDays` | []string |  | AllowedDays lists the days of the week when promotions are allowed. Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun. |
-| `spec.schedule.allowedHours` | string |  | AllowedHours is a time range in "HH:MM-HH:MM" format (24h, local time). |
-| `spec.schedule.timezone` | string |  | Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). |
+| `spec.schedule.allowedDays` | []string |  | AllowedDays lists the days of the week when promotions are allowed. Valid values: Mon, Tue, Wed, Thu, Fri, Sat, Sun (full names such as Monday are accepted too). Empty means every day. |
+| `spec.schedule.allowedHours` | string |  | AllowedHours is a time range in "HH:MM-HH:MM" format (24h, in Timezone). The start is inclusive and the end exclusive; "24:00" is allowed as the end. An end before the start is an overnight range that belongs to the start day (for example "22:00-02:00" on Fri allows Friday 22:00 to Saturday 02:00). Empty means the whole day. |
+| `spec.schedule.timezone` | string |  | Timezone is the IANA timezone name (e.g. "America/Los_Angeles"). Default: UTC. "Local" is rejected: it would be the controller's own timezone. An unknown name makes the window invalid: status condition Valid is False with the error, and the window is active (blocking). |
 | `spec.start` | string (date-time) |  | Start is when a blackout window begins (required for type: blackout). |
-| `spec.type` | string | yes | Type is the ChangeWindow type. "blackout": no promotions allowed between Start and End. "recurring": promotions allowed only during AllowedDays/AllowedHours windows. One of: `blackout`, `recurring`. |
+| `spec.type` | string | yes | Type is the ChangeWindow type. "blackout": the window is active (blocking) from Start (inclusive) to End (exclusive). "recurring": Schedule describes when promotions are allowed; the window is active (blocking) at every other time. An invalid spec (for example End not after Start, an unknown timezone or a malformed allowedHours) makes the window active, so gates that reference it block. One of: `blackout`, `recurring`. |
 | `status` | object |  | ChangeWindowStatus defines the observed state of a ChangeWindow. |
-| `status.active` | boolean |  | Active is true when the ChangeWindow is currently in effect. Updated by the controller on each reconcile cycle. |
+| `status.active` | boolean |  | Active is true when the ChangeWindow is currently blocking promotions. Written by the ChangeWindow reconciler, which requeues at the next window boundary. PolicyGates evaluate the spec at their own evaluation time with the same logic, so they never depend on this field being fresh. |
+| `status.conditions` | []object |  | Conditions holds status conditions. Valid is True when the spec can be evaluated. It is False (reason InvalidSpec, the error in the message) when it cannot, for example for an unknown timezone; the window is then active, so every gate that references it blocks until the spec is fixed. |
+| `status.conditions[].lastTransitionTime` | string (date-time) | yes | lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed. If that is not known, then using the time when the API field changed is acceptable. |
+| `status.conditions[].message` | string | yes | message is a human readable message indicating details about the transition. This may be an empty string. |
+| `status.conditions[].observedGeneration` | integer (int64) |  | observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date with respect to the current state of the instance. |
+| `status.conditions[].reason` | string | yes | reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty. |
+| `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
+| `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.reason` | string |  | Reason explains the current active/inactive state. |
 
 ## MetricCheck
@@ -133,8 +140,8 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | MetricCheckSpec defines a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus at spec.interval, evaluates the threshold, and writes results to status. PolicyGate CEL expressions can reference these results via the metrics.* context variable. |
-| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty. |
-| `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus server. Example: http://prometheus.monitoring.svc:9090 |
+| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty. Values below "10s" are raised to "10s". |
+| `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Example: http://prometheus.monitoring.svc:9090 |
 | `spec.provider` | string | yes | Provider is the metrics backend. Currently only "prometheus" is supported. One of: `prometheus`. Default: `prometheus`. |
 | `spec.query` | string | yes | Query is the PromQL query string to evaluate. The query must return a scalar or a single-element vector. |
 | `spec.threshold` | object | yes | Threshold defines how to compare the metric value. |
@@ -143,7 +150,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | `status` | object |  | MetricCheckStatus records the most recent metric evaluation result. |
 | `status.lastEvaluatedAt` | string (date-time) |  | LastEvaluatedAt is the timestamp of the most recent evaluation. |
 | `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
-| `status.reason` | string |  | Reason is a human-readable explanation of the current result. |
+| `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
 
 ## NotificationHook
@@ -161,10 +168,13 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 | `spec.webhook.authorizationHeader` | string |  | AuthorizationHeader is the value of the Authorization header to include in the POST. Typically "Bearer &lt;token&gt;" or "Token &lt;secret&gt;". The value is stored in plain text in the spec and sent as is: anyone who can read this NotificationHook can read it. |
 | `spec.webhook.url` | string | yes | URL is the HTTPS URL to POST the notification payload to. |
 | `status` | object |  | NotificationHookStatus defines the observed state of a NotificationHook. |
+| `status.failedAttempts` | integer (int32) |  | FailedAttempts counts consecutive failed deliveries. The controller retries with exponential backoff and gives up on an event after 10 attempts. Reset to zero on a successful delivery. |
 | `status.failureMessage` | string |  | FailureMessage records the last webhook delivery failure, if any. Cleared on next successful delivery. |
 | `status.lastEvent` | string |  | LastEvent is the event type of the last successfully delivered notification. |
-| `status.lastEventKey` | string |  | LastEventKey is a deterministic string identifying the last delivered event (e.g. "Bundle.Verified/nginx-demo-abc123"). Used for idempotency. |
-| `status.lastSentAt` | string |  | LastSentAt is the RFC3339 timestamp of the last successful webhook delivery. Used for idempotency: the reconciler will not re-deliver the same event if lastEvent and lastSentAt match the current event key. |
+| `status.lastEventKey` | string |  | LastEventKey is a deterministic string identifying the last delivered event (e.g. "Bundle.Verified/nginx-demo-abc123"). Idempotency uses processedEventKeys; this field is informational. |
+| `status.lastSentAt` | string |  | LastSentAt is the RFC3339 timestamp of the last successful webhook delivery. |
+| `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the hook generation the controller last reconciled. Zero means the hook was never reconciled. On that first reconcile only the newest qualifying event that already exists is delivered; older ones are recorded as processed rather than backfilled. |
+| `status.processedEventKeys` | []string |  | ProcessedEventKeys lists the keys of the qualifying events that were delivered, or given up on after the retry limit. Each event is delivered once. The list is pruned to events that still qualify, so it stays bounded. |
 
 ## PRStatus
 
@@ -181,9 +191,11 @@ PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pu
 | `status` | object |  | PRStatusStatus holds the observed state of the pull request. Written exclusively by the PRStatusReconciler. |
 | `status.approvalCount` | integer |  | ApprovalCount is the number of distinct approved reviews on this PR. Written by PRStatusReconciler. CEL: bundle.pr["staging"].approvalCount &gt;= 2 |
 | `status.approved` | boolean |  | Approved is true when the pull request has at least one approved review and no outstanding change-request reviews. Written by PRStatusReconciler. CEL: bundle.pr["staging"].isApproved |
-| `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt records the timestamp of the most recent SCM API poll. |
+| `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt records when the status was last written from an SCM API poll. Polls that change nothing refresh it at most every 5 minutes, so it can lag the most recent poll by up to that much. |
+| `status.mergeCommitSHA` | string |  | MergeCommitSHA is the commit the PR was merged as (the merge, squash or rebase commit on the base branch). Written once the PR is merged, when the SCM provider reports it. Health adapters use it to confirm that the GitOps tool deployed this exact revision. |
 | `status.merged` | boolean |  | Merged is true when the pull request has been merged. The Graph Watch node uses this field: readyWhen: ${prStatus.status.merged == true} |
 | `status.open` | boolean |  | Open is true when the pull request is still open (not merged, not closed). Set to false when the PR is closed or merged. |
+| `status.pollError` | string |  | PollError is the SCM API error of the last poll when a retry cannot fix it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep waiting for this PR fails with it. Cleared by the next successful poll. Transient errors (429, 5xx, network) are only logged and retried. |
 
 ## Pipeline
 
@@ -196,7 +208,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec` | object |  | PipelineSpec defines the desired state of a Pipeline. |
 | `spec.environments` | []object | yes | Environments lists the promotion path. Sequential ordering (GB-1): when an environment does not specify dependsOn, it implicitly depends on the previous entry in this list. The first environment has no upstream dependency. This sequential default means a list of N environments without dependsOn fields produces a linear chain. Override with dependsOn to express parallel fan-out or explicit DAG structure. Environment names must be unique; at most 100 environments (a bound the API server needs to cost the CEL rules on each entry). |
 | `spec.environments[].approval` | string |  | Approval controls whether promotion into this environment requires a PR review. One of: `auto`, `pr-review`. Default: `auto`. |
-| `spec.environments[].autoRollback` | object |  | AutoRollback configures automatic rollback when health checks fail repeatedly. When not set, automatic rollback is disabled. |
+| `spec.environments[].autoRollback` | object |  | AutoRollback is reserved and rejected by the API server: consecutive-failure auto-rollback is not implemented. See OnHealthFailure. |
 | `spec.environments[].autoRollback.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures that trigger an automatic rollback Bundle creation. Default: 3. Default: `3`. |
 | `spec.environments[].bake` | object |  | Bake configures a contiguous-healthy soak window for this environment (K-01). When set, the health check must pass continuously for Bake.Minutes before the step transitions to Verified. A health failure resets the timer if policy is "reset-on-alarm" (default), or fails the step if "fail-on-alarm". |
 | `spec.environments[].bake.minutes` | integer | yes | Minutes is the required contiguous healthy duration in minutes. The timer resets on health failure when Policy is "reset-on-alarm". |
@@ -205,14 +217,27 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].delivery.delegate` | string |  | Delegate offloads in-cluster progressive delivery to an external controller. Supported values: none, argoRollouts, flagger. One of: `none`, `argoRollouts`, `flagger`. |
 | `spec.environments[].dependsOn` | []string |  | DependsOn lists names of other environments in this pipeline that must reach Verified state before this environment can start. |
 | `spec.environments[].health` | object |  | Health holds the health check configuration for this environment. |
-| `spec.environments[].health.cluster` | string |  | Cluster is the kubeconfig Secret name for remote cluster health checks. |
+| `spec.environments[].health.argoRollouts` | object |  | ArgoRollouts overrides the Rollout checked by health.type=argoRollouts (or delivery.delegate=argoRollouts). Defaults: name "&lt;pipeline&gt;", namespace "&lt;environment&gt;". |
+| `spec.environments[].health.argoRollouts.name` | string |  | Name is the object name. |
+| `spec.environments[].health.argoRollouts.namespace` | string |  | Namespace is the object namespace. |
+| `spec.environments[].health.argocd` | object |  | ArgoCD overrides the Argo CD Application checked by health.type=argocd. Defaults: name "&lt;pipeline&gt;-&lt;environment&gt;", namespace "argocd". |
+| `spec.environments[].health.argocd.name` | string |  | Name is the object name. |
+| `spec.environments[].health.argocd.namespace` | string |  | Namespace is the object namespace. |
+| `spec.environments[].health.cluster` | string |  | Cluster is reserved for remote-cluster health checks and is NOT implemented. A non-empty value fails the PromotionStep with "health.cluster is not supported" instead of silently checking the local cluster. To verify a workload in another cluster, use the argocd adapter against its Application in the Argo CD hub. |
+| `spec.environments[].health.flagger` | object |  | Flagger overrides the Canary checked by health.type=flagger (or delivery.delegate=flagger). Defaults: name "&lt;pipeline&gt;", namespace "&lt;environment&gt;". |
+| `spec.environments[].health.flagger.name` | string |  | Name is the object name. |
+| `spec.environments[].health.flagger.namespace` | string |  | Namespace is the object namespace. |
+| `spec.environments[].health.flux` | object |  | Flux overrides the Flux Kustomization checked by health.type=flux. Defaults: name "&lt;pipeline&gt;-&lt;environment&gt;", namespace "flux-system". |
+| `spec.environments[].health.flux.name` | string |  | Name is the object name. |
+| `spec.environments[].health.flux.namespace` | string |  | Namespace is the object namespace. |
 | `spec.environments[].health.labelSelector` | map[string]string |  | LabelSelector enables WatchKind mode for health.type=resource. When set, the health node watches ALL Deployments in the environment namespace that match the given labels (a kro Graph collection ref node). When unset, a single named Deployment is watched (a kro Graph ref node). Example: {"app": "my-service", "kardinal.io/pipeline": "nginx-demo"} Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger (those resource types are always single-named). |
 | `spec.environments[].health.resource` | object |  | Resource specifies the exact Kubernetes resource to watch for health.type=resource. When set, overrides the default behavior (which watches a Deployment named after the pipeline in the environment namespace). Use this when the health target is in a different namespace or has a different name than the pipeline. Only applies to health.type=resource. Ignored for argocd, flux, argoRollouts, flagger. |
-| `spec.environments[].health.resource.kind` | string |  | Kind is the Kubernetes resource kind (e.g. "Deployment", "StatefulSet"). Defaults to "Deployment" when unset. |
+| `spec.environments[].health.resource.condition` | string |  | Condition is the Deployment condition type that must be True. Defaults to "Available". |
+| `spec.environments[].health.resource.kind` | string |  | Kind is the Kubernetes resource kind. Only "Deployment" is supported; any other value fails the PromotionStep with a clear message. Defaults to "Deployment" when unset. |
 | `spec.environments[].health.resource.name` | string |  | Name is the resource name. Defaults to the pipeline name when unset. |
 | `spec.environments[].health.resource.namespace` | string |  | Namespace is the resource namespace. Defaults to the environment name when unset. |
 | `spec.environments[].health.timeout` | string |  | Timeout is the maximum time to wait for health checks to pass. Uses Go duration format (e.g. "30m", "1h"). Defaults to "10m". |
-| `spec.environments[].health.type` | string |  | Type selects the health check backend. Supported values: resource, argocd, flux, argoRollouts, flagger. One of: `resource`, `argocd`, `flux`, `argoRollouts`, `flagger`. |
+| `spec.environments[].health.type` | string |  | Type selects the health check backend. Supported values: resource, argocd, flux, argoRollouts, flagger. When empty the PromotionStep reconciler uses "resource" (a Deployment named after the Pipeline in the environment namespace, unless health.resource overrides it). delivery.delegate, when set, takes precedence. One of: `resource`, `argocd`, `flux`, `argoRollouts`, `flagger`. |
 | `spec.environments[].layout` | string |  | Layout configures how the promotion interacts with the Git repo layout. "directory" (default): env manifests are in a subdirectory of the main branch. "branch": rendered manifests are committed to a separate env-specific branch. In this mode the step sequence includes kustomize-build to render templates before committing to the target branch. One of: `directory`, `branch`. Default: `directory`. |
 | `spec.environments[].name` | string | yes | Name is the environment identifier (e.g. "test", "uat", "prod"). It must be a DNS label (lower-case letters, digits and '-', at most 63 characters): it names a Graph node, derived objects and, for the resource, argoRollouts and flagger health checks, a namespace. |
 | `spec.environments[].onHealthFailure` | string |  | OnHealthFailure controls what the reconciler does when health fails during bake or health checking (K-03). "rollback": create a rollback Bundle at the previous version; step → RollingBack. "abort": freeze the step; state → AbortedByAlarm; requires human intervention. "none" (default): step → Failed; downstream stops. One of: `rollback`, `abort`, `none`. Default: `none`. |
@@ -220,7 +245,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].promotionTemplate` | object |  | PromotionTemplate is reserved for a shared step sequence and is not implemented yet. A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate". See docs/custom-steps.md. |
 | `spec.environments[].promotionTemplate.name` | string | yes | Name is the PromotionTemplate resource name. |
 | `spec.environments[].promotionTemplate.namespace` | string |  | Namespace is the namespace of the PromotionTemplate. If empty, the Pipeline's own namespace is used. |
-| `spec.environments[].regions` | []string |  | Regions enables multi-region fan-out for this environment (issue #612). When two or more region names are listed, the translator emits a single forEach Graph node that stamps out one PromotionStep per region. Each stamped PromotionStep receives spec.region = the region name, which the reconciler uses when constructing Git paths and PR labels. All regions must be Verified before downstream environments proceed. When empty or only one region is listed, the environment uses the default single-node behaviour (no forEach). |
+| `spec.environments[].regions` | []string |  | Regions is reserved for multi-region fan-out (issue #612) and is NOT implemented. With two or more regions the translator stamps out one PromotionStep per region (spec.region), but every region would edit the same path and push the same branch, so the PromotionStep reconciler fails such steps with "environments[].regions fan-out is not implemented". Declare one environment per region instead (for example prod-us, prod-eu). When empty or only one region is listed, the field has no effect. |
 | `spec.environments[].shard` | string |  | Shard pins this environment to a specific kardinal-controller agent shard in distributed mode. Leave empty for single-controller deployments. |
 | `spec.environments[].stepTimeoutSeconds` | integer |  | StepTimeoutSeconds is the maximum number of seconds a single promotion step (git-clone, kustomize-set-image, open-pr, etc.) may run before the reconciler cancels it via context.WithTimeout and marks the PromotionStep as Failed. When not set or 0 (default), no per-step timeout is applied. Useful for restricting execution in restricted-egress environments where git-clone against a slow SCM host can block the reconciler indefinitely. |
 | `spec.environments[].steps` | []object |  | Steps is reserved for a custom step sequence and is not implemented yet: the controller always runs the default sequence (see DefaultSequenceForBundle). A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate", instead of silently running the default steps. See docs/custom-steps.md. |
@@ -228,7 +253,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].steps[].webhook` | object |  | Webhook configures the HTTP endpoint for custom (non-built-in) steps. Required when Uses does not match any registered built-in step. |
 | `spec.environments[].steps[].webhook.secretRef` | object |  | SecretRef references a Kubernetes Secret whose "Authorization" key is sent as the Authorization header. |
 | `spec.environments[].steps[].webhook.secretRef.name` | string | yes | Name is the Secret name. |
-| `spec.environments[].steps[].webhook.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. |
+| `spec.environments[].steps[].webhook.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
 | `spec.environments[].steps[].webhook.timeoutSeconds` | integer |  | TimeoutSeconds is the per-call timeout. Defaults to 300. Default: `300`. |
 | `spec.environments[].steps[].webhook.url` | string | yes | URL is the HTTP(S) endpoint to POST to. |
 | `spec.environments[].update` | object |  | Update holds the manifest update configuration for this environment. |
@@ -248,7 +273,7 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.git.provider` | string |  | Provider is the SCM provider. One of: `github`, `gitlab`. Default: `github`. |
 | `spec.git.secretRef` | object |  | SecretRef references a Kubernetes Secret containing the SCM token. |
 | `spec.git.secretRef.name` | string | yes | Name is the Secret name. |
-| `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. |
+| `spec.git.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
 | `spec.git.url` | string | yes | URL is the GitOps repository URL (HTTPS). |
 | `spec.historyLimit` | integer |  | HistoryLimit is the number of completed Bundle promotions to retain. When unset or zero, defaults to 50. Terminal Bundles (Verified, Failed, Superseded) beyond this limit are deleted oldest-first on each new Bundle creation. Default: `50`. |
 | `spec.maxConcurrentPromotions` | integer |  | MaxConcurrentPromotions caps the number of Bundles in Promoting phase for this pipeline at any given time. When 0 or unset (default), there is no cap and all Available Bundles are promoted concurrently. When set to a positive value, Bundles that exceed the cap are requeued until a promotion slot becomes available. This prevents promotion storms (e.g. a CI burst creating 50 Bundles simultaneously) from saturating git hosts, exhausting GitHub API rate limits, or creating merge conflicts in the GitOps repository. Example: maxConcurrentPromotions: 2 allows at most 2 active promotions at once. Additional Available Bundles wait in a 30-second polling loop. Default: `0`. |
@@ -293,7 +318,7 @@ PolicyGate is a CEL-powered policy check represented as a node in the promotion 
 | `spec.overrides[].expiresAt` | string (date-time) | yes | ExpiresAt is when this override stops being effective. After this time the gate evaluates CEL normally. |
 | `spec.overrides[].reason` | string | yes | Reason is the mandatory human-readable justification for the override. |
 | `spec.overrides[].stage` | string |  | Stage is the environment name this override applies to. An empty string applies to all environments. |
-| `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
+| `spec.recheckInterval` | string |  | RecheckInterval is how often to re-evaluate time-based gates. Uses Go duration format (e.g. "5m", "1h"). The minimum is 10s: a smaller value is raised to 10s, and "0" or an invalid value means the default. Default: `5m`. |
 | `spec.selector` | object |  | Selector is a label selector for org-level auto-injection: this gate is automatically applied to any Pipeline whose labels match the selector. |
 | `spec.selector.matchExpressions` | []object |  | matchExpressions is a list of label selector requirements. The requirements are ANDed. |
 | `spec.selector.matchExpressions[].key` | string | yes | key is the label key that the selector applies to. |
@@ -328,7 +353,7 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `spec.inputs` | map[string]string |  | Inputs carries step-specific configuration values derived from the Pipeline and Bundle at graph generation time. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this step belongs to. |
 | `spec.prStatusRef` | string |  | PRStatusRef is the name of the companion PRStatus CRD in the same namespace. Set by the Graph controller from the PRStatus Watch node's metadata.name CEL reference. The PromotionStep reconciler reads the PRStatus CRD instead of polling GitHub directly, eliminating the PS-4 / SCM-2 external API call on the reconcile hot path. |
-| `spec.region` | string |  | Region identifies which geographic/cloud region this PromotionStep instance promotes into. Set by the kro Graph controller via forEach "${region}" substitution when the Pipeline environment has spec.regions with ≥2 entries. Empty for single-region environments. The reconciler uses this field when constructing region-scoped Git paths and PR labels (issue #612). |
+| `spec.region` | string |  | Region identifies which geographic/cloud region this PromotionStep instance promotes into. Set by the kro Graph controller via forEach "${region}" substitution when the Pipeline environment has spec.regions with ≥2 entries. Empty for single-region environments. Region fan-out is not implemented: the reconciler fails a step with a non-empty region instead of pushing the same change once per region (issue #612). |
 | `spec.requiredGates` | []string |  | RequiredGates holds the names of PolicyGate instances that must be ready before this PromotionStep can be promoted. Set by the Graph controller via CEL. |
 | `spec.stepType` | string | yes | StepType identifies the built-in or custom step to execute. Examples: git-clone, kustomize-set-image, git-commit, open-pr, wait-for-merge, health-check. |
 | `spec.upstreamStates` | []string |  | UpstreamStates holds the resolved state of all upstream PromotionSteps. Each entry is a string like "Verified", set by the kro Graph controller via CEL expression substitution. Replaces the N-field upstreamVerified/upstreamVerified2 pattern (issue 625) -- a single list scales to any number of upstream environments. kro scans list items for CEL references, so each entry creates a DAG edge. |
@@ -346,9 +371,11 @@ PromotionStep is a controller-internal CRD representing one step in a promotion 
 | `status.consecutiveHealthFailures` | integer |  | ConsecutiveHealthFailures tracks the number of consecutive health-check failures for this step. Reset to 0 on a successful health check. Used by the auto-rollback policy in the pipeline environment spec. |
 | `status.currentStepIndex` | integer |  | CurrentStepIndex is the index into the step sequence that the reconciler is currently executing. Persisted to etcd for idempotent crash recovery (spec 003 FR-002). |
 | `status.healthCheckExpiry` | string (date-time) |  | HealthCheckExpiry is the deadline for the health check, computed as healthCheckStartedAt + timeout. Set once when the health check begins. A Graph CEL expression can observe this field to detect a stale health check. Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md). |
+| `status.lastHealthCheckAt` | string (date-time) |  | LastHealthCheckAt records when the health adapter was last called. Used to space health checks at the health-check interval regardless of how often the step is reconciled. |
 | `status.message` | string |  | Message provides human-readable detail about the current state. |
 | `status.outputs` | map[string]string |  | Outputs accumulates key/value results from completed steps in the sequence (e.g. prURL from the open-pr step). |
 | `status.prURL` | string |  | PRURL is the GitHub pull request URL opened for this promotion. Set when the step enters WaitingForMerge state. |
+| `status.retryCount` | integer |  | RetryCount is the number of consecutive step-engine errors retried in the current state. Reset when a step makes progress. When it reaches the retry limit the PromotionStep fails. |
 | `status.state` | string |  | State is the step execution state. The Graph controller uses readyWhen expressions of the form ${step.status.state == "Verified"} to advance the promotion DAG. One of: `Pending`, `Promoting`, `WaitingForMerge`, `HealthChecking`, `Verified`, `Failed`, `AbortedByAlarm`, `RollingBack`. |
 | `status.steps` | []object |  | Steps is the per-step execution history for this PromotionStep. Populated by the reconciler as each step in the sequence starts, completes, or fails. Provides fine-grained visibility into which sub-step is running without reading controller logs. Initialized when the step sequence starts (state → Promoting). |
 | `status.steps[].completedAt` | string (date-time) |  | CompletedAt is when the step finished (success or failure). |
@@ -375,7 +402,7 @@ PromotionTemplate is a reusable named step sequence that Pipeline environments c
 | `spec.steps[].webhook` | object |  | Webhook configures the HTTP endpoint for custom (non-built-in) steps. Required when Uses does not match any registered built-in step. |
 | `spec.steps[].webhook.secretRef` | object |  | SecretRef references a Kubernetes Secret whose "Authorization" key is sent as the Authorization header. |
 | `spec.steps[].webhook.secretRef.name` | string | yes | Name is the Secret name. |
-| `spec.steps[].webhook.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. |
+| `spec.steps[].webhook.secretRef.namespace` | string |  | Namespace is the Secret namespace. If empty, the Pipeline's namespace is used. For spec.git.secretRef it must be empty or equal to the Pipeline's namespace: the controller refuses to read a Secret from another namespace and fails the PromotionStep with a clear message, so a Pipeline author cannot borrow another team's credentials. |
 | `spec.steps[].webhook.timeoutSeconds` | integer |  | TimeoutSeconds is the per-call timeout. Defaults to 300. Default: `300`. |
 | `spec.steps[].webhook.url` | string | yes | URL is the HTTP(S) endpoint to POST to. |
 | `status` | object |  | PromotionTemplateStatus defines the observed state of a PromotionTemplate. |
@@ -395,8 +422,8 @@ RollbackPolicy monitors consecutive health-check failures on a PromotionStep and
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `spec` | object |  | RollbackPolicySpec defines the desired state of a RollbackPolicy. RollbackPolicy objects are created per environment that has autoRollback configured. They are typically created by the Pipeline/Graph controller when a Bundle is promoted to an environment with AutoRollback enabled. |
-| `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. When ConsecutiveHealthFailures on the associated PromotionStep reaches FailureThreshold, a rollback Bundle is created from this Bundle's spec. |
+| `spec` | object |  | RollbackPolicySpec defines the desired state of a RollbackPolicy. Nothing creates RollbackPolicy objects automatically: the controller only reconciles the ones that exist. Automatic rollback on health failure is configured with Pipeline spec.environments[].onHealthFailure: rollback. |
+| `spec.bundleRef` | string | yes | BundleRef is the name of the Bundle being monitored. Only the PromotionSteps of this Bundle in Environment are read: the steps labelled kardinal.io/pipeline and kardinal.io/environment whose spec.bundleName (or, when that is empty, kardinal.io/bundle label) is BundleRef. When the highest ConsecutiveHealthFailures among them (one step per region) reaches FailureThreshold, a rollback Bundle is created. |
 | `spec.environment` | string | yes | Environment is the environment this policy monitors. |
 | `spec.failureThreshold` | integer |  | FailureThreshold is the number of consecutive health-check failures required to trigger a rollback. Defaults to 3 if &lt;= 0. |
 | `spec.pipelineName` | string | yes | PipelineName is the Pipeline this policy monitors. |
@@ -431,18 +458,18 @@ Subscription watches an OCI registry or Git repository for new artifacts and aut
 | `spec.git` | object |  | Git holds Git repository watching parameters. Required when type=git. |
 | `spec.git.branch` | string |  | Branch is the branch to watch. Defaults to "main". Default: `main`. |
 | `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
-| `spec.git.pathGlob` | string |  | PathGlob is an optional glob pattern for files to watch. Only commits that touch matching paths trigger Bundle creation. Empty string watches all paths. |
+| `spec.git.pathGlob` | string |  | PathGlob is reserved for path filtering, which is not implemented. A non-empty value puts the Subscription in phase Error; leave it empty (every new commit on the branch creates a Bundle). |
 | `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. |
 | `spec.image` | object |  | Image holds OCI registry watching parameters. Required when type=image. |
 | `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
-| `spec.image.registry` | string | yes | Registry is the OCI registry URL (e.g. "ghcr.io/myorg/myapp"). |
-| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. |
-| `spec.namespace` | string |  | Namespace is the namespace where Bundles will be created. Defaults to the Subscription's own namespace. |
+| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://localhost:5000/myapp" for a plain-HTTP registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. |
+| `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. With one matching tag its digest is tracked (a moving tag such as "^main$"); when every matching tag is a semantic version the highest wins; otherwise the most recently built image wins (at most 50 matching tags). No matching tag is an error. |
+| `spec.namespace` | string |  | Namespace must be empty or equal to the Subscription's own namespace. Bundles are always created in the Subscription's namespace; any other value puts the Subscription in phase Error and creates no Bundle. Leave it empty: the field is kept only so existing manifests still apply. |
 | `spec.pipeline` | string | yes | Pipeline is the name of the Pipeline CRD that Bundles should target. |
 | `spec.type` | string | yes | Type identifies the artifact source: "image" (OCI) or "git". |
 | `status` | object |  | SubscriptionStatus defines the observed state of a Subscription. |
 | `status.lastBundleCreated` | string |  | LastBundleCreated is the name of the last Bundle created by this Subscription. |
 | `status.lastCheckedAt` | string |  | LastCheckedAt is the RFC3339 timestamp of the last poll. |
-| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest or Git commit SHA from the last successful check. Used for deduplication — a new Bundle is only created when this changes. |
+| `status.lastSeenDigest` | string |  | LastSeenDigest is the OCI digest or Git commit SHA from the last successful check. The first check only records it (no Bundle); a later check that sees a different value creates a Bundle. |
 | `status.message` | string |  | Message provides a human-readable reason for the current phase (e.g. error details). |
 | `status.phase` | string |  | Phase is the current subscription state. One of: `Watching`, `Idle`, `Error`. |

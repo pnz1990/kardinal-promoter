@@ -20,7 +20,51 @@
 // GitWatcher uses the Git Smart HTTP protocol to read branch HEAD SHAs without cloning.
 package source
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"time"
+)
+
+const (
+	// defaultHTTPTimeout bounds every watcher request, so a hung registry or git
+	// host cannot block the Subscription reconcile worker.
+	defaultHTTPTimeout = 30 * time.Second
+	// maxResponseBytes bounds a registry response body (tags/list page, manifest,
+	// image config).
+	maxResponseBytes = 4 << 20
+	// maxTokenBytes bounds an anonymous token response.
+	maxTokenBytes = 64 << 10
+	// maxRefsBytes bounds a git info/refs advertisement.
+	maxRefsBytes = 32 << 20
+	userAgent    = "kardinal-promoter/subscription-watcher"
+)
+
+// newHTTPClient returns the client the watchers use by default.
+func newHTTPClient() *http.Client {
+	return &http.Client{Timeout: defaultHTTPTimeout}
+}
+
+// readLimited reads r fully and fails when it is longer than limit bytes.
+func readLimited(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return b, nil
+}
+
+// drainClose discards a small remainder of the body and closes it, so the
+// connection can be reused.
+func drainClose(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	_ = resp.Body.Close()
+}
 
 // WatchResult is the result of polling an artifact source.
 type WatchResult struct {

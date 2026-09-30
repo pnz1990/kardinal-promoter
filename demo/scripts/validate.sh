@@ -316,7 +316,7 @@ if scenario 9 "CLI completeness"; then
   check_cmd "get pipelines" "PIPELINE\|kardinal-test-app"
   check_cmd "explain kardinal-test-app --env prod" "gate\|Gate\|prod\|no-weekend"
   check_cmd "history kardinal-test-app" "Bundle\|history\|No history\|AGE"
-  check_cmd "get steps kardinal-test-app" "STEP\|Steps\|no steps\|PromotionStep"
+  check_cmd "get steps kardinal-test-app" "STEP\|Steps\|No active bundles\|PromotionStep"
 
   # Shell completion exists
 $KARDINAL completion bash &>/dev/null && pass "kardinal completion bash works" || \

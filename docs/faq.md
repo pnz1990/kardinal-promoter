@@ -131,14 +131,17 @@ Each reconciler is idempotent and safe to re-run after a crash.
 
 ### How do I manually approve a blocked bundle?
 
-Use `kardinal approve` to patch the Bundle with an approval label, which bypasses
-upstream gate requirements:
+Force-pass the blocking PolicyGate with `kardinal override`. It records who
+overrode the gate, why, and until when:
 
 ```bash
-kardinal approve <bundle-name> --env prod
+kardinal override <pipeline> --stage prod --gate <gate-name> \
+  --reason "hotfix for INC-123" --expires-in 1h
 ```
 
-See [kardinal approve](reference/cli/kardinal-approve.md) for full options.
+`kardinal approve` is deprecated: the label it set was never read by any gate,
+so it bypassed nothing. It now exits with an error that points to
+`kardinal override`. See [kardinal override](reference/cli/kardinal-override.md).
 
 ### How do I pause a promotion mid-flight?
 
@@ -146,16 +149,19 @@ See [kardinal approve](reference/cli/kardinal-approve.md) for full options.
 kardinal pause <pipeline>
 ```
 
-This prevents new Graphs from advancing. Existing in-flight PRs are not closed.
-Resume with `kardinal resume <pipeline>`.
+No new promotion step starts, and a step that has not opened its PR yet holds
+before its next git step. Steps waiting for a PR merge or running health checks
+finish, and open PRs are not closed. Resume with `kardinal resume <pipeline>`;
+held steps continue where they stopped. See [Pause and Resume](rollback.md#pause-and-resume).
 
 ### What triggers a rollback?
 
 Rollbacks are triggered:
 
 1. **Manual**: `kardinal rollback <pipeline> --env prod` — opens a rollback PR
-2. **Automatic**: If `spec.autoRollback.enabled: true` in a `RollbackPolicy` CRD and
-   the health check fails after merge beyond the configured failure threshold
+2. **Automatic**: If the environment sets `onHealthFailure: rollback` and a health check
+   fails during a `bake` window with `policy: fail-on-alarm`. See [Rollback](rollback.md#automatic-rollback).
+   (`environments[].autoRollback` is not implemented and is rejected by the API server.)
 
 A rollback is a forward promotion of the previously-verified Bundle image through the
 same pipeline, same gates, same audit trail.
@@ -180,11 +186,12 @@ Yes. Combine conditions:
 ```yaml
 spec:
   expression: >
-    !schedule.isWeekend() ||
-    bundle.metadata.annotations.exists(a, a == 'kardinal.io/hotfix')
+    !schedule.isWeekend ||
+    ("kardinal.io/hotfix" in bundle.labels && bundle.labels["kardinal.io/hotfix"] == "true")
 ```
 
-Annotate the Bundle at creation time to mark it as a hotfix.
+Label the Bundle `kardinal.io/hotfix=true` at creation time to mark it as a hotfix.
+Bundle annotations are not in the CEL context; labels are (`bundle.labels`).
 
 ### How often does kardinal re-evaluate a gate?
 
