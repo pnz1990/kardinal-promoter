@@ -19,36 +19,38 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 )
 
 // GitWatcher watches a Git repository for new commits on a branch.
 //
-// It uses the Git Smart HTTP protocol (info/refs?service=git-upload-pack)
-// to read the current HEAD of a branch without cloning. This works for
-// GitHub, GitLab, Gitea/Forgejo, and any standard HTTPS git server.
+// It uses the Git Smart HTTP protocol v0 reference advertisement
+// (GET info/refs?service=git-upload-pack) to read the current HEAD of a branch
+// without cloning. This works for GitHub, GitLab, Gitea/Forgejo, and any
+// standard HTTPS git server. Only public (anonymous) repositories are supported.
 //
-// PathGlob filtering is not applied at the reference-discovery level:
-// the watcher returns Changed=true on any new commit to the branch.
-// Path-level filtering is a client-side concern handled by the Subscription
-// reconciler when deciding whether to create a Bundle.
+// Path filtering is not implemented: a non-empty PathGlob makes Watch return an
+// error instead of silently creating a Bundle for every commit.
 type GitWatcher struct {
 	// RepoURL is the HTTPS Git repository URL (e.g. "https://github.com/myorg/myapp").
 	RepoURL string
 	// Branch is the branch to watch. Defaults to "main".
 	Branch string
-	// PathGlob is the optional file glob to filter commits.
-	// Currently recorded in the Watcher for future use when go-git is available.
-	// Today the watcher returns Changed=true on any new commit (#495 tracks go-git migration).
+	// PathGlob is spec.git.pathGlob. It is not supported; Watch rejects a
+	// non-empty value.
 	PathGlob string
-	// httpClient is the HTTP client used for requests. Defaults to http.DefaultClient.
+	// httpClient is the HTTP client used for requests. NewGitWatcher sets a
+	// client with a timeout.
 	httpClient *http.Client
 }
 
-// NewGitWatcher creates a GitWatcher with the default HTTP client.
+// NewGitWatcher creates a GitWatcher with an HTTP client that times out.
 func NewGitWatcher(repoURL, branch, pathGlob string) *GitWatcher {
 	b := branch
 	if b == "" {
@@ -58,7 +60,7 @@ func NewGitWatcher(repoURL, branch, pathGlob string) *GitWatcher {
 		RepoURL:    repoURL,
 		Branch:     b,
 		PathGlob:   pathGlob,
-		httpClient: http.DefaultClient,
+		httpClient: newHTTPClient(),
 	}
 }
 
@@ -69,14 +71,20 @@ func NewGitWatcher(repoURL, branch, pathGlob string) *GitWatcher {
 //	GET <repoURL>/info/refs?service=git-upload-pack
 //
 // The response body contains pkt-line encoded reference advertisements.
-// We parse the response to find the SHA for refs/heads/<branch>.
+// We parse the response to find the SHA for refs/heads/<branch>. A branch that
+// is not advertised is an error.
 //
 // Returns Changed=true when the latest SHA differs from lastDigest.
 // First-run (lastDigest=="") returns Changed=false to avoid creating a Bundle
-// on every Subscription creation at controller startup.
+// on every Subscription creation at controller startup. The caller records the
+// returned Digest as the baseline.
 func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult, error) {
 	if w.RepoURL == "" {
 		return nil, fmt.Errorf("GitWatcher: repoURL must not be empty")
+	}
+	if w.PathGlob != "" {
+		return nil, fmt.Errorf("GitWatcher: pathGlob %q is set but path filtering is not implemented; "+
+			"remove spec.git.pathGlob (every commit on the branch would create a Bundle)", w.PathGlob)
 	}
 
 	branch := w.Branch
@@ -86,12 +94,7 @@ func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 
 	sha, err := w.fetchLatestSHA(ctx, branch)
 	if err != nil {
-		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", w.RepoURL, branch, err)
-	}
-
-	if sha == "" {
-		// Branch not found in advertisement — return not-changed.
-		return &WatchResult{Digest: lastDigest, Tag: "", Changed: false}, nil
+		return nil, fmt.Errorf("GitWatcher: fetch latest SHA for %s@%s: %w", redactURL(w.RepoURL), branch, err)
 	}
 
 	// First-run (lastDigest=="") is not considered a change to avoid creating
@@ -112,43 +115,69 @@ func (w *GitWatcher) Watch(ctx context.Context, lastDigest string) (*WatchResult
 
 // fetchLatestSHA fetches the current HEAD SHA for the given branch using
 // the Git Smart HTTP protocol.
+//
+// It deliberately sends no "Git-Protocol: version=2" header: with it, servers
+// answer with a v2 capability advertisement that lists no refs.
 func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string, error) {
 	refsURL := strings.TrimRight(w.RepoURL, "/") + "/info/refs?service=git-upload-pack"
+	repo := redactURL(w.RepoURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, refsURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Git-Protocol", "version=2")
-	req.Header.Set("User-Agent", "kardinal-promoter/subscription-watcher")
+	req.Header.Set("User-Agent", userAgent)
 
 	httpClient := w.httpClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = newHTTPClient()
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", refsURL, err)
+		return "", fmt.Errorf("GET info/refs: %w", err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return "", fmt.Errorf("repository not found: %s (HTTP 404)", w.RepoURL)
+		return "", fmt.Errorf("repository not found: %s (HTTP 404)", repo)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return "", fmt.Errorf("authentication required for %s (HTTP %d)", w.RepoURL, resp.StatusCode)
+		return "", fmt.Errorf("authentication required for %s (HTTP %d); only public repositories are supported",
+			repo, resp.StatusCode)
 	case http.StatusOK:
 		// continue
 	default:
-		return "", fmt.Errorf("unexpected HTTP %d from %s", resp.StatusCode, refsURL)
+		return "", fmt.Errorf("unexpected HTTP %d from %s", resp.StatusCode, repo)
 	}
 
-	return parsePktLineRefs(bufio.NewReader(resp.Body), "refs/heads/"+branch)
+	refName := "refs/heads/" + branch
+	sha, refs, err := parsePktLineRefs(bufio.NewReader(io.LimitReader(resp.Body, maxRefsBytes)), refName)
+	if err != nil {
+		return "", fmt.Errorf("parse ref advertisement: %w", err)
+	}
+	if sha != "" {
+		return sha, nil
+	}
+	if refs == 0 {
+		return "", fmt.Errorf("repository %s advertises no refs (empty repository or not a git smart HTTP endpoint)", repo)
+	}
+	return "", fmt.Errorf("branch %q not found in %s (%d refs advertised)", branch, repo, refs)
+}
+
+// redactURL returns raw with any password replaced, for errors and status
+// messages. A URL that does not parse is not echoed.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid URL>"
+	}
+	return u.Redacted()
 }
 
 // parsePktLineRefs parses the Git pkt-line format used in Smart HTTP responses
-// and returns the SHA for the given refName. Returns "" if the ref is not found.
+// and returns the SHA for the given refName ("" if the ref is not found) and
+// the number of refs seen.
 //
 // Pkt-line format: each line is prefixed with a 4-hex-digit length (including
 // the 4-byte prefix itself). A line starting with "0000" is a flush packet.
@@ -158,19 +187,29 @@ func (w *GitWatcher) fetchLatestSHA(ctx context.Context, branch string) (string,
 //  2. Ref advertisement: each ref + 0000 (flush at end)
 //
 // Each ref line is: "<sha> <refname>[NUL capabilities]"
-func parsePktLineRefs(r *bufio.Reader, refName string) (string, error) {
+//
+// Reads use io.ReadFull, so a body delivered in small chunks parses the same as
+// one written at once. A truncated packet is an error; EOF at a packet
+// boundary ends the advertisement.
+func parsePktLineRefs(r *bufio.Reader, refName string) (string, int, error) {
 	flushCount := 0
+	refs := 0
+	lenHex := make([]byte, 4)
 	for {
-		// Read 4-byte hex length prefix.
-		lenHex := make([]byte, 4)
-		if _, err := r.Read(lenHex); err != nil {
-			break
+		if _, err := io.ReadFull(r, lenHex); err != nil {
+			if errors.Is(err, io.EOF) {
+				return "", refs, nil
+			}
+			return "", refs, fmt.Errorf("read pkt-line length: %w", err)
 		}
 		lenBytes, err := hex.DecodeString(string(lenHex))
 		if err != nil {
-			// Not a valid pkt-line — may be plain text (older git servers).
-			// Fall back to line-by-line parsing.
-			return parsePlainRefs(r, refName, string(lenHex))
+			if refs == 0 && flushCount == 0 {
+				// Not a pkt-line stream — may be plain text (dumb HTTP servers).
+				sha, n := parsePlainRefs(r, refName, string(lenHex))
+				return sha, n, nil
+			}
+			return "", refs, fmt.Errorf("invalid pkt-line length %q", lenHex)
 		}
 		lineLen := int(lenBytes[0])<<8 | int(lenBytes[1])
 		if lineLen == 0 {
@@ -178,17 +217,17 @@ func parsePktLineRefs(r *bufio.Reader, refName string) (string, error) {
 			flushCount++
 			if flushCount >= 2 {
 				// Second flush ends the ref advertisement section.
-				break
+				return "", refs, nil
 			}
 			// First flush separates service announcement from refs — continue.
 			continue
 		}
 		if lineLen < 4 {
-			break
+			return "", refs, fmt.Errorf("invalid pkt-line length %d", lineLen)
 		}
 		payload := make([]byte, lineLen-4)
-		if _, err := r.Read(payload); err != nil {
-			break
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return "", refs, fmt.Errorf("read pkt-line payload: %w", err)
 		}
 		line := strings.TrimRight(string(payload), "\n\x00")
 		// Strip capability advertisement (after NUL byte on the first ref line).
@@ -196,29 +235,35 @@ func parsePktLineRefs(r *bufio.Reader, refName string) (string, error) {
 			line = line[:idx]
 		}
 		parts := strings.SplitN(line, " ", 2)
-		if len(parts) == 2 && parts[1] == refName {
-			return parts[0], nil
+		if len(parts) != 2 || !looksLikeSHA(parts[0]) {
+			continue
+		}
+		refs++
+		if parts[1] == refName {
+			return parts[0], refs, nil
 		}
 	}
-	return "", nil
 }
 
 // parsePlainRefs is a fallback parser for git servers that respond with
-// plain text (non-pkt-line format). Line format: "<sha>\t<refname>"
-func parsePlainRefs(r *bufio.Reader, refName, alreadyRead string) (string, error) {
+// plain text (non-pkt-line format). Line format: "<sha>\t<refname>".
+// It returns the SHA for refName ("" if absent) and the number of lines read.
+func parsePlainRefs(r *bufio.Reader, refName, alreadyRead string) (string, int) {
 	// Reconstruct the first line from alreadyRead + rest of current line.
 	rest, _ := r.ReadString('\n')
 	firstLine := alreadyRead + rest
+	lines := 1
 	if sha := extractSHAFromLine(firstLine, refName); sha != "" {
-		return sha, nil
+		return sha, lines
 	}
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
+		lines++
 		if sha := extractSHAFromLine(scanner.Text(), refName); sha != "" {
-			return sha, nil
+			return sha, lines
 		}
 	}
-	return "", nil
+	return "", lines
 }
 
 // extractSHAFromLine extracts the SHA from a line if it references refName.

@@ -18,6 +18,10 @@ package subscription_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,11 +78,20 @@ func makeGitSub(name, ns, pipeline, repoURL string) *kardinalv1alpha1.Subscripti
 	}
 }
 
-// changedWatcher reports that a new digest is available.
+// changedWatcher follows the production watcher contract: the first poll
+// (empty lastDigest) is a baseline and reports Changed=false.
 type changedWatcher struct{ digest, tag string }
 
 func (w *changedWatcher) Watch(_ context.Context, lastDigest string) (*source.WatchResult, error) {
-	return &source.WatchResult{Digest: w.digest, Tag: w.tag, Changed: w.digest != lastDigest}, nil
+	return &source.WatchResult{Digest: w.digest, Tag: w.tag, Changed: lastDigest != "" && w.digest != lastDigest}, nil
+}
+
+// forcedChangeWatcher always reports Changed=true, as two HA replicas reading a
+// stale lastSeenDigest would both see.
+type forcedChangeWatcher struct{ digest, tag string }
+
+func (w *forcedChangeWatcher) Watch(_ context.Context, _ string) (*source.WatchResult, error) {
+	return &source.WatchResult{Digest: w.digest, Tag: w.tag, Changed: true}, nil
 }
 
 // unchangedWatcher reports that nothing has changed.
@@ -213,6 +226,7 @@ func TestSubscriptionReconciler_WatcherError(t *testing.T) {
 // TestSubscriptionReconciler_GitType_Changed verifies git subscriptions create config Bundles.
 func TestSubscriptionReconciler_GitType_Changed(t *testing.T) {
 	sub := makeGitSub("sub-git", "default", "my-pipeline", "https://github.com/myorg/myapp")
+	sub.Status.LastSeenDigest = "0000000old"
 
 	s := newScheme()
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(sub).WithStatusSubresource(sub).Build()
@@ -281,7 +295,7 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 	r := &subscription.Reconciler{
 		Client: c,
 		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
-			return &changedWatcher{digest: digest, tag: "v2.0.0"}, nil
+			return &forcedChangeWatcher{digest: digest, tag: "v2.0.0"}, nil
 		},
 		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
 	}
@@ -307,4 +321,215 @@ func TestSubscriptionReconciler_LabelSelectorDedup(t *testing.T) {
 	// Verify the source-digest label is set (sanitized: sha256: prefix stripped, truncated to 63)
 	assert.NotEmpty(t, bundleList.Items[0].Labels["kardinal.io/source-digest"],
 		"source-digest label must be set")
+}
+
+// newReconcilerWithRealWatchers wires the production watchers exactly as
+// cmd/kardinal-controller/main.go does.
+func newReconcilerWithRealWatchers(c client.Client, now func() time.Time) *subscription.Reconciler {
+	return &subscription.Reconciler{
+		Client: c,
+		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+			switch sub.Spec.Type {
+			case kardinalv1alpha1.SubscriptionTypeImage:
+				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
+			case kardinalv1alpha1.SubscriptionTypeGit:
+				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
+			}
+			return nil, fmt.Errorf("unknown type %q", sub.Spec.Type)
+		},
+		NowFn: now,
+	}
+}
+
+// fakeRegistry is a minimal OCI distribution API: a tag list and HEAD manifests.
+type fakeRegistry struct {
+	mu   sync.Mutex
+	name string
+	tags map[string]string // tag -> digest
+}
+
+func (f *fakeRegistry) set(tag, digest string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tags[tag] = digest
+}
+
+func (f *fakeRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prefix := "/v2/" + f.name + "/"
+	switch {
+	case r.URL.Path == prefix+"tags/list":
+		names := make([]string, 0, len(f.tags))
+		for tag := range f.tags {
+			names = append(names, `"`+tag+`"`)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"name":%q,"tags":[%s]}`, f.name, strings.Join(names, ","))
+	case strings.HasPrefix(r.URL.Path, prefix+"manifests/"):
+		digest, ok := f.tags[strings.TrimPrefix(r.URL.Path, prefix+"manifests/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", digest)
+		w.WriteHeader(http.StatusOK)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func digestOf(c byte) string { return "sha256:" + strings.Repeat(string(c), 64) }
+
+func listBundles(t *testing.T, c client.Client) []kardinalv1alpha1.Bundle {
+	t.Helper()
+	var list kardinalv1alpha1.BundleList
+	require.NoError(t, c.List(context.Background(), &list, client.InNamespace("default")))
+	return list.Items
+}
+
+// TestSubscriptionReconciler_RealOCIWatcher_NewPushCreatesBundle runs the
+// production OCIWatcher against an httptest registry: the first poll records a
+// baseline, and a later push creates exactly one Bundle (C04-gates-04, C05-steps-04).
+func TestSubscriptionReconciler_RealOCIWatcher_NewPushCreatesBundle(t *testing.T) {
+	reg := &fakeRegistry{name: "org/app", tags: map[string]string{"v1.0.0": digestOf('1')}}
+	srv := httptest.NewServer(reg)
+	defer srv.Close()
+
+	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
+	sub.Spec.Image.TagFilter = `^v\d+\.\d+\.\d+$`
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) })
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Subscription
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	require.Equal(t, "Watching", got.Status.Phase, got.Status.Message)
+	assert.Equal(t, digestOf('1'), got.Status.LastSeenDigest, "first poll records the baseline")
+	assert.Empty(t, listBundles(t, c), "the baseline does not create a Bundle")
+
+	reg.set("v1.1.0", digestOf('2'))
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Equal(t, digestOf('2'), got.Status.LastSeenDigest)
+
+	bundles := listBundles(t, c)
+	require.Len(t, bundles, 1, "a new push creates a Bundle")
+	assert.Equal(t, got.Status.LastBundleCreated, bundles[0].Name)
+	require.Len(t, bundles[0].Spec.Images, 1)
+	assert.Equal(t, "v1.1.0", bundles[0].Spec.Images[0].Tag)
+	assert.Equal(t, digestOf('2'), bundles[0].Spec.Images[0].Digest)
+	assert.Equal(t, strings.TrimPrefix(srv.URL, "http://")+"/org/app", bundles[0].Spec.Images[0].Repository,
+		"the Bundle image repository carries no URL scheme")
+
+	// A further poll with no push changes nothing.
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Len(t, listBundles(t, c), 1)
+}
+
+// TestSubscriptionReconciler_MutableTagRepush verifies that re-pushing the same
+// tag with a new digest creates a second Bundle instead of colliding on the
+// name (C04-gates-19).
+func TestSubscriptionReconciler_MutableTagRepush(t *testing.T) {
+	reg := &fakeRegistry{name: "org/app", tags: map[string]string{"latest": digestOf('1')}}
+	srv := httptest.NewServer(reg)
+	defer srv.Close()
+
+	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
+	sub.Spec.Image.TagFilter = "^latest$"
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) })
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+
+	for _, d := range []byte{'1', '2', '3'} {
+		reg.set("latest", digestOf(d))
+		_, err := r.Reconcile(context.Background(), req)
+		require.NoError(t, err)
+	}
+	bundles := listBundles(t, c)
+	require.Len(t, bundles, 2, "each re-push after the baseline creates a Bundle")
+	names := []string{bundles[0].Name, bundles[1].Name}
+	assert.ElementsMatch(t, []string{"app-sub-latest-22222222", "app-sub-latest-33333333"}, names)
+}
+
+// TestSubscriptionReconciler_NameCollisionWithOtherDigestIsAnError verifies that
+// AlreadyExists is only treated as crash recovery when the existing Bundle is
+// for the same digest (C04-gates-19).
+func TestSubscriptionReconciler_NameCollisionWithOtherDigestIsAnError(t *testing.T) {
+	sub := makeImageSub("app-sub", "default", "my-pipeline", "ghcr.io/org/app")
+	sub.Status.LastSeenDigest = digestOf('0')
+	squatter := &kardinalv1alpha1.Bundle{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "app-sub-latest-11111111", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/subscription": "other", "kardinal.io/source-digest": "x"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub, squatter).WithStatusSubresource(sub).Build()
+	r := &subscription.Reconciler{
+		Client: c,
+		WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+			return &changedWatcher{digest: digestOf('1'), tag: "latest"}, nil
+		},
+		NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var got kardinalv1alpha1.Subscription
+	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	assert.Equal(t, "Error", got.Status.Phase)
+	assert.Contains(t, got.Status.Message, "already exists for another artifact")
+	assert.Equal(t, digestOf('0'), got.Status.LastSeenDigest, "the digest is not consumed")
+}
+
+// TestSubscriptionReconciler_SpecNamespace verifies that a Subscription creates
+// Bundles only in its own namespace (C08-api-config-02, C04-gates-18).
+func TestSubscriptionReconciler_SpecNamespace(t *testing.T) {
+	tests := []struct {
+		name      string
+		specNS    string
+		wantPhase string
+		wantNS    string
+	}{
+		{name: "other namespace is rejected", specNS: "team-b", wantPhase: "Error"},
+		{name: "own namespace is allowed", specNS: "default", wantPhase: "Watching", wantNS: "default"},
+		{name: "empty uses own namespace", specNS: "", wantPhase: "Watching", wantNS: "default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := makeImageSub("app-sub", "default", "my-pipeline", "ghcr.io/org/app")
+			sub.Spec.Namespace = tt.specNS
+			sub.Status.LastSeenDigest = digestOf('0')
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
+			r := &subscription.Reconciler{
+				Client: c,
+				WatcherFn: func(_ *kardinalv1alpha1.Subscription) (source.Watcher, error) {
+					return &changedWatcher{digest: digestOf('1'), tag: "v1.0.0"}, nil
+				},
+				NowFn: func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+			_, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			var got kardinalv1alpha1.Subscription
+			require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+			assert.Equal(t, tt.wantPhase, got.Status.Phase, got.Status.Message)
+
+			var all kardinalv1alpha1.BundleList
+			require.NoError(t, c.List(context.Background(), &all))
+			if tt.wantNS == "" {
+				assert.Empty(t, all.Items, "no Bundle in any namespace")
+				assert.Contains(t, got.Status.Message, `spec.namespace "team-b" is not allowed`)
+				return
+			}
+			require.Len(t, all.Items, 1)
+			assert.Equal(t, tt.wantNS, all.Items[0].Namespace)
+		})
+	}
 }

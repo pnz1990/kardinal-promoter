@@ -49,6 +49,7 @@ import (
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
+	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -65,6 +66,12 @@ import (
 
 	// Import built-in steps to register them via init().
 	_ "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
+
+	// Embed the IANA timezone database. The runtime image has no tzdata, and
+	// ChangeWindow spec.schedule.timezone ("America/Los_Angeles") needs it:
+	// without it every named timezone is invalid and the window always blocks.
+	// TestControllerEmbedsTZData guards this import.
+	_ "time/tzdata"
 )
 
 // ControllerVersion is the controller version string, overridable at build time via ldflags.
@@ -410,6 +417,15 @@ func main() {
 		Client: mgr.GetClient(),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up ScheduleClockReconciler")
+	}
+
+	// ChangeWindowReconciler: evaluates each ChangeWindow (blackout or recurring),
+	// writes status.active/reason and requeues at the next boundary. The status write
+	// re-evaluates the PolicyGates that reference the window.
+	if err := (&changewindowrecon.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up ChangeWindowReconciler")
 	}
 
 	// NotificationHookReconciler: watches Bundle, PolicyGate, and PromotionStep objects

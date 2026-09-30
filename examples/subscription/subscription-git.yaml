@@ -1,11 +1,15 @@
 # subscription-git.yaml — Git repository subscription example.
-# Watches the main branch of a config repo for new commits touching "config/"
-# and creates a config Bundle for the platform-config Pipeline
-# (examples/config-promotion/pipeline.yaml) when one is detected.
+# Watches the main branch of a config source repo for new commits and creates
+# a config Bundle for the platform-config Pipeline
+# (examples/config-promotion/pipeline.yaml) for each one. The first poll
+# records the current commit; each later commit creates a Bundle.
 #
-# myorg/platform-config is a placeholder; change it to your config repo. Keep
-# pathGlob outside the environment paths the Pipeline writes, so kardinal's own
-# promotion commits do not trigger new Bundles.
+# myorg/platform-config-source is a placeholder; change it to your config
+# source repo. It uses the Pipeline's layout (environments/<name>), and
+# config-merge copies each environment's path from the new commit.
+# Watch a repo or branch the Pipeline does not write to: pathGlob (path
+# filtering) is not implemented and must be left unset, so a Subscription on
+# myorg/platform-config main would create a Bundle for every promotion commit.
 #
 # Usage:
 #   kubectl apply -f subscription-git.yaml
@@ -19,7 +23,6 @@ spec:
   type: git
   pipeline: platform-config
   git:
-    repoURL: https://github.com/myorg/platform-config
+    repoURL: https://github.com/myorg/platform-config-source
     branch: main
-    pathGlob: "config/**"
     interval: 5m

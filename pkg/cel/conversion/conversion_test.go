@@ -13,7 +13,6 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/conversion"
-	"github.com/kardinal-promoter/kardinal-promoter/pkg/cel/sentinels"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -163,19 +162,26 @@ func TestGoNativeType_OptionalPresent(t *testing.T) {
 	assert.Equal(t, "present", result)
 }
 
-func TestGoNativeType_OmitSentinel(t *testing.T) {
-	// Omit sentinel passes through without error.
-	omitVal := types.DefaultTypeAdapter.NativeToValue(sentinels.Omit{})
-	result, err := conversion.GoNativeType(omitVal)
-	// The default type adapter wraps Omit in an objectVal — ErrUnsupportedType is
-	// expected for unknown types. What matters is that Omit specifically returns the
-	// sentinel back. Omit is handled in the default branch; if the type adapter wraps
-	// it opaquely, we just check no panic.
-	// We tolerate either success (Omit{} returned) or ErrUnsupportedType (opaque wrap).
-	if err != nil {
-		assert.True(t, errors.Is(err, conversion.ErrUnsupportedType) || result == nil,
-			"Omit wrapped by adapter: expected ErrUnsupportedType or nil; got result=%v err=%v", result, err)
-	}
+// TestGoNativeType_GoNativeMapValues covers C04-gates-28: a map built in Go
+// (such as the PolicyGate context) holds values that are not JSON types, for
+// example int. Converting it must not panic, so json.marshal(schedule) works.
+func TestGoNativeType_GoNativeMapValues(t *testing.T) {
+	v := types.DefaultTypeAdapter.NativeToValue(map[string]interface{}{
+		"hour":   10,
+		"count":  int32(3),
+		"names":  []string{"a", "b"},
+		"nested": map[string]interface{}{"n": 1, "ok": true},
+	})
+	var got interface{}
+	var err error
+	require.NotPanics(t, func() { got, err = conversion.GoNativeType(v) })
+	require.NoError(t, err)
+	assert.Equal(t, map[string]interface{}{
+		"hour":   int64(10),
+		"count":  int64(3),
+		"names":  []interface{}{"a", "b"},
+		"nested": map[string]interface{}{"n": int64(1), "ok": true},
+	}, got)
 }
 
 func TestGoNativeType_NilSentinel_ErrorIs(t *testing.T) {

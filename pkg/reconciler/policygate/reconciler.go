@@ -8,20 +8,29 @@ package policygate
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -32,8 +41,15 @@ const (
 	labelEnvironment = "kardinal.io/environment"
 	// labelPipeline is the pipeline the gate is associated with.
 	labelPipeline = "kardinal.io/pipeline"
+	// conditionReady is the gate condition whose lastTransitionTime marks when
+	// the gate last flipped between allowed and blocked.
+	conditionReady = "Ready"
 	// defaultRecheckInterval is used when gate.Spec.RecheckInterval is empty or invalid.
 	defaultRecheckInterval = 5 * time.Minute
+	// minRecheckInterval is the shortest re-evaluation interval, the same as
+	// MetricCheck's. A smaller recheckInterval ("1ms") would re-evaluate and
+	// patch the gate in a hot loop.
+	minRecheckInterval = 10 * time.Second
 	// historyLimit is the number of recent Bundles to include in history stats.
 	historyLimit = 10
 )
@@ -110,7 +126,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if patchErr := r.patchStatus(ctx, &gate, true, overrideReason); patchErr != nil {
 			return ctrl.Result{}, fmt.Errorf("patch gate status (override): %w", patchErr)
 		}
-		return ctrl.Result{RequeueAfter: recheckInterval}, nil
+		// Re-evaluate just after the override expires, so the gate does not stay
+		// force-passed for up to a whole recheck interval (C04-gates-21).
+		return ctrl.Result{RequeueAfter: min(recheckInterval, activeOverride.ExpiresAt.Sub(now)+time.Second)}, nil
 	}
 
 	// Build CEL context. bundleVersion is returned separately so it can be
@@ -127,7 +145,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// Evaluate CEL expression
-	pass, reason, evalErr := r.eval.evaluate(gate.Spec.Expression, celCtx)
+	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
 	if evalErr != nil {
 		// Fail-closed on evaluation error
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
@@ -155,9 +173,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("patch gate status: %w", patchErr)
 	}
 
-	// Emit Prometheus metric. Only emit on state changes to avoid double-counting
-	// on re-reconcile with the same result. We check whether ready actually changed
-	// by comparing to the previous status before the patch.
+	// Emit Prometheus metric. This counts every evaluation, including rechecks
+	// with an unchanged result; it is a rate of evaluations, not of transitions.
 	gateResult := "blocked"
 	if pass {
 		gateResult = "allowed"
@@ -203,8 +220,15 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 	}
 
 	// Patch status to reflect the validation result. ready=false for templates
-	// (only instances are evaluated against a real bundle context and may become ready=true).
-	if patchErr := r.patchStatus(ctx, gate, false, reason); patchErr != nil {
+	// (only instances are evaluated against a real bundle context and may become
+	// ready=true). A template is not evaluated, so lastEvaluatedAt stays unset and
+	// no Ready condition, audit record or Blocked event is written: a template is
+	// not blocking anything (C04-gates-11).
+	patch := client.MergeFrom(gate.DeepCopy())
+	gate.Status.Ready = false
+	gate.Status.Reason = reason
+	gate.Status.LastEvaluatedAt = nil
+	if patchErr := r.Status().Patch(ctx, gate, patch); patchErr != nil {
 		return ctrl.Result{}, fmt.Errorf("patch template gate status: %w", patchErr)
 	}
 
@@ -227,9 +251,17 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	now := r.now()
 	version := extractVersion(&bundle)
 
+	// bundle.labels is always a map (empty when the Bundle has no labels), so
+	// has(bundle.labels.hotfix) and "kardinal.io/rollback" in bundle.labels work.
+	labelsCtx := make(map[string]interface{}, len(bundle.Labels))
+	for k, v := range bundle.Labels {
+		labelsCtx[k] = v
+	}
+
 	bundleCtx := map[string]interface{}{
 		"type":    bundle.Spec.Type,
 		"version": version,
+		"labels":  labelsCtx,
 		"provenance": map[string]interface{}{
 			"author":    "",
 			"commitSHA": "",
@@ -272,18 +304,19 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		upstreamCtx = buildUpstreamContext(&bundle)
 	}
 
-	// bundle.upstreamSoakMinutes is the maximum soak minutes across all verified
-	// upstream environments. It is a convenience shorthand so expressions can write
+	// bundle.upstreamSoakMinutes is the soak time of the environment(s) directly
+	// upstream of the gated environment in the Pipeline DAG, so expressions can write
 	//   bundle.upstreamSoakMinutes >= 30
-	// instead of requiring knowledge of the specific upstream environment name.
-	// Documented in docs/policy-gates.md §CEL context variables.
-	var maxSoakMinutes int64
-	for _, env := range bundle.Status.Environments {
-		if env.SoakMinutes > maxSoakMinutes {
-			maxSoakMinutes = env.SoakMinutes
+	// without naming the upstream. It is only computed when the expression uses it,
+	// because it needs the Pipeline; a lookup failure fails the gate closed.
+	// Documented in docs/policy-gates.md and docs/reference/cel-context.md.
+	if strings.Contains(gate.Spec.Expression, "upstreamSoakMinutes") {
+		soak, soakErr := r.directUpstreamSoakMinutes(ctx, gate, &bundle)
+		if soakErr != nil {
+			return nil, version, fmt.Errorf("bundle.upstreamSoakMinutes: %w", soakErr)
 		}
+		bundleCtx["upstreamSoakMinutes"] = soak
 	}
-	bundleCtx["upstreamSoakMinutes"] = maxSoakMinutes
 
 	// Build PR review context (K-08): bundle.pr["<envName>"].isApproved / .approvalCount
 	// Reads PRStatus CRDs labelled with this bundle. Non-fatal on error.
@@ -293,6 +326,17 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		prCtx = map[string]interface{}{}
 	}
 	bundleCtx["pr"] = prCtx
+
+	// ChangeWindows are only listed when the expression references them, so a
+	// List failure blocks exactly the gates that depend on a window (fail closed).
+	cwCtx := map[string]interface{}{}
+	if strings.Contains(gate.Spec.Expression, "changewindow") {
+		var cwErr error
+		cwCtx, cwErr = r.buildChangeWindowContext(ctx, now)
+		if cwErr != nil {
+			return nil, version, fmt.Errorf("changewindow: %w", cwErr)
+		}
+	}
 
 	return map[string]interface{}{
 		"bundle": bundleCtx,
@@ -306,8 +350,55 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 		},
 		"metrics":      metricsCtx,
 		"upstream":     upstreamCtx,
-		"changewindow": r.buildChangeWindowContext(ctx, now),
+		"changewindow": cwCtx,
 	}, version, nil
+}
+
+// directUpstreamSoakMinutes returns the soak minutes of the environments that
+// the gate's environment directly depends on for this bundle (Pipeline dependsOn
+// or list order, with skipped environments bridged, exactly as the Graph is
+// built). With several upstreams (fan-in) it returns the minimum, so every
+// upstream must have soaked long enough. An upstream that is not Verified counts
+// as 0. A root environment (no upstream) returns 0.
+//
+// It reads only CRD state: the Pipeline spec and Bundle.status.environments[].soakMinutes,
+// which the BundleReconciler writes.
+func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardinalv1alpha1.PolicyGate,
+	bundle *kardinalv1alpha1.Bundle) (int64, error) {
+	envName := gate.Labels[labelEnvironment]
+	if envName == "" {
+		return 0, fmt.Errorf("gate has no %s label", labelEnvironment)
+	}
+	pipelineName := bundle.Spec.Pipeline
+	if pipelineName == "" {
+		pipelineName = gate.Labels[labelPipeline]
+	}
+	var pipeline kardinalv1alpha1.Pipeline
+	if err := r.Get(ctx, types.NamespacedName{Name: pipelineName, Namespace: gate.Namespace}, &pipeline); err != nil {
+		return 0, fmt.Errorf("load pipeline %s: %w", pipelineName, err)
+	}
+	upstreams, err := graph.DirectUpstreams(&pipeline, bundle, envName)
+	if err != nil {
+		return 0, err
+	}
+	if len(upstreams) == 0 {
+		return 0, nil
+	}
+	byName := make(map[string]kardinalv1alpha1.EnvironmentStatus, len(bundle.Status.Environments))
+	for _, env := range bundle.Status.Environments {
+		byName[env.Name] = env
+	}
+	var minSoak int64 = -1
+	for _, up := range upstreams {
+		var soak int64
+		if env, ok := byName[up]; ok && env.Phase == "Verified" {
+			soak = env.SoakMinutes
+		}
+		if minSoak < 0 || soak < minSoak {
+			minSoak = soak
+		}
+	}
+	return minSoak, nil
 }
 
 // buildMetricsContext lists all MetricCheck objects in the given namespace and
@@ -464,41 +555,40 @@ func sortBundlesByCreationDesc(bundles []kardinalv1alpha1.Bundle) []kardinalv1al
 	return out
 }
 
-// buildChangeWindowContext lists all ChangeWindow objects cluster-wide and
+// buildChangeWindowContext lists all ChangeWindow objects (cluster-scoped) and
 // returns a map: {"<name>": bool} where the boolean is true if the window
 // is currently active (blocking). CEL expressions use:
 //
-//	changewindow["holiday-freeze"]         → true when the window is active
-//	!changewindow["holiday-freeze"]        → passes when window is inactive
+//	changewindow["holiday-freeze"]               → true when the window is active
+//	!changewindow.isBlocked("holiday-freeze")    → passes when the window is inactive
+//	changewindow.isAllowed("business-hours")     → passes inside a recurring allowed window
 //
-// Graph-first: reads CRD status fields only. The ChangeWindow controller is
-// responsible for updating status.active; this method reads it.
-// Fallback: if status.active is not set, re-derives from spec.start/end vs now.
-func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time) map[string]interface{} {
+// Each window is evaluated at the gate's own evaluation time with
+// changewindow.Evaluate, the same function the ChangeWindow reconciler uses to
+// write status.active. Reading only status.active would let a gate pass for the
+// moment between a window boundary and the ChangeWindow reconciler's next write;
+// the ChangeWindow status write is what triggers the re-evaluation (see the
+// ChangeWindow Watch in SetupWithManager).
+//
+// A List error is returned to the caller so the gate fails closed with a
+// "context error" reason: an unreadable freeze must never allow a promotion
+// (C04-gates-02). An invalid ChangeWindow spec evaluates as active (blocking).
+func (r *Reconciler) buildChangeWindowContext(ctx context.Context, now time.Time) (map[string]interface{}, error) {
 	var list kardinalv1alpha1.ChangeWindowList
 	if err := r.List(ctx, &list); err != nil {
-		zerolog.Ctx(ctx).Warn().Err(err).Msg("failed to list ChangeWindows, using empty context")
-		return map[string]interface{}{}
+		return nil, fmt.Errorf("list ChangeWindows: %w", err)
 	}
 
 	result := make(map[string]interface{}, len(list.Items))
 	for _, cw := range list.Items {
-		// Use status.active if set by the ChangeWindow controller.
-		// Fall back to spec-based derivation for blackout windows.
-		active := cw.Status.Active
-		if cw.Spec.Type == "blackout" {
-			// Re-derive: active if now is between Start and End.
-			// This fallback ensures correctness even when the controller hasn't
-			// run yet (e.g. just after creation).
-			start := cw.Spec.Start.Time
-			end := cw.Spec.End.Time
-			if !start.IsZero() && !end.IsZero() {
-				active = now.After(start) && now.Before(end)
-			}
+		res := changewindow.Evaluate(cw.Spec, now)
+		if res.Err != nil {
+			zerolog.Ctx(ctx).Warn().Err(res.Err).Str("changewindow", cw.Name).
+				Msg("invalid ChangeWindow spec, treating it as active (blocking)")
 		}
-		result[cw.Name] = active
+		result[cw.Name] = res.Active
 	}
-	return result
+	return result, nil
 }
 
 // buildPRContext lists PRStatus CRDs for this bundle and returns a map
@@ -540,21 +630,42 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 	ready bool, reason string) error {
 	prevReady := gate.Status.Ready
 	isFirstEval := gate.Status.LastEvaluatedAt == nil
+	// blockedSince is when the current blocking episode started, read before
+	// the condition is updated.
+	var blockedSince time.Time
+	if c := meta.FindStatusCondition(gate.Status.Conditions, conditionReady); c != nil && c.Status == metav1.ConditionFalse {
+		blockedSince = c.LastTransitionTime.Time
+	}
 	patch := client.MergeFrom(gate.DeepCopy())
 	now := metav1.NewTime(r.now())
 	gate.Status.Ready = ready
 	gate.Status.Reason = reason
 	gate.Status.LastEvaluatedAt = &now
+	// The Ready condition's lastTransitionTime moves only when the gate flips,
+	// unlike lastEvaluatedAt, so it identifies one blocking episode. The
+	// NotificationHook reconciler keys PolicyGate.Blocked on it.
+	cond := metav1.Condition{
+		Type:               conditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             "Blocked",
+		Message:            truncateMessage(reason),
+		ObservedGeneration: gate.Generation,
+		LastTransitionTime: now,
+	}
+	if ready {
+		cond.Status, cond.Reason = metav1.ConditionTrue, "Allowed"
+	}
+	meta.SetStatusCondition(&gate.Status.Conditions, cond)
 	if err := r.Status().Patch(ctx, gate, patch); err != nil {
 		return fmt.Errorf("status patch: %w", err)
 	}
-	// Audit: write on state change only (ready flip), not every evaluation.
-	if ready != prevReady {
+	// Audit the first evaluation and every ready flip, not every recheck.
+	if ready != prevReady || isFirstEval {
 		outcome := "Success"
 		if !ready {
 			outcome = "Failure"
 		}
-		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason)
+		writeGateAuditEvent(ctx, r.Client, gate, outcome, reason, now)
 	}
 	// Emit Kubernetes Event on gate state change OR on first evaluation that blocks.
 	// First block: isFirstEval && !ready (gate immediately blocks on creation).
@@ -574,16 +685,36 @@ func (r *Reconciler) patchStatus(ctx context.Context, gate *kardinalv1alpha1.Pol
 					envName, pipeline, gate.Name))
 		}
 	}
-	// Emit gate blocking duration when gate transitions from blocked to allowed.
-	// Uses CreationTimestamp as the upper-bound proxy for blocking duration.
-	// A FirstBlockedAt status field would give exact duration; tracked in design doc 15.
-	if ready && !prevReady {
-		blockingDuration := r.now().Sub(gate.CreationTimestamp.Time)
+	// Emit gate blocking duration when gate transitions from blocked to allowed:
+	// the time since the Ready condition turned False. A gate that passes on
+	// its first evaluation was never blocked and is not observed. Gates
+	// evaluated before the condition existed fall back to CreationTimestamp
+	// (C04-gates-32).
+	if ready && !prevReady && !isFirstEval {
+		if blockedSince.IsZero() {
+			blockedSince = gate.CreationTimestamp.Time
+		}
+		blockingDuration := now.Sub(blockedSince)
 		if blockingDuration > 0 {
 			observability.GateBlockingDurationSeconds.Observe(blockingDuration.Seconds())
 		}
 	}
 	return nil
+}
+
+// maxConditionMessage bounds the Ready condition message; a CEL error can be long.
+const maxConditionMessage = 1024
+
+// truncateMessage shortens msg to maxConditionMessage bytes on a rune boundary.
+func truncateMessage(msg string) string {
+	if len(msg) <= maxConditionMessage {
+		return msg
+	}
+	cut := maxConditionMessage
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
 }
 
 // now returns the current time, using NowFn if set (for testing).
@@ -592,6 +723,31 @@ func (r *Reconciler) now() time.Time {
 		return r.NowFn()
 	}
 	return time.Now().UTC()
+}
+
+// metricCheckRequests enqueues the PolicyGate instances in the MetricCheck's
+// namespace whose expression reads metrics, so they are re-evaluated as soon
+// as a MetricCheck result changes.
+func (r *Reconciler) metricCheckRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	return r.instanceGateRequests(ctx, "MetricCheck", "metrics", client.InNamespace(obj.GetNamespace()))
+}
+
+// metricCheckResultChanged passes MetricCheck updates that change what a gate
+// can read (metrics.<name>.value and metrics.<name>.result) or the spec. The
+// MetricCheck reconciler writes lastEvaluatedAt on every query; re-evaluating
+// every gate in the namespace on each of those writes was wasted work
+// (C04-gates-36). Create and delete events pass.
+var metricCheckResultChanged = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldMC, okOld := e.ObjectOld.(*kardinalv1alpha1.MetricCheck)
+		newMC, okNew := e.ObjectNew.(*kardinalv1alpha1.MetricCheck)
+		if !okOld || !okNew {
+			return true
+		}
+		return oldMC.Generation != newMC.Generation ||
+			oldMC.Status.Result != newMC.Status.Result ||
+			oldMC.Status.LastValue != newMC.Status.LastValue
+	},
 }
 
 // SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
@@ -603,70 +759,78 @@ func (r *Reconciler) now() time.Time {
 //
 // It also adds a Watch on ScheduleClock objects: when a ScheduleClock's status.tick
 // changes (updated on each interval by the ScheduleClockReconciler), all PolicyGate
-// instances in ALL namespaces are re-evaluated. This replaces the per-gate
-// ctrl.Result{RequeueAfter: recheckInterval} timer loop for schedule.* expressions.
-// (PG-4 from docs/design/11-graph-purity-tech-debt.md)
+// instances in ALL namespaces are re-evaluated, so schedule.* expressions follow
+// the clock interval. The per-gate RequeueAfter: recheckInterval still runs as
+// well; it is the only periodic re-evaluation when no ScheduleClock exists.
+//
+// The gate's own status writes do not re-trigger it (eventfilter.SpecOrAnnotationChanged;
+// a spec edit or an annotation such as kardinal.io/force-recheck does):
+// every evaluation writes lastEvaluatedAt, and re-evaluating on that write
+// doubled the evaluations and the status writes (C04-gates-36).
+//
+// It also watches ChangeWindow objects: the ChangeWindow reconciler writes
+// status.active at every window boundary, and that write re-evaluates every
+// PolicyGate instance whose expression references changewindow, so a freeze
+// starts blocking at its boundary rather than at the next recheckInterval.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// metricCheckMapper enqueues all PolicyGates in the same namespace as the
-	// changed MetricCheck. This ensures PolicyGates with metrics.* expressions
-	// are re-evaluated immediately when a MetricCheck result changes.
-	metricCheckMapper := func(ctx context.Context, obj client.Object) []reconcile.Request {
-		var gateList kardinalv1alpha1.PolicyGateList
-		if err := r.List(ctx, &gateList, client.InNamespace(obj.GetNamespace())); err != nil {
-			return nil
-		}
-		reqs := make([]reconcile.Request, 0, len(gateList.Items))
-		for _, gate := range gateList.Items {
-			// Only enqueue instance gates (those with a bundle label) —
-			// templates have no bundle label and are always skipped by Reconcile.
-			if gate.Labels[labelBundle] == "" {
-				continue
-			}
-			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      gate.Name,
-					Namespace: gate.Namespace,
-				},
-			})
-		}
-		return reqs
+	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
+	// when any ScheduleClock ticks, so schedule.* expressions are re-evaluated
+	// on every clock interval rather than only at their recheckInterval.
+	scheduleClockMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
+		return r.instanceGateRequests(ctx, "ScheduleClock", "")
 	}
 
-	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
-	// when any ScheduleClock ticks. This ensures schedule.* expressions are
-	// re-evaluated on every clock interval without a per-gate RequeueAfter timer.
-	scheduleClockMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
-		var gateList kardinalv1alpha1.PolicyGateList
-		if err := r.List(ctx, &gateList); err != nil {
-			return nil
-		}
-		reqs := make([]reconcile.Request, 0, len(gateList.Items))
-		for _, gate := range gateList.Items {
-			if gate.Labels[labelBundle] == "" {
-				continue
-			}
-			reqs = append(reqs, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name:      gate.Name,
-					Namespace: gate.Namespace,
-				},
-			})
-		}
-		return reqs
+	// changeWindowMapper enqueues the PolicyGate instances that reference a
+	// ChangeWindow. ChangeWindows are cluster-scoped, so gates in every
+	// namespace the controller can see are considered.
+	changeWindowMapper := func(ctx context.Context, _ client.Object) []reconcile.Request {
+		return r.instanceGateRequests(ctx, "ChangeWindow", "changewindow")
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kardinalv1alpha1.PolicyGate{}).
-		// Watch MetricCheck objects: when a MetricCheck status changes (Pass/Fail),
-		// all PolicyGates in the same namespace are re-evaluated immediately.
-		// This replaces the polling-only model with an event-driven one,
-		// moving toward the Graph-first Watch node architecture.
-		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(metricCheckMapper)).
+		For(&kardinalv1alpha1.PolicyGate{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
+		// Watch MetricCheck objects: when a MetricCheck's result or value changes,
+		// the gates in the same namespace that read metrics are re-evaluated
+		// immediately.
+		Watches(&kardinalv1alpha1.MetricCheck{}, handler.EnqueueRequestsFromMapFunc(r.metricCheckRequests),
+			builder.WithPredicates(metricCheckResultChanged)).
 		// Watch ScheduleClock objects: when status.tick changes, all PolicyGate instances
-		// are re-evaluated cluster-wide. This replaces RequeueAfter for schedule.* gates.
-		// (PG-4 elimination — see docs/design/11-graph-purity-tech-debt.md)
+		// are re-evaluated cluster-wide.
 		Watches(&kardinalv1alpha1.ScheduleClock{}, handler.EnqueueRequestsFromMapFunc(scheduleClockMapper)).
+		// Watch ChangeWindow objects: a window boundary (status.active write) or a
+		// spec edit re-evaluates the gates that reference changewindow.
+		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
 		Complete(r)
+}
+
+// instanceGateRequests lists PolicyGates and returns a request for every instance
+// gate (one with a bundle label). When exprContains is non-empty, only gates whose
+// expression contains it are returned. A List error is logged (the watch event is
+// then lost, and the gate is re-evaluated at its next recheckInterval) rather than
+// dropped silently (C04-gates-36).
+func (r *Reconciler) instanceGateRequests(ctx context.Context, source, exprContains string,
+	opts ...client.ListOption) []reconcile.Request {
+	var gateList kardinalv1alpha1.PolicyGateList
+	if err := r.List(ctx, &gateList, opts...); err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Str("source", source).
+			Msg("failed to list PolicyGates for watch event; gates re-evaluate at their recheckInterval")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(gateList.Items))
+	for _, gate := range gateList.Items {
+		// Only enqueue instance gates (those with a bundle label) — templates
+		// are only validated, never evaluated against a context.
+		if gate.Labels[labelBundle] == "" {
+			continue
+		}
+		if exprContains != "" && !strings.Contains(gate.Spec.Expression, exprContains) {
+			continue
+		}
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace},
+		})
+	}
+	return reqs
 }
 
 // --- helpers ---
@@ -687,7 +851,9 @@ func extractVersion(bundle *kardinalv1alpha1.Bundle) string {
 	return ""
 }
 
-// parseRecheckInterval parses a Go duration string, returning defaultRecheckInterval on error.
+// parseRecheckInterval parses a Go duration string, returning
+// defaultRecheckInterval on error and raising values below minRecheckInterval
+// to minRecheckInterval.
 func parseRecheckInterval(s string) time.Duration {
 	if s == "" {
 		return defaultRecheckInterval
@@ -695,6 +861,9 @@ func parseRecheckInterval(s string) time.Duration {
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
 		return defaultRecheckInterval
+	}
+	if d < minRecheckInterval {
+		return minRecheckInterval
 	}
 	return d
 }

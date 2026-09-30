@@ -38,21 +38,30 @@ type SubscriptionSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Pipeline string `json:"pipeline"`
 
-	// Namespace is the namespace where Bundles will be created.
-	// Defaults to the Subscription's own namespace.
+	// Namespace must be empty or equal to the Subscription's own namespace.
+	// Bundles are always created in the Subscription's namespace; any other
+	// value puts the Subscription in phase Error and creates no Bundle. Leave
+	// it empty: the field is kept only so existing manifests still apply.
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
 // ImageSubscriptionSpec configures OCI registry watching.
 type ImageSubscriptionSpec struct {
-	// Registry is the OCI registry URL (e.g. "ghcr.io/myorg/myapp").
+	// Registry is the image repository to poll, without a tag or digest
+	// (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or
+	// "http://localhost:5000/myapp" for a plain-HTTP registry). Only public
+	// repositories are supported: the watcher uses the registry's anonymous
+	// token flow and sends no credentials.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Registry string `json:"registry"`
 
 	// TagFilter is an optional regular expression that image tags must match.
-	// Empty string matches all tags.
+	// Empty string matches all tags. With one matching tag its digest is
+	// tracked (a moving tag such as "^main$"); when every matching tag is a
+	// semantic version the highest wins; otherwise the most recently built
+	// image wins (at most 50 matching tags). No matching tag is an error.
 	// +optional
 	TagFilter string `json:"tagFilter,omitempty"`
 
@@ -76,9 +85,9 @@ type GitSubscriptionSpec struct {
 	// +optional
 	Branch string `json:"branch,omitempty"`
 
-	// PathGlob is an optional glob pattern for files to watch.
-	// Only commits that touch matching paths trigger Bundle creation.
-	// Empty string watches all paths.
+	// PathGlob is reserved for path filtering, which is not implemented.
+	// A non-empty value puts the Subscription in phase Error; leave it empty
+	// (every new commit on the branch creates a Bundle).
 	// +optional
 	PathGlob string `json:"pathGlob,omitempty"`
 
@@ -106,7 +115,8 @@ type SubscriptionStatus struct {
 	LastBundleCreated string `json:"lastBundleCreated,omitempty"`
 
 	// LastSeenDigest is the OCI digest or Git commit SHA from the last successful check.
-	// Used for deduplication — a new Bundle is only created when this changes.
+	// The first check only records it (no Bundle); a later check that sees a
+	// different value creates a Bundle.
 	// +optional
 	LastSeenDigest string `json:"lastSeenDigest,omitempty"`
 

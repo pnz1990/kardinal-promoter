@@ -111,6 +111,7 @@ type SecretRef struct {
 }
 
 // EnvironmentSpec defines one environment in a Pipeline.
+// +kubebuilder:validation:XValidation:rule="!has(self.autoRollback)",message="environments[].autoRollback is not implemented; remove it (automatic rollback is configured with onHealthFailure, see docs/rollback.md)"
 // +kubebuilder:validation:XValidation:rule="!(self.name in ['api-version','kind','metadata','namespace','spec','status','graph','graphengine','kro','each','item','items','object','self','this','context','true','false','null','in','as','break','const','continue','else','for','function','if','import','let','loop','package','return','var','void','while','bundle'])",message="reserved environment name: the name becomes a kro Graph node ID; bundle, kro reserved IDs (spec, status, metadata, graph, self, each, item, ...) and CEL keywords are not allowed"
 type EnvironmentSpec struct {
 	// Name is the environment identifier (e.g. "test", "uat", "prod").
@@ -170,8 +171,8 @@ type EnvironmentSpec struct {
 	// +optional
 	Shard string `json:"shard,omitempty"`
 
-	// AutoRollback configures automatic rollback when health checks fail repeatedly.
-	// When not set, automatic rollback is disabled.
+	// AutoRollback is reserved and rejected by the API server: consecutive-failure
+	// auto-rollback is not implemented. See OnHealthFailure.
 	// +optional
 	AutoRollback *AutoRollbackSpec `json:"autoRollback,omitempty"`
 
@@ -258,7 +259,8 @@ type PromotionTemplateRef struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// AutoRollbackSpec defines the automatic rollback policy for an environment.
+// AutoRollbackSpec is reserved for a consecutive-failure rollback policy. It is
+// not implemented, and EnvironmentSpec rejects it; see OnHealthFailure.
 type AutoRollbackSpec struct {
 	// FailureThreshold is the number of consecutive health-check failures
 	// that trigger an automatic rollback Bundle creation. Default: 3.

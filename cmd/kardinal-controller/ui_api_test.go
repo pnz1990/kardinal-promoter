@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
 func uiScheme() *runtime.Scheme {
@@ -492,6 +493,42 @@ func TestUIAPI_ValidateCEL_KroFunctionsAvailable(t *testing.T) {
 		var resp map[string]interface{}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, tc.wantValid, resp["valid"], "expression: %s", tc.expression)
+	}
+}
+
+// TestUIAPI_ValidateCEL_SameEnvironmentAsController covers C04-gates-26: the
+// validator used its own CEL environment, which accepted previousBundle (the
+// controller has no such variable, so the gate could never pass) and rejected
+// changewindow.isBlocked (which the controller supports). It now compiles in
+// the controller's environment.
+func TestUIAPI_ValidateCEL_SameEnvironmentAsController(t *testing.T) {
+	srv := newUIAPIServer(fake.NewClientBuilder().WithScheme(uiScheme()).Build(), zerolog.Nop())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	tests := []struct {
+		expression string
+		wantValid  bool
+	}{
+		{`!changewindow.isBlocked("holiday-freeze")`, true},
+		{`changewindow.isAllowed("holiday-freeze")`, true},
+		{`metrics["error-rate"].result == "Pass"`, true},
+		{`random.seededInt(0, 100, bundle.version) < 10`, true},
+		{`previousBundle.version == "1.0.0"`, false},
+		{`bundle.version.startsWith("1.")`, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.expression, func(t *testing.T) {
+			body, err := json.Marshal(map[string]string{"expression": tc.expression})
+			require.NoError(t, err)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/ui/validate-cel", strings.NewReader(string(body))))
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp map[string]interface{}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			assert.Equal(t, tc.wantValid, resp["valid"], "response: %v", resp)
+			assert.Equal(t, tc.wantValid, policygate.ValidateExpression(tc.expression) == nil, "the controller agrees")
+		})
 	}
 }
 
