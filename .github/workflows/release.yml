@@ -9,10 +9,104 @@ permissions:
   contents: read
 
 jobs:
+  # Every check that can stop a release runs here, before the tests and with
+  # a read-only token, so a bad tag fails before anything is pushed.
+  # test/hack/release_test.go runs these scripts.
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      chart-version: ${{ steps.version.outputs.chart-version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      make-latest: ${{ steps.version.outputs.make-latest }}
+      image-tags: ${{ steps.version.outputs.image-tags }}
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # v0.6.0 and v0.8.1 were tagged on merge commits outside main. A release
+      # is built only from a commit on main.
+      - name: Check that the tagged commit is on main
+        run: |
+          # A tag checkout does not always create origin/main, so fetch it.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag ${GITHUB_REF_NAME} points to ${GITHUB_SHA}, which is not on main. Tag a commit on main."
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME} (${GITHUB_SHA}) is on main"
+
+      # A version with a "-" (v0.9.0-rc.1) is a prerelease: the image gets no
+      # latest tag, and the GitHub release is marked prerelease and not latest.
+      # The chart has no floating tag; helm skips a prerelease chart unless
+      # given --version or --devel.
+      - name: Set version and release channel from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag ${VERSION} is not vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-PRERELEASE"
+            exit 1
+          fi
+          IMAGE=ghcr.io/pnz1990/kardinal-promoter/controller
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE=true
+            TAGS="${IMAGE}:${VERSION}"
+          else
+            PRERELEASE=false
+            TAGS="${IMAGE}:${VERSION}"$'\n'"${IMAGE}:latest"
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "chart-version=${VERSION#v}"
+            echo "prerelease=${PRERELEASE}"
+            if [ "$PRERELEASE" = true ]; then echo "make-latest=false"; else echo "make-latest=true"; fi
+            echo "image-tags<<IMAGE_TAGS_EOF"
+            echo "$TAGS"
+            echo "IMAGE_TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "${VERSION}: prerelease=${PRERELEASE}, image tags:"
+          echo "$TAGS"
+
+      # The release notes are the "## [<version>]" section of
+      # docs/changelog.md. Write that section before tagging: without it the
+      # release fails here. The notes never come from the commit history.
+      - name: Release notes from docs/changelog.md
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # The section runs from its heading to the next "## " heading or
+          # "---" rule. Headings are "## [v1.2.3] — date" or "## v1.2.3".
+          NOTES=$(awk -v v="$VERSION" '
+            /^## / { if (found) exit; found = ($2 == "[" v "]" || $2 == v); next }
+            /^---[[:space:]]*$/ { if (found) exit }
+            found { print }
+          ' docs/changelog.md | sed -e '/./,$!d')
+          if [ -z "${NOTES//[[:space:]]/}" ]; then
+            echo "::error::docs/changelog.md has no \"## [${VERSION}]\" section, or it is empty. Add it before tagging."
+            exit 1
+          fi
+          # A random delimiter, so no changelog line can end the value early.
+          DELIM="NOTES_$(openssl rand -hex 16)"
+          {
+            echo "notes<<${DELIM}"
+            echo "$NOTES"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
+          echo "$NOTES"
+
   # The tests run in their own job so that test code never runs with the
   # release job's write token.
   test:
     name: test
+    needs: preflight
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,8 +125,11 @@ jobs:
 
   release:
     name: release
-    needs: test
+    needs: [preflight, test]
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      CHART_VERSION: ${{ needs.preflight.outputs.chart-version }}
     permissions:
       contents: write
       packages: write
@@ -40,22 +137,17 @@ jobs:
       attestations: write   # required for actions/attest-build-provenance (SLSA)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Set version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
-
       - name: Set up Docker Buildx (multi-arch)
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -82,16 +174,14 @@ jobs:
       # ── Build kardinal-promoter controller image ───────────────────────────
       - name: Build and push kardinal-promoter controller image (multi-arch)
         id: build-controller
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
           build-args: |
             VERSION=${{ env.VERSION }}
-          tags: |
-            ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
-            ghcr.io/pnz1990/kardinal-promoter/controller:latest
+          tags: ${{ needs.preflight.outputs.image-tags }}
           labels: |
             org.opencontainers.image.title=kardinal-promoter-controller
             org.opencontainers.image.version=${{ env.VERSION }}
@@ -99,14 +189,14 @@ jobs:
 
       # ── SLSA Level 2 provenance ──────────────────────────────────────────────
       - name: Generate SLSA provenance attestation
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-name: ghcr.io/pnz1990/kardinal-promoter/controller
           subject-digest: ${{ steps.build-controller.outputs.digest }}
 
       # ── Cosign keyless image signing ──────────────────────────────────────────
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3.9.1
         with:
           cosign-release: v2.4.3
 
@@ -117,7 +207,7 @@ jobs:
 
       # ── SBOM generation ─────────────────────────────────────────────────────
       - name: Generate SBOM with Syft
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
         with:
           image: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
           artifact-name: sbom-controller.spdx.json
@@ -138,7 +228,7 @@ jobs:
       # Blocking here leaves a published image without a GitHub Release entry.
       # CVE remediation is tracked separately via Dependabot and the SARIF report.
       - name: Scan controller image for HIGH/CRITICAL CVEs (trivy)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ghcr.io/pnz1990/kardinal-promoter/controller:${{ env.VERSION }}
           format: sarif
@@ -149,7 +239,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload trivy SARIF report (controller)
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
         if: always()
         with:
           sarif_file: trivy-controller-results.sarif
@@ -160,13 +250,13 @@ jobs:
       - name: Update chart version
         run: |
           sed -i "s|^appVersion:.*|appVersion: \"${VERSION}\"|" chart/kardinal-promoter/Chart.yaml
-          sed -i "s|^version:.*|version: ${VERSION#v}|" chart/kardinal-promoter/Chart.yaml
+          sed -i "s|^version:.*|version: ${CHART_VERSION}|" chart/kardinal-promoter/Chart.yaml
 
       - name: Package Helm chart
         run: |
           helm package chart/kardinal-promoter \
-            --version ${VERSION#v} \
-            --app-version ${VERSION} \
+            --version "${CHART_VERSION}" \
+            --app-version "${VERSION}" \
             --destination dist/
 
       - name: Push Helm chart to OCI registry
@@ -174,34 +264,15 @@ jobs:
           helm push dist/kardinal-promoter-*.tgz oci://ghcr.io/pnz1990/charts
 
       # ── GitHub release ─────────────────────────────────────────────────────
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)
-          else
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges | head -20)
-          fi
-          # A random delimiter, so no commit subject can end the value early
-          # and inject variables into GITHUB_ENV.
-          DELIM="CHANGELOG_$(openssl rand -hex 16)"
-          {
-            echo "CHANGELOG<<${DELIM}"
-            echo "$COMMITS"
-            echo "${DELIM}"
-          } >> "$GITHUB_ENV"
-
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ env.VERSION }}
           name: kardinal-promoter ${{ env.VERSION }}
           body: |
             ## kardinal-promoter ${{ env.VERSION }}
 
-            ### Changes
-            ${{ env.CHANGELOG }}
+            ${{ needs.preflight.outputs.notes }}
 
             ### Install
 
@@ -221,7 +292,7 @@ jobs:
             ```bash
             helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
               --namespace kardinal-system --create-namespace \
-              --version ${{ env.VERSION }} \
+              --version ${{ env.CHART_VERSION }} \
               --set github.secretRef.name=github-token
             ```
 
@@ -229,7 +300,7 @@ jobs:
             update CRDs, so apply them before upgrading:
 
             ```bash
-            helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version ${{ env.VERSION }} \
+            helm show crds oci://ghcr.io/pnz1990/charts/kardinal-promoter --version ${{ env.CHART_VERSION }} \
               | kubectl apply --server-side -f -
             ```
 
@@ -256,4 +327,5 @@ jobs:
             | `ghcr.io/pnz1990/kardinal-promoter/controller` | `${{ env.VERSION }}` | linux/amd64, linux/arm64 |
           files: dist/*
           draft: false
-          prerelease: ${{ contains(env.VERSION, '-') }}
+          prerelease: ${{ needs.preflight.outputs.prerelease }}
+          make_latest: ${{ needs.preflight.outputs.make-latest }}
