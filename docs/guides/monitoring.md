@@ -17,25 +17,29 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
-If you use the Prometheus Operator:
+The Helm chart creates the Service with the `metrics` port (8080) automatically.
+
+### Prometheus Operator
+
+If you use the Prometheus Operator (for example kube-prometheus-stack), let the chart
+create a ServiceMonitor:
 
 ```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: kardinal-promoter
-  namespace: kardinal-system
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: kardinal-promoter
-  endpoints:
-    - port: metrics
-      path: /metrics
-      interval: 30s
+# values.yaml
+serviceMonitor:
+  enabled: true        # default false; needs the monitoring.coreos.com CRDs
+  interval: 30s        # optional; empty uses the Prometheus default
+  labels:              # optional; match your Prometheus serviceMonitorSelector
+    release: kube-prometheus-stack
 ```
 
-The Helm chart creates the Service with the `metrics` port (8080) automatically.
+The ServiceMonitor scrapes the chart Service's `metrics` port over plain HTTP, in the
+release namespace. Prometheus Operator sets the `job` label to the Service name, which
+is the chart's full name (`kardinal-promoter` for a release named `kardinal-promoter`).
+The alerts from `prometheusRule.enabled` select `job="<full name>"`, so they match this
+ServiceMonitor with no extra settings. If you scrape with your own ServiceMonitor or a
+static config instead, keep the job label equal to that Service name, or the
+`KardinalControllerDown` alert fires.
 
 ---
 

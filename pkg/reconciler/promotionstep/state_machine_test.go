@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -56,7 +56,7 @@ func auditActions(t *testing.T, c client.Client) []string {
 }
 
 // drain returns every Event recorded so far.
-func drain(rec *record.FakeRecorder) []string {
+func drain(rec *events.FakeRecorder) []string {
 	var out []string
 	for {
 		select {
@@ -137,7 +137,7 @@ func TestStepErrorRetry(t *testing.T) {
 			ps.Status.Outputs = tt.outputs
 			c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
 			m := &mockSCM{}
-			rec := record.NewFakeRecorder(20)
+			rec := events.NewFakeRecorder(20)
 			r := &promotionstep.Reconciler{Client: c, SCM: m, Recorder: rec,
 				WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
 			if !tt.noGit {
@@ -455,7 +455,7 @@ func TestStepStatusesFollowTheStateMachine(t *testing.T) {
 func TestTransitionsAreRecorded(t *testing.T) {
 	ps := labelled(makeStep("step", "p", "b1", "test"))
 	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
-	rec := record.NewFakeRecorder(50)
+	rec := events.NewFakeRecorder(50)
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{}, Recorder: rec,
 		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
 

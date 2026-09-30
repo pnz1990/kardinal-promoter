@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1563,7 +1563,7 @@ func TestPolicyGateReconciler_EmitsBlockedEvent(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gate, bundle).WithStatusSubresource(gate).Build()
 
-	fakeRecorder := record.NewFakeRecorder(10)
+	fakeRecorder := events.NewFakeRecorder(10)
 	r, err := policygate.NewReconciler(c)
 	require.NoError(t, err)
 	r.NowFn = time.Now

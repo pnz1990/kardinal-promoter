@@ -1242,7 +1242,7 @@ func (s *uiAPIServer) handleStepsSubpath(w http.ResponseWriter, r *http.Request)
 }
 
 // handleStepEvents returns the last 20 Kubernetes events for the named PromotionStep,
-// sorted by lastTimestamp descending (newest first) (#527). The step must
+// newest first (#527). The step must
 // exist (404 otherwise) and only events whose involvedObject is that step are
 // returned, so the endpoint cannot read events of other objects.
 func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, namespace, stepName string) {
@@ -1299,14 +1299,9 @@ func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, n
 		filtered = append(filtered, ev)
 	}
 
-	// Sort by lastTimestamp descending (newest first).
-	sort.Slice(filtered, func(i, j int) bool {
-		ti := filtered[i].LastTimestamp.Time
-		tj := filtered[j].LastTimestamp.Time
-		if ti.Equal(tj) {
-			return filtered[i].EventTime.After(filtered[j].EventTime.Time)
-		}
-		return ti.After(tj)
+	// Sort newest first.
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return eventLastSeen(&filtered[i]).After(eventLastSeen(&filtered[j]))
 	})
 
 	// Cap at 20 events.
@@ -1316,22 +1311,59 @@ func (s *uiAPIServer) handleStepEvents(w http.ResponseWriter, r *http.Request, n
 	}
 
 	result := make([]uiEventResponse, 0, len(filtered))
-	for _, ev := range filtered {
+	for i := range filtered {
+		ev := &filtered[i]
 		r := uiEventResponse{
 			Type:    ev.Type,
 			Reason:  ev.Reason,
 			Message: ev.Message,
-			Count:   ev.Count,
+			Count:   eventCount(ev),
 		}
-		if !ev.FirstTimestamp.IsZero() {
-			r.FirstTimestamp = ev.FirstTimestamp.UTC().Format(time.RFC3339)
+		if first := eventFirstSeen(ev); !first.IsZero() {
+			r.FirstTimestamp = first.UTC().Format(time.RFC3339)
 		}
-		if !ev.LastTimestamp.IsZero() {
-			r.LastTimestamp = ev.LastTimestamp.UTC().Format(time.RFC3339)
+		if last := eventLastSeen(ev); !last.IsZero() {
+			r.LastTimestamp = last.UTC().Format(time.RFC3339)
 		}
 		result = append(result, r)
 	}
 	writeJSON(w, result)
+}
+
+// The reconcilers write Events through events.k8s.io/v1. Read through core/v1,
+// such an Event has no firstTimestamp, lastTimestamp or count: its times are
+// eventTime and series.lastObservedTime, and its count is series.count (no
+// series means it happened once). Events written through core/v1 before the
+// upgrade carry the old fields. These helpers read both.
+
+// eventLastSeen is when the Event last happened.
+func eventLastSeen(ev *corev1.Event) time.Time {
+	if !ev.LastTimestamp.IsZero() {
+		return ev.LastTimestamp.Time
+	}
+	if ev.Series != nil && !ev.Series.LastObservedTime.IsZero() {
+		return ev.Series.LastObservedTime.Time
+	}
+	return ev.EventTime.Time
+}
+
+// eventFirstSeen is when the Event first happened.
+func eventFirstSeen(ev *corev1.Event) time.Time {
+	if !ev.FirstTimestamp.IsZero() {
+		return ev.FirstTimestamp.Time
+	}
+	return ev.EventTime.Time
+}
+
+// eventCount is how many times the Event happened.
+func eventCount(ev *corev1.Event) int32 {
+	if ev.Count > 0 {
+		return ev.Count
+	}
+	if ev.Series != nil && ev.Series.Count > 0 {
+		return ev.Series.Count
+	}
+	return 1
 }
 
 // handleBundles handles POST /api/v1/ui/bundles — creates a Bundle from the UI

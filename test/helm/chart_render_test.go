@@ -394,7 +394,8 @@ var readVerbs = []string{"get", "list", "watch"}
 // rule in templates/_rbac.tpl.
 func controllerAccess() []apiAccess {
 	acc := []apiAccess{
-		{"", "events", []string{"create", "patch"}, inWatched, "", "GetEventRecorderFor (main.go)"},
+		{"events.k8s.io", "events", []string{"create", "patch"}, inWatched, "", "GetEventRecorder (main.go): reconciler Events"},
+		{"", "events", []string{"list", "create", "patch"}, inWatched, "", "UI step events list (ui_api.go); leader election Events (controller-runtime)"},
 		{"", "secrets", readVerbs, inWatched, "", "Pipeline git secret (promotionstep), SCM SecretWatcher (cached client)"},
 		{"", "configmaps", readVerbs, inWatched, "", "ensureVersionConfigMap cached Get (main.go)"},
 		{"kardinal.io", "auditevents", []string{"get", "list", "watch", "create"}, inWatched, "", "audit.go"},

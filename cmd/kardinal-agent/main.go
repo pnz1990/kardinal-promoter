@@ -149,7 +149,7 @@ func main() {
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
 		Shard:          shard,
-		Recorder:       mgr.GetEventRecorderFor("kardinal-agent"), //nolint:staticcheck
+		Recorder:       mgr.GetEventRecorder("kardinal-agent"),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("[kardinal-agent] unable to set up PromotionStepReconciler")
 	}
