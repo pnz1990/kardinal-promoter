@@ -22,6 +22,8 @@ import (
 
 const fakeKubectl = `#!/usr/bin/env bash
 echo "kubectl $*" >> "$FAKE_LOG"
+# Read piped input (kubectl apply -f -) so the writer never gets SIGPIPE.
+for a in "$@"; do [ "$a" = - ] && cat >/dev/null; done
 if [ "$1" = config ]; then
   case "$2" in
     current-context) echo "$FAKE_CURRENT_CONTEXT" ;;
@@ -52,6 +54,8 @@ exit 0
 
 const fakeRecorder = `#!/usr/bin/env bash
 echo "$(basename "$0") $*" >> "$FAKE_LOG"
+# Read piped input (kubectl apply -f -) so the writer never gets SIGPIPE.
+for a in "$@"; do [ "$a" = - ] && cat >/dev/null; done
 exit 0
 `
 
