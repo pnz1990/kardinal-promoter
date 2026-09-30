@@ -360,8 +360,13 @@ Secret: <the controller's webhook secret>
 Events: Pull requests (pull_request)
 ```
 
-Only merged `pull_request` events advance a promotion. See
-[SCM Providers](scm-providers.md#webhook-configuration) for GitLab and Forgejo.
+The `https://` URL needs controller TLS (`controller.tlsCertFile` and `controller.tlsKeyFile`)
+or an Ingress that terminates TLS in front of port 8083; without either, the endpoint is plain
+`http://`.
+
+Only merged `pull_request` events advance a promotion. See SCM Providers for
+[GitLab](scm-providers.md#webhook-configuration_1) and
+[Forgejo](scm-providers.md#webhook-configuration_2).
 
 With webhooks configured, the controller advances the promotion within seconds of
 PR merge. Without webhooks, advancement happens at the next poll (within about 30 seconds).

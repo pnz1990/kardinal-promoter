@@ -40,8 +40,8 @@ helm install kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
 
 # 3. Check the demo Pipeline (it lives in the release namespace)
 kardinal get pipelines -n kardinal-system
-# PIPELINE   BUNDLE   TEST   UAT   PROD   AGE
-# demo       -        -      -     -      10s
+# PIPELINE   BUNDLE   TEST   UAT   PROD   SUB   AGE
+# demo       -        -      -     -      0     10s
 
 # 4. Trigger the first promotion (get the latest test-app SHA from CI)
 SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
@@ -283,8 +283,8 @@ Verify the Pipeline was created:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE   TEST   UAT   PROD   AGE
-# kardinal-test-app   -        -      -     -      10s
+# PIPELINE            BUNDLE   TEST   UAT   PROD   SUB   AGE
+# kardinal-test-app   -        -      -     -      0     10s
 ```
 
 !!! tip "Troubleshooting: Pipeline not appearing"
@@ -338,8 +338,8 @@ The promotion starts immediately. kardinal-promoter generates a Graph and begins
 ```bash
 # Watch the pipeline status
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT              PROD   AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   -      2m
+# PIPELINE            BUNDLE                    TEST       UAT              PROD   SUB   AGE
+# kardinal-test-app   kardinal-test-app-x7k2p   Verified   HealthChecking   -      0     2m
 
 # See the steps of the active Bundle
 kardinal get steps kardinal-test-app
@@ -391,8 +391,8 @@ The PR body contains:
 
 ```bash
 kardinal get pipelines
-# PIPELINE            BUNDLE                    TEST       UAT        PROD       AGE
-# kardinal-test-app   kardinal-test-app-x7k2p   Verified   Verified   Verified   8m
+# PIPELINE            BUNDLE                    TEST       UAT        PROD       SUB   AGE
+# kardinal-test-app   kardinal-test-app-x7k2p   Verified   Verified   Verified   0     8m
 ```
 
 The promotion is complete.

@@ -1,15 +1,16 @@
 # 04: PolicyGate Reconciler
 
-> Status: Historical (checked against the code on 2026-09-29). Several parts differ from the
+> Status: Historical (checked against the code on 2026-09-30). Several parts differ from the
 > code; `pkg/reconciler/policygate/` and [policy-gates](../policy-gates.md) are the reference.
 > Known differences:
-> - The package holds `audit.go`, `cel_evaluator.go`, `doc.go`, `reconciler.go` and `types.go`.
+> - The package holds `audit.go`, `cel_evaluator.go`, `doc.go` and `reconciler.go`.
 > - There is no `NewCELEnvironment`. `newEvaluator` in `cel_evaluator.go` declares the
->   variables `bundle`, `schedule`, `environment`, `metrics`, `upstream`, `previousBundle` and
->   `changewindow`. There are no `delegation`, `externalApproval`, `contracts` or
+>   variables `bundle`, `schedule`, `environment`, `metrics`, `upstream` and `changewindow`.
+>   There are no `previousBundle`, `delegation`, `externalApproval`, `contracts` or
 >   `targetDrift` variables.
-> - `bundle.upstreamSoakMinutes` is the largest `soakMinutes` in the Bundle's environment
->   status.
+> - `bundle.upstreamSoakMinutes` is the smallest `soakMinutes` among the environments directly
+>   upstream of the gated environment in the Pipeline DAG
+>   (`directUpstreamSoakMinutes` in `reconciler.go`).
 > - Templates are not ignored: `reconcileTemplate` compiles their expression and writes the
 >   result to status.
 > Depends on: 01-graph-integration

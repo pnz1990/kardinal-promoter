@@ -112,8 +112,8 @@ kardinal create bundle kardinal-test-app \
 
 # 7. Watch promotion start
 kardinal get pipelines
-# PIPELINE              BUNDLE        TEST       UAT     PROD     AGE
-# kardinal-test-app     sha-9349a3f   Verified   ...     ...      2m
+# PIPELINE              BUNDLE        TEST       UAT     PROD     SUB   AGE
+# kardinal-test-app     sha-9349a3f   Verified   ...     ...      0     2m
 
 # 8. Check policy gate explanation
 kardinal explain kardinal-test-app --env prod
@@ -125,8 +125,8 @@ kardinal explain kardinal-test-app --env prod
 
 # 10. After PR merge
 kardinal get pipelines
-# PIPELINE              BUNDLE        TEST       UAT        PROD       AGE
-# kardinal-test-app     sha-9349a3f   Verified   Verified   Verified   8m
+# PIPELINE              BUNDLE        TEST       UAT        PROD       SUB   AGE
+# kardinal-test-app     sha-9349a3f   Verified   Verified   Verified   0     8m
 ```
 
 ### Pass criteria

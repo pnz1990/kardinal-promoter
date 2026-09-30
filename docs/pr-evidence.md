@@ -99,8 +99,10 @@ kardinal-promoter detects PR merges in two ways:
 
 - **Webhook**: the controller serves `/webhook/scm` on port 8083. A merged `pull_request` event
   marks the matching PRStatus as merged, and the PromotionStep then moves to HealthChecking.
-  The endpoint needs the controller's webhook secret; see
-  [SCM Providers](scm-providers.md#webhook-configuration).
+  The endpoint needs the controller's webhook secret; see the webhook configuration for
+  [GitHub](scm-providers.md#webhook-configuration),
+  [GitLab](scm-providers.md#webhook-configuration_1) or
+  [Forgejo](scm-providers.md#webhook-configuration_2).
 - **Polling**: the PRStatus reconciler checks each open PR every 30 seconds, so merges are
   picked up without webhooks and after a controller restart.
 

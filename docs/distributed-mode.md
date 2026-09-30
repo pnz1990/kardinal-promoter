@@ -50,6 +50,11 @@ server, runs the promotion steps (Git, PR, health check) for its PromotionSteps,
 their status there. The agent's own SCM token (`--github-token` or `GITHUB_TOKEN`) stays
 wherever the agent runs; a Pipeline `git.secretRef` is read from the hub.
 
+Only the hub controller runs the PRStatus reconciler. It detects merges of the PRs that agents
+open, by polling with the hub's SCM token or through the hub's `/webhook/scm` endpoint. So
+`approval: pr-review` in a sharded environment needs a hub SCM token that can read the
+GitOps repository, or SCM webhooks pointed at the hub.
+
 ## When to Use Distributed Mode
 
 | Scenario | Use distributed? |
@@ -186,8 +191,13 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]
+  # patch is needed only for update.strategy: argocd, which patches the
+  # Application's image overrides. Drop it otherwise.
   - apiGroups: ["argoproj.io"]
-    resources: ["applications", "rollouts"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kustomize.toolkit.fluxcd.io"]
     resources: ["kustomizations"]

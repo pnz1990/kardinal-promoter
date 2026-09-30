@@ -184,7 +184,7 @@ installs, using RBAC to restrict writes.
 
 #### Additional isolation steps
 
-1. Keep `networkPolicy.enabled=true` and narrow `networkPolicy.ingressFrom.*` for each install (see [NetworkPolicy](#networkpolicy))
+1. Set `networkPolicy.enabled=true` (the default is `false`) and narrow `networkPolicy.ingressFrom.*` for each install (see [NetworkPolicy](#networkpolicy))
 2. Give each team its own SCM token, scoped to that team's GitOps repositories, so a leaked token only reaches one team's repos
 3. Keep each team's token `Secret` in that team's namespace — never share a token across namespace installs
 
