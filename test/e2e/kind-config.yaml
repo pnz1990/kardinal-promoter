@@ -4,7 +4,8 @@
 # The node image must be Kubernetes 1.30 or newer: on 1.29 the API server's
 # CEL cost estimate rejects kro's graphs.kro.run CRD ("estimated rule cost
 # exceeds budget"). The image is the one built for the kind release the
-# workflows install (v0.29.0), pinned by digest as the kind release notes list it.
+# workflows install (KIND_VERSION in hack/tool-versions.env), pinned by digest
+# as the kind release notes list it. KUBECTL_VERSION there has the same minor.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: kardinal-e2e

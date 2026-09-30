@@ -38,6 +38,7 @@ func makeBundle(name, pipeline string) *kardinalv1alpha1.Bundle {
 		Spec: kardinalv1alpha1.BundleSpec{
 			Type:     "image",
 			Pipeline: pipeline,
+			Images:   []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}},
 		},
 	}
 }
@@ -339,8 +340,9 @@ func TestBuilder_ConfigBundle(t *testing.T) {
 	bundle := &kardinalv1alpha1.Bundle{
 		ObjectMeta: metav1.ObjectMeta{Name: "config-app-fix1", Namespace: "default"},
 		Spec: kardinalv1alpha1.BundleSpec{
-			Type:     "config",
-			Pipeline: "config-app",
+			Type:      "config",
+			Pipeline:  "config-app",
+			ConfigRef: &kardinalv1alpha1.ConfigRef{GitRepo: "https://github.com/org/config", CommitSHA: "abc123"},
 		},
 	}
 
@@ -446,7 +448,7 @@ func TestBuilder_GraphNameMaxLength(t *testing.T) {
 			Name:      "very-long-bundle-name-with-version-1-2-3-4",
 			Namespace: "default",
 		},
-		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: pipeline.Name},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: pipeline.Name, Images: testImages},
 	}
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
@@ -465,7 +467,7 @@ func TestBuilder_OwnerReferences(t *testing.T) {
 			Namespace: "default",
 			UID:       "test-uid-1234",
 		},
-		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app"},
+		Spec: kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "app", Images: testImages},
 	}
 
 	result, err := b.Build(graph.BuildInput{Pipeline: pipeline, Bundle: bundle})
@@ -1220,3 +1222,6 @@ func TestBuilder_SingleRegionNoForEach(t *testing.T) {
 	_, hasRegion := prodSpec["region"]
 	assert.False(t, hasRegion, "single-region environment (regions=[x]) must not have spec.region in template")
 }
+
+// testImages is the image of the test Bundles: an image Bundle needs one.
+var testImages = []kardinalv1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: "v1"}}

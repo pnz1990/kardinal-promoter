@@ -31,7 +31,6 @@ const (
 	LabelPipeline    = "kardinal.io/pipeline"
 	LabelEnvironment = "kardinal.io/environment"
 	LabelRollback    = "kardinal.io/rollback"
-	LabelEmergency   = "kardinal.io/emergency"
 	LabelReason      = "kardinal.io/reason"
 	LabelScope       = "kardinal.io/scope"
 	LabelFreeze      = "kardinal.io/freeze"
@@ -78,17 +77,26 @@ func StampCreatedAt(obj metav1.Object, now time.Time) {
 // CompareCreation orders two Bundles by creation: negative when a was created
 // before b, positive when after, zero only for the same object.
 //
+// It compares the tuple (creationTimestamp, has created-at, created-at, name).
 // The API server's creationTimestamp decides when the seconds differ. Within
-// the same second the kardinal.io/created-at annotation decides when both
-// Bundles carry it. The name is the last resort, so the order is total and
-// stable across reconciles.
+// the same second a Bundle without a valid kardinal.io/created-at annotation
+// (created with kubectl, GitOps or an older controller) sorts before every
+// Bundle that has one, and two stamped Bundles are ordered by the stamp. The
+// name is the last resort. That is a total order, so sorting gives the same
+// result whatever the List order (#1316).
 func CompareCreation(a, b *v1alpha1.Bundle) int {
 	if c := a.CreationTimestamp.Compare(b.CreationTimestamp.Time); c != 0 {
 		return c
 	}
 	ta, okA := createdAt(a)
 	tb, okB := createdAt(b)
-	if okA && okB {
+	switch {
+	case okA != okB:
+		if okA {
+			return 1
+		}
+		return -1
+	case okA:
 		if c := ta.Compare(tb); c != 0 {
 			return c
 		}

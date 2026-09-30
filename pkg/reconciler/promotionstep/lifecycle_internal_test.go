@@ -51,6 +51,11 @@ func arStep(bundle, state string, minute int) *v1alpha1.PromotionStep {
 	return s
 }
 
+func withSidecar(b *v1alpha1.Bundle, tag string) *v1alpha1.Bundle {
+	b.Spec.Images = append(b.Spec.Images, v1alpha1.ImageRef{Repository: "ghcr.io/org/sidecar", Tag: tag})
+	return b
+}
+
 // TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle covers
 // C03-promotionstep-09: onHealthFailure=rollback creates a Bundle with the
 // images of the Bundle verified before the failing one (the planner the CLI
@@ -73,6 +78,11 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 		wantTgt   string
 		// failingIsRollback makes app-v2 a rollback Bundle (from app-v3).
 		failingIsRollback bool
+		// sidecar adds the image ghcr.io/org/sidecar:2 to app-v2 (#1315).
+		sidecar bool
+		// wantSidecar is the sidecar tag the rollback restores.
+		wantSidecar string
+		wantMsg     string
 	}{
 		{name: "rolls back to the bundle verified before the failing one",
 			earlier:   []client.Object{arBundle("app-v1", "1", 0), arStep("app-v1", StateVerified, 5)},
@@ -92,6 +102,17 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 			earlier:           []client.Object{arBundle("app-v1", "1", 0), arStep("app-v1", StateVerified, 5)},
 			failingIsRollback: true,
 			wantState:         StateAbortedByAlarm},
+		{name: "an image the target does not name is restored from the history (#1315)",
+			earlier: []client.Object{
+				withSidecar(arBundle("app-v0", "0", 0), "0"), arStep("app-v0", StateVerified, 2),
+				arBundle("app-v1", "1", 3), arStep("app-v1", StateVerified, 5),
+			},
+			sidecar:   true,
+			wantState: StateRollingBack, wantTag: "1", wantTgt: "app-v1", wantSidecar: "0"},
+		{name: "an image with no earlier version: abort for a human, naming it (#1315)",
+			earlier:   []client.Object{arBundle("app-v1", "1", 0), arStep("app-v1", StateVerified, 5)},
+			sidecar:   true,
+			wantState: StateAbortedByAlarm, wantMsg: "with image ghcr.io/org/sidecar was Verified in prod"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +123,9 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 				failingBundle.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
 				failingBundle.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "app-v3"}
 				failingBundle.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+			}
+			if tc.sidecar {
+				withSidecar(failingBundle, "2")
 			}
 			objs := append([]client.Object{pipeline.DeepCopy(), failingBundle, failing}, tc.earlier...)
 			c := fakeclient.NewClientBuilder().WithScheme(newTestScheme(t)).
@@ -138,13 +162,17 @@ func TestOnHealthFailureRollback_RestoresPreviousVerifiedBundle(t *testing.T) {
 				if tc.failingIsRollback {
 					assert.Contains(t, got.Status.Message, "Bundle app-v2 is a rollback and is not rolled back again")
 				}
+				assert.Contains(t, got.Status.Message, tc.wantMsg)
 				return
 			}
 			require.Len(t, rollbacks, 1, "one rollback Bundle, however often the step is reconciled")
 			rb := rollbacks[0]
 			assert.Equal(t, "app-v2-rollback-alarm", rb.Name)
-			require.Len(t, rb.Spec.Images, 1, "the rollback Bundle carries the target's images")
-			assert.Equal(t, tc.wantTag, rb.Spec.Images[0].Tag)
+			wantImages := []v1alpha1.ImageRef{{Repository: "ghcr.io/org/app", Tag: tc.wantTag}}
+			if tc.wantSidecar != "" {
+				wantImages = append(wantImages, v1alpha1.ImageRef{Repository: "ghcr.io/org/sidecar", Tag: tc.wantSidecar})
+			}
+			assert.Equal(t, wantImages, rb.Spec.Images, "the target's images, plus the history's version of the images it does not name")
 			assert.Equal(t, tc.wantTgt, rb.Spec.Provenance.RollbackOf)
 			assert.Equal(t, "app-v2", rb.Annotations[lifecycle.AnnotationRollbackFrom])
 			assert.Equal(t, "prod", rb.Spec.Intent.TargetEnvironment)
