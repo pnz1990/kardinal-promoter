@@ -69,12 +69,12 @@ func read(in io.Reader, out io.Writer) (*summary, error) {
 		line := sc.Bytes()
 		var ev event
 		if len(line) == 0 || line[0] != '{' || json.Unmarshal(line, &ev) != nil {
-			fmt.Fprintln(out, string(line))
+			_, _ = fmt.Fprintln(out, string(line))
 			continue
 		}
 		switch ev.Action {
 		case "output":
-			fmt.Fprint(out, ev.Output)
+			_, _ = fmt.Fprint(out, ev.Output)
 		case "pass", "fail", "skip":
 			if ev.Test == "" {
 				if ev.Action == "fail" {

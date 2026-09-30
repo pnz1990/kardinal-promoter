@@ -8,7 +8,9 @@
 # kardinal-system/scm-webhook when present). Idempotent (helm upgrade).
 #
 # Env:
-#   KARDINAL_E2E_IMAGE      image ref (default ghcr.io/pnz1990/kardinal-promoter/controller:e2e)
+#   KARDINAL_E2E_IMAGE      image ref (default
+#                           ghcr.io/pnz1990/kardinal-promoter/controller:e2e-<cluster>, so
+#                           suites set up at once on one host don't load each other's build)
 #   KARDINAL_E2E_BUILD      docker (default): docker build of the repo Dockerfile
 #                           host: go build on the host + hack/e2e/controller.Dockerfile
 #                           none: KARDINAL_E2E_IMAGE is already built (CI)
@@ -23,7 +25,7 @@ target_cluster
 # shellcheck disable=SC1091
 source "$E2E_OUT/env"
 
-IMAGE=${KARDINAL_E2E_IMAGE:-ghcr.io/pnz1990/kardinal-promoter/controller:e2e}
+IMAGE=${KARDINAL_E2E_IMAGE:-ghcr.io/pnz1990/kardinal-promoter/controller:e2e-$KIND_CLUSTER}
 BUILD=${KARDINAL_E2E_BUILD:-docker}
 BIN="$E2E_OUT/bin"
 mkdir -p "$BIN"

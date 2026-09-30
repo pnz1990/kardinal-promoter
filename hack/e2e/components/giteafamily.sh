@@ -146,8 +146,8 @@ ensure_token kardinal-bot "$FLAVOR-bot-token" '["write:repository","write:issue"
   api POST /orgs "{\"username\":\"$ORG\",\"visibility\":\"public\"}" >/dev/null
 TEAM_ID=$(api GET "/orgs/$ORG/teams" | python3 -c 'import json,sys; print(next((str(t["id"]) for t in json.load(sys.stdin) if t["name"]=="bots"),""))')
 if [ -z "$TEAM_ID" ]; then
-  TEAM_ID=$(api POST "/orgs/$ORG/teams" '{"name":"bots","permission":"write","includes_all_repositories":true,
-    "units":["repo.code","repo.pulls","repo.issues"],
+  # units_map only: Gitea 28 rejects a team with both units and units_map.
+  TEAM_ID=$(api POST "/orgs/$ORG/teams" '{"name":"bots","includes_all_repositories":true,
     "units_map":{"repo.code":"write","repo.pulls":"write","repo.issues":"write"}}' |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 fi

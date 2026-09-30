@@ -38,8 +38,6 @@ type Repo struct {
 	Branch string
 	// CloneURL is the Pipeline's spec.git.url.
 	CloneURL string
-	// id is the provider's own handle (GitLab project ID).
-	id string
 }
 
 // PR is a pull or merge request as the provider reports it.
@@ -163,7 +161,7 @@ func (c *client) do(ctx context.Context, method, path string, in, out interface{
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err

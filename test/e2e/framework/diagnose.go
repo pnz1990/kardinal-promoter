@@ -107,7 +107,7 @@ func artifactsDir() string {
 	if d := os.Getenv(EnvArtifacts); d != "" {
 		return d
 	}
-	return filepath.Join("results")
+	return "results"
 }
 
 func write(t *testing.T, dir, name string, data []byte) {
