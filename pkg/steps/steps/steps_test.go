@@ -590,12 +590,68 @@ func TestOpenPRStep_RollbackTitleAndLabels(t *testing.T) {
 	}
 }
 
-func TestLookup_UnknownStep_FallsBackToCustom(t *testing.T) {
-	// Unknown step names now return a CustomWebhookStep (not an error).
-	// The custom step will fail at execution time if webhook.url is missing.
-	step, err := parentsteps.Lookup("nonexistent-step")
-	require.NoError(t, err, "unknown step names must not error — they become custom webhook steps")
-	assert.Equal(t, "nonexistent-step", step.Name())
+// TestLookup proves only built-in steps resolve. An unknown name is a
+// permanent error instead of a custom webhook step (#1282), and the removed
+// verify-image and integration-test steps are no longer registered.
+func TestLookup(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr string
+	}{
+		{name: "git-clone"},
+		{name: "kustomize-set-image"},
+		{name: "health-check"},
+		{name: "nonexistent-step", wantErr: `unknown step "nonexistent-step"`},
+		{name: "verify-image", wantErr: `unknown step "verify-image"`},
+		{name: "integration-test", wantErr: `unknown step "integration-test"`},
+		{name: "", wantErr: "empty step name"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step, err := parentsteps.Lookup(tt.name)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, tt.name, step.Name())
+				return
+			}
+			require.Error(t, err)
+			assert.Nil(t, step)
+			assert.EqualError(t, err, tt.wantErr)
+			assert.ErrorIs(t, err, parentsteps.ErrPermanent, "retrying cannot fix an unknown step name")
+		})
+	}
+}
+
+// TestDefaultSequencesUseRegisteredSteps: Lookup no longer turns an unknown
+// name into a webhook, so every step a default sequence names must be
+// registered, for every approval, bundle type, strategy and layout.
+func TestDefaultSequencesUseRegisteredSteps(t *testing.T) {
+	for _, approval := range []string{"", "auto", "pr-review"} {
+		for _, bundleType := range []string{"", "image", "config", "mixed"} {
+			for _, strategy := range []string{"", "kustomize", "helm", "argocd"} {
+				for _, layout := range []string{"", "directory", "branch"} {
+					for _, name := range parentsteps.DefaultSequenceForBundle(approval, bundleType, strategy, layout) {
+						_, err := parentsteps.Lookup(name)
+						assert.NoError(t, err, "approval=%q type=%q strategy=%q layout=%q", approval, bundleType, strategy, layout)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestEngine_UnknownStepFailsWithoutExecuting proves a sequence with an
+// unknown step name stops at that step with a permanent error and runs
+// nothing: before #1282 the name became a webhook call.
+func TestEngine_UnknownStepFailsWithoutExecuting(t *testing.T) {
+	state := &parentsteps.StepState{Outputs: map[string]string{}}
+	next, result, err := parentsteps.NewEngine([]string{"health-check", "my-webhook"}).
+		ExecuteFrom(context.Background(), state, 0)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, parentsteps.ErrPermanent)
+	assert.Contains(t, err.Error(), `unknown step "my-webhook"`)
+	assert.Equal(t, 1, next, "the engine stops at the unknown step")
+	assert.Equal(t, parentsteps.StepFailed, result.Status)
 }
 
 func TestEngine_ExecuteFrom_AllSteps(t *testing.T) {

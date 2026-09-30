@@ -34,7 +34,7 @@ writes its result to its own CRD status, because kro has no primitive for it (le
 | — (not catalogued) | The Bundle reconciler computes soak time with `time.Now` and requeues every minute while Promoting (`soakRequeue`). | Accepted |
 | — (not catalogued) | The PRStatus reconciler polls the SCM API every 30 s (`requeuePollInterval`); SCM webhooks only shorten the wait. | Accepted |
 | — (not catalogued) | Reconcilers make external HTTP calls: NotificationHook (webhook delivery), Subscription (registry and Git Smart HTTP reads in `pkg/source`), MetricCheck (Prometheus). Each writes the result to its own status. | Accepted |
-| — (not catalogued) | The `verify-image` step runs the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Accepted |
+| — (not catalogued) | The `verify-image` step ran the `cosign` binary (`pkg/steps/steps/verify_image.go`). | Done: step removed (#1278, #1282); signatures are verified at admission in the target cluster |
 
 ### What to work on now
 
@@ -87,7 +87,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | CEL-2 / PG-2 | #131 | `buildMetricsContext()` aggregates MetricCheck CRDs in Go | Create MetricCheck Watch node; remove Go aggregation |
 | PS-4 / SCM-2 / ST-10 / ST-11 / BU-3 / WH-1 | #133 | GitHub API `GetPRStatus()` in 5 code paths | New `PRStatus` CRD + reconciler; Watch node replaces all 5 |
 | PS-6 / PS-7 | #134 | Auto-rollback threshold in Go; Bundle created from PromotionStep reconciler | New `RollbackPolicy` CRD; threshold is Watch node condition |
-| ST-3 / ST-4 | #135 | CustomWebhookStep blocks reconciler with `time.After` | Replace blocking retries with `ctrl.Result{RequeueAfter}` |
+| ST-3 / ST-4 | #135 | CustomWebhookStep blocks reconciler with `time.After` | Removed: the custom webhook step was deleted (#1282); `steps.Lookup` now errors on unregistered names |
 | CLI-1 / CLI-2 / CLI-3 | #137 | CLI imports `pkg/cel`; schedule.isWeekend computed client-side | Server-side simulation API; remove `pkg/cel` from CLI |
 
 ### HIGH

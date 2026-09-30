@@ -1,7 +1,7 @@
 ---
 # Example PromotionTemplate — reusable step sequence for all standard pipelines.
 # NOT USED YET: spec.environments[].promotionTemplate is not implemented, and a
-# Pipeline that sets it is rejected (see docs/custom-steps.md). Applying this
+# Pipeline that sets it is rejected (see docs/pipeline-reference.md#promotion-steps). Applying this
 # object is harmless; no environment can reference it.
 apiVersion: kardinal.io/v1alpha1
 kind: PromotionTemplate

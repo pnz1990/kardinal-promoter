@@ -550,7 +550,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 			return ctrl.Result{RequeueAfter: requeueWaitForMerge}, nil
 		}
 
-		// No prURL — this is a non-blocking retry (e.g. custom webhook 5xx backoff).
+		// No prURL — this is a non-blocking retry (e.g. an SCM call to retry later).
 		// Stay in Promoting state; use the step's requested RequeueAfter duration if set.
 		ps.Status.Message = result.Message
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
