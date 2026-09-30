@@ -33,9 +33,12 @@ export function sortBundlesNewestFirst(bundles: Bundle[]): Bundle[] {
 /**
  * The bundle shown when the user has not picked one:
  *  1. the pipeline's activeBundleName (chosen by the API), when it is in the list;
- *  2. otherwise the newest Promoting bundle;
- *  3. otherwise the newest bundle that is not Superseded;
- *  4. otherwise the newest bundle.
+ *  2. otherwise the newest bundle that is not Superseded, whatever its phase;
+ *  3. otherwise the newest bundle.
+ * Steps 2 and 3 are the API's activeBundleName rule (handlePipelines in
+ * cmd/kardinal-controller/ui_api.go), so both pick the same bundle. The phase
+ * does not rank bundles: a newer Failed bundle is shown over an older Verified
+ * or Promoting one, so a failure is never hidden (E2E-R15).
  */
 export function pickDefaultBundle(bundles: Bundle[], activeBundleName?: string): Bundle | undefined {
   if (bundles.length === 0) return undefined
@@ -44,9 +47,7 @@ export function pickDefaultBundle(bundles: Bundle[], activeBundleName?: string):
     if (active) return active
   }
   const sorted = sortBundlesNewestFirst(bundles)
-  return sorted.find(b => b.phase === 'Promoting')
-    ?? sorted.find(b => b.phase !== 'Superseded')
-    ?? sorted[0]
+  return sorted.find(b => b.phase !== 'Superseded') ?? sorted[0]
 }
 
 /**

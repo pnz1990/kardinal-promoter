@@ -265,39 +265,40 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build per-pipeline active bundle index:
-	// For each pipeline, find the most recent Promoting (or Verified) Bundle
-	// and read its per-environment states for the health bar (#342).
+	// Build per-pipeline active bundle index (#342): the pipeline's current
+	// bundle, whose per-environment states feed the health bar and whose steps
+	// and gates feed the ops counts.
 	var bundleList v1alpha1.BundleList
 	if err := s.client.List(r.Context(), &bundleList); err != nil {
 		s.log.Error().Err(err).Msg("ui: list bundles")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// Index: namespace/pipeline → active bundle (prefer Promoting > Available >
-	// Verified; the newest bundle wins a tie).
+	// Index: namespace/pipeline → current bundle. The current bundle is the
+	// newest non-Superseded bundle (lifecycle.CompareCreation: creationTimestamp,
+	// then the created-at annotation, then the name), whatever its phase, so a
+	// newer Failed bundle is never hidden behind an older Verified or Promoting
+	// one (E2E-R15). When every bundle is Superseded, the newest one is used.
+	// web/src/bundleSelection.ts pickDefaultBundle applies the same rule.
 	type activeBundleEntry struct {
+		bundle       *v1alpha1.Bundle
 		name         string
-		phase        string
+		superseded   bool
 		envStates    map[string]string
 		createdAt    time.Time
 		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
 	}
 	activeBundles := make(map[string]*activeBundleEntry)
-	phaseOrder := map[string]int{"Promoting": 3, "Available": 2, "Verified": 1, "Failed": 0, "Superseded": -1}
-	for _, b := range bundleList.Items {
+	for i := range bundleList.Items {
+		b := &bundleList.Items[i]
 		if b.Spec.Pipeline == "" {
 			continue
 		}
 		key := fmt.Sprintf("%s/%s", b.Namespace, b.Spec.Pipeline)
 		existing := activeBundles[key]
-		newScore := phaseOrder[b.Status.Phase]
-		existingScore := -99
-		if existing != nil {
-			existingScore = phaseOrder[existing.phase]
-		}
-		if existing == nil || newScore > existingScore ||
-			(newScore == existingScore && b.CreationTimestamp.After(existing.createdAt)) {
+		superseded := b.Status.Phase == "Superseded"
+		if existing == nil || (existing.superseded && !superseded) ||
+			(existing.superseded == superseded && lifecycle.CompareCreation(b, existing.bundle) > 0) {
 			envStates := make(map[string]string, len(b.Status.Environments))
 			var lastVerified time.Time
 			for _, env := range b.Status.Environments {
@@ -310,8 +311,9 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			activeBundles[key] = &activeBundleEntry{
+				bundle:       b,
 				name:         b.Name,
-				phase:        b.Status.Phase,
+				superseded:   superseded,
 				envStates:    envStates,
 				createdAt:    b.CreationTimestamp.Time,
 				lastVerified: lastVerified,

@@ -45,8 +45,12 @@ describe('pickDefaultBundle', () => {
     { name: 'no bundles', bundles: [], active: undefined, want: undefined },
     { name: 'the pipeline active bundle wins', bundles: [old, promoting, failed], active: 'app-1', want: 'app-1' },
     { name: 'an active bundle that is not in the list is ignored', bundles: [old, promoting], active: 'gone', want: 'app-2' },
-    { name: 'then the newest Promoting bundle', bundles: [old, promoting, failed, superseded], active: undefined, want: 'app-2' },
     { name: 'then the newest bundle that is not Superseded', bundles: [old, failed, superseded], active: undefined, want: 'app-3' },
+    // E2E-R15: a newer Failed bundle must not hide behind an older Promoting
+    // or Verified one; the phase does not matter, only the age.
+    { name: 'a newer Failed bundle beats an older Promoting bundle', bundles: [old, promoting, failed, superseded], active: undefined, want: 'app-3' },
+    { name: 'a newer Verified bundle beats an older Promoting bundle', bundles: [promoting, b('app-5', 'Verified', '2026-01-05T00:00:00Z')], active: undefined, want: 'app-5' },
+    { name: 'an older Promoting bundle beats a newer Superseded bundle', bundles: [old, promoting, superseded], active: undefined, want: 'app-2' },
     { name: 'then the newest bundle', bundles: [b('s1', 'Superseded', '2026-01-01T00:00:00Z'), b('s2', 'Superseded', '2026-01-02T00:00:00Z')], active: undefined, want: 's2' },
   ])('$name', ({ bundles, active, want }) => {
     expect(pickDefaultBundle(bundles, active)?.name).toBe(want)
