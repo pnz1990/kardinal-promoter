@@ -205,24 +205,30 @@ func TestGateHolds(t *testing.T) {
 		{name: "env reached, no step yet", phase: "Promoting", steps: []kardinalv1alpha1.PromotionStep{testVerified}, want: true},
 		{name: "ready gate", phase: "Promoting", ready: true, steps: []kardinalv1alpha1.PromotionStep{testVerified}},
 		{name: "failed bundle", phase: "Failed", steps: []kardinalv1alpha1.PromotionStep{testVerified}},
+		// #1300/#1323: checkRequiredGates re-checks every gate of a Pending
+		// step, whatever spec.when says, so every such gate holds it.
 		{
-			name: "post-deploy gate, Pending step", phase: "Promoting",
-			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "Pending", gateName)},
+			name: "post-deploy gate, Pending step", phase: "Promoting", when: "post-deploy",
+			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "Pending", gateName)}, want: true,
+		},
+		{
+			name: "gate with no when, Pending step", phase: "Promoting",
+			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "Pending", gateName)}, want: true,
 		},
 		{
 			name: "pre-deploy gate, Pending step", phase: "Promoting", when: "pre-deploy",
 			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "Pending", gateName)}, want: true,
 		},
 		{
-			name: "pre-deploy gate, step with no state", phase: "Promoting", when: "pre-deploy",
+			name: "gate, step with no state", phase: "Promoting",
 			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "", gateName)}, want: true,
 		},
 		{
-			name: "pre-deploy gate, step started", phase: "Promoting", when: "pre-deploy",
+			name: "gate, step started", phase: "Promoting",
 			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "Promoting", gateName)},
 		},
 		{
-			name: "pre-deploy gate the step does not require", phase: "Promoting", when: "pre-deploy",
+			name: "gate the step does not require", phase: "Promoting",
 			steps: []kardinalv1alpha1.PromotionStep{testVerified, step("prod", "Pending")},
 		},
 	}
@@ -237,7 +243,7 @@ func TestGateHolds(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: gateName, Namespace: "default", Labels: map[string]string{
 					"kardinal.io/bundle": "app-v1", "kardinal.io/environment": "prod",
 				}},
-				Spec:   kardinalv1alpha1.PolicyGateSpec{Expression: "false", When: tt.when},
+				Spec:   kardinalv1alpha1.PolicyGateSpec{Expression: "false", When: tt.when}, //nolint:staticcheck // SA1019: when has no effect (#1323)
 				Status: kardinalv1alpha1.PolicyGateStatus{Ready: tt.ready},
 			}
 			assert.Equal(t, tt.want, GateHolds(p, b, g, tt.steps))
