@@ -139,8 +139,9 @@ type PromotionStepStatus struct {
 	// +optional
 	ConsecutiveHealthFailures int `json:"consecutiveHealthFailures,omitempty"`
 
-	// HealthCheckExpiry is the deadline for the health check, computed as
-	// healthCheckStartedAt + timeout. Set once when the health check begins.
+	// HealthCheckExpiry is the deadline for a healthy check: health.timeout
+	// after the health check began, moved to health.timeout after the moment
+	// a bake window stops. It does not apply while a bake window runs.
 	// A Graph CEL expression can observe this field to detect a stale health check.
 	// Graph-purity: replaces the time.Since() call (PS-5 in 11-graph-purity-tech-debt.md).
 	// +optional

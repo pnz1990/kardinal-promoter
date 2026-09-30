@@ -245,9 +245,9 @@ Distributed mode (`kardinal-agent`, `shard`) was removed; see [Multi-Cluster](di
 
 | Setting | Value | Effect |
 |---|---|---|
-| `health.timeout` | default `10m` | Maximum time from entering HealthChecking to the **first** healthy check. When it expires it counts as a health failure (`status.consecutiveHealthFailures`) and applies `onHealthFailure`, with the message `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: ...`. It stops applying once a `bake` window has started, so a bake longer than the timeout completes. |
+| `health.timeout` | default `10m` | Maximum time from entering HealthChecking to the **first** healthy check, and from the moment a `bake` window stops to the next healthy check. When it expires it counts as a health failure (`status.consecutiveHealthFailures`) and applies `onHealthFailure`, with the message `health alarm via <adapter> (onHealthFailure=<action>): health check timeout after <timeout>; last result: ...`. It does not apply while a bake window runs, so a bake longer than the timeout completes. |
 | Check interval | 10s | A step is checked at most once every 10s, however often it is reconciled. |
-| `bake.minutes` | — | The environment must stay healthy for this long, contiguously, after the first healthy check. With `policy: reset-on-alarm` (default) an unhealthy check restarts the window. With `fail-on-alarm` it applies `onHealthFailure`. |
+| `bake.minutes` | — | The environment must stay healthy for this long, contiguously, after the first healthy check. A Waiting check stops the window without an alarm (a canary paused at a step, for example). An Unhealthy check is an alarm: with `policy: reset-on-alarm` (default) it stops the window and increments `status.bakeResets`; with `fail-on-alarm` it applies `onHealthFailure`. A stopped window starts again at the next healthy check, and `health.timeout` bounds the wait for it, so a release that stays unhealthy fails at the timeout under either policy. |
 
 Each health check has one of four results:
 
