@@ -217,3 +217,145 @@ func TestNamespaceCheckCatchesKnownMistakes(t *testing.T) {
 	assert.Equal(t, "test/pdca", exampleUnit("test/pdca/pipeline.yaml"))
 	assert.Equal(t, "examples/multi-tenant", exampleUnit("helm template examples/multi-tenant/chart --values v.yaml"))
 }
+
+// pipelineNameClashes reports every Pipeline namespace/name that more than one
+// example under examples/ declares: applying the second example replaces the
+// first one's Pipeline (#1297). demo/ and test/pdca are separate stacks.
+func pipelineNameClashes(docs []doc) []string {
+	units := map[string]map[string]bool{} // namespace/name -> examples declaring it
+	for _, d := range docs {
+		unit := exampleUnit(d.source)
+		if !strings.HasPrefix(unit, "examples/") ||
+			!strings.HasPrefix(str(d.obj, "apiVersion"), "kardinal.io/") || str(d.obj, "kind") != "Pipeline" {
+			continue
+		}
+		ns := str(d.obj, "metadata", "namespace")
+		if ns == "" {
+			ns = d.release
+		}
+		if ns == "" {
+			ns = "default"
+		}
+		key := ns + "/" + str(d.obj, "metadata", "name")
+		if units[key] == nil {
+			units[key] = map[string]bool{}
+		}
+		units[key][unit] = true
+	}
+	var problems []string
+	for key, set := range units {
+		if len(set) < 2 {
+			continue
+		}
+		names := make([]string, 0, len(set))
+		for u := range set {
+			names = append(names, u)
+		}
+		sort.Strings(names)
+		problems = append(problems, fmt.Sprintf("Pipeline %s is declared by %s; applying one replaces the other",
+			key, strings.Join(names, ", ")))
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// TestExamplePipelinesHaveDistinctNames checks that two examples can be
+// applied to one cluster without one replacing the other's Pipeline.
+func TestExamplePipelinesHaveDistinctNames(t *testing.T) {
+	docs := allDocs(t)
+	var pipelines int
+	for _, d := range docs {
+		if strings.HasPrefix(exampleUnit(d.source), "examples/") && str(d.obj, "kind") == "Pipeline" {
+			pipelines++
+		}
+	}
+	assert.Empty(t, pipelineNameClashes(docs))
+	assert.Greater(t, pipelines, 5, "too few example Pipelines found; is the walk broken?")
+}
+
+func TestPipelineNameCheckCatchesKnownMistakes(t *testing.T) {
+	pipeline := func(name, ns string) string {
+		meta := "{name: " + name + "}"
+		if ns != "" {
+			meta = "{name: " + name + ", namespace: " + ns + "}"
+		}
+		return "apiVersion: kardinal.io/v1alpha1\nkind: Pipeline\nmetadata: " + meta + "\n"
+	}
+	type file struct{ source, yaml, release string }
+	tests := []struct {
+		name  string
+		files []file
+		want  string // "" means no problem
+	}{
+		{
+			// The examples before #1297: all five were kardinal-test-app in default.
+			name: "two examples declare the same Pipeline",
+			files: []file{
+				{source: "examples/quickstart/pipeline.yaml", yaml: pipeline("kardinal-test-app", "default")},
+				{source: "examples/flux-demo/pipeline.yaml", yaml: pipeline("kardinal-test-app", "default")},
+			},
+			want: "Pipeline default/kardinal-test-app is declared by examples/flux-demo, examples/quickstart",
+		},
+		{
+			name: "no namespace is the default namespace",
+			files: []file{
+				{source: "examples/quickstart/pipeline.yaml", yaml: pipeline("kardinal-test-app", "default")},
+				{source: "examples/github-demo/pipeline.yaml", yaml: pipeline("kardinal-test-app", "")},
+			},
+			want: "Pipeline default/kardinal-test-app is declared by examples/github-demo, examples/quickstart",
+		},
+		{
+			name: "distinct names",
+			files: []file{
+				{source: "examples/quickstart/pipeline.yaml", yaml: pipeline("kardinal-test-app", "default")},
+				{source: "examples/flux-demo/pipeline.yaml", yaml: pipeline("flux-demo", "default")},
+			},
+		},
+		{
+			name: "same name in different namespaces",
+			files: []file{
+				{source: "examples/a/pipeline.yaml", yaml: pipeline("p", "team-a")},
+				{source: "examples/b/pipeline.yaml", yaml: pipeline("p", "team-b")},
+			},
+		},
+		{
+			name: "a rendered chart in its release namespace",
+			files: []file{
+				{source: "helm template examples/multi-tenant/chart", yaml: pipeline("p", ""), release: "team-a"},
+				{source: "examples/b/pipeline.yaml", yaml: pipeline("p", "team-a")},
+			},
+			want: "Pipeline team-a/p is declared by examples/b, examples/multi-tenant",
+		},
+		{
+			name: "one example declaring it in two files",
+			files: []file{
+				{source: "examples/a/pipeline.yaml", yaml: pipeline("p", "default")},
+				{source: "examples/a/pipeline-v2.yaml", yaml: pipeline("p", "default")},
+			},
+		},
+		{
+			name: "demo reuses the quickstart Pipeline",
+			files: []file{
+				{source: "examples/quickstart/pipeline.yaml", yaml: pipeline("kardinal-test-app", "default")},
+				{source: "demo/manifests/pipeline-simple/pipeline.yaml", yaml: pipeline("kardinal-test-app", "default")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var docs []doc
+			for _, f := range tt.files {
+				for _, d := range splitDocs(t, f.source, []byte(f.yaml)) {
+					d.release = f.release
+					docs = append(docs, d)
+				}
+			}
+			problems := pipelineNameClashes(docs)
+			if tt.want == "" {
+				assert.Empty(t, problems)
+				return
+			}
+			assert.Contains(t, strings.Join(problems, "\n"), tt.want)
+		})
+	}
+}

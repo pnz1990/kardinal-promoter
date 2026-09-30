@@ -1,7 +1,7 @@
 apiVersion: kardinal.io/v1alpha1
 kind: Pipeline
 metadata:
-  name: kardinal-test-app
+  name: github-demo
   namespace: default
 spec:
   # GitHub SCM provider — uses the full GitHub feature set:
@@ -17,6 +17,10 @@ spec:
     secretRef:
       name: github-token
 
+  # The Argo CD Applications are the quickstart's (examples/quickstart/
+  # argocd-applications.yaml): kardinal-test-app-<env> in argocd, which sync
+  # the kardinal-demo paths this Pipeline promotes into. health.argocd.name
+  # points at them; the default would be <pipeline>-<env> (github-demo-test).
   environments:
     - name: test
       path: environments/test
@@ -25,6 +29,8 @@ spec:
       approval: auto
       health:
         type: argocd
+        argocd:
+          name: kardinal-test-app-test
 
     - name: uat
       path: environments/uat
@@ -36,13 +42,15 @@ spec:
         policy: fail-on-alarm
       health:
         type: argocd
+        argocd:
+          name: kardinal-test-app-uat
 
     # prod: full GitHub feature exercise
     # - PR opened with structured evidence body
     # - Requires at least 1 approving review (pr-review)
     # - PolicyGate no-weekend: blocks Saturday/Sunday
     # - 60-minute contiguous healthy bake after merge
-    # - Emergency override available via: kardinal override kardinal-test-app --stage prod --gate no-weekend-deploys --reason "hotfix"
+    # - Emergency override available via: kardinal override github-demo --stage prod --gate no-weekend-deploys --reason "hotfix"
     # - Rollback opens a new PR with kardinal/rollback label
     - name: prod
       path: environments/prod
@@ -55,6 +63,8 @@ spec:
       onHealthFailure: rollback
       health:
         type: argocd
+        argocd:
+          name: kardinal-test-app-prod
         timeout: 15m
 
   historyLimit: 20
