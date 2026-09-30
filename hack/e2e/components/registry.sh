@@ -31,7 +31,7 @@ SEED_REPO=e2e/podinfo
 SEED_IMAGE=ghcr.io/stefanprodan/podinfo
 SEED_TAGS=(6.13.0 6.14.0 6.15.0)
 
-load_image "$REGISTRY_IMAGE"
+pull_images "$REGISTRY_IMAGE"
 "${KUBECTL[@]}" create namespace "$NS" --dry-run=client -o yaml | "${KUBECTL[@]}" apply -f - >/dev/null
 # One user whose "hash" is not a bcrypt hash, so no password matches: the
 # private registry refuses every login as well as every anonymous request.
@@ -102,7 +102,8 @@ code=$(curl -sS -o /dev/null -w '%{http_code}' "$PRIVATE/v2/")
 work=$(mktemp -d)
 (cd "$REPO_ROOT" && go build -o "$work/ocipush" ./hack/e2e/ocipush)
 for tag in "${SEED_TAGS[@]}"; do
-  docker image inspect "$SEED_IMAGE:$tag" >/dev/null 2>&1 || docker pull -q "$SEED_IMAGE:$tag" >/dev/null
+  docker image inspect "$SEED_IMAGE:$tag" >/dev/null 2>&1 || pull_retry docker pull -q "$SEED_IMAGE:$tag" >/dev/null ||
+    die "can't pull $SEED_IMAGE:$tag"
   docker save "$SEED_IMAGE:$tag" -o "$work/image.tar"
   "$work/ocipush" -archive "$work/image.tar" -registry "$BASE" -repo "$SEED_REPO" -tag "$tag" >/dev/null
 done
