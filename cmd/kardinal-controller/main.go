@@ -129,7 +129,8 @@ func main() {
 	flag.StringVar(&uiAuthToken, "ui-auth-token", os.Getenv("KARDINAL_UI_TOKEN"),
 		"Bearer token for authenticating /api/v1/ui/* requests. "+
 			"When set, all UI API routes require 'Authorization: Bearer <token>'. "+
-			"When empty (default), the UI API is open (no authentication). "+
+			"When empty (default) and --ui-tokenreview-auth is off, /api/ answers only "+
+			"loopback clients (kubectl port-forward) and refuses the rest with 403. "+
 			"Also readable from KARDINAL_UI_TOKEN environment variable.")
 
 	var uiListenAddress string
