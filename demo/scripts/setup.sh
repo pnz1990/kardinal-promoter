@@ -105,6 +105,7 @@ for arg in "$@"; do
       sed -n '/^# Usage/,/^# Copyright/p' "${BASH_SOURCE[0]}" | grep -v "^#$" | sed 's/^# //'
       exit 0
       ;;
+    --eks)        warn "--eks was removed; the demo runs on kind only (see demo/README.md)" ;;
     *) warn "Unknown flag: $arg" ;;
   esac
 done
