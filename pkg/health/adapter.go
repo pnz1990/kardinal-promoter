@@ -511,13 +511,20 @@ func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatu
 	}
 
 	conditions, _, _ := unstructured.NestedSlice(ks.Object, "status", "conditions")
-	observedGen, _, _ := unstructured.NestedInt64(ks.Object, "status", "observedGeneration")
-	generation, _, _ := unstructured.NestedInt64(ks.Object, "metadata", "generation")
+	observedGen, observedFound, _ := unstructured.NestedInt64(ks.Object, "status", "observedGeneration")
+	generation, generationFound, _ := unstructured.NestedInt64(ks.Object, "metadata", "generation")
 	applied, _, _ := unstructured.NestedString(ks.Object, "status", "lastAppliedRevision")
 
 	readyCond := findCondition(conditions, "Ready")
 	if readyCond == nil {
 		return progressing("Ready condition not found"), nil
+	}
+	// A missing field would read as 0 and make 0 == 0 look reconciled.
+	if !generationFound {
+		return progressing("metadata.generation not set"), nil
+	}
+	if !observedFound {
+		return progressing("status.observedGeneration not set: Flux has not reconciled this generation"), nil
 	}
 
 	readyStatus, _ := readyCond["status"].(string)
@@ -602,7 +609,8 @@ var argoRolloutsGVR = schema.GroupVersionResource{
 func (a *ArgoRolloutsAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.ArgoRollouts
 	if cfg.Namespace == "" {
-		cfg.Namespace = "default"
+		// OptionsForEnv always sets it.
+		return HealthStatus{}, fmt.Errorf("argoRollouts health: Rollout %q has no namespace", cfg.Name)
 	}
 	if cfg.Name == "" {
 		return HealthStatus{Healthy: false, Reason: "ArgoRollouts.Name not configured", CheckedAt: time.Now()}, nil
@@ -666,7 +674,8 @@ var flaggerGVR = schema.GroupVersionResource{
 func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatus, error) {
 	cfg := opts.Flagger
 	if cfg.Namespace == "" {
-		cfg.Namespace = "default"
+		// OptionsForEnv always sets it.
+		return HealthStatus{}, fmt.Errorf("flagger health: Canary %q has no namespace", cfg.Name)
 	}
 	if cfg.Name == "" {
 		return HealthStatus{Healthy: false, Reason: "Flagger.Name not configured", CheckedAt: time.Now()}, nil
@@ -687,11 +696,17 @@ func (a *FlaggerAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSt
 	}
 
 	phase, _, _ := unstructured.NestedString(canary.Object, "status", "phase")
-	statusMsg, _, _ := unstructured.NestedString(canary.Object, "status", "lastTransitionTime")
+	conditions, _, _ := unstructured.NestedSlice(canary.Object, "status", "conditions")
 
+	// Flagger explains the phase (for a failure, why it rolled back) in the
+	// message of its Promoted condition.
 	reason := fmt.Sprintf("Canary phase: %s", phase)
-	if statusMsg != "" {
-		reason += fmt.Sprintf(" (lastTransition: %s)", statusMsg)
+	cond := findCondition(conditions, "Promoted")
+	if cond == nil {
+		cond = findCondition(conditions, "Ready")
+	}
+	if msg, _ := cond["message"].(string); msg != "" {
+		reason += " — " + msg
 	}
 	switch phase {
 	case "Succeeded":

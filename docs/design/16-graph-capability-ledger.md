@@ -144,8 +144,9 @@ the node itself").
   the PRStatus `status.mergeCommitSHA`) and requires Argo CD's synced revision or Flux's
   `lastAppliedRevision` to match it, and a Deployment to run the Bundle images
   (`pkg/health/adapter.go`, `pkg/reconciler/promotionstep/reconciler.go` `expectedRevision`).
-- **Still not solved in the Graph:** the ref health nodes keep the self-only
-  `Healthy && Synced` `readyWhen`, so Graph readiness alone can see the previous revision.
+- **Still not solved in the Graph:** the ref health nodes keep a self-only `readyWhen`
+  (for Argo CD: `Healthy`, `Synced` and no running or failed sync operation), so Graph
+  readiness alone can see the previous revision.
   Doing it in the Graph needs `app.status.sync.revision == step.status.outputs.commitSHA`,
   which is a cross-node `readyWhen`.
 
