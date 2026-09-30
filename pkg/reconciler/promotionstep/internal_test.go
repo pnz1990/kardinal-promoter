@@ -361,9 +361,11 @@ func TestPRStatusMapper_UnmatchedPRStatus(t *testing.T) {
 }
 
 // TestPolicyGateMapper verifies C03-promotionstep-26: a PolicyGate change
-// wakes only the steps that list the gate in spec.requiredGates, are still in
-// a state the gate can affect, and belong to this reconciler's shard. It used
-// to enqueue every PromotionStep in the namespace.
+// wakes only the steps that list the gate in spec.requiredGates and are still
+// in a state the gate can affect. It used to enqueue every PromotionStep in
+// the namespace. A step with a kardinal.io/shard label, left over from
+// distributed mode, is woken too, so it fails with "shard is not supported"
+// instead of waiting for an agent that no longer exists (#1321).
 func TestPolicyGateMapper(t *testing.T) {
 	step := func(name, ns, state, shard string, gates ...string) *v1alpha1.PromotionStep {
 		ps := &v1alpha1.PromotionStep{
@@ -389,25 +391,14 @@ func TestPolicyGateMapper(t *testing.T) {
 	c := fakeclient.NewClientBuilder().WithScheme(newTestScheme(t)).WithObjects(objs...).Build()
 	gate := &v1alpha1.PolicyGate{ObjectMeta: metav1.ObjectMeta{Name: "gate-1", Namespace: "default"}}
 
-	tests := []struct {
-		shard string
-		want  []string
-	}{
-		{shard: "", want: []string{"new", "waiting"}},
-		{shard: "eu", want: []string{"sharded"}},
+	r := &Reconciler{Client: c}
+	var got []string
+	for _, req := range r.policyGateMapper(context.Background(), gate) {
+		assert.Equal(t, "default", req.Namespace)
+		got = append(got, req.Name)
 	}
-	for _, tt := range tests {
-		t.Run("shard="+tt.shard, func(t *testing.T) {
-			r := &Reconciler{Client: c, Shard: tt.shard}
-			var got []string
-			for _, req := range r.policyGateMapper(context.Background(), gate) {
-				assert.Equal(t, "default", req.Namespace)
-				got = append(got, req.Name)
-			}
-			sort.Strings(got)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+	sort.Strings(got)
+	assert.Equal(t, []string{"new", "sharded", "waiting"}, got)
 }
 
 // TestCollectGateResults verifies the PR body gets one row per required gate,

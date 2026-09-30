@@ -110,7 +110,7 @@ Issues #131–#155 are closed, but not every leak below is gone: see
 | ID | Issue | Description | Fix Approach |
 |---|---|---|---|
 | PG-5 / PG-6 | #148 | Template/instance distinction; extractVersion() not in CRD | Write results to CRD status fields |
-| PS-3 | #149 | Shard filtering silent skip in Go | Use label selector on controller; add to CRD spec |
+| PS-3 | #149 | Shard filtering silent skip in Go | Resolved: shard filtering was removed with distributed mode (#1321) |
 | PS-8 / HE-5 | #143 | Hardcoded naming conventions; live CRD probe on hot path | Move to Pipeline spec; cache at startup |
 | GB-1 | #150 | Sequential default not in Pipeline spec | Add `sequentialDefault: true` field |
 | TR-1 / TR-2 | #151 | `collectGates()` namespace aggregation; `policyNS` hardcoded | Add `policyNamespaces` to Pipeline spec |

@@ -116,7 +116,6 @@ For each environment in the filtered list (in dependency order):
         kardinal.io/pipeline: <pipeline-name>
         kardinal.io/bundle: <bundle-name>
         kardinal.io/environment: <environment-name>
-        kardinal.io/shard: <shard-value>   # if shard is set on the environment
     spec:
       pipeline: <pipeline-name>
       environment: <environment-name>
@@ -237,7 +236,7 @@ Test cases for `translator.go`:
 4. intent.targetEnvironment = staging: verify only dev and staging nodes, no prod.
 5. intent.skipEnvironments = [staging] with SkipPermission: verify staging removed, dev -> prod directly.
 6. intent.skipEnvironments = [staging] without SkipPermission: verify Build fails with `skip denied` (ErrInvalid); with one, verify the permission instance holds prod.
-7. Pipeline with shard on prod: verify shard label on prod PromotionStep.
+7. Pipeline with shard on prod: verify no shard label is set (distributed mode was removed, #1321; the step fails with `shard is not supported`).
 8. Pipeline with custom steps or a promotionTemplate on prod: verify Build rejects it (not implemented yet).
 9. Config Bundle: verify different default step sequence (config-merge instead of kustomize-set-image).
 10. Empty Pipeline: verify error.

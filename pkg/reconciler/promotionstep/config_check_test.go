@@ -105,9 +105,9 @@ func TestSecretRefNamespace(t *testing.T) {
 	}
 }
 
-// TestUnsupportedConfigFailsLoudly proves C08-api-config-12/13, C13b-design-05
-// and C03-promotionstep-04 (cluster): options that were accepted and silently
-// ignored now fail the step with a message naming the field.
+// TestUnsupportedConfigFailsLoudly proves C08-api-config-12/13, C13b-design-05,
+// C03-promotionstep-04 (cluster) and #1321 (shard): options that were accepted
+// and silently ignored now fail the step with a message naming the field.
 func TestUnsupportedConfigFailsLoudly(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -121,9 +121,23 @@ func TestUnsupportedConfigFailsLoudly(t *testing.T) {
 		{name: "health.cluster while health checking", state: "HealthChecking",
 			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Health.Cluster = "prod-kubeconfig" },
 			message: "health.cluster is not supported"},
-		{name: "region fan-out", state: "",
+		{name: "region step left over from a pre-upgrade Graph", state: "",
 			mutate:  func(_ *v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) { ps.Spec.Region = "us-east-1" },
-			message: "regions fan-out is not implemented"},
+			message: "regions is not supported; declare one environment per region"},
+		// #1321: distributed mode was removed. A step left over with a shard
+		// label used to be skipped by the controller and hang in Pending.
+		{name: "shard step left over from distributed mode", state: "",
+			mutate: func(env *v1alpha1.EnvironmentSpec, ps *v1alpha1.PromotionStep) {
+				env.Shard = "eu"
+				ps.Labels = map[string]string{"kardinal.io/shard": "eu"}
+			},
+			message: "shard is not supported: distributed mode was removed"},
+		{name: "shard on the environment only", state: "",
+			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" },
+			message: "shard is not supported"},
+		{name: "shard while promoting", state: "Promoting",
+			mutate:  func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) { env.Shard = "eu" },
+			message: "shard is not supported"},
 		{name: "resource kind other than Deployment", state: "HealthChecking",
 			mutate: func(env *v1alpha1.EnvironmentSpec, _ *v1alpha1.PromotionStep) {
 				env.Health.Resource = &v1alpha1.ResourceRef{Kind: "StatefulSet", Name: "db"}

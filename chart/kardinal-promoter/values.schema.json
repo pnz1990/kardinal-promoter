@@ -103,9 +103,6 @@
             "type": "string"
           }
         },
-        "shard": {
-          "type": "string"
-        },
         "extraArgs": {
           "type": "array",
           "items": {

@@ -48,12 +48,11 @@ func TestBuild_RejectsCollidingEnvNodeIDs(t *testing.T) {
 }
 
 // TestBuild_RejectsReservedNodeIDs verifies that environment names whose node
-// ID kro reserves, or that collide with the Bundle ref node or the region
-// iterator, are rejected by Build (C01-graph-28).
+// ID kro reserves, or that collide with the Bundle ref node, are rejected by
+// Build (C01-graph-28).
 func TestBuild_RejectsReservedNodeIDs(t *testing.T) {
 	tests := []struct {
 		env     string
-		regions bool
 		wantErr string
 	}{
 		{env: "Status", wantErr: "reserves"},
@@ -63,14 +62,10 @@ func TestBuild_RejectsReservedNodeIDs(t *testing.T) {
 		{env: "self", wantErr: "reserves"},
 		{env: "for", wantErr: "reserves"},
 		{env: "bundle", wantErr: "same node id"},
-		{env: "region", regions: true, wantErr: "forEach iterator"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.env, func(t *testing.T) {
 			envs := []kardinalv1alpha1.EnvironmentSpec{{Name: tt.env}}
-			if tt.regions {
-				envs = append(envs, kardinalv1alpha1.EnvironmentSpec{Name: "prod", Regions: []string{"eu", "us"}})
-			}
 			_, err := graph.NewBuilder().Build(graph.BuildInput{
 				Pipeline: pipelineOf("app", envs...), Bundle: makeBundle("app-x7k2m", "app"),
 			})
@@ -214,15 +209,13 @@ func TestBuild_RejectsInvalidInput(t *testing.T) {
 		{"duplicate environment", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
 			p.Spec.Environments[1].Name = "test"
 		}, "declared twice"},
-		{"invalid region", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"US_EAST", "eu"}
-		}, `region "US_EAST"`},
-		{"duplicate region", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Regions = []string{"eu", "eu"}
-		}, "listed twice"},
-		{"invalid shard", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
-			p.Spec.Environments[1].Shard = "cluster/b"
-		}, `shard "cluster/b"`},
+		// #1304: two or more regions fail at Graph build, before any step.
+		{"two regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
+			p.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"}
+		}, `environment "prod": regions is not supported; declare one environment per region (prod-us, prod-eu) and use wave`},
+		{"two invalid regions", func(p *kardinalv1alpha1.Pipeline, _ *kardinalv1alpha1.Bundle) {
+			p.Spec.Environments[1].Regions = []string{"US_EAST", "US_EAST"}
+		}, "regions is not supported"},
 		{"unknown skipped environment", func(_ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) {
 			b.Spec.Intent = &kardinalv1alpha1.BundleIntent{SkipEnvironments: []string{"stagign"}}
 		}, "unknown environments [stagign]"},

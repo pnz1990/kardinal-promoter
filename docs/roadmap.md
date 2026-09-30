@@ -99,13 +99,11 @@ All of the following are implemented and shipped:
 - `RollbackPolicy` CRD + automated rollback PR
 - Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
-- Multi-cluster through an Argo CD hub (remote-cluster health checks via `health.cluster` kubeconfig Secrets are not implemented)
+- Multi-cluster through an Argo CD or Flux hub (see [Multi-Cluster](distributed-mode.md); `health.cluster` kubeconfig Secrets are not supported)
 
 **CLI** — full command set: `get`, `explain`, `create`, `promote`, `rollback`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
 **UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Overriding a gate is CLI-only (`kardinal override`)
-
-**Distributed mode (experimental)** — shard routing: the `shard:` field on Pipeline environments labels PromotionSteps, and a `kardinal-agent --shard <name>` process reconciles only the steps for its shard. The agent is built from `cmd/kardinal-agent` but is not published as an image or chart, and it uses one API server for PromotionSteps and health checks. See [Distributed Mode](distributed-mode.md).
 
 **Multi-tenant self-service** — ApplicationSet + Pipeline template bootstrap; team onboarding by committing a folder to Git; org PolicyGates automatically inherited; namespace isolation enforced by RBAC.
 

@@ -82,10 +82,7 @@ controller:
   # Empty keeps the controller default, platform-policies. Ignored in
   # namespace mode, which always uses watchNamespace.
   policyNamespaces: []
-  # -- Shard name (--shard). Empty = this controller reconciles every Pipeline.
-  # See docs/distributed-mode.md.
-  shard: ""
-  # -- Extra controller args, e.g. ["--pipeline-admission-webhook=true"].
+  # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
   # -- Extra env vars for the controller container (e.g. HTTPS_PROXY).
   extraEnv: []

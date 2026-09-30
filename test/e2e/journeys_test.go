@@ -157,8 +157,8 @@ func TestJourney1Quickstart(t *testing.T) {
 // Each must reach Verified independently.
 //
 // This test uses a fake Kubernetes client (same approach as J1/J3/J4/J5/J6).
-// Stage 14 distributed mode is not required for the fan-out logic — the
-// PromotionStep reconciler handles all steps in standalone mode regardless of shard.
+// One controller reconciles every environment; distributed mode was removed
+// (#1321).
 //
 // Pass criteria (subset of definition-of-done.md Journey 2):
 //   - dependsOn fan-out: prod-eu and prod-us start after pre-prod is Verified

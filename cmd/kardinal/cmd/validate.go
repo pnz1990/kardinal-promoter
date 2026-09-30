@@ -182,11 +182,13 @@ func validatePipeline(out io.Writer, file string, data []byte) error {
 		dummyBundle := &kardinalv1alpha1.Bundle{}
 		dummyBundle.Name = "validate-dummy"
 		dummyBundle.Namespace = "default"
-		// Build rejects custom steps too; they are reported above already.
+		// Build rejects custom steps and two or more regions too; they are
+		// reported above already.
 		buildable := pipeline.DeepCopy()
 		for i := range buildable.Spec.Environments {
 			buildable.Spec.Environments[i].Steps = nil
 			buildable.Spec.Environments[i].PromotionTemplate = nil
+			buildable.Spec.Environments[i].Regions = nil
 		}
 		if _, err := b.Build(graph.BuildInput{Pipeline: buildable, Bundle: dummyBundle}); err != nil {
 			errs = append(errs, err.Error())

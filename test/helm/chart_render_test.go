@@ -643,7 +643,6 @@ func controllerEnvReads(t *testing.T) map[string]bool {
 
 // everyValue sets every value that renders a flag or env var.
 var everyValue = []string{
-	"--set", "controller.shard=eu",
 	"--set", "controller.tlsCertFile=/tls/tls.crt",
 	"--set", "controller.tlsKeyFile=/tls/tls.key",
 	"--set", "controller.policyNamespaces={platform-policies}",
@@ -681,7 +680,6 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 	env := envByName(c)
 
 	wantArgs := map[string]string{
-		"shard":                "eu",
 		"policy-namespaces":    "platform-policies",
 		"scm-provider":         "gitlab",
 		"scm-api-url":          "https://gitlab.example.com",
@@ -711,7 +709,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 
 	// extraArgs, extraEnv, extraVolumes and extraVolumeMounts pass through.
 	docs := render(t, "kardinal-promoter",
-		"--set", "controller.extraArgs={--pipeline-admission-webhook=true}",
+		"--set", "controller.extraArgs={--cors-allowed-origins=https://kardinal.example.com}",
 		"--set", "controller.extraEnv[0].name=HTTPS_PROXY",
 		"--set", "controller.extraEnv[0].value=http://proxy:3128",
 		"--set", "controller.extraVolumes[0].name=tls",
@@ -719,7 +717,7 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 		"--set", "controller.extraVolumeMounts[0].name=tls",
 		"--set", "controller.extraVolumeMounts[0].mountPath=/tls")
 	c = controllerContainer(t, docs)
-	assert.Contains(t, c.Args, "--pipeline-admission-webhook=true")
+	assert.Contains(t, c.Args, "--cors-allowed-origins=https://kardinal.example.com")
 	assert.Equal(t, "http://proxy:3128", envByName(c)["HTTPS_PROXY"].Value)
 	mounts := map[string]string{}
 	for _, m := range c.VolumeMounts {
@@ -730,9 +728,10 @@ func TestChartValuesWireControllerFlags(t *testing.T) {
 
 // TestChartRejectsUnknownValues: values.schema.json fails unknown keys, so the
 // value names the docs used to give can no longer be silently ignored.
+// controller.shard was removed with distributed mode (#1321).
 func TestChartRejectsUnknownValues(t *testing.T) {
 	for _, set := range []string{
-		"controller.shardd=eu",
+		"controller.shard=eu",
 		"controller.github.token.secretName=github-token",
 		"controller.remoteKubeconfig.secretRef.name=kubeconfig",
 		"controller.uiAuthToken=abc",
@@ -758,7 +757,6 @@ func TestChartAcceptsRepoSetKeys(t *testing.T) {
 		"controller.watchNamespace=" + releaseNS,
 		"controller.tlsCertFile=/tls/tls.crt",
 		"controller.tlsKeyFile=/tls/tls.key",
-		"controller.shard=eu",
 		"prometheusRule.enabled=true",
 		"prometheusRule.additionalLabels.release=kube-prometheus-stack",
 		"grafanaDashboard.enabled=true",

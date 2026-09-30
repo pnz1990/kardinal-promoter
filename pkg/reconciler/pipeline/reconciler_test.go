@@ -148,10 +148,13 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].PromotionTemplate = &kardinalv1alpha1.PromotionTemplateRef{Name: "t"}
 			}},
-		{name: "regions fan-out", wantMsg: "regions fan-out is not implemented",
+		{name: "two regions", wantMsg: `environment "test": regions is not supported; declare one environment per region`,
 			mutate: func(p *kardinalv1alpha1.Pipeline) {
 				p.Spec.Environments[0].Regions = []string{"us-east-1", "eu-west-1"}
 			}},
+		// #1321: distributed mode was removed, so a shard is rejected.
+		{name: "shard", wantMsg: `environment "test": shard is not supported: distributed mode was removed`,
+			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Environments[0].Shard = "eu" }},
 		{name: "pipeline layout branch", wantMsg: "spec.git.layout: branch is not implemented",
 			mutate: func(p *kardinalv1alpha1.Pipeline) { p.Spec.Git.Layout = "branch" }},
 		{name: "environment layout branch", wantMsg: `environment "test": layout: branch is not implemented`,
@@ -187,8 +190,9 @@ func TestPipelineReconciler_UnimplementedFieldsNotReady(t *testing.T) {
 			assert.Contains(t, cond.Message, tc.wantMsg)
 			// Most fields fail a Bundle only in the environment that sets them.
 			assert.NotContains(t, cond.Message, "every Bundle")
-			assert.True(t, strings.HasPrefix(cond.Message, "not implemented, so a Bundle fails when it reaches "+
-				"an environment that uses one (steps and promotionTemplate fail it when its Graph is built): "),
+			assert.True(t, strings.HasPrefix(cond.Message, "not implemented or not supported, so a Bundle fails "+
+				"when it reaches an environment that uses one (steps, promotionTemplate and two or more regions "+
+				"fail it when its Graph is built): "),
 				cond.Message)
 		})
 	}

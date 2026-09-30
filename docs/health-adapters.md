@@ -102,7 +102,7 @@ On a branch shared with other environments, a later commit can reach Argo CD bef
 
 **When to use:** Any cluster managed by Argo CD. This is the recommended adapter for Argo CD users because it verifies that Argo CD successfully synced the promoted manifests, not just that the Deployment is running.
 
-**Multi-cluster:** In the Argo CD hub-spoke model, all Applications live in the hub cluster. The controller reads Application status from the hub. No cross-cluster API calls needed.
+**Multi-cluster:** In the Argo CD hub-spoke model, all Applications live in the hub cluster. The controller reads Application status from the hub. No cross-cluster API calls needed. See [Remote Clusters](#remote-clusters).
 
 **Edge cases:**
 | Application state | Adapter behavior |
@@ -136,7 +136,7 @@ health:
 
 **When to use:** Any cluster managed by Flux.
 
-**Multi-cluster:** Flux runs per-cluster. `health.cluster` is not supported; see [Remote Clusters](#remote-clusters).
+**Multi-cluster:** Use a Kustomization in the hub that targets the remote cluster with `spec.kubeConfig.secretRef`; see [Remote Clusters](#remote-clusters).
 
 **Edge cases:**
 | Kustomization state | Adapter behavior |
@@ -208,18 +208,36 @@ health:
 
 ## Remote Clusters
 
-`health.cluster` (a kubeconfig Secret for a remote cluster) is **not supported**. A PromotionStep whose environment sets it fails with:
+kardinal checks health only in the cluster it runs in. It holds no credentials for other clusters and makes no calls to their API servers. To verify a workload in another cluster, run kardinal next to the GitOps hub that manages that cluster and read the hub's object:
+
+- **Argo CD hub:** use `type: argocd`. The Applications for every cluster live in the hub, and their status (health, sync and synced revision) covers the workload in the destination cluster.
+
+    ```yaml
+    health:
+      type: argocd
+      argocd:
+        name: my-app-prod-eu        # an Application in the hub whose destination is the spoke
+    ```
+
+- **Flux hub:** use `type: flux` on a Kustomization in the hub that sets `spec.kubeConfig.secretRef`. Flux applies that Kustomization to the remote cluster, and the flux adapter reads the Kustomization's status in the hub. Set `spec.wait: true` (or `spec.healthChecks`) on the Kustomization so its `Ready` condition covers the remote workloads, not only the apply. This follows the Flux documentation; it is not tested in this repository.
+
+    ```yaml
+    health:
+      type: flux
+      flux:
+        name: my-app-prod-eu        # a Kustomization in the hub with spec.kubeConfig.secretRef
+        namespace: flux-system
+    ```
+
+**Limit: a spoke the hub cannot reach has no kardinal health check.** kardinal sees only what the hub reports. A cluster that runs its own Argo CD or Flux and is not managed from the hub (for example a pull-only or disconnected cluster) cannot be checked. While a managed spoke is unreachable, the hub's status is what Argo CD or Flux last recorded or an error, not a fresh reading of the workload.
+
+`health.cluster` (a kubeconfig Secret for a remote cluster) is **not supported** and is deprecated. The Pipeline is `Ready=False` (reason `NotImplemented`), `kardinal validate` fails, and a PromotionStep whose environment sets it fails with:
 
 ```
-health.cluster is not supported: remote-cluster health checks are not implemented; for a workload in another cluster, check its Argo CD Application in this cluster (health.type: argocd)
+health.cluster is not supported: kardinal checks health only in the cluster it runs in; for a workload in another cluster, check its Argo CD Application or Flux Kustomization in this cluster (health.type: argocd or flux, see docs/health-adapters.md#remote-clusters)
 ```
 
-This replaces the earlier behaviour, where the field was accepted and the health check silently ran against the controller's own cluster.
-
-Every adapter reads objects through the reconciler's own Kubernetes client, so it only sees the cluster that holds the PromotionSteps. To verify a workload in another cluster:
-
-- **Argo CD hub-spoke:** use `type: argocd`. Applications for all clusters live in the hub, and their status (sync revision and health) reflects the remote workloads. No `cluster` field is needed.
-- **Distributed mode does not help yet:** a `kardinal-agent` uses one client configuration for both the PromotionSteps and the health checks (see [Distributed Mode](distributed-mode.md)), so it checks the API server that holds the PromotionSteps, not the cluster it runs in.
+Distributed mode (`kardinal-agent`, `shard`) was removed; see [Multi-Cluster](distributed-mode.md).
 
 ## Timings and failures
 

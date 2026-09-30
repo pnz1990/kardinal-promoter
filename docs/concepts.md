@@ -159,19 +159,11 @@ Each environment runs the default promotion sequence (clone, update image, commi
 
 > **Not implemented yet.** `spec.environments[].steps` is reserved for custom step sequences, but the controller cannot run them yet: a Pipeline that sets `steps` is rejected when a Bundle is translated (the Bundle goes to phase `Failed`, with the reason in its status conditions) and by `kardinal validate`, and the Pipeline's `Ready` condition is `False` with reason `NotImplemented`. See [Custom Promotion Steps](custom-steps.md).
 
-### Distributed mode and sharding
+### Multiple clusters
 
-For multi-cluster deployments where some clusters are behind firewalls, environments can be assigned to a `shard`. A kardinal-agent running in the target cluster reconciles PromotionSteps for that shard.
+kardinal runs in one cluster, next to the Argo CD or Flux hub that manages your workload clusters. Declare one environment per cluster or region (for example `prod-eu` and `prod-us`) and promote them in parallel with `wave` or `dependsOn`. Each environment reads its health from the hub: `health.type: argocd` on its Application, or `health.type: flux` on a hub Kustomization that targets the remote cluster. A spoke the hub cannot reach has no kardinal health check. See [Multi-Cluster](distributed-mode.md) and [Remote Clusters](health-adapters.md#remote-clusters).
 
-```yaml
-  environments:
-    - name: prod-eu
-      shard: eu-cluster              # handled by the agent in the EU cluster
-      dependsOn: [staging]
-      approval: pr-review
-```
-
-The `shard` value becomes the `kardinal.io/shard` label on the environment's PromotionSteps. The control-plane controller skips labelled steps, so an environment with a `shard` makes progress only while a kardinal-agent started with `--shard <value>` is running. Leave `shard` unset in standalone mode.
+Distributed mode (`shard` and `kardinal-agent`) was removed. A Pipeline environment that sets `shard` is rejected; remove it, and the controller reconciles every environment.
 
 ### How it works under the hood
 

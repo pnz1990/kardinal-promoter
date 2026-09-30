@@ -194,28 +194,6 @@ func TestBuilder_UpstreamGating(t *testing.T) {
 		prodSpec["upstreamStates"])
 }
 
-// TestBuilder_UpstreamGating_MultiRegion verifies that a step downstream of a
-// forEach environment waits for every region to be Verified.
-func TestBuilder_UpstreamGating_MultiRegion(t *testing.T) {
-	pipeline := &kardinalv1alpha1.Pipeline{
-		ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "default"},
-		Spec: kardinalv1alpha1.PipelineSpec{
-			Environments: []kardinalv1alpha1.EnvironmentSpec{
-				{Name: "canary", Regions: []string{"us-east-1", "eu-west-1", "ap-south-1"}},
-				{Name: "prod"},
-			},
-		},
-	}
-	result, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: makeBundle("fleet-v1", "fleet")})
-	require.NoError(t, err)
-
-	prodSpec := nodeByID(result.Graph.Spec.Nodes)["prod"].Template["spec"].(map[string]interface{})
-	assert.Equal(t,
-		[]interface{}{`${["Verified"].filter(x_, size(canary) == 3 && canary.all(s_, s_.status.state == "Verified"))[0]}`},
-		prodSpec["upstreamStates"],
-		"size() guards against the vacuous all() on an empty or partially stamped collection")
-}
-
 // TestBuilder_ServiceAccountName verifies the Graph carries the applier
 // ServiceAccount kro impersonates, with a default and an override.
 func TestBuilder_ServiceAccountName(t *testing.T) {
@@ -237,7 +215,6 @@ func TestBuilder_ServiceAccountName(t *testing.T) {
 func TestBuilder_OnlyKroKeywords(t *testing.T) {
 	gate := makePolicyGate("no-weekend", "platform-policies", "prod", "!schedule.isWeekend")
 	pipeline := makeLinearPipeline("app", "test", "prod")
-	pipeline.Spec.Environments[1].Regions = []string{"us-east-1", "eu-west-1"}
 	result, err := graph.NewBuilder().Build(graph.BuildInput{
 		Pipeline: pipeline, Bundle: makeBundle("app-v1", "app"),
 		PolicyGates: []kardinalv1alpha1.PolicyGate{gate},

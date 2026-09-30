@@ -176,7 +176,6 @@ The SCM webhook and the Bundle API are on a separate ServeMux in `main.go`, on t
 
 - `/webhook/scm` and `/webhook/scm/health`
 - `/api/v1/bundles`, only when `--bundle-api-token` is set
-- `/webhook/validate/pipeline`, only when the Pipeline admission webhook is enabled
 
 ## Port Separation
 

@@ -31,32 +31,30 @@ spec:
       health:
         type: argocd   # Application name defaults to rollouts-demo-pre-prod in namespace argocd
 
-    # Prod EU: PR approval, Argo Rollouts canary, parallel with prod-us
+    # Prod EU: PR approval, Argo Rollouts canary in the prod-eu cluster, parallel
+    # with prod-us. The Rollout runs in the spoke, so kardinal checks the hub's
+    # Argo CD Application for it (rollouts-demo-prod-eu), not the Rollout.
     - name: prod-eu
       dependsOn: [pre-prod]
       path: env/prod-eu
-      shard: eu-cluster                   # handled by the agent in the EU cluster
       update:
         strategy: kustomize
       approval: pr-review
       health:
-        type: argoRollouts
+        type: argocd
         timeout: 30m
-      delivery:
-        delegate: argoRollouts
 
-    # Prod US: PR approval, Argo Rollouts canary, parallel with prod-eu
+    # Prod US: PR approval, Argo Rollouts canary in the prod-us cluster, parallel
+    # with prod-eu. The Rollout runs in the spoke, so kardinal checks the hub's
+    # Argo CD Application for it (rollouts-demo-prod-us), not the Rollout.
     - name: prod-us
       dependsOn: [pre-prod]
       path: env/prod-us
-      shard: us-cluster                   # handled by the agent in the US cluster
       update:
         strategy: kustomize
       approval: pr-review
       health:
-        type: argoRollouts
+        type: argocd
         timeout: 30m
-      delivery:
-        delegate: argoRollouts
 
   historyLimit: 20

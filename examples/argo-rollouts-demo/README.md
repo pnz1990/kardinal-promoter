@@ -1,6 +1,6 @@
 # Argo Rollouts Demo — standalone single-cluster example
 
-This example demonstrates kardinal-promoter with [Argo Rollouts](https://argoproj.github.io/rollouts/) for canary delivery in a single cluster. Unlike the multi-cluster-fleet example (which uses shards), this example runs entirely in one cluster with three environments: `test` (Deployment), `uat` (ArgoCD Application), `prod` (Argo Rollouts canary).
+This example demonstrates kardinal-promoter with [Argo Rollouts](https://argoproj.github.io/rollouts/) for canary delivery in a single cluster. Unlike the multi-cluster-fleet example (an Argo CD hub with workload clusters), this example runs entirely in one cluster with three environments: `test` (Deployment), `uat` (ArgoCD Application), `prod` (Argo Rollouts canary).
 
 ## Architecture
 
@@ -25,7 +25,7 @@ kardinal-controller
 
 | | argo-rollouts-demo | multi-cluster-fleet |
 |---|---|---|
-| Clusters | Single | Multiple (shards) |
+| Clusters | Single | Hub plus workload clusters |
 | Strategy | Steps (setWeight + pause) | Steps (setWeight + pause) |
 | Focus | Learning Argo Rollouts integration | Multi-cluster fan-out |
 | ArgoCD needed | Optional (uat only) | Required (prod environments) |

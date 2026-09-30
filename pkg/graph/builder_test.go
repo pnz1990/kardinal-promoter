@@ -285,7 +285,9 @@ func TestBuilder_SkipEnvironments_WithoutPermission(t *testing.T) {
 	assert.Contains(t, buildErr.Error(), "skip denied")
 }
 
-// Test 7: Shard label on prod environment.
+// Test 7: distributed mode was removed (#1321), so a shard no longer labels
+// the environment's PromotionSteps: the controller reconciles every step, and
+// the step fails with "shard is not supported" instead of being skipped.
 func TestBuilder_ShardLabel(t *testing.T) {
 	b := graph.NewBuilder()
 	envs := []kardinalv1alpha1.EnvironmentSpec{
@@ -308,8 +310,7 @@ func TestBuilder_ShardLabel(t *testing.T) {
 	require.True(t, ok, "template.metadata must be a map")
 	labels, ok := template["labels"].(map[string]interface{})
 	require.True(t, ok, "template.metadata.labels must be a map")
-	assert.Equal(t, "cluster-b", labels["kardinal.io/shard"],
-		"prod node must have kardinal.io/shard = cluster-b")
+	assert.NotContains(t, labels, "kardinal.io/shard", "prod node must not carry a shard label")
 }
 
 // Test 8: Custom steps are not implemented, so Build rejects them loudly
@@ -1118,70 +1119,30 @@ func TestBuilder_RejectsCustomStepsAndTemplates(t *testing.T) {
 	}
 }
 
-// TestBuilder_MultiRegionFanOut verifies that when an environment declares ≥2 regions,
-// the builder emits a kro forEach node with a "region" iterator over a CEL array
-// literal and spec.region = "${region}" in the PromotionStep template (issue #612).
+// TestBuilder_MultiRegionFanOut verifies #1304: two or more regions fail at
+// Graph build with a message that points to one environment per region. The
+// builder used to emit a forEach node whose region steps then failed at run
+// time, because every region pushed the same change to the same branch.
 func TestBuilder_MultiRegionFanOut(t *testing.T) {
-	b := graph.NewBuilder()
-
 	pipeline := &kardinalv1alpha1.Pipeline{
 		ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "default"},
 		Spec: kardinalv1alpha1.PipelineSpec{
 			Environments: []kardinalv1alpha1.EnvironmentSpec{
 				{Name: "test"},
-				{
-					Name:    "prod",
-					Regions: []string{"us-east-1", "eu-west-1"},
-				},
+				{Name: "prod", Regions: []string{"us-east-1", "eu-west-1"}},
 			},
 		},
 	}
-	bundle := makeBundle("fleet-v1", "fleet")
-
-	result, err := b.Build(graph.BuildInput{
-		Pipeline:    pipeline,
-		Bundle:      bundle,
-		PolicyGates: nil,
-	})
-	require.NoError(t, err)
-	assertKroValid(t, result.Graph)
-
-	// Node count: 1 bundle + test(1 PRStatus + 1 PromotionStep) + prod(1 PRStatus + 1 PromotionStep) = 5
-	assert.Equal(t, 5, result.NodeCount)
-
-	nodeMap := nodeByID(result.Graph.Spec.Nodes)
-
-	// test node must NOT have ForEach set
-	testNode := nodeMap["test"]
-	assert.Empty(t, testNode.ForEach, "single-region test node must not have ForEach")
-
-	// prod node MUST have one forEach dimension iterating the two regions
-	prodNode := nodeMap["prod"]
-	require.Len(t, prodNode.ForEach, 1, "multi-region prod node must have one forEach dimension")
-	assert.Equal(t, `${["us-east-1","eu-west-1"]}`, prodNode.ForEach[0]["region"])
-
-	// Each stamped PromotionStep needs a distinct name and its region.
-	prodSpec, ok := prodNode.Template["spec"].(map[string]interface{})
-	require.True(t, ok, "prod node template must have spec")
-	assert.Equal(t, "${region}", prodSpec["region"], "prod template spec.region must be ${region}")
-	prodMeta, _ := prodNode.Template["metadata"].(map[string]interface{})
-	assert.True(t, strings.HasSuffix(prodMeta["name"].(string), "-${region}"),
-		"prod name must be suffixed with the region")
-
-	// Collection readyWhen is evaluated per element.
-	assert.Equal(t, []string{`${each.status.state == "Verified"}`}, prodNode.ReadyWhen)
-
-	// The test node template must NOT include spec.region
-	testSpec, ok := testNode.Template["spec"].(map[string]interface{})
-	require.True(t, ok, "test node template must have spec")
-	_, hasRegion := testSpec["region"]
-	assert.False(t, hasRegion, "single-region test node must not have spec.region")
+	_, err := graph.NewBuilder().Build(graph.BuildInput{Pipeline: pipeline, Bundle: makeBundle("fleet-v1", "fleet")})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, graph.ErrInvalid)
+	assert.Contains(t, err.Error(), `environment "prod": regions is not supported; declare one environment `+
+		`per region (prod-us, prod-eu) and use wave`)
 }
 
-// TestBuilder_SingleRegionNoForEach verifies that when an environment declares exactly one
-// region (Regions: ["x"]), the builder treats it as single-region and does NOT emit a forEach
-// node. The threshold for multi-region fan-out is ≥2. This pins the correct fallback behavior
-// so a future refactor cannot accidentally fan out single-region environments (issue #1111).
+// TestBuilder_SingleRegionNoForEach verifies that one region (Regions: ["x"])
+// is accepted and ignored: no forEach node and no spec.region (issues #1111,
+// #1304).
 func TestBuilder_SingleRegionNoForEach(t *testing.T) {
 	b := graph.NewBuilder()
 

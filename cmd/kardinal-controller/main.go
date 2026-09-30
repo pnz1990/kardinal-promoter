@@ -45,7 +45,6 @@ import (
 	czap "sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
-	admissionpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/admission"
 	graphpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
@@ -183,10 +182,9 @@ func main() {
 			"both the UI and webhook servers use HTTPS instead of plain HTTP. "+
 			"Also readable from KARDINAL_TLS_KEY_FILE environment variable.")
 
-	var shard string
-	flag.StringVar(&shard, "shard", os.Getenv("KARDINAL_SHARD"),
-		"Shard name for distributed mode. When set, this controller only processes PromotionSteps "+
-			"with a matching kardinal.io/shard label. Leave empty for standalone (single-controller) mode.")
+	// --shard and --pipeline-admission-webhook were removed; setting one stops
+	// the controller with a message (removed_settings.go).
+	removed := bindRemovedFlags(flag.CommandLine, os.Getenv)
 
 	// SCM credential rotation — watch a Kubernetes Secret and reload the SCM
 	// provider on change without restarting the controller. When
@@ -213,20 +211,6 @@ func main() {
 		os.Getenv("KARDINAL_SCM_TOKEN_SECRET_KEY"),
 		"Data key within the Secret that holds the SCM token (default: \"token\"). "+
 			"Also readable from KARDINAL_SCM_TOKEN_SECRET_KEY environment variable.")
-
-	// --pipeline-admission-webhook enables the ValidatingAdmissionWebhook handler for
-	// Pipeline CRDs. When true, the handler is mounted at
-	// POST /webhook/validate/pipeline on the webhook server (--webhook-bind-address).
-	// Operators must separately install a ValidatingWebhookConfiguration pointing at
-	// this path; the controller does not auto-create it.
-	// Design ref: docs/design/15-production-readiness.md §Lens 4
-	var pipelineAdmissionWebhook bool
-	flag.BoolVar(&pipelineAdmissionWebhook, "pipeline-admission-webhook",
-		os.Getenv("KARDINAL_PIPELINE_ADMISSION_WEBHOOK") == "true",
-		"Enable the ValidatingAdmissionWebhook handler for Pipeline cycle detection "+
-			"at POST /webhook/validate/pipeline. Requires a ValidatingWebhookConfiguration "+
-			"to be installed separately. Also readable from "+
-			"KARDINAL_PIPELINE_ADMISSION_WEBHOOK=true environment variable.")
 
 	// --watch-namespace limits the controller's informer cache to a single namespace.
 	// When empty (default), the controller watches all namespaces (cluster-wide mode).
@@ -281,10 +265,8 @@ func main() {
 	// reconciler line, errors included, goes to a disabled logger.
 	zerolog.DefaultContextLogger = &logger
 
-	if shard != "" {
-		logger.Info().Str("shard", shard).Msg("controller started in distributed mode")
-	} else {
-		logger.Info().Msg("controller started in standalone mode")
+	if err := removed.err(); err != nil {
+		logger.Fatal().Err(err).Msg("a removed controller setting is still set")
 	}
 
 	ctrl.SetLogger(czap.New(czap.UseFlagOptions(&opts)))
@@ -384,7 +366,6 @@ func main() {
 		SCM:            scmProvider,
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
-		Shard:          shard,
 		Recorder:       mgr.GetEventRecorderFor("kardinal-controller"), //nolint:staticcheck
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PromotionStepReconciler")
@@ -481,7 +462,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up ready check")
 	}
 
-	// Webhook server: SCM webhooks, bundle API, Pipeline admission.
+	// Webhook server: SCM webhooks and the bundle API.
 	webhookSrv := newWebhookServerWithConfig(scmProvider, mgr.GetClient(), logger, webhookSecret != "")
 	if webhookSecret == "" {
 		logger.Warn().Msg("SCM webhooks disabled: no --webhook-secret set, /webhook/scm rejects every event; merges are detected by PR status polling")
@@ -502,13 +483,6 @@ func main() {
 		bundleAPI.onlyNamespace = watchNamespace
 		mux.HandleFunc("/api/v1/bundles", bundleAPI.Handler())
 		logger.Info().Msg("bundle API endpoint enabled at /api/v1/bundles")
-	}
-	// Pipeline admission webhook — only mounted when explicitly enabled.
-	// Requires a ValidatingWebhookConfiguration installed separately by the operator.
-	// Design ref: docs/design/15-production-readiness.md §Lens 4
-	if pipelineAdmissionWebhook {
-		mux.HandleFunc("/webhook/validate/pipeline", admissionpkg.PipelineWebhookHandler(logger))
-		logger.Info().Msg("pipeline admission webhook enabled at /webhook/validate/pipeline")
 	}
 	// The webhook and UI servers are manager Runnables: they start after the
 	// caches sync, a bind failure stops the controller, and shutdown drains

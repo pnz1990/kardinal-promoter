@@ -34,8 +34,6 @@ spec:
         path: env/{{env}}
       destination:
         server: "{{server}}"
-        # The argoRollouts adapter looks for Rollout <pipeline> in a namespace
-        # named after the environment.
         namespace: "{{env}}"
       syncPolicy:
         automated:

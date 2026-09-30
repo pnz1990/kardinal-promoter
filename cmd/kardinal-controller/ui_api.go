@@ -751,8 +751,8 @@ func (s *uiAPIServer) handleBundleGraph(w http.ResponseWriter, r *http.Request, 
 
 // pipelineEnvDeps returns the Pipeline's environments in execution order and
 // the environments each one waits for, using the Graph builder's rules. An
-// invalid topology (admission rejects cycles) falls back to a chain in list
-// order so the UI still renders.
+// invalid topology (the Pipeline is Ready=False for a cycle) falls back to a
+// chain in list order so the UI still renders.
 func pipelineEnvDeps(pl *v1alpha1.Pipeline) ([]string, map[string][]string) {
 	order, orderErr := graphpkg.EnvironmentOrder(pl)
 	deps, depsErr := graphpkg.EnvironmentDependencies(pl)
