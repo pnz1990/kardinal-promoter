@@ -587,8 +587,8 @@ func gateHoldCases() (*v1alpha1.Pipeline, []gateHoldCase) {
 		}
 	}
 	soak := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
-	preDeploy := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
-	preDeploy.Spec.When = "pre-deploy"
+	postDeploy := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
+	postDeploy.Spec.When = "post-deploy" //nolint:staticcheck // SA1019: when has no effect (#1323)
 	// prodStep is the prod step waiting on the soak gate, the way the Graph
 	// builder lists gate instances in spec.requiredGates.
 	prodStep := func(state string) *v1alpha1.PromotionStep {
@@ -603,25 +603,26 @@ func gateHoldCases() (*v1alpha1.Pipeline, []gateHoldCase) {
 	}
 	return pipeline, []gateHoldCase{
 		{
-			// checkPreDeployGates keeps the step Pending, before git.
-			name: "pre-deploy gate holds the Pending prod step",
-			objs: append(upstream(), prodStep("Pending"), preDeploy),
-			want: 1,
-		},
-		{
-			name: "pre-deploy gate holds the new prod step",
-			objs: append(upstream(), prodStep(""), preDeploy),
-			want: 1,
-		},
-		{
-			name: "pre-deploy gate after the prod step started",
-			objs: append(upstream(), prodStep("Promoting"), preDeploy),
-			want: 0,
-		},
-		{
-			name: "post-deploy gate does not hold the Pending prod step",
+			// checkRequiredGates keeps the step Pending, before git.
+			name: "gate holds the Pending prod step",
 			objs: append(upstream(), prodStep("Pending"), soak),
+			want: 1,
+		},
+		{
+			name: "gate holds the new prod step",
+			objs: append(upstream(), prodStep(""), soak),
+			want: 1,
+		},
+		{
+			name: "gate after the prod step started",
+			objs: append(upstream(), prodStep("Promoting"), soak),
 			want: 0,
+		},
+		{
+			// #1323: spec.when has no effect.
+			name: "post-deploy gate holds the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), postDeploy),
+			want: 1,
 		},
 		{
 			name: "health checking in test",

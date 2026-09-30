@@ -26,23 +26,50 @@ spec:
   expression: <string>                  # CEL expression
   message: <string>                     # human-readable explanation shown when gate blocks
   recheckInterval: <duration>           # how often to re-evaluate (default: "5m", minimum: "10s")
-  when: <string>                        # "pre-deploy" or "post-deploy" (default: "post-deploy")
+  when: <string>                        # deprecated, has no effect (see below)
 ```
 
-### `when` field (K-02)
+### When a gate holds a step
 
-Every gate on an environment holds that environment back: the Graph does not create the
-environment's PromotionStep until the gate reports ready, so nothing is pushed and no PR is opened
-while a gate blocks. This is true for both values of `when`:
+Every gate on an environment holds that environment back, twice:
 
-- `post-deploy` (default): no additional check. The gate is **not** evaluated again after the
-  deployment, so it cannot hold a step that is already deploying or baking. Use `bake` for
-  post-deployment soak and `health` for health checks.
-- `pre-deploy`: the PromotionStep reconciler also re-checks the gate right before git operations
-  begin. If it is not ready at that moment, the PromotionStep stays in `Pending` and no `git-clone`
-  starts. Use this for conditions that can turn false between the step being created and it starting,
-  such as upstream health. While it holds the step, `kardinal status` lists it under Blocking Policy
-  Gates and the UI counts it as a blocker (the Blocked label and the Blockers column).
+1. The Graph does not create the environment's PromotionStep until every gate on it reports ready.
+2. Right before the step starts, before any git operation, the PromotionStep reconciler re-checks
+   every gate in the step's `spec.requiredGates`. The step starts only when each gate exists, is
+   ready, and was evaluated at or after the step was created (its `status.lastEvaluatedAt` is not
+   earlier than the step's `creationTimestamp`). Otherwise the step stays in `Pending` with the
+   message `waiting for gate <name>` or `waiting for gate <name> to be re-evaluated`. Nothing is
+   pushed and no PR is opened.
+
+The Graph acts on the gate's last result, which can be older than the step: it can predate a
+metric, change window or schedule change. So the controller re-evaluates a new step's gates as soon
+as the step is created, and a gate that is still true lets the step start within seconds.
+
+While a gate that is not ready holds a step, `kardinal status` lists it under Blocking Policy Gates
+and the UI counts it as a blocker (the Blocked label and the Blockers column). A ready gate whose
+result is older than the step still shows as ready while the step waits for its re-evaluation; the
+step's message says which gate it waits for.
+
+Limits:
+
+- **A step that has started is not stopped.** Once the step leaves `Pending`, a gate that turns
+  false does not interrupt it: gates are not evaluated against a deployment in progress. Use `bake`
+  for post-deployment soak and `health` for health checks.
+- **Steps wait if gates cannot be evaluated.** A step that needs a fresh result waits until the
+  controller writes one (it fails closed).
+- **Clock skew.** The API server sets the step's `creationTimestamp`; the controller's clock sets
+  the gate's `lastEvaluatedAt`. Both have one-second precision, so a result from the same second as
+  the step counts. If the controller's clock is behind the API server's, a fresh result can look
+  older than the step, and the step waits for a later evaluation (the next ScheduleClock tick or
+  `recheckInterval` after the skew has passed). If the controller's clock is ahead, a result up to
+  the skew old is accepted. Keep node clocks synchronized. This effect is not covered by tests.
+
+### `when` field (deprecated)
+
+`spec.when` has no effect and is deprecated: `pre-deploy` and `post-deploy` behave the same, and
+every gate is re-checked before its step starts, as described above. The field keeps its values and
+its default (`post-deploy`), so existing manifests still apply. `kardinal validate` warns when it is
+set. Remove it from your gates.
 
 **Example: block prod deployments when staging error rate is high**
 
@@ -52,7 +79,6 @@ metadata:
   name: staging-healthy-before-prod
   namespace: platform-policies
 spec:
-  when: pre-deploy
   expression: 'double(metrics["staging-error-rate"].value) < 0.01'
   message: "Staging error rate is above 1% — do not start prod deployment"
   recheckInterval: 1m
@@ -425,10 +451,14 @@ PolicyGates are re-evaluated when any of the following occurs:
 5. **Gate spec change** — Editing a gate's `spec` re-evaluates it. The controller's own status
    writes do not.
 
-The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph and the
-dependent PromotionStep only read `status.ready`: they do not check how recent the evaluation
-is. While the controller is down, every gate keeps its last result, so a gate that was ready
-before the outage stays ready until the controller re-evaluates it. The controller re-evaluates every gate when it starts.
+6. **PromotionStep created** — When a PromotionStep that has not started is created, the gates in
+   its `spec.requiredGates` are re-evaluated at once, so the step can start on a fresh result.
+
+The controller writes `status.lastEvaluatedAt` on each re-evaluation. The Graph reads only
+`status.ready`; the PromotionStep also checks that the result is not older than the step before it
+starts (see [When a gate holds a step](#when-a-gate-holds-a-step)). While the controller is down,
+every gate keeps its last result and no step starts. The controller re-evaluates every gate when it
+starts. A result from before an outage still counts for a step created before that result.
 `kardinal policy list`, `kardinal status` and the UI show when each gate was last evaluated, so a
 stale result is visible.
 
@@ -488,8 +518,8 @@ kardinal policy simulate --pipeline my-app --env prod --time "Saturday 3pm"
 In the UI, the pipeline page's "PolicyGate blocking promotion" banner, its **Show blocked** filter
 and the "blocked" count on the Policy Gates panel include only gates that hold the Bundle back, the
 same rule as the Blocked label and the Blockers column: the Bundle has reached the gate's
-environment (every upstream environment is Verified and the environment has no step yet), or a
-`pre-deploy` gate holds its `Pending` step. A gate that is not ready but does not hold the Bundle,
+environment (every upstream environment is Verified and the environment has no step yet), or the
+environment's `Pending` step requires the gate. A gate that is not ready but does not hold the Bundle,
 because its environment is not reached yet or the Bundle failed (it can still retry), is shown as
 **Waiting** (grey) instead of **Block** (red). A superseded Bundle's gates that are not ready are
 shown as **Superseded**: they are not evaluated again.

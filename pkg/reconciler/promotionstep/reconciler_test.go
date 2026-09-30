@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	dynfake "k8s.io/client-go/dynamic/fake"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
@@ -1359,142 +1360,170 @@ func TestOrphanCleanup_MultipleStepsForBundle(t *testing.T) {
 	}
 }
 
-// ─── K-02: Pre-deploy gates ───────────────────────────────────────────────────
+// ─── #1300 / #1323: required gates are re-checked before the step starts ────
 
-// TestPreDeployGate_BlocksPendingTransition verifies that a pre-deploy gate
-// that is NOT ready prevents the Pending → Promoting transition.
-func TestPreDeployGate_BlocksPendingTransition(t *testing.T) {
-	scheme := buildScheme(t)
-	step := makeStep("step-prod", "my-app", "bundle-1", "prod")
-	// step.Spec.RequiredGates = ["pre-deploy-gate"] set after creation
-	step.Spec.RequiredGates = []string{"pre-deploy-gate"}
+// gateStepCreated is the creationTimestamp of the step in the required-gate
+// tests. The fake client does not set creationTimestamp, so the tests do.
+var gateStepCreated = metav1.NewTime(time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC))
 
-	pipeline := makePipeline("my-app")
-	bundle := makeBundle("bundle-1", "my-app")
-
-	// Pre-deploy gate that is NOT ready
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "pre-deploy-gate", Namespace: "default"},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "!schedule.isWeekend",
-			When:       "pre-deploy",
-		},
-		Status: v1alpha1.PolicyGateStatus{Ready: false, Reason: "weekend"},
+// requiredGate returns a PolicyGate with the given result, last evaluated at
+// evaluatedAt (nil: never evaluated).
+func requiredGate(name, when string, ready bool, evaluatedAt *metav1.Time) *v1alpha1.PolicyGate {
+	return &v1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec:       v1alpha1.PolicyGateSpec{Expression: "upstream.uat.soakMinutes >= 30", When: when}, //nolint:staticcheck // SA1019: when has no effect (#1323)
+		Status:     v1alpha1.PolicyGateStatus{Ready: ready, LastEvaluatedAt: evaluatedAt},
 	}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(step, pipeline, bundle, gate).
-		WithStatusSubresource(&v1alpha1.PromotionStep{}).
-		Build()
-
-	r := &promotionstep.Reconciler{
-		Client:    c,
-		SCM:       &mockSCM{},
-		GitClient: &mockGit{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
-	}
-
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
-	result, err := r.Reconcile(context.Background(), req)
-	require.NoError(t, err)
-
-	var got v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
-
-	// Step must NOT advance to Promoting — pre-deploy gate is blocking
-	assert.NotEqual(t, "Promoting", got.Status.State,
-		"step must not advance to Promoting when pre-deploy gate is not ready")
-	// Should requeue to check again later
-	assert.Greater(t, result.RequeueAfter.Milliseconds(), int64(0),
-		"should requeue when blocked by pre-deploy gate")
 }
 
-// TestPreDeployGate_AllowsTransitionWhenReady verifies that when all pre-deploy
-// gates are ready, the step advances normally to Promoting.
-func TestPreDeployGate_AllowsTransitionWhenReady(t *testing.T) {
-	scheme := buildScheme(t)
-	step := makeStep("step-prod", "my-app", "bundle-1", "prod")
-	step.Spec.RequiredGates = []string{"pre-deploy-gate"}
-
-	pipeline := makePipeline("my-app")
-	bundle := makeBundle("bundle-1", "my-app")
-
-	// Pre-deploy gate that IS ready
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "pre-deploy-gate", Namespace: "default"},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "!schedule.isWeekend",
-			When:       "pre-deploy",
-		},
-		Status: v1alpha1.PolicyGateStatus{Ready: true, Reason: "weekday"},
-	}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(step, pipeline, bundle, gate).
-		WithStatusSubresource(&v1alpha1.PromotionStep{}).
-		Build()
-
-	r := &promotionstep.Reconciler{
-		Client:    c,
-		SCM:       &mockSCM{},
-		GitClient: &mockGit{},
-		WorkDirFn: func(_, _ string) string { return t.TempDir() },
-	}
-
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
-	_, err := r.Reconcile(context.Background(), req)
-	require.NoError(t, err)
-
-	var got v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
-
-	// Step must advance to Promoting — all pre-deploy gates are ready
-	assert.Equal(t, "Promoting", got.Status.State,
-		"step must advance to Promoting when all pre-deploy gates are ready")
+func gateTime(d time.Duration) *metav1.Time {
+	t := metav1.NewTime(gateStepCreated.Add(d))
+	return &t
 }
 
-// TestPreDeployGate_PostDeployGatesDoNotBlockPending verifies that gates with
-// when: post-deploy (or no when field) do NOT block the Pending → Promoting transition.
-func TestPreDeployGate_PostDeployGatesDoNotBlockPending(t *testing.T) {
-	scheme := buildScheme(t)
+// newGatedStepReconciler returns a reconciler and client holding a Pending
+// prod step, created at gateStepCreated, that requires gateNames.
+func newGatedStepReconciler(t *testing.T, gateNames []string, gates ...*v1alpha1.PolicyGate) (*promotionstep.Reconciler, *mockSCM, ctrl.Request) {
+	t.Helper()
 	step := makeStep("step-prod", "my-app", "bundle-1", "prod")
-	step.Spec.RequiredGates = []string{"post-deploy-gate"}
-
-	pipeline := makePipeline("my-app")
-	bundle := makeBundle("bundle-1", "my-app")
-
-	// Post-deploy gate that is NOT ready — should NOT block Pending → Promoting
-	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "post-deploy-gate", Namespace: "default"},
-		Spec: v1alpha1.PolicyGateSpec{
-			Expression: "upstream.uat.soakMinutes >= 30",
-			When:       "post-deploy", // or "" (default)
-		},
-		Status: v1alpha1.PolicyGateStatus{Ready: false, Reason: "not enough soak"},
+	step.CreationTimestamp = gateStepCreated
+	step.Spec.RequiredGates = gateNames
+	objs := []client.Object{step, makePipeline("my-app"), makeBundle("bundle-1", "my-app")}
+	for _, g := range gates {
+		objs = append(objs, g)
 	}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(step, pipeline, bundle, gate).
-		WithStatusSubresource(&v1alpha1.PromotionStep{}).
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithObjects(objs...).
+		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{}).
 		Build()
-
+	scmMock := &mockSCM{}
 	r := &promotionstep.Reconciler{
 		Client:    c,
-		SCM:       &mockSCM{},
+		SCM:       scmMock,
 		GitClient: &mockGit{},
 		WorkDirFn: func(_, _ string) string { return t.TempDir() },
 	}
+	return r, scmMock, ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
+}
 
-	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"}}
-	_, err := r.Reconcile(context.Background(), req)
+// TestCheckRequiredGates: a Pending step starts only when every required gate
+// exists, is ready, and was evaluated at or after the step was created. The
+// Graph created the step on a gate result that can be older than the step
+// (#1300), and spec.when has no effect (#1323).
+func TestCheckRequiredGates(t *testing.T) {
+	tests := []struct {
+		name      string
+		gateNames []string
+		gates     []*v1alpha1.PolicyGate
+		wantStart bool
+		wantMsg   string
+	}{
+		{
+			name:      "missing gate holds",
+			gateNames: []string{"soak"},
+			wantMsg:   "waiting for gate soak",
+		},
+		{
+			name:      "gate not ready holds",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "", false, gateTime(time.Minute))},
+			wantMsg:   "waiting for gate soak",
+		},
+		{
+			// #1323: the CRD default. The gate turned false after the Graph
+			// created the step, before the step started.
+			name:      "post-deploy gate that turned false before start holds",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "post-deploy", false, gateTime(time.Minute))},
+			wantMsg:   "waiting for gate soak",
+		},
+		{
+			name:      "ready gate never evaluated holds",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "", true, nil)},
+			wantMsg:   "waiting for gate soak to be re-evaluated",
+		},
+		{
+			// #1300: the result the Graph acted on is older than the step.
+			name:      "step newer than the gate's lastEvaluatedAt holds",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "post-deploy", true, gateTime(-time.Minute))},
+			wantMsg:   "waiting for gate soak to be re-evaluated",
+		},
+		{
+			// metav1.Time has one-second precision: same second counts.
+			name:      "gate evaluated in the second the step was created starts",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "", true, gateTime(0))},
+			wantStart: true,
+		},
+		{
+			name:      "gate evaluated after the step was created starts",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "post-deploy", true, gateTime(time.Minute))},
+			wantStart: true,
+		},
+		{
+			name:      "pre-deploy gate evaluated after the step was created starts",
+			gateNames: []string{"soak"},
+			gates:     []*v1alpha1.PolicyGate{requiredGate("soak", "pre-deploy", true, gateTime(time.Minute))},
+			wantStart: true,
+		},
+		{
+			name:      "one of two gates not re-evaluated holds",
+			gateNames: []string{"soak", "hours"},
+			gates: []*v1alpha1.PolicyGate{
+				requiredGate("soak", "", true, gateTime(time.Minute)),
+				requiredGate("hours", "", true, gateTime(-time.Second)),
+			},
+			wantMsg: "waiting for gate hours to be re-evaluated",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, scmMock, req := newGatedStepReconciler(t, tt.gateNames, tt.gates...)
+			result, err := r.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+
+			var got v1alpha1.PromotionStep
+			require.NoError(t, r.Get(context.Background(), req.NamespacedName, &got))
+			if tt.wantStart {
+				assert.Equal(t, "Promoting", got.Status.State)
+				return
+			}
+			assert.Empty(t, got.Status.State, "a held step stays Pending")
+			assert.Equal(t, tt.wantMsg, got.Status.Message)
+			assert.Empty(t, got.Status.Steps, "no step sequence before the gates pass")
+			assert.Zero(t, scmMock.openCalled, "no PR while a gate holds")
+			assert.Greater(t, result.RequeueAfter, time.Duration(0), "a held step requeues")
+		})
+	}
+}
+
+// TestCheckRequiredGates_PassesAfterReEvaluation: a step held on a gate
+// result older than the step starts once the gate is re-evaluated.
+func TestCheckRequiredGates_PassesAfterReEvaluation(t *testing.T) {
+	r, _, req := newGatedStepReconciler(t, []string{"soak"},
+		requiredGate("soak", "", true, gateTime(-time.Minute)))
+	ctx := context.Background()
+
+	_, err := r.Reconcile(ctx, req)
 	require.NoError(t, err)
-
 	var got v1alpha1.PromotionStep
-	require.NoError(t, c.Get(context.Background(), req.NamespacedName, &got))
+	require.NoError(t, r.Get(ctx, req.NamespacedName, &got))
+	require.Empty(t, got.Status.State, "held on the stale gate result")
+	require.Equal(t, "waiting for gate soak to be re-evaluated", got.Status.Message)
 
-	// Post-deploy gate NOT ready must NOT block the transition to Promoting
-	assert.Equal(t, "Promoting", got.Status.State,
-		"post-deploy gate must not block Pending → Promoting transition")
+	// The PolicyGate reconciler re-evaluates the gate after the step exists.
+	var gate v1alpha1.PolicyGate
+	require.NoError(t, r.Get(ctx, types.NamespacedName{Name: "soak", Namespace: "default"}, &gate))
+	gate.Status.LastEvaluatedAt = gateTime(5 * time.Second)
+	require.NoError(t, r.Status().Update(ctx, &gate))
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, r.Get(ctx, req.NamespacedName, &got))
+	assert.Equal(t, "Promoting", got.Status.State)
 }
 
 // ─── K-01: Contiguous soak / bake ────────────────────────────────────────────

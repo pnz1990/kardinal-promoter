@@ -871,6 +871,44 @@ func staleToFresh(oldStatus, newStatus kardinalv1alpha1.MetricCheckStatus) bool 
 	return oldStatus.ValidUntil == nil || oldStatus.ValidUntil.Before(newStatus.LastEvaluatedAt)
 }
 
+// stepRequiredGateRequests enqueues the PolicyGates a PromotionStep requires
+// (spec.requiredGates, in the step's namespace). A new step starts only on
+// gate results evaluated at or after it was created (checkRequiredGates in
+// the PromotionStep reconciler, #1300), so its gates are re-evaluated as soon
+// as it exists rather than at their next recheck.
+func stepRequiredGateRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	ps, ok := obj.(*kardinalv1alpha1.PromotionStep)
+	if !ok {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(ps.Spec.RequiredGates))
+	for _, name := range ps.Spec.RequiredGates {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: name, Namespace: ps.Namespace},
+		})
+	}
+	return reqs
+}
+
+// unstartedStepCreated passes only the create event of a PromotionStep that
+// has not started (state "" or Pending) and requires a gate. Updates, deletes
+// and generic events do not pass. At controller start the informer's initial
+// list sends a create event for every existing step; the state filter skips
+// the finished ones.
+var unstartedStepCreated = predicate.Funcs{
+	CreateFunc: func(e event.CreateEvent) bool {
+		ps, ok := e.Object.(*kardinalv1alpha1.PromotionStep)
+		if !ok {
+			return false
+		}
+		return len(ps.Spec.RequiredGates) > 0 &&
+			(ps.Status.State == "" || ps.Status.State == "Pending")
+	},
+	UpdateFunc:  func(event.UpdateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
+
 // SetupWithManager registers the PolicyGateReconciler with the controller-runtime Manager.
 // It adds a Watch on MetricCheck objects so that when any MetricCheck in a namespace
 // changes (status updated by the MetricCheckReconciler), all PolicyGates in that
@@ -893,6 +931,11 @@ func staleToFresh(oldStatus, newStatus kardinalv1alpha1.MetricCheckStatus) bool 
 // status.active at every window boundary, and that write re-evaluates every
 // PolicyGate instance whose expression references changewindow, so a freeze
 // starts blocking at its boundary rather than at the next recheckInterval.
+//
+// It also watches PromotionStep creates: a new step's required gates are
+// re-evaluated at once, because the step starts only on gate results
+// evaluated at or after it was created (#1300). The evaluation's status write
+// wakes the step (the PromotionStep reconciler watches PolicyGates).
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// scheduleClockMapper enqueues all PolicyGate instances across ALL namespaces
 	// when any ScheduleClock ticks, so schedule.* expressions are re-evaluated
@@ -921,6 +964,10 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch ChangeWindow objects: a window boundary (status.active write) or a
 		// spec edit re-evaluates the gates that reference changewindow.
 		Watches(&kardinalv1alpha1.ChangeWindow{}, handler.EnqueueRequestsFromMapFunc(changeWindowMapper)).
+		// Watch PromotionStep creates: a new unstarted step's required gates
+		// are re-evaluated at once (#1300).
+		Watches(&kardinalv1alpha1.PromotionStep{}, handler.EnqueueRequestsFromMapFunc(stepRequiredGateRequests),
+			builder.WithPredicates(unstartedStepCreated)).
 		Complete(r)
 }
 
