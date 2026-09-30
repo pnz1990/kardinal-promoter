@@ -8,6 +8,7 @@
 #
 # Env:
 #   COUNT         go test -count (default 1; the weekly flake job uses more)
+#   RUN           go test -run pattern (default: the suite's, from up.sh)
 #   KIND_CLUSTER  cluster name (default kardinal-e2e-SUITE)
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -28,5 +29,5 @@ target_cluster
 
 cd "$REPO_ROOT"
 go build -o "$E2E_OUT/bin/report" ./test/e2e/report
-go test -tags e2e ./test/e2e/live -run "$KARDINAL_E2E_RUN" -count="${COUNT:-1}" -timeout 90m -json 2>&1 |
+go test -tags e2e ./test/e2e/live -run "${RUN:-$KARDINAL_E2E_RUN}" -count="${COUNT:-1}" -timeout 90m -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE"

@@ -25,9 +25,11 @@ set -euo pipefail
 
 SUITE=${1:?usage: $0 SUITE}
 case "$SUITE" in
-  # RUN is the go test -run pattern of the suite's tests. Every git server
-  # suite runs the core tests against its server.
-  core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh) RUN='^TestCore_' ;;
+  # RUN is the go test -run pattern of the suite's tests; the prefix names
+  # the area (test/e2e/README.md). Every git server suite runs the TestCore_
+  # promotion tests against its server.
+  core) COMPONENTS=("giteafamily.sh forgejo" argocd.sh)
+    RUN='^Test(Core|Gate|Bundle|Pipeline|Graph|Step|Rollback|Health|CLI|CIAPI|Notify|Sub|Audit)_' ;;
   gitea) COMPONENTS=("giteafamily.sh gitea" argocd.sh) RUN='^Test(Core|SCM)_' ;;
   *)
     echo "unknown suite $SUITE" >&2

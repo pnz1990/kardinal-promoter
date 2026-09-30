@@ -154,17 +154,18 @@ e2e-teardown: ## Convenience: tear down the e2e kind cluster
 ## Live e2e suites (test/e2e/live, test/e2e/README.md): a kind cluster per
 ## suite with real git servers, GitOps engines and the controller built from
 ## this checkout.
-## KIND_K8S picks the Kubernetes minor (e.g. 1.37; default kind-config.yaml's)
-## and COUNT the go test -count.
+## KIND_K8S picks the Kubernetes minor (e.g. 1.37; default kind-config.yaml's),
+## COUNT the go test -count and RUN the go test -run pattern (default the suite's).
 SUITE ?= core
 KIND_K8S ?=
 COUNT ?= 1
+RUN ?=
 
 e2e-up: ## Create or update the kind cluster for live suite SUITE (default core)
 	KIND_CLUSTER=kardinal-e2e-$(SUITE) KIND_K8S=$(KIND_K8S) bash hack/e2e/up.sh $(SUITE)
 
 test-e2e-live: ## Run live suite SUITE against the cluster from make e2e-up; fails on any skip
-	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) bash hack/e2e/run.sh $(SUITE)
+	KIND_CLUSTER=kardinal-e2e-$(SUITE) COUNT=$(COUNT) RUN='$(RUN)' bash hack/e2e/run.sh $(SUITE)
 
 e2e-down: ## Delete the kind cluster of live suite SUITE
 	kind delete cluster --name kardinal-e2e-$(SUITE)
