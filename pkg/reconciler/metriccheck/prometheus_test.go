@@ -18,11 +18,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 )
 
@@ -48,11 +51,46 @@ func prometheusScalarResponse(value float64) string {
 	}`, value)
 }
 
+// loopbackProvider returns a provider without the egress guard. The tests'
+// Prometheus servers are httptest servers on loopback, which the default
+// client refuses.
+func loopbackProvider() *metriccheck.PrometheusProvider {
+	return &metriccheck.PrometheusProvider{HTTPClient: &http.Client{Timeout: 10 * time.Second}}
+}
+
 // TestNewPrometheusProvider verifies the constructor returns a non-nil provider.
 func TestNewPrometheusProvider(t *testing.T) {
 	p := metriccheck.NewPrometheusProvider()
 	require.NotNil(t, p)
 	require.NotNil(t, p.HTTPClient)
+}
+
+// TestQueryScalar_DefaultClientRefusesLoopback covers #1267: the default
+// client (from NewPrometheusProvider, and the nil-client fallback) refuses a
+// loopback or link-local destination at dial time, so a MetricCheck cannot
+// reach the controller's own UI API or the cloud metadata endpoint. The
+// server never sees the request.
+func TestQueryScalar_DefaultClientRefusesLoopback(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		fmt.Fprint(w, prometheusScalarResponse(1))
+	}))
+	defer srv.Close()
+
+	providers := map[string]*metriccheck.PrometheusProvider{
+		"constructor": metriccheck.NewPrometheusProvider(),
+		"nil client":  {},
+	}
+	for name, p := range providers {
+		t.Run(name, func(t *testing.T) {
+			_, err := p.QueryScalar(context.Background(), srv.URL, "up")
+			require.Error(t, err)
+			assert.ErrorIs(t, err, egress.ErrBlockedAddress)
+			assert.Contains(t, err.Error(), "loopback")
+		})
+	}
+	assert.Zero(t, hits.Load(), "the loopback server must not receive a request")
 }
 
 // TestQueryScalar_VectorResult verifies that a single-series vector result is parsed correctly.
@@ -65,7 +103,7 @@ func TestQueryScalar_VectorResult(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	val, err := p.QueryScalar(context.Background(), srv.URL, "error_rate")
 	require.NoError(t, err)
 	assert.InDelta(t, 0.01, val, 1e-9)
@@ -79,7 +117,7 @@ func TestQueryScalar_ScalarResult(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	val, err := p.QueryScalar(context.Background(), srv.URL, "some_query")
 	require.NoError(t, err)
 	assert.InDelta(t, 42.5, val, 1e-9)
@@ -92,7 +130,7 @@ func TestQueryScalar_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	_, err := p.QueryScalar(context.Background(), srv.URL, "bad_query")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "500")
@@ -106,7 +144,7 @@ func TestQueryScalar_PrometheusError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	_, err := p.QueryScalar(context.Background(), srv.URL, "slow_query")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "query timeout")
@@ -114,7 +152,7 @@ func TestQueryScalar_PrometheusError(t *testing.T) {
 
 // TestQueryScalar_InvalidURL verifies that an unparseable URL returns an error.
 func TestQueryScalar_InvalidURL(t *testing.T) {
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	_, err := p.QueryScalar(context.Background(), "://bad-url", "query")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse")
@@ -125,7 +163,7 @@ func TestQueryScalar_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately before the request is made
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	// Use localhost with an invalid port to ensure connection failure with a cancelled context.
 	_, err := p.QueryScalar(ctx, "http://127.0.0.1:1", "query")
 	require.Error(t, err)
@@ -139,7 +177,7 @@ func TestQueryScalar_EmptyVector(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	_, err := p.QueryScalar(context.Background(), srv.URL, "no_data")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty vector")
@@ -162,7 +200,7 @@ func TestQueryScalar_MultipleSeriesError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	_, err := p.QueryScalar(context.Background(), srv.URL, "multi_series")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "2 series")
@@ -176,7 +214,7 @@ func TestQueryScalar_UnsupportedResultType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := metriccheck.NewPrometheusProvider()
+	p := loopbackProvider()
 	_, err := p.QueryScalar(context.Background(), srv.URL, "matrix_query")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported")

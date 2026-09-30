@@ -175,6 +175,8 @@ All PolicyGate expressions are evaluated against the following context. All attr
 | `metrics.<name>.stale` | bool | `true` when the MetricCheck's result has not been refreshed in time: its `status.validUntil` is unset or has passed |
 | `bundle.upstreamSoakMinutes` | int | Soak minutes of the environment(s) directly upstream of the gated environment. With several direct upstreams (fan-in) it is the minimum. An upstream that is not Verified counts as 0. A root environment gets 0. |
 
+The controller does not query a MetricCheck `spec.prometheusURL` on a loopback, link-local or cloud metadata address: the MetricCheck's `status.reason` then reads `destination address is not allowed` (see [Outbound requests to user URLs](guides/security.md#outbound-requests-to-user-urls)).
+
 #### Stale metric results
 
 Each MetricCheck evaluation writes `status.validUntil`: the evaluation time plus three times the

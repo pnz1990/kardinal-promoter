@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 )
 
 // maxResponseBytes bounds the Prometheus response body that is read.
@@ -34,15 +36,23 @@ const maxErrorText = 256
 // field of a Prometheus API error response are reported.
 type PrometheusProvider struct {
 	// HTTPClient is used for all Prometheus API calls.
-	// If nil, a client with a 10s timeout is used.
+	// If nil, the default client from NewPrometheusProvider is used.
 	HTTPClient *http.Client
 }
 
-// NewPrometheusProvider creates a PrometheusProvider with a default HTTP client.
+// defaultHTTPClient refuses loopback, link-local and cloud metadata
+// destinations at dial time (pkg/egress), so a MetricCheck URL cannot reach
+// the controller's own UI API or the node's credential endpoints. Private
+// ranges stay allowed for in-cluster Prometheus. It honours HTTP(S)_PROXY.
+var defaultHTTPClient = &http.Client{
+	Timeout:   10 * time.Second,
+	Transport: egress.NewTransport(http.ProxyFromEnvironment),
+}
+
+// NewPrometheusProvider creates a PrometheusProvider with the default,
+// egress-guarded HTTP client.
 func NewPrometheusProvider() *PrometheusProvider {
-	return &PrometheusProvider{
-		HTTPClient: &http.Client{Timeout: 10 * time.Second},
-	}
+	return &PrometheusProvider{HTTPClient: defaultHTTPClient}
 }
 
 // QueryScalar calls the Prometheus instant query API and extracts the scalar result.
@@ -64,7 +74,7 @@ func (p *PrometheusProvider) QueryScalar(ctx context.Context, prometheusURL, que
 
 	hc := p.HTTPClient
 	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Second}
+		hc = defaultHTTPClient
 	}
 
 	resp, err := hc.Do(req)

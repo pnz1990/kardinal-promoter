@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -136,7 +137,7 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 	require.NoError(t, err)
 	gates.NowFn = func() time.Time { return f.now }
 	f.gates = gates
-	f.hooks = &notificationhook.Reconciler{Client: c, NowFn: func() time.Time { return f.now }}
+	f.hooks = &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient, NowFn: func() time.Time { return f.now }}
 	return f
 }
 
@@ -331,6 +332,31 @@ func TestDelivery_RedirectIsNotFollowed(t *testing.T) {
 	h := f.hook()
 	assert.Contains(t, h.Status.FailureMessage, "HTTP 307")
 	assert.Contains(t, h.Status.FailureMessage, "redirects are not followed")
+}
+
+// TestDelivery_DefaultClientRefusesLoopback covers #1267: without an
+// HTTPClient override the reconciler uses the egress guard, so a hook aimed at
+// loopback (for example the controller's own UI API on 127.0.0.1:8082) is
+// refused at dial time and the server never sees the POST.
+func TestDelivery_DefaultClientRefusesLoopback(t *testing.T) {
+	srv := &webhookServer{}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(ts.URL, "http://"))
+	require.NoError(t, err)
+
+	for _, target := range []string{ts.URL, "http://localhost:" + port} {
+		t.Run(target, func(t *testing.T) {
+			f := newFixture(t, newHook(target, v1alpha1.NotificationEventBundleFailed), failedBundle("app-v0", saturday))
+			f.hooks.HTTPClient = nil
+			f.reconcileHook()
+
+			assert.Empty(t, srv.received(), "the loopback server must not receive the POST")
+			h := f.hook()
+			assert.Contains(t, h.Status.FailureMessage, "not allowed")
+			assert.Contains(t, h.Status.FailureMessage, "loopback")
+		})
+	}
 }
 
 // TestDelivery_URLTokenNotInStatusOrLogs covers C04-gates-14: incoming-webhook

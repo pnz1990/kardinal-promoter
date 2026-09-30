@@ -15,7 +15,7 @@ Object names come from the chart's full name, which is `kardinal-promoter` for a
 | ServiceAccount `kardinal-promoter` | Release namespace | The controller identity |
 | ClusterRole `kardinal-promoter-manager-role`, ClusterRoleBinding `kardinal-promoter-manager-rolebinding` | Cluster (default) | The namespaced rules in every namespace, plus the cluster-scoped rules |
 | Role and RoleBinding `kardinal-promoter-manager-role` / `-manager-rolebinding`, ClusterRole and binding `kardinal-promoter-cluster-scoped` | Namespace mode (`controller.watchNamespace`) | The namespaced rules in the watched namespace; the cluster-scoped rules |
-| Role and RoleBinding `kardinal-promoter-leader-election` | Release namespace | The leader-election Lease and the `kardinal-version` ConfigMap |
+| Role and RoleBinding `kardinal-promoter-leader-election` | Release namespace | The leader-election Lease, the `kardinal-version` ConfigMap, and `get` on the SCM token Secret by name |
 | ClusterRoles `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` | Cluster | Bound (with RoleBindings only) to the ServiceAccount kro impersonates for each Graph (`graph.serviceAccountName`, default `kardinal-graph`) |
 | ClusterRole `kardinal-promoter-kro-watch` | Cluster | Lets kro watch the kinds a Graph renders; aggregated into kro's role when kro uses `rbac.mode=aggregation` |
 
@@ -23,7 +23,7 @@ What the namespaced rules grant:
 
 | Resources | Verbs | Why |
 |---|---|---|
-| `secrets` | get, list, watch | Pipeline `spec.git.secretRef` and the SCM token Secret. In cluster mode this is **every Secret in the cluster**, because the rule is in a ClusterRole |
+| `secrets` | get | Pipeline `spec.git.secretRef` and the SCM token Secret. The controller reads Secrets straight from the API server, one by name, and never lists or watches them. In cluster mode `get` still reaches **every Secret in the cluster** by name, because the rule is in a ClusterRole |
 | `events.k8s.io` `events` | create, patch | Events from every reconciler (the events.k8s.io/v1 API) |
 | `events` (core) | get, list, watch, create, patch | The UI step event list reads Events through core/v1; leader election writes core Events |
 | `configmaps` | get, list, watch | Cached reads; the only write is the `kardinal-version` ConfigMap |
@@ -46,6 +46,9 @@ helm template kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
 
 To keep Secret access out of other namespaces, run in namespace mode
 (`controller.watchNamespace`), which turns the namespaced rules into a Role in that namespace.
+The release-namespace Role also grants `get` on the SCM token Secret, limited to its name
+(`github.secretRef.name`, or the Secret the chart creates from `github.token`). The rule is
+left out when neither is set.
 
 ---
 
@@ -349,6 +352,39 @@ The policy allows:
 
 Disable with `--set networkPolicy.enabled=false` if your CNI does not support NetworkPolicy.
 
+### Outbound requests to user URLs
+
+NotificationHook webhooks (`spec.webhook.url`) and MetricCheck queries (`spec.prometheusURL`)
+send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+refuses to connect when the address is one of these:
+
+- loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;
+- link-local (`169.254.0.0/16`, `fe80::/10`), which holds the cloud metadata and credential
+  endpoints `169.254.169.254`, `169.254.170.2` and `169.254.170.23`;
+- other cloud metadata addresses: `fd00:ec2::254`, `fd00:ec2::23`, `fd20:ce::254`,
+  `100.100.100.200` and `168.63.129.16`;
+- unspecified (`0.0.0.0/8`, `::`) and multicast addresses.
+
+The check runs when the connection is opened, on the resolved address, for every
+connection including redirects. A host name that resolves, or later re-resolves, to one of
+these addresses is refused too. The failure reads `destination address is not allowed:
+127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
+`status.failureMessage` or MetricCheck `status.reason`.
+
+Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and public
+addresses are allowed, because in-cluster Services and Prometheus are the normal targets.
+To narrow egress further, enable the NetworkPolicy and list the allowed destinations in
+`networkPolicy.extraEgress`.
+
+NotificationHook and MetricCheck requests honour `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`.
+Through a proxy, the controller connects to the proxy, so before it sends a request there it
+checks the target itself: an IP address against the list above, and a host name by resolving
+it and checking every address it resolves to. This applies to every request, including
+redirects. A host name the controller cannot resolve is refused, because it cannot be checked.
+The proxy resolves the name again, and DNS can give it a different answer, so the proxy must
+also enforce its own egress policy. The proxy's own address is checked too: a proxy on a
+loopback address is refused.
+
 ---
 
 ## Admission Validation
@@ -373,11 +409,34 @@ The embedded UI server runs on port `:8082` and serves two surfaces:
 | Path prefix | Content | Default |
 |---|---|---|
 | `/ui/*` | React app (HTML/JS/CSS) | Public: no data, and it must load before the browser can send a token |
-| `/api/v1/ui/*` | Pipeline state, Bundle history, gate details, and the promote, rollback, pause/resume and gate-approve actions | Open unless one of the modes below is enabled |
+| `/api/v1/ui/*` | Pipeline state, Bundle history, gate details, and the promote, rollback, pause/resume and gate-approve actions | Local clients only, unless one of the modes below is enabled |
 
-Without authentication, any pod in the cluster that can reach `:8082` can read all
-pipeline state and can promote, roll back, pause and approve gates. Enable one of the
-two modes below for production deployments.
+The UI API acts with the controller's own ServiceAccount. With no auth mode set, the
+controller serves `/api/` only to clients that connect from loopback, which is how
+`kubectl port-forward` arrives: the container runtime dials `localhost:<port>` inside the
+pod's network namespace. Every other client, whether a pod, a node, a `NodePort`, a
+`LoadBalancer` or an Ingress controller, gets `403`:
+
+```
+UI API: no UI auth mode is set, so only local clients (kubectl port-forward) are served; set Helm value ui.auth.tokenReview=true or ui.auth.tokenSecretRef.name (flags --ui-tokenreview-auth, --ui-auth-token)
+```
+
+The check is on the TCP peer address, not on the `Host` header, which any client can set.
+A request that carries a header a proxy adds (`Forwarded`, `X-Forwarded-*`, `X-Real-Ip`,
+`X-Envoy-*` or `l5d-*`) is not local either, even from loopback. There is no flag to turn
+the check off. The controller logs a warning at startup while no auth mode is set.
+
+!!! warning "With a sidecar mesh, set an auth mode"
+    With a service-mesh sidecar in the controller pod (Istio, Linkerd), inbound traffic
+    reaches the controller from the sidecar on a loopback address (`127.0.0.6` for Istio,
+    `127.0.0.1` for Linkerd), so every client in the mesh looks local. The proxy-header
+    check catches the usual sidecar configurations but is best effort: a sidecar can be
+    set up to strip those headers. Any other container in the controller pod is local as
+    well. When the controller pod runs with a sidecar, set one of the two modes below.
+
+To reach the UI through an Ingress, a `NodePort` or a `LoadBalancer`, set one of the two
+modes below. An authenticating reverse proxy in front of the UI (for example
+oauth2-proxy) can use Option 1 and inject the shared token as the `Authorization` header.
 
 ### Option 1: shared UI token
 
@@ -506,7 +565,8 @@ own names:
 The chart always passes the controller Service's DNS names: `<fullname>`,
 `<fullname>.<namespace>`, `<fullname>.<namespace>.svc` and
 `<fullname>.<namespace>.svc.cluster.local`. Add your Ingress host name, a
-non-default cluster domain, or the node IP you browse to:
+non-default cluster domain, or the node IP you browse to. Clients that come in that
+way are not local, so they also need a UI auth mode (see above):
 
 ```bash
 helm upgrade kardinal-promoter oci://ghcr.io/pnz1990/charts/kardinal-promoter \
@@ -548,7 +608,7 @@ The Service is named after the Helm release (`<fullname>`, `kardinal-promoter` f
 release named `kardinal-promoter`). Then open the UI at `http://localhost:8082/ui/`. The
 browser may display a warning when accessed over plain HTTP.
 
-> **Production note**: Do not expose port 8082 via a LoadBalancer or Ingress without TLS and auth enabled. Use port-forward for operator access or configure TLS as described below.
+> **Production note**: A LoadBalancer or Ingress in front of port 8082 needs a UI auth mode (without one, its clients get `403`) and TLS. Use port-forward for operator access or configure TLS as described below.
 
 ### Browser security headers
 
