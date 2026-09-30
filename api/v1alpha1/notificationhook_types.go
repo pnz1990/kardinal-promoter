@@ -90,6 +90,13 @@ type NotificationHookStatus struct {
 	// +optional
 	FailedAttempts int32 `json:"failedAttempts,omitempty"`
 
+	// NextRetryAt is the RFC3339 time of the next delivery attempt after a
+	// failed one. No webhook is sent before it, however often the hook is
+	// reconciled. Cleared on a successful delivery, when the controller gives
+	// up on the event, and when the hook's spec changes.
+	// +optional
+	NextRetryAt string `json:"nextRetryAt,omitempty"`
+
 	// FailureMessage records the last webhook delivery failure, if any.
 	// Cleared on next successful delivery.
 	// +optional

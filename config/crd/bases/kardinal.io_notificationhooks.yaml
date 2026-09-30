@@ -131,6 +131,13 @@ spec:
                 description: LastSentAt is the RFC3339 timestamp of the last successful
                   webhook delivery.
                 type: string
+              nextRetryAt:
+                description: |-
+                  NextRetryAt is the RFC3339 time of the next delivery attempt after a
+                  failed one. No webhook is sent before it, however often the hook is
+                  reconciled. Cleared on a successful delivery, when the controller gives
+                  up on the event, and when the hook's spec changes.
+                type: string
               observedGeneration:
                 description: |-
                   ObservedGeneration is the hook generation the controller last reconciled.

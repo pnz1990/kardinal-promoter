@@ -93,7 +93,9 @@ never send `PolicyGate.Blocked`.
   delivered; older ones are recorded as processed and not backfilled.
 - One reconcile sends at most 10 events; the rest follow straight away.
 - A failed delivery (non-2xx response, connection error, timeout) is retried
-  with exponential backoff: 30s, 1m, 2m, 4m, 8m, then every 10m. After 10
+  with exponential backoff: 30s, 1m, 2m, 4m, 8m, then every 10m. The time of
+  the next attempt is in `status.nextRetryAt`; no POST is made before it,
+  whatever else changes in the namespace. After 10
   failed attempts the controller gives up on that event, records it in
   `failureMessage`, and moves on. Later events wait until the failing one
   succeeds or is given up on. Editing the hook's spec (for example fixing the
@@ -177,6 +179,7 @@ status:
     - "PolicyGate.Blocked/nginx-demo-abc123-prod-no-weekend-deploys/2026-04-18T10:00:00Z"
   observedGeneration: 1
   failedAttempts: 0   # consecutive failed attempts for the current event
+  nextRetryAt: ""     # time of the next attempt after a failure
   failureMessage: ""  # cleared on success
 ```
 

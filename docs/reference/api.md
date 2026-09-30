@@ -162,6 +162,7 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 | `status.lastEvent` | string |  | LastEvent is the event type of the last successfully delivered notification. |
 | `status.lastEventKey` | string |  | LastEventKey is a deterministic string identifying the last delivered event (e.g. "Bundle.Verified/nginx-demo-abc123"). Idempotency uses processedEventKeys; this field is informational. |
 | `status.lastSentAt` | string |  | LastSentAt is the RFC3339 timestamp of the last successful webhook delivery. |
+| `status.nextRetryAt` | string |  | NextRetryAt is the RFC3339 time of the next delivery attempt after a failed one. No webhook is sent before it, however often the hook is reconciled. Cleared on a successful delivery, when the controller gives up on the event, and when the hook's spec changes. |
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the hook generation the controller last reconciled. Zero means the hook was never reconciled. On that first reconcile only the newest qualifying event that already exists is delivered; older ones are recorded as processed rather than backfilled. |
 | `status.processedEventKeys` | []string |  | ProcessedEventKeys lists the keys of the qualifying events that were delivered, or given up on after the retry limit. Each event is delivered once. The list is pruned to events that still qualify, so it stays bounded. |
 
