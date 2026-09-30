@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
@@ -229,6 +230,7 @@ func (r *Reconciler) createBundle(ctx context.Context, sub *kardinalv1alpha1.Sub
 			CommitSHA: result.Digest,
 		}
 	}
+	lifecycle.StampCreatedAt(bundle, now) // sub-second creation order for supersession
 
 	if err := r.Create(ctx, bundle); err != nil {
 		if !apierrors.IsAlreadyExists(err) {

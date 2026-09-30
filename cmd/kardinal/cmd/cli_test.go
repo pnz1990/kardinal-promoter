@@ -91,51 +91,6 @@ func TestCreateBundle_RejectsMalformedImage(t *testing.T) {
 	}
 }
 
-// TestRollback_CreatesBundleWithRollbackOf verifies rollback bundle creation.
-// The rollback command now queries PromotionStep history (not Bundle.Phase) to find
-// the last Verified bundle for the target environment (#264).
-func TestRollback_CreatesBundleWithRollbackOf(t *testing.T) {
-	s := cliTestScheme(t)
-	// Original bundle is Superseded (normal in production after multiple deploys).
-	verifiedBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
-	}
-	// Verified PromotionStep for prod — this is what rollback now uses.
-	prodStep := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-v1-prod",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    "nginx-demo",
-				"kardinal.io/environment": "prod",
-			},
-		},
-		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", Environment: "prod", BundleName: "nginx-demo-v1"},
-		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle, prodStep).WithStatusSubresource(verifiedBundle, prodStep).Build()
-
-	var buf bytes.Buffer
-	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
-	require.NoError(t, err)
-
-	var bundles v1alpha1.BundleList
-	require.NoError(t, c.List(context.Background(), &bundles))
-	require.Len(t, bundles.Items, 2, "should have original + rollback bundle")
-
-	var rb *v1alpha1.Bundle
-	for i := range bundles.Items {
-		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
-			rb = &bundles.Items[i]
-		}
-	}
-	require.NotNil(t, rb, "rollback bundle not created")
-	assert.Equal(t, "nginx-demo-v1", rb.Spec.Provenance.RollbackOf)
-	assert.Equal(t, "prod", rb.Spec.Intent.TargetEnvironment)
-}
-
 // TestPause_PatchesPipelinePaused verifies that pauseFn patches Pipeline.spec.paused=true
 // and creates a freeze PolicyGate (Graph-observable pause enforcement, PS-2 / BU-2 fix).
 func TestPause_PatchesPipelinePaused(t *testing.T) {
@@ -197,8 +152,11 @@ func TestResume_UnpausesPipeline(t *testing.T) {
 		},
 	}
 	freezeGate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: "freeze-nginx-demo", Namespace: "default"},
-		Spec:       v1alpha1.PolicyGateSpec{Expression: "false"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "freeze-nginx-demo", Namespace: "default",
+			Labels: map[string]string{"kardinal.io/freeze": "true"},
+		},
+		Spec: v1alpha1.PolicyGateSpec{Expression: "false"},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pipeline, freezeGate).Build()
 
@@ -394,145 +352,29 @@ func TestHistory_Duration(t *testing.T) {
 	}
 }
 
-// TestRollback_CopiesTypeFromOriginalBundle verifies that the rollback bundle
-// copies Type from the original Verified bundle, not hardcoding "image" (CLI-5 fix).
-func TestRollback_CopiesTypeFromOriginalBundle(t *testing.T) {
-	s := cliTestScheme(t)
-	// Bundle is Superseded (realistic production state).
-	verifiedBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-cfg-v1", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "config", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
-	}
-	// Verified PromotionStep points to this bundle.
-	prodStep := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "nginx-demo-cfg-v1-prod",
-			Namespace: "default",
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    "nginx-demo",
-				"kardinal.io/environment": "prod",
-			},
-		},
-		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", Environment: "prod", BundleName: "nginx-demo-cfg-v1"},
-		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(verifiedBundle, prodStep).WithStatusSubresource(verifiedBundle, prodStep).Build()
-
-	var buf bytes.Buffer
-	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
-	require.NoError(t, err)
-
-	var bundles v1alpha1.BundleList
-	require.NoError(t, c.List(context.Background(), &bundles))
-	require.Len(t, bundles.Items, 2)
-
-	var rb *v1alpha1.Bundle
-	for i := range bundles.Items {
-		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
-			rb = &bundles.Items[i]
-		}
-	}
-	require.NotNil(t, rb)
-	assert.Equal(t, "config", rb.Spec.Type, "rollback bundle must copy type from the original bundle")
-	assert.Equal(t, "nginx-demo-cfg-v1", rb.Spec.Provenance.RollbackOf)
-}
-
-// TestRollback_CopiesTypeWhenExplicitToBundle verifies type is copied when --to is specified.
-func TestRollback_CopiesTypeWhenExplicitToBundle(t *testing.T) {
-	s := cliTestScheme(t)
-	targetBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-mixed-v3", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "mixed", Pipeline: "nginx-demo"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(targetBundle).Build()
-
-	var buf bytes.Buffer
-	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "nginx-demo-mixed-v3", false)
-	require.NoError(t, err)
-
-	var bundles v1alpha1.BundleList
-	require.NoError(t, c.List(context.Background(), &bundles))
-
-	var rb *v1alpha1.Bundle
-	for i := range bundles.Items {
-		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
-			rb = &bundles.Items[i]
-		}
-	}
-	require.NotNil(t, rb)
-	assert.Equal(t, "mixed", rb.Spec.Type, "rollback bundle must copy type from target bundle")
-}
-
-// TestRollback_WorksWhenAllBundlesSuperseded verifies that rollback succeeds even when
-// all Bundle objects have Phase=Superseded — the realistic production state (#264).
-func TestRollback_WorksWhenAllBundlesSuperseded(t *testing.T) {
-	s := cliTestScheme(t)
-	// All bundles are Superseded (as in production after multiple deploys).
-	oldBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-old", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
-	}
-	newBundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-new", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-		Status:     v1alpha1.BundleStatus{Phase: "Superseded"},
-	}
-	// Old bundle has a Verified prod step; new bundle is still Promoting.
-	oldProdStep := &v1alpha1.PromotionStep{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "nginx-demo-old-prod",
-			Namespace:         "default",
-			CreationTimestamp: metav1.Now(),
-			Labels: map[string]string{
-				"kardinal.io/pipeline":    "nginx-demo",
-				"kardinal.io/environment": "prod",
-			},
-		},
-		Spec:   v1alpha1.PromotionStepSpec{PipelineName: "nginx-demo", Environment: "prod", BundleName: "nginx-demo-old"},
-		Status: v1alpha1.PromotionStepStatus{State: "Verified"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(oldBundle, newBundle, oldProdStep).
-		WithStatusSubresource(oldBundle, newBundle, oldProdStep).
-		Build()
-
-	var buf bytes.Buffer
-	err := rollbackFn(&buf, c, "default", "nginx-demo", "prod", "", false)
-	require.NoError(t, err, "rollback must succeed even when all bundles are Superseded")
-
-	var bundles v1alpha1.BundleList
-	require.NoError(t, c.List(context.Background(), &bundles))
-
-	var rb *v1alpha1.Bundle
-	for i := range bundles.Items {
-		if bundles.Items[i].Labels["kardinal.io/rollback"] == "true" {
-			rb = &bundles.Items[i]
-		}
-	}
-	require.NotNil(t, rb, "rollback bundle must be created")
-	assert.Equal(t, "nginx-demo-old", rb.Spec.Provenance.RollbackOf,
-		"rollback must target the bundle with the most recent Verified prod PromotionStep")
-}
-
-// TestSplitImageRef verifies image reference parsing.
+// TestSplitImageRef verifies image reference parsing. A digest is returned as
+// the digest, never as the tag (C09a-cli-02).
 func TestSplitImageRef(t *testing.T) {
 	tests := []struct {
-		img  string
-		repo string
-		tag  string
+		img    string
+		repo   string
+		tag    string
+		digest string
 	}{
-		{"nginx:1.25", "nginx", "1.25"},
-		{"ghcr.io/myorg/app:v2.0.0", "ghcr.io/myorg/app", "v2.0.0"},
-		{"nginx", "nginx", ""},
-		{"nginx@sha256:abc123", "nginx", "sha256:abc123"},
+		{"nginx:1.25", "nginx", "1.25", ""},
+		{"ghcr.io/myorg/app:v2.0.0", "ghcr.io/myorg/app", "v2.0.0", ""},
+		{"nginx", "nginx", "", ""},
+		{"nginx@sha256:abc123", "nginx", "", "sha256:abc123"},
+		{"ghcr.io/myorg/app:v2@sha256:abc123", "ghcr.io/myorg/app", "v2", "sha256:abc123"},
+		{"registry:5000/app", "registry:5000/app", "", ""},
+		{"registry:5000/app:v1", "registry:5000/app", "v1", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.img, func(t *testing.T) {
-			repo, tag := splitImageRef(tt.img)
+			repo, tag, digest := splitImageRef(tt.img)
 			assert.Equal(t, tt.repo, repo)
 			assert.Equal(t, tt.tag, tag)
+			assert.Equal(t, tt.digest, digest)
 		})
 	}
 }
@@ -586,58 +428,21 @@ func TestPolicyTest_MissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "nonexistent")
 }
 
-// TestApprove_PatchesBundleWithLabel verifies that approveFn adds kardinal.io/approved label.
-func TestApprove_PatchesBundleWithLabel(t *testing.T) {
-	s := cliTestScheme(t)
-	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-29-0", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+// TestApprove_IsDeprecatedNoOp covers C09a-cli-03 / E2E-19: approve never
+// bypassed anything, so it now fails with a pointer to override and leaves
+// the Bundle untouched.
+func TestApprove_IsDeprecatedNoOp(t *testing.T) {
+	for _, args := range [][]string{{"nginx-demo-v1-29-0", "--env", "prod"}, {"nginx-demo-v1-29-0"}} {
+		cmd := newApproveCmd()
+		cmd.SetArgs(args)
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		err := cmd.Execute()
+		require.ErrorIs(t, err, errApproveRemoved)
+		assert.Contains(t, err.Error(), "kardinal override")
+		assert.NotEmpty(t, cmd.Deprecated)
 	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(bundle).Build()
-
-	var buf bytes.Buffer
-	err := approveFn(&buf, c, "default", "nginx-demo-v1-29-0", "prod")
-	require.NoError(t, err)
-
-	// Verify label was applied.
-	var updated v1alpha1.Bundle
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1-29-0", Namespace: "default"}, &updated))
-	assert.Equal(t, "true", updated.Labels["kardinal.io/approved"])
-	assert.Equal(t, "prod", updated.Labels["kardinal.io/approved-for"])
-
-	// Verify output.
-	assert.Contains(t, buf.String(), "nginx-demo-v1-29-0")
-	assert.Contains(t, buf.String(), "approved")
-}
-
-// TestApprove_WithoutEnv verifies approveFn without --env flag.
-func TestApprove_WithoutEnv(t *testing.T) {
-	s := cliTestScheme(t)
-	bundle := &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo-v1-28-0", Namespace: "default"},
-		Spec:       v1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
-	}
-	c := fake.NewClientBuilder().WithScheme(s).WithObjects(bundle).Build()
-
-	var buf bytes.Buffer
-	err := approveFn(&buf, c, "default", "nginx-demo-v1-28-0", "")
-	require.NoError(t, err)
-
-	var updated v1alpha1.Bundle
-	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: "nginx-demo-v1-28-0", Namespace: "default"}, &updated))
-	assert.Equal(t, "true", updated.Labels["kardinal.io/approved"])
-	assert.Empty(t, updated.Labels["kardinal.io/approved-for"])
-}
-
-// TestApprove_BundleNotFound verifies error when bundle does not exist.
-func TestApprove_BundleNotFound(t *testing.T) {
-	s := cliTestScheme(t)
-	c := fake.NewClientBuilder().WithScheme(s).Build()
-
-	var buf bytes.Buffer
-	err := approveFn(&buf, c, "default", "nonexistent-bundle", "prod")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "nonexistent-bundle")
 }
 
 // --- #406: pause/resume lifecycle tests ---

@@ -426,7 +426,7 @@ kubectl get scheduleclock kardinal-clock -n kardinal-system
 
 PolicyGates are injected into the Graph at Graph creation time (when the Bundle starts promoting). If a new org-level PolicyGate is added while a Bundle is mid-flight, it does not apply to that Bundle's existing Graph. It applies to all subsequent Bundles.
 
-To block an in-flight promotion, use `kardinal pause <pipeline>`, which injects a freeze gate that takes effect immediately.
+To stop promotions at once, use `kardinal pause <pipeline>`. No new step starts, and in-flight steps hold at the next safe point (steps waiting for a PR merge or running health checks finish). See [Pause and Resume](rollback.md#pause-and-resume).
 
 ## Inspecting PolicyGates
 

@@ -96,11 +96,11 @@ All of the following are implemented and shipped:
 
 **Operations**
 - `RollbackPolicy` CRD + automated rollback PR
-- Pause/resume (`Bundle.spec.paused`)
+- Pause/resume (`Pipeline.spec.paused`)
 - Supersession for concurrent Bundles
 - Multi-cluster via kubeconfig Secrets
 
-**CLI** — full command set: `get`, `explain`, `create`, `rollback`, `approve`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
+**CLI** — full command set: `get`, `explain`, `create`, `promote`, `rollback`, `pause`, `resume`, `history`, `policy`, `diff`, `logs`, `metrics`, `version`, `override`
 
 **UI** — embedded control plane UI: fleet health bar and pipeline operations table, pipeline lane and DAG views, bundle promotion timeline with bundle comparison, policy gates panel and gate details (CEL expression, last evaluation), release efficiency metrics bar, and actions: create bundle, pause/resume, promote, roll back. Approving a bundle and overriding a gate are CLI-only (`kardinal approve`, `kardinal override`)
 

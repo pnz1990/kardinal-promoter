@@ -94,14 +94,14 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.environments[].prMergedAt` | string (date-time) |  | PRMergedAt is when the promotion PR was merged. |
 | `status.environments[].prURL` | string |  | PRURL is the URL of the pull request opened for this promotion. |
 | `status.environments[].soakMinutes` | integer (int64) |  | SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt. Written by the BundleReconciler as part of its own CRD status write. The PolicyGate reconciler reads this field from Bundle.status.environments to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix). |
-| `status.graphRef` | string |  | GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG. Populated by the BundleReconciler when the Graph is first created. Used to detect Graph deletion and trigger recreation. |
+| `status.graphRef` | string |  | GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG. Populated by the BundleReconciler when the Graph is first created. Used to detect Graph deletion and trigger recreation. The Graph of a Bundle that failed promoting is not recreated (GraphSynced=False, reason GraphDeleted), so the failed artifacts are not promoted again; a Pipeline change rebuilds it. |
 | `status.metrics` | object |  | Metrics holds deployment efficiency metrics for this Bundle (K-05). Populated by the BundleReconciler when all environments reach Verified. |
 | `status.metrics.autoRollbacks` | integer |  | AutoRollbacks is the number of environments that auto-rolled back during this Bundle's promotion. |
 | `status.metrics.bakeResets` | integer |  | BakeResets is the total number of bake timer resets across all environments. High bake reset count indicates flaky health or over-sensitive bake windows. |
 | `status.metrics.commitToProductionMinutes` | integer (int64) |  | CommitToProductionMinutes is the time from Bundle creation to the last environment reaching Verified. Indicates total promotion pipeline latency. |
 | `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides applied during this Bundle's promotion across all environments. |
 | `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
-| `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec at the time the Graph was last created for this Bundle. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch triggers Graph deletion so Translate recreates it with the updated spec. |
+| `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
 
 ## ChangeWindow
 
