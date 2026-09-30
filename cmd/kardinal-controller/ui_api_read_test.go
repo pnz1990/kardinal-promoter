@@ -581,11 +581,46 @@ func TestUIAPI_Pipelines_BlockerCountOnlyReachedEnvs(t *testing.T) {
 		}
 	}
 	soak := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
+	preDeploy := uiGateInstance("default", "app-b2-prod-soak", "app-b2", "require-uat-soak", "prod", false)
+	preDeploy.Spec.When = "pre-deploy"
+	// prodStep is the prod step waiting on the soak gate, the way the Graph
+	// builder lists gate instances in spec.requiredGates.
+	prodStep := func(state string) *v1alpha1.PromotionStep {
+		s := uiStep("default", "s-prod", "app-b2", "prod", state)
+		s.Spec.RequiredGates = []string{"app-b2-prod-soak"}
+		return s
+	}
+	upstream := func() []client.Object {
+		return []client.Object{bundle("Promoting"),
+			uiStep("default", "s-test", "app-b2", "test", "Verified"),
+			uiStep("default", "s-uat", "app-b2", "uat", "Verified")}
+	}
 	tests := []struct {
 		name string
 		objs []client.Object
 		want int
 	}{
+		{
+			// checkPreDeployGates keeps the step Pending, before git.
+			name: "pre-deploy gate holds the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), preDeploy),
+			want: 1,
+		},
+		{
+			name: "pre-deploy gate holds the new prod step",
+			objs: append(upstream(), prodStep(""), preDeploy),
+			want: 1,
+		},
+		{
+			name: "pre-deploy gate after the prod step started",
+			objs: append(upstream(), prodStep("Promoting"), preDeploy),
+			want: 0,
+		},
+		{
+			name: "post-deploy gate does not hold the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), soak),
+			want: 0,
+		},
 		{
 			name: "health checking in test",
 			objs: []client.Object{bundle("Promoting"),

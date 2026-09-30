@@ -276,12 +276,12 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	// Index: namespace/pipeline → current bundle, lifecycle.CurrentBundle's
-	// rule: the newest non-Superseded bundle (lifecycle.CompareCreation), whatever
-	// its phase, so a newer Failed bundle is never hidden behind an older
-	// Verified or Promoting one (E2E-R15). When every bundle is Superseded, the
-	// newest one is used. kardinal get pipelines and
-	// web/src/bundleSelection.ts pickDefaultBundle apply the same rule.
+	// Index: namespace/pipeline → current bundle (lifecycle.CurrentBundle): the
+	// newest non-Superseded bundle (lifecycle.CompareCreation), whatever its
+	// phase, so a newer Failed bundle is never hidden behind an older Verified
+	// or Promoting one (E2E-R15). When every bundle is Superseded, the newest
+	// one is used. kardinal get pipelines and web/src/bundleSelection.ts
+	// pickDefaultBundle apply the same rule.
 	type activeBundleEntry struct {
 		bundle       *v1alpha1.Bundle
 		name         string
@@ -289,32 +289,33 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 		createdAt    time.Time
 		lastVerified time.Time // most recent HealthCheckedAt across all envs in this bundle
 	}
-	activeBundles := make(map[string]*activeBundleEntry)
-	for i := range bundleList.Items {
-		b := &bundleList.Items[i]
-		if b.Spec.Pipeline == "" {
-			continue
+	bundlesByPipeline := make(map[string][]v1alpha1.Bundle)
+	for _, b := range bundleList.Items {
+		if b.Spec.Pipeline != "" {
+			key := b.Namespace + "/" + b.Spec.Pipeline
+			bundlesByPipeline[key] = append(bundlesByPipeline[key], b)
 		}
-		key := fmt.Sprintf("%s/%s", b.Namespace, b.Spec.Pipeline)
-		if existing := activeBundles[key]; existing == nil || lifecycle.MoreCurrent(b, existing.bundle) {
-			envStates := make(map[string]string, len(b.Status.Environments))
-			var lastVerified time.Time
-			for _, env := range b.Status.Environments {
-				if env.Phase != "" {
-					envStates[env.Name] = env.Phase
-				}
-				// Track most recent HealthCheckedAt across all envs for lastMergedAt.
-				if env.HealthCheckedAt != nil && env.HealthCheckedAt.After(lastVerified) {
-					lastVerified = env.HealthCheckedAt.Time
-				}
+	}
+	activeBundles := make(map[string]*activeBundleEntry, len(bundlesByPipeline))
+	for key, bundles := range bundlesByPipeline {
+		b := lifecycle.CurrentBundle(bundles)
+		envStates := make(map[string]string, len(b.Status.Environments))
+		var lastVerified time.Time
+		for _, env := range b.Status.Environments {
+			if env.Phase != "" {
+				envStates[env.Name] = env.Phase
 			}
-			activeBundles[key] = &activeBundleEntry{
-				bundle:       b,
-				name:         b.Name,
-				envStates:    envStates,
-				createdAt:    b.CreationTimestamp.Time,
-				lastVerified: lastVerified,
+			// Track most recent HealthCheckedAt across all envs for lastMergedAt.
+			if env.HealthCheckedAt != nil && env.HealthCheckedAt.After(lastVerified) {
+				lastVerified = env.HealthCheckedAt.Time
 			}
+		}
+		activeBundles[key] = &activeBundleEntry{
+			bundle:       b,
+			name:         b.Name,
+			envStates:    envStates,
+			createdAt:    b.CreationTimestamp.Time,
+			lastVerified: lastVerified,
 		}
 	}
 
@@ -408,25 +409,17 @@ func (s *uiAPIServer) handlePipelines(w http.ResponseWriter, r *http.Request) {
 }
 
 // blockingGateCount counts the not-ready gate instances of bundle that hold it
-// back (E2E-R18): the gate's environment has no step of bundle yet, and the
-// bundle has reached it, every upstream environment Verified
-// (graph.UpstreamsVerified). A gate of an environment the bundle has not
-// reached cannot be the reason it is waiting, so it is not counted, and
-// neither is a gate of a Failed or Superseded bundle, which will not come.
-// kardinal status lists the same gates as Blocking Policy Gates.
+// back (E2E-R18), graph.GateHolds: the gate's environment has no step of
+// bundle yet and every upstream environment is Verified, or a Pending step
+// there waits on the gate as a pre-deploy gate. A gate of an environment the
+// bundle has not reached is not the reason it is waiting, so it is not
+// counted, and neither is a gate of a Failed or Superseded bundle. kardinal
+// status lists the same gates as Blocking Policy Gates.
 func blockingGateCount(p *v1alpha1.Pipeline, bundle *v1alpha1.Bundle, notReady []v1alpha1.PolicyGate,
 	steps []v1alpha1.PromotionStep) int {
-	if phase := bundle.Status.Phase; phase == "Failed" || phase == "Superseded" {
-		return 0
-	}
-	stepped := make(map[string]bool, len(steps))
-	for i := range steps {
-		stepped[steps[i].Spec.Environment] = true
-	}
 	n := 0
-	for _, g := range notReady {
-		env := g.Labels["kardinal.io/environment"]
-		if env != "" && !stepped[env] && graphpkg.UpstreamsVerified(p, bundle, env, steps) {
+	for i := range notReady {
+		if graphpkg.GateHolds(p, bundle, &notReady[i], steps) {
 			n++
 		}
 	}

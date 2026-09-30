@@ -16,10 +16,12 @@ Superseded and has a PromotionStep there, or a gate instance there and has not
 failed; see kardinal explain), its PromotionSteps
 (one row per region, active steps marked), the PolicyGates holding it back
 (with CEL expression and current reason), and open PR URLs. A gate is listed
-as blocking only once the bundle has reached its environment: every upstream
-environment is Verified for that bundle and the gate is not ready. A gate of
-an environment the bundle has not reached yet is not listed. This is the first
-command to run when a promotion is stuck.
+as blocking only while it holds the bundle back: it is not ready and either
+every upstream environment is Verified for that bundle and the bundle has no
+PromotionStep in the gate's environment yet, or it is a pre-deploy gate that
+the bundle's Pending PromotionStep there waits on. A gate of an environment
+the bundle has not reached yet is not listed. This is the first command to
+run when a promotion is stuck.
 
 Examples:
   # Cluster-level summary

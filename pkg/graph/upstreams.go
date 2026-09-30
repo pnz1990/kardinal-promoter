@@ -5,6 +5,7 @@ package graph
 
 import (
 	"fmt"
+	"slices"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 )
@@ -80,4 +81,45 @@ func UpstreamsVerified(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 		}
 	}
 	return true
+}
+
+// GateHolds reports whether gate, a PolicyGate instance of bundle, is holding
+// the bundle's promotion back in the gate's environment. It is the one rule
+// for the UI API's blockerCount and kardinal status's blocking gates. The gate
+// must be not ready and the bundle still in flight (not Failed or Superseded),
+// and either:
+//   - the bundle has no PromotionStep in the environment and every upstream
+//     environment is Verified for it (UpstreamsVerified): the Graph creates
+//     the step only once the gate is ready; or
+//   - the gate is a pre-deploy gate (spec.when) that a step of the bundle in
+//     the environment lists in spec.requiredGates while that step is still
+//     Pending ("" or "Pending"): the PromotionStep reconciler
+//     (checkPreDeployGates, K-02) keeps such a step Pending, before any git
+//     operation, until the gate is ready.
+//
+// A gate of an environment the bundle has not reached, or whose steps have
+// all left Pending, holds nothing. steps may hold PromotionSteps of any
+// bundle; only the bundle's own count.
+func GateHolds(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle,
+	gate *kardinalv1alpha1.PolicyGate, steps []kardinalv1alpha1.PromotionStep) bool {
+	env := gate.Labels["kardinal.io/environment"]
+	if gate.Status.Ready || env == "" || gate.Labels["kardinal.io/bundle"] != bundle.Name {
+		return false
+	}
+	if phase := bundle.Status.Phase; phase == "Failed" || phase == "Superseded" {
+		return false
+	}
+	stepped := false
+	for i := range steps {
+		s := &steps[i]
+		if s.Spec.BundleName != bundle.Name || s.Spec.Environment != env {
+			continue
+		}
+		stepped = true
+		pending := s.Status.State == "" || s.Status.State == "Pending"
+		if gate.Spec.When == "pre-deploy" && pending && slices.Contains(s.Spec.RequiredGates, gate.Name) {
+			return true
+		}
+	}
+	return !stepped && UpstreamsVerified(pipeline, bundle, env, steps)
 }

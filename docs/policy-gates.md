@@ -41,7 +41,8 @@ while a gate blocks. This is true for both values of `when`:
 - `pre-deploy`: the PromotionStep reconciler also re-checks the gate right before git operations
   begin. If it is not ready at that moment, the PromotionStep stays in `Pending` and no `git-clone`
   starts. Use this for conditions that can turn false between the step being created and it starting,
-  such as upstream health.
+  such as upstream health. While it holds the step, `kardinal status` lists it under Blocking Policy
+  Gates and the UI counts it as a blocker (the Blocked label and the Blockers column).
 
 **Example: block prod deployments when staging error rate is high**
 

@@ -102,11 +102,47 @@ func TestStatusPipelineWriter_BlockingOnlyWhenReached(t *testing.T) {
 		return explainGateInstance("demo", "b2", "prod", "require-uat-soak", "upstream.uat.soakMinutes >= 30",
 			false, true, "upstream.uat.soakMinutes >= 30 = false")
 	}
+	preDeploy := func() *v1alpha1.PolicyGate {
+		g := soak()
+		g.Spec.When = "pre-deploy"
+		return g
+	}
+	// prodStep is the prod step waiting on the soak gate, the way the Graph
+	// builder lists gate instances in spec.requiredGates.
+	prodStep := func(state string) *v1alpha1.PromotionStep {
+		s := explainStep("demo", "b2", "prod", state, "", recent)
+		s.Spec.RequiredGates = []string{soak().Name}
+		return s
+	}
+	upstream := func() []sigs_client.Object {
+		return []sigs_client.Object{explainBundle("b2", "Promoting", recent),
+			explainStep("demo", "b2", "test", "Verified", "", recent),
+			explainStep("demo", "b2", "uat", "Verified", "", recent)}
+	}
 	tests := []struct {
 		name         string
 		objs         []sigs_client.Object
 		wantBlocking bool
 	}{
+		{
+			// checkPreDeployGates keeps the step Pending, before git.
+			name:         "pre-deploy gate holds the Pending prod step",
+			objs:         append(upstream(), prodStep("Pending"), preDeploy()),
+			wantBlocking: true,
+		},
+		{
+			name:         "pre-deploy gate holds the new prod step",
+			objs:         append(upstream(), prodStep(""), preDeploy()),
+			wantBlocking: true,
+		},
+		{
+			name: "pre-deploy gate after the prod step started",
+			objs: append(upstream(), prodStep("Promoting"), preDeploy()),
+		},
+		{
+			name: "post-deploy gate does not hold the Pending prod step",
+			objs: append(upstream(), prodStep("Pending"), soak()),
+		},
 		{
 			// j6-supersede.log: 7k9rk HealthChecking in test, the prod soak
 			// gate listed as blocking.
