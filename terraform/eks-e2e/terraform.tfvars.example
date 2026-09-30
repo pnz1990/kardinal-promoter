@@ -1,8 +1,0 @@
-# Optional overrides: copy to terraform.tfvars and edit. The values below are
-# the defaults in variables.tf. Keep cluster_name and region away from any
-# cluster you did not create with this configuration.
-# cluster_name       = "kardinal-e2e-prod"
-# region             = "us-east-2"
-# kubernetes_version = "1.31"
-# node_instance_type = "t3.medium"
-# node_count         = 2

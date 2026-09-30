@@ -359,8 +359,9 @@ func (r *Reconciler) validate(p *kardinalv1alpha1.Pipeline) metav1.Condition {
 	if msgs := graph.UnimplementedFields(p); len(msgs) > 0 {
 		return metav1.Condition{
 			Type: "Ready", Status: metav1.ConditionFalse, Reason: reasonNotImplemented,
-			Message: "not implemented, so a Bundle fails when it reaches an environment that uses one " +
-				"(steps and promotionTemplate fail it when its Graph is built): " + strings.Join(msgs, "; "),
+			Message: "not implemented or not supported, so a Bundle fails when it reaches an environment " +
+				"that uses one (steps, promotionTemplate and two or more regions fail it when its Graph is " +
+				"built): " + strings.Join(msgs, "; "),
 			ObservedGeneration: p.Generation,
 		}
 	}

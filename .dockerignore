@@ -34,7 +34,6 @@ hack/
 .github/
 demo/
 scripts/
-terraform/
 
 # Test files
 test/

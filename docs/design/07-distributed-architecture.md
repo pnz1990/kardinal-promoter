@@ -1,13 +1,20 @@
 # 07: Distributed Architecture
 
-> Status: Comprehensive
+> Status: **Withdrawn** (2026-09-30, #1321). Distributed mode was removed: `cmd/kardinal-agent`,
+> the controller's `--shard` flag and the chart value `controller.shard` are gone, the
+> translator no longer sets `kardinal.io/shard`, and a Pipeline environment that sets `shard`
+> is rejected (Pipeline `Ready=False`; a leftover PromotionStep fails with
+> `shard is not supported`). The agent was never shipped as an image or chart, and it used one
+> API server for PromotionSteps and health checks, so it could not run in a spoke. Multi-cluster
+> is supported through the Argo CD or Flux hub; see [Multi-Cluster](../distributed-mode.md).
+> The rest of this document is kept as history and does not describe the code.
 > Depends on: 01-graph-integration, 03-promotionstep-reconciler
 > Blocks: nothing (additive to standalone mode)
 
 ## Present
 
-- ✅ `kardinal-agent` standalone binary — `cmd/kardinal-agent/main.go` ships as a separate entry point for spoke-cluster distributed mode. Reads shard assignments via `--shard` flag, runs only the PromotionStep reconciler for matching steps. No Bundle, Pipeline, PolicyGate, UI, or webhook components. Defaults to ports :8085/:8086 to avoid collision with the controller. (PR #886, 2026-04-20)
-- ✅ Shard routing — `kardinal.io/shard` label on PromotionStep resources. Pipeline translator sets the label from `environment.shard`. Controller skips sharded steps; agent handles only matching-shard steps.
+- ❌ `kardinal-agent` binary — removed (#1321). It was added in PR #886 (2026-04-20) and never shipped.
+- ❌ Shard routing — removed (#1321). The `shard` field is deprecated and rejected.
 
 ## Future
 

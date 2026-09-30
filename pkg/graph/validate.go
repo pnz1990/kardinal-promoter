@@ -130,8 +130,8 @@ func describeNode(n GraphNode) string {
 }
 
 // validateInput rejects Pipelines and Bundles whose names the Graph cannot
-// carry: every name ends up in a label value, and environment and region
-// names end up in object names. Gate names are checked by validateGateNames,
+// carry: every name ends up in a label value, and environment names end up
+// in object names. Gate names are checked by validateGateNames,
 // only for the gates this Graph uses.
 func validateInput(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1alpha1.Bundle) error {
 	if errs := validation.IsValidLabelValue(pipeline.Name); len(errs) > 0 {
@@ -204,7 +204,7 @@ func validateGateNames(envs []string, gatesByEnv map[string][]kardinalv1alpha1.P
 	return nil
 }
 
-// validateEnvironments checks the environment names, regions, shards and steps.
+// validateEnvironments checks the environment names, regions and steps.
 func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 	names := make(map[string]bool, len(envs))
 	for _, e := range envs {
@@ -219,22 +219,10 @@ func validateEnvironments(envs []kardinalv1alpha1.EnvironmentSpec) error {
 			return fmt.Errorf("build: environment %q is declared twice", e.Name)
 		}
 		names[e.Name] = true
-		if e.Shard != "" {
-			if errs := validation.IsValidLabelValue(e.Shard); len(errs) > 0 {
-				return fmt.Errorf("build: environment %q: shard %q cannot be used as a label value: %s",
-					e.Name, e.Shard, strings.Join(errs, "; "))
-			}
-		}
-		regions := make(map[string]bool, len(e.Regions))
-		for _, r := range e.Regions {
-			if errs := validation.IsDNS1123Label(r); len(errs) > 0 {
-				return fmt.Errorf("build: environment %q: region %q must be a DNS-1123 label "+
-					"(it becomes part of the PromotionStep name): %s", e.Name, r, strings.Join(errs, "; "))
-			}
-			if regions[r] {
-				return fmt.Errorf("build: environment %q: region %q is listed twice", e.Name, r)
-			}
-			regions[r] = true
+		// One region names nothing Build uses; two or more would push the same
+		// change to the same branch once per region.
+		if len(e.Regions) >= 2 { //nolint:staticcheck // SA1019: read to reject it
+			return fmt.Errorf("build: environment %q: %s", e.Name, RegionsNotSupported)
 		}
 		// Refuse a custom step sequence instead of silently ignoring the steps
 		// the author asked for.
@@ -275,8 +263,8 @@ func validateSkipNames(pipeline *kardinalv1alpha1.Pipeline, bundle *kardinalv1al
 // token to spec.git.url, which the same author controls, so a Pipeline could
 // otherwise use another namespace's credentials. An empty Pipeline namespace
 // fails closed. The PromotionStep reconciler refuses the step with this error,
-// the Pipeline reconciler sets Ready=False/ValidationFailed, the admission
-// webhook denies the Pipeline and "kardinal validate" reports it.
+// the Pipeline reconciler sets Ready=False/ValidationFailed and "kardinal
+// validate" reports it.
 func ValidateSecretRef(p *kardinalv1alpha1.Pipeline) error {
 	if ref := p.Spec.Git.SecretRef; ref != nil && ref.Namespace != "" && ref.Namespace != p.Namespace {
 		return fmt.Errorf("git.secretRef.namespace %q is not allowed: the Secret must be in the Pipeline's namespace %q",

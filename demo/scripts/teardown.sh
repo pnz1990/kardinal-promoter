@@ -11,11 +11,14 @@ set -euo pipefail
 CONTROL_CLUSTER="${CONTROL_CLUSTER:-kardinal-control}"
 DEV_CLUSTER="${DEV_CLUSTER:-kardinal-dev}"
 PROD_CLUSTER="${PROD_CLUSTER:-kardinal-prod}"
-DESTROY_EKS=false
 
 for arg in "$@"; do
   case $arg in
-    --eks) DESTROY_EKS=true ;;
+    --eks)
+      echo "[teardown] WARNING: --eks was removed; this script deletes only the kind clusters." >&2
+      echo "[teardown] WARNING: destroy an EKS cluster created with --eks or make eks-up from a checkout that still has terraform/eks-e2e/ (see demo/README.md)." >&2
+      ;;
+    *) echo "[teardown] WARNING: unknown flag: $arg" >&2 ;;
   esac
 done
 
@@ -28,13 +31,6 @@ for cluster in "$CONTROL_CLUSTER" "$DEV_CLUSTER" "$PROD_CLUSTER"; do
     echo "  $cluster not found — skipping"
   fi
 done
-
-if [[ "$DESTROY_EKS" == "true" ]]; then
-  echo "[teardown] Destroying EKS cluster..."
-  REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-  cd "${REPO_ROOT}/terraform/eks-e2e"
-  terraform destroy -input=false -auto-approve
-fi
 
 echo "[teardown] Done. Pruning stale kubeconfig contexts..."
 for ctx in "kind-${CONTROL_CLUSTER}" "kind-${DEV_CLUSTER}" "kind-${PROD_CLUSTER}"; do

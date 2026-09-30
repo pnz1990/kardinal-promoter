@@ -7,7 +7,7 @@ This directory contains everything needed to create a **complete, working demo e
 ```
 kind-kardinal-control   ← kardinal controller + kro + ArgoCD
 kind-kardinal-dev       ← test + uat environments (kardinal-test-app)
-kind-kardinal-prod      ← prod environment  (kind locally, or EKS with --eks)
+kind-kardinal-prod      ← prod environment
 ```
 
 > **Current limitation:** promotions do not yet reach the dev and prod clusters.
@@ -209,22 +209,9 @@ This script also runs **nightly in CI** (`.github/workflows/demo-validate.yml`).
 
 ---
 
-## EKS Prod Cluster (Optional)
+## EKS Prod Cluster (Removed)
 
-For a real production cluster:
-
-```bash
-# Set up with EKS prod. If the cluster kardinal-e2e-prod does not exist,
-# setup.sh creates it from terraform/eks-e2e (us-east-2, ~15 min).
-GITHUB_TOKEN=ghp_xxx ./demo/scripts/setup.sh --eks
-
-# Tear down EKS when done (costs money while running)
-./demo/scripts/teardown.sh --eks
-```
-
-The Terraform in `terraform/eks-e2e/` (also used by `make eks-up`) creates a minimal EKS cluster: 2× t3.medium nodes in us-east-2.
-
-If you created a cluster from the old `demo/terraform/` directory, destroy it from a checkout that still has that directory (`cd demo/terraform && terraform destroy`); `teardown.sh --eks` does not know about it.
+The `--eks` option and the Terraform behind it were removed; the demo runs on kind only. If you created the `kardinal-e2e-prod` EKS cluster with `setup.sh --eks` or `make eks-up`, destroy it from a checkout that still has `terraform/eks-e2e/` (`cd terraform/eks-e2e && terraform destroy`). A cluster from the older `demo/terraform/` directory is destroyed the same way from a checkout that has that directory.
 
 ---
 
@@ -254,15 +241,14 @@ demo/
 │   ├── setup.sh                 # create all clusters + install everything
 │   ├── teardown.sh              # destroy all clusters
 │   └── validate.sh              # end-to-end validation (source of truth)
-├── manifests/
-│   ├── policy-gates/
-│   │   └── org-gates.yaml       # 4 PolicyGates covering all gate types
-│   ├── pipeline-simple/
-│   │   └── pipeline.yaml        # kardinal-test-app (test→uat→prod)
-│   ├── argocd/
-│   │   └── applications.yaml    # ArgoCD Applications for all envs
-│   ├── flux/                    # Flux pipeline + Kustomizations (scenario 11)
-│   ├── rollouts/                # Argo Rollouts pipeline + Rollout (scenario 12)
-│   └── flagger/                 # Flagger pipeline + Canary (scenario 13)
-└── (EKS prod cluster: terraform/eks-e2e/ at the repo root)
+└── manifests/
+    ├── policy-gates/
+    │   └── org-gates.yaml       # 4 PolicyGates covering all gate types
+    ├── pipeline-simple/
+    │   └── pipeline.yaml        # kardinal-test-app (test→uat→prod)
+    ├── argocd/
+    │   └── applications.yaml    # ArgoCD Applications for all envs
+    ├── flux/                    # Flux pipeline + Kustomizations (scenario 11)
+    ├── rollouts/                # Argo Rollouts pipeline + Rollout (scenario 12)
+    └── flagger/                 # Flagger pipeline + Canary (scenario 13)
 ```

@@ -13,9 +13,9 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 )
 
-// E2E-R14: one list of the unimplemented fields that fail a Bundle, shared by
-// the Pipeline reconciler, "kardinal validate" and the admission warnings. It
-// covers every "not implemented" refusal of promotionstep/config_check.go.
+// E2E-R14: one list of the unimplemented or unsupported fields that fail a
+// Bundle, shared by the Pipeline reconciler and "kardinal validate". It covers
+// every refusal of promotionstep/config_check.go except git.secretRef.
 func TestUnimplementedFields(t *testing.T) {
 	tests := []struct {
 		name string
@@ -34,9 +34,13 @@ func TestUnimplementedFields(t *testing.T) {
 		{name: "autoRollback", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
 			AutoRollback: &kardinalv1alpha1.AutoRollbackSpec{}},
 			want: []string{`environment "test": environments[].autoRollback is not implemented`}},
-		{name: "regions fan-out", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
+		{name: "two regions", env: kardinalv1alpha1.EnvironmentSpec{Name: "test",
 			Regions: []string{"us-east-1", "eu-west-1"}},
-			want: []string{`environment "test": environments[].regions fan-out is not implemented`}},
+			want: []string{`environment "test": regions is not supported; declare one environment per region ` +
+				`(prod-us, prod-eu) and use wave`}},
+		// #1321: distributed mode was removed.
+		{name: "shard", env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Shard: "eu"},
+			want: []string{`environment "test": shard is not supported: distributed mode was removed`}},
 		{name: "environment layout branch", env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Layout: "branch"},
 			want: []string{`environment "test": layout: branch is not implemented`}},
 		{name: "pipeline layout branch", git: kardinalv1alpha1.PipelineGit{Layout: "branch"},
@@ -57,8 +61,9 @@ func TestUnimplementedFields(t *testing.T) {
 			Health:   kardinalv1alpha1.HealthConfig{Resource: &kardinalv1alpha1.ResourceRef{Kind: "StatefulSet"}}}},
 		{name: "every field is reported", git: kardinalv1alpha1.PipelineGit{Layout: "branch"},
 			env: kardinalv1alpha1.EnvironmentSpec{Name: "test", Layout: "branch",
-				Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}, Regions: []string{"a", "b"}},
-			want: []string{"spec.git.layout", "steps is not supported", "regions fan-out", `"test": layout: branch`}},
+				Steps: []kardinalv1alpha1.StepSpec{{Uses: "git-clone"}}, Regions: []string{"a", "b"}, Shard: "eu"},
+			want: []string{"spec.git.layout", "steps is not supported", "regions is not supported",
+				"shard is not supported", `"test": layout: branch`}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

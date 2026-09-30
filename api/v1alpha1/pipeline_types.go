@@ -179,8 +179,14 @@ type EnvironmentSpec struct {
 	// +optional
 	Wave int `json:"wave,omitempty"`
 
-	// Shard pins this environment to a specific kardinal-controller agent shard
-	// in distributed mode. Leave empty for single-controller deployments.
+	// Shard was the agent shard of distributed mode, which was removed. A
+	// non-empty value sets the Pipeline Ready=False (reason NotImplemented)
+	// and fails the environment's PromotionSteps with "shard is not
+	// supported".
+	//
+	// Deprecated: remove shard; the controller reconciles every environment.
+	// For workloads in other clusters, use the Argo CD or Flux hub (see
+	// docs/distributed-mode.md).
 	// +optional
 	Shard string `json:"shard,omitempty"`
 
@@ -255,13 +261,13 @@ type EnvironmentSpec struct {
 	// +optional
 	StepTimeoutSeconds int `json:"stepTimeoutSeconds,omitempty"`
 
-	// Regions is reserved for multi-region fan-out (issue #612) and is NOT
-	// implemented. With two or more regions the translator stamps out one
-	// PromotionStep per region (spec.region), but every region would edit the
-	// same path and push the same branch, so the PromotionStep reconciler fails
-	// such steps with "environments[].regions fan-out is not implemented".
-	// Declare one environment per region instead (for example prod-us, prod-eu).
-	// When empty or only one region is listed, the field has no effect.
+	// Regions is not supported: every region would edit the same path and push
+	// the same branch. With two or more regions the Pipeline is Ready=False
+	// (reason NotImplemented) and every Bundle fails when its Graph is built
+	// with "regions is not supported". One region has no effect.
+	//
+	// Deprecated: declare one environment per region (prod-us, prod-eu) and
+	// use wave.
 	// +optional
 	Regions []string `json:"regions,omitempty"`
 }
@@ -410,11 +416,15 @@ type HealthConfig struct {
 	// +optional
 	Timeout string `json:"timeout,omitempty"`
 
-	// Cluster is reserved for remote-cluster health checks and is NOT implemented.
-	// A non-empty value fails the PromotionStep with "health.cluster is not
-	// supported" instead of silently checking the local cluster. To verify a
-	// workload in another cluster, use the argocd adapter against its Application
-	// in the Argo CD hub.
+	// Cluster is not supported: kardinal checks health only in the cluster it
+	// runs in. A non-empty value sets the Pipeline Ready=False (reason
+	// NotImplemented) and fails the PromotionStep with "health.cluster is not
+	// supported" instead of silently checking the local cluster.
+	//
+	// Deprecated: remove cluster. To verify a workload in another cluster,
+	// check its Argo CD Application (health.type: argocd) or Flux
+	// Kustomization (health.type: flux) in the hub cluster kardinal runs in;
+	// see docs/health-adapters.md#remote-clusters.
 	// +optional
 	Cluster string `json:"cluster,omitempty"`
 

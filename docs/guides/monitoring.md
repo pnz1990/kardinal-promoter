@@ -69,16 +69,6 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 | `workqueue_work_duration_seconds` | Histogram | Time spent processing each item |
 | `workqueue_retries_total` | Counter | Total retries per controller |
 
-### Webhook metrics
-
-| Metric | Type | Description |
-|---|---|---|
-| `controller_runtime_webhook_requests_total` | Counter | Admission webhook calls by `code` (only with `--pipeline-admission-webhook`) |
-| `controller_runtime_webhook_request_duration_seconds` | Histogram | Admission webhook latency (only with `--pipeline-admission-webhook`) |
-
-These are controller-runtime's admission webhook metrics. The Bundle API
-(`POST /api/v1/bundles`) and the SCM webhook (`/webhook/scm`) on port 8083 do not emit them.
-
 ---
 
 ## kardinal Metrics
@@ -172,14 +162,6 @@ histogram_quantile(0.99,
 
 ```promql
 workqueue_depth{name=~"bundle|promotionstep|policygate"}
-```
-
-### Admission webhook latency P95 (with `--pipeline-admission-webhook`)
-
-```promql
-histogram_quantile(0.95,
-  rate(controller_runtime_webhook_request_duration_seconds_bucket[5m])
-)
 ```
 
 ---

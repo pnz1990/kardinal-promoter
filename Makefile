@@ -14,7 +14,6 @@ LOCALBIN               ?= $(shell pwd)/bin
 # Build
 BINARY_CONTROLLER = bin/kardinal-controller
 BINARY_CLI        = bin/kardinal
-BINARY_AGENT      = bin/kardinal-agent
 GO                = go
 GOPROXY          ?= https://proxy.golang.org
 
@@ -26,10 +25,10 @@ IMG      ?= $(IMG_REPO):$(IMG_TAG)
 # kind cluster used by the e2e targets
 KIND_CLUSTER ?= kardinal-e2e
 
-.PHONY: all build build-controller build-cli build-agent ui ui-test ui-test-e2e test test-integration test-cover \
+.PHONY: all build build-controller build-cli ui ui-test ui-test-e2e test test-integration test-cover \
         lint lint-local vet vuln generate manifests api-docs \
         install uninstall docker-build helm-lint validate-manifests \
-        install-kro setup-e2e-env setup-e2e-env-fast setup-multi-cluster-env eks-up eks-down \
+        install-kro setup-e2e-env setup-e2e-env-fast \
         e2e-setup e2e-teardown kind-up kind-down \
         test-e2e test-e2e-kind test-e2e-journey-1 test-e2e-journey-2 test-e2e-journey-3 \
         test-e2e-journey-4 test-e2e-journey-5 \
@@ -38,16 +37,13 @@ KIND_CLUSTER ?= kardinal-e2e
 all: generate build test lint
 
 ## Build
-build: build-controller build-cli build-agent
+build: build-controller build-cli
 
 build-controller:
 	$(GO) build -o $(BINARY_CONTROLLER) ./cmd/kardinal-controller/
 
 build-cli:
 	$(GO) build -o $(BINARY_CLI) ./cmd/kardinal/
-
-build-agent:
-	$(GO) build -o $(BINARY_AGENT) ./cmd/kardinal-agent/
 
 ## UI
 ui: ## Build the embedded React UI (requires Node.js and npm)
@@ -145,18 +141,6 @@ setup-e2e-env: ## Full single-cluster E2E: kind + kro + ArgoCD + test app in tes
 
 setup-e2e-env-fast: ## Single-cluster E2E without ArgoCD (faster, for integration testing)
 	KIND_CLUSTER=$(KIND_CLUSTER) SKIP_ARGOCD=1 bash hack/setup-e2e-env.sh
-
-setup-multi-cluster-env: ## Multi-cluster E2E: kind (test+uat) + EKS prod cluster. Requires AWS creds + EKS cluster (see terraform/eks-e2e).
-	bash hack/setup-multi-cluster-env.sh
-
-eks-up: ## Create EKS prod cluster for multi-cluster E2E via Terraform (requires AWS creds; asks for confirmation)
-	cd terraform/eks-e2e && terraform init && terraform apply
-	@echo ""
-	@echo "Cluster ready. Update kubeconfig with:"
-	@cd terraform/eks-e2e && terraform output -raw kubeconfig_update_command
-
-eks-down: ## Destroy EKS prod cluster (saves cost when not running E2E; asks for confirmation)
-	cd terraform/eks-e2e && terraform destroy
 
 kind-down: ## Delete the e2e kind cluster
 	kind delete cluster --name $(KIND_CLUSTER)

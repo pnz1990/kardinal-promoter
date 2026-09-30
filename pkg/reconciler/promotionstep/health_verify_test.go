@@ -420,32 +420,16 @@ func TestHealthCheckCadence(t *testing.T) {
 	}
 }
 
-// TestShardOwnership proves C03-promotionstep-24 and C13b-design-03: a step
-// labelled for an agent's shard is reconciled only by that agent, not by the
-// hub controller (empty Shard), and the hub reconciles only unlabelled steps.
-func TestShardOwnership(t *testing.T) {
-	tests := []struct {
-		name      string
-		stepShard string
-		ourShard  string
-		wantState string
-	}{
-		{name: "hub skips a sharded step", stepShard: "eu", ourShard: "", wantState: ""},
-		{name: "agent reconciles its shard", stepShard: "eu", ourShard: "eu", wantState: "Promoting"},
-		{name: "agent skips an unlabelled step", stepShard: "", ourShard: "eu", wantState: ""},
-		{name: "hub reconciles an unlabelled step", stepShard: "", ourShard: "", wantState: "Promoting"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ps := makeStep("step", "p", "b1", "test")
-			if tt.stepShard != "" {
-				ps.Labels = map[string]string{"kardinal.io/shard": tt.stepShard}
-			}
-			c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
-			r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{}, Shard: tt.ourShard,
-				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
-			reconcileStep(t, r, "step")
-			assert.Equal(t, tt.wantState, getStep(t, c, "step").Status.State)
-		})
-	}
+// TestShardLabelNoLongerSkipsStep proves #1321: distributed mode was removed,
+// so the controller reconciles a step whose kardinal.io/shard label is left
+// over from it. It used to skip the step, which then waited for a
+// kardinal-agent forever.
+func TestShardLabelNoLongerSkipsStep(t *testing.T) {
+	ps := makeStep("step", "p", "b1", "test")
+	ps.Labels = map[string]string{"kardinal.io/shard": "eu"}
+	c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: &mockGit{},
+		WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+	reconcileStep(t, r, "step")
+	assert.Equal(t, "Promoting", getStep(t, c, "step").Status.State)
 }

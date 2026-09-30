@@ -33,7 +33,9 @@ prod-eu and prod-us run in parallel after pre-prod is verified and all policy ga
 | prod-us | Workload | rollouts-demo (prod US, Argo Rollouts canary) |
 
 Argo CD in the hub cluster manages Applications for all 4 workload clusters.
-kardinal-promoter reads Application health from the hub. No cross-cluster API calls.
+kardinal-promoter reads Application health from the hub (`health.type: argocd`). It makes
+no cross-cluster API calls and needs no credentials for the workload clusters. See
+[Multi-Cluster](../../docs/distributed-mode.md).
 
 ## Prerequisites
 
@@ -41,9 +43,6 @@ kardinal-promoter reads Application health from the hub. No cross-cluster API ca
   and Argo CD
 - 4 workload clusters registered as Argo CD cluster targets
 - Argo Rollouts installed in prod-eu and prod-us clusters
-- A kardinal-agent in each prod cluster, started with `--shard eu-cluster` and
-  `--shard us-cluster`. The `shard:` fields in `pipeline.yaml` route the prod-eu and
-  prod-us PromotionSteps to them. See [distributed mode](../../docs/distributed-mode.md).
 - AWS ALB Ingress Controller in prod clusters (for canary traffic routing)
 - GitOps repo with Kustomize overlays. `pipeline.yaml` and `argocd-applications.yaml` use
   the placeholder `https://github.com/myorg/rollouts-demo-deploy`; change both to your repo:
@@ -113,8 +112,10 @@ kardinal create bundle rollouts-demo --image ghcr.io/myorg/rollouts-demo:v2.0.0
    - Human reviews and merges.
    - Argo CD syncs the Rollout manifest.
    - Argo Rollouts executes canary: 20% --> 40% --> 60% --> 80% --> 100% with ALB.
-   - kardinal-promoter watches Rollout.status.phase via argoRollouts health adapter.
-   - When Rollout is Healthy, Bundle is Verified for that region.
+   - kardinal-promoter watches the region's Application in the hub via the argocd health
+     adapter. Argo CD's built-in Rollout health keeps the Application `Progressing` while the
+     canary runs and `Healthy` once it completes.
+   - When the Application is Synced to the promoted commit and Healthy, the region is Verified.
 7. Both regions verified: Bundle fully promoted.
 
 ## Observing the promotion
@@ -145,13 +146,13 @@ kardinal history rollouts-demo
 | Promotion mechanism | PromotionTask steps (git-clone, kustomize-set-image, git-push, argocd-update) | Built-in: controller handles git + kustomize + PR automatically |
 | Approval | Kargo UI or manual `kargo promote` | GitHub PR with promotion evidence (metrics, provenance, policy gates) |
 | Policy governance | None (autoPromotionEnabled: true/false) | PolicyGate DAG nodes with CEL expressions |
-| Canary | Argo Rollouts (same) | Argo Rollouts via delegation (same) |
+| Canary | Argo Rollouts (same) | Argo Rollouts in the spoke, verified through the hub Argo CD Application |
 
 ## Files in this example
 
 | File | What it is |
 |---|---|
-| `pipeline.yaml` | Pipeline CRD (4 environments, parallel prod fan-out, Argo Rollouts delegation) |
+| `pipeline.yaml` | Pipeline CRD (4 environments, parallel prod fan-out, argocd health from the hub) |
 | `policy-gates.yaml` | Org-level PolicyGates (no-weekend-deploys, pre-prod-soak), one per prod region |
 | `bundle.yaml` | Sample Bundle for manual creation |
 | `argocd-applications.yaml` | Argo CD ApplicationSet for 4 environments across 4 clusters |

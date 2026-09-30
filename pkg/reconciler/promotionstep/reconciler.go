@@ -36,7 +36,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	builderutil "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -93,9 +92,6 @@ const (
 	// retries: 10s, 20s, 40s, 80s, 120s.
 	retryBaseDelay = 10 * time.Second
 	retryMaxDelay  = 2 * time.Minute
-
-	// shardLabel names the distributed-mode shard that owns a PromotionStep.
-	shardLabel = "kardinal.io/shard"
 )
 
 // Reconciler drives the PromotionStep state machine.
@@ -136,12 +132,6 @@ type Reconciler struct {
 	// If nil, the health-check step stub (always-success) is used.
 	HealthDetector *health.AutoDetector
 
-	// Shard is the distributed-mode shard this reconciler owns. It reconciles
-	// only PromotionSteps whose kardinal.io/shard label equals Shard, so an
-	// empty Shard (the control-plane controller) skips every step that an
-	// agent owns (C03-promotionstep-24).
-	Shard string
-
 	// WorkDirFn returns the working directory for a given pipeline+bundle pair.
 	// Tests set it; when nil a fixed path under the kardinal work root is used.
 	WorkDirFn func(pipelineName, bundleName string) string
@@ -165,21 +155,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
-	}
-
-	// Shard ownership: every PromotionStep is reconciled by exactly one
-	// controller. A step labelled kardinal.io/shard=X belongs to the agent
-	// started with --shard=X; an unlabelled step belongs to the controller
-	// started without --shard. The control-plane controller used to reconcile
-	// every step, racing the agent that owns it (C03-promotionstep-24,
-	// C13b-design-03). The predicate in SetupWithManager applies the same rule
-	// at the watch layer; this guard covers direct requeues.
-	if stepShard := ps.Labels[shardLabel]; stepShard != r.Shard {
-		log.Debug().
-			Str("step_shard", stepShard).
-			Str("our_shard", r.Shard).
-			Msg("step belongs to another shard — skipping")
-		return ctrl.Result{}, nil
 	}
 
 	// Orphan guard: if the parent Bundle no longer exists, self-delete this
@@ -1230,13 +1205,9 @@ func (r *Reconciler) handleBake(
 
 // SetupWithManager registers the PromotionStep reconciler with controller-runtime.
 //
-// The PromotionStep watch has two predicates:
-//   - shardMatchPredicate: only steps whose kardinal.io/shard label equals
-//     r.Shard (an empty Shard matches only unlabelled steps), so a hub and its
-//     agents never reconcile the same step (C03-promotionstep-24).
-//   - spec, label or annotation changes only. The reconciler's own status
-//     patches no longer re-enqueue the step immediately; it requeues itself
-//     with RequeueAfter (C03-promotionstep-12).
+// The PromotionStep watch reacts to spec, label or annotation changes only.
+// The reconciler's own status patches no longer re-enqueue the step
+// immediately; it requeues itself with RequeueAfter (C03-promotionstep-12).
 //
 // Additionally registers Watches on PRStatus and PolicyGate CRDs:
 //   - PRStatus: re-enqueue the owning PromotionStep when status.merged changes.
@@ -1248,7 +1219,6 @@ func (r *Reconciler) handleBake(
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.PromotionStep{}, builderutil.WithPredicates(
-			shardMatchPredicate{shard: r.Shard},
 			predicate.Or(predicate.GenerationChangedPredicate{},
 				predicate.LabelChangedPredicate{}, predicate.AnnotationChangedPredicate{}),
 		)).
@@ -1269,7 +1239,7 @@ func (r *Reconciler) prStatusMapper(ctx context.Context, obj client.Object) []re
 	}
 	var reqs []reconcile.Request
 	for _, step := range stepList.Items {
-		if step.Spec.PRStatusRef == prs.GetName() && step.Labels[shardLabel] == r.Shard {
+		if step.Spec.PRStatusRef == prs.GetName() {
 			reqs = append(reqs, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Name:      step.Name,
@@ -1281,8 +1251,7 @@ func (r *Reconciler) prStatusMapper(ctx context.Context, obj client.Object) []re
 	return reqs
 }
 
-// policyGateMapper re-enqueues the unfinished PromotionSteps of this shard
-// whose spec.requiredGates names the changed gate. Enqueueing every step in
+// policyGateMapper re-enqueues the unfinished PromotionSteps whose spec.requiredGates names the changed gate. Enqueueing every step in
 // the namespace on every gate evaluation made each step reconcile (and run
 // its health check) once per gate tick (C03-promotionstep-26).
 func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -1293,7 +1262,7 @@ func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []
 	}
 	var reqs []reconcile.Request
 	for _, step := range stepList.Items {
-		if step.Labels[shardLabel] != r.Shard || !isCancellable(step.Status.State) ||
+		if !isCancellable(step.Status.State) ||
 			!slices.Contains(step.Spec.RequiredGates, gate.GetName()) {
 			continue
 		}
@@ -1305,29 +1274,6 @@ func (r *Reconciler) policyGateMapper(ctx context.Context, obj client.Object) []
 		})
 	}
 	return reqs
-}
-
-// shardMatchPredicate implements sigs.k8s.io/controller-runtime/pkg/predicate.Predicate
-// for shard-based filtering. Eliminates PS-3: shard filtering is now at the watch
-// layer (controller-runtime predicate) rather than inside the reconcile function.
-type shardMatchPredicate struct {
-	shard string
-}
-
-func (p shardMatchPredicate) Create(e event.CreateEvent) bool {
-	return e.Object.GetLabels()[shardLabel] == p.shard
-}
-
-func (p shardMatchPredicate) Delete(e event.DeleteEvent) bool {
-	return e.Object.GetLabels()[shardLabel] == p.shard
-}
-
-func (p shardMatchPredicate) Update(e event.UpdateEvent) bool {
-	return e.ObjectNew.GetLabels()[shardLabel] == p.shard
-}
-
-func (p shardMatchPredicate) Generic(e event.GenericEvent) bool {
-	return e.Object.GetLabels()[shardLabel] == p.shard
 }
 
 // patchPRStatusSpec updates the spec of the companion PRStatus CRD with PR data

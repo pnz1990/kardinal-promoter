@@ -101,9 +101,21 @@ func TestValidate_Documents(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "regions fan-out",
+			name:    "two regions",
 			content: validPipelineDoc + "    regions: [us-east-1, eu-west-1]\n",
-			wantOut: []string{"✗ f.yaml is invalid:", "environments[].regions fan-out is not implemented"},
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": regions is not supported; declare one environment per region`},
+			wantErr: true,
+		},
+		{
+			name:    "one region is accepted and ignored",
+			content: validPipelineDoc + "    regions: [us-east-1]\n",
+			wantOut: []string{"✓ f.yaml is valid"},
+		},
+		// #1321: distributed mode was removed.
+		{
+			name:    "shard",
+			content: validPipelineDoc + "    shard: eu\n",
+			wantOut: []string{"✗ f.yaml is invalid:", `environment "prod": shard is not supported: distributed mode was removed`},
 			wantErr: true,
 		},
 		{

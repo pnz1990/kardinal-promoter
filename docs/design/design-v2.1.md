@@ -12,6 +12,8 @@
 >   and namespace, plus kind and condition for `resource`), and a non-empty `health.cluster` fails the PromotionStep (remote-cluster
 >   checks are not implemented).
 > - Merge detection polls through the PRStatus reconciler; it is not webhook-only.
+> - Distributed mode (kardinal-agent, `--shard`, the `shard` field) was removed (#1321), and
+>   `regions` fan-out will not be implemented (#1304); see [07](07-distributed-architecture.md).
 > - The metric names are not the real ones (`pkg/reconciler/observability/metrics.go`).
 > - There is no `/var/cache/kardinal`; the chart mounts an `emptyDir` at `/tmp`.
 > - The UI is not read-only.
