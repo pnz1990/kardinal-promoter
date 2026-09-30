@@ -16,8 +16,10 @@
 package health_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/google/cel-go/cel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -76,6 +78,72 @@ func TestWatchNodeTemplate_ArgoCD(t *testing.T) {
 	assert.Contains(t, spec.ReadyWhen, "Healthy")
 	assert.Contains(t, spec.ReadyWhen, "Synced")
 	assert.Equal(t, "argocd", spec.HealthType)
+}
+
+// TestWatchNodeTemplate_ArgoCDOperationState evaluates the argocd readyWhen
+// the way kro does, with the node ID substituted as the translator does it: a
+// running or failed sync is not Ready, as in ArgoCDAdapter.Check (#1280). A
+// missing field is a "no such key" error, which kro treats as not ready yet
+// (pkg/graphengine/runtime/errors.go celDataPendingPatterns).
+func TestWatchNodeTemplate_ArgoCDOperationState(t *testing.T) {
+	spec, err := health.WatchNodeTemplate("argocd", health.CheckOptions{
+		ArgoCD: health.ArgoCDConfig{Name: "nginx-prod", Namespace: "argocd"},
+	})
+	require.NoError(t, err)
+	env, err := cel.NewEnv(cel.Variable("healthProd", cel.DynType))
+	require.NoError(t, err)
+	ast, iss := env.Compile(strings.ReplaceAll(spec.ReadyWhen, "healthNode", "healthProd"))
+	require.NoError(t, iss.Err())
+	prg, err := env.Program(ast)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name      string
+		operation map[string]interface{}
+		ready     bool
+	}{
+		{name: "no operation yet", ready: true},
+		{name: "sync succeeded", operation: map[string]interface{}{"phase": "Succeeded"}, ready: true},
+		{name: "sync running", operation: map[string]interface{}{"phase": "Running"}},
+		{name: "sync failed", operation: map[string]interface{}{"phase": "Failed"}},
+		{name: "sync error", operation: map[string]interface{}{"phase": "Error"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			status := map[string]interface{}{
+				"health": map[string]interface{}{"status": "Healthy"},
+				"sync":   map[string]interface{}{"status": "Synced"},
+			}
+			if tc.operation != nil {
+				status["operationState"] = tc.operation
+			}
+			out, _, err := prg.Eval(map[string]interface{}{
+				"healthProd": map[string]interface{}{"status": status},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.ready, out.Value())
+		})
+	}
+}
+
+// TestWatchNodeTemplate_NamespaceRequired verifies that the Rollout and Canary
+// nodes return an error for an empty namespace instead of watching "default"
+// (#1279). OptionsForEnv always sets one.
+func TestWatchNodeTemplate_NamespaceRequired(t *testing.T) {
+	cases := []struct {
+		healthType string
+		opts       health.CheckOptions
+	}{
+		{"argoRollouts", health.CheckOptions{ArgoRollouts: health.ArgoRolloutsConfig{Name: "my-app"}}},
+		{"flagger", health.CheckOptions{Flagger: health.FlaggerConfig{Name: "my-app"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.healthType, func(t *testing.T) {
+			_, err := health.WatchNodeTemplate(tc.healthType, tc.opts)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `"my-app" has no namespace`)
+		})
+	}
 }
 
 // TestWatchNodeTemplate_ArgoCDDefaultNamespace verifies that an empty Namespace

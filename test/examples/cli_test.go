@@ -363,8 +363,8 @@ func TestShellWordsAndParseCatchKnownMistakes(t *testing.T) {
 			words: []string{"kardinal", "create", "bundle", "app", "--image", "ghcr.io/o/a:sha-$(git rev-parse --short HEAD)"},
 		},
 		{
-			line:    "kardinal create bundle app --image ghcr.io/o/a:1 --commit abc123",
-			wantErr: "unknown flag: --commit",
+			line:    "kardinal create bundle app --image ghcr.io/o/a:1 --sha abc123",
+			wantErr: "unknown flag: --sha",
 		},
 		{
 			line:    `kardinal override app --env prod --reason "fix"`,

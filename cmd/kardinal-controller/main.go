@@ -361,7 +361,10 @@ func main() {
 	eventRecorder := mgr.GetEventRecorder("kardinal-controller")
 
 	if err := (&bundlereconciler.Reconciler{
-		Client:       mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Uncached: the maxConcurrentPromotions count must see the Promoting
+		// patch of the previous reconcile (#1310).
+		APIReader:    mgr.GetAPIReader(),
 		Translator:   newTranslator(mgr, graphIdentity, splitCSV(policyNamespaces), logger),
 		GraphChecker: newGraphClient(mgr.GetConfig(), logger),
 		Recorder:     eventRecorder,

@@ -131,8 +131,11 @@ Each reconciler is idempotent and safe to re-run after a crash.
 
 ### How do I manually approve a blocked bundle?
 
-Force-pass the blocking PolicyGate with `kardinal override`. It records who
-overrode the gate, why, and until when:
+Force-pass the blocking PolicyGate with `kardinal override`. It records the
+reason and expiry on the gate; the Kubernetes audit log records who made the
+change. (The override's `createdBy` is the local OS user name the CLI sends,
+and anyone who can edit the gate can set it to any value, so do not treat it as
+an identity.)
 
 ```bash
 kardinal override <pipeline> --stage prod --gate <gate-name> \

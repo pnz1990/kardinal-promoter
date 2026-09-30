@@ -159,6 +159,8 @@ var allFeatures = []string{
 	"--set", "replicaCount=2",
 	"--set", "ui.auth.tokenReview=true",
 	"--set", "rbac.argocdApplicationsWrite=true",
+	// Deprecated no-op (#1278): kept so the schema still accepts it and
+	// TestChartRBACLeastPrivilege proves it grants nothing.
 	"--set", "rbac.integrationTestJobs=true",
 }
 
@@ -436,9 +438,6 @@ var optionalAccess = []struct {
 	{"rbac.argocdApplicationsWrite=true", []apiAccess{
 		{"argoproj.io", "applications", []string{"patch"}, inWatched, "", "steps argocd_set_image.go"},
 	}},
-	{"rbac.integrationTestJobs=true", []apiAccess{
-		{"batch", "jobs", []string{"get", "list", "watch", "create", "delete"}, inWatched, "", "steps integration_test_step.go"},
-	}},
 }
 
 func checkAccess(t *testing.T, v rbacView, mode string, watched []string, acc apiAccess, want bool) {
@@ -509,6 +508,11 @@ func TestChartRBACLeastPrivilege(t *testing.T) {
 		{"", "kardinal.io", "changewindows", "delete", "freeze"},
 		{"team-a", "", "secrets", "create", ""},
 		{"team-a", "rbac.authorization.k8s.io", "clusterroles", "bind", "cluster-admin"},
+		// The integration-test step was removed (#1278); rbac.integrationTestJobs
+		// is a no-op, so even with it set the controller gets no Job access.
+		{"team-a", "batch", "jobs", "create", ""},
+		{"team-a", "batch", "jobs", "delete", ""},
+		{releaseNS, "batch", "jobs", "create", ""},
 	}
 	for _, d := range denied {
 		assert.False(t, v.allowed(releaseNS, sa, d.ns, d.group, d.resource, d.verb, d.name),

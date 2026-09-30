@@ -81,25 +81,16 @@ Bundle is a versioned snapshot of what to deploy. Treat it as immutable: the API
 | `status.conditions[].status` | string | yes | status of the condition, one of True, False, Unknown. One of: `True`, `False`, `Unknown`. |
 | `status.conditions[].type` | string | yes | type of condition in CamelCase or in foo.example.com/CamelCase. |
 | `status.environments` | []object |  | Environments holds per-environment promotion evidence. |
-| `status.environments[].gateResults` | []object |  | GateResults holds the result of each PolicyGate evaluation for this environment. |
-| `status.environments[].gateResults[].evaluatedAt` | string (date-time) | yes | EvaluatedAt is when the gate was evaluated. |
-| `status.environments[].gateResults[].gateName` | string | yes | GateName is the name of the PolicyGate. |
-| `status.environments[].gateResults[].gateNamespace` | string |  | GateNamespace is the namespace of the PolicyGate. |
-| `status.environments[].gateResults[].reason` | string |  | Reason is the human-readable explanation for the result. |
-| `status.environments[].gateResults[].result` | string | yes | Result is the evaluation outcome: "pass" or "block". |
 | `status.environments[].healthCheckedAt` | string (date-time) |  | HealthCheckedAt is when the post-merge health check completed. |
-| `status.environments[].mergedBy` | string |  | MergedBy is the actor who merged the promotion PR. |
 | `status.environments[].name` | string | yes | Name is the environment name. |
 | `status.environments[].phase` | string |  | Phase is the promotion phase for this environment. |
-| `status.environments[].prMergedAt` | string (date-time) |  | PRMergedAt is when the promotion PR was merged. |
 | `status.environments[].prURL` | string |  | PRURL is the URL of the pull request opened for this promotion. |
 | `status.environments[].soakMinutes` | integer (int64) |  | SoakMinutes is the number of minutes that have elapsed since HealthCheckedAt. Written by the BundleReconciler as part of its own CRD status write. The PolicyGate reconciler reads this field from Bundle.status.environments to populate bundle.upstreamSoakMinutes in the CEL context. This eliminates the time.Since() call from the PolicyGate reconciler hot path (PG-3 fix). |
 | `status.graphRef` | string |  | GraphRef is the name of the kro Graph CR backing this Bundle's promotion DAG. Populated by the BundleReconciler when the Graph is first created. Used to detect Graph deletion and trigger recreation. The Graph of a Bundle that failed promoting is not recreated (GraphSynced=False, reason GraphDeleted), so the failed artifacts are not promoted again; a Pipeline change rebuilds it. |
 | `status.metrics` | object |  | Metrics holds deployment efficiency metrics for this Bundle (K-05). Populated by the BundleReconciler when all environments reach Verified. |
-| `status.metrics.autoRollbacks` | integer |  | AutoRollbacks is the number of environments that auto-rolled back during this Bundle's promotion. |
 | `status.metrics.bakeResets` | integer |  | BakeResets is the total number of bake timer resets across all environments. High bake reset count indicates flaky health or over-sensitive bake windows. |
 | `status.metrics.commitToProductionMinutes` | integer (int64) |  | CommitToProductionMinutes is the time from Bundle creation to the last environment reaching Verified. Indicates total promotion pipeline latency. |
-| `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides applied during this Bundle's promotion across all environments. |
+| `status.metrics.operatorInterventions` | integer |  | OperatorInterventions is the number of PolicyGate overrides recorded on this Bundle's gate instances (kardinal override), counted when the Bundle becomes Verified. |
 | `status.phase` | string |  | Phase is the bundle promotion phase. One of: `Available`, `Promoting`, `Verified`, `Failed`, `Superseded`. |
 | `status.pipelineSpecHash` | string |  | PipelineSpecHash is the SHA-256 hash of the Pipeline spec (spec.paused excluded) the Graph was last built from. When the Bundle reconciler is re-queued by a Pipeline watch event, it compares the current Pipeline spec hash to this field. A mismatch re-translates the Graph in place with the updated spec. |
 
@@ -135,7 +126,7 @@ ChangeWindow defines a cluster-scoped time window during which promotions are bl
 
 `kardinal.io/v1alpha1`
 
-MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value` and `metrics.&lt;name&gt;.result`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
+MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus, evaluates the threshold, and writes the result to status. PolicyGate CEL expressions reference these results via `metrics.&lt;name&gt;.value`, `metrics.&lt;name&gt;.result` and `metrics.&lt;name&gt;.stale`. MetricCheck objects are typically created alongside PolicyGates that reference them. MetricCheck is namespaced and must be in the same namespace as the PolicyGate that uses it.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -152,6 +143,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | `status.lastValue` | string |  | LastValue is the most recent metric value returned by the Prometheus query. Empty string means no evaluation has completed yet. |
 | `status.reason` | string |  | Reason is a human-readable explanation of the current result. On a query error it holds the HTTP status and, for a Prometheus API error, its error text; the response body is never copied here. |
 | `status.result` | string |  | Result is the evaluation result: "Pass" or "Fail". Empty when no evaluation has completed. One of: `Pass`, `Fail`. |
+| `status.validUntil` | string (date-time) |  | ValidUntil is when the current result goes stale: lastEvaluatedAt plus three intervals, and at least 30s. The MetricCheck reconciler writes it with each evaluation. A PolicyGate evaluated after this time, or when it is unset, sees metrics.&lt;name&gt;.result as "Stale" and metrics.&lt;name&gt;.stale as true, so a result that is no longer refreshed cannot pass a gate. |
 
 ## NotificationHook
 
@@ -244,13 +236,13 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 | `spec.environments[].name` | string | yes | Name is the environment identifier (e.g. "test", "uat", "prod"). It must be a DNS label (lower-case letters, digits and '-', at most 63 characters): it names a Graph node, derived objects and, for the resource, argoRollouts and flagger health checks, a namespace. |
 | `spec.environments[].onHealthFailure` | string |  | OnHealthFailure controls what the reconciler does when health fails during bake or health checking (K-03). "rollback": create a rollback Bundle at the previous version; step → RollingBack. "abort": freeze the step; state → AbortedByAlarm; requires human intervention. "none" (default): step → Failed; downstream stops. One of: `rollback`, `abort`, `none`. Default: `none`. |
 | `spec.environments[].path` | string |  | Path is the subdirectory within the GitOps repository for this environment. Used when spec.git.layout is "directory". Defaults to "environments/&lt;name&gt;". |
-| `spec.environments[].promotionTemplate` | object |  | PromotionTemplate is reserved for a shared step sequence and is not implemented yet. A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate". See docs/custom-steps.md. |
+| `spec.environments[].promotionTemplate` | object |  | PromotionTemplate is reserved for a shared step sequence and is not implemented yet. A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate". See docs/pipeline-reference.md#promotion-steps. |
 | `spec.environments[].promotionTemplate.name` | string | yes | Name is the PromotionTemplate resource name. |
 | `spec.environments[].promotionTemplate.namespace` | string |  | Namespace is the namespace of the PromotionTemplate. If empty, the Pipeline's own namespace is used. |
 | `spec.environments[].regions` | []string |  | Regions is reserved for multi-region fan-out (issue #612) and is NOT implemented. With two or more regions the translator stamps out one PromotionStep per region (spec.region), but every region would edit the same path and push the same branch, so the PromotionStep reconciler fails such steps with "environments[].regions fan-out is not implemented". Declare one environment per region instead (for example prod-us, prod-eu). When empty or only one region is listed, the field has no effect. |
 | `spec.environments[].shard` | string |  | Shard pins this environment to a specific kardinal-controller agent shard in distributed mode. Leave empty for single-controller deployments. |
 | `spec.environments[].stepTimeoutSeconds` | integer |  | StepTimeoutSeconds is the maximum number of seconds a single promotion step (git-clone, kustomize-set-image, open-pr, etc.) may run before the reconciler cancels it via context.WithTimeout and marks the PromotionStep as Failed. When not set or 0 (default), no per-step timeout is applied. Useful for restricting execution in restricted-egress environments where git-clone against a slow SCM host can block the reconciler indefinitely. |
-| `spec.environments[].steps` | []object |  | Steps is reserved for a custom step sequence and is not implemented yet: the controller always runs the default sequence (see DefaultSequenceForBundle). A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate", instead of silently running the default steps. See docs/custom-steps.md. |
+| `spec.environments[].steps` | []object |  | Steps is reserved for a custom step sequence and is not implemented yet: the controller always runs the default sequence (see DefaultSequenceForBundle). A Pipeline that sets it is rejected when a Bundle is translated and by "kardinal validate", instead of silently running the default steps. See docs/pipeline-reference.md#promotion-steps. |
 | `spec.environments[].steps[].uses` | string | yes | Uses identifies the step to execute (built-in name or custom name). |
 | `spec.environments[].steps[].webhook` | object |  | Webhook configures the HTTP endpoint for custom (non-built-in) steps. Required when Uses does not match any registered built-in step. |
 | `spec.environments[].steps[].webhook.secretRef` | object |  | SecretRef references a Kubernetes Secret whose "Authorization" key is sent as the Authorization header. |

@@ -3,9 +3,10 @@
 
 // Package metriccheck implements the MetricCheckReconciler which queries a
 // Prometheus-compatible backend and patches MetricCheck.status with the result.
-// PolicyGate CEL expressions reference these results via metrics.<name>.value and
-// metrics.<name>.result. The reconciler never evaluates CEL itself — it only
-// writes CRD status fields for the PolicyGate reconciler to read.
+// PolicyGate CEL expressions reference these results via metrics.<name>.value,
+// metrics.<name>.result and metrics.<name>.stale (status.validUntil has
+// passed). The reconciler never evaluates CEL itself — it only writes CRD
+// status fields for the PolicyGate reconciler to read.
 package metriccheck
 
 import (
@@ -34,6 +35,11 @@ const (
 	// maxConcurrentReconciles lets one slow or unreachable Prometheus endpoint
 	// stall only its own MetricChecks, not every MetricCheck in the cluster.
 	maxConcurrentReconciles = 4
+	// staleAfterIntervals and minValidFor set status.validUntil: a result is
+	// valid for three intervals (two missed evaluations of margin), and at
+	// least minValidFor. PolicyGates treat a result past validUntil as stale.
+	staleAfterIntervals = 3
+	minValidFor         = 30 * time.Second
 )
 
 // MetricsProvider queries a metrics backend and returns a scalar value for the given query.
@@ -59,7 +65,8 @@ type Reconciler struct {
 //  1. Not found → deleted, skip.
 //  2. Query Prometheus → get scalar value.
 //  3. Evaluate threshold → Pass or Fail.
-//  4. Patch status.lastValue, status.result, status.lastEvaluatedAt, status.reason.
+//  4. Patch status.lastValue, status.result, status.lastEvaluatedAt, status.reason
+//     and status.validUntil.
 //  5. Requeue after spec.interval (default 1m, minimum 10s).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
@@ -104,15 +111,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: interval}, nil
 }
 
-// patchStatus patches MetricCheck.status with the latest evaluation result.
+// patchStatus patches MetricCheck.status with the latest evaluation result,
+// and with validUntil, after which PolicyGates treat the result as stale.
 func (r *Reconciler) patchStatus(ctx context.Context, mc *kardinalv1alpha1.MetricCheck,
 	lastValue, result, reason string) error {
 	patch := client.MergeFrom(mc.DeepCopy())
-	now := metav1.NewTime(r.now())
+	evaluatedAt := r.now()
+	now := metav1.NewTime(evaluatedAt)
+	validUntil := metav1.NewTime(evaluatedAt.Add(validFor(parseInterval(mc.Spec.Interval))))
 	mc.Status.LastValue = lastValue
 	mc.Status.Result = result
 	mc.Status.Reason = reason
 	mc.Status.LastEvaluatedAt = &now
+	mc.Status.ValidUntil = &validUntil
 	if err := r.Status().Patch(ctx, mc, patch); err != nil {
 		return fmt.Errorf("status patch: %w", err)
 	}
@@ -160,6 +171,12 @@ func evaluateThreshold(value float64, t kardinalv1alpha1.MetricThreshold) (strin
 		return "Pass", fmt.Sprintf("%g %s %g = true", value, t.Operator, t.Value)
 	}
 	return "Fail", fmt.Sprintf("%g %s %g = false", value, t.Operator, t.Value)
+}
+
+// validFor is how long a result evaluated every interval stays valid:
+// staleAfterIntervals intervals, and at least minValidFor.
+func validFor(interval time.Duration) time.Duration {
+	return max(staleAfterIntervals*interval, minValidFor)
 }
 
 // parseInterval parses a Go duration string, returning defaultInterval on

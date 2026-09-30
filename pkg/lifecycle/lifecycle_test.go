@@ -4,6 +4,8 @@
 package lifecycle_test
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,13 +114,53 @@ func TestCompareCreation(t *testing.T) {
 			want: -1},
 		{name: "same second without annotations falls back to the name",
 			a: withAnn("a", sameSecond, ""), b: withAnn("b", sameSecond, ""), want: -1},
-		{name: "unparseable annotation falls back to the name",
-			a: withAnn("b", sameSecond, "garbage"), b: withAnn("a", sameSecond, sameSecond.Format(time.RFC3339Nano)), want: 1},
+		{name: "same second: an unstamped Bundle sorts before a stamped one, whatever the names",
+			a: withAnn("b", sameSecond, ""), b: withAnn("a", sameSecond, sameSecond.Format(time.RFC3339Nano)), want: -1},
+		{name: "unparseable annotation counts as unstamped",
+			a: withAnn("b", sameSecond, "garbage"), b: withAnn("a", sameSecond, sameSecond.Format(time.RFC3339Nano)), want: -1},
+		{name: "same second and same stamp falls back to the name",
+			a:    withAnn("a", sameSecond, sameSecond.Format(time.RFC3339Nano)),
+			b:    withAnn("b", sameSecond, sameSecond.Format(time.RFC3339Nano)),
+			want: -1},
+		{name: "same object", a: withAnn("a", sameSecond, ""), b: withAnn("a", sameSecond, ""), want: 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, lifecycle.CompareCreation(tc.a, tc.b))
 			assert.Equal(t, -tc.want, lifecycle.CompareCreation(tc.b, tc.a))
+		})
+	}
+}
+
+// TestCompareCreation_TotalOrderWithMixedStamps is #1316: in one second, x is
+// stamped .900, y is not stamped and z is stamped .100. Comparing the stamp
+// only when both Bundles had one made z < x < y < z, so the sorted order
+// depended on the input order. Every input order must sort to y, z, x.
+func TestCompareCreation_TotalOrderWithMixedStamps(t *testing.T) {
+	second := t0.Add(5 * time.Second)
+	mk := func(name string, stamp time.Duration) *v1alpha1.Bundle {
+		b := &v1alpha1.Bundle{ObjectMeta: metav1.ObjectMeta{Name: name, CreationTimestamp: metav1.NewTime(second)}}
+		if stamp > 0 {
+			b.Annotations = map[string]string{lifecycle.AnnotationCreatedAt: second.Add(stamp).Format(time.RFC3339Nano)}
+		}
+		return b
+	}
+	x, y, z := mk("x", 900*time.Millisecond), mk("y", 0), mk("z", 100*time.Millisecond)
+	orders := [][]*v1alpha1.Bundle{
+		{x, y, z}, {x, z, y}, {y, x, z}, {y, z, x}, {z, x, y}, {z, y, x},
+	}
+	for _, in := range orders {
+		names := func(bs []*v1alpha1.Bundle) []string {
+			out := make([]string, 0, len(bs))
+			for _, b := range bs {
+				out = append(out, b.Name)
+			}
+			return out
+		}
+		t.Run(strings.Join(names(in), ""), func(t *testing.T) {
+			got := slices.Clone(in)
+			slices.SortFunc(got, lifecycle.CompareCreation)
+			assert.Equal(t, []string{"y", "z", "x"}, names(got))
 		})
 	}
 }

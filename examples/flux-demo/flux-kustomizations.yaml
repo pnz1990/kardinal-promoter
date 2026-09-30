@@ -1,7 +1,10 @@
+# The Kustomization names are <pipeline>-<env> (flux-demo-test, ...): that is the
+# Kustomization the flux health check looks up in flux-system. Each one
+# deploys the Deployment kardinal-test-app into kardinal-test-app-<env>.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: kardinal-test-app-test
+  name: flux-demo-test
   namespace: flux-system
 spec:
   interval: 1m
@@ -23,7 +26,7 @@ spec:
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: kardinal-test-app-uat
+  name: flux-demo-uat
   namespace: flux-system
 spec:
   interval: 1m
@@ -45,7 +48,7 @@ spec:
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: kardinal-test-app-prod
+  name: flux-demo-prod
   namespace: flux-system
 spec:
   interval: 1m

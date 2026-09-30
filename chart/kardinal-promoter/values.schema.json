@@ -292,7 +292,8 @@
           "type": "boolean"
         },
         "integrationTestJobs": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Deprecated, no effect, removed in v0.10."
         }
       }
     },

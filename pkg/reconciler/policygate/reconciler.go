@@ -8,6 +8,7 @@ package policygate
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -45,6 +46,12 @@ const (
 	// conditionReady is the gate condition whose lastTransitionTime marks when
 	// the gate last flipped between allowed and blocked.
 	conditionReady = "Ready"
+	// condBundleGraphReady is the Bundle condition that mirrors its Graph's
+	// Ready condition (written by the Bundle reconciler).
+	condBundleGraphReady = "GraphReady"
+	// metricResultStale replaces metrics.<name>.result when the MetricCheck's
+	// status.validUntil is unset or has passed (#1302).
+	metricResultStale = "Stale"
 	// defaultRecheckInterval is used when gate.Spec.RecheckInterval is empty or invalid.
 	defaultRecheckInterval = 5 * time.Minute
 	// minRecheckInterval is the shortest re-evaluation interval, the same as
@@ -65,6 +72,12 @@ type Reconciler struct {
 	eval *evaluator
 	// NowFn returns the current time. Overridable for testing.
 	NowFn func() time.Time
+	// MetricsNowFn, when set, is the time MetricCheck results are checked for
+	// staleness against, instead of the evaluation time. `kardinal policy
+	// simulate` sets it to the real current time, so a simulated --time keeps
+	// the cluster's metric results as they are now. The controller leaves it
+	// nil: staleness is judged at the evaluation time.
+	MetricsNowFn func() time.Time
 	// Recorder emits Kubernetes Events when a PolicyGate first blocks.
 	// When nil, event emission is skipped (backward-compatible).
 	Recorder events.EventRecorder
@@ -113,12 +126,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.reconcileTemplate(ctx, &gate)
 	}
 
-	// A Superseded Bundle never promotes again (Superseded is terminal), so
-	// its gate instances are left as they were when it was superseded: no
-	// evaluation, status write, audit record or requeue (E2E-R20). A Failed
-	// Bundle can recover, so its gates keep being evaluated.
-	if r.bundleSuperseded(ctx, gate.Namespace, bundleName) {
-		log.Debug().Str("bundle", bundleName).Msg("bundle superseded, gate not evaluated")
+	// A settled Bundle never promotes again, so its gate instances are left
+	// as they were: no evaluation, status write, audit record or requeue.
+	// Superseded is terminal (E2E-R20). A Verified Bundle whose GraphReady is
+	// True is finished: its Graph is not read again, so a gate write would
+	// only wake the Graph and NotificationHook watchers for nothing (#1301).
+	// A Failed Bundle can recover, so its gates keep being evaluated.
+	if r.bundleSettled(ctx, gate.Namespace, bundleName) {
+		log.Debug().Str("bundle", bundleName).Msg("bundle settled, gate not evaluated")
 		return ctrl.Result{}, nil
 	}
 
@@ -157,6 +172,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Evaluate CEL expression
 	pass, reason, evalErr := r.eval.evaluate(ctx, gate.Spec.Expression, celCtx)
+	// Name the stale metrics the expression uses when it blocks: a stale
+	// value is empty, so a double(...) comparison fails with an evaluation
+	// error rather than false.
+	if !pass {
+		if notes := staleMetricNotes(gate.Spec.Expression, celCtx); notes != "" {
+			reason = reason + "; " + notes
+		}
+	}
 	if evalErr != nil {
 		// Fail-closed on evaluation error
 		log.Warn().Err(evalErr).Str("expr", gate.Spec.Expression).
@@ -246,15 +269,23 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 	return ctrl.Result{}, nil
 }
 
-// bundleSuperseded reports whether the gate's Bundle exists and is Superseded.
-// A read error is not treated as superseded: buildContext reports it and the
-// gate fails closed as before.
-func (r *Reconciler) bundleSuperseded(ctx context.Context, namespace, bundleName string) bool {
+// bundleSettled reports whether the gate's Bundle exists and is either
+// Superseded, or Verified with its GraphReady condition True. The Bundle
+// reconciler keeps a Verified Bundle's GraphReady up to date until it is True
+// and does not read the Graph after that. A read error is not treated as
+// settled: buildContext reports it and the gate fails closed as before.
+func (r *Reconciler) bundleSettled(ctx context.Context, namespace, bundleName string) bool {
 	var bundle kardinalv1alpha1.Bundle
 	if err := r.Get(ctx, types.NamespacedName{Name: bundleName, Namespace: namespace}, &bundle); err != nil {
 		return false
 	}
-	return bundle.Status.Phase == "Superseded"
+	switch bundle.Status.Phase {
+	case "Superseded":
+		return true
+	case "Verified":
+		return meta.IsStatusConditionTrue(bundle.Status.Conditions, condBundleGraphReady)
+	}
+	return false
 }
 
 // buildContext constructs the Phase 1 CEL context for gate evaluation.
@@ -307,8 +338,12 @@ func (r *Reconciler) buildContext(ctx context.Context, gate *kardinalv1alpha1.Po
 	}
 
 	// Build metrics context: list all MetricChecks in the gate's namespace
-	// and expose them as metrics.<name>.value and metrics.<name>.result.
-	metricsCtx, err := r.buildMetricsContext(ctx, gate.Namespace)
+	// and expose them as metrics.<name>.value, .result and .stale.
+	metricsNow := now
+	if r.MetricsNowFn != nil {
+		metricsNow = r.MetricsNowFn()
+	}
+	metricsCtx, err := r.buildMetricsContext(ctx, gate.Namespace, metricsNow)
 	if err != nil {
 		// Non-fatal: log and continue with empty metrics context so the gate
 		// evaluates with whatever data is available (fail-closed if expr references metrics).
@@ -424,9 +459,16 @@ func (r *Reconciler) directUpstreamSoakMinutes(ctx context.Context, gate *kardin
 }
 
 // buildMetricsContext lists all MetricCheck objects in the given namespace and
-// returns a map suitable for CEL: {"<name>": {"value": <string>, "result": <string>}}.
+// returns a map suitable for CEL:
+// {"<name>": {"value": <string>, "result": <string>, "stale": <bool>}}.
 // Only MetricCheck objects in the gate's own namespace are included.
-func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string) (map[string]interface{}, error) {
+//
+// A result whose status.validUntil is unset or before now is stale (#1302):
+// nothing has refreshed it for three MetricCheck intervals, for example after
+// an outage or while its status patch keeps failing. It is exposed as result
+// "Stale" with an empty value, so both metrics.x.result == "Pass" and
+// double(metrics.x.value) < ... fail closed, and stale is true.
+func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string, now time.Time) (map[string]interface{}, error) {
 	var list kardinalv1alpha1.MetricCheckList
 	if err := r.List(ctx, &list, client.InNamespace(ns)); err != nil {
 		return nil, fmt.Errorf("list metricchecks: %w", err)
@@ -434,12 +476,57 @@ func (r *Reconciler) buildMetricsContext(ctx context.Context, ns string) (map[st
 
 	result := make(map[string]interface{}, len(list.Items))
 	for _, mc := range list.Items {
-		result[mc.Name] = map[string]interface{}{
+		entry := map[string]interface{}{
 			"value":  mc.Status.LastValue,
 			"result": mc.Status.Result,
+			"stale":  false,
 		}
+		if mc.Status.ValidUntil == nil || mc.Status.ValidUntil.Time.Before(now) {
+			entry["value"], entry["result"], entry["stale"] = "", metricResultStale, true
+		}
+		result[mc.Name] = entry
 	}
 	return result, nil
+}
+
+// staleMetricNotes returns `metric "x" result is stale` for each stale metric
+// in the evaluation context that expr refers to by name, sorted, joined with
+// "; ". It only explains a blocked gate in status.reason; it does not change
+// the result.
+func staleMetricNotes(expr string, celCtx map[string]interface{}) string {
+	metrics, _ := celCtx["metrics"].(map[string]interface{})
+	var notes []string
+	for name, v := range metrics {
+		entry, _ := v.(map[string]interface{})
+		if stale, _ := entry["stale"].(bool); stale && exprRefersToMetric(expr, name) {
+			notes = append(notes, fmt.Sprintf("metric %q result is stale", name))
+		}
+	}
+	sort.Strings(notes)
+	return strings.Join(notes, "; ")
+}
+
+// exprRefersToMetric reports whether expr names the metric: metrics["name"],
+// metrics['name'] or metrics.name.
+func exprRefersToMetric(expr, name string) bool {
+	if strings.Contains(expr, `"`+name+`"`) || strings.Contains(expr, `'`+name+`'`) {
+		return true
+	}
+	for rest := expr; ; {
+		i := strings.Index(rest, "metrics."+name)
+		if i < 0 {
+			return false
+		}
+		rest = rest[i+len("metrics."+name):]
+		if rest == "" || !isIdentChar(rest[0]) {
+			return true
+		}
+	}
+}
+
+// isIdentChar reports whether c can continue a CEL identifier.
+func isIdentChar(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // buildUpstreamContext reads per-environment soak minutes from bundle status.
@@ -755,10 +842,13 @@ func (r *Reconciler) metricCheckRequests(ctx context.Context, obj client.Object)
 }
 
 // metricCheckResultChanged passes MetricCheck updates that change what a gate
-// can read (metrics.<name>.value and metrics.<name>.result) or the spec. The
+// can read (metrics.<name>.value, .result and .stale) or the spec. The
 // MetricCheck reconciler writes lastEvaluatedAt on every query; re-evaluating
 // every gate in the namespace on each of those writes was wasted work
-// (C04-gates-36). Create and delete events pass.
+// (C04-gates-36). An evaluation that makes a stale result fresh again passes
+// too (#1302): the old validUntil is unset or before the new lastEvaluatedAt,
+// so a gate held on the stale result re-evaluates at once even when the
+// result and value did not change. Create and delete events pass.
 var metricCheckResultChanged = predicate.Funcs{
 	UpdateFunc: func(e event.UpdateEvent) bool {
 		oldMC, okOld := e.ObjectOld.(*kardinalv1alpha1.MetricCheck)
@@ -768,8 +858,18 @@ var metricCheckResultChanged = predicate.Funcs{
 		}
 		return oldMC.Generation != newMC.Generation ||
 			oldMC.Status.Result != newMC.Status.Result ||
-			oldMC.Status.LastValue != newMC.Status.LastValue
+			oldMC.Status.LastValue != newMC.Status.LastValue ||
+			staleToFresh(oldMC.Status, newMC.Status)
 	},
+}
+
+// staleToFresh reports whether the update is an evaluation of a MetricCheck
+// whose previous result had gone stale, or had no validUntil.
+func staleToFresh(oldStatus, newStatus kardinalv1alpha1.MetricCheckStatus) bool {
+	if newStatus.LastEvaluatedAt == nil {
+		return false
+	}
+	return oldStatus.ValidUntil == nil || oldStatus.ValidUntil.Before(newStatus.LastEvaluatedAt)
 }
 
 // stepRequiredGateRequests enqueues the PolicyGates a PromotionStep requires

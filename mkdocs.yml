@@ -104,8 +104,6 @@ nav:
     - Rollback: rollback.md
     - CI Integration: ci-integration.md
     - PR Evidence: pr-evidence.md
-    - Custom Steps: custom-steps.md
-    - Image Signing: image-signing.md
     - Rendered Manifests: rendered-manifests.md
     - Argo CD Native Promotion: argocd-native-promotion.md
     - Subscriptions: subscription.md

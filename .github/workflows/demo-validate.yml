@@ -68,14 +68,25 @@ jobs:
           mkdir -p "$BIN"
           echo "$BIN" >> "$GITHUB_PATH"
 
+          # Versions and sha256 sums: hack/tool-versions.env.
+          source hack/tool-versions.env
+
           # kind
           curl -fsSLo "${BIN}/kind" \
-            https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
+            "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          echo "${KIND_SHA256}  ${BIN}/kind" | sha256sum -c -
           chmod +x "${BIN}/kind"
 
+          # kubectl, matching the kind node image (not the runner's copy)
+          curl -fsSLo "${BIN}/kubectl" \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  ${BIN}/kubectl" | sha256sum -c -
+          chmod +x "${BIN}/kubectl"
+
           # argocd CLI
-          curl -fsSL https://github.com/argoproj/argo-cd/releases/download/v2.10.3/argocd-linux-amd64 \
+          curl -fsSL "https://github.com/argoproj/argo-cd/releases/download/${ARGOCD_VERSION}/argocd-linux-amd64" \
             -o "${BIN}/argocd"
+          echo "${ARGOCD_SHA256}  ${BIN}/argocd" | sha256sum -c -
           chmod +x "${BIN}/argocd"
 
           # kardinal CLI — built from this checkout
