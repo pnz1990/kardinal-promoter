@@ -1,21 +1,9 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 // Package egress guards the HTTP requests the controller sends to URLs that
-// users write into custom resources (NotificationHook webhooks, MetricCheck
-// Prometheus URLs, custom step webhooks).
+// users write into custom resources (NotificationHook webhooks and MetricCheck
+// Prometheus URLs).
 //
 // The guard runs as a net.Dialer Control function, so it sees the address the
 // connection is about to use after DNS resolution, on every connection,
@@ -34,10 +22,16 @@
 // (networkPolicy.enabled, networkPolicy.extraEgress) to narrow egress further.
 //
 // When the transport uses a proxy, the connection goes to the proxy, so the
-// guard checks the proxy's address and the proxy must apply its own policy.
+// dial-time check sees only the proxy's address. The transport therefore also
+// checks the target before it hands a request to a proxy: an IP address with
+// CheckAddr, a host name by resolving it and checking every address. A name
+// that does not resolve is refused. The proxy resolves the name again, so a
+// name whose answers change between the two lookups can still get through;
+// the proxy must apply its own policy too.
 package egress
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -111,8 +105,13 @@ func Control(_, address string, _ syscall.RawConn) error {
 // NewTransport returns an http.Transport with the settings of
 // http.DefaultTransport whose dialer applies Control to every connection.
 // proxy is the Transport.Proxy function: http.ProxyFromEnvironment to honour
-// HTTP(S)_PROXY and NO_PROXY, or nil to always connect directly.
+// HTTP(S)_PROXY and NO_PROXY, or nil to always connect directly. When proxy
+// picks a proxy for a request, the request's target is checked first (see
+// the package comment), on every request including redirects.
 func NewTransport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
+	if proxy != nil {
+		proxy = checkTargetBeforeProxy(proxy)
+	}
 	return &http.Transport{
 		Proxy: proxy,
 		DialContext: (&net.Dialer{
@@ -126,4 +125,41 @@ func NewTransport(proxy func(*http.Request) (*url.URL, error)) *http.Transport {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+}
+
+// checkTargetBeforeProxy wraps a Transport.Proxy function. When it returns a
+// proxy, the request's target host must pass CheckAddr: an IP literal
+// directly, a host name through every address it resolves to.
+func checkTargetBeforeProxy(proxy func(*http.Request) (*url.URL, error)) func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		proxyURL, err := proxy(req)
+		if err != nil || proxyURL == nil {
+			return proxyURL, err
+		}
+		if err := checkHost(req.Context(), req.URL.Hostname()); err != nil {
+			return nil, err
+		}
+		return proxyURL, nil
+	}
+}
+
+// checkHost applies CheckAddr to host, an IP literal or a name to resolve.
+func checkHost(ctx context.Context, host string) error {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return CheckAddr(ip.WithZone(""))
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err == nil && len(ips) == 0 {
+		err = errors.New("no addresses")
+	}
+	if err != nil {
+		return fmt.Errorf("%w: cannot resolve %q to check it before sending the request to the proxy: %v",
+			ErrBlockedAddress, host, err)
+	}
+	for _, ip := range ips {
+		if err := CheckAddr(ip.WithZone("")); err != nil {
+			return fmt.Errorf("%w (%q resolves to it)", err, host)
+		}
+	}
+	return nil
 }

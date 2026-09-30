@@ -353,9 +353,9 @@ Disable with `--set networkPolicy.enabled=false` if your CNI does not support Ne
 
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
-and custom step webhooks send HTTP requests from the controller to a URL a user wrote into a
-resource. The controller refuses to connect when the address is one of these:
+NotificationHook webhooks (`spec.webhook.url`) and MetricCheck queries (`spec.prometheusURL`)
+send HTTP requests from the controller to a URL a user wrote into a resource. The controller
+refuses to connect when the address is one of these:
 
 - loopback (`127.0.0.0/8`, `::1`), which includes the controller's own UI API;
 - link-local (`169.254.0.0/16`, `fe80::/10`), which holds the cloud metadata and credential
@@ -368,7 +368,7 @@ The check runs when the connection is opened, on the resolved address, for every
 connection including redirects. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
-`status.failureMessage`, MetricCheck `status.reason`, or the step's failure message.
+`status.failureMessage` or MetricCheck `status.reason`.
 
 Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and public
 addresses are allowed, because in-cluster Services and Prometheus are the normal targets.
@@ -376,8 +376,13 @@ To narrow egress further, enable the NetworkPolicy and list the allowed destinat
 `networkPolicy.extraEgress`.
 
 NotificationHook and MetricCheck requests honour `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`.
-Through a proxy, the controller connects to the proxy, so the check applies to the proxy's
-address and the proxy must enforce its own policy. A proxy on a loopback address is refused.
+Through a proxy, the controller connects to the proxy, so before it sends a request there it
+checks the target itself: an IP address against the list above, and a host name by resolving
+it and checking every address it resolves to. This applies to every request, including
+redirects. A host name the controller cannot resolve is refused, because it cannot be checked.
+The proxy resolves the name again, and DNS can give it a different answer, so the proxy must
+also enforce its own egress policy. The proxy's own address is checked too: a proxy on a
+loopback address is refused.
 
 ---
 

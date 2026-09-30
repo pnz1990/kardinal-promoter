@@ -1,17 +1,5 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package egress_test
 
@@ -156,9 +144,9 @@ func TestNewTransport_RefusesLoopbackServer(t *testing.T) {
 	assert.Equal(t, int32(1), hits.Load())
 }
 
-// TestNewTransport_ProxyAddressIsChecked documents the proxy caveat: with a
-// proxy, the connection goes to the proxy, so the guard checks the proxy's
-// address. A loopback proxy is refused.
+// TestNewTransport_ProxyAddressIsChecked: with a proxy, the connection goes
+// to the proxy, so the dial-time check applies to the proxy's address. A
+// loopback proxy is refused.
 func TestNewTransport_ProxyAddressIsChecked(t *testing.T) {
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -173,4 +161,164 @@ func TestNewTransport_ProxyAddressIsChecked(t *testing.T) {
 		_ = resp.Body.Close()
 	}
 	assert.ErrorIs(t, err, egress.ErrBlockedAddress)
+}
+
+// TestNewTransport_ProxyChecksTarget calls the transport's Proxy function
+// directly: when a proxy is chosen, a denied target is refused before the
+// request is handed to the proxy, whether it is an IP literal or a name.
+func TestNewTransport_ProxyChecksTarget(t *testing.T) {
+	proxyURL := &url.URL{Scheme: "http", Host: "10.0.0.2:3128"}
+	tr := egress.NewTransport(http.ProxyURL(proxyURL))
+
+	tests := []struct {
+		target  string
+		blocked bool
+	}{
+		{"http://169.254.169.254/latest/meta-data/", true},
+		{"http://[fd00:ec2::254]/latest/meta-data/", true},
+		{"http://100.100.100.200/latest/meta-data/", true},
+		{"https://168.63.129.16/", true},
+		{"http://[fe80::1%25eth0]/", true},
+		{"http://[::ffff:127.0.0.1]:8082/api/v1/ui/pipelines", true},
+		// A name is resolved and every address is checked.
+		{"http://localhost:8082/api/v1/ui/pipelines", true},
+		// A name that does not resolve cannot be checked (RFC 6761 .invalid).
+		{"http://kardinal-egress-test.invalid/", true},
+		{"http://10.0.0.5:9090/api/v1/query", false},
+		{"https://8.8.8.8/", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.target, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, tt.target, nil)
+			require.NoError(t, err)
+			got, err := tr.Proxy(req)
+			if tt.blocked {
+				assert.ErrorIs(t, err, egress.ErrBlockedAddress)
+				assert.Nil(t, got)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, proxyURL, got)
+			}
+		})
+	}
+
+	// When the Proxy function picks no proxy (NO_PROXY), the request goes
+	// direct and the dial-time check applies instead.
+	direct := egress.NewTransport(func(*http.Request) (*url.URL, error) { return nil, nil })
+	req := httptest.NewRequest(http.MethodGet, "http://169.254.169.254/", nil)
+	got, err := direct.Proxy(req)
+	assert.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// TestNewTransport_ProxyRefusesDeniedTargets runs a real forward proxy on a
+// non-loopback address, so the dial-time check lets the connection to it
+// through. Requests for metadata addresses never reach it, an allowed
+// target does, and a redirect from the proxy to loopback is refused.
+func TestNewTransport_ProxyRefusesDeniedTargets(t *testing.T) {
+	var hits atomic.Int32
+	proxy := newServerOnHostIP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "http://127.0.0.1:8082/api/v1/ui/pipelines", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	proxyURL, err := url.Parse(proxy.URL)
+	require.NoError(t, err)
+	client := &http.Client{Transport: egress.NewTransport(http.ProxyURL(proxyURL)), Timeout: 10 * time.Second}
+
+	for _, target := range []string{
+		"http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+		"http://[fd00:ec2::254]/latest/meta-data/",
+		"http://100.100.100.200/latest/meta-data/",
+		"http://localhost:8082/api/v1/ui/pipelines",
+	} {
+		resp, err := client.Get(target)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		assert.ErrorIs(t, err, egress.ErrBlockedAddress, target)
+	}
+	assert.Zero(t, hits.Load(), "a denied target must not reach the proxy")
+
+	resp, err := client.Get("http://10.0.0.5:9090/ok")
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int32(1), hits.Load(), "an allowed target goes through the proxy")
+
+	resp, err = client.Get("http://10.0.0.5:9090/redirect")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	assert.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Equal(t, int32(2), hits.Load(), "the redirect to loopback must not be sent to the proxy")
+}
+
+// TestNewTransport_RedirectToLoopbackRefused: without a proxy, a server on
+// an allowed address that redirects to loopback does not get the request
+// through; the redirect's connection is checked like the first one.
+func TestNewTransport_RedirectToLoopbackRefused(t *testing.T) {
+	var loopbackHits atomic.Int32
+	loopback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		loopbackHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer loopback.Close()
+
+	var hits atomic.Int32
+	redirector := newServerOnHostIP(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Redirect(w, r, loopback.URL+"/", http.StatusFound)
+	}))
+
+	client := &http.Client{Transport: egress.NewTransport(nil), Timeout: 10 * time.Second}
+	resp, err := client.Get(redirector.URL + "/hook")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	assert.ErrorIs(t, err, egress.ErrBlockedAddress)
+	assert.Equal(t, int32(1), hits.Load(), "the first server is allowed")
+	assert.Zero(t, loopbackHits.Load(), "the redirect to loopback must be refused")
+}
+
+// newServerOnHostIP starts h on a non-loopback IPv4 address of this host,
+// which the guard allows, and skips the test if the host has none.
+func newServerOnHostIP(t *testing.T, h http.Handler) *httptest.Server {
+	t.Helper()
+	ip, ok := hostIPv4()
+	if !ok {
+		t.Skip("no non-loopback IPv4 address on this host")
+	}
+	ln, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+	require.NoError(t, err)
+	srv := httptest.NewUnstartedServer(h)
+	require.NoError(t, srv.Listener.Close())
+	srv.Listener = ln
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// hostIPv4 returns a non-loopback, non-link-local IPv4 address of this host.
+func hostIPv4() (netip.Addr, bool) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip, ok := netip.AddrFromSlice(ipnet.IP)
+		if ip = ip.Unmap(); ok && ip.Is4() && egress.CheckAddr(ip) == nil {
+			return ip, true
+		}
+	}
+	return netip.Addr{}, false
 }
