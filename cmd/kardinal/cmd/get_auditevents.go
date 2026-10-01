@@ -35,9 +35,10 @@ func newGetAuditEventsCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:     "auditevents",
-		Aliases: []string{"auditevent", "ae", "audit"},
-		Short:   "List AuditEvent records — immutable promotion event log",
+		Use:         "auditevents",
+		Aliases:     []string{"auditevent", "ae", "audit"},
+		Short:       "List AuditEvent records — immutable promotion event log",
+		Annotations: map[string]string{outputAnnotation: "true"},
 		Long: `List AuditEvents recording promotion lifecycle transitions.
 AuditEvents are written by the controller at key points:
   PromotionStarted     — Bundle starts promoting through an environment
@@ -45,7 +46,11 @@ AuditEvents are written by the controller at key points:
   PromotionFailed      — Step reached Failed state
   PromotionSuperseded  — Newer Bundle superseded an in-flight promotion
   GateEvaluated        — PolicyGate changed readiness state
-  RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle`,
+  RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
+
+Events are listed most recent first, at most --limit of them. -o json and
+-o yaml print the same events as a list of AuditEvent objects ([] when there
+are none).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGetAuditEvents(cmd, pipeline, bundle, env, limit)
 		},
@@ -92,9 +97,8 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 	}
 
 	events := aeList.Items
-	if len(events) == 0 {
-		_, _ = fmt.Fprintln(out, "No audit events found.")
-		return nil
+	if events == nil {
+		events = []v1alpha1.AuditEvent{} // -o json prints [], not null
 	}
 
 	// Sort by timestamp descending (most recent first).
@@ -105,6 +109,17 @@ func getAuditEventsFn(out io.Writer, client sigs_client.Client, ns, pipeline, bu
 	// Apply limit.
 	if limit > 0 && len(events) > limit {
 		events = events[:limit]
+	}
+
+	switch OutputFormat() {
+	case "json":
+		return WriteJSON(out, events)
+	case "yaml":
+		return WriteYAML(out, events)
+	}
+	if len(events) == 0 {
+		_, _ = fmt.Fprintln(out, "No audit events found.")
+		return nil
 	}
 
 	// Print table.

@@ -102,6 +102,7 @@ func TestOutputFlag_StructuredCommands(t *testing.T) {
 	root := NewRootCmd()
 	for _, path := range [][]string{
 		{"get", "bundles"}, {"get", "pipelines"}, {"get", "steps"}, {"get", "subscriptions"},
+		{"get", "auditevents"},
 	} {
 		c, _, err := root.Find(path)
 		require.NoError(t, err)

@@ -13,6 +13,10 @@ AuditEvents are written by the controller at key points:
   GateEvaluated        — PolicyGate changed readiness state
   RollbackStarted      — onHealthFailure=rollback triggered a rollback Bundle
 
+Events are listed most recent first, at most --limit of them. -o json and
+-o yaml print the same events as a list of AuditEvent objects ([] when there
+are none).
+
 ```
 kardinal get auditevents [flags]
 ```
