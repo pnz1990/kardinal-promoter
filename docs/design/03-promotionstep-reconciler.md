@@ -93,15 +93,15 @@ Transition to Failed: when the PR is closed without merge (`status.prClosed = tr
 > readyWhen kept the Graph from being Ready when the step opened no PR, and the
 > PromotionStep node is Verified only after the merge anyway. Using `propagateWhen`
 > would create a circular dependency: the PromotionStep node includes
-> `${prstatus.metadata.name}` in its template, creating
-> a data-flow edge from PRStatus to PromotionStep. If PRStatus had `propagateWhen: false`,
-> the PromotionStep could never start (it depends on PRStatus propagating).
+> `${prstatus.metadata.name}` in its template, creating a data-flow edge from
+> PRStatus to PromotionStep. If PRStatus had `propagateWhen: false`, the
+> PromotionStep could never start (it depends on PRStatus propagating).
 >
 > The `WaitingForMerge → HealthChecking` transition is enforced by the PromotionStep
 > reconciler state machine, not by Graph `propagateWhen`. The PRStatus node drives the
 > `prStatusRef` field in the PromotionStep template so the reconciler can find the
-> PRStatus CRD by name without polling GitHub. This is not a design flaw — it is an intentional consequence
-> of the flat DAG topology (see docs/design/11-graph-purity-tech-debt.md §Flat DAG
+> PRStatus CRD by name without polling GitHub. This is not a design flaw — it is an
+> intentional consequence of the flat DAG topology (see docs/design/11-graph-purity-tech-debt.md §Flat DAG
 > Compilation — Why It Does Not Work).
 >
 > A future architecture change that splits HealthChecking into a separate CRD/reconciler

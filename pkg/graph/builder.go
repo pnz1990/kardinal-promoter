@@ -840,8 +840,8 @@ func buildSkipPermissionNode(nodeID, k8sName string, sg skipPermissionGate,
 // runs the step list recorded when it started, so an edit to pr-review does
 // not add a PR to it, and a pr-review step with nothing to commit opens none.
 //
-// Graph-purity: this node provides observable PR merge state for the UI and
-// for the PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
+// Graph-purity: this node provides observable PR merge state for the
+// PromotionStep reconciler (eliminates direct GitHub API polling PS-4, SCM-2).
 func buildPRStatusNode(nodeID, k8sName, pipelineName, bundleName, envName string) GraphNode {
 	templateMeta := map[string]interface{}{
 		"name": k8sName,

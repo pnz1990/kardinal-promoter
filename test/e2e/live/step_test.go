@@ -22,7 +22,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -357,7 +356,9 @@ func TestStep_RetriesTransientGitErrors(t *testing.T) {
 // Either way the Bundle in flight finishes: its Graph, rebuilt in place by the
 // edit, turns Ready, and the environment's gate is not evaluated after that
 // (B69: the auto step's PRStatus node waited for a merge, so GraphReady stayed
-// False and the gate was evaluated at every recheckInterval for good).
+// False and the gate was evaluated at every recheckInterval for good). Only
+// auto-to-pr-review catches B69: after pr-review-to-auto the environment is
+// auto, whose PRStatus node had no readyWhen before the fix either.
 //
 // The edit lands while git-clone retries, not open-pr: an SCM API fault would
 // need the controller's SCM endpoint, which every test of the suite shares.
@@ -444,18 +445,21 @@ func TestStep_NoChangesPRReview(t *testing.T) {
 }
 
 // settled checks that bundle finishes: it is Verified with GraphReady True,
-// and for 30 seconds the instance of gate for env is not evaluated after
-// GraphReady turned True (docs/policy-gates.md, gates of finished Bundles).
-// The gate's recheckInterval is shorter than that. An evaluation that started
-// before the Bundle settled may still land, so 2 seconds of slack are allowed.
+// and for 30 seconds the instance of gate for env is not evaluated after the
+// test saw both (docs/policy-gates.md, gates of finished Bundles). The gate's
+// recheckInterval is shorter than that. The reference is the time the test saw
+// both, not GraphReady's lastTransitionTime: GraphReady can turn True before
+// the phase is Verified, and the gate is still evaluated in between. An
+// evaluation that started before the Bundle settled may still land, and
+// lastEvaluatedAt has second precision, so 2 seconds of slack are allowed.
 func (a *app) settled(t *testing.T, bundle, env, gate string) {
 	t.Helper()
-	b := a.e.WaitBundle(t, a.ns, bundle, 2*time.Minute, "Verified with GraphReady True", func(b *v1alpha1.Bundle) (bool, string) {
+	a.e.WaitBundle(t, a.ns, bundle, 2*time.Minute, "Verified with GraphReady True", func(b *v1alpha1.Bundle) (bool, string) {
 		ok, seen := framework.CondIs(b.Status.Conditions, "GraphReady", metav1.ConditionTrue, "")
 		return ok && b.Status.Phase == "Verified", fmt.Sprintf("phase=%s %s", b.Status.Phase, seen)
 	})
-	ready := meta.FindStatusCondition(b.Status.Conditions, "GraphReady").LastTransitionTime.Time
-	framework.Consistently(t, 30*time.Second, "gate "+gate+" of "+bundle+" not evaluated after GraphReady", func(ctx context.Context) (bool, string) {
+	ready := time.Now()
+	framework.Consistently(t, 30*time.Second, "gate "+gate+" of "+bundle+" not evaluated after it settled", func(ctx context.Context) (bool, string) {
 		g, ok, err := a.e.GateInstance(ctx, a.ns, bundle, env, gate)
 		switch {
 		case err != nil:
@@ -465,7 +469,7 @@ func (a *app) settled(t *testing.T, bundle, env, gate string) {
 		}
 		at := g.Status.LastEvaluatedAt.Time
 		return !at.After(ready.Add(2 * time.Second)),
-			fmt.Sprintf("gate %s evaluated at %s, GraphReady since %s", g.Name, at.Format(time.RFC3339), ready.Format(time.RFC3339))
+			fmt.Sprintf("gate %s evaluated at %s, settled since %s", g.Name, at.Format(time.RFC3339), ready.Format(time.RFC3339))
 	})
 }
 

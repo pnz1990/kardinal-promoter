@@ -20,7 +20,7 @@ feature or by contributing it ourselves.
 | Gates block an environment | Each PolicyGate is a node. The environment's step is created only after every gate node for it is ready. |
 | PR review tracking | Each environment gets a PRStatus node, which the step fills in when it opens a PR. The node has no `readyWhen`: the step node is ready only once the step is Verified, which for a step that opened a PR is after the merge. |
 | Watching application health | Read-only ref nodes watch the Deployment, Argo CD Application, Flux Kustomization, Rollout or Canary. |
-| Pipeline changes mid-flight | The Graph is updated in place. Environments that are already Verified are not re-run, and a step that has started runs the step list it recorded, so an `approval` edit changes its steps from the next Bundle. The Bundle in flight still reaches `GraphReady` True. Before B69 was fixed, the PRStatus node's readiness followed the live `approval`: an `auto` step edited to `pr-review` after it started opened no PR, its PRStatus node waited for a merge that never came, and the Bundle ended Verified with `GraphReady` False. |
+| Pipeline changes mid-flight | The Graph is updated in place. Environments that are already Verified are not re-run, and a step that has started runs the step list it recorded, so an `approval` edit changes its steps from the next Bundle. The Bundle in flight still reaches `GraphReady` True, whether or not its step opened a PR. |
 | Cleanup | Deleting a Bundle deletes its Graph, and kro deletes everything the Graph created. A step's open PR is closed first. In a namespace being deleted, the controller removes kro's finalizer once kro can no longer delete as the Graph ServiceAccount. |
 
 ## On the Graph, with a workaround
