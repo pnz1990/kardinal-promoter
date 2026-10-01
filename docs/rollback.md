@@ -199,7 +199,7 @@ my-app-v1-29-0          promote    prod   #144   15m        2026-04-09 10:20
 my-app-v1-28-0          promote    prod   #138   12m        2026-04-07 14:00
 ```
 
-There is one row per PromotionStep, newest first. ACTION is `rollback` for a rollback Bundle. PR is `--` in an environment that opened no PR (`approval: auto`), and DURATION is `...` while the step is in flight. The history ends at the Bundles `historyLimit` keeps (see below): a deleted Bundle's rows are gone too.
+There is one row per PromotionStep, newest first; steps created in the same second are in name order. `--limit` sets how many rows it prints (default 20), and `--env` keeps the rows of one environment. ACTION is `rollback` for a rollback Bundle. PR is `--` in an environment that opened no PR (`approval: auto`). DURATION is the time from the step's creation to Verified, or for a step that stopped (Failed, AbortedByAlarm, RollingBack) to its last completed step, rounded down to whole seconds, minutes, hours or days (`45s`, `5m`, `2h`, `3d`). It is `...` while the step is in flight and `--` when no end time is recorded. TIMESTAMP is when the step was created, in UTC. The history ends at the Bundles `historyLimit` keeps (see below): a deleted Bundle's rows are gone too.
 
 ## How Far Back Can You Roll Back
 
