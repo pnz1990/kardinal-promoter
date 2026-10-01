@@ -372,7 +372,7 @@ func TestStep_Timeout(t *testing.T) {
 			t.Fatalf("apply %s %s: %v", obj.GetKind(), obj.GetName(), err)
 		}
 	}
-	e.RunningPod(t, a.ns, "app.kubernetes.io/name=slow-git")
+	e.WaitDeploymentImage(t, a.ns, "slow-git", fixtures.Image+":"+fixtures.V1, 2*time.Minute)
 
 	p := a.pipeline(nil)
 	p.Spec.Git.URL = fmt.Sprintf("http://slow-git.%s.svc.cluster.local:9898%s%s/%s.git",
