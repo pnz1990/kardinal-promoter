@@ -16,6 +16,7 @@
 package scheduleclock_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/scheduleclock"
 )
 
@@ -191,4 +193,17 @@ func TestReconcile_Idempotent(t *testing.T) {
 	var second kardinalv1alpha1.ScheduleClock
 	require.NoError(t, fakeClient.Get(context.Background(), req.NamespacedName, &second))
 	assert.Equal(t, "2026-04-14T12:01:00Z", second.Status.Tick)
+}
+
+// TestReconcile_DeletedBeforeTick: a ScheduleClock deleted between its read
+// and its tick write ends the reconcile with no error, requeue or warn or
+// error log.
+func TestReconcile_DeletedBeforeTick(t *testing.T) {
+	c := newFakeClient(makeScheduleClock("1m")).WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	r := &scheduleclock.Reconciler{Client: c}
+	var logs bytes.Buffer
+	res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "kardinal-clock", Namespace: "kardinal-system"},
+	})
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

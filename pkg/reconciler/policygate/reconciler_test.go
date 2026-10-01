@@ -4,8 +4,10 @@
 package policygate_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/policygate"
 )
 
@@ -1607,4 +1610,38 @@ func TestPolicyGateReconciler_NoRecorderNoPanic(t *testing.T) {
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: gate.Name, Namespace: gate.Namespace}}
 	_, reconcileErr := r.Reconcile(context.Background(), req)
 	require.NoError(t, reconcileErr)
+}
+
+// TestPolicyGateReconciler_DeletedBeforeWrite: a PolicyGate deleted between
+// its read and the reconciler's write (its status after an evaluation, the
+// status of a template, or spec.generated on a long-named instance) ends the
+// reconcile with no error, requeue or warn or error log.
+func TestPolicyGateReconciler_DeletedBeforeWrite(t *testing.T) {
+	long := makeGateInstance("app-v1-prod-"+strings.Repeat("p", 60), "default", "app-v1", "true", "5m")
+	long.Labels["kardinal.io/gate-template"] = "t"
+	template := makeGateInstance("no-weekend", "default", "", "!schedule.isWeekend", "")
+	delete(template.Labels, "kardinal.io/bundle")
+	tests := []struct {
+		name string
+		gate *kardinalv1alpha1.PolicyGate
+	}{
+		{name: "instance status", gate: makeGateInstance("app-v1-prod-ok", "default", "app-v1", "true", "5m")},
+		{name: "template status", gate: template},
+		{name: "spec.generated", gate: long},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isGate := func(obj client.Object) bool { _, ok := obj.(*kardinalv1alpha1.PolicyGate); return ok }
+			c := fake.NewClientBuilder().WithScheme(newScheme()).
+				WithObjects(tt.gate, makeBundle("app-v1", "default")).WithStatusSubresource(tt.gate).
+				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, isGate)).Build()
+			r, err := policygate.NewReconciler(c)
+			require.NoError(t, err)
+			var logs bytes.Buffer
+			res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: tt.gate.Name, Namespace: "default"},
+			})
+			objectgonetest.AssertQuiet(t, res, err, &logs)
+		})
+	}
 }

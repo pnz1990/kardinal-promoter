@@ -16,6 +16,7 @@
 package subscription_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -36,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/subscription"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
@@ -638,6 +640,37 @@ func TestSubscriptionReconciler_SpecNamespace(t *testing.T) {
 			}
 			require.Len(t, all.Items, 1)
 			assert.Equal(t, tt.wantNS, all.Items[0].Namespace)
+		})
+	}
+}
+
+// TestSubscriptionReconciler_DeletedBeforeStatusWrite: a Subscription deleted
+// between its read and its status write, after a poll or a failed poll, ends
+// the reconcile with no error, requeue or warn or error log.
+func TestSubscriptionReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		watcher source.Watcher
+	}{
+		{name: "no change", watcher: &unchangedWatcher{"sha256:existing"}},
+		{name: "watch error", watcher: &errWatcher{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := makeImageSub("sub-deleted", "default", "my-pipeline", "ghcr.io/test/app")
+			sub.Status.LastSeenDigest = "sha256:existing"
+			c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).
+				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+			r := &subscription.Reconciler{
+				Client:    c,
+				WatcherFn: func(*kardinalv1alpha1.Subscription) (source.Watcher, error) { return tt.watcher, nil },
+				NowFn:     func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) },
+			}
+			var logs bytes.Buffer
+			res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace},
+			})
+			objectgonetest.AssertQuiet(t, res, err, &logs)
 		})
 	}
 }

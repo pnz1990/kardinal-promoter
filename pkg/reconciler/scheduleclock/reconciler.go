@@ -45,6 +45,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
 const (
@@ -71,7 +72,16 @@ type Reconciler struct {
 //
 // The tick write generates a Kubernetes watch event that flows to any
 // controller Watching this ScheduleClock (e.g. the PolicyGate reconciler).
+//
+// A ScheduleClock deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, scheduleClocksResource, r.reconcile)
+}
+
+// scheduleClocksResource is the resource objectgone matches a NotFound against.
+var scheduleClocksResource = kardinalv1alpha1.GroupVersion.WithResource("scheduleclocks").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("scheduleclock", req.Name).
 		Str("namespace", req.Namespace).

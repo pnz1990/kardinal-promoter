@@ -42,6 +42,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -164,7 +165,16 @@ func (r *Reconciler) now() time.Time {
 
 // Reconcile processes one PromotionStep event.
 // It is idempotent: safe to re-run after a crash at any point.
+//
+// A PromotionStep deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
+}
+
+// promotionStepsResource is the resource objectgone matches a NotFound against.
+var promotionStepsResource = v1alpha1.GroupVersion.WithResource("promotionsteps").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("promotionstep", req.Name).
 		Str("namespace", req.Namespace).
@@ -304,7 +314,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			ps.Status.RetryCount++
 			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying (%d/%d): %v",
 				ps.Spec.BundleName, ps.Status.RetryCount, maxStepRetries, closeErr)
-			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
 			}
 			return ctrl.Result{RequeueAfter: retryDelay(ps.Status.RetryCount)}, nil
@@ -439,7 +449,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 			// Update message for visibility but do NOT change state.
 			if ps.Status.Message != msg {
 				ps.Status.Message = msg
-				if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base))
+				if apierrors.IsNotFound(patchErr) {
+					log.Debug().Msg("step deleted before the gate wait message patch — ignoring")
+					return ctrl.Result{}, nil
+				}
+				if patchErr != nil {
 					log.Warn().Err(patchErr).Msg("failed to patch gate wait message (non-fatal)")
 				}
 			}

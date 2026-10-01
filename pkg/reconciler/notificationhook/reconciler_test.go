@@ -16,6 +16,7 @@
 package notificationhook_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -35,6 +36,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 )
 
 func nhScheme() *runtime.Scheme {
@@ -276,4 +278,24 @@ func TestReconcile_NoMatchingEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, callCount, "no webhook must fire when no qualifying event exists")
+}
+
+// TestReconcile_DeletedBeforeStatusWrite: a NotificationHook deleted between
+// its read and its status write ends the reconcile with no error, requeue or
+// warn or error log.
+func TestReconcile_DeletedBeforeStatusWrite(t *testing.T) {
+	hook := &v1alpha1.NotificationHook{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-hook", Namespace: "default", Generation: 1},
+		Spec: v1alpha1.NotificationHookSpec{
+			Webhook: v1alpha1.NotificationWebhookConfig{URL: "https://hooks.example.com/kardinal"},
+			Events:  []v1alpha1.NotificationHookEventType{v1alpha1.NotificationEventBundleVerified},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(nhScheme()).WithObjects(hook).
+		WithStatusSubresource(&v1alpha1.NotificationHook{}).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	r := &notificationhook.Reconciler{Client: c, HTTPClient: loopbackClient}
+	var logs bytes.Buffer
+	res, err := r.Reconcile(objectgonetest.Context(&logs), reqFor("default", "test-hook"))
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

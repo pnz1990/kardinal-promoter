@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -552,4 +553,31 @@ func TestWebhook_EventTypeFromHeader(t *testing.T) {
 			assert.Equal(t, wantMerges, health["mergedPREvents"], "only a merge counts as a merge: %s", hw.Body.String())
 		})
 	}
+}
+
+// TestWebhook_PRStatusDeletedBeforePatch: a PRStatus deleted between the list
+// and the merged patch is skipped. The event is still accepted (204), with no
+// error log: a deleted PRStatus has no step left to advance.
+func TestWebhook_PRStatusDeletedBeforePatch(t *testing.T) {
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "prstatus-bundle-1-prod", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"},
+		Status:     v1alpha1.PRStatusStatus{Open: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(webhookScheme()).WithObjects(prs).WithStatusSubresource(prs).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	mockSCM := &mockSCMProvider{event: scm.WebhookEvent{
+		EventType: "pull_request", Action: "closed", Merged: true, PRNumber: 42, RepoFullName: "owner/repo",
+	}}
+	var logs bytes.Buffer
+	handler := newWebhookServerWithConfig(mockSCM, c, zerolog.New(&logs), true).Handler()
+
+	body := []byte(`{"action":"closed","pull_request":{"number":42,"merged":true},"repository":{"full_name":"owner/repo"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/webhook/scm", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.NotContains(t, logs.String(), `"level":"error"`)
 }

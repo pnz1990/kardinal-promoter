@@ -35,6 +35,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -114,7 +115,16 @@ func NewReconciler(c client.Client) (*Reconciler, error) {
 //   - Bundle settled (Superseded, or Verified with GraphReady True) → status
 //     kept as it was, skip (no requeue)
 //   - Otherwise → build context, evaluate CEL, patch status, requeue
+//
+// A PolicyGate deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, policyGatesResource, r.reconcile)
+}
+
+// policyGatesResource is the resource objectgone matches a NotFound against.
+var policyGatesResource = kardinalv1alpha1.GroupVersion.WithResource("policygates").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("gate", req.Name).
 		Str("namespace", req.Namespace).

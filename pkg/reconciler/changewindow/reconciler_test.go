@@ -4,6 +4,7 @@
 package changewindow_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 )
 
 // TestReconciler_WritesStatusAndRequeuesAtBoundary verifies that the reconciler
@@ -159,4 +161,22 @@ func TestReconciler_NotFound(t *testing.T) {
 	r := &changewindow.Reconciler{Client: fake.NewClientBuilder().WithScheme(s).Build()}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "gone"}})
 	require.NoError(t, err)
+}
+
+// TestReconciler_DeletedBeforeStatusWrite: a ChangeWindow deleted between its
+// read and its status write ends the reconcile with no error, requeue or warn
+// or error log.
+func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	s := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(s))
+	cw := &kardinalv1alpha1.ChangeWindow{
+		ObjectMeta: metav1.ObjectMeta{Name: "business-hours"},
+		Spec:       recurring("", []string{"Mon", "Tue", "Wed", "Thu", "Fri"}, "09:00-17:00"),
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(cw).WithStatusSubresource(cw).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	r := &changewindow.Reconciler{Client: c, NowFn: func() time.Time { return at("2026-10-02T16:30:00Z") }}
+	var logs bytes.Buffer
+	res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{NamespacedName: types.NamespacedName{Name: "business-hours"}})
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

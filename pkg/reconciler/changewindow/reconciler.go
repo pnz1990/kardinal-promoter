@@ -31,6 +31,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
 // maxRequeue bounds the wait between evaluations, as a safety net for clock
@@ -49,7 +50,16 @@ type Reconciler struct {
 }
 
 // Reconcile evaluates one ChangeWindow and writes its status when it changed.
+//
+// A ChangeWindow deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, changeWindowsResource, r.reconcile)
+}
+
+// changeWindowsResource is the resource objectgone matches a NotFound against.
+var changeWindowsResource = kardinalv1alpha1.GroupVersion.WithResource("changewindows").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().Str("changewindow", req.Name).Logger()
 
 	var cw kardinalv1alpha1.ChangeWindow

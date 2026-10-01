@@ -53,6 +53,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 )
 
@@ -160,7 +161,16 @@ type Reconciler struct {
 //     retried step, an accepted Graph), or back to Available when a Pipeline
 //     that failed validation is changed. A newer sibling supersedes it instead.
 //   - Verified, Superseded: settled; only the evidence is synced.
+//
+// A Bundle deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, bundlesResource, r.reconcile)
+}
+
+// bundlesResource is the resource objectgone matches a NotFound against.
+var bundlesResource = kardinalv1alpha1.GroupVersion.WithResource("bundles").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("bundle", req.Name).
 		Str("namespace", req.Namespace).
@@ -685,7 +695,12 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 			patch := client.MergeFrom(b.DeepCopy())
 			if setBundleCondition(b, condReady, metav1.ConditionFalse, "WaitingForSlot",
 				fmt.Sprintf("maxConcurrentPromotions (%d) reached; waiting for a promoting bundle to finish", limit)) {
-				if pErr := r.Status().Patch(ctx, b, patch); pErr != nil && !apierrors.IsNotFound(pErr) {
+				pErr := r.Status().Patch(ctx, b, patch)
+				if apierrors.IsNotFound(pErr) {
+					log.Debug().Msg("bundle deleted before WaitingForSlot patch — ignoring")
+					return ctrl.Result{}, nil
+				}
+				if pErr != nil {
 					log.Warn().Err(pErr).Msg("failed to record WaitingForSlot (non-fatal)")
 				}
 			}
@@ -708,17 +723,23 @@ func (r *Reconciler) handleAvailable(ctx context.Context, log zerolog.Logger,
 	}
 	if err != nil {
 		// An API or RBAC error (timeout, conflict, missing permission). Stay
-		// Available and retry with backoff; the condition shows the error.
-		log.Error().Err(err).Msg("failed to translate bundle to graph")
+		// Available and retry with backoff; the condition shows the error. A
+		// Bundle deleted meanwhile needs no retry.
 		patch := client.MergeFrom(b.DeepCopy())
 		if setBundleCondition(b, condReady, metav1.ConditionFalse, "TranslationError",
 			fmt.Sprintf("graph creation failed, retrying: %v", err)) {
-			if pErr := r.Status().Patch(ctx, b, patch); pErr != nil && !apierrors.IsNotFound(pErr) {
+			pErr := r.Status().Patch(ctx, b, patch)
+			if apierrors.IsNotFound(pErr) {
+				log.Debug().Err(err).Msg("bundle deleted while its graph was created — ignoring")
+				return ctrl.Result{}, nil
+			}
+			if pErr != nil {
 				log.Warn().Err(pErr).Msg("failed to record TranslationError (non-fatal)")
 			}
 			r.event(b, corev1.EventTypeWarning, "TranslationError",
 				fmt.Sprintf("graph creation failed for pipeline %s, retrying: %v", b.Spec.Pipeline, err))
 		}
+		log.Error().Err(err).Msg("failed to translate bundle to graph")
 		return ctrl.Result{}, fmt.Errorf("translate bundle %s: %w", b.Name, err)
 	}
 
