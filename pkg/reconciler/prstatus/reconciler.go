@@ -55,7 +55,9 @@
 //   - status.observedGeneration records the spec the status describes. A
 //     PromotionStep recreated after its PR was closed opens a new PR and
 //     points the spec at it; the reconciler then clears the old PR's status
-//     and polls the new PR (clearForNewPR, B72).
+//     and polls the new PR (clearForNewPR, B72). A status an older release
+//     wrote has no observedGeneration and is taken to describe the spec until
+//     the reconciler records the generation on it (adoptLegacyStatus).
 //   - Idempotent: a merged PR whose merge commit is known, or recorded
 //     unavailable, is a no-op, and so is a PR that is final-closed.
 //
@@ -127,8 +129,10 @@ func IsClosedFinal(s *v1alpha1.PRStatusStatus) bool {
 
 // DescribesSpec reports whether the status was written for the current spec:
 // status.observedGeneration is the PRStatus generation, or zero (written by an
-// older release). It is false after the PromotionStep pointed the spec at
-// another PR, until this reconciler has cleared the old PR's status (B72).
+// older release; the reconciler records the generation on such a status the
+// first time it sees it, adoptLegacyStatus). It is false after the
+// PromotionStep pointed the spec at another PR, until this reconciler has
+// cleared the old PR's status (B72).
 func DescribesSpec(prs *v1alpha1.PRStatus) bool {
 	g := prs.Status.ObservedGeneration
 	return g == 0 || g == prs.Generation
@@ -187,7 +191,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// (or an older release recorded it closed) — nothing to poll.
 	if IsClosedFinal(&prs.Status) {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR is closed without merge, no-op")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.adoptLegacyStatus(ctx, log, &prs)
 	}
 
 	// Placeholder guard: PRNumber=0 means the open-pr step has not yet run.
@@ -400,7 +404,7 @@ func (r *Reconciler) recordPollError(ctx context.Context, log zerolog.Logger, pr
 func (r *Reconciler) recordMergeCommit(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) (ctrl.Result, error) {
 	if prs.Status.MergeCommitSHA != "" || prs.Status.MergeCommitUnavailable {
 		log.Debug().Str("prURL", prs.Spec.PRURL).Msg("PR already merged, no-op")
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.adoptLegacyStatus(ctx, log, prs)
 	}
 	var sha string
 	if last := prs.Status.LastCheckedAt; last != nil && time.Since(last.Time) > mergeCommitWindow {
@@ -440,6 +444,28 @@ func (r *Reconciler) clearForNewPR(ctx context.Context, log zerolog.Logger, prs 
 		return ctrl.Result{}, fmt.Errorf("clear prstatus %s for a new PR: %w", prs.Name, err)
 	}
 	return ctrl.Result{Requeue: true}, nil
+}
+
+// adoptLegacyStatus records the generation on a status a release before
+// observedGeneration wrote (it is 0) and that this reconciler patches for no
+// other reason: a merged PR whose merge commit is known or recorded
+// unavailable, or a PR closed for good. Left at 0, DescribesSpec held for every later spec, so a
+// PromotionStep recreated after the upgrade that pointed the spec at its new PR
+// read the old PR's merged or closedFinal (B72). One patch, when the generation
+// is not yet recorded; the reconcile it triggers finds it recorded and patches
+// nothing. A status this release wrote has it already.
+func (r *Reconciler) adoptLegacyStatus(ctx context.Context, log zerolog.Logger, prs *v1alpha1.PRStatus) error {
+	if prs.Status.ObservedGeneration == prs.Generation {
+		return nil
+	}
+	patch := client.MergeFrom(prs.DeepCopy())
+	prs.Status.ObservedGeneration = prs.Generation
+	if err := r.Status().Patch(ctx, prs, patch); err != nil {
+		return fmt.Errorf("record generation on prstatus %s: %w", prs.Name, err)
+	}
+	log.Info().Str("prURL", prs.Spec.PRURL).Int64("generation", prs.Generation).
+		Msg("recorded the generation on a PRStatus status written by an earlier release")
+	return nil
 }
 
 // fetchMergeCommit asks the SCM provider for the merge commit of prs. retry
