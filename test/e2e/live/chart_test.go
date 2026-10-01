@@ -2062,11 +2062,11 @@ func logLine(logs *framework.LogStream, substrs ...string) (framework.LogLine, b
 // TestChart_RestartMidStep stops the controller with SIGTERM (a scale-down,
 // as in a rolling update or a node drain) while a pr-review step, its branch
 // already pushed, waits on the SCM API to open its PR, then starts it again.
-// The Pod keeps the chart's 60s grace period. The shutdown cancels the SCM
-// call in flight rather than waiting for it, the workers finish and the
-// controller exits well inside its 30s drain. After the restart the step
-// runs again and opens one PR with one commit; the base branch is untouched
-// until the merge, and the Bundle is Verified.
+// The Pod keeps the chart's 60s grace period. With no HTTP request in
+// flight, the shutdown cancels the SCM call rather than waiting for it, the
+// workers finish and the controller exits within seconds. After the restart
+// the step runs again and opens one PR with one commit; the base branch is
+// untouched until the merge, and the Bundle is Verified.
 //
 // Covers INST-SHUTDOWN-01, STEP-RESUME-01.
 func TestChart_RestartMidStep(t *testing.T) {
@@ -2145,7 +2145,7 @@ func TestChart_RestartMidStep(t *testing.T) {
 		assert.True(t, cancelled.At.After(sigterm), "the call ends after the SIGTERM")
 		assert.Less(t, cancelled.At.Sub(opening.At), 30*time.Second, "the call is cancelled, not timed out")
 	}
-	assert.Less(t, exited, 30*time.Second, "the controller exits inside its 30s drain, long before the 60s SIGKILL")
+	assert.Less(t, exited, 10*time.Second, "with no request in flight the controller exits within seconds, long before the 60s SIGKILL")
 
 	promotion := fmt.Sprintf("kardinal/%s/prod", bundle)
 	kustomization, err := e.Git.ReadFile(ctx, a.repo, promotion, fixtures.Path("prod")+"/kustomization.yaml")
@@ -2177,4 +2177,136 @@ func TestChart_RestartMidStep(t *testing.T) {
 	prs, err = e.Git.PullRequests(ctx, a.repo)
 	require.NoError(t, err)
 	assert.Len(t, prs, 1, "no other PR is opened")
+}
+
+// drainScript runs in a probe Pod. It opens three kinds of request to the
+// controller Pod at $5 in the background, and logs each connect (nc -v) to
+// /tmp/<a|b|c>.err:
+//   - a: a webhook event (head $1, body $2) whose body is sent once /tmp/go
+//     exists; its response goes to /tmp/a.out;
+//   - b: every 2s until /tmp/go exists, a webhook event (head $3) whose body
+//     never comes, held open until /tmp/end exists;
+//   - c: a metrics scrape (head $4) whose body never comes, held open until
+//     /tmp/end exists.
+const drainScript = `cd /tmp
+( { printf '%s' "$1"; until [ -e go ]; do sleep 1; done; printf '%s' "$2"; } | timeout 80 nc -v "$5" 8083 >a.out 2>a.err ) </dev/null >/dev/null 2>&1 &
+( while [ ! -e go ]; do { printf '%s' "$3"; until [ -e end ]; do sleep 1; done; } | timeout 80 nc -v "$5" 8083 >/dev/null 2>>b.err & sleep 2; done; wait ) </dev/null >/dev/null 2>&1 &
+( { printf '%s' "$4"; until [ -e end ]; do sleep 1; done; } | timeout 80 nc -v "$5" 8080 >/dev/null 2>c.err ) </dev/null >/dev/null 2>&1 &
+`
+
+// TestChart_ShutdownDrain stops the controller with SIGTERM while its git
+// push is in flight (the git server holds it in a pre-receive hook) and HTTP
+// requests are open: a webhook event whose body comes after the SIGTERM,
+// webhook events whose body never comes (a new one every 2s, so one is
+// younger than its 30s read timeout allows to end before the drain does),
+// and a metrics scrape whose body never comes. The webhook server stops
+// accepting connections, answers the event in flight and gives up on the
+// others after 20s. Reconciles run until then; then the push is cancelled
+// rather than waited for. The manager gives up 30s after the SIGTERM (the
+// metrics server would wait a minute for its scrape) and the controller
+// exits, before the chart's 60s SIGKILL. After the restart the step pushes
+// again and the Bundle is Verified.
+//
+// Covers INST-SHUTDOWN-02, INST-SHUTDOWN-03.
+func TestChart_ShutdownDrain(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	heads, ok := e.Git.(gitserver.Committer)
+	require.True(t, ok, "git server %s does not report branch heads", e.Git.Kind())
+	a := newArgoApp(t, e, "prod")
+	base, err := heads.BranchSHA(ctx, a.repo)
+	require.NoError(t, err)
+
+	// With a webhook secret the webhook handler reads each event's body.
+	secret(t, e, a.ns, "scm-webhook", "secret", randomHex(t, 16))
+	values := nsValues(a.ns, framework.Values{"webhook": framework.Values{"secretRef": framework.Values{"name": "scm-webhook"}}})
+	r := e.InstallChart(t, releaseName(a.ns), a.ns, values)
+	pod := runningPod(t, r)
+	logs := r.FollowLogs(t, pod.Name)
+	caller := e.Probe(t, a.ns, "caller", nil)
+
+	stalled, release := e.StallPushes(t, a.repo)
+	a.apply(t, a.resourcePipeline(nil))
+	image := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", image)
+	framework.Eventually(t, 2*time.Minute, "the git server holds the step's push", func(context.Context) (bool, string) {
+		return stalled(), "no push is held"
+	})
+
+	ip := pod.Status.PodIP
+	event := func(length int, closing bool) string {
+		head := fmt.Sprintf("POST /webhook/scm HTTP/1.1\r\nHost: %s:8083\r\nContent-Type: application/json\r\n"+
+			"X-Gitea-Event: pull_request\r\nX-Gitea-Signature: %s\r\nContent-Length: %d\r\n", ip, randomHex(t, 32), length)
+		if closing {
+			head += "Connection: close\r\n"
+		}
+		return head + "\r\n"
+	}
+	body := `{"action":"closed"}`
+	scrape := fmt.Sprintf("POST /metrics HTTP/1.1\r\nHost: %s:8080\r\nContent-Length: 64\r\n\r\n", ip)
+	out, err := caller.Exec(t, "sh", "-c", drainScript, "sh", event(len(body), true), body, event(64, false), scrape, ip)
+	require.NoError(t, err, out)
+	framework.Eventually(t, 30*time.Second, "the requests are connected", func(context.Context) (bool, string) {
+		out, _ := caller.Exec(t, "sh", "-c", "cd /tmp && for f in a b c; do grep -q succeeded $f.err 2>/dev/null && echo $f; done")
+		return strings.Join(strings.Fields(out), " ") == "a b c", "connected: " + out
+	})
+
+	d := r.Deployment(t)
+	scaleDown := client.MergeFrom(d.DeepCopy())
+	zero := int32(0)
+	d.Spec.Replicas = &zero
+	sigterm := time.Now()
+	require.NoError(t, e.Client.Patch(ctx, d, scaleDown))
+	var drain framework.LogLine
+	framework.Eventually(t, 30*time.Second, "the webhook server starts draining", func(context.Context) (bool, string) {
+		drain, ok = logLine(logs, `"server":"webhook"`, `"message":"shutting down server"`)
+		return ok, "the webhook server has not logged shutting down server"
+	})
+	out, err = caller.Exec(t, "touch", "/tmp/go")
+	require.NoError(t, err, out)
+	select {
+	case <-logs.Done():
+	case <-time.After(90 * time.Second):
+		t.Fatalf("the controller Pod %s still runs 90s after the scale-down", pod.Name)
+	}
+	exited := time.Since(sigterm)
+	t.Logf("the controller exited %s after the scale-down", exited.Round(time.Millisecond))
+	out, err = caller.Exec(t, "touch", "/tmp/end")
+	require.NoError(t, err, out)
+
+	at := func(what string, substrs ...string) time.Time {
+		t.Helper()
+		l, ok := logLine(logs, substrs...)
+		require.True(t, ok, "the controller logs %s", what)
+		return l.At
+	}
+	stop := at("the SIGTERM", "Stopping and waiting for non leader election runnables")
+	answered := at("the refused event", `"message":"webhook signature invalid or parse error"`)
+	assert.True(t, answered.After(drain.At), "the webhook server handles the event whose body came after the drain began")
+	response, _ := caller.Exec(t, "cat", "/tmp/a.out")
+	assert.Contains(t, response, "HTTP/1.1 401", "the event in flight gets its response")
+	gaveUp := at("the webhook server giving up", "webhook server: shutdown: context deadline exceeded")
+	assert.InDelta(t, 20, gaveUp.Sub(drain.At).Seconds(), 3, "the webhook server gives its requests in flight 20s")
+	reconcilers := at("the reconcilers stopping", "Stopping and waiting for leader election runnables")
+	assert.GreaterOrEqual(t, reconcilers.Sub(drain.At).Seconds(), 18.0, "reconciles run on while the webhook server drains")
+	cancelled := at("the git push cancelled", `"message":"step failed, will retry"`, "git-push", "context canceled")
+	assert.True(t, cancelled.After(reconcilers.Add(-time.Second)), "the push is cancelled once the reconcilers stop, not before")
+	at("the metrics server waiting for its scrape", "Shutting down metrics server with timeout of 1 minute")
+	bound := at("the manager giving up", "failed waiting for all runnables to end within grace period of 30s")
+	t.Logf("after the drain began: event answered %s, webhook server gave up %s, reconcilers stopped %s, push cancelled %s; manager gave up %s after the SIGTERM",
+		answered.Sub(drain.At).Round(time.Millisecond), gaveUp.Sub(drain.At).Round(time.Millisecond),
+		reconcilers.Sub(drain.At).Round(time.Millisecond), cancelled.Sub(drain.At).Round(time.Millisecond), bound.Sub(stop).Round(time.Millisecond))
+	assert.InDelta(t, 30, bound.Sub(stop).Seconds(), 3, "the manager gives the whole shutdown 30s")
+	assert.Less(t, exited, 50*time.Second, "the controller exits on its own, before the chart's 60s SIGKILL")
+
+	release()
+	r.Upgrade(t, values)
+	runningPod(t, r)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), image, syncTimeout)
+	now, err := heads.BranchSHA(ctx, a.repo)
+	require.NoError(t, err)
+	assert.NotEqual(t, base, now, "the restarted step pushed")
 }
