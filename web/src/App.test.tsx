@@ -281,6 +281,66 @@ describe('App pipeline selection', () => {
   })
 })
 
+// #338: Shift-click picks the bundle to compare; the timeline then offers
+// Compare (opens the comparison, bundle= in the URL) and clear.
+describe('App bundle comparison', () => {
+  const dialog = () => screen.queryByRole('dialog', { name: 'Bundle comparison' })
+  const oldChip = () => screen.getByTitle(/^b-old: Superseded/)
+
+  it('leaves Compare and clear reachable after a shift-click, and Compare opens the comparison', async () => {
+    render(<App />)
+    await flush()
+    fireEvent.click(oldChip(), { shiftKey: true })
+    await flush()
+    expect(oldChip().className).toContain('bundle-chip--compare')
+    expect(dialog()).not.toBeInTheDocument()
+    expect(window.location.hash).not.toContain('bundle=')
+
+    // Compare opens the comparison and moves focus into it.
+    const compare = screen.getByRole('button', { name: 'Compare ↔' })
+    compare.focus()
+    fireEvent.click(compare)
+    await flush()
+    expect(dialog()).toBeInTheDocument()
+    expect(dialog()).toContainElement(document.activeElement as HTMLElement)
+    expect(window.location.hash).toContain('bundle=b-old')
+
+    // Closing it returns focus to Compare, which opens it again.
+    fireEvent.click(within(dialog()!).getByRole('button', { name: 'Close' }))
+    await flush()
+    expect(dialog()).not.toBeInTheDocument()
+    expect(window.location.hash).not.toContain('bundle=')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Compare ↔' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Compare ↔' }))
+    await flush()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await flush()
+    expect(dialog()).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Compare ↔' }))
+
+    // clear drops the comparison bundle.
+    fireEvent.click(screen.getByRole('button', { name: '× clear' }))
+    await flush()
+    expect(oldChip().className).not.toContain('bundle-chip--compare')
+    expect(screen.queryByRole('button', { name: 'Compare ↔' })).not.toBeInTheDocument()
+    expect(screen.getByText('Shift-click to compare')).toBeInTheDocument()
+  })
+
+  it('opens the comparison from a bundle= link', async () => {
+    window.history.replaceState(null, '', '/ui/#pipeline=app&bundle=b-old')
+    render(<App />)
+    await flush()
+    expect(dialog()).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await flush()
+    expect(dialog()).not.toBeInTheDocument()
+    expect(window.location.hash).not.toContain('bundle=')
+    // The linked bundle stays picked, as after Compare.
+    expect(oldChip().className).toContain('bundle-chip--compare')
+    expect(screen.getByRole('button', { name: 'Compare ↔' })).toBeInTheDocument()
+  })
+})
+
 // docs/installation.md: a NodePort without TLS shows a security warning. The
 // API refuses such a client outright unless ui.allowedHosts names the host, so
 // the warning cannot wait for a pipeline view: it heads every view.

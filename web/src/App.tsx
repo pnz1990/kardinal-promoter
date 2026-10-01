@@ -116,15 +116,14 @@ export function App() {
     if (node) setSelectedNodeLocal(node)
   }, [graph, urlState.node, selectedNode?.id])
 
-  // #338: Bundle diff comparison state.
-  // #740: compareBundle and showDiffPanel are derived from URL bundle= param.
-  const compareBundle = urlState.bundle
+  // #338: Bundle diff comparison state. Shift-click picks the bundle to
+  // compare (compareTarget); the timeline then offers Compare and clear.
+  // #740: the comparison is open while the URL has bundle=, so a link opens it.
+  // Closing it keeps the pick, so Compare and clear are where focus returns.
+  const [compareTarget, setCompareTarget] = useState<string | undefined>()
   const showDiffPanel = !!urlState.bundle
-  const setCompareBundle = useCallback((name: string | undefined) => {
-    setUrlState({ bundle: name })
-  }, [setUrlState])
-  const setShowDiffPanel = useCallback((show: boolean) => {
-    if (!show) setUrlState({ bundle: undefined })
+  const closeDiffPanel = useCallback(() => {
+    setUrlState({ bundle: undefined })
   }, [setUrlState])
 
   // Refresh indicator: tracks last successful poll for the staleness indicator.
@@ -249,6 +248,7 @@ export function App() {
     setBundleHistoryOpen(false)
     setShowBlockedOnly(false)
     setSelectedNodeLocal(null)
+    setCompareTarget(undefined)
     if (!selectedPipeline) {
       setGraphLoading(false)
       setBundlesLoading(false)
@@ -258,6 +258,13 @@ export function App() {
     setBundlesLoading(true)
     void loadPipeline(selectedPipeline, urlState.ns, seq)
   }, [selectedPipeline, urlState.ns, loadPipeline])
+
+  // An open comparison (bundle=, from Compare, a link or Back) is also the
+  // pick. This runs after the reset above, so a link that names a pipeline
+  // and a bundle= keeps the pick when the comparison closes.
+  useEffect(() => {
+    if (urlState.bundle) setCompareTarget(urlState.bundle)
+  }, [urlState.bundle, selectedPipeline, urlState.ns])
 
   // Poll pipeline list every 5 seconds.
   usePolling(doFetchAll, POLL_INTERVAL_MS)
@@ -287,8 +294,8 @@ export function App() {
     onEscape: useCallback(() => {
       if (showShortcutsPanel) { setShowShortcutsPanel(false); return }
       if (selectedNode) { setSelectedNode(null); return }
-      if (showDiffPanel) { setShowDiffPanel(false); return }
-    }, [showShortcutsPanel, selectedNode, showDiffPanel, setSelectedNode, setShowDiffPanel]),
+      if (showDiffPanel) { closeDiffPanel(); return }
+    }, [showShortcutsPanel, selectedNode, showDiffPanel, setSelectedNode, closeDiffPanel]),
     // #800: / focuses the pipeline search input
     onSearch: useCallback(() => {
       searchInputRef.current?.focus()
@@ -307,6 +314,8 @@ export function App() {
     : undefined
   const selectedNamespace = urlState.ns ?? activePipeline?.namespace
   const activeBundle = shownBundleName ? bundles.find(b => b.name === shownBundleName) : undefined
+  // The picked comparison bundle, while the pipeline still has it.
+  const compareBundle = compareTarget && bundles.some(b => b.name === compareTarget) ? compareTarget : undefined
 
   // Handler for timeline bundle selection — shows that bundle until the user
   // picks another one or it disappears.
@@ -764,25 +773,22 @@ export function App() {
                   selectedBundle={activeBundle?.name}
                   onSelectBundle={handleTimelineBundleSelect}
                   compareBundle={compareBundle}
-                  onCompareBundle={(name) => {
-                    setCompareBundle(name ?? undefined)
-                    if (!name) setShowDiffPanel(false)
-                  }}
-                  onCompare={() => setShowDiffPanel(true)}
+                  onCompareBundle={(name) => setCompareTarget(name ?? undefined)}
+                  onCompare={() => setUrlState({ bundle: compareBundle })}
                 />
               </ErrorBoundary>
             </div>
 
             {/* #338: Bundle diff panel — shows when two bundles are selected for comparison */}
-            {showDiffPanel && compareBundle && activeBundle && (
+            {showDiffPanel && activeBundle && (
               (() => {
-                const compareBundleObj = bundles.find(b => b.name === compareBundle)
+                const compareBundleObj = bundles.find(b => b.name === urlState.bundle)
                 if (!compareBundleObj) return null
                 return (
                   <BundleDiffPanel
                     bundleA={activeBundle}
                     bundleB={compareBundleObj}
-                    onClose={() => { setShowDiffPanel(false); setCompareBundle(undefined) }}
+                    onClose={closeDiffPanel}
                   />
                 )
               })()
