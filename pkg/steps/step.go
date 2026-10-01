@@ -94,6 +94,19 @@ type StepState struct {
 	// BundleName is the Bundle resource name.
 	BundleName string
 
+	// RequestedBy is who asked for the Bundle: its kardinal.io/requested-by
+	// annotation (the CLI or UI user, or the controller for an automatic
+	// rollback). Empty when it is not recorded.
+	RequestedBy string
+
+	// RollbackFrom names the Bundle a rollback Bundle replaces: its
+	// kardinal.io/rollback-from annotation. Empty for a promotion.
+	RollbackFrom string
+
+	// RollbackFromBundle is the spec of the RollbackFrom Bundle. Nil when
+	// there is none or it cannot be read.
+	RollbackFromBundle *v1alpha1.BundleSpec
+
 	// WorkDir is the local directory where the Git work tree is checked out.
 	WorkDir string
 

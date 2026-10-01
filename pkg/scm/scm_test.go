@@ -933,6 +933,115 @@ func TestRenderPRBody_RollbackSection(t *testing.T) {
 	t.Logf("rollback PR body:\n%s", body)
 }
 
+// TestRenderPRBody_RollbackNote pins the rollback note: FROM names the Bundle
+// the rollback replaces and its version, TO the Bundle it restores and the
+// version it deploys, and "Rolled back by" who asked for it. The actor is free
+// text and must stay on its line (spike bug 6).
+func TestRenderPRBody_RollbackNote(t *testing.T) {
+	base := scm.PRBody{
+		PipelineName:    "demo-gitea",
+		Environment:     "prod",
+		BundleName:      "demo-gitea-rollback-9c5q2",
+		RollbackOf:      "demo-gitea-bx5l8",
+		RestoredVersion: "sha-a000001",
+		Bundle: v1alpha1.BundleSpec{
+			Type:       "image",
+			Images:     []v1alpha1.ImageRef{{Repository: "ghcr.io/pnz1990/kardinal-test-app", Tag: "sha-a000001"}},
+			Provenance: &v1alpha1.BundleProvenance{CommitSHA: "a000001", Author: "spike-qa", RollbackOf: "demo-gitea-bx5l8"},
+		},
+	}
+	tests := []struct {
+		name     string
+		edit     func(*scm.PRBody)
+		wantNote string
+	}{
+		{
+			name: "replaced and restored bundles with versions",
+			edit: func(d *scm.PRBody) {
+				d.RollbackFrom, d.RollbackFromVersion, d.RolledBackBy = "demo-gitea-x7k2p", "sha-a000002", "rrroizma"
+			},
+			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
+				"> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-bx5l8.\n" +
+				"> Rolling back FROM: demo-gitea-x7k2p (sha-a000002)\n" +
+				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
+				"> Rolled back by: rrroizma",
+		},
+		{
+			name: "actor stays on its line",
+			edit: func(d *scm.PRBody) {
+				d.RollbackFrom, d.RolledBackBy = "demo-gitea-x7k2p", "mallory\n## Approved"
+			},
+			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
+				"> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-bx5l8.\n" +
+				"> Rolling back FROM: demo-gitea-x7k2p\n" +
+				"> Rolling back TO: demo-gitea-bx5l8 (sha-a000001)\n" +
+				"> Rolled back by: mallory ## Approved",
+		},
+		{
+			name: "nothing recorded",
+			edit: func(d *scm.PRBody) { d.RestoredVersion = "" },
+			wantNote: "## ROLLBACK: demo-gitea-rollback-9c5q2 -> demo-gitea/prod\n\n" +
+				"> **This is a rollback PR.** It reverts environment prod to the state of bundle demo-gitea-bx5l8.\n" +
+				"> Rolling back FROM: the bundle deployed in prod now\n" +
+				"> Rolling back TO: demo-gitea-bx5l8",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := base
+			tt.edit(&data)
+			body, err := scm.RenderPRBody(data)
+			require.NoError(t, err)
+			start := strings.Index(body, "## ROLLBACK:")
+			end := strings.Index(body, "\n\n### Artifact Provenance")
+			require.True(t, start >= 0 && end > start, body)
+			assert.Equal(t, tt.wantNote, body[start:end])
+			assert.Contains(t, body, "| a000001 | spike-qa |", "the provenance Author is the restored build's author")
+		})
+	}
+}
+
+// TestBundleVersion pins the version a rollback PR title and note name: the
+// tag (or short digest) of a one-image Bundle, "<image>:<tag>" for each of
+// several images, at most three, or the short config commit of a config
+// Bundle.
+func TestBundleVersion(t *testing.T) {
+	const digest = "sha256:a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1b2"
+	img := func(repo, tag, dgst string) v1alpha1.ImageRef {
+		return v1alpha1.ImageRef{Repository: repo, Tag: tag, Digest: dgst}
+	}
+	tests := []struct {
+		name string
+		spec v1alpha1.BundleSpec
+		want string
+	}{
+		{name: "one image tag", spec: v1alpha1.BundleSpec{Type: "image",
+			Images: []v1alpha1.ImageRef{img("ghcr.io/o/app", "1.2.3", digest)}}, want: "1.2.3"},
+		{name: "one image digest", spec: v1alpha1.BundleSpec{Type: "image",
+			Images: []v1alpha1.ImageRef{img("ghcr.io/o/app", "", digest)}}, want: "sha256:a1b2c3d4e5f6"},
+		{name: "one image without tag or digest", spec: v1alpha1.BundleSpec{Type: "image",
+			Images: []v1alpha1.ImageRef{img("ghcr.io/o/app", "", "")}}, want: "app"},
+		{name: "several images", spec: v1alpha1.BundleSpec{Type: "image",
+			Images: []v1alpha1.ImageRef{img("ghcr.io/o/app", "1.2.3", ""), img("ghcr.io/o/sidecar", "", digest)}},
+			want: "app:1.2.3, sidecar@sha256:a1b2c3d4e5f6"},
+		{name: "more than three images", spec: v1alpha1.BundleSpec{Type: "image",
+			Images: []v1alpha1.ImageRef{img("r/a", "1", ""), img("r/b", "2", ""), img("r/c", "3", ""), img("r/d", "4", ""), img("r/e", "5", "")}},
+			want: "a:1, b:2, c:3 and 2 more"},
+		{name: "config bundle", spec: v1alpha1.BundleSpec{Type: "config",
+			ConfigRef: &v1alpha1.ConfigRef{GitRepo: "https://github.com/o/cfg", CommitSHA: "0123456789abcdef"}},
+			want: "config 0123456"},
+		{name: "mixed bundle deploys its images", spec: v1alpha1.BundleSpec{Type: "mixed",
+			Images:    []v1alpha1.ImageRef{img("ghcr.io/o/app", "1.2.3", "")},
+			ConfigRef: &v1alpha1.ConfigRef{CommitSHA: "0123456789abcdef"}}, want: "1.2.3"},
+		{name: "no artifacts", spec: v1alpha1.BundleSpec{Type: "image"}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, scm.BundleVersion(tt.spec))
+		})
+	}
+}
+
 // TestRenderPRBody_NormalPromotion_NoRollbackSection verifies that normal promotion
 // PRs do NOT include the rollback section.
 func TestRenderPRBody_NormalPromotion_NoRollbackSection(t *testing.T) {

@@ -306,7 +306,10 @@ func TestPlanRollback(t *testing.T) {
 			assert.Equal(t, "app", b.Spec.Pipeline)
 			assert.Equal(t, "true", b.Labels[lifecycle.LabelRollback])
 			assert.Equal(t, "app", b.Labels[lifecycle.LabelPipeline])
-			assert.Equal(t, "alice", b.Spec.Provenance.Author)
+			assert.Equal(t, "ci", b.Spec.Provenance.Author,
+				"provenance keeps the author of the restored build, not the actor")
+			assert.Equal(t, "alice", b.Annotations[lifecycle.AnnotationRequestedBy],
+				"the actor is recorded as who asked for the rollback")
 			assert.Equal(t, "sha-"+tc.wantTag, b.Spec.Provenance.CommitSHA)
 			assert.Equal(t, "app-rollback-", b.GenerateName)
 			assert.NotEmpty(t, b.Annotations[lifecycle.AnnotationCreatedAt])
@@ -333,6 +336,7 @@ func TestPlanRollback_NameReason(t *testing.T) {
 	}, plan.Bundle.Labels, "no kardinal.io/emergency label (#1288)")
 	assert.Empty(t, plan.Bundle.Annotations[lifecycle.AnnotationCreatedAt], "zero Now stamps nothing")
 	assert.Equal(t, "ci", plan.Bundle.Spec.Provenance.Author, "without an actor the target's author is kept")
+	assert.NotContains(t, plan.Bundle.Annotations, lifecycle.AnnotationRequestedBy, "no actor, no requested-by")
 }
 
 // TestPlanRollback_RestoresEveryImageTheDeployedBundleChanged is #1315: the

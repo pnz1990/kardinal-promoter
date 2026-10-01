@@ -58,27 +58,36 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		branch = fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
 	}
 
-	// Use a more descriptive PR title for rollback promotions. rollbackOf is the
-	// Bundle whose state the rollback restores, not the one it rolls back from.
-	rollbackOf := ""
-	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
-		rollbackOf = state.Bundle.Provenance.RollbackOf
-	}
-	title := fmt.Sprintf("[kardinal] Promote %s to %s", state.BundleName, state.Environment.Name)
-	if rollbackOf != "" {
-		title = fmt.Sprintf("[kardinal] Rollback %s to %s (restores %s)", state.Environment.Name, state.BundleName, rollbackOf)
-	}
-
-	body, err := scm.RenderPRBody(scm.PRBody{
+	data := scm.PRBody{
 		PipelineName:         state.PipelineName,
 		Environment:          state.Environment.Name,
 		BundleName:           state.BundleName,
 		Bundle:               state.Bundle,
-		RollbackOf:           rollbackOf,
 		GateResults:          state.GateResults,
 		UpstreamEnvironments: buildPRBodyUpstreamEnvs(state.UpstreamEnvironments),
 		Pipeline:             state.Pipeline,
-	})
+	}
+	title := fmt.Sprintf("[kardinal] Promote %s to %s", state.BundleName, state.Environment.Name)
+	// A rollback PR says what it restores: the title names the restored
+	// version (docs/rollback.md), and the note names the Bundle it replaces,
+	// the Bundle it restores (RollbackOf, not the rollback Bundle itself) and
+	// who asked for it.
+	if state.Bundle.Provenance != nil && state.Bundle.Provenance.RollbackOf != "" {
+		data.RollbackOf = state.Bundle.Provenance.RollbackOf
+		data.RestoredVersion = scm.BundleVersion(state.Bundle)
+		data.RollbackFrom = state.RollbackFrom
+		if state.RollbackFromBundle != nil {
+			data.RollbackFromVersion = scm.BundleVersion(*state.RollbackFromBundle)
+		}
+		data.RolledBackBy = state.RequestedBy
+		restores := data.RestoredVersion
+		if restores == "" {
+			restores = data.RollbackOf
+		}
+		title = fmt.Sprintf("[kardinal] Rollback %s to %s (restores %s)", state.Environment.Name, state.BundleName, restores)
+	}
+
+	body, err := scm.RenderPRBody(data)
 	if err != nil {
 		return parentsteps.StepResult{Status: parentsteps.StepFailed, Message: fmt.Sprintf("render PR body: %v", err)},
 			fmt.Errorf("open-pr render body: %w", err)
