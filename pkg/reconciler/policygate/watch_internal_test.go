@@ -5,6 +5,7 @@ package policygate
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,9 +13,20 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
+	toolscache "k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllertest"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
@@ -280,4 +292,101 @@ func TestStepRequiredGateRequests(t *testing.T) {
 	assert.Equal(t, "team-a", reqs[1].Namespace)
 	assert.Equal(t, "app-v1-prod-hours", reqs[1].Name)
 	assert.Empty(t, stepRequiredGateRequests(context.Background(), &kardinalv1alpha1.PolicyGate{}), "not a step")
+}
+
+// handlerAddedInformer is a fake informer that closes added once the watch
+// has added its event handler.
+type handlerAddedInformer struct {
+	*controllertest.FakeInformer
+	added chan struct{}
+}
+
+func (i *handlerAddedInformer) AddEventHandlerWithOptions(h toolscache.ResourceEventHandler,
+	opts toolscache.HandlerOptions) (toolscache.ResourceEventHandlerRegistration, error) {
+	reg, err := i.FakeInformer.AddEventHandlerWithOptions(h, opts)
+	close(i.added)
+	return reg, err
+}
+
+// TestScheduleClockWatchOnlyTicks checks the ScheduleClock watch that
+// SetupWithManager registers: a clock event lists the gates to re-evaluate
+// only when status.tick changed. TestScheduleClockTicked covers the predicate;
+// this covers that the watch carries it. Without it every clock create,
+// delete and spec, label or status write re-evaluated every gate.
+func TestScheduleClockWatchOnlyTicks(t *testing.T) {
+	scheme := runtime.NewScheme()
+	require.NoError(t, kardinalv1alpha1.AddToScheme(scheme))
+	gv := kardinalv1alpha1.GroupVersion
+	clocks := &handlerAddedInformer{FakeInformer: controllertest.NewFakeInformer(controllertest.Synced),
+		added: make(chan struct{})}
+	informers := &informertest.FakeInformers{Scheme: scheme,
+		InformersByGVK: map[schema.GroupVersionKind]toolscache.SharedIndexInformer{gv.WithKind("ScheduleClock"): clocks}}
+	// Every watched kind has its informer up front: the watches start in
+	// parallel, and FakeInformers adds a missing informer without a lock.
+	for _, kind := range []string{"PolicyGate", "MetricCheck", "ChangeWindow", "PromotionStep"} {
+		informers.InformersByGVK[gv.WithKind(kind)] = controllertest.NewFakeInformer(controllertest.Synced)
+	}
+	var gateLists atomic.Int32 // the clock mapper lists the gates to enqueue
+	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*kardinalv1alpha1.PolicyGateList); ok {
+				gateLists.Add(1)
+			}
+			return c.List(ctx, list, opts...)
+		},
+	}).Build()
+	mgr, err := ctrl.NewManager(&rest.Config{Host: "https://127.0.0.1:1"}, ctrl.Options{
+		Scheme:                 scheme,
+		NewCache:               func(*rest.Config, cache.Options) (cache.Cache, error) { return informers, nil },
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+		Controller:             config.Controller{SkipNameValidation: ptr.To(true)},
+	})
+	require.NoError(t, err)
+	r, err := NewReconciler(c)
+	require.NoError(t, err)
+	require.NoError(t, r.SetupWithManager(mgr))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan error, 1)
+	go func() { stopped <- mgr.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		assert.NoError(t, <-stopped)
+	})
+	select {
+	case <-clocks.added:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the ScheduleClock watch did not start")
+	}
+
+	clock := func(mutate func(c *kardinalv1alpha1.ScheduleClock)) *kardinalv1alpha1.ScheduleClock {
+		c := &kardinalv1alpha1.ScheduleClock{
+			ObjectMeta: metav1.ObjectMeta{Name: "fast", Namespace: "team-a", Generation: 1, ResourceVersion: "10"},
+			Spec:       kardinalv1alpha1.ScheduleClockSpec{Interval: "1s"},
+			Status:     kardinalv1alpha1.ScheduleClockStatus{Tick: "2026-10-01T07:27:26Z"},
+		}
+		if mutate != nil {
+			mutate(c)
+		}
+		return c
+	}
+	clocks.Add(clock(nil))
+	clocks.Update(clock(nil), clock(func(c *kardinalv1alpha1.ScheduleClock) {
+		c.Labels = map[string]string{"team": "a"}
+		c.ResourceVersion = "11"
+	}))
+	clocks.Update(clock(nil), clock(func(c *kardinalv1alpha1.ScheduleClock) {
+		c.Spec.Interval = "1m"
+		c.Generation = 2
+		c.ResourceVersion = "11"
+	}))
+	clocks.Delete(clock(nil))
+	assert.Zero(t, gateLists.Load(), "only a tick re-evaluates the gates")
+
+	clocks.Update(clock(nil), clock(func(c *kardinalv1alpha1.ScheduleClock) {
+		c.Status.Tick = "2026-10-01T07:27:31Z"
+		c.ResourceVersion = "11"
+	}))
+	assert.Positive(t, gateLists.Load(), "a tick re-evaluates the gates")
 }
