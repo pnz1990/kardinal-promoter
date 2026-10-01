@@ -11,7 +11,8 @@
 #     so the bot can push to and open PRs on repos the tests create
 #   - Secrets kardinal-system/git-token (key token, the bot token) and
 #     kardinal-system/scm-webhook (key secret)
-# Webhooks go to ClusterIPs (ALLOWED_HOST_LIST=*); each test registers its own.
+# Webhooks go to the controller's ClusterIP, which the webhook allow list
+# must let through; each test registers its own.
 # Idempotent.
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -23,8 +24,11 @@ target_cluster
 
 FLAVOR=${1:?usage: $0 forgejo|gitea}
 case "$FLAVOR" in
-  forgejo) IMAGE=$FORGEJO_IMAGE PFX=FORGEJO ;;
-  gitea) IMAGE=$GITEA_IMAGE PFX=GITEA ;;
+  # Forgejo reads the webhook allow list from [webhook], where "*" allows
+  # every host. Gitea 28 reads it from [security] (the [webhook] key only logs
+  # a deprecation error), rejects "*", and needs private hosts listed.
+  forgejo) IMAGE=$FORGEJO_IMAGE PFX=FORGEJO ALLOW_SECTION=webhook ALLOW_HOSTS='*' ;;
+  gitea) IMAGE=$GITEA_IMAGE PFX=GITEA ALLOW_SECTION=security ALLOW_HOSTS='*.svc.cluster.local' ;;
   *) die "flavor must be forgejo or gitea" ;;
 esac
 NS=$FLAVOR
@@ -66,7 +70,7 @@ spec:
             - {name: ${PFX}__server__START_SSH_SERVER, value: "false"}
             - {name: ${PFX}__server__OFFLINE_MODE, value: "true"}
             # The default ("external") blocks webhooks to the controller's ClusterIP.
-            - {name: ${PFX}__webhook__ALLOWED_HOST_LIST, value: "*"}
+            - {name: ${PFX}__${ALLOW_SECTION}__ALLOWED_HOST_LIST, value: "$ALLOW_HOSTS"}
             - {name: ${PFX}__webhook__DELIVER_TIMEOUT, value: "10"}
             - {name: ${PFX}__service__DISABLE_REGISTRATION, value: "true"}
             - {name: ${PFX}__repository__DEFAULT_BRANCH, value: main}

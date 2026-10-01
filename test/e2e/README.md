@@ -29,22 +29,30 @@ there: older kind releases can't boot its node images. The core suite also
 needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 
-CI (`.github/workflows/e2e-live.yml`) runs every suite on every pull request,
-the core suite on each of the three Kubernetes minors, split across two jobs
-per minor with `SHARD`. A weekly run repeats
-every test three times to find flakes. The `e2e live` check passes when every suite
-passed.
+CI (`.github/workflows/e2e-live.yml`) runs every suite but `github` on every
+pull request, the core suite on each of the three Kubernetes minors, split
+across two jobs per minor with `SHARD`. The `github` suite needs the
+`DEMO_GITHUB_TOKEN` secret, so it runs only on pushes to main, the weekly run
+and manual dispatches. The weekly run repeats every test three times to find
+flakes. The `e2e live` check passes when every suite that ran passed.
 
 `hack/e2e/up.sh` defines the suites: each one's components and the `RUN`
 pattern of its tests.
 
 | Suite | Components | Tests |
 |---|---|---|
-| `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
-| `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*` |
+| `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestSCM_*`, `TestForgejo_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
+| `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitea_*` |
+| `gitlab` | GitLab CE, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitLab_*` |
+| `github` | GitHub (branches of `pnz1990/kardinal-demo`), Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitHub_*` |
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
 | `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
+
+`TestSCM_*` tests use only `Env.Git`, so they run against every git server;
+a test that needs one provider is named after it and checks `Env.Git.Kind()`
+first. The `github` suite takes its token from `KARDINAL_E2E_GITHUB_TOKEN_FILE`,
+`DEMO_GITHUB_TOKEN` or `gh auth token` (`hack/e2e/components/github.sh`).
 
 ## Coverage
 
