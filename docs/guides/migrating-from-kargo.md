@@ -14,7 +14,7 @@ This guide walks through migrating a Kargo-managed delivery pipeline to kardinal
 | `FreightRequest` | `Bundle.spec.intent` | Targets a specific environment; can skip others |
 | `Promotion` | `PromotionStep` CRD | Created automatically by the Graph controller |
 | `VerifiedIn` / approval required | `approval: pr-review` on environment | PR approval required before HealthChecking |
-| `AnalysisTemplate` | `MetricCheck` CRD | Prometheus / custom queries with pass/fail thresholds |
+| `AnalysisTemplate` | `MetricCheck` CRD | A Prometheus query with a pass/fail threshold; Prometheus is the only provider |
 | `ClusterStage` | `Pipeline` with `namespace` per env | Multi-cluster through an Argo CD hub; `health.cluster` kubeconfig Secrets are not implemented |
 | `Project` | Kubernetes Namespace | RBAC isolation is namespace-scoped |
 | Argo Rollouts integration | `health.type: argoRollouts` on environment | Reads Rollout `.status.phase` |

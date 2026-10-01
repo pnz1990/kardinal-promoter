@@ -51,13 +51,13 @@ kardinal-promoter uses [controller-runtime](https://github.com/kubernetes-sigs/c
 
 | Metric | Type | Description |
 |---|---|---|
-| `controller_runtime_reconcile_total` | Counter | Total reconcile operations, labelled by `controller` and `result` (`success`, `error`, `requeue`) |
+| `controller_runtime_reconcile_total` | Counter | Total reconcile operations, labelled by `controller` and `result` (`success`, `error`, `requeue`, `requeue_after`) |
 | `controller_runtime_reconcile_errors_total` | Counter | Total reconcile errors, labelled by `controller` |
 | `controller_runtime_reconcile_time_seconds` | Histogram | Time spent per reconcile loop, labelled by `controller` |
 | `controller_runtime_max_concurrent_reconciles` | Gauge | Configured max concurrent reconciles per controller |
 | `controller_runtime_active_workers` | Gauge | Active reconcile goroutines per controller |
 
-**Controller labels**: `bundle`, `promotionstep`, `policygate`, `metriccheck`
+**Controller labels**: `bundle`, `changewindow`, `metriccheck`, `notificationhook`, `pipeline`, `policygate`, `promotionstep`, `prstatus`, `rollbackpolicy`, `scheduleclock`, `subscription`
 
 ### Work queue metrics
 
@@ -81,8 +81,8 @@ The controller registers these on the same `/metrics` endpoint
 | `kardinal_bundles_total` | Counter | `phase` | Bundle phase transitions, labelled by the phase entered |
 | `kardinal_steps_total` | Counter | `type` (always `PromotionStep`), `result` (`succeeded`, `failed`) | PromotionSteps reaching a terminal state |
 | `kardinal_gate_evaluations_total` | Counter | `result` (`allowed`, `blocked`) | PolicyGate evaluations |
-| `kardinal_pr_duration_seconds` | Histogram | — | Time from PR open (WaitingForMerge) to merge |
-| `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step |
+| `kardinal_pr_duration_seconds` | Histogram | — | Time from the PR opening (the `open-pr` step completing) to the merge the controller sees |
+| `kardinal_step_duration_seconds` | Histogram | `step` (step name, e.g. `git-clone`) | Duration of each promotion step, observed when it completes or fails. `wait-for-merge` lasts until the merge; `health-check` covers the health check and the bake |
 | `kardinal_gate_blocking_duration_seconds` | Histogram | — | How long a PolicyGate was blocked before it allowed |
 | `kardinal_promotionstep_age_seconds` | Histogram | — | PromotionStep age when it reaches a terminal state |
 
