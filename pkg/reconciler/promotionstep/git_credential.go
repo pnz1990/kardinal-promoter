@@ -150,6 +150,19 @@ func (c gitCredential) note(step string) string {
 	return ""
 }
 
+// waitsForSecret reports whether the step should wait for the credential
+// with no retry limit: spec.git.secretRef is not set, or its Secret does not
+// exist or has no token key, so creating it or setting the secretRef fixes
+// the step. A Secret that could not be read (Forbidden, a timeout) is not
+// fixed that way, so its step keeps the retry limit.
+func (c gitCredential) waitsForSecret() bool {
+	switch c.reason {
+	case reasonSecretRefNotSet, reasonSecretNotFound, reasonSecretHasNoToken:
+		return true
+	}
+	return false
+}
+
 // markGitCredentialMissing sets ConditionGitCredentialMissing to True with
 // note and reports whether it was not True before, i.e. whether the Warning
 // Event is due once the status is written.
@@ -167,11 +180,13 @@ func markGitCredentialMissing(ps *v1alpha1.PromotionStep, reason, note string) b
 }
 
 // clearGitCredentialMissing sets ConditionGitCredentialMissing to False when
-// it is True and git now has a token. The caller writes the status.
+// it is True and git now has a token, and resets status.gitCredentialRetries,
+// so the backoff starts over. The caller writes the status.
 func clearGitCredentialMissing(ps *v1alpha1.PromotionStep, cred gitCredential) {
 	if cred.reason != "" || !meta.IsStatusConditionTrue(ps.Status.Conditions, ConditionGitCredentialMissing) {
 		return
 	}
+	ps.Status.GitCredentialRetries = 0
 	meta.SetStatusCondition(&ps.Status.Conditions, metav1.Condition{
 		Type:               ConditionGitCredentialMissing,
 		Status:             metav1.ConditionFalse,

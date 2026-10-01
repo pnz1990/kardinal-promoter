@@ -81,8 +81,9 @@ func rfCredentialCondition(t *testing.T, ps *v1alpha1.PromotionStep) *metav1.Con
 // the push is refused. The step message names the missing Secret right after
 // the git error, with no newline from the git server's response between them,
 // the step is GitCredentialMissing=True with one Warning Event, and
-// it keeps retrying past the retry limit (5). Creating the Secret is enough:
-// the next retry pushes and the step is Verified.
+// it keeps retrying past the retry limit (5), in status.gitCredentialRetries,
+// leaving status.retryCount at 0. Creating the Secret is enough: the next
+// retry pushes and the step is Verified.
 //
 // Covers STEP-GITCRED-01.
 func TestStep_GitSecretMissing(t *testing.T) {
@@ -119,10 +120,11 @@ func TestStep_GitSecretMissing(t *testing.T) {
 		if got.Status.State == "Failed" {
 			return false, "Failed: " + got.Status.Message
 		}
-		return got.Status.State == "Promoting" && got.Status.RetryCount >= 6,
-			fmt.Sprintf("state=%q retries=%d message=%q", got.Status.State, got.Status.RetryCount, got.Status.Message)
+		return got.Status.State == "Promoting" && got.Status.GitCredentialRetries >= 6,
+			fmt.Sprintf("state=%q credential retries=%d message=%q", got.Status.State, got.Status.GitCredentialRetries, got.Status.Message)
 	})
 	assert.Contains(t, ps.Status.Message, ", no limit while git has no credentials)")
+	assert.Zero(t, ps.Status.RetryCount, "credential retries leave the retry limit for other errors")
 	assert.Contains(t, ps.Status.Message, "("+note+")")
 	rfOneCredentialEvent(t, e, ps, note)
 

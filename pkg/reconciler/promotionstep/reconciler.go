@@ -554,7 +554,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	ps.Status.Outputs = state.Outputs
 	ps.Status.CurrentStepIndex = nextIdx
 	if nextIdx > prevIdx {
-		ps.Status.RetryCount = 0 // progress resets the retry budget
+		// Progress resets the retry budget.
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 	}
 	if prURL := state.Outputs["prURL"]; prURL != "" {
 		ps.Status.PRURL = prURL
@@ -659,11 +660,15 @@ func prOpenedAt(ps *v1alpha1.PromotionStep) (opened time.Time, ok bool) {
 // the steps this reconcile already closed; they are observed with the ones
 // closed here once the status patch succeeds.
 //
-// When git-clone or git-push fails and git has no token (cred), the message
-// names what is missing after the git error, ConditionGitCredentialMissing
-// turns True with one Warning Event, and a retried error is retried with no
-// limit: creating the Secret (or setting spec.git.secretRef) lets the step
-// continue at its next retry (B48).
+// When the remote refuses git-clone or git-push and git has no token (cred),
+// the message names what is missing after the git error, and
+// ConditionGitCredentialMissing turns True with one Warning Event. When the
+// Secret or the secretRef is missing (cred.waitsForSecret), the step is
+// retried with no limit, counted in status.gitCredentialRetries and not in
+// status.retryCount: creating the Secret (or setting spec.git.secretRef) lets
+// it continue at its next retry, and an error after that still gets all
+// maxStepRetries retries (B48). A Secret that could not be read keeps the
+// limit, since creating it does not help.
 func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, base, ps *v1alpha1.PromotionStep,
 	stepNames []string, timings map[int]steps.StepTiming, execErr error, closed stepObservations,
 	cred gitCredential) (ctrl.Result, error) {
@@ -679,22 +684,28 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 			note = cred.note(step)
 		}
 	}
-	emitCredential := false
+	emitCredential, waitForSecret := false, false
 	if note != "" {
 		execErr = fmt.Errorf("%w (%s)", execErr, note)
 		emitCredential = markGitCredentialMissing(ps, cred.reason, note)
+		waitForSecret = cred.waitsForSecret()
 	}
-	if retryable && (ps.Status.RetryCount < maxStepRetries || note != "") {
-		ps.Status.RetryCount++
-		delay := retryDelay(ps.Status.RetryCount)
-		count := fmt.Sprintf("%d/%d", ps.Status.RetryCount, maxStepRetries)
-		if ps.Status.RetryCount > maxStepRetries {
-			count = fmt.Sprintf("%d, no limit while git has no credentials", ps.Status.RetryCount)
+	if retryable && (waitForSecret || ps.Status.RetryCount < maxStepRetries) {
+		var count string
+		if waitForSecret {
+			ps.Status.GitCredentialRetries++
+			count = fmt.Sprintf("%d, no limit while git has no credentials", ps.Status.GitCredentialRetries)
+		} else {
+			ps.Status.RetryCount++
+			count = fmt.Sprintf("%d/%d", ps.Status.RetryCount, maxStepRetries)
 		}
+		// Both kinds of retry back off together.
+		delay := retryDelay(ps.Status.RetryCount + ps.Status.GitCredentialRetries)
 		ps.Status.Message = fmt.Sprintf("retrying in %s (%s) after error: %v", delay, count, execErr)
 		closed = append(closed, updateStepStatuses(ps, stepNames, idx, false, "", timings)...)
 		log.Warn().Err(execErr).Str("env", ps.Spec.Environment).
-			Int("retry", ps.Status.RetryCount).Dur("delay", delay).Msg("step failed, will retry")
+			Int("retry", ps.Status.RetryCount).Int("gitCredentialRetries", ps.Status.GitCredentialRetries).
+			Dur("delay", delay).Msg("step failed, will retry")
 		if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
 			if apierrors.IsNotFound(patchErr) {
 				return ctrl.Result{}, nil
@@ -720,6 +731,8 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 	if _, err := r.transitionClosing(ctx, base, ps, StateFailed, msg, "", closed); err != nil {
 		return ctrl.Result{}, err
 	}
+	// Reached when a Secret that could not be read is the first credential
+	// failure and the retries are used up already.
 	if emitCredential {
 		r.emitGitCredentialMissing(ps, step, note)
 	}

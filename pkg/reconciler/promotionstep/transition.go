@@ -90,7 +90,7 @@ func (r *Reconciler) patchState(ctx context.Context, base, ps *v1alpha1.Promotio
 	changed := base.Status.State != state
 	if changed {
 		closed = append(closed, closeStepStatuses(ps, state)...)
-		ps.Status.RetryCount = 0
+		ps.Status.RetryCount, ps.Status.GitCredentialRetries = 0, 0
 	}
 	if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 		if apierrors.IsNotFound(err) {
