@@ -976,14 +976,14 @@ func TestHealth_ArgoStrategyRejectsConfigBundles(t *testing.T) {
 // step fails with the API server's forbidden error after its retries and
 // nothing changes. helm template shows rbac.argocdApplicationsWrite=true
 // adds patch to the chart's Applications rule; with that rule bound in the
-// Application namespace, the next Bundle promotes. Covers ARGOSTRAT-04,
+// Application namespace, for this Application only, the next Bundle promotes. Covers ARGOSTRAT-04,
 // CHART-ARGOCDWRITE-01.
 func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
 	ns, repo, app := argoStrategyApp(t, e, map[string]interface{}{"image": map[string]interface{}{"tag": fixtures.V1}})
-	require.False(t, e.ControllerCan(t, "patch"), "the chart's default RBAC grants no patch on Applications")
-	require.True(t, e.ControllerCan(t, "get"))
+	require.False(t, e.ControllerCan(t, "patch", app), "the chart's default RBAC grants no patch on Applications")
+	require.True(t, e.ControllerCan(t, "get", app))
 	require.NoError(t, e.Client.Create(context.Background(), argoStrategyPipeline(ns, repo, argoStrategyEnv("test", app, ""))))
 
 	denied := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
@@ -1011,8 +1011,14 @@ func TestHealth_ArgoStrategyNeedsPatchRBAC(t *testing.T) {
 	assert.Equal(t, [][]string{{"get", "list", "watch"}}, verbs(framework.ChartApplicationRules(t)))
 	write := framework.ChartApplicationRules(t, "rbac.argocdApplicationsWrite=true")
 	require.Equal(t, [][]string{{"get", "list", "watch", "patch"}}, verbs(write))
+	// Bound for this test's Application only: the tests running in parallel
+	// keep the chart's default RBAC on theirs.
+	for i := range write {
+		write[i].ResourceNames = []string{app}
+	}
 	e.BindArgoRules(t, ns, write)
-	require.True(t, e.ControllerCan(t, "patch"))
+	require.True(t, e.ControllerCan(t, "patch", app))
+	require.False(t, e.ControllerCan(t, "patch", ""), "patch is granted on %s only", app)
 
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", imageV2)
 	ps = e.WaitStepState(t, ns, pipelineName, bundle, "test", "Verified", promoteTimeout)

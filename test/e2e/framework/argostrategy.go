@@ -129,8 +129,9 @@ func (e *Env) BindArgoRules(t *testing.T, name string, rules []rbacv1.PolicyRule
 }
 
 // ControllerCan reports whether the controller's ServiceAccount may do verb
-// on Argo CD Applications in ArgoCDNamespace (a SubjectAccessReview).
-func (e *Env) ControllerCan(t *testing.T, verb string) bool {
+// on the Argo CD Application name in ArgoCDNamespace, or on every
+// Application when name is "" (a SubjectAccessReview).
+func (e *Env) ControllerCan(t *testing.T, verb, name string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -138,7 +139,7 @@ func (e *Env) ControllerCan(t *testing.T, verb string) bool {
 		Spec: authv1.SubjectAccessReviewSpec{
 			User: "system:serviceaccount:" + ControllerNamespace + ":" + ControllerServiceAccount,
 			ResourceAttributes: &authv1.ResourceAttributes{Namespace: ArgoCDNamespace, Verb: verb,
-				Group: ApplicationGVR.Group, Resource: ApplicationGVR.Resource},
+				Group: ApplicationGVR.Group, Resource: ApplicationGVR.Resource, Name: name},
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
