@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -30,6 +31,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
@@ -39,6 +41,8 @@ import (
 const (
 	// labelBundle is the label that identifies a PolicyGate instance (vs template).
 	labelBundle = "kardinal.io/bundle"
+	// labelGateTemplate names the template a gate instance was made from.
+	labelGateTemplate = "kardinal.io/gate-template"
 	// labelEnvironment is the environment the gate is evaluated for.
 	labelEnvironment = "kardinal.io/environment"
 	// labelPipeline is the pipeline the gate is associated with.
@@ -116,6 +120,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get policygate: %w", err)
+	}
+
+	if writable, err := r.markGenerated(ctx, &gate); err != nil {
+		return ctrl.Result{}, err
+	} else if !writable {
+		log.Warn().Msgf("PolicyGate name is longer than %d characters and kardinal did not create it, "+
+			"so its status cannot be written and no Graph uses it; recreate it with a shorter name",
+			validation.LabelValueMaxLength)
+		return ctrl.Result{}, nil
 	}
 
 	// Template PolicyGates (no bundle label) are platform/team-defined gate specs.
@@ -274,6 +287,40 @@ func (r *Reconciler) reconcileTemplate(ctx context.Context, gate *kardinalv1alph
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// markGenerated sets spec.generated on a PolicyGate kardinal created before
+// the field existed whose name is longer than 63 characters: a gate instance
+// (kardinal.io/bundle or kardinal.io/gate-template label) or a freeze gate
+// (lifecycle.IsFreezeGate). The CRD refuses every write to such a gate,
+// status writes included, until it has the field. kro keeps the field when it
+// re-applies an instance from a Graph rendered before the field existed,
+// because kro does not own it.
+//
+// It reports whether gate can be written: false for a long-named gate
+// kardinal did not create, which only the older, laxer name rule let in. No
+// Graph uses such a gate (graph validateGateNames refuses it), and setting
+// the field would only hide it.
+func (r *Reconciler) markGenerated(ctx context.Context, gate *kardinalv1alpha1.PolicyGate) (bool, error) {
+	if gate.Spec.Generated || len(gate.Name) <= validation.LabelValueMaxLength {
+		return true, nil
+	}
+	_, created := gate.Labels[labelBundle]
+	if _, fromTemplate := gate.Labels[labelGateTemplate]; fromTemplate {
+		created = true
+	}
+	if pipeline, freeze := strings.CutPrefix(gate.Name, lifecycle.FreezeGateName("")); freeze {
+		created = created || lifecycle.IsFreezeGate(gate, pipeline)
+	}
+	if !created {
+		return false, nil
+	}
+	patch := client.MergeFrom(gate.DeepCopy())
+	gate.Spec.Generated = true
+	if err := r.Patch(ctx, gate, patch); err != nil {
+		return false, fmt.Errorf("set spec.generated on policygate %s: %w", gate.Name, err)
+	}
+	return true, nil
 }
 
 // bundleSettled reports whether the gate's Bundle exists and is either

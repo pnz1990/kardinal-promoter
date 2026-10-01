@@ -334,7 +334,7 @@ func healthConfigured(env kardinalv1alpha1.EnvironmentSpec) bool {
 // collectGates lists PolicyGate templates from the org policy namespaces
 // (t.policyNS), the Pipeline's spec.policyNamespaces, and the Pipeline's
 // namespace. De-duplicates by name+namespace and skips gate instances
-// (labelled kardinal.io/gate-template).
+// (labelled kardinal.io/gate-template) and every gate with spec.generated.
 //
 // spec.policyNamespaces only adds namespaces (TR-2,
 // docs/design/11-graph-purity-tech-debt.md). The org namespaces are always
@@ -364,8 +364,11 @@ func (t *Translator) collectGates(ctx context.Context,
 		for _, g := range list.Items {
 			// Skip gate instances a Graph stamped from a template. They live in
 			// the pipeline namespace and would otherwise be re-stamped as
-			// templates for the next Bundle.
-			if _, isInstance := g.Labels["kardinal.io/gate-template"]; isInstance {
+			// templates for the next Bundle. Skip every gate with
+			// spec.generated too (instances, freeze gates): only such a gate may
+			// have a name too long for the gate-template label, so it must never
+			// be a template, whoever set the field.
+			if _, isInstance := g.Labels["kardinal.io/gate-template"]; isInstance || g.Spec.Generated {
 				continue
 			}
 			key := g.Namespace + "/" + g.Name

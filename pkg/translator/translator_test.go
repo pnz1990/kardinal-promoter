@@ -15,6 +15,7 @@ package translator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -128,6 +129,33 @@ func TestCollectGates_SkipsGateInstances(t *testing.T) {
 		Spec: kardinalv1alpha1.PolicyGateSpec{Expression: "bundle.type == 'image'"},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(template, instance).Build()
+
+	tr := New(nil, nil, c, []string{"platform-policies"}, zerolog.Nop())
+	pipeline := &kardinalv1alpha1.Pipeline{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-app", Namespace: "my-team"},
+	}
+
+	gates, err := tr.collectGates(context.Background(), pipeline)
+	require.NoError(t, err)
+	require.Len(t, gates, 1)
+	assert.Equal(t, "team-gate", gates[0].Name)
+}
+
+// TestCollectGates_SkipsGeneratedGates (GATE-REJECT-02): a gate with
+// spec.generated is never a template, whatever its labels. That is what lets
+// the CRD exempt generated gates from the 63-character name limit: a long gate
+// a user marks generated applies to no environment.
+func TestCollectGates_SkipsGeneratedGates(t *testing.T) {
+	s := translatorTestScheme()
+	template := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-gate", Namespace: "my-team"},
+		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "bundle.type == 'image'"},
+	}
+	generated := &kardinalv1alpha1.PolicyGate{
+		ObjectMeta: metav1.ObjectMeta{Name: "team--" + strings.Repeat("c", 60), Namespace: "my-team"},
+		Spec:       kardinalv1alpha1.PolicyGateSpec{Expression: "false", Generated: true},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(template, generated).Build()
 
 	tr := New(nil, nil, c, []string{"platform-policies"}, zerolog.Nop())
 	pipeline := &kardinalv1alpha1.Pipeline{

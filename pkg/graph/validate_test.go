@@ -360,6 +360,8 @@ func TestBuild_LabelValuesValid(t *testing.T) {
 // template: expression, message, recheckInterval, and when only if set.
 // spec.overrides is not copied, because kro would own the field and revert
 // overrides the CLI records on the instance (C01-graph-05, C01-graph-29).
+// spec.generated is set, so the instance may have a name over 63 characters
+// and is never collected as a template (GATE-REJECT-02).
 func TestBuild_GateInstanceSpec(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -389,6 +391,7 @@ func TestBuild_GateInstanceSpec(t *testing.T) {
 			require.NotNil(t, spec, "gate instance must be emitted")
 			assert.Equal(t, "!schedule.isWeekend", spec["expression"])
 			assert.Equal(t, "5m", spec["recheckInterval"])
+			assert.Equal(t, true, spec["generated"])
 			assert.NotContains(t, spec, "overrides")
 			if tt.wantWhen {
 				assert.Equal(t, tt.when, spec["when"])

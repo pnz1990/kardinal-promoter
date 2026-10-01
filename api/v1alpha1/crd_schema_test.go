@@ -507,38 +507,87 @@ func TestCRDShortNamesDoNotShadowBuiltins(t *testing.T) {
 // ── PolicyGate names fit the gate-template label ─────────────────────────────
 
 // TestCRDSchemaPolicyGateName: a PolicyGate name longer than 63 characters is
-// refused at creation, because the Graph copies it into the
-// kardinal.io/gate-template label of each instance. Gate instances (which
-// contain "--") and pause freeze gates ("freeze-<pipeline>") may be longer.
-// Dots are allowed: a dotted name of at most 63 characters is a valid label
-// value.
+// refused, because the Graph copies a template's name into the
+// kardinal.io/gate-template label of each instance. Only a gate with
+// spec.generated, which kardinal sets on the gate instances and freeze gates
+// it creates and never uses as a template, may be longer. The names kardinal
+// gives those gates ("--" in an instance name, "freeze-<pipeline>") do not
+// exempt a gate without it (GATE-REJECT-02). Dots are allowed: a dotted name
+// of at most 63 characters is a valid label value.
 func TestCRDSchemaPolicyGateName(t *testing.T) {
 	crds := loadCRDs(t)
+	const instance = "no-weekend-deploys-platform-policies-prod--kardinal-test-app-sha-abc1234"
+	freeze := "freeze-" + strings.Repeat("p", 63)
 	cases := []struct {
-		name  string
-		allow bool
+		name      string
+		generated bool
+		allow     bool
 	}{
-		{"no-weekend-deploys", true},
-		{strings.Repeat("g", 63), true},
-		{"release.v1.2-window", true},
-		{strings.Repeat("g", 64), false},
-		{"no-weekend-deploys-for-the-payments-platform-team-in-every-region", false},
-		// Gate instance: <gate>-<namespace>-<env>--<bundle>.
-		{"no-weekend-deploys-platform-policies-prod--kardinal-test-app-sha-abc1234", true},
-		// Freeze gate of a pipeline with a 63-character name.
-		{"freeze-" + strings.Repeat("p", 63), true},
+		{"no-weekend-deploys", false, true},
+		{strings.Repeat("g", 63), false, true},
+		{"release.v1.2-window", false, true},
+		{strings.Repeat("g", 64), false, false},
+		{"no-weekend-deploys-for-the-payments-platform-team-in-every-region", false, false},
+		// Templates named like kardinal's own gates.
+		{"team--" + strings.Repeat("g", 60), false, false},
+		{"freeze-" + strings.Repeat("g", 60), false, false},
+		{instance, false, false},
+		{freeze, false, false},
+		// Gate instance <gate>-<namespace>-<env>--<bundle> and the freeze gate of
+		// a pipeline with a 63-character name, as kardinal creates them.
+		{instance, true, true},
+		{freeze, true, true},
+		{strings.Repeat("g", 63), true, true},
 	}
 	for _, c := range cases {
 		obj := baseObject("PolicyGate")
 		obj["metadata"].(map[string]interface{})["name"] = c.name
+		if c.generated {
+			obj["spec"].(map[string]interface{})["generated"] = true
+		}
 		errs := validateCR(t, crds, obj)
 		if c.allow {
-			assert.Empty(t, errs, c.name)
+			assert.Empty(t, errs, "%s generated=%v", c.name, c.generated)
 		} else {
-			require.Len(t, errs, 1, c.name)
+			require.Len(t, errs, 1, "%s generated=%v", c.name, c.generated)
 			assert.Contains(t, errs[0], "at most 63 characters", c.name)
 		}
 	}
+}
+
+// TestCRDPolicyGateNameRuleOnUpdate runs the name rule through the API
+// server's validator. A long-named gate kardinal created before
+// spec.generated existed is refused on its next status write, so the
+// PolicyGate reconciler sets spec.generated on it first; ratcheting does not
+// help, because the rule is on the root and the root changes. A PolicyGate
+// with no spec at all is judged by its name only.
+func TestCRDPolicyGateNameRuleOnUpdate(t *testing.T) {
+	crds := loadCRDs(t)
+	const name = "no-weekend-deploys-platform-policies-prod--kardinal-test-app-sha-abc1234"
+	gate := func(generated bool, reason string) map[string]interface{} {
+		obj := baseObject("PolicyGate")
+		obj["metadata"].(map[string]interface{})["name"] = name
+		if generated {
+			obj["spec"].(map[string]interface{})["generated"] = true
+		}
+		if reason != "" {
+			obj["status"] = map[string]interface{}{"ready": false, "reason": reason}
+		}
+		return obj
+	}
+	for _, ratchet := range []bool{false, true} {
+		assertRejectedWith(t, celAdmission(t, crds, gate(false, "blocked"), gate(false, ""), ratchet),
+			"at most 63 characters")
+		assert.Empty(t, celAdmission(t, crds, gate(true, ""), gate(false, ""), ratchet), "marking it")
+		assert.Empty(t, celAdmission(t, crds, gate(true, "blocked"), gate(true, ""), ratchet), "status write once marked")
+	}
+
+	noSpec := baseObject("PolicyGate")
+	delete(noSpec, "spec")
+	noSpec["metadata"].(map[string]interface{})["name"] = name
+	assertRejectedWith(t, celAdmission(t, crds, noSpec, nil, false), "at most 63 characters")
+	noSpec["metadata"].(map[string]interface{})["name"] = "short"
+	assert.Empty(t, celAdmission(t, crds, noSpec, nil, false))
 }
 
 // TestCRDSchemaAcceptsShippedPolicyGates: every PolicyGate in examples/, demo/

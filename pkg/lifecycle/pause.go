@@ -64,9 +64,12 @@ func DesiredFreezeGate(p *v1alpha1.Pipeline) *v1alpha1.PolicyGate {
 				LabelFreeze:   "true",
 			},
 		},
+		// Generated: the freeze gate is never a template, so its name may be
+		// longer than 63 characters (a pipeline name can be 63).
 		Spec: v1alpha1.PolicyGateSpec{
 			Expression: "false",
 			Message:    fmt.Sprintf("Pipeline %s is paused — resume with: kardinal resume %s", p.Name, p.Name),
+			Generated:  true,
 		},
 	}
 	if p.UID != "" {

@@ -770,10 +770,14 @@ func buildPolicyGateNode(
 		},
 	}
 
+	// generated marks the instance as kardinal's: it is never used as a
+	// template, which is what lets its name be longer than 63 characters
+	// (the PolicyGate CRD name rule).
 	templateSpec := map[string]interface{}{
 		"expression":      gate.Spec.Expression,
 		"message":         gate.Spec.Message,
 		"recheckInterval": gate.Spec.RecheckInterval,
+		"generated":       true,
 	}
 	// when is copied only when set: the CRD defaults it to post-deploy, and an
 	// empty string would fail the enum. It is deprecated and has no effect

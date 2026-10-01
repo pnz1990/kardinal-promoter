@@ -296,12 +296,13 @@ Pipeline defines a promotion pipeline for one application. It specifies the orde
 
 `kardinal.io/v1alpha1`
 
-PolicyGate is a CEL-powered policy check represented as a node in the promotion Graph. Platform teams define org-level gates; teams add their own. A gate's name must be at most 63 characters, because the Graph copies it into a label of each instance. The rule exempts the two kinds of PolicyGate kardinal names itself: gate instances ("&lt;gate&gt;-&lt;namespace&gt;-&lt;env&gt;--&lt;bundle&gt;", see pkg/graph gateNodeK8sName, which can be longer) and pause freeze gates ("freeze-&lt;pipeline&gt;"). Neither is ever used as a template.
+PolicyGate is a CEL-powered policy check represented as a node in the promotion Graph. Platform teams define org-level gates; teams add their own. A gate's name must be at most 63 characters, because the Graph copies it into a label of each instance. Only the PolicyGates kardinal creates may be longer: gate instances ("&lt;gate&gt;-&lt;namespace&gt;-&lt;env&gt;--&lt;bundle&gt;", see pkg/graph gateNodeK8sName) and pause freeze gates ("freeze-&lt;pipeline&gt;"). Kardinal sets spec.generated on them and never uses a gate with spec.generated as a template. The exemption does not go by name, because a template can have any name; a template that sets spec.generated is no longer a template.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | PolicyGateSpec defines the desired state of a PolicyGate. |
 | `spec.expression` | string | yes | Expression is the CEL expression evaluated to determine if promotion is allowed. Must evaluate to a boolean. |
+| `spec.generated` | boolean |  | Generated is set by kardinal on the PolicyGates it creates: the gate instances a promotion Graph makes from a template, and the freeze gate of a paused Pipeline. Kardinal never uses a generated PolicyGate as a template, so only a generated PolicyGate may have a name longer than 63 characters. Do not set it on a gate you write: a generated gate never applies to an environment. |
 | `spec.message` | string |  | Message is a human-readable explanation shown when the gate blocks. |
 | `spec.overrides` | []object |  | Overrides holds time-limited emergency overrides (K-09). When any non-expired override exists (matching Stage or with empty Stage), the gate passes immediately. Expired overrides are kept as audit records. |
 | `spec.overrides[].createdAt` | string (date-time) |  | CreatedAt is when the override was created (set by the CLI). |
