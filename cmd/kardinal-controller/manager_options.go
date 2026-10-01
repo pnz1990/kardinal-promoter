@@ -13,9 +13,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
-// gracefulShutdownTimeout lets in-flight reconciles and HTTP requests finish
-// before the controller exits. It is half the pod's
-// terminationGracePeriodSeconds (60s) to leave room for cleanup. (#574)
+// gracefulShutdownTimeout is how long the controller waits on shutdown for
+// in-flight reconciles, whose context the shutdown cancels, and HTTP requests
+// to return. It is half the pod's terminationGracePeriodSeconds (60s) to
+// leave room for cleanup. (#574)
 const gracefulShutdownTimeout = 30 * time.Second
 
 // managerConfig holds the flags that shape the controller-runtime manager.

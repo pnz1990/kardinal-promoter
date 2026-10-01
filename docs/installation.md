@@ -506,15 +506,15 @@ after its push and before its PR opens one PR with one commit, and the base bran
 only when the PR is merged.
 
 The Helm chart sets `terminationGracePeriodSeconds: 60` (double the shutdown timeout)
-so Kubernetes sends `SIGKILL` only after the controller has had a full 30 seconds to drain.
+so Kubernetes sends `SIGKILL` only after the controller has had its full 30 seconds to shut down.
 
-The 30-second drain is fixed in the controller. `terminationGracePeriodSeconds` only sets
+The 30-second shutdown timeout is fixed in the controller. `terminationGracePeriodSeconds` only sets
 when Kubernetes sends `SIGKILL`, so a value above 30 does not give reconciles more time.
-A value below 30 cuts the drain short, and `0` kills the Pod at once:
+A value below 30 can cut the shutdown short, and `0` kills the Pod at once:
 
 ```yaml
 # values.yaml
-terminationGracePeriodSeconds: 0  # no drain: SIGKILL at once
+terminationGracePeriodSeconds: 0  # no graceful shutdown: SIGKILL at once
 ```
 
 ---
