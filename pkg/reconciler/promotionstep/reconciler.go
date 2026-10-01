@@ -909,6 +909,9 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 			health.ImageExpectation{Repository: img.Repository, Tag: img.Tag, Digest: img.Digest})
 	}
 	opts.Since = healthCheckStart(ps)
+	if at := ps.Status.TargetUpdatedAt; at != nil {
+		opts.TargetUpdatedAt = at.Time
+	}
 
 	adapter, err := r.HealthDetector.Select(ctx, opts.Type)
 	if err != nil {
@@ -936,6 +939,12 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 	}
 	checkedAt := metav1.NewTime(time.Now())
 	ps.Status.LastHealthCheckAt = &checkedAt
+	// The first check that finds the target on the Bundle images dates the
+	// update: the flagger check counts a Failed phase only when Flagger set it
+	// later. Every path below patches the status.
+	if result.TargetUpdated && ps.Status.TargetUpdatedAt == nil {
+		ps.Status.TargetUpdatedAt = &checkedAt
+	}
 
 	// A terminal result (ProgressDeadlineExceeded, Flagger canary Failed) will
 	// not recover, bake or not.

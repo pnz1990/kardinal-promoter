@@ -195,6 +195,15 @@ type PromotionStepStatus struct {
 	// +optional
 	LastHealthCheckAt *metav1.Time `json:"lastHealthCheckAt,omitempty"`
 
+	// TargetUpdatedAt is when a health check of this step first found the
+	// workload's target running the Bundle images (health.type flagger: the
+	// Canary's target Deployment). Set once. The flagger check counts a
+	// Failed phase only when Flagger set it after this time: the previous
+	// release can fail after the health check started but before the GitOps
+	// tool applied the Bundle.
+	// +optional
+	TargetUpdatedAt *metav1.Time `json:"targetUpdatedAt,omitempty"`
+
 	// Steps is the per-step execution history for this PromotionStep.
 	// Populated by the reconciler as each step in the sequence starts, completes, or fails.
 	// Provides fine-grained visibility into which sub-step is running without reading

@@ -240,8 +240,10 @@ func TestFlaggerAdapter_Revision(t *testing.T) {
 		objs     []runtime.Object
 		expected []health.ImageExpectation
 		since    time.Time
-		want     wantKind
-		reason   string
+		// seen is when a check first found the target on the Bundle images.
+		seen   time.Time
+		want   wantKind
+		reason string
 	}{
 		{name: "Succeeded once the primary runs the Bundle images",
 			objs:     []runtime.Object{canaryObj(target, "Succeeded", after, okMsg), targetOn(podinfo + ":6.15.0"), primaryOn(podinfo + ":6.15.0")},
@@ -269,9 +271,9 @@ func TestFlaggerAdapter_Revision(t *testing.T) {
 			objs:     []runtime.Object{ticked(canaryObj(target, "Failed", before, failMsg), after), targetOn(podinfo + ":6.15.0"), primaryOn(podinfo + ":6.14.1")},
 			expected: bundle, since: since, want: isProgressing,
 			reason: "Canary phase: Failed is for an earlier release: its Promoted condition's lastUpdateTime 2026-09-30T21:56:24Z is before"},
-		{name: "Failed after the health check started is terminal with Flagger's reason",
+		{name: "Failed after the target ran the Bundle images is terminal with Flagger's reason",
 			objs:     []runtime.Object{canaryObj(target, "Failed", after, failMsg), targetOn(podinfo + ":6.15.0"), primaryOn(podinfo + ":6.14.1")},
-			expected: bundle, since: since, want: isTerminal, reason: "Canary phase: Failed — " + failMsg},
+			expected: bundle, since: since, seen: since.Add(time.Minute), want: isTerminal, reason: "Canary phase: Failed — " + failMsg},
 		{name: "Failed with no health-check start known is terminal",
 			objs:     []runtime.Object{canaryObj(target, "Failed", before, failMsg), targetOn(podinfo + ":6.15.0"), primaryOn(podinfo + ":6.14.1")},
 			expected: bundle, want: isTerminal, reason: failMsg},
@@ -313,9 +315,10 @@ func TestFlaggerAdapter_Revision(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dyn := dynfake.NewSimpleDynamicClient(runtime.NewScheme(), tt.objs...)
 			got, err := health.NewFlaggerAdapter(dyn).Check(context.Background(), health.CheckOptions{
-				Flagger:        health.FlaggerConfig{Name: "web", Namespace: "prod"},
-				ExpectedImages: tt.expected,
-				Since:          tt.since,
+				Flagger:         health.FlaggerConfig{Name: "web", Namespace: "prod"},
+				ExpectedImages:  tt.expected,
+				Since:           tt.since,
+				TargetUpdatedAt: tt.seen,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, kindOf(got), got.Reason)

@@ -1417,6 +1417,10 @@ func (in *PromotionStepStatus) DeepCopyInto(out *PromotionStepStatus) {
 		in, out := &in.LastHealthCheckAt, &out.LastHealthCheckAt
 		*out = (*in).DeepCopy()
 	}
+	if in.TargetUpdatedAt != nil {
+		in, out := &in.TargetUpdatedAt, &out.TargetUpdatedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Steps != nil {
 		in, out := &in.Steps, &out.Steps
 		*out = make([]StepStatus, len(*in))
