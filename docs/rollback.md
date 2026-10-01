@@ -29,7 +29,7 @@ The rollback Bundle has the target's type, with the exceptions below, and deploy
 
 In each case `spec.provenance.rollbackOf` names the target. The automatic rollbacks choose the same way.
 
-The target, by the deployed Bundle's type. A `--to` target that cannot deploy what the deployed Bundle changed is refused, and the error names what it cannot restore:
+The table below shows, for each type of deployed Bundle, which Bundle a rollback without `--to` targets and what a rollback to each type of target restores. A `--to` target that cannot deploy what the deployed Bundle changed is refused, and the error names what it cannot restore:
 
 | Deployed | Without `--to` | `--to` an image Bundle | `--to` a config Bundle | `--to` a mixed Bundle |
 |---|---|---|---|---|
