@@ -232,8 +232,54 @@ func TestCheckGitHubToken(t *testing.T) {
 			assert.Equal(t, tc.wantIcon, r.icon)
 			assert.Equal(t, tc.wantDetail, r.detail)
 			assert.NotContains(t, r.detail+r.hint, "ghp_x", "the token is never printed")
+			wantLabel := "GitHub token"
+			if tc.name == "no controller in the namespace" {
+				wantLabel = "SCM token"
+			}
+			assert.Equal(t, wantLabel, r.label, "no --scm-provider is GitHub")
 		})
 	}
+}
+
+// The token check is named after the controller's --scm-provider, read the
+// way the controller reads it: the last flag in command and args, either
+// form, else KARDINAL_SCM_PROVIDER. A provider doctor does not know, or no
+// controller Deployment, is "SCM token".
+func TestCheckGitHubToken_ProviderLabel(t *testing.T) {
+	cases := []struct {
+		name      string
+		command   []string
+		args      []string
+		env       []corev1.EnvVar
+		wantLabel string
+	}{
+		{name: "default", wantLabel: "GitHub token"},
+		{name: "github", args: []string{"--scm-provider=github"}, wantLabel: "GitHub token"},
+		{name: "chart args", args: []string{"--leader-elect=true", "--scm-provider=forgejo", "--scm-api-url=http://x"},
+			wantLabel: "Forgejo token"},
+		{name: "gitea", args: []string{"--scm-provider=gitea"}, wantLabel: "Gitea token"},
+		{name: "separate value", args: []string{"-scm-provider", "gitlab"}, wantLabel: "GitLab token"},
+		{name: "in command", command: []string{"/manager", "--scm-provider=bitbucket"}, wantLabel: "Bitbucket token"},
+		{name: "last flag wins", args: []string{"--scm-provider=gitlab", "--scm-provider=azuredevops"},
+			wantLabel: "Azure DevOps token"},
+		{name: "env", env: []corev1.EnvVar{{Name: "KARDINAL_SCM_PROVIDER", Value: "gitlab"}}, wantLabel: "GitLab token"},
+		{name: "flag beats env", args: []string{"--scm-provider=forgejo"},
+			env: []corev1.EnvVar{{Name: "KARDINAL_SCM_PROVIDER", Value: "gitlab"}}, wantLabel: "Forgejo token"},
+		{name: "unknown provider", args: []string{"--scm-provider=svn"}, wantLabel: "SCM token"},
+		{name: "a flag with a similar name", args: []string{"--scm-provider-x=gitlab"}, wantLabel: "GitHub token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := controllerDeployment("kardinal", append(tc.env, corev1.EnvVar{Name: "GITHUB_TOKEN", Value: "ghp_x"})...)
+			d.Spec.Template.Spec.Containers[0].Command = tc.command
+			d.Spec.Template.Spec.Containers[0].Args = tc.args
+			r := checkGitHubToken(context.Background(), doctorClient(d), "kardinal")
+			assert.Equal(t, tc.wantLabel, r.label)
+			assert.Equal(t, doctorPass, r.icon)
+		})
+	}
+	r := checkGitHubToken(context.Background(), doctorClient(), "kardinal")
+	assert.Equal(t, "SCM token", r.label, "no controller Deployment")
 }
 
 // C09a-cli-11: pipeline phases are Ready, Degraded, Promoting, Unknown; a Get error other

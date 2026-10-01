@@ -12,6 +12,10 @@ Run pre-flight checks for kardinal-promoter:
   ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
   ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
 
+The token check is named after the controller's --scm-provider (GitHub token,
+GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps
+token), and is "SCM token" when doctor finds no controller Deployment.
+
 Use --controller-namespace when kardinal-promoter is installed in a namespace
 other than kardinal-system. --pipeline checks a Pipeline in the current
 namespace (-n, else the kubeconfig context's namespace).

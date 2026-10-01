@@ -18,7 +18,7 @@
 //   2. CRDs installed        — uses discovery to find every kardinal.io/v1alpha1 resource
 //   3. kro running           — looks for the kro controller pod in kro-system
 //   4. kro Graph CRD         — uses discovery API to find kro.run/v1alpha1 graphs
-//   5. GitHub token          — reads GITHUB_TOKEN from the controller Deployment
+//   5. SCM token             — reads GITHUB_TOKEN from the controller Deployment
 //   6. Pipeline health       — optional via --pipeline flag
 
 package cmd
@@ -83,6 +83,10 @@ func newDoctorCmd() *cobra.Command {
   ✅ kro running               kro controller pod in kro-system
   ✅ kro Graph CRD installed   kro.run/v1alpha1 graphs registered
   ✅ GitHub token              GITHUB_TOKEN set on the controller Deployment
+
+The token check is named after the controller's --scm-provider (GitHub token,
+GitLab token, Forgejo token, Gitea token, Bitbucket token or Azure DevOps
+token), and is "SCM token" when doctor finds no controller Deployment.
 
 Use --controller-namespace when kardinal-promoter is installed in a namespace
 other than kardinal-system. --pipeline checks a Pipeline in the current
@@ -342,11 +346,67 @@ func checkKroCRDs(disco discovery.DiscoveryInterface) doctorResult {
 	return r
 }
 
+// scmTokenLabels names the token check after the controller's SCM provider
+// (the --scm-provider values scm.NewProvider accepts; "" is GitHub).
+var scmTokenLabels = map[string]string{
+	"": "GitHub token", "github": "GitHub token", "gitlab": "GitLab token",
+	"forgejo": "Forgejo token", "gitea": "Gitea token",
+	"bitbucket": "Bitbucket token", "azuredevops": "Azure DevOps token",
+}
+
+// scmProvider returns the SCM provider a controller container runs with, as
+// the controller reads it: the last --scm-provider flag in its command and
+// args, else the KARDINAL_SCM_PROVIDER env value, else "" (GitHub).
+func scmProvider(c corev1.Container) string {
+	provider, flagSet := "", false
+	argv := append(append([]string{}, c.Command...), c.Args...)
+	for i, a := range argv {
+		name, value, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if !strings.HasPrefix(a, "-") || name != "scm-provider" {
+			continue
+		}
+		if !hasValue {
+			if i+1 >= len(argv) {
+				continue
+			}
+			value = argv[i+1]
+		}
+		provider, flagSet = value, true
+	}
+	if flagSet {
+		return provider
+	}
+	for _, env := range c.Env {
+		if env.Name == "KARDINAL_SCM_PROVIDER" && env.ValueFrom == nil {
+			return env.Value
+		}
+	}
+	return ""
+}
+
+// scmTokenLabel is the token check's label for a controller Deployment: the
+// provider's name, or "SCM token" for a provider doctor does not know.
+func scmTokenLabel(dep appsv1.Deployment) string {
+	provider := ""
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		if p := scmProvider(c); p != "" {
+			provider = p
+			break
+		}
+	}
+	if label, ok := scmTokenLabels[provider]; ok {
+		return label
+	}
+	return "SCM token"
+}
+
 // checkGitHubToken reads where the controller Deployment gets GITHUB_TOKEN:
 // an inline value (helm github.token) or a Secret key (github.secretRef).
-// The token value is never printed.
+// The check is labelled with the controller's SCM provider (scmTokenLabel),
+// or "SCM token" when no controller Deployment is found. The token value is
+// never printed.
 func checkGitHubToken(ctx context.Context, client sigs_client.Client, controllerNS string) doctorResult {
-	r := doctorResult{label: "GitHub token"}
+	r := doctorResult{label: "SCM token"}
 	warn := func(detail, hint string) doctorResult {
 		r.icon, r.detail, r.hint, r.warned = doctorWarn, detail, hint, true
 		return r
@@ -363,6 +423,7 @@ func checkGitHubToken(ctx context.Context, client sigs_client.Client, controller
 			"Installed elsewhere? Use --controller-namespace.")
 	}
 	dep := deps.Items[0]
+	r.label = scmTokenLabel(dep)
 	for _, c := range dep.Spec.Template.Spec.Containers {
 		for _, env := range c.Env {
 			if env.Name != "GITHUB_TOKEN" {
