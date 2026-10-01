@@ -65,6 +65,7 @@ func (m *mockSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, 
 	m.openCalled++
 	return m.prURL, m.prNumber, m.openPRErr
 }
+
 // ClosePR records the call. A close that succeeds, or whose response is lost
 // (lostClose), leaves the PR closed: GetPRStatus then reports it not open.
 func (m *mockSCM) ClosePR(_ context.Context, repo string, number int) error {
