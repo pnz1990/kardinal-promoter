@@ -405,6 +405,23 @@ func TestArgoCDAdapter_Revision(t *testing.T) {
 				"summary":        map[string]interface{}{"images": []interface{}{"ghcr.io/org/app:v1"}}}),
 			images: []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}}, want: isProgressing,
 			reason: "runs ghcr.io/org/app:v1, Bundle has ghcr.io/org/app:v2"},
+		// B67: a summary with none of the Bundle repositories does not show
+		// the change deployed, so only Healthy counts.
+		{name: "B67 no revision: degraded with none of the Bundle repositories waits",
+			status: synced(map[string]interface{}{
+				"health":  map[string]interface{}{"status": "Degraded"},
+				"summary": map[string]interface{}{"images": []interface{}{"ghcr.io/org/sidecar:1.0"}}}),
+			images: []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}}, want: isProgressing,
+			reason: "health=Degraded, sync=Synced, opPhase=Succeeded, (image not verified: runs none of the Bundle images)"},
+		{name: "B67 no revision: failed operation with no summary images waits",
+			status: synced(map[string]interface{}{"operationState": map[string]interface{}{"phase": "Failed"}}),
+			images: []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}}, want: isProgressing,
+			reason: "health=Healthy, sync=Synced, opPhase=Failed, (image not verified: runs none of the Bundle images)"},
+		{name: "no revision: healthy with none of the Bundle repositories passes, not verified",
+			status: synced(map[string]interface{}{"summary": map[string]interface{}{
+				"images": []interface{}{"ghcr.io/org/sidecar:1.0"}}}),
+			images: []health.ImageExpectation{{Repository: "ghcr.io/org/app", Tag: "v2"}}, want: isHealthy,
+			reason: "(image not verified: runs none of the Bundle images)"},
 		{name: "no revision, nothing to compare: degraded is a failure",
 			status: synced(map[string]interface{}{"health": map[string]interface{}{"status": "Degraded"}}),
 			want:   isUnhealthy},

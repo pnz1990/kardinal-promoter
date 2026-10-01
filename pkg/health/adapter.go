@@ -400,7 +400,10 @@ var argoCDApplicationGVR = schema.GroupVersionResource{
 // operation counts only when it ran on the promoted commit. An operation
 // still running on the promoted commit has not deployed it (a PreSync hook
 // can run for minutes), so while it runs Degraded counts only once the
-// Application is Synced on the commit or has it in status.history. Every
+// Application is Synced on the commit or has it in status.history. Without a
+// revision, a status.summary.images with none of the Bundle repositories
+// shows neither version: Healthy and Synced still pass, unverified, but
+// Degraded and a failed operation wait for health.timeout (B67). Every
 // other not-yet-healthy state (OutOfSync, Progressing, Missing, a running
 // operation, an older revision, a failure from before the change) is
 // Progressing, so it never adds to status.consecutiveHealthFailures.
@@ -426,7 +429,7 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	state := fmt.Sprintf("health=%s, sync=%s, opPhase=%s", healthStatus, syncStatus, opPhase)
 
 	target := argoCDRevision(app, syncStatus, opPhase, opts)
-	if !target.deployed {
+	if !target.deployed || target.unverified {
 		state += ", " + target.note
 	}
 	opFailed := opPhase == "Failed" || opPhase == "Error"
@@ -438,7 +441,7 @@ func (a *ArgoCDAdapter) Check(ctx context.Context, opts CheckOptions) (HealthSta
 	opOK := opPhase == "Succeeded" || opPhase == "" || (!target.operated && opFailed)
 
 	switch {
-	case healthStatus == "Degraded" && target.deployed, opFailed && target.operated:
+	case !target.unverified && ((healthStatus == "Degraded" && target.deployed) || (opFailed && target.operated)):
 		return unhealthy(state), nil
 	case healthStatus == "Healthy" && syncStatus == "Synced" && opOK && target.deployed:
 		reason := fmt.Sprintf("Healthy+Synced (opPhase=%q)", opPhase)
@@ -459,6 +462,11 @@ type argoCDTarget struct {
 	// operated: status.operationState ran on the promoted change, so its
 	// phase counts.
 	operated bool
+	// unverified: deployed is assumed, not shown (update.strategy argocd,
+	// with none of the Bundle repositories in status.summary.images).
+	// Healthy passes the change, but Degraded health and a failed operation
+	// can be the previous version's, so they do not count (B67).
+	unverified bool
 	// note is for the status message: why the change is not deployed yet,
 	// or how it was verified.
 	note string
@@ -483,9 +491,10 @@ func argoCDRevision(app *unstructured.Unstructured, syncStatus, opPhase string, 
 		if len(opts.ExpectedImages) > 0 {
 			// No commit to compare (update.strategy argocd): an operation or
 			// health from before the Application runs the Bundle images is
-			// about the previous version.
+			// about the previous version. A summary with none of the Bundle
+			// repositories shows neither version, so only Healthy counts.
 			ok, note := argoCDImages(app, opts.ExpectedImages)
-			return argoCDTarget{deployed: ok, operated: ok, note: note}
+			return argoCDTarget{deployed: ok, operated: ok, unverified: ok && note != "", note: note}
 		}
 		return argoCDTarget{deployed: true, operated: true, note: "(revision not verified)"}
 	}
