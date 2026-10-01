@@ -448,7 +448,7 @@ What each finding blocks:
 | env `steps` / `autoRollback` | every write fails | only edits to that environment fail |
 | reserved environment name (e.g. `graph`) | every write fails | only edits to that environment fail |
 | `spec.policyGates`, PolicyGate `spec.selector` | every write fails | writes succeed; the next edit must remove the field |
-| environment name that is not a DNS label (e.g. `Test`) | spec writes fail; status writes succeed and the Pipeline reports Valid | writes succeed |
+| environment name that is not a DNS label (e.g. `Test`) | spec and label writes fail; status writes succeed and the Pipeline reports Valid | writes succeed |
 | PolicyGate name longer than 63 characters | every write fails | **every write fails**, including labels and status |
 | duplicate environment name | writes succeed; Pipeline `Ready=False` `ValidationFailed` | same |
 | `shard` | writes succeed; Pipeline `Ready=False` `NotImplemented` | same |
