@@ -3,7 +3,7 @@ INST-KRO-01	live	core	covered	install	kro v0.10.0-rc.0 Graph controller with Gra
 INST-CRD-01	live	core	covered	install	kardinal CRDs installable from config/crd/bases (Pipeline, Bundle, PolicyGate, PromotionStep)	docs/installation.md:72; config/crd/bases
 INST-CRD-02	live	core	covered	install	secondary CRDs installed and served (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock, RollbackPolicy, AuditEvent, PRStatus)	config/crd/bases; docs/installation.md:72
 INST-QUICKSTART-01	live	core	covered	install	examples/quickstart pipeline.yaml and policy-gates.yaml are accepted by the API server	examples/quickstart/README.md:62-71; docs/quickstart.md:236
-INST-SHUTDOWN-01	live	upgrade	todo	install	graceful SIGTERM shutdown drains in-flight reconciles up to 30s (terminationGracePeriodSeconds 60)	docs/installation.md:258-268; chart/kardinal-promoter/values.yaml:10
+INST-SHUTDOWN-01	live	upgrade	todo	install	graceful SIGTERM shutdown drains in-flight reconciles up to 30s (terminationGracePeriodSeconds 60)	docs/installation.md:267-277; chart/kardinal-promoter/values.yaml:10
 GRAPH-SEQ-01	live	core	covered	graph	default sequential ordering: each environment starts only after the previous one is Verified	docs/pipeline-reference.md:96
 GRAPH-DEP-01	live	core	covered	graph	dependsOn fan-out and fan-in: parallel environments, join waits for all	docs/pipeline-reference.md:96; docs/pipeline-reference.md:164
 GRAPH-DEP-02	live	core	covered	graph	unknown dependsOn or a dependency cycle sets Pipeline Ready=False and no promotion runs	docs/changelog.md:85; pkg/graph/cycle.go:20
@@ -15,10 +15,10 @@ GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph 
 GRAPH-HEAL-01	live	core	covered	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
 GRAPH-RBAC-01	live	chart	todo	graph	Graph ServiceAccount and RBAC (graph-rbac.yaml) let kro create PromotionSteps, PolicyGates and PRStatus nodes	chart/kardinal-promoter/templates/graph-rbac.yaml
 GRAPH-PRSTATUS-01	live	scm-forgejo	todo	graph	PRStatus companion node per pr-review step tracks PR state	docs/graph-coverage.md; api/v1alpha1/prstatus_types.go
-GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:60; docs/changelog.md:56
-GRAPH-READER-PRUNE-01	live	core	covered	graph	deleting a namespace's last Bundle deletes the reader RoleBinding its Graph had in argocd	pkg/reconciler/graphcleanup/reconciler.go:54; docs/installation.md:573
-GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:240; docs/changelog.md:57
-GRAPH-READER-SWEEP-01	live	upgrade	todo	graph	after an upgrade or restart, the startup sweep deletes the reader RoleBindings whose namespace is gone or holds no Graph reading through them	pkg/reconciler/graphcleanup/sweep.go:22; docs/installation.md:579
+GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:67; docs/changelog.md:56
+GRAPH-READER-PRUNE-01	live	core	covered	graph	deleting a namespace's last Bundle deletes the reader RoleBinding its Graph had in argocd	pkg/reconciler/graphcleanup/reconciler.go:61; docs/installation.md:605
+GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:246; docs/changelog.md:57
+GRAPH-READER-SWEEP-01	live	upgrade	todo	graph	after an upgrade or restart, the startup sweep deletes the reader RoleBindings whose namespace is gone or holds no Graph reading through them	pkg/reconciler/graphcleanup/sweep.go:22; docs/installation.md:611
 BUNDLE-PHASE-01	live	core	covered	bundle	a new Bundle is picked up by the controller and gets phase Available or Promoting	api/v1alpha1/bundle_types.go:107
 BUNDLE-VERIFIED-01	live	core	covered	bundle	image Bundle reaches Verified when every targeted environment is Verified	docs/changelog.md:84
 BUNDLE-FAILED-01	live	core	covered	bundle	a failing step fails the Bundle; a Failed Bundle retries after its Pipeline changes	docs/changelog.md:84
@@ -55,10 +55,11 @@ STEP-GITAUTH-01	live	core	covered	step	git.secretRef token Secret authenticates 
 STEP-RETRY-01	live	core	covered	step	transient git or SCM errors are retried with backoff before the step fails	docs/pipeline-reference.md:110
 STEP-TIMEOUT-01	live	core	covered	step	stepTimeoutSeconds cancels a step that runs too long; handled like a step error	docs/pipeline-reference.md:110
 STEP-MERGETIMEOUT-01	live	scm-forgejo	todo	step	waitForMergeTimeout fails the step and closes the PR so a late merge cannot deliver	docs/pipeline-reference.md:109
-STEP-RESUME-01	live	upgrade	todo	step	controller restart after git-push resumes the step without a duplicate commit or PR	docs/installation.md:258
+STEP-RESUME-01	live	upgrade	todo	step	controller restart after git-push resumes the step without a duplicate commit or PR	docs/installation.md:267
 STEP-ORPHAN-01	live	core	covered	step	PromotionSteps whose Bundle is gone are cleaned up	pkg/reconciler/promotionstep
-STEP-DELETE-PR-01	live	core	covered	step	a step with an open PR holds the kardinal.io/close-pr finalizer; deleting its Bundle closes the PR with a comment, and a step without a PR goes at once	pkg/reconciler/promotionstep/finalizer.go:27; docs/changelog.md:55
-STEP-DELETE-PR-02	live	core	covered	step	deleting a namespace closes the open PR of its step; the close-pr finalizer does not stall the namespace deletion	pkg/reconciler/promotionstep/finalizer.go:111; docs/troubleshooting.md:541
+STEP-DELETE-PR-01	live	core	covered	step	a pr-review step holds the kardinal.io/close-pr finalizer and a Verified auto step does not; deleting their Bundle closes the PR with one comment, and the steps go	pkg/reconciler/promotionstep/finalizer.go:27; docs/changelog.md:55
+STEP-DELETE-PR-02	live	core	covered	step	deleting a namespace closes the open PR of its step with one comment naming the namespace; the close-pr finalizer does not stall the namespace deletion	pkg/reconciler/promotionstep/finalizer.go:120; docs/troubleshooting.md:541
+STEP-DELETE-PR-03	live	core	covered	step	a step deleted with its Graph while the Bundle is Promoting leaves its PR open and uncommented; the recreated step reuses it, so the environment has one PR	pkg/reconciler/promotionstep/finalizer.go:191; docs/troubleshooting.md:558
 STEP-AUDIT-01	live	core	covered	audit	AuditEvent objects are written for step transitions and gate decisions	api/v1alpha1/auditevent_types.go; docs/changelog.md:94
 STEP-EVENTS-01	live	core	covered	audit	controller emits events.k8s.io/v1 Events with action and note <=1024 bytes	docs/changelog.md:74
 ARGOSTRAT-01	live	health-argocd	todo	step	update.strategy: argocd patches the Application spec.source.helm.valuesObject with no git commit or PR	docs/argocd-native-promotion.md:26; docs/argocd-native-promotion.md:65; pkg/steps/steps/argocd_set_image.go
@@ -186,7 +187,7 @@ GATE-PR-01	live	core	covered	gates	bundle.pr.* (isApproved, approvalCount) from 
 GATE-ORG-01	live	core	covered	gates	org gates in platform-policies with kardinal.io/applies-to are injected into matching Pipelines and cannot be removed by the team	docs/policy-gates.md:89-108; docs/policy-gates.md:129-148
 GATE-TEAM-01	live	core	covered	gates	team gates in the Pipeline namespace apply only to that team's matching envs	docs/policy-gates.md:109-128
 GATE-POLNS-01	live	core	covered	gates	Pipeline spec.policyNamespaces adds extra gate namespaces	api/v1alpha1/pipeline_types.go:52-58; docs/guides/security.md:118-135
-GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:518-523; pkg/reconciler/promotionstep/reconciler.go:1181-1198
+GATE-PREDEPLOY-01	live	core	covered	gates	step waits for a gate evaluation at or after its own creation; a gate that turns not-ready before start holds the step	docs/policy-gates.md:518-523; pkg/reconciler/promotionstep/reconciler.go:1211-1228
 GATE-RECHECK-01	live	core	covered	gates	recheckInterval (default 5m, min 10s) re-evaluates gates periodically	docs/policy-gates.md:447-481
 GATE-FINISHED-01	live	core	covered	gates	gates of settled or Superseded Bundles are no longer evaluated	docs/policy-gates.md:504-517; pkg/reconciler/policygate/reconciler.go:142-145
 GATE-OVERRIDE-01	live	core	covered	gates	spec.overrides with reason and expiry makes the gate pass for that stage; PR body shows OVERRIDDEN by/reason	docs/policy-gates.md:553; pkg/reconciler/policygate/reconciler.go:153-165; pkg/reconciler/policygate/reconciler.go:154
@@ -358,7 +359,7 @@ OBS-METRICS-01	live	flux	covered	observability	/metrics exposes the 7 kardinal m
 OBS-CRMETRICS-01	live	flux	covered	observability	controller-runtime reconcile and workqueue metrics	docs/guides/monitoring.md:46-73
 OBS-READYZ-01	live	core	covered	observability	/readyz readiness probe on the health port	chart/kardinal-promoter/templates/deployment.yaml:142-151
 OBS-HEALTHZ-01	live	core	covered	observability	/healthz liveness probe	chart/kardinal-promoter/templates/deployment.yaml:142-151
-UPG-CRDS-01	live	upgrade	todo	upgrade	v0.8.1 to v0.9.0-rc.1: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:49-64; docs/installation.md:211-226; docs/installation.md:276-279
+UPG-CRDS-01	live	upgrade	todo	upgrade	v0.8.1 to v0.9.0-rc.1: kro first, CRDs applied by hand, then helm upgrade	docs/changelog.md:49-64; docs/installation.md:211-226; docs/installation.md:285-288
 UPG-REUSE-01	live	upgrade	todo	upgrade	helm upgrade --reuse-values from v0.8.1	docs/installation.md:223-226; chart/kardinal-promoter/values.schema.json:6
 UPG-INFLIGHT-01	live	upgrade	todo	upgrade	in-flight Bundles re-translate into kro Graphs and continue after the upgrade	docs/changelog.md:66-87
 UPG-PAUSED-01	live	upgrade	todo	upgrade	Pipelines paused before the upgrade stay held	docs/changelog.md:66-87; pkg/lifecycle/pause.go:45

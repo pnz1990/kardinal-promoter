@@ -86,8 +86,8 @@ func TestCLI_DeleteBundleClosesPR(t *testing.T) {
 // Terminating for good. The controller now drops kro's finalizer from its own
 // Graphs in a terminating namespace once the applier RoleBinding is gone, and
 // the namespace controller deletes the children. The prod step's close-pr
-// finalizer must not stall the namespace either: the controller closes the PR
-// and lets the step go. The reader RoleBinding in argocd goes with the
+// finalizer must not stall the namespace either: the controller closes the PR,
+// with one comment naming the namespace, and lets the step go. The reader RoleBinding in argocd goes with the
 // namespace's last Graph. Covers GRAPH-NSDELETE-01, STEP-DELETE-PR-02,
 // GRAPH-READER-PRUNE-02.
 func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
@@ -122,6 +122,8 @@ func TestGraph_NamespaceDeletionFinishes(t *testing.T) {
 		return false, fmt.Sprintf("phase=%s; %s", ns.Status.Phase, describeGraph(ctx, e, a.ns, graph))
 	})
 	e.WaitPRState(t, a.repo, pr.Number, "closed", time.Minute)
+	assert.Len(t, e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR: namespace "+a.ns+" was deleted"), 1,
+		"one comment says why kardinal closed the PR")
 	framework.Eventually(t, time.Minute, "no reader binding for "+a.ns+" in argocd", func(context.Context) (bool, string) {
 		left := readerBindings(t, e, a.ns)
 		return len(left) == 0, fmt.Sprintf("left: %v", left)
