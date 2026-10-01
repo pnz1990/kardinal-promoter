@@ -311,8 +311,10 @@ func TestFluxAdapter_Revision(t *testing.T) {
 	}{
 		{name: "previous commit applied", obj: ks("True", "main@sha1:d7d4d8a000000000000000000000000000000000"),
 			want: isProgressing, reason: "waiting for 034ce92a1b2c"},
-		{name: "pushed commit applied", obj: ks("True", "main@sha1:"+pushed), want: isHealthy},
-		{name: "legacy revision format", obj: ks("True", "main/"+pushed), want: isHealthy},
+		{name: "pushed commit applied", obj: ks("True", "main@sha1:"+pushed), want: isHealthy,
+			reason: "Ready=True, generation=3 matches, lastAppliedRevision=034ce92a1b2c"},
+		{name: "legacy revision format", obj: ks("True", "main/"+pushed), want: isHealthy,
+			reason: "lastAppliedRevision=034ce92a1b2c"},
 		{name: "OCI source cannot be compared", obj: ks("True", "latest@sha256:abc"), want: isHealthy,
 			reason: "revision not verified"},
 		{name: "Ready=Unknown is progressing", obj: ks("Unknown", "main@sha1:"+pushed), want: isProgressing},

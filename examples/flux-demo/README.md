@@ -97,8 +97,8 @@ bash scripts/demo-validate.sh
 ## Expected Output
 
 ```
-test  | Flux Kustomization flux-demo-test  | Ready=True, generation=2 matches
-uat   | Flux Kustomization flux-demo-uat   | Ready=True, generation=2 matches
+test  | Flux Kustomization flux-demo-test  | Ready=True, generation=2 matches, lastAppliedRevision=1f0c2a9b7d3e
+uat   | Flux Kustomization flux-demo-uat   | Ready=True, generation=2 matches, lastAppliedRevision=8b41d7e05c2a
 prod  | PR #42 open — waiting for merge
 ```
 

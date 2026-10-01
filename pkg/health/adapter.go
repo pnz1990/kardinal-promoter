@@ -558,17 +558,20 @@ func (a *FluxAdapter) Check(ctx context.Context, opts CheckOptions) (HealthStatu
 	if readyStatus != "True" || observedGen != generation {
 		return progressing(state), nil
 	}
-	note := ""
+	reason := fmt.Sprintf("Ready=True, generation=%d matches", generation)
+	rev, verifiable := fluxCommit(applied)
+	if verifiable && rev != "" {
+		reason += ", lastAppliedRevision=" + shortRev(rev)
+	}
 	if want := opts.ExpectedRevision; want != "" {
-		rev, verifiable := fluxCommit(applied)
 		switch {
 		case !verifiable:
-			note = fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
+			reason += fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
 		case !SameRevision(rev, want):
 			return progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want))), nil
 		}
 	}
-	return healthy(fmt.Sprintf("Ready=True, generation=%d matches%s", generation, note)), nil
+	return healthy(reason), nil
 }
 
 // fluxCommit extracts the commit from a Flux lastAppliedRevision
