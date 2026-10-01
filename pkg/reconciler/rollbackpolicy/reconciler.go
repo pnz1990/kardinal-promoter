@@ -57,8 +57,10 @@ const (
 	// defaultFailureThreshold is used when spec.failureThreshold <= 0.
 	defaultFailureThreshold = 3
 
-	// requeueInterval is how often to recheck while a policy is below its
-	// threshold, and after a failure to create the rollback Bundle.
+	// requeueInterval is how long to wait before retrying after the rollback
+	// Bundle could not be listed or created. No watched object changes on
+	// that error, so a timer retries it. A policy below its threshold is not
+	// polled: the watches in SetupWithManager re-evaluate it.
 	requeueInterval = 30 * time.Second
 
 	labelPipeline    = "kardinal.io/pipeline"
@@ -168,8 +170,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
-	// Not yet triggered — requeue to re-check.
-	return ctrl.Result{RequeueAfter: requeueInterval}, nil
+	// Not yet triggered. No poll: the inputs above are the policy's spec and
+	// the status of the Bundle's PromotionSteps, and SetupWithManager watches
+	// both, so a change re-evaluates the policy.
+	return ctrl.Result{}, nil
 }
 
 // bundleStepFailures returns the highest status.consecutiveHealthFailures across
@@ -356,10 +360,15 @@ func (r *Reconciler) now() time.Time {
 
 // SetupWithManager registers the RollbackPolicyReconciler with controller-runtime.
 //
-// It watches PromotionStep so a policy is evaluated when a step of its Bundle
-// appears and when the step's status changes, not only on the 30s requeue
-// below the threshold. Only spec or annotation changes
-// of the RollbackPolicy itself trigger a reconcile: its own status writes do not.
+// The watches cover every input of the threshold check, so a policy is not
+// polled:
+//   - RollbackPolicy spec or annotation changes (failureThreshold, bundleRef,
+//     environment, pipelineName). Its own status writes do not trigger a
+//     reconcile, and only this reconciler writes them.
+//   - PromotionStep create, update and delete, mapped by policiesForStep on
+//     the step's Bundle, pipeline and environment. On update both the old and
+//     the new step are mapped, so a change of
+//     status.consecutiveHealthFailures, or a step moving away, enqueues.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&v1alpha1.RollbackPolicy{}, builder.WithPredicates(eventfilter.SpecOrAnnotationChanged)).
@@ -382,7 +391,7 @@ func (r *Reconciler) policiesForStep(ctx context.Context, obj client.Object) []r
 	var list v1alpha1.RollbackPolicyList
 	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 		zerolog.Ctx(ctx).Error().Err(err).Str("promotionstep", obj.GetName()).
-			Msg("failed to list RollbackPolicies for PromotionStep event; relying on requeue")
+			Msg("failed to list RollbackPolicies for PromotionStep event; the next event of the step re-evaluates them")
 		return nil
 	}
 	var reqs []reconcile.Request

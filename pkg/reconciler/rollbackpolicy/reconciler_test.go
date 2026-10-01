@@ -17,6 +17,7 @@ package rollbackpolicy_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -26,7 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
@@ -429,6 +432,57 @@ func TestReconciler_ReadsStepsOfBundleRef(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReconciler_NotTriggered_NoRequeue covers B49: a policy below its
+// threshold is not polled. Its inputs are its own spec and the status of the
+// Bundle's PromotionSteps, and both are watched (SetupWithManager), so a
+// change re-evaluates it without a 30s requeue.
+func TestReconciler_NotTriggered_NoRequeue(t *testing.T) {
+	tests := []struct {
+		name     string
+		failures int
+	}{
+		{name: "healthy", failures: 0},
+		{name: "below the threshold", failures: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			updated, result, err := reconcileOnce(t,
+				makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3),
+				makePromotionStep("step-1", "nginx-demo", "prod", tt.failures),
+				makeBundle("bundle-1", "nginx-demo"))
+			require.NoError(t, err)
+			assert.False(t, updated.Status.ShouldRollback)
+			assert.Equal(t, tt.failures, updated.Status.ConsecutiveFailures)
+			assert.Equal(t, ctrl.Result{}, result, "the PromotionStep watch, not a poll, re-evaluates")
+		})
+	}
+}
+
+// TestReconciler_RollbackBundleError_Requeues: when the rollback Bundle
+// cannot be listed or created, the policy is retried on a timer, since no
+// watched object changes to re-enqueue it.
+func TestReconciler_RollbackBundleError_Requeues(t *testing.T) {
+	rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+	step := makePromotionStep("step-1", "nginx-demo", "prod", 3)
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithObjects(rp, step, makeBundle("bundle-1", "nginx-demo")).
+		WithStatusSubresource(rp, step).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*v1alpha1.BundleList); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).Build()
+	r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "rp-1", Namespace: "default"}}
+
+	result, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, result.RequeueAfter)
 }
 
 // TestReconciler_ShouldRollbackFollowsTheThreshold covers B49: below the
