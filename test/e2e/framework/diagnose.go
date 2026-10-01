@@ -14,14 +14,15 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 )
 
 // diagnosedGroups are the API groups whose objects Diagnose dumps: kardinal,
-// kro, the workloads (Deployments, ReplicaSets), Argo Rollouts, Flagger and
-// Flux.
-var diagnosedGroups = []string{"kardinal.io", "kro.run", "apps", "argoproj.io", "flagger.app",
+// kro, the workloads (Deployments, ReplicaSets), Jobs (Argo CD hooks), Argo
+// Rollouts, Flagger and Flux.
+var diagnosedGroups = []string{"kardinal.io", "kro.run", "apps", "batch", "argoproj.io", "flagger.app",
 	"source.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io"}
 
 // logNamespaces are the namespaces whose pod logs Diagnose saves. A suite
@@ -29,8 +30,9 @@ var diagnosedGroups = []string{"kardinal.io", "kro.run", "apps", "argoproj.io", 
 var logNamespaces = []string{ControllerNamespace, "kro-system", "argo-rollouts", "flagger-system", FluxNamespace}
 
 // Diagnose writes the state a failed test needs for debugging to
-// $KARDINAL_E2E_ARTIFACTS/<ns>/: every object of diagnosedGroups in ns,
-// the namespace's events, and the logs of the pods in logNamespaces.
+// $KARDINAL_E2E_ARTIFACTS/<ns>/: every object of diagnosedGroups in ns, the
+// Argo CD Applications that deploy to ns, the namespace's events, and the
+// logs of the pods in logNamespaces.
 func (e *Env) Diagnose(t *testing.T, ns string) {
 	t.Helper()
 	dir := filepath.Join(artifactsDir(), ns)
@@ -50,11 +52,20 @@ func (e *Env) Diagnose(t *testing.T, ns string) {
 		for _, it := range list.Items {
 			items = append(items, it.Object)
 		}
-		out, err := yaml.Marshal(items)
-		if err != nil {
-			continue
+		writeYAML(t, dir, gvr.Resource+"."+gvr.Group+".yaml", items)
+	}
+
+	// Argo CD Applications live in ArgoCDNamespace, not in the test's.
+	if apps, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).List(ctx, metav1.ListOptions{}); err == nil {
+		var items []interface{}
+		for _, it := range apps.Items {
+			if dest, _, _ := unstructured.NestedString(it.Object, "spec", "destination", "namespace"); dest == ns {
+				items = append(items, it.Object)
+			}
 		}
-		write(t, dir, gvr.Resource+"."+gvr.Group+".yaml", out)
+		if len(items) > 0 {
+			writeYAML(t, dir, ApplicationGVR.Resource+"."+ApplicationGVR.Group+"."+ArgoCDNamespace+".yaml", items)
+		}
 	}
 
 	if evs, err := e.Kube.CoreV1().Events(ns).List(ctx, metav1.ListOptions{}); err == nil {
@@ -112,6 +123,15 @@ func artifactsDir() string {
 		return d
 	}
 	return "results"
+}
+
+func writeYAML(t *testing.T, dir, name string, items []interface{}) {
+	out, err := yaml.Marshal(items)
+	if err != nil {
+		t.Logf("diagnostics: marshal %s: %v", name, err)
+		return
+	}
+	write(t, dir, name, out)
 }
 
 func write(t *testing.T, dir, name string, data []byte) {
