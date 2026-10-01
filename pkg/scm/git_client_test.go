@@ -241,6 +241,34 @@ func TestGoGitClient_HTMLErrorBodyIsOneLine(t *testing.T) {
 	}
 }
 
+// TestGoGitClient_ErrorBodyCredentialsAreRemoved covers an HTTP error body
+// that holds URLs with credentials, such as a proxy page that echoes the URLs
+// it refused. The credentials are removed before the body is cut at 200
+// characters: one URL is before the cut, and the cut runs through the other's
+// credentials ("https://user:t"), so cutting first would keep part of them.
+func TestGoGitClient_ErrorBodyCredentialsAreRemoved(t *testing.T) {
+	lead := "Blocked by the proxy. Sign in at https://user:tok@host.example/login and retry, or use the mirror "
+	lead += strings.Repeat(".", 185-len(lead)) + " " // the second URL starts at character 186
+	body := lead + "https://user:tok@host.example/mirror instead.\n"
+	require.Equal(t, "https://user:t", body[186:200], "the cut must run through the second URL's credentials")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	url := srv.URL + "/org/repo.git"
+	err := scm.NewGoGitClient().Clone(context.Background(), url, "main", filepath.Join(t.TempDir(), "w"), "tok")
+	require.Error(t, err)
+
+	removed := strings.ReplaceAll(strings.TrimSpace(body), "user:tok@", "")
+	assert.Equal(t, fmt.Sprintf("git clone %s: authorization failed: %s…", url, removed[:200]), err.Error())
+	assert.Contains(t, err.Error(), "Sign in at https://host.example/login and retry")
+	assert.True(t, strings.HasSuffix(err.Error(), " https://host.example/mi…"), err.Error())
+	assert.NotContains(t, err.Error(), "user")
+	assert.NotContains(t, err.Error(), "tok@")
+}
+
 // seedUncheckoutable creates a bare repository whose main commit holds a file
 // with a 300-byte name, which no checkout can write (file names are at most
 // 255 bytes), and returns its path and the commit.
