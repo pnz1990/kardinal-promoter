@@ -70,8 +70,10 @@ The Helm chart creates the necessary `ClusterRole` (a `Role` in namespace mode).
   Flux `kustomizations`, Flagger `canaries` (`patch` on `applications` only with
   `rbac.argocdApplicationsWrite`)
 - `get` on `secrets` (Pipeline `spec.git.secretRef` and the SCM token); no `list` or `watch`
-- `get/create` on `serviceaccounts` and `get/create/update/delete` on `rolebindings`, plus
+- `get/create` on `serviceaccounts` and `get/list/create/update/delete` on `rolebindings`, plus
   `bind` on the two Graph ClusterRoles only, for the [Graph identity](installation.md)
+- `get` on `namespaces` (only the watched one in namespace mode), to tell whether a Graph's,
+  Bundle's or step's namespace is being deleted
 - `create/patch` on `events.k8s.io` `events` and `get/list/watch/create/patch` on core `events`
 - in the release namespace: the leader election `leases`, and `create` plus
   `get/update/patch` on the `kardinal-version` ConfigMap
