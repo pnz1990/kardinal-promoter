@@ -563,7 +563,10 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// from the live Pipeline: an approval edit made while the step runs would
 	// otherwise move the current index into another sequence (skipping open-pr,
 	// or opening a PR the finalizer was not added for). The edit applies from
-	// the next Bundle.
+	// the next Bundle. The in-place Graph rebuild that follows the edit does
+	// not wait on a PR either: the PRStatus node has no readyWhen, so this
+	// environment's nodes are ready once this step is Verified, with or
+	// without a PR (B69).
 	seq := recordedSequence(ps)
 	if len(seq) == 0 {
 		// A step is Promoting with no step list only if its status was edited

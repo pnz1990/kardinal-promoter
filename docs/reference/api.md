@@ -170,7 +170,7 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 
 `kardinal.io/v1alpha1`
 
-PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pull request, making it observable by the kro Graph. Architecture: PromotionStep open-pr step creates a PRStatus CR. The PRStatusReconciler polls GitHub (or receives webhook events) and writes status.merged. The Graph Watch node propagates when status.merged == true, replacing the previous polling loop in handleWaitingForMerge. Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 from docs/design/11-graph-purity-tech-debt.md.
+PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pull request, making it observable by the kro Graph. Architecture: PromotionStep open-pr step creates a PRStatus CR. The PRStatusReconciler polls GitHub (or receives webhook events) and writes status.merged. The PromotionStep watches status.merged, replacing the previous polling loop in handleWaitingForMerge. Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 from docs/design/11-graph-purity-tech-debt.md.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -186,7 +186,7 @@ PRStatus is a controller-internal CRD that tracks the merge state of a GitHub pu
 | `status.lastCheckedAt` | string (date-time) |  | LastCheckedAt records when the status was last written from an SCM API poll. Polls that change nothing refresh it at most every 5 minutes, so it can lag the most recent poll by up to that much. |
 | `status.mergeCommitSHA` | string |  | MergeCommitSHA is the commit the PR was merged as (the merge, squash or rebase commit on the base branch). Written once the PR is merged, when the SCM provider reports it. Health adapters use it to confirm that the GitOps tool deployed this exact revision. |
 | `status.mergeCommitUnavailable` | boolean |  | MergeCommitUnavailable is true once the PR is merged and the PRStatusReconciler stopped trying to learn mergeCommitSHA: the SCM provider cannot report merge commits, reported none for this PR, failed with an error a retry cannot fix (401, 403 that is not a rate limit, 404, 410), or still failed 5 minutes after the merge was recorded. Until then an argocd health check of the PromotionStep waits for the merge commit instead of checking the Bundle images only. |
-| `status.merged` | boolean |  | Merged is true when the pull request has been merged. The Graph Watch node uses this field: readyWhen: ${prStatus.status.merged == true} |
+| `status.merged` | boolean |  | Merged is true when the pull request has been merged. A PromotionStep in WaitingForMerge watches this field. |
 | `status.open` | boolean |  | Open is true when the pull request is still open (not merged, not closed). Set to false when the PR is closed or merged. A closed PR is still polled for 5 minutes (see closedAt), so open can turn true again when it is reopened. |
 | `status.pollError` | string |  | PollError is the SCM API error of the last poll when a retry cannot fix it: HTTP 401, 403 (not a rate limit), 404 or 410. The PromotionStep waiting for this PR fails with it. Cleared by the next successful poll. Transient errors (429, 5xx, network) are only logged and retried. |
 

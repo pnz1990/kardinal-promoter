@@ -31,7 +31,7 @@ type PRStatusSpec struct {
 // Written exclusively by the PRStatusReconciler.
 type PRStatusStatus struct {
 	// Merged is true when the pull request has been merged.
-	// The Graph Watch node uses this field: readyWhen: ${prStatus.status.merged == true}
+	// A PromotionStep in WaitingForMerge watches this field.
 	// +optional
 	Merged bool `json:"merged,omitempty"`
 
@@ -116,8 +116,8 @@ type PRStatusStatus struct {
 //
 // Architecture: PromotionStep open-pr step creates a PRStatus CR. The
 // PRStatusReconciler polls GitHub (or receives webhook events) and writes
-// status.merged. The Graph Watch node propagates when status.merged == true,
-// replacing the previous polling loop in handleWaitingForMerge.
+// status.merged. The PromotionStep watches status.merged, replacing the
+// previous polling loop in handleWaitingForMerge.
 //
 // Graph-purity: eliminates PS-4, SCM-2, ST-10, ST-11, BU-3, WH-1 from
 // docs/design/11-graph-purity-tech-debt.md.

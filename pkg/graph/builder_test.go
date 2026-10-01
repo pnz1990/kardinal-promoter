@@ -514,22 +514,47 @@ func TestBuilder_PRStatusWatchNode(t *testing.T) {
 	assert.NotContains(t, prStatusTestNode.Template, "spec",
 		"PRStatus template must not carry a spec")
 
-	// Check ReadyWhen references status.merged (health signal for UI only)
-	require.NotEmpty(t, prStatusTestNode.ReadyWhen)
-	assert.Contains(t, prStatusTestNode.ReadyWhen[0], "status.merged == true",
-		"ReadyWhen must gate on status.merged for UI health display")
-
-	// An auto environment never opens a PR, so a merged readyWhen would keep
-	// the Graph from ever reaching Ready.
-	prStatusProdNode := prStatusNode("prod")
-	require.NotNil(t, prStatusProdNode, "PRStatus Watch node for 'prod' must be present")
-	assert.Empty(t, prStatusProdNode.ReadyWhen, "auto environments must not carry a PRStatus readyWhen")
-
 	// Check PromotionStep node has prStatusRef referencing the Watch node
 	testStepNode, ok := nodeMap["test"]
 	require.True(t, ok, "PromotionStep node for 'test' must exist")
 	assert.True(t, containsCELRef(testStepNode.Template, prStatusTestNode.ID),
 		"PromotionStep node must have CEL reference to PRStatus Watch node")
+}
+
+// TestBuilder_PRStatusNodeHasNoReadyWhen checks that no PRStatus node has a
+// readyWhen, whatever the environment's approval (B69). The PromotionStep
+// node's readyWhen (state Verified) already covers the merge: a step that
+// opened a PR is Verified only after the merge. A merged readyWhen built from
+// the live approval kept the Graph from ever being Ready when the step ran
+// with no PR: a step that started as auto before an edit to pr-review, or a
+// pr-review step with nothing to commit. The node is the same for both
+// approvals, so an in-place rebuild after an approval edit leaves it alone.
+func TestBuilder_PRStatusNodeHasNoReadyWhen(t *testing.T) {
+	build := func(t *testing.T, approval string) graph.GraphNode {
+		t.Helper()
+		pipeline := makeLinearPipeline("nginx-demo", "test")
+		pipeline.Spec.Environments[0].Approval = approval
+		result, err := graph.NewBuilder().Build(graph.BuildInput{
+			Pipeline: pipeline, Bundle: makeBundle("nginx-demo-v1", "nginx-demo")})
+		require.NoError(t, err)
+		assertKroValid(t, result.Graph)
+		for _, n := range result.Graph.Spec.Nodes {
+			if kind, _ := n.Template["kind"].(string); kind == "PRStatus" {
+				return n
+			}
+		}
+		t.Fatal("no PRStatus node")
+		return graph.GraphNode{}
+	}
+
+	auto := build(t, "auto")
+	for _, approval := range []string{"auto", "pr-review", ""} {
+		t.Run("approval="+approval, func(t *testing.T) {
+			node := build(t, approval)
+			assert.Empty(t, node.ReadyWhen, "PRStatus readyWhen")
+			assert.Equal(t, auto, node, "the PRStatus node does not depend on the approval")
+		})
+	}
 }
 
 // --- helpers ---

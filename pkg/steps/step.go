@@ -142,7 +142,10 @@ type StepState struct {
 	// Sequence is the step list being run: the one the PromotionStep recorded
 	// when it left Pending. A step reads it, not Environment.Approval, to know
 	// whether the promotion goes through a PR, so an approval edit made while
-	// the step runs applies from the next Bundle.
+	// the step runs applies from the next Bundle. The Graph does not follow
+	// the approval either (its PRStatus node has no readyWhen), so the Bundle
+	// in flight still turns GraphReady once its steps are Verified and its gates
+	// pass (B69).
 	Sequence []string
 }
 

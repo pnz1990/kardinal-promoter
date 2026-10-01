@@ -324,8 +324,10 @@ These are not gaps, but the translator has to work around them.
   is documented as a known limitation (`docs/health-adapters.md`).
 - **The Graph is not Ready while any node is not Ready.** A `readyWhen` on a node that
   can never become ready keeps the Graph `Ready=False` forever. This happened with
-  `PRStatus` nodes for auto environments, which never open a PR. The builder now adds
-  `status.merged == true` only for `pr-review` environments.
+  `PRStatus` nodes whose step opened no PR: an auto environment, then (B69) a `pr-review`
+  step with nothing to commit, or an `auto` step whose environment was edited to
+  `pr-review` while it ran. `PRStatus` nodes now have no `readyWhen`; the step node's
+  `state == "Verified"` already comes after the merge when there is a PR.
 - **A Graph cannot be suspended.** The `kro.run/reconcile: suspended` annotation
   (`api/v1alpha1/groupversion_info.go:36-55`) is read only by the instance controller
   (`pkg/controller/instance/controller.go:317`), not the Graph controller. Deleting the
