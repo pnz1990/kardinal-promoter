@@ -160,6 +160,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get promotionstep %s: %w", req.Name, err)
 	}
 
+	// A deleted step only closes its PR (FinalizerClosePR). Otherwise the
+	// finalizer follows the state before and after this reconcile: it is on
+	// before an open-pr step opens its PR and off once the step is past it.
+	if !ps.DeletionTimestamp.IsZero() {
+		return r.handleDeleted(ctx, log, &ps)
+	}
+	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
+		return ctrl.Result{}, err
+	}
+	res, err := r.reconcileState(ctx, log, &ps)
+	if err != nil {
+		return res, err
+	}
+	if err := r.syncPRFinalizer(ctx, &ps); err != nil {
+		return ctrl.Result{}, err
+	}
+	return res, nil
+}
+
+// reconcileState runs the orphan and supersession guards and then the
+// handler of the step's state.
+func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
 	// Orphan guard: if the parent Bundle no longer exists, self-delete this
 	// PromotionStep to stop the infinite reconcile error loop (#248).
 	// This handles the case where a Bundle was deleted manually (e.g. during
@@ -175,7 +197,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				log.Info().
 					Str("bundle", ps.Spec.BundleName).
 					Msg("parent bundle not found — self-deleting orphaned PromotionStep")
-				if delErr := r.Delete(ctx, &ps); delErr != nil && !apierrors.IsNotFound(delErr) {
+				if delErr := r.Delete(ctx, ps); delErr != nil && !apierrors.IsNotFound(delErr) {
 					return ctrl.Result{}, fmt.Errorf("delete orphaned promotionstep: %w", delErr)
 				}
 				return ctrl.Result{}, nil
@@ -190,37 +212,37 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// step could still turn Verified and, with onHealthFailure=rollback,
 		// open a rollback of a version nobody promotes any more.
 		if parentBundle.Status.Phase == "Superseded" && isCancellable(ps.Status.State) {
-			return r.handleSuperseded(ctx, log, &ps)
+			return r.handleSuperseded(ctx, log, ps)
 		}
 	}
 
 	switch ps.Status.State {
 	case StatePending, StatePendingExplicit:
-		return r.handlePending(ctx, log, &ps)
+		return r.handlePending(ctx, log, ps)
 	case StatePromoting:
-		return r.handlePromoting(ctx, log, &ps)
+		return r.handlePromoting(ctx, log, ps)
 	case StateWaitingForMerge:
-		return r.handleWaitingForMerge(ctx, log, &ps)
+		return r.handleWaitingForMerge(ctx, log, ps)
 	case StateHealthChecking:
-		return r.handleHealthChecking(ctx, log, &ps)
+		return r.handleHealthChecking(ctx, log, ps)
 	case StateVerified, StateFailed:
 		// Terminal states — clean up workdir if present (ST-7/ST-8 short-term mitigation).
-		r.cleanWorkDir(log, &ps)
+		r.cleanWorkDir(log, ps)
 		return ctrl.Result{}, nil
 	case StateAbortedByAlarm:
 		// Terminal human-intervention state — clean up workdir and stop reconciling.
 		// Requires manual resume or rollback from a human operator.
-		r.cleanWorkDir(log, &ps)
+		r.cleanWorkDir(log, ps)
 		return ctrl.Result{}, nil
 	case StateRollingBack:
 		// Managed state set by applyHealthFailurePolicy (K-03). The rollback Bundle
 		// drives resolution externally; this reconciler takes no further action until
 		// the rollback Bundle completes and the step is superseded or manually reset.
-		r.cleanWorkDir(log, &ps)
+		r.cleanWorkDir(log, ps)
 		return ctrl.Result{}, nil
 	default:
 		log.Warn().Str("state", ps.Status.State).Msg("unknown state, resetting to Pending")
-		if err := r.transition(ctx, ps.DeepCopy(), &ps, StatePendingExplicit, ""); err != nil {
+		if err := r.transition(ctx, ps.DeepCopy(), ps, StatePendingExplicit, ""); err != nil {
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{Requeue: true}, nil

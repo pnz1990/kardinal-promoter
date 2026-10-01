@@ -505,7 +505,14 @@ terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take
 
 ## Uninstall
 
+Delete your Bundles before you uninstall the controller. A PromotionStep with an open
+promotion PR carries the `kardinal.io/close-pr` finalizer, and the controller closes the PR
+(with a comment) before it lets the step go. Without the controller the finalizer stays and
+the step, its Graph and its namespace never finish deleting. If that happens, see
+[Troubleshooting: deletion hangs](troubleshooting.md#a-promotionstep-graph-or-namespace-never-finishes-deleting).
+
 ```bash
+kubectl delete bundles.kardinal.io --all -A   # closes the open promotion PRs
 helm uninstall kardinal-promoter -n kardinal-system
 
 # Optional: remove kardinal CRDs (deletes all Pipelines, Bundles, PolicyGates, etc.)

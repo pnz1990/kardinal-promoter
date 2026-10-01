@@ -538,6 +538,27 @@ kubectl get graph -l kardinal.io/bundle=my-app-v1 -o jsonpath='{.items[0].status
 
 If a PolicyGate node is not ready, downstream PromotionSteps will not be created until it passes.
 
+## A PromotionStep, Graph or namespace never finishes deleting
+
+A step that opens or has opened a promotion PR carries the `kardinal.io/close-pr` finalizer
+while it is `Promoting` or `WaitingForMerge`. When the step is deleted (its Bundle or
+its namespace was deleted) the controller closes the PR with a comment, then removes the
+finalizer. If the SCM call keeps failing, it retries with backoff for about 5 minutes, then
+removes the finalizer anyway and emits a `ClosePRFailed` Warning Event on the step: close that PR
+by hand, since merging it would change the environment with no PromotionStep tracking it.
+
+The step stays only while the controller is not running, for example after `helm uninstall`
+without deleting the Bundles first. Close the PR by hand, then remove the finalizer:
+
+```bash
+# Deleted steps still holding a finalizer
+kubectl get promotionsteps -A -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.status.prURL}{" "}{.metadata.finalizers}{"\n"}{end}'
+
+# Remove kardinal.io/close-pr (the test op makes the patch fail if index 0 holds another finalizer)
+kubectl patch promotionstep <name> -n <namespace> --type=json -p \
+  '[{"op":"test","path":"/metadata/finalizers/0","value":"kardinal.io/close-pr"},{"op":"remove","path":"/metadata/finalizers/0"}]'
+```
+
 ---
 
 ## Performance tuning (large-scale deployments)
