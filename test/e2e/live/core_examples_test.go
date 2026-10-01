@@ -373,7 +373,11 @@ func TestCore_ConfigPromotionExample(t *testing.T) {
 	for _, env := range envs {
 		files[fixtures.Path(env)+"/deployment.yaml"] = []byte(withConfigChange(fixtures.Deployment(pipeline, imageV1)))
 	}
-	sha, err := gitserver.CommitFiles(ctx, e.Git, a.repo, a.repo.Branch, "config-change", "Set the podinfo UI message", files)
+	// Named after the test's branch: on GitHub, where the test's branch is
+	// one of a shared repo, the framework writes only branches under e2e/.
+	cfgBranch := a.repo.Branch + "-config-change"
+	e.GitBranch(t, a.repo, cfgBranch, a.repo.Branch)
+	sha, err := gitserver.CommitFiles(ctx, e.Git, a.repo, cfgBranch, "", "Set the podinfo UI message", files)
 	require.NoError(t, err, "commit the config change")
 	for _, env := range envs {
 		require.NotContains(t, e.ReadFile(t, a.repo, a.repo.Branch, fixtures.Path(env)+"/deployment.yaml"), configValue,
