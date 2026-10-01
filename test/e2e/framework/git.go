@@ -50,7 +50,8 @@ func (e *Env) SubgroupRepo(t *testing.T, sub, ns string, files map[string][]byte
 
 // newRepo creates a repo with create, deletes it when the test ends unless
 // KARDINAL_E2E_KEEP=1, and registers the suite's webhook on it when hook is
-// set.
+// set. Before deleting the repo it drains the test's namespaces (see
+// beforeRepoDelete).
 func (e *Env) newRepo(t *testing.T, ns string, hook bool, create func(context.Context) (gitserver.Repo, error)) gitserver.Repo {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -64,6 +65,7 @@ func (e *Env) newRepo(t *testing.T, ns string, hook bool, create func(context.Co
 		if os.Getenv(EnvKeep) == "1" {
 			return
 		}
+		e.beforeRepoDelete(t)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		if err := e.Git.DeleteRepo(ctx, repo); err != nil {
