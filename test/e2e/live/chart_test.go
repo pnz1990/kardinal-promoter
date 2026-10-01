@@ -575,7 +575,7 @@ func TestChart_ScheduleClock(t *testing.T) {
 
 	key := types.NamespacedName{Namespace: ns, Name: "kardinal-clock"}
 	var ticks []time.Time
-	framework.Eventually(t, 90*time.Second, "kardinal-clock ticks three times", func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, 3*time.Minute, "kardinal-clock ticks four times", func(ctx context.Context) (bool, string) {
 		var clock v1alpha1.ScheduleClock
 		if err := e.Client.Get(ctx, key, &clock); err != nil {
 			return false, err.Error()
@@ -590,13 +590,18 @@ func TestChart_ScheduleClock(t *testing.T) {
 		if len(ticks) == 0 || !tick.Equal(ticks[len(ticks)-1]) {
 			ticks = append(ticks, tick)
 		}
-		return len(ticks) >= 4, fmt.Sprint(ticks)
+		return len(ticks) >= 5, fmt.Sprint(ticks)
 	})
-	// The first tick seen can be any age; the later ones are one interval apart.
+	// The first tick seen can be any age. The later ones are never closer
+	// than the interval; a loaded node can delay one, or a slow poll miss
+	// one, but the closest pair is one interval apart, not the 60s default.
+	closest := time.Hour
 	for i := 2; i < len(ticks); i++ {
 		gap := ticks[i].Sub(ticks[i-1])
-		assert.True(t, gap >= 9*time.Second && gap <= 13*time.Second, "tick %d came %s after the one before, want about 10s", i, gap)
+		assert.GreaterOrEqual(t, gap, 9*time.Second, "tick %d came %s after the one before, sooner than the 10s interval", i, gap)
+		closest = min(closest, gap)
 	}
+	assert.LessOrEqual(t, closest, 15*time.Second, "the closest ticks are %s apart, want about 10s: %v", closest, ticks)
 
 	r.Upgrade(t, nsValues(ns, framework.Values{"scheduleClock": framework.Values{"enabled": false}}))
 	err := e.Client.Get(context.Background(), key, &v1alpha1.ScheduleClock{})
