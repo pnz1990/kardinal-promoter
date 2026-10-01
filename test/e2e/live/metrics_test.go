@@ -530,10 +530,13 @@ func TestObs_ControllerMetrics(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, delta("kardinal_gate_blocking_duration_seconds_sum", nil), 10.0, "prod's gate blocked for more than 10s")
 	assert.Subset(t, stepNames, after.LabelValues("kardinal_step_duration_seconds_count", "step"), "step labels are step names")
-	// git-clone starts and finishes within one reconcile in every promotion
-	// above (older and bundle in test, bundle in prod, fails in gone).
-	assert.GreaterOrEqual(t, delta("kardinal_step_duration_seconds_count", map[string]string{"step": "git-clone"}), 4.0,
-		"each git-clone is observed")
+	// Four promotions above: older and bundle in test, bundle in prod, fails
+	// in gone. git-clone starts and finishes within one reconcile; the state
+	// machine closes wait-for-merge (prod) and the health check (all four).
+	for step, want := range map[string]float64{"git-clone": 4, "wait-for-merge": 1, "health-check": 4} {
+		assert.GreaterOrEqual(t, delta("kardinal_step_duration_seconds_count", map[string]string{"step": step}), want,
+			"%s observations", step)
+	}
 	ps, ok, err := e.Step(ctx, a.ns, pipelineName, bundle, "test")
 	require.NoError(t, err)
 	require.True(t, ok, "test PromotionStep of %s", bundle)
