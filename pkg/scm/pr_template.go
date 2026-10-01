@@ -80,8 +80,10 @@ type PRBody struct {
 	// BundleName is the Bundle resource name.
 	BundleName string
 
-	// RollbackOf is the name of the Bundle whose state this rollback restores (if this is a rollback PR).
-	// When non-empty, the PR body includes a rollback notice section (#402).
+	// RollbackOf is the name of the rollback's target (if this is a rollback
+	// PR): the rollback restores its images, its config commit, or both, as
+	// Bundle's type deploys. When non-empty, the PR body includes a rollback
+	// notice section (#402).
 	RollbackOf string
 
 	// RestoredVersion is the version the rollback deploys, BundleVersion of
@@ -145,7 +147,9 @@ var prBodyTemplate = template.Must(template.New("pr-body").Funcs(template.FuncMa
 {{- if .RollbackOf}}
 ## ROLLBACK: {{.BundleName}} -> {{.PipelineName}}/{{.Environment}}
 
-> **This is a rollback PR.** It reverts environment {{.Environment}} to the state of bundle {{.RollbackOf}}.
+> **This is a rollback PR.** {{if eq .Bundle.Type "mixed"}}It reverts environment {{.Environment}} to the state of bundle {{.RollbackOf}}.
+{{- else if eq .Bundle.Type "config"}}It restores the config commit of bundle {{.RollbackOf}} in environment {{.Environment}}.
+{{- else}}It restores the images of bundle {{.RollbackOf}} in environment {{.Environment}}.{{end}}
 > Rolling back FROM: {{if .RollbackFrom}}{{.RollbackFrom}}{{with .RollbackFromVersion}} ({{mdcell .}}){{end}}{{else}}the bundle deployed in {{.Environment}} now{{end}}
 > Rolling back TO: {{.RollbackOf}}{{with .RestoredVersion}} ({{mdcell .}}){{end}}
 {{- with .RolledBackBy}}

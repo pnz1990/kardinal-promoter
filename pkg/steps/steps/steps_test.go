@@ -712,7 +712,7 @@ func TestOpenPRStep_RollbackBody(t *testing.T) {
 					Images: []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.30.0"}}}
 				s.RequestedBy = "alice"
 			},
-			wantNote: "> **This is a rollback PR.** It reverts environment prod to the state of bundle nginx-demo-v1-29-0.\n" +
+			wantNote: "> **This is a rollback PR.** It restores the images of bundle nginx-demo-v1-29-0 in environment prod.\n" +
 				"> Rolling back FROM: nginx-demo-v1-30-0 (1.30.0)\n" +
 				"> Rolling back TO: nginx-demo-v1-29-0 (1.29.0)\n" +
 				"> Rolled back by: alice\n",
