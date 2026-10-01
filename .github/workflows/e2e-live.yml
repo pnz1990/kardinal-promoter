@@ -103,6 +103,11 @@ jobs:
       - name: Load the controller image
         run: gunzip -c controller-image.tar.gz | docker load
 
+      # TestCLI_Completion checks the zsh completion script with zsh -n.
+      - name: Install zsh
+        if: matrix.suite == 'core'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends zsh
+
       # The ui suite's browser tests run Playwright from web/ (components/ui.sh).
       - if: matrix.suite == 'ui'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
