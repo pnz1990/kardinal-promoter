@@ -611,9 +611,12 @@ to turn the namespaced rules into a Role in one namespace.
 
 kro does not apply a Graph's children with its own identity. It impersonates the Graph's
 `spec.serviceAccountName` (default `kardinal-graph`) in the Graph's namespace. The kardinal-promoter
-controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-promoter-graph-applier`
-(in the Graph namespace) and `kardinal-promoter-graph-reader` (in each namespace a health `ref` node reads,
-limited to the Graph's own namespace and `graph.readerNamespaces`). Reader bindings that no Graph
+controller creates that ServiceAccount and binds it with RoleBindings to `<fullname>-graph-applier`
+(in the Graph namespace) and `<fullname>-graph-reader` (in each namespace a health `ref` node reads,
+limited to the Graph's own namespace and `graph.readerNamespaces`). Each reader binding is named
+`<fullname>-graph-reader-<graph namespace>`: with release `kp`, `kp-kardinal-promoter-graph-reader-<graph namespace>`.
+`<fullname>` is the chart's full name: `fullnameOverride` if set, else the release name, plus
+`-kardinal-promoter` unless the release name contains it. Reader bindings that no Graph
 in the namespace needs any more are deleted: when a Bundle is translated, when a Graph is deleted,
 and, in cluster mode, by a sweep at controller startup and every 10 minutes that also catches the
 bindings of namespaces that are gone. The sweep lists only RoleBindings labeled
