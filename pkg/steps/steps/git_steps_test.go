@@ -402,8 +402,29 @@ func TestOpenPRStep_Providers(t *testing.T) {
 				}
 			}
 			assert.Contains(t, res.Message, tc.wantMsg)
+			if tc.labelsErr != nil {
+				assert.Equal(t, tc.labelsErr.Error(), res.Outputs["prLabelsError"],
+					"the output keeps the label error once wait-for-merge's message replaces this one (B71)")
+			} else {
+				assert.NotContains(t, res.Outputs, "prLabelsError")
+			}
 		})
 	}
+}
+
+// TestOpenPRStep_LabelsErrorCleared covers B71: a PR whose labels worked
+// clears the label error an earlier PR of the step left in the outputs.
+func TestOpenPRStep_LabelsErrorCleared(t *testing.T) {
+	scmP := &mockSCMProvider{prURL: "https://example/pr/8", prNumber: 8}
+	state := makeState(t, &mockGitClient{}, scmP)
+	state.Pipeline.Git.URL = "https://github.com/owner/repo"
+	state.Outputs["branch"] = "kardinal/nginx-demo-v1-29-0/prod"
+	state.Outputs["prLabelsError"] = "403 labels"
+	res, err := runStep(t, "open-pr", state)
+	require.NoError(t, err)
+	v, ok := res.Outputs["prLabelsError"]
+	assert.True(t, ok, "the output is set, to empty")
+	assert.Empty(t, v)
 }
 
 // TestWaitForMergeStep_Transient proves an SCM API error keeps the step

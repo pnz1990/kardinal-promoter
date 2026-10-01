@@ -453,6 +453,17 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 	return r.deletePRBranch(ctx, ps, repo, num)
 }
 
+// withLabelsError appends the error of open-pr's failed attempt to label the
+// PR (steps.OutputPRLabelsError) to a WaitingForMerge message. The wait-for-
+// merge message replaces open-pr's, which carried it, so without this the
+// step message never said the PR has no labels (docs/pr-evidence.md).
+func withLabelsError(msg string, outputs map[string]string) string {
+	if e := outputs[steps.OutputPRLabelsError]; e != "" {
+		return msg + "; adding labels failed: " + e
+	}
+	return msg
+}
+
 // retryDelay is the backoff before retry n (1-based) of a transient failure.
 func retryDelay(n int) time.Duration {
 	d := retryBaseDelay
@@ -657,7 +668,8 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if prURL := state.Outputs["prURL"]; prURL != "" {
 			// The open-pr step (or similar) has opened a PR and is waiting for merge.
 			// Transition to WaitingForMerge so the PRStatusReconciler can take over.
-			if _, err := r.transitionClosing(ctx, base, ps, StateWaitingForMerge, result.Message, "", closed); err != nil {
+			if _, err := r.transitionClosing(ctx, base, ps, StateWaitingForMerge,
+				withLabelsError(result.Message, state.Outputs), "", closed); err != nil {
 				return ctrl.Result{}, err
 			}
 			// Fill in the PRStatus spec so the PRStatusReconciler can poll it.
@@ -1004,7 +1016,7 @@ func (r *Reconciler) handleWaitingForMerge(ctx context.Context, log zerolog.Logg
 	case prstatus.IsClosed(&prs.Status):
 		msg = closedMsg
 	case msg == closedMsg:
-		msg = fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber)
+		msg = withLabelsError(fmt.Sprintf("PR #%d is open, waiting for merge", prs.Spec.PRNumber), ps.Status.Outputs)
 	}
 	if msg != ps.Status.Message {
 		ps.Status.Message = msg

@@ -112,19 +112,26 @@ func (s *openPRStep) Execute(ctx context.Context, state *parentsteps.StepState) 
 		baseLabels = append(baseLabels, "kardinal/rollback")
 	}
 	message := fmt.Sprintf("PR #%d: %s", prNum, prURL)
+	outputs := map[string]string{
+		"prURL":    prURL,
+		"prNumber": fmt.Sprintf("%d", prNum),
+	}
 	if labelsErr := state.SCM.AddLabelsToPR(ctx, repo, prNum, baseLabels); labelsErr != nil {
-		// Non-fatal: the PR exists; report the missing labels.
+		// Non-fatal: the PR exists; report the missing labels. The output
+		// keeps the error once the step moves on to wait for the merge, whose
+		// message replaces this one (docs/pr-evidence.md).
 		zerolog.Ctx(ctx).Warn().Err(labelsErr).Int("pr", prNum).Strs("labels", baseLabels).Msg("add PR labels failed")
 		message += fmt.Sprintf(" (adding labels failed: %v)", labelsErr)
+		outputs[parentsteps.OutputPRLabelsError] = labelsErr.Error()
+	} else if state.Outputs[parentsteps.OutputPRLabelsError] != "" {
+		// An earlier PR's labels failed; this one's did not.
+		outputs[parentsteps.OutputPRLabelsError] = ""
 	}
 
 	return parentsteps.StepResult{
 		Status:  parentsteps.StepSuccess,
 		Message: message,
-		Outputs: map[string]string{
-			"prURL":    prURL,
-			"prNumber": fmt.Sprintf("%d", prNum),
-		},
+		Outputs: outputs,
 	}, nil
 }
 

@@ -65,6 +65,8 @@ type mockSCM struct {
 
 	deleteErrs []error  // returned in order by successive DeleteBranch calls; nil entries succeed
 	deleted    []string // "repo:branch" of every DeleteBranch call
+
+	labelsErr error // returned by AddLabelsToPR
 }
 
 func (m *mockSCM) OpenPR(_ context.Context, _, _, _, _, _ string) (string, int, error) {
@@ -118,7 +120,7 @@ func (m *mockSCM) ParseWebhookEvent(_ []byte, _ string) (scm.WebhookEvent, error
 	return scm.WebhookEvent{}, nil
 }
 func (m *mockSCM) AddLabelsToPR(_ context.Context, _ string, _ int, _ []string) error {
-	return nil
+	return m.labelsErr
 }
 
 type mockGit struct {

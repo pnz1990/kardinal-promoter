@@ -612,6 +612,15 @@ func scmLabelsAndRotation(t *testing.T, e *framework.Env, scopes []string) {
 	assert.Empty(t, pr.Labels, "the new token may not label PRs")
 	e.WaitControllerLog(t, since, time.Minute, "the label failure",
 		framework.LogMessage("add PR labels failed", "pr", strconv.Itoa(pr.Number)))
+	// The step message records the failure while the step waits for the merge
+	// (docs/pr-evidence.md), and status.outputs.prLabelsError keeps it.
+	want := fmt.Sprintf("PR #%d is open, waiting for merge; adding labels failed: ", pr.Number)
+	ps := e.WaitStep(t, a.ns, pipelineName, fourth, "prod", time.Minute, "the label failure in its message",
+		func(s *v1alpha1.PromotionStep) (bool, string) {
+			return s.Status.State == "WaitingForMerge" && strings.HasPrefix(s.Status.Message, want),
+				fmt.Sprintf("state=%q message=%q", s.Status.State, s.Status.Message)
+		})
+	assert.NotEmpty(t, ps.Status.Outputs["prLabelsError"], "status.outputs.prLabelsError")
 	a.stillOpen(t, fourth, "prod", 10*time.Second, "after the label failure")
 
 	since = time.Now()
