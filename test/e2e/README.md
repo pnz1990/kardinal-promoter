@@ -21,7 +21,8 @@ On hosts where `docker build` can't download Go modules, set
 
 `make test-e2e-live` fails when a test fails or skips, or when no test ran,
 and keeps the `go test -json` stream in `test/e2e/results/<cluster>/test.json`.
-`COUNT=3` repeats every test. `make e2e-up KIND_K8S=1.37` picks the
+`COUNT=3` repeats every test, `SHARD=2/3` runs every third of the suite's
+tests starting at the second. `make e2e-up KIND_K8S=1.37` picks the
 Kubernetes minor (one of the `KIND_NODE_*` images in `hack/tool-versions.env`;
 the default is `test/e2e/kind-config.yaml`'s). Use the kind version pinned
 there: older kind releases can't boot its node images. The core suite also
@@ -29,7 +30,8 @@ needs bash and zsh on PATH: `TestCLI_Completion` checks the completion scripts
 with `bash -n` and `zsh -n`.
 
 CI (`.github/workflows/e2e-live.yml`) runs every suite on every pull request,
-the core suite on each of the three Kubernetes minors. A weekly run repeats
+the core suite on each of the three Kubernetes minors, split across two jobs
+per minor with `SHARD`. A weekly run repeats
 every test three times to find flakes. The `e2e live` check passes when every suite
 passed.
 

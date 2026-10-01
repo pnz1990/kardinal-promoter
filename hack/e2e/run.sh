@@ -10,6 +10,8 @@
 # Env:
 #   COUNT         go test -count (default 1; the weekly flake job uses more)
 #   RUN           go test -run pattern (default: the suite's, from up.sh)
+#   SHARD         i/n runs every nth of the matching tests, starting at the
+#                 ith (CI splits the core suite across jobs this way)
 #   KIND_CLUSTER  cluster name (default kardinal-e2e-SUITE)
 #
 # Copyright 2026 The kardinal-promoter Authors.
@@ -30,5 +32,25 @@ target_cluster
 
 cd "$REPO_ROOT"
 go build -o "$E2E_OUT/bin/report" ./test/e2e/report
-go test -tags e2e ./test/e2e/live -run "${RUN:-$KARDINAL_E2E_RUN}" -count="${COUNT:-1}" -timeout 90m -json 2>&1 |
+RUN=${RUN:-$KARDINAL_E2E_RUN}
+COUNT=${COUNT:-1}
+if [ -n "${SHARD:-}" ]; then
+  if ! [[ "$SHARD" =~ ^([0-9]+)/([0-9]+)$ ]] || [ "${BASH_REMATCH[1]}" -lt 1 ] ||
+    [ "${BASH_REMATCH[1]}" -gt "${BASH_REMATCH[2]}" ]; then
+    die "SHARD=$SHARD: want i/n with 1 <= i <= n"
+  fi
+  i=${BASH_REMATCH[1]} n=${BASH_REMATCH[2]}
+  list=$(go test -tags e2e ./test/e2e/live -list "$RUN")
+  mapfile -t tests < <(grep '^Test' <<<"$list")
+  mine=()
+  for k in "${!tests[@]}"; do
+    if [ $((k % n)) -eq $((i - 1)) ]; then mine+=("${tests[$k]}"); fi
+  done
+  [ "${#mine[@]}" -gt 0 ] || die "SHARD=$SHARD: no tests (${#tests[@]} match $RUN)"
+  # Test names are identifiers, so the exact-name pattern needs no quoting.
+  RUN="^($(IFS='|'; echo "${mine[*]}"))\$"
+  echo "shard $SHARD: ${#mine[@]} of ${#tests[@]} tests"
+fi
+# 90 minutes per repetition.
+go test -tags e2e ./test/e2e/live -run "$RUN" -count="$COUNT" -timeout "$((90 * COUNT))m" -json 2>&1 |
   tee "$E2E_OUT/test.json" | "$E2E_OUT/bin/report" -suite "$SUITE" -out "$E2E_OUT/summary.json"

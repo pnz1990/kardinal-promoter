@@ -4,8 +4,9 @@ name: E2E live
 # cluster with a real git server and GitOps engine and the controller built
 # from this commit; nothing is faked and no secret is needed, so pull
 # requests from forks run them too. The core suite runs on the three
-# Kubernetes minors in hack/tool-versions.env. The weekly run repeats every
-# test three times to find flakes.
+# Kubernetes minors in hack/tool-versions.env, split across two jobs per
+# minor (hack/e2e/run.sh SHARD). The weekly run repeats every test three
+# times to find flakes.
 #
 # Branch protection requires only the "e2e live" job, which passes when
 # every suite passed; the matrix can change without touching it.
@@ -56,17 +57,21 @@ jobs:
           retention-days: 1
 
   suite:
-    name: ${{ matrix.suite }} on Kubernetes ${{ matrix.k8s }}
+    name: ${{ matrix.suite }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.of) || '' }} on Kubernetes ${{ matrix.k8s }}
     needs: image
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The weekly run repeats every test three times.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 180 || 60 }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {suite: core, k8s: '1.35'}
-          - {suite: core, k8s: '1.36'}
-          - {suite: core, k8s: '1.37'}
+          - {suite: core, k8s: '1.35', shard: 1, of: 2}
+          - {suite: core, k8s: '1.35', shard: 2, of: 2}
+          - {suite: core, k8s: '1.36', shard: 1, of: 2}
+          - {suite: core, k8s: '1.36', shard: 2, of: 2}
+          - {suite: core, k8s: '1.37', shard: 1, of: 2}
+          - {suite: core, k8s: '1.37', shard: 2, of: 2}
           - {suite: gitea, k8s: '1.37'}
           - {suite: delivery, k8s: '1.37'}
           - {suite: ui, k8s: '1.37'}
@@ -75,6 +80,7 @@ jobs:
       KIND_K8S: ${{ matrix.k8s }}
       KARDINAL_E2E_BUILD: none
       COUNT: ${{ github.event_name == 'schedule' && '3' || inputs.count || '1' }}
+      SHARD: ${{ matrix.shard && format('{0}/{1}', matrix.shard, matrix.of) || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
@@ -126,17 +132,19 @@ jobs:
       # hack/e2e/run.sh fails when a test fails or skips, or when none ran,
       # and writes the per-test results to the job summary.
       - name: Run the suite
-        run: make test-e2e-live SUITE="$SUITE" COUNT="$COUNT"
+        run: make test-e2e-live SUITE="$SUITE" COUNT="$COUNT" SHARD="$SHARD"
 
       # Diagnostics (kardinal objects, events, pod and controller logs of
       # each failed test), the go test -json stream and the results summary
       # the "e2e live" job proves coverage from. Not the env file or the
-      # generated credentials next to them.
+      # generated credentials next to them. The name ends in the run attempt:
+      # a re-run job can't replace its earlier attempt's artifact, so the
+      # "e2e live" job keeps each job's latest attempt.
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: e2e-live-${{ matrix.suite }}-k8s-${{ matrix.k8s }}
+          name: e2e-live-${{ matrix.suite }}-k8s-${{ matrix.k8s }}${{ matrix.shard && format('-{0}of{1}', matrix.shard, matrix.of) || '' }}-attempt-${{ github.run_attempt }}
           path: |
             test/e2e/results/*/diagnostics/
             test/e2e/results/*/test.json
@@ -166,9 +174,15 @@ jobs:
 
       # Every test/e2e/coverage.tsv row a live test claims must have passed
       # in the suites that ran. The job summary lists every row's result.
+      # A job that was re-run has one results/<job>-attempt-<n> directory per
+      # attempt; only its latest counts.
       - name: Prove the coverage
         run: |
-          mapfile -t files < <(find results -name summary.json | sort)
+          declare -A latest
+          while read -r d; do latest[${d%-attempt-*}]=$d; done < \
+            <(find results -mindepth 1 -maxdepth 1 -type d -name '*-attempt-*' | sort -V)
+          [ "${#latest[@]}" -gt 0 ] || { echo "::error::no suite uploaded results"; exit 1; }
+          mapfile -t files < <(find "${latest[@]}" -name summary.json | sort)
           go run ./test/e2e/proof -out coverage-proof.json "${files[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
