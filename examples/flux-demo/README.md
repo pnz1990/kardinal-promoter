@@ -64,13 +64,21 @@ The `flux` health adapter checks:
 
 1. **`Ready` condition is `True`** on the Kustomization resource
 2. **`observedGeneration == metadata.generation`** — the controller has reconciled the *current* spec, not a previous version
+3. **`lastAppliedRevision` is the commit kardinal promoted** — or a later commit while the Kustomization's Deployments run the Bundle images (a sibling environment pushed to the same branch)
 
-This two-part check prevents a false positive where Flux reconciled the previous manifest successfully but hasn't yet picked up the new commit kardinal pushed.
+Together these prevent a false positive where Flux reconciled the previous commit successfully but hasn't yet applied the one kardinal pushed.
 
-**Unhealthy states that cause the adapter to wait:**
-- `Ready=False` (reconciliation failed or in progress)
-- `Ready=True` but `observedGeneration` lags `generation` (Flux hasn't reconciled the new commit yet)
-- Kustomization not found (Flux hasn't created it yet)
+**States that make the adapter wait:**
+- `Ready=Unknown` while Flux applies a commit, or `observedGeneration` lags `generation`
+- `Ready=True` on an older commit (Flux hasn't fetched or applied the new commit yet)
+- `Ready=Unknown` while Flux reconciles again the commit it already applied (every interval): the result is that of the Kustomization's Deployments, so a running bake continues
+- `spec.suspend: true` before the commit is applied: the message says the Kustomization is suspended; Flux applies nothing until it is resumed
+
+**States that count as a health failure:**
+- `Ready=False` (build or apply failed, or a health check timed out). When Flux gave up because the promoted commit's resources stalled (`HealthCheckFailed`), `onHealthFailure` applies at once
+- Kustomization not found
+
+Waiting ends at `health.timeout`, which then applies `onHealthFailure`. See [docs/health-adapters.md](../../docs/health-adapters.md) for every case.
 
 **Configuration reference:**
 

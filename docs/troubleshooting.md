@@ -131,6 +131,7 @@ kubectl get promotionstep my-app-v1-29-0-prod -o yaml
 Common causes:
 - Argo CD Application has not synced the promoted commit yet (`revision=<old>, waiting for <new>`; check the Application sync status and revision)
 - Flux has not applied the promoted commit yet (`lastAppliedRevision=<old>, waiting for <new>`)
+- The Flux Kustomization is suspended (`is suspended; Flux applies nothing until it is resumed`; run `flux resume kustomization <name>`)
 - The Deployment still runs the previous image (`not updated yet`) or has not finished rolling out
 - Deployment pods are crash-looping (check pod logs)
 - Health timeout is too short for slow deploys (increase `health.timeout`)
