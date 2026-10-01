@@ -27,7 +27,7 @@ Bundles `<pipeline>-<random suffix>`). `<rollbackOf>` is the rollback Bundle's
 | `kardinal/promotion` | Always, rollbacks included | Promotion PR |
 | `kardinal/rollback` | On rollbacks | Added next to `kardinal/promotion` when the Bundle is a rollback (`spec.provenance.rollbackOf` is set) |
 
-If adding the labels fails, the PR stays open and the step message records the error.
+If adding the labels fails, the PR stays open and the step message records the error. On Azure DevOps the labels are PR tags. Bitbucket Cloud has no PR labels, so its PRs get none; find rollback PRs there by their `[kardinal] Rollback` title.
 
 ### Body
 

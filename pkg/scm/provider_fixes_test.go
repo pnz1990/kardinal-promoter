@@ -416,7 +416,8 @@ func TestFindExistingPR_FiltersByBranch(t *testing.T) {
 				_, _ = w.Write([]byte(`{"values":[]}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"values":[{"id":5,"source":{"branch":{"name":"kardinal/b/prod"}},"links":{"html":{"href":"https://bitbucket.org/ws/r/pull-requests/5"}}}]}`))
+			_, _ = w.Write([]byte(`{"values":[{"id":5,"source":{"branch":{"name":"kardinal/b/prod"}},"destination":{"branch":{"name":"main"}},` +
+				`"links":{"html":{"href":"https://bitbucket.org/ws/r/pull-requests/5"}}}]}`))
 		}))
 		defer srv.Close()
 		_, n, err := scm.NewBitbucketProvider("t", srv.URL, "").OpenPR(context.Background(), "ws/r", "t", "b", head, "main")

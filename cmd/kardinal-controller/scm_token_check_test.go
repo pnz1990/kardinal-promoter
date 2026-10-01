@@ -8,12 +8,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
 // TestCheckSCMTokenAtStartup covers the startup token check main runs whenever
@@ -124,6 +127,47 @@ func TestCheckSCMTokenAtStartup(t *testing.T) {
 				assert.Contains(t, buf.String(), tt.wantLog)
 			}
 			require.NotContains(t, buf.String(), secret, "the token must never be logged")
+		})
+	}
+}
+
+// TestCheckSCMTokenAtStartup_NotAvailable checks the startup token check for
+// providers without a validator: no request reaches the SCM API, neither from
+// the check nor from building the provider, and exactly one info line says
+// the check is not available and where token problems show instead. The token
+// is not logged, and an empty token logs nothing. Covers SCM-BB-06.
+func TestCheckSCMTokenAtStartup_NotAvailable(t *testing.T) {
+	const token = "s3cr3t-token-value"
+	for _, provider := range []string{"bitbucket", "azuredevops"} {
+		t.Run(provider, func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			}))
+			defer srv.Close()
+
+			// main builds the provider, then starts the check.
+			_, err := scm.NewProvider(provider, token+"\n", srv.URL, "")
+			require.NoError(t, err)
+			_, err = scm.NewDynamicProvider(provider, token+"\n", srv.URL, "")
+			require.NoError(t, err)
+
+			var buf bytes.Buffer
+			logger := zerolog.New(&buf).Level(zerolog.DebugLevel)
+			assert.Nil(t, checkSCMTokenAtStartup(context.Background(), logger, provider, token+"\n", srv.URL))
+			assert.Zero(t, requests.Load(), "no SCM API request")
+
+			lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+			require.Len(t, lines, 1, buf.String())
+			assert.JSONEq(t, `{"level":"info","provider":"`+provider+`",`+
+				`"message":"SCM token check at startup is not available for this provider; token problems show on the first promotion step"}`,
+				lines[0])
+			assert.NotContains(t, buf.String(), token, "the token must never be logged")
+
+			buf.Reset()
+			assert.Nil(t, checkSCMTokenAtStartup(context.Background(), logger, provider, " \n", srv.URL))
+			assert.Empty(t, buf.String(), "no token, no check and no log line")
 		})
 	}
 }
