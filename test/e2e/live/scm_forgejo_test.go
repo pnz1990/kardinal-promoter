@@ -50,9 +50,9 @@ func TestForgejo_PromotionPR(t *testing.T) {
 }
 
 // TestForgejo_MergeByPolling checks that without a webhook the PRStatus poll
-// finds a merge on Forgejo, and the Graph's PRStatus nodes: one per step,
-// named for the Bundle and environment, without a spec, ready when merged
-// only for pr-review, and referenced by the step.
+// finds a merge on Forgejo, and the Graph's PRStatus nodes: one per
+// environment, named for the Bundle and environment, without a spec, ready
+// when merged only for pr-review, and referenced by the step.
 //
 // Covers SCM-FJ-03, GRAPH-PRSTATUS-01.
 func TestForgejo_MergeByPolling(t *testing.T) {
