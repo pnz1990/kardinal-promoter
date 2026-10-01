@@ -25,6 +25,13 @@ stale now.
 A blocked gate shows the next hour, within 7 days, at which it would pass with
 the same inputs. Gates that do not depend on time show no window.
 
+The first line is RESULT: PASS or RESULT: BLOCKED. A blocked result then lists
+each blocking gate with its message and next window. Last comes one row per
+gate: its name, PASS or BLOCK, and the reason. The command exits 0 whether the
+result is PASS or BLOCKED, so a script reads the RESULT line; it exits non-zero
+only when it cannot simulate (a bad flag, a pipeline or environment that does
+not exist, or no cluster to read).
+
 Example:
   kardinal policy simulate --pipeline nginx-demo --env prod --time "Saturday 3pm"
   # RESULT: BLOCKED
