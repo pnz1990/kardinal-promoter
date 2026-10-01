@@ -232,6 +232,15 @@ never applied, and a key the new chart removed fails its schema.
 `helm upgrade` upgrades the kardinal-promoter controller only. Upgrade kro separately by
 re-running `hack/install-kro.sh` from the matching kardinal-promoter release.
 
+### Downgrading
+
+A controller from v0.9.0-rc.1 or earlier does not know the `kardinal.io/close-pr` finalizer
+that this release puts on PromotionSteps that open a PR, and never removes it: such a step, its
+Graph and its namespace then never finish deleting. After you downgrade, remove the finalizer
+from every step that holds it with the command under [Uninstall](#uninstall). The older
+controller does not close the PR of a deleted step, so close by hand the PRs of the steps you
+delete after the downgrade.
+
 ### Upgrading from v0.8.1
 
 v0.8.1 ran its own Graph controller (krocodile, `experimental.kro.run`) from the kardinal chart. This release runs on upstream kro (`kro.run`), which you install separately. `helm upgrade --reuse-values` fails. A `helm upgrade` that gets past the values check deletes the `kro-system` namespace. Follow the steps below instead.
@@ -505,9 +514,39 @@ terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take
 
 ## Uninstall
 
-```bash
-helm uninstall kardinal-promoter -n kardinal-system
+Delete your Bundles, and wait for their PromotionSteps to go, before you uninstall the
+controller. A step of a `pr-review` environment carries the `kardinal.io/close-pr` finalizer
+while it is `Promoting` or `WaitingForMerge`, and on delete the controller closes its PR with a
+comment before it lets the step go. Without the controller the finalizer stays, and the step,
+its Graph, its namespace and the PromotionStep CRD never finish deleting.
 
+```bash
+kubectl delete bundles.kardinal.io --all -A
+# The controller closes the open promotion PRs. It gives up on a PR after about 5 minutes of
+# SCM errors (see Troubleshooting), so the steps are gone within about 6 minutes.
+kubectl wait --for=delete promotionsteps.kardinal.io --all -A --timeout=6m
+helm uninstall kardinal-promoter -n kardinal-system
+```
+
+If a step still holds the finalizer once the controller is gone (the wait timed out, or the
+controller was uninstalled first), remove the finalizer by hand. The controller did not close
+that step's PR, so the PR stays open: close it in your SCM, since merging it would change the
+environment with no PromotionStep tracking it. This prints each step and its PR (`-` when the
+step recorded none), then removes the finalizer:
+
+```bash
+kubectl get promotionsteps.kardinal.io -A -o go-template='{{range .items}}{{$s := .}}{{range $i, $f := .metadata.finalizers}}{{if eq $f "kardinal.io/close-pr"}}{{$s.metadata.namespace}} {{$s.metadata.name}} {{$i}} {{or $s.status.prURL "-"}}{{"\n"}}{{end}}{{end}}{{end}}' |
+while read -r ns name i pr; do
+  echo "$ns/$name: close PR $pr by hand"
+  kubectl patch promotionsteps.kardinal.io "$name" -n "$ns" --type=json -p \
+    "[{\"op\":\"test\",\"path\":\"/metadata/finalizers/$i\",\"value\":\"kardinal.io/close-pr\"},{\"op\":\"remove\",\"path\":\"/metadata/finalizers/$i\"}]"
+done
+```
+
+See also [Troubleshooting: deletion hangs](troubleshooting.md#a-promotionstep-graph-or-namespace-never-finishes-deleting).
+Then remove the CRDs and kro if you want:
+
+```bash
 # Optional: remove kardinal CRDs (deletes all Pipelines, Bundles, PolicyGates, etc.)
 # promotiontemplates.kardinal.io exists only on clusters that ran a pre-release build from main.
 kubectl delete crd --ignore-not-found \
@@ -544,7 +583,8 @@ The chart creates the controller's ServiceAccount (`kardinal-promoter`) and its 
 |---|---|
 | All `kardinal.io` kinds and their `/status` | Full CRUD, except `auditevents` (get, list, watch, create) and `changewindows` (get, list, watch; get, update, patch on `/status`) |
 | `graphs.kro.run` | Full CRUD; get on `graphs/status` |
-| `serviceaccounts`, `rolebindings` | get, create; get, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs) |
+| `serviceaccounts`, `rolebindings` | get, create; get, list, create, update, delete (Graph identity; `delete` removes reader bindings no Graph needs, `list` finds them for the sweep) |
+| `namespaces` | get, limited to `controller.watchNamespace` in namespace mode (lets go of a Graph whose namespace is being deleted) |
 | `clusterroles` | `bind`, limited to `kardinal-promoter-graph-applier` and `kardinal-promoter-graph-reader` |
 | `deployments`, Argo CD `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch (health adapters) |
 | `secrets` | get only: the controller reads each Secret by name and never lists or watches them. In the default cluster mode `get` covers **every Secret in the cluster**. The release-namespace Role adds `get` on the SCM token Secret by name |
@@ -562,13 +602,17 @@ kro does not apply a Graph's children with its own identity. It impersonates the
 controller creates that ServiceAccount and binds it with RoleBindings to `kardinal-promoter-graph-applier`
 (in the Graph namespace) and `kardinal-promoter-graph-reader` (in each namespace a health `ref` node reads,
 limited to the Graph's own namespace and `graph.readerNamespaces`). Reader bindings that no Graph
-in the namespace needs any more are deleted.
+in the namespace needs any more are deleted: when a Bundle is translated, when a Graph is deleted,
+and, in cluster mode, by a sweep at controller startup and every 10 minutes that also catches the
+bindings of namespaces that are gone. The sweep lists only RoleBindings labeled
+`app.kubernetes.io/managed-by=kardinal-promoter`.
 See G5 in the [Graph capability ledger](design/16-graph-capability-ledger.md).
 
 **Upgrading:** earlier versions bound the reader role in every namespace a health `ref` named,
-and did not record those bindings, so the controller does not delete them. After upgrading,
-list them and delete any in a namespace that is not the Graph's own and not in
-`graph.readerNamespaces`:
+and did not record those bindings. In cluster mode the sweep deletes them once no Graph reads
+through them. A binding that a Graph made by the old version still reads through stays until
+that Graph's Bundle is replaced. To revoke such bindings at once, list them and delete any in
+a namespace that is not the Graph's own and not in `graph.readerNamespaces`:
 
 ```bash
 kubectl get rolebindings -A -l app.kubernetes.io/managed-by=kardinal-promoter \

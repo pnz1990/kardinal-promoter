@@ -7,8 +7,9 @@ Delete a Bundle by name
 Delete a Bundle by name.
 
 Deleting a Bundle stops its promotion: its Graph, PromotionSteps and gate
-instances are deleted with it. Nothing is written to git, and a pull request
-the promotion opened stays open; close it on the Git server.
+instances are deleted with it. Nothing is written to git. A pull request the
+promotion opened that is still open is closed, with a comment, before its
+PromotionStep goes away.
 
 Finished Bundles (Verified, Failed or Superseded) beyond the Pipeline's
 spec.historyLimit (default 50) are deleted automatically, oldest first;

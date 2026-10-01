@@ -136,7 +136,7 @@ func TestStepErrorRetry(t *testing.T) {
 			ps.Status.RetryCount = tt.retryCount
 			ps.Status.Outputs = tt.outputs
 			c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
-			m := &mockSCM{}
+			m := &mockSCM{open: true}
 			rec := events.NewFakeRecorder(20)
 			r := &promotionstep.Reconciler{Client: c, SCM: m, Recorder: rec,
 				WorkDirFn: func(_, _ string) string { return filepath.Join(t.TempDir(), "w") }}
@@ -271,7 +271,7 @@ func TestSupersession(t *testing.T) {
 				objs = append(objs, tt.prStatus)
 			}
 			c := newClient(t, objs...)
-			m := &mockSCM{closeErrs: tt.closeErrs}
+			m := &mockSCM{open: true, closeErrs: tt.closeErrs}
 			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}}
 
 			res, err := r.Reconcile(context.Background(), reqFor("step"))
@@ -362,7 +362,7 @@ func TestWaitForMerge(t *testing.T) {
 				objs = append(objs, tt.prStatus)
 			}
 			c := newClient(t, append(objs, ps)...)
-			m := &mockSCM{}
+			m := &mockSCM{open: true}
 			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: &mockGit{}}
 
 			res, err := r.Reconcile(context.Background(), reqFor("step"))

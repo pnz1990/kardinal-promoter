@@ -16,11 +16,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -438,14 +440,19 @@ func TestLifecycle_TransientTranslateErrorIsRetried(t *testing.T) {
 	assert.Equal(t, "Promoting", lcGet(t, c, "app-v1").Status.Phase)
 }
 
-// errTranslator returns err while it is set and counts its calls.
+// errTranslator returns err while it is set and counts its calls. It calls
+// before, when set, first.
 type errTranslator struct {
-	err   error
-	calls int
+	err    error
+	calls  int
+	before func()
 }
 
 func (m *errTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
 	m.calls++
+	if m.before != nil {
+		m.before()
+	}
 	if m.err != nil {
 		return "", m.err
 	}
@@ -460,8 +467,8 @@ func (m *errTranslator) Translate(_ context.Context, _ *kardinalv1alpha1.Pipelin
 // Failed without re-translating until something changes, and recovers once
 // the Graph builds.
 func TestLifecycle_InvalidGraphBuildFailsBundle(t *testing.T) {
-	buildErr := fmt.Errorf("translator.Translate: build: %w",
-		fmt.Errorf("skip denied for environment %q: %w", "uat", graph.ErrInvalid))
+	buildErr := fmt.Errorf("translator.Translate: %w",
+		fmt.Errorf("build: skip denied for environment %q: %w", "uat", graph.ErrInvalid))
 	tests := []struct {
 		name  string
 		phase string
@@ -832,6 +839,157 @@ func TestLifecycle_GraphSyncErrorKeepsEvidence(t *testing.T) {
 	require.NotNil(t, synced)
 	assert.Equal(t, metav1.ConditionTrue, synced.Status)
 	assert.NotEqual(t, "hash-of-an-older-spec", got.Status.PipelineSpecHash)
+}
+
+// B54: a namespace being deleted refuses new objects, so translating a
+// Bundle in it only fails creating the Graph ServiceAccount, its RoleBindings
+// or the Graph, and the namespace deletion deletes the Bundle next. No path
+// that translates (the first Graph, the re-translate after a Pipeline change,
+// the recreate of a deleted Graph) translates then, or reports an error, a
+// condition, an Event or a requeue, also when the namespace starts
+// terminating during the translation. A refusal for another terminating
+// namespace, while the Bundle's own namespace stays active, is reported as
+// before.
+func TestLifecycle_TerminatingNamespaceNotTranslated(t *testing.T) {
+	translateErr := func(ns string) error {
+		nsErr := apierrors.NewForbidden(schema.GroupResource{Resource: "serviceaccounts"}, "kardinal-graph",
+			fmt.Errorf("unable to create new content in namespace %s because it is being terminated", ns))
+		nsErr.ErrStatus.Details.Causes = append(nsErr.ErrStatus.Details.Causes, metav1.StatusCause{
+			Type: corev1.NamespaceTerminatingCause, Field: "metadata.namespace",
+			Message: "namespace " + ns + " is being terminated"})
+		return fmt.Errorf("translator.Translate: %w",
+			fmt.Errorf("graph identity: create serviceaccount %s/kardinal-graph: %w", ns, nsErr))
+	}
+	terminating := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"},
+		DeletionTimestamp: &metav1.Time{Time: time.Now()}}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating}}
+	// The kubernetes finalizer keeps the namespace, Terminating, once deleted.
+	active := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"}},
+		Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}
+	newClient := func(t *testing.T, objs ...client.Object) client.Client {
+		s := newScheme()
+		require.NoError(t, corev1.AddToScheme(s))
+		return indexedBuilder(s).WithObjects(objs...).
+			WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}).Build()
+	}
+	paths := []struct {
+		name    string
+		phase   string
+		hash    string // the stored PipelineSpecHash
+		checker bundle.GraphChecker
+	}{
+		{name: "first graph of an available bundle", phase: "Available", checker: existsChecker{}},
+		{name: "re-translate after a pipeline change", phase: "Promoting", hash: "hash-of-an-older-spec",
+			checker: existsChecker{}},
+		{name: "recreate of a deleted graph", phase: "Promoting", checker: &graphStatusReader{}},
+	}
+	modes := []struct {
+		name      string
+		ns        *corev1.Namespace
+		errNS     string // the namespace the translation error names
+		deleteNS  bool   // the translation deletes the Bundle's namespace first
+		wantCalls int
+		wantQuiet bool
+	}{
+		{name: "namespace terminating", ns: terminating, errNS: "default", wantCalls: 0, wantQuiet: true},
+		{name: "namespace starts terminating during the translation", ns: active, errNS: "default", deleteNS: true,
+			wantCalls: 1, wantQuiet: true},
+		{name: "another namespace is terminating", ns: active, errNS: "argocd", wantCalls: 1},
+	}
+	for _, p := range paths {
+		for _, m := range modes {
+			t.Run(p.name+"/"+m.name, func(t *testing.T) {
+				b := lcBundle("app-v1", "image", p.phase, time.Now().UTC())
+				if p.phase != "Available" {
+					b.Status.GraphRef = "app-app-v1"
+					b.Status.PipelineSpecHash = p.hash
+				}
+				c := newClient(t, m.ns.DeepCopy(), lcPipeline("app", lcEnvs("test")...), b)
+				tr := &errTranslator{err: translateErr(m.errNS)}
+				if m.deleteNS {
+					tr.before = func() {
+						require.NoError(t, c.Delete(context.Background(), m.ns.DeepCopy()))
+					}
+				}
+				rec := events.NewFakeRecorder(10)
+				r := &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: p.checker, Recorder: rec}
+
+				res, err := r.Reconcile(context.Background(), ctrl.Request{
+					NamespacedName: types.NamespacedName{Name: "app-v1", Namespace: "default"}})
+				assert.Equal(t, m.wantCalls, tr.calls)
+				got := lcGet(t, c, "app-v1")
+				assert.Equal(t, p.phase, got.Status.Phase)
+				if p.phase == "Available" {
+					assert.Empty(t, got.Status.GraphRef, "no Graph")
+				}
+				if p.hash != "" {
+					assert.Equal(t, p.hash, got.Status.PipelineSpecHash, "the Graph was not updated")
+				}
+				reported := false
+				for _, cond := range got.Status.Conditions {
+					if cond.Reason == "TranslationError" || cond.Type == "GraphSynced" && cond.Status == metav1.ConditionFalse {
+						reported = true
+						assert.Contains(t, cond.Message, "argocd", "condition %s", cond.Type)
+					}
+				}
+				if !m.wantQuiet {
+					assert.True(t, err != nil || reported, "the failed translation is reported")
+					return
+				}
+				require.NoError(t, err)
+				assert.Zero(t, res.RequeueAfter)
+				assert.False(t, reported, "no TranslationError or GraphSynced=False condition: %v", got.Status.Conditions)
+				assert.Empty(t, rec.Events, "no Event")
+			})
+		}
+	}
+
+	// An active namespace is translated as before.
+	c := newClient(t, active.DeepCopy(), lcPipeline("app", lcEnvs("test")...),
+		lcBundle("app-v1", "image", "Available", time.Now().UTC()))
+	tr := &errTranslator{}
+	lcReconcile(t, &bundle.Reconciler{Client: c, Translator: tr, GraphChecker: existsChecker{}}, "app-v1")
+	assert.Equal(t, 1, tr.calls)
+	assert.Equal(t, "Promoting", lcGet(t, c, "app-v1").Status.Phase)
+}
+
+// B54: in a namespace being deleted, a Bundle whose Pipeline went first is not
+// marked PipelineNotFound: the status write and the Warning Event would only
+// be refused, and the namespace deletion deletes the Bundle next. In an active
+// namespace it is marked as before (C02-bundle-11).
+func TestLifecycle_TerminatingNamespacePipelineGone(t *testing.T) {
+	newClient := func(t *testing.T, objs ...client.Object) client.Client {
+		s := newScheme()
+		require.NoError(t, corev1.AddToScheme(s))
+		return indexedBuilder(s).WithObjects(objs...).
+			WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}).Build()
+	}
+	terminating := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"},
+		DeletionTimestamp: &metav1.Time{Time: time.Now()}}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating}}
+	active := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}
+	for _, phase := range []string{"Available", "Promoting"} {
+		for _, ns := range []*corev1.Namespace{terminating, active} {
+			t.Run(phase+"/"+string(ns.Status.Phase), func(t *testing.T) {
+				c := newClient(t, ns.DeepCopy(), lcBundle("app-v1", "image", phase, time.Now().UTC()))
+				rec := events.NewFakeRecorder(10)
+				r := &bundle.Reconciler{Client: c, Translator: &countingTranslator{}, Recorder: rec}
+
+				res := lcReconcile(t, r, "app-v1")
+				ready := meta.FindStatusCondition(lcGet(t, c, "app-v1").Status.Conditions, "Ready")
+				if ns == terminating {
+					assert.Zero(t, res.RequeueAfter)
+					assert.False(t, ready != nil && ready.Reason == "PipelineNotFound", "not marked PipelineNotFound")
+					assert.Empty(t, rec.Events, "no Event")
+					return
+				}
+				require.NotNil(t, ready)
+				assert.Equal(t, "PipelineNotFound", ready.Reason)
+				assert.Positive(t, res.RequeueAfter)
+				require.Len(t, rec.Events, 1)
+				assert.Contains(t, <-rec.Events, "PipelineNotFound")
+			})
+		}
+	}
 }
 
 // Pausing a Pipeline does not re-translate every in-flight Graph.

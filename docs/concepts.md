@@ -43,7 +43,8 @@ same Pipeline, the older Bundle is **superseded**:
   status they had when the Bundle was superseded
 - A step the Graph created just before the Bundle was superseded, and that never started,
   is failed with "superseded before this step started" and writes no AuditEvent
-- Deleting the Bundle deletes its Graph and everything the Graph created
+- Deleting the Bundle deletes its Graph and everything the Graph created, and closes, with a
+  comment, a PR one of its steps opened that is still open
 
 Supersession is tracked independently by Bundle type. A new `image` Bundle does not
 supersede an in-flight `config` Bundle, and vice versa.

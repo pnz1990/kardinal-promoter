@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 	corev1 "k8s.io/api/core/v1"
@@ -84,6 +85,56 @@ type IdentityProvisioner struct {
 	// allows every namespace except kube-system, kube-public and
 	// kube-node-lease, which are never allowed.
 	ReaderNamespaces []string
+
+	// OnlyNamespace, when set (namespace mode, --watch-namespace), is the only
+	// namespace the controller has RBAC in. Prune looks for reader RoleBindings
+	// there only: the controller cannot have created one anywhere else, and
+	// every read elsewhere is forbidden.
+	OnlyNamespace string
+
+	// mu is held through Lock and Unlock.
+	mu sync.Mutex
+}
+
+// Lock serializes the callers that bind and prune reader RoleBindings. The
+// translator holds it from Ensure until its Graph is created; every Prune
+// caller holds it from listing the namespace's Graphs until Prune returns.
+// Without it a Prune that listed the Graphs just before a new Graph was
+// created could delete the reader binding Ensure had just made for it. A nil
+// provisioner does nothing.
+func (p *IdentityProvisioner) Lock() {
+	if p != nil {
+		p.mu.Lock()
+	}
+}
+
+// Unlock releases Lock.
+func (p *IdentityProvisioner) Unlock() {
+	if p != nil {
+		p.mu.Unlock()
+	}
+}
+
+// ApplierBindingName is the name of the applier RoleBinding in every Graph
+// namespace (the applier ClusterRole's name).
+func (p *IdentityProvisioner) ApplierBindingName() string {
+	return p.applierRole()
+}
+
+// ReaderBinding reports whether rb is a reader RoleBinding the controller
+// created, and for Graphs in which namespace: it carries the managed-by label,
+// binds the reader ClusterRole, and grants it to the Graph ServiceAccount of
+// one namespace, after which it is named.
+func (p *IdentityProvisioner) ReaderBinding(rb *rbacv1.RoleBinding) (graphNS string, ok bool) {
+	if !isManaged(rb.Labels) || rb.RoleRef.Kind != "ClusterRole" || rb.RoleRef.Name != p.readerRole() ||
+		len(rb.Subjects) != 1 {
+		return "", false
+	}
+	s := rb.Subjects[0]
+	if s.Kind != rbacv1.ServiceAccountKind || s.Name != p.saName() || rb.Name != p.readerBindingName(s.Namespace) {
+		return "", false
+	}
+	return s.Namespace, true
 }
 
 func (p *IdentityProvisioner) saName() string {
@@ -140,7 +191,9 @@ func (p *IdentityProvisioner) MayRead(graphNS, ns string) bool {
 // RoleBinding of the same name exists that the controller does not manage.
 // The caller must drop g's refs into those namespaces before creating g: kro
 // treats a forbidden ref read as a hard error and would degrade the Graph. The
-// next translation tries again.
+// next translation tries again. A reader binding refused because g's own
+// namespace is being deleted is an error instead: g cannot be created there
+// either.
 //
 // Reader bindings the controller created are recorded on the applier
 // RoleBinding (AnnotationReaderNamespaces) for Prune.
@@ -172,6 +225,10 @@ func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, e
 			if owned {
 				managed = append(managed, readNS)
 			}
+		case readNS == ns && apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
+			// The Graph's own namespace is being deleted, so the Graph cannot
+			// be created either: stop, rather than report the role unbound.
+			return nil, err
 		case apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || errors.Is(err, errUnmanaged):
 			log.Warn().Err(err).Str("namespace", readNS).Str("graphNamespace", ns).
 				Msg("graph identity: reader role not bound")
@@ -189,10 +246,20 @@ func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, e
 // Prune deletes the reader RoleBindings for graphNS that no Graph in graphs
 // reads through any more. graphs must be every Graph in graphNS. Only
 // bindings recorded by Ensure and still carrying managedByLabel are deleted.
-// Ensure and Prune must not run concurrently for one graphNS, or Prune can
-// delete a binding a Graph that is not yet listed needs; the Bundle
-// reconciler, the only caller, runs one reconcile at a time.
+// When the applier RoleBinding, which holds the record, is gone (its
+// namespace was deleted, or someone deleted it), the bindings are looked for
+// in graphNS and every namespace ReaderNamespaces names; with AllNamespaces
+// the others are left for the sweep (PruneIn). With OnlyNamespace set, only
+// that namespace is looked in. A namespace whose binding cannot be read stays
+// in the record, so a later Prune tries again. The caller must hold Lock.
 func (p *IdentityProvisioner) Prune(ctx context.Context, graphNS string, graphs []*Graph) error {
+	return p.PruneIn(ctx, graphNS, graphs, nil)
+}
+
+// PruneIn is Prune that also looks for reader bindings for graphNS in
+// namespaces, which the sweep passes when it found bindings there that the
+// record may not list.
+func (p *IdentityProvisioner) PruneIn(ctx context.Context, graphNS string, graphs []*Graph, namespaces []string) error {
 	if p == nil {
 		return nil
 	}
@@ -202,60 +269,91 @@ func (p *IdentityProvisioner) Prune(ctx context.Context, graphNS string, graphs 
 			needed[ns] = true
 		}
 	}
-	recorded, err := p.recorded(ctx, graphNS)
+	recorded, found, err := p.recorded(ctx, graphNS)
 	if err != nil {
 		return err
 	}
+	candidates := map[string]bool{}
+	for _, ns := range append(recorded, namespaces...) {
+		candidates[ns] = true
+	}
+	if !found {
+		candidates[graphNS] = true
+		for _, ns := range p.ReaderNamespaces {
+			if ns != AllNamespaces {
+				candidates[ns] = true
+			}
+		}
+	}
 	var removed []string
-	for _, ns := range recorded {
-		if needed[ns] {
+	for _, ns := range sortedKeys(candidates) {
+		if needed[ns] || (p.OnlyNamespace != "" && ns != p.OnlyNamespace) {
 			continue
 		}
-		if err := p.deleteReaderBinding(ctx, ns, graphNS); err != nil {
+		pruned, err := p.deleteReaderBinding(ctx, ns, graphNS)
+		if err != nil {
 			return err
 		}
-		removed = append(removed, ns)
+		if pruned {
+			removed = append(removed, ns)
+		}
+	}
+	if !found {
+		return nil
 	}
 	return p.updateRecord(ctx, graphNS, nil, removed)
 }
 
 // deleteReaderBinding deletes the reader RoleBinding for graphNS in ns if it
-// is managed by the controller. A missing binding is already pruned.
-func (p *IdentityProvisioner) deleteReaderBinding(ctx context.Context, ns, graphNS string) error {
+// is managed by the controller, and reports whether ns holds no such binding
+// any more: deleted, missing, or one the controller does not manage. A
+// binding the controller may not read (ReaderNamespaces naming a namespace the
+// chart grants nothing in) is logged and reported as not pruned, so its
+// namespace stays in the record and a later Prune tries again.
+func (p *IdentityProvisioner) deleteReaderBinding(ctx context.Context, ns, graphNS string) (bool, error) {
 	var rb rbacv1.RoleBinding
 	key := client.ObjectKey{Namespace: ns, Name: p.readerBindingName(graphNS)}
 	if err := p.Reader.Get(ctx, key, &rb); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
+		switch {
+		case apierrors.IsNotFound(err):
+			return true, nil
+		case apierrors.IsForbidden(err):
+			zerolog.Ctx(ctx).Warn().Err(err).Str("namespace", ns).Str("graphNamespace", graphNS).
+				Msg("graph identity: may not read the reader rolebinding; not pruning it")
+			return false, nil
 		}
-		return fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
+		return false, fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
 	}
-	if !isManaged(rb.Labels) {
-		return nil
+	if !isManaged(rb.Labels) || rb.RoleRef.Name != p.readerRole() {
+		return true, nil
 	}
 	err := p.Writer.Delete(ctx, &rb, client.Preconditions{UID: &rb.UID, ResourceVersion: &rb.ResourceVersion})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("graph identity: delete rolebinding %s: %w", key, err)
+		return false, fmt.Errorf("graph identity: delete rolebinding %s: %w", key, err)
 	}
-	return nil
+	zerolog.Ctx(ctx).Info().Str("rolebinding", key.String()).Str("graphNamespace", graphNS).
+		Msg("graph identity: deleted a reader rolebinding no Graph reads through")
+	return true, nil
 }
 
-// recorded returns the reader namespaces recorded on the applier RoleBinding.
-func (p *IdentityProvisioner) recorded(ctx context.Context, graphNS string) ([]string, error) {
+// recorded returns the reader namespaces recorded on the applier RoleBinding,
+// and whether that binding exists.
+func (p *IdentityProvisioner) recorded(ctx context.Context, graphNS string) ([]string, bool, error) {
 	var rb rbacv1.RoleBinding
 	key := client.ObjectKey{Namespace: graphNS, Name: p.applierRole()}
 	if err := p.Reader.Get(ctx, key, &rb); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, nil
+			return nil, false, nil
 		}
-		return nil, fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
+		return nil, false, fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
 	}
-	return splitNamespaces(rb.Annotations[AnnotationReaderNamespaces]), nil
+	return splitNamespaces(rb.Annotations[AnnotationReaderNamespaces]), true, nil
 }
 
 // updateRecord adds and removes namespaces in the applier RoleBinding's
 // AnnotationReaderNamespaces. It does nothing when the set does not change,
-// or when the binding is not managed by the controller.
+// when the binding is not managed by the controller, or, when it only
+// removes, when the binding is gone.
 func (p *IdentityProvisioner) updateRecord(ctx context.Context, graphNS string, add, remove []string) error {
 	if len(add) == 0 && len(remove) == 0 {
 		return nil
@@ -264,6 +362,9 @@ func (p *IdentityProvisioner) updateRecord(ctx context.Context, graphNS string, 
 		var rb rbacv1.RoleBinding
 		key := client.ObjectKey{Namespace: graphNS, Name: p.applierRole()}
 		if err := p.Reader.Get(ctx, key, &rb); err != nil {
+			if apierrors.IsNotFound(err) && len(add) == 0 {
+				return nil
+			}
 			return fmt.Errorf("graph identity: get rolebinding %s: %w", key, err)
 		}
 		if !isManaged(rb.Labels) {

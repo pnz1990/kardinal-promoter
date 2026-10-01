@@ -538,6 +538,82 @@ kubectl get graph -l kardinal.io/bundle=my-app-v1 -o jsonpath='{.items[0].status
 
 If a PolicyGate node is not ready, downstream PromotionSteps will not be created until it passes.
 
+## A PromotionStep, Graph or namespace never finishes deleting
+
+Two finalizers can hold a delete, and the controller removes both itself while it runs.
+
+**`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (a `pr-review`
+environment) carries it while it is `Promoting` or `WaitingForMerge`, from before it opens the
+PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
+the PR is still open, closes it with a comment if it is (a merged or closed PR is left alone), then
+removes the finalizer. What happens to the PR depends on what was deleted:
+
+- **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
+  was deleted. ...`.
+- **The namespace.** The PR is closed with the comment `kardinal closed this PR: namespace
+  <namespace> was deleted. ...`.
+- **The PromotionStep alone** (`kubectl delete promotionstep`). kro creates the step again, under
+  the same name, once the old one is gone. The old PR is closed first (`kardinal closed this PR:
+  PromotionStep <name> was deleted. ...`), and the new step opens a new PR.
+- **The Graph, while the Bundle is `Promoting`.** The PR stays open: the controller recreates the
+  Graph, and the new step reuses the PR. The controller logs `left the PR of a step deleted with
+  its Graph open` with the `env` and `prURL`.
+
+If the SCM call keeps failing, the controller retries with backoff for about 5 minutes, then
+removes the finalizer anyway and logs the error `gave up closing the PR of a deleted
+PromotionStep; removing its finalizer` with the `env` and `prURL`: close that PR by hand, since
+merging it would change the environment with no PromotionStep tracking it. It also emits a
+`ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
+refuses new Events there, and the step is gone, so the controller log is the only record.
+
+**A PR left open with no PromotionStep.** In the Graph case above, the PR stays open on the
+promise that a new step reuses it. If the Bundle is deleted or stops `Promoting`, or its
+namespace is deleted, before the new step exists, nothing tracks the PR and the controller never
+closes it. (A Graph that fails to translate leaves the PR open only until the translation works
+again; the new step then reuses it.) Such a PR has the `kardinal/promotion` label and the branch
+`kardinal/<bundle>/<environment>`, and no PromotionStep matches it:
+
+```bash
+kubectl get promotionsteps -n <namespace> -l kardinal.io/bundle=<bundle>,kardinal.io/environment=<environment>
+```
+
+Close it by hand. The `left the PR of a step deleted with its Graph open` log line names it.
+
+The step stays only while the controller is not running, for example after `helm uninstall`
+without deleting the Bundles first. The controller did not close its PR: close the PR by hand,
+then remove the finalizer (to remove it from every step at once, see
+[Uninstall](installation.md#uninstall)):
+
+```bash
+# Deleted steps still holding a finalizer
+kubectl get promotionsteps -A -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.status.prURL}{" "}{.metadata.finalizers}{"\n"}{end}'
+
+# Remove kardinal.io/close-pr (the test op makes the patch fail if index 0 holds another finalizer)
+kubectl patch promotionstep <name> -n <namespace> --type=json -p \
+  '[{"op":"test","path":"/metadata/finalizers/0","value":"kardinal.io/close-pr"},{"op":"remove","path":"/metadata/finalizers/0"}]'
+```
+
+**`kro.run/graph-finalizer` on a Graph in a namespace being deleted.** kro deletes a Graph's
+resources as the Graph ServiceAccount, which the applier RoleBinding authorizes. Deleting the
+namespace deletes that RoleBinding too, after which every delete kro makes is forbidden and it
+keeps its finalizer. The controller removes kro's finalizer from its own Graphs (the
+`kardinal.io/bundle` label and a Bundle owner) once the namespace is Terminating and the applier
+RoleBinding is gone; the namespace deletion then deletes the resources. It logs `removed kro's
+finalizer from a Graph in a terminating namespace`. A Graph whose teardown was already stuck
+before the namespace deletion started is found within 30 seconds of it: the controller checks a
+deleting Graph again every 30 seconds until its namespace is Terminating. It never touches a
+Graph outside a Terminating namespace, or one kardinal did not create.
+
+If the controller is not running, check that the namespace is Terminating, then remove the
+finalizer by hand:
+
+```bash
+kubectl get namespace <namespace> -o jsonpath='{.status.phase}'   # Terminating
+kubectl get graphs.kro.run -n <namespace> -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.finalizers}{"\n"}{end}'
+kubectl patch graphs.kro.run <name> -n <namespace> --type=json -p \
+  '[{"op":"test","path":"/metadata/finalizers/0","value":"kro.run/graph-finalizer"},{"op":"remove","path":"/metadata/finalizers/0"}]'
+```
+
 ---
 
 ## Performance tuning (large-scale deployments)

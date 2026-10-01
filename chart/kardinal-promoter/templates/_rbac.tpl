@@ -82,14 +82,16 @@ rules exist for. A new client call needs a row there and a rule here.
   verbs: ["get"]
 # Graph identity: the ServiceAccount kro impersonates and its RoleBindings.
 # bind is limited to the two Graph ClusterRoles, so the controller cannot
-# grant anything else. delete prunes reader RoleBindings in namespaces that
-# were removed from graph.readerNamespaces (C01-graph-04).
+# grant anything else. delete prunes reader RoleBindings no Graph reads
+# through any more (C01-graph-04): after a translation, when a Graph is
+# deleted, and in the leader's sweep, which lists the RoleBindings carrying
+# the controller's managed-by label (cluster mode only).
 - apiGroups: [""]
   resources: ["serviceaccounts"]
   verbs: ["get", "create"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["rolebindings"]
-  verbs: ["get", "create", "update", "delete"]
+  verbs: ["get", "list", "create", "update", "delete"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["clusterroles"]
   verbs: ["bind"]
@@ -129,6 +131,18 @@ rules exist for. A new client call needs a row there and a rule here.
 - apiGroups: ["kardinal.io"]
   resources: ["changewindows/status"]
   verbs: ["get", "update", "patch"]
+# The Graph cleanup reconciler reads the namespace of a deleted Graph, the
+# Bundle reconciler the namespace of a Bundle before translating it, and the
+# PromotionStep reconciler the namespace of a deleted step that holds a PR, to
+# tell whether it is being deleted (pkg/reconciler/graphcleanup,
+# pkg/reconciler/bundle, pkg/reconciler/promotionstep). Namespace mode: only
+# the watched namespace.
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
+  {{- with .Values.controller.watchNamespace }}
+  resourceNames: [{{ . | quote }}]
+  {{- end }}
 {{- if .Values.ui.auth.tokenReview }}
 # ui.auth.tokenReview: the UI API validates each bearer token with a
 # TokenReview and authorizes it with a SubjectAccessReview.

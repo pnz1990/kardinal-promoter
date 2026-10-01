@@ -49,6 +49,7 @@ import (
 	healthpkg "github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	bundlereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
 	changewindowrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/changewindow"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/graphcleanup"
 	metriccheckrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
 	nhookrecon "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/notificationhook"
 	pipelinereconciler "github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
@@ -229,8 +230,10 @@ func main() {
 
 	// Graph identity: kro applies each Graph as this ServiceAccount in the
 	// Pipeline's namespace. The controller creates it and binds it to the two
-	// ClusterRoles the chart ships (templates/graph-rbac.yaml).
-	graphIdentity := graphpkg.IdentityProvisioner{}
+	// ClusterRoles the chart ships (templates/graph-rbac.yaml). The translator,
+	// the Graph cleanup reconciler and the reader binding sweep share it (and
+	// its lock).
+	graphIdentity := &graphpkg.IdentityProvisioner{}
 	flag.StringVar(&graphIdentity.ServiceAccountName, "graph-service-account",
 		graphpkg.DefaultGraphServiceAccount,
 		"ServiceAccount (created in each Pipeline namespace) that kro impersonates to apply Graphs.")
@@ -253,6 +256,7 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 	graphIdentity.ReaderNamespaces = splitCSV(graphReaderNamespaces)
+	graphIdentity.OnlyNamespace = watchNamespace
 
 	// Configure zerolog level
 	level, err := zerolog.ParseLevel(zerologLevel)
@@ -291,6 +295,8 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("unable to create manager")
 	}
+	graphIdentity.Writer = mgr.GetClient()
+	graphIdentity.Reader = mgr.GetAPIReader()
 
 	// SCM provider — dispatches to GitHub or GitLab based on --scm-provider flag.
 	// When --scm-token-secret-name is set, a DynamicProvider is used so that
@@ -355,6 +361,31 @@ func main() {
 		logger.Fatal().Err(err).Msg("unable to set up BundleReconciler")
 	}
 
+	// Graph cleanup: prunes reader RoleBindings when a Graph is deleted, and
+	// lets kardinal's Graphs in a terminating namespace go once kro can no
+	// longer tear them down (its applier RoleBinding is gone).
+	graphLister := newGraphClient(mgr.GetConfig(), logger)
+	if err := (&graphcleanup.Reconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Graphs:    graphLister,
+		Identity:  graphIdentity,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatal().Err(err).Msg("unable to set up GraphCleanupReconciler")
+	}
+	// The sweep lists RoleBindings cluster-wide, which namespace mode does not
+	// grant; there the controller binds the reader role only in the watched
+	// namespace, and the reconciler's prune covers it.
+	if watchNamespace == "" {
+		if err := mgr.Add(&graphcleanup.Sweep{
+			APIReader: mgr.GetAPIReader(),
+			Graphs:    graphLister,
+			Identity:  graphIdentity,
+		}); err != nil {
+			logger.Fatal().Err(err).Msg("unable to register the reader RoleBinding sweep")
+		}
+	}
+
 	if err := (&pipelinereconciler.Reconciler{Client: mgr.GetClient()}).
 		SetupWithManager(mgr); err != nil {
 		logger.Fatal().Err(err).Msg("unable to set up PipelineReconciler")
@@ -374,6 +405,7 @@ func main() {
 
 	if err := (&psreconciler.Reconciler{
 		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
 		SCM:            scmProvider,
 		GitClient:      gitClient,
 		HealthDetector: newHealthDetector(mgr.GetConfig(), mgr.GetClient(), logger),
@@ -647,7 +679,7 @@ func newHealthDetector(cfg *rest.Config, k8s sigs_client.Client, log zerolog.Log
 
 // newTranslator constructs the Translator wired with a GraphClient, Builder,
 // and the Graph identity provisioner.
-func newTranslator(mgr ctrl.Manager, identity graphpkg.IdentityProvisioner,
+func newTranslator(mgr ctrl.Manager, identity *graphpkg.IdentityProvisioner,
 	policyNS []string, log zerolog.Logger) *translator.Translator {
 	dynClient, err := dynamic.NewForConfig(mgr.GetConfig())
 	if err != nil {
@@ -656,10 +688,8 @@ func newTranslator(mgr ctrl.Manager, identity graphpkg.IdentityProvisioner,
 	graphClient := graphpkg.NewGraphClient(dynClient, log)
 	builder := graphpkg.NewBuilder()
 	builder.ServiceAccountName = identity.ServiceAccountName
-	identity.Writer = mgr.GetClient()
-	identity.Reader = mgr.GetAPIReader()
 	return translator.New(graphClient, builder, mgr.GetClient(), policyNS, log).
-		WithIdentity(&identity).
+		WithIdentity(identity).
 		WithRESTMapper(mgr.GetRESTMapper())
 }
 

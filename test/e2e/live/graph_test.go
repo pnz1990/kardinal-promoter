@@ -344,9 +344,11 @@ func TestGraph_PipelineEditUpdatesInPlace(t *testing.T) {
 // an in-flight Bundle makes the controller recreate it (a new UID). Its
 // PromotionSteps are recreated with it, prod reuses the PR it had already
 // opened instead of opening a second one, and the Bundle still reaches
-// Verified.
+// Verified. The deleted prod step held the close-pr finalizer, and the
+// controller left its PR open and uncommented for the new step: prod has
+// exactly one PR, the same one, open.
 //
-// Covers GRAPH-HEAL-01.
+// Covers GRAPH-HEAL-01, STEP-DELETE-PR-03.
 func TestGraph_DeletedGraphIsRecreated(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
@@ -376,6 +378,14 @@ func TestGraph_DeletedGraphIsRecreated(t *testing.T) {
 	prs, err := e.Git.PullRequests(ctx, a.repo)
 	require.NoError(t, err)
 	assert.Len(t, prs, 1, "no second PR is opened")
+	var prodPRs []string
+	for _, p := range prs {
+		if p.Head == prHead(bundle, "prod") {
+			prodPRs = append(prodPRs, fmt.Sprintf("#%d %s", p.Number, p.State))
+		}
+	}
+	assert.Equal(t, []string{fmt.Sprintf("#%d open", pr.Number)}, prodPRs, "prod has one PR, the one it opened first, still open")
+	assert.Empty(t, e.PRComments(t, a.repo, pr.Number, "kardinal closed this PR"), "the PR kept for the new step is not commented on")
 	a.merge(t, again)
 	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)

@@ -144,9 +144,10 @@ func TestHelmTemplateGraphRBAC(t *testing.T) {
 	assert.Contains(t, rendered, "name: kardinal-promoter-graph-applier")
 	assert.Contains(t, rendered, "name: kardinal-promoter-graph-reader")
 	assert.Contains(t, rendered, `rbac.kro.run/aggregate-to-controller: "true"`)
-	// Reader RoleBindings no Graph needs any more are pruned.
+	// Reader RoleBindings no Graph needs any more are pruned; the sweep lists
+	// them.
 	assert.Contains(t, rendered, `resources: ["rolebindings"]
-    verbs: ["get", "create", "update", "delete"]`)
+    verbs: ["get", "list", "create", "update", "delete"]`)
 	assert.Contains(t, rendered, `verbs: ["bind"]
     resourceNames:
       - kardinal-promoter-graph-applier

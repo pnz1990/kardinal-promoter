@@ -30,10 +30,12 @@ What the namespaced rules grant:
 | All kardinal.io kinds and their `/status` | full CRUD; get, update, patch on status | Reconcilers |
 | `auditevents` | get, list, watch, create | Audit records are append-only |
 | `graphs.kro.run` | full CRUD; get on `graphs/status` | One Graph per Bundle |
-| `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, create, update, delete; bind | The Graph identity |
+| `serviceaccounts`; `rolebindings`; `clusterroles` (bind, limited to the two Graph ClusterRoles) | get, create; get, list, create, update, delete; bind | The Graph identity. `list` is for the sweep that deletes reader bindings no Graph reads through; it runs in cluster mode only and touches only RoleBindings labeled `app.kubernetes.io/managed-by=kardinal-promoter` |
 | `deployments`, `argoproj.io` `applications` and `rollouts`, Flux `kustomizations`, Flagger `canaries` | get, list, watch | Health adapters. `rbac.argocdApplicationsWrite=true` adds `patch` on Applications for `update.strategy: argocd` |
 
-The cluster-scoped rules cover `changewindows` (read, and status writes) and, with
+The cluster-scoped rules cover `changewindows` (read, and status writes), `namespaces` (get,
+limited to `controller.watchNamespace` in namespace mode: the controller checks whether a Graph's
+namespace is being deleted before it removes kro's finalizer) and, with
 `ui.auth.tokenReview=true`, `tokenreviews` and `subjectaccessreviews` (create).
 
 To see the exact rules for your values:
