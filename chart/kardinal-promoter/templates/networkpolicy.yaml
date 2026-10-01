@@ -37,7 +37,8 @@ spec:
     - Ingress
     - Egress
   ingress:
-    {{- range $name, $port := dict "metrics" .Values.service.metricsPort "health" .Values.service.healthPort "ui" .Values.service.uiPort "webhook" .Values.service.webhookPort }}
+    {{- /* NetworkPolicy ports are Pod ports, not Service ports */}}
+    {{- range $name, $port := include "kardinal-promoter.containerPorts" . | fromJson }}
     - ports:
         - port: {{ $port }}
           protocol: TCP

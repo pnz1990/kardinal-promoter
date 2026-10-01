@@ -155,3 +155,26 @@ controller-runtime's --zap-log-level accepts debug, info, error and panic
 {{- define "kardinal-promoter.zapLogLevel" -}}
 {{- if eq .Values.logLevel "warn" -}}error{{- else -}}{{ .Values.logLevel }}{{- end -}}
 {{- end }}
+
+{{/*
+The container port a bind address (":8080", "0.0.0.0:8080") listens on.
+Called with (list <bind address> <fallback port>); the fallback is for an
+address with no port or port 0 (controller-runtime's "disabled").
+*/}}
+{{- define "kardinal-promoter.bindPort" -}}
+{{- $port := splitList ":" (index . 0) | last -}}
+{{- if and $port (ne $port "0") -}}{{ $port }}{{- else -}}{{ index . 1 }}{{- end -}}
+{{- end }}
+
+{{/*
+The controller's container ports. Metrics and health listen on their bind
+addresses; the UI and webhook servers listen on their Service ports.
+*/}}
+{{- define "kardinal-promoter.containerPorts" -}}
+{{- $ports := dict -}}
+{{- $_ := set $ports "metrics" (include "kardinal-promoter.bindPort" (list .Values.metricsBindAddress .Values.service.metricsPort)) -}}
+{{- $_ = set $ports "health" (include "kardinal-promoter.bindPort" (list .Values.healthProbeBindAddress .Values.service.healthPort)) -}}
+{{- $_ = set $ports "ui" (toString .Values.service.uiPort) -}}
+{{- $_ = set $ports "webhook" (toString .Values.service.webhookPort) -}}
+{{- toJson $ports -}}
+{{- end }}

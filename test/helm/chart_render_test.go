@@ -673,6 +673,61 @@ func TestChartExposesUIAndWebhookPorts(t *testing.T) {
 	assert.Equal(t, ":9083", args["webhook-bind-address"])
 }
 
+// The metrics and health servers listen on metricsBindAddress and
+// healthProbeBindAddress, so the container ports, the probes (port: health)
+// and the NetworkPolicy must follow those addresses, not the Service ports.
+// Before the fix a custom bind address left the probes on a port nothing
+// listened on and the install never became ready.
+func TestChartPortsFollowBindAddresses(t *testing.T) {
+	docs := render(t, "kardinal-promoter", "--set", "networkPolicy.enabled=true",
+		"--set", "metricsBindAddress=:9100", "--set", "healthProbeBindAddress=0.0.0.0:9101",
+		"--set", "service.metricsPort=9090", "--set", "service.healthPort=9091")
+	c := controllerContainer(t, docs)
+	ports := map[string]int32{}
+	for _, p := range c.Ports {
+		ports[p.Name] = p.ContainerPort
+	}
+	assert.Equal(t, map[string]int32{"metrics": 9100, "health": 9101, "ui": 8082, "webhook": 8083}, ports)
+	args := argValues(c)
+	assert.Equal(t, ":9100", args["metrics-bind-address"])
+	assert.Equal(t, "0.0.0.0:9101", args["health-probe-bind-address"])
+	assert.Equal(t, "health", c.LivenessProbe.HTTPGet.Port.String())
+	assert.Equal(t, "health", c.ReadinessProbe.HTTPGet.Port.String())
+
+	svcs := docsOfKind(docs, "Service")
+	require.Len(t, svcs, 1)
+	var svc corev1.Service
+	decodeStrict(t, svcs[0], &svc)
+	svcPorts := map[string]int32{}
+	for _, p := range svc.Spec.Ports {
+		svcPorts[p.Name] = p.Port
+		assert.Equal(t, p.Name, p.TargetPort.String(), "Service port %s targets the named container port", p.Name)
+	}
+	assert.Equal(t, map[string]int32{"metrics": 9090, "health": 9091, "ui": 8082, "webhook": 8083}, svcPorts)
+
+	nps := docsOfKind(docs, "NetworkPolicy")
+	require.Len(t, nps, 1)
+	var np networkingv1.NetworkPolicy
+	decodeStrict(t, nps[0], &np)
+	var ingress []int32
+	for _, r := range np.Spec.Ingress {
+		for _, p := range r.Ports {
+			ingress = append(ingress, p.Port.IntVal)
+		}
+	}
+	assert.ElementsMatch(t, []int32{9100, 9101, 8082, 8083}, ingress,
+		"NetworkPolicy ports are Pod ports, so they must be the container ports")
+
+	// Port 0 disables controller-runtime's metrics server; the container port
+	// falls back to the Service port instead of rendering an invalid 0.
+	c = controllerContainer(t, render(t, "kardinal-promoter", "--set-string", "metricsBindAddress=0"))
+	for _, p := range c.Ports {
+		if p.Name == "metrics" {
+			assert.Equal(t, int32(8080), p.ContainerPort)
+		}
+	}
+}
+
 // terminationGracePeriodSeconds 0 is a valid value (kill at once); the chart
 // used `default 60`, which treats 0 as unset and rendered 60.
 func TestChartTerminationGracePeriod(t *testing.T) {
