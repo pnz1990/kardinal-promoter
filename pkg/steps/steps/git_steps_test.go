@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	parentsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
 func runStep(t *testing.T, name string, state *parentsteps.StepState) (parentsteps.StepResult, error) {
@@ -335,6 +337,32 @@ func TestGitPushStep_Modes(t *testing.T) {
 			assert.Contains(t, res.Message, tc.wantMsg)
 		})
 	}
+}
+
+// TestPRBranch covers the one definition of the branch kardinal promotes
+// through: git-push pushes PRBranch(bundle, env), open-pr opens the PR from it
+// when git-push reported no branch, and both are under PRBranchPrefix, the
+// only prefix the PromotionStep reconciler deletes a branch under. Three
+// literals of the same name used to live in these places (B70 nit).
+func TestPRBranch(t *testing.T) {
+	want := "kardinal/nginx-demo-v1-29-0/prod"
+	assert.Equal(t, want, steps.PRBranch("nginx-demo-v1-29-0", "prod"))
+	assert.True(t, strings.HasPrefix(want, steps.PRBranchPrefix))
+
+	git := &mockGitClient{}
+	state := makeState(t, git, nil)
+	state.Sequence = parentsteps.DefaultSequenceForBundle("pr-review", "image", "", "")
+	state.Environment.Approval = "pr-review"
+	_, err := runStep(t, "git-push", state)
+	require.NoError(t, err)
+	assert.Equal(t, want, git.pushBranch, "git-push pushes the PR branch")
+
+	scmP := &mockSCMProvider{prURL: "https://example/pr/7", prNumber: 7}
+	state = makeState(t, &mockGitClient{}, scmP)
+	delete(state.Outputs, "branch")
+	_, err = runStep(t, "open-pr", state)
+	require.NoError(t, err)
+	assert.Equal(t, []string{want}, scmP.heads, "open-pr falls back to the PR branch")
 }
 
 // TestPromotionSequence_NoChangesSkipsPR runs the pr-review sequence against a

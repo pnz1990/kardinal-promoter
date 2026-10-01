@@ -123,17 +123,19 @@ type mockSCMProvider struct {
 	// repos records the repository argument of every OpenPR, GetPRStatus
 	// and AddLabelsToPR call.
 	repos []string
-	// titles and bodies record the title and body arguments of every OpenPR
-	// call.
+	// titles, bodies and heads record the title, body and head branch
+	// arguments of every OpenPR call.
 	titles []string
+	heads  []string
 	bodies []string
 }
 
-func (m *mockSCMProvider) OpenPR(_ context.Context, repo, title, body, _, _ string) (string, int, error) {
+func (m *mockSCMProvider) OpenPR(_ context.Context, repo, title, body, head, _ string) (string, int, error) {
 	m.openPRCalls++
 	m.repos = append(m.repos, repo)
 	m.titles = append(m.titles, title)
 	m.bodies = append(m.bodies, body)
+	m.heads = append(m.heads, head)
 	return m.prURL, m.prNumber, m.openPRErr
 }
 

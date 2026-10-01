@@ -26,6 +26,17 @@ func init() {
 	parentsteps.Register(&gitPushStep{})
 }
 
+// PRBranchPrefix prefixes every branch kardinal pushes a promotion to and
+// opens a PR from (PRBranch). The PromotionStep reconciler deletes the head
+// branch of a PR it closed only when the branch is under this prefix.
+const PRBranchPrefix = "kardinal/"
+
+// PRBranch is the branch git-push pushes a pr-review promotion to and open-pr
+// opens the PR from: kardinal/<bundle>/<env>.
+func PRBranch(bundle, env string) string {
+	return fmt.Sprintf("%s%s/%s", PRBranchPrefix, bundle, env)
+}
+
 // gitPushStep pushes the promotion commit. Which branch follows from the step
 // sequence being run (StepState.Sequence), not from the live approval, so an
 // approval edit made while the step runs cannot strand the commit:
@@ -56,7 +67,7 @@ func (s *gitPushStep) Execute(ctx context.Context, state *parentsteps.StepState)
 	}
 
 	// Promotion branch name: kardinal/<bundle>/<env>
-	branch := fmt.Sprintf("kardinal/%s/%s", state.BundleName, state.Environment.Name)
+	branch := PRBranch(state.BundleName, state.Environment.Name)
 	force := true
 	if !state.OpensPR() {
 		branch = state.Git.Branch

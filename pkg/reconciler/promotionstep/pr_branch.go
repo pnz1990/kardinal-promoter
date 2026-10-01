@@ -23,22 +23,20 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
+	builtinsteps "github.com/kardinal-promoter/kardinal-promoter/pkg/steps/steps"
 )
 
-// prBranchPrefix prefixes every branch kardinal pushes a promotion to and
-// opens a PR from (git-push, open-pr).
-const prBranchPrefix = "kardinal/"
-
 // prHeadBranch returns the branch the step's PR was opened from: the branch
-// git-push reported, or, as open-pr falls back to, kardinal/<bundle>/<env>.
-// It returns "" for a branch kardinal does not own, so a step whose outputs
-// name any other branch never deletes it.
+// git-push reported, or, as open-pr falls back to, builtinsteps.PRBranch. It
+// returns "" for a branch kardinal does not own (not under
+// builtinsteps.PRBranchPrefix), so a step whose outputs name any other branch
+// never deletes it.
 func prHeadBranch(ps *v1alpha1.PromotionStep) string {
 	branch := ps.Status.Outputs["branch"]
 	if branch == "" && ps.Spec.BundleName != "" && ps.Spec.Environment != "" {
-		branch = fmt.Sprintf("%s%s/%s", prBranchPrefix, ps.Spec.BundleName, ps.Spec.Environment)
+		branch = builtinsteps.PRBranch(ps.Spec.BundleName, ps.Spec.Environment)
 	}
-	if !strings.HasPrefix(branch, prBranchPrefix) || len(branch) == len(prBranchPrefix) {
+	if !strings.HasPrefix(branch, builtinsteps.PRBranchPrefix) || len(branch) == len(builtinsteps.PRBranchPrefix) {
 		return ""
 	}
 	return branch
