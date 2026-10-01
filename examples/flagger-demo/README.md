@@ -19,8 +19,8 @@ Flagger detects image change → starts canary analysis
     ↓ if metrics OK: promotes canary (Canary.status.phase = Succeeded)
     ↓ if metrics fail: rolls back (Canary.status.phase = Failed)
 kardinal checks Canary.status.phase
-    ↓ Succeeded → promotion Verified
-    ↓ Failed → kardinal marks promotion failed → opens rollback PR
+    ↓ Succeeded, primary on the Bundle image → promotion Verified
+    ↓ Failed → onHealthFailure: rollback at once → opens rollback PR
 ```
 
 ## Prerequisites
@@ -112,7 +112,11 @@ kardinal get pipelines
 
 ## How the Flagger Health Adapter Works
 
-The `flagger` health adapter maps Flagger's `Canary.status.phase` to kardinal health states:
+The `flagger` health adapter maps Flagger's `Canary.status.phase` to kardinal health states.
+Flagger keeps the phase of its last analysis until it notices a new revision,
+so the adapter first checks that the Canary's target Deployment runs the
+Bundle's image (until then it waits), and a `Succeeded` or `Failed` phase from
+an earlier release is a wait too:
 
 | Canary phase | kardinal verdict | Meaning |
 |---|---|---|
@@ -122,8 +126,14 @@ The `flagger` health adapter maps Flagger's `Canary.status.phase` to kardinal he
 | `Progressing` | Wait | Canary analysis running |
 | `Promoting` | Wait | Promoting canary to primary |
 | `Finalising` | Wait | Cleaning up canary |
-| `Succeeded` | **Healthy** | Canary promoted — promotion Verified |
-| `Failed` | **Unhealthy** | Canary rolled back — kardinal opens rollback PR |
+| `Succeeded` | **Healthy** | Canary promoted: the primary Deployment runs the Bundle's image — promotion Verified |
+| `Failed` | **Failed at once** | Canary rolled back — `onHealthFailure` applies without waiting for `health.timeout` |
+
+This example sets `onHealthFailure: rollback` on prod: on a failed analysis
+kardinal creates a rollback Bundle for the previous release, the step shows
+`RollingBack`, and because prod is `pr-review` the rollback opens a PR for you
+to merge. Without `onHealthFailure` (the default is `none`) the step is just
+marked `Failed`.
 
 **Configuration reference:**
 

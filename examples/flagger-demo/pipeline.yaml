@@ -41,8 +41,9 @@ spec:
 
     # prod: Flagger Canary progressive delivery
     # Flagger intercepts the Deployment and creates a canary.
-    # kardinal waits for the Canary phase to reach "Succeeded" before
-    # marking the promotion as Verified.
+    # kardinal waits for the Canary phase to reach "Succeeded", with the
+    # primary Deployment on the Bundle's image, before marking the promotion
+    # as Verified.
     # Canary name is derived: <pipeline> = flagger-demo, namespace = <env> = prod
     - name: prod
       path: environments/prod
@@ -54,5 +55,8 @@ spec:
         timeout: 30m                 # Flagger canary typically takes 10–20 minutes
       delivery:
         delegate: flagger
+      # A failed analysis (Canary phase Failed) gets a rollback Bundle for the
+      # previous release at once, and so a rollback PR.
+      onHealthFailure: rollback
 
   historyLimit: 20
