@@ -165,6 +165,51 @@ func TestIdentityProvisioner_UnbindableNamespaces(t *testing.T) {
 	assert.ElementsMatch(t, []string{"argocd", "prod"}, readerBindings(t, c, "team-a"))
 }
 
+// TestIdentityProvisioner_TerminatingNamespace covers B54: when the Graph's own
+// namespace is being deleted, the Graph cannot be created either, so a reader
+// binding refused there is an error and not an unbound namespace (with a
+// warning). A refusal in another terminating namespace leaves it unbound.
+func TestIdentityProvisioner_TerminatingNamespace(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		terminating string // the namespace that refuses new objects
+		wantUnbound []string
+		wantErr     bool
+	}{
+		{name: "the Graph's own namespace", terminating: "team-a", wantErr: true},
+		{name: "another namespace", terminating: "prod", wantUnbound: []string{"prod"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(identityScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					rb, ok := obj.(*rbacv1.RoleBinding)
+					if !ok || rb.Namespace != tt.terminating || rb.RoleRef.Name != graph.DefaultReaderClusterRole {
+						return c.Create(ctx, obj, opts...)
+					}
+					err := apierrors.NewForbidden(rbacv1.Resource("rolebindings"), obj.GetName(),
+						errors.New("unable to create new content in namespace "+tt.terminating+" because it is being terminated"))
+					err.ErrStatus.Details.Causes = append(err.ErrStatus.Details.Causes, metav1.StatusCause{
+						Type: corev1.NamespaceTerminatingCause, Field: "metadata.namespace",
+						Message: "namespace " + tt.terminating + " is being terminated"})
+					return err
+				},
+			}).Build()
+			p := &graph.IdentityProvisioner{Writer: c, Reader: c, ReaderNamespaces: []string{graph.AllNamespaces}}
+
+			unbound, err := p.Ensure(context.Background(), refGraph("team-a", "team-a", "prod"))
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.True(t, apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause), "the cause is kept: %v", err)
+				assert.Nil(t, unbound)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantUnbound, unbound)
+			assert.ElementsMatch(t, []string{"team-a"}, readerBindings(t, c, "team-a"))
+		})
+	}
+}
+
 // TestIdentityProvisioner_RepairsSubjects verifies that a binding the
 // controller created is repaired.
 func TestIdentityProvisioner_RepairsSubjects(t *testing.T) {

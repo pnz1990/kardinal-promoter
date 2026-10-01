@@ -775,9 +775,11 @@ func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bun
 // only fail creating the Graph ServiceAccount, its RoleBindings or the Graph,
 // and the namespace deletion deletes the Bundle next. translate then returns
 // errNamespaceTerminating without trying, or when the API server refused an
-// object because the namespace started terminating meanwhile.
+// object because a namespace is being deleted and b's namespace is the one
+// that started terminating meanwhile.
 //
-// The namespace is read only before a translation (namespaceDeleting).
+// The namespace is read before the translation, and again only when the
+// translation was refused for a terminating namespace (namespaceDeleting).
 func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 	pipeline *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
 	if r.namespaceDeleting(ctx, log, b.Namespace) {
@@ -785,7 +787,7 @@ func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 		return "", errNamespaceTerminating
 	}
 	name, err := r.Translator.Translate(ctx, pipeline, b)
-	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) {
+	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) && r.namespaceDeleting(ctx, log, b.Namespace) {
 		log.Debug().Err(err).Msg("namespace is being deleted — bundle not translated")
 		return "", errNamespaceTerminating
 	}
@@ -794,7 +796,7 @@ func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 
 // namespaceDeleting reports whether namespace is being deleted. It reads the
 // namespace from the API server (the controller has no Namespace cache), so it
-// is called only before a translation or on a missing Pipeline. A namespace
+// is called only around a translation and on a missing Pipeline. A namespace
 // that cannot be read counts as not being deleted.
 func (r *Reconciler) namespaceDeleting(ctx context.Context, log zerolog.Logger, namespace string) bool {
 	reader := r.APIReader

@@ -185,7 +185,9 @@ func (p *IdentityProvisioner) MayRead(graphNS, ns string) bool {
 // RoleBinding of the same name exists that the controller does not manage.
 // The caller must drop g's refs into those namespaces before creating g: kro
 // treats a forbidden ref read as a hard error and would degrade the Graph. The
-// next translation tries again.
+// next translation tries again. A reader binding refused because g's own
+// namespace is being deleted is an error instead: g cannot be created there
+// either.
 //
 // Reader bindings the controller created are recorded on the applier
 // RoleBinding (AnnotationReaderNamespaces) for Prune.
@@ -217,6 +219,10 @@ func (p *IdentityProvisioner) Ensure(ctx context.Context, g *Graph) ([]string, e
 			if owned {
 				managed = append(managed, readNS)
 			}
+		case readNS == ns && apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
+			// The Graph's own namespace is being deleted, so the Graph cannot
+			// be created either: stop, rather than report the role unbound.
+			return nil, err
 		case apierrors.IsNotFound(err) || apierrors.IsForbidden(err) || errors.Is(err, errUnmanaged):
 			log.Warn().Err(err).Str("namespace", readNS).Str("graphNamespace", ns).
 				Msg("graph identity: reader role not bound")
