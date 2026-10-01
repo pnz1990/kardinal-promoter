@@ -35,7 +35,12 @@ var logNamespaces = []string{ControllerNamespace, "kro-system", "argo-rollouts",
 // logs of the pods in logNamespaces.
 func (e *Env) Diagnose(t *testing.T, ns string) {
 	t.Helper()
-	dir := filepath.Join(artifactsDir(), ns)
+	e.diagnose(t, ns, filepath.Join(artifactsDir(), ns))
+}
+
+// diagnose is Diagnose writing to dir.
+func (e *Env) diagnose(t *testing.T, ns, dir string) {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Logf("diagnostics: %v", err)
 		return
