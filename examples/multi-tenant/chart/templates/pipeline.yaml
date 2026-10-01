@@ -14,6 +14,8 @@ spec:
   git:
     url: {{ .Values.gitRepo }}
     branch: {{ .Values.gitBranch | default "main" }}
+    secretRef:
+      name: {{ .Values.gitSecretName | default "github-token" }}
   policyNamespaces:
     - platform-policies  # always inherit org-level gates
     - {{ .Release.Namespace }}
