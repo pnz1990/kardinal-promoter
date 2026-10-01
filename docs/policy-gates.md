@@ -208,7 +208,9 @@ Each MetricCheck evaluation writes `status.validUntil`: the evaluation time plus
 MetricCheck's `interval`, and at least 30 seconds (3 minutes with the default `interval: 1m`). A
 gate compares it with the time of its own evaluation. When `validUntil` is unset or has passed, the
 result is stale: nothing has refreshed it for three intervals, for example after a controller
-outage or while the MetricCheck's status write keeps failing. A stale result is exposed as
+outage or while the MetricCheck's status write keeps failing (the controller evaluates again and
+retries the write every `interval`, and the first write that works refreshes the result). A stale
+result is exposed as
 `result: "Stale"`, `value: ""` and `stale: true`, so both `metrics["x"].result == "Pass"` and
 `double(metrics["x"].value) < 0.01` block (the second with an evaluation error, since `""` is not a
 number). Compare with `== "Pass"`, not `!= "Fail"`: a stale result is neither. The gate's

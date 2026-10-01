@@ -17,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
@@ -246,6 +247,54 @@ func TestReconciler_WritesValidUntil(t *testing.T) {
 
 			require.NotNil(t, result.Status.ValidUntil)
 			assert.Equal(t, fixedNow.Add(tt.want), result.Status.ValidUntil.UTC())
+		})
+	}
+}
+
+// countingProvider counts the queries it answers.
+type countingProvider struct {
+	fakeProvider
+	queries int
+}
+
+func (c *countingProvider) QueryScalar(ctx context.Context, url, query string) (float64, error) {
+	c.queries++
+	return c.fakeProvider.QueryScalar(ctx, url, query)
+}
+
+// TestReconciler_StatusWriteFailureRequeuesAtInterval proves bug 10 of the
+// health spike fixed: when the status write fails (for example an admission
+// policy denies it), the MetricCheck is evaluated again at spec.interval,
+// not in controller-runtime's error backoff, which retries at once and then
+// doubles up to 1000s, querying Prometheus on every retry. The result the
+// PolicyGates read goes stale at status.validUntil, so a gate still fails
+// closed.
+func TestReconciler_StatusWriteFailureRequeuesAtInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		provider *countingProvider
+	}{
+		{name: "evaluated", provider: &countingProvider{fakeProvider: fakeProvider{value: 0.005}}},
+		{name: "query error", provider: &countingProvider{fakeProvider: fakeProvider{err: fmt.Errorf("connection refused")}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mc := newMetricCheck("error-rate", "lt", 0.01)
+			denied := 0
+			c := fake.NewClientBuilder().WithScheme(buildScheme()).WithStatusSubresource(mc).WithObjects(mc).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch,
+						...client.SubResourcePatchOption) error {
+						denied++
+						return fmt.Errorf("admission webhook denied the request")
+					},
+				}).Build()
+			r := &metriccheck.Reconciler{Client: c, Provider: tt.provider, NowFn: func() time.Time { return fixedNow }}
+
+			res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key(mc)})
+			require.NoError(t, err, "an error would put the MetricCheck into the error backoff")
+			assert.Equal(t, 30*time.Second, res.RequeueAfter, "evaluated again at spec.interval")
+			assert.Equal(t, 1, denied)
+			assert.Equal(t, 1, tt.provider.queries)
 		})
 	}
 }

@@ -67,7 +67,8 @@ type Reconciler struct {
 //  3. Evaluate threshold → Pass or Fail.
 //  4. Patch status.lastValue, status.result, status.lastEvaluatedAt, status.reason
 //     and status.validUntil.
-//  5. Requeue after spec.interval (default 1m, minimum 10s).
+//  5. Requeue after spec.interval (default 1m, minimum 10s), also when the
+//     status patch fails.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("metriccheck", req.Name).
@@ -88,11 +89,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	value, queryErr := r.Provider.QueryScalar(ctx, mc.Spec.PrometheusURL, mc.Spec.Query)
 	if queryErr != nil {
 		log.Warn().Err(queryErr).Str("query", mc.Spec.Query).Msg("prometheus query failed")
-		if patchErr := r.patchStatus(ctx, &mc, "", "Fail",
-			fmt.Sprintf("prometheus query error: %s", queryErr)); patchErr != nil {
-			return ctrl.Result{}, fmt.Errorf("patch metriccheck status: %w", patchErr)
-		}
-		return ctrl.Result{RequeueAfter: interval}, nil
+		return r.record(ctx, log, &mc, interval, "", "Fail", fmt.Sprintf("prometheus query error: %s", queryErr))
 	}
 
 	// Evaluate threshold.
@@ -104,10 +101,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Str("reason", reason).
 		Msg("metriccheck evaluated")
 
-	if patchErr := r.patchStatus(ctx, &mc, fmt.Sprintf("%g", value), result, reason); patchErr != nil {
-		return ctrl.Result{}, fmt.Errorf("patch metriccheck status: %w", patchErr)
-	}
+	return r.record(ctx, log, &mc, interval, fmt.Sprintf("%g", value), result, reason)
+}
 
+// record writes an evaluation to the status and requeues after interval.
+// A failed write requeues after interval too, not with an error: the error
+// backoff would retry at once and then ever later (up to 1000s), querying
+// Prometheus on every retry, and the next evaluation would come long after
+// the write works again. Until a write succeeds, the result PolicyGates read
+// goes stale at its status.validUntil, so they fail closed.
+func (r *Reconciler) record(ctx context.Context, log zerolog.Logger, mc *kardinalv1alpha1.MetricCheck,
+	interval time.Duration, lastValue, result, reason string) (ctrl.Result, error) {
+	if err := r.patchStatus(ctx, mc, lastValue, result, reason); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		log.Error().Err(err).Dur("retryIn", interval).Msg("metriccheck status write failed")
+	}
 	return ctrl.Result{RequeueAfter: interval}, nil
 }
 
