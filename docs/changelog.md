@@ -19,6 +19,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Forgejo/Gitea token check** — a 403 from `/user` with the documented scopes is logged at info as "token scopes not checked" with the configured provider, not as a network error at debug level
 - **PRStatus placeholders are not polled** — a PRStatus without a PR number was requeued every 30 seconds for every Bundle; it now waits for the PromotionStep to set the PR
 - **The UI's Create Bundle checks the Bundle like the Bundle API** — `POST /api/v1/ui/bundles` created a Bundle for a Pipeline that does not exist, and answered every other error with 500 `failed to create bundle`. It now answers 404 for a missing Pipeline, 400 with the reason for an invalid pipeline name or a Bundle the API server refuses, and 403 when the caller may not create it, and the dialog shows the reason
+- **Bundle API right after a new Pipeline** — `POST /api/v1/bundles` read the Pipeline from the controller's cache and answered 404 for a Pipeline created moments before; it now reads the API server before answering 404
 
 ---
 

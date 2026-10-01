@@ -56,6 +56,10 @@ args=(
 if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret scm-webhook >/dev/null 2>&1; then
   args+=(--set webhook.secretRef.name=scm-webhook)
 fi
+# components/ciapi.sh
+if "${KUBECTL[@]}" -n "$KARDINAL_NS" get secret bundle-api-token >/dev/null 2>&1; then
+  args+=(--set bundleAPI.tokenSecretRef.name=bundle-api-token)
+fi
 # shellcheck disable=SC2206
 args+=(${KARDINAL_E2E_HELM_ARGS:-})
 

@@ -137,8 +137,9 @@ type Reconciler struct {
 //     event as processed (no backfill).
 //  4. Deliver every event not in status.processedEventKeys, oldest first,
 //     recording each key after its successful POST.
-//  5. On a failed POST, record the attempt and requeue with backoff; after
-//     maxDeliveryAttempts give up on that event.
+//  5. On a failed POST, record the attempt and status.nextRetryAt and requeue
+//     with backoff; after maxDeliveryAttempts give up on that event. No POST
+//     is made before status.nextRetryAt, however often the hook is reconciled.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("notificationhook", req.Name).
@@ -182,6 +183,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	case hook.Status.ObservedGeneration != observed:
 		// The spec changed (for example a corrected URL): retry at once.
 		hook.Status.FailedAttempts = 0
+		hook.Status.NextRetryAt = ""
 	}
 
 	writeStatus := func() error {
@@ -215,6 +217,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			result.RequeueAfter = time.Second
 			break
 		}
+		// Watches on Bundles, PolicyGates and PromotionSteps reconcile the
+		// hook far more often than the backoff, so the retry time is kept in
+		// status and checked here, not only returned as RequeueAfter.
+		if wait := r.retryWait(&hook); wait > 0 {
+			result.RequeueAfter = wait
+			break
+		}
 		if deliveryErr := r.deliver(ctx, &hook, &ev); deliveryErr != nil {
 			hook.Status.FailedAttempts++
 			log.Warn().Err(deliveryErr).Str("eventKey", ev.eventKey).Str("host", urlHost(hook.Spec.Webhook.URL)).
@@ -224,11 +233,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 				hook.Status.FailureMessage = fmt.Sprintf("gave up on %s after %d attempts: %v",
 					ev.eventKey, maxDeliveryAttempts, deliveryErr)
 				hook.Status.FailedAttempts = 0
+				hook.Status.NextRetryAt = ""
 				result.RequeueAfter = retryBaseDelay
 			} else {
 				hook.Status.FailureMessage = fmt.Sprintf("delivery of %s failed (attempt %d of %d): %v",
 					ev.eventKey, hook.Status.FailedAttempts, maxDeliveryAttempts, deliveryErr)
 				result.RequeueAfter = retryDelay(hook.Status.FailedAttempts)
+				// time.Now() is called here, inside the status write.
+				hook.Status.NextRetryAt = r.now().Add(result.RequeueAfter).UTC().Format(time.RFC3339)
 			}
 			break
 		}
@@ -239,6 +251,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		hook.Status.LastEvent = string(ev.eventType)
 		hook.Status.LastEventKey = ev.eventKey
 		hook.Status.FailedAttempts = 0
+		hook.Status.NextRetryAt = ""
 		hook.Status.FailureMessage = ""
 		log.Info().Str("eventKey", ev.eventKey).Str("host", urlHost(hook.Spec.Webhook.URL)).
 			Msg("notificationhook: webhook delivered")
@@ -252,6 +265,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	return result, nil
+}
+
+// retryWait returns how long to wait before the next delivery attempt after a
+// failed one: the time left until status.nextRetryAt, or 0 when an attempt is
+// due. Like the health-check spacing in the PromotionStep reconciler, it reads
+// the clock only to compare with a time this reconciler wrote to its own
+// status.
+func (r *Reconciler) retryWait(hook *v1alpha1.NotificationHook) time.Duration {
+	if hook.Status.NextRetryAt == "" {
+		return 0
+	}
+	next, err := time.Parse(time.RFC3339, hook.Status.NextRetryAt)
+	if err != nil {
+		return 0
+	}
+	return next.Sub(r.now())
 }
 
 // retryDelay is the backoff after the given number of consecutive failures.

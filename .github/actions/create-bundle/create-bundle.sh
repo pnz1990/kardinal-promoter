@@ -20,6 +20,8 @@ NAMESPACE="${INPUT_NAMESPACE:-default}"
 KARDINAL_URL="${INPUT_KARDINAL_URL:-}"
 KARDINAL_URL="${KARDINAL_URL%/}"
 UI_URL="${INPUT_UI_URL:-}"
+CONFIG_COMMIT="${INPUT_CONFIG_COMMIT:-}"
+CONFIG_REPO="${INPUT_CONFIG_REPO:-}"
 MAX_ATTEMPTS="${CREATE_BUNDLE_MAX_ATTEMPTS:-3}"
 SLEEP_SECS="${CREATE_BUNDLE_RETRY_SLEEP_SECS:-1}"
 : "${GITHUB_OUTPUT:=/dev/null}"
@@ -46,6 +48,14 @@ case "$KARDINAL_URL$UI_URL" in
     exit 1
     ;;
 esac
+case "$BUNDLE_TYPE" in
+  config | mixed)
+    if [ -z "$CONFIG_COMMIT" ]; then
+      echo "::error::the config-commit input is required for type $BUNDLE_TYPE"
+      exit 1
+    fi
+    ;;
+esac
 
 echo "::group::Build image list"
 IMAGES_JSON=$(build_images_json "${INPUT_IMAGE:-}" "${INPUT_DIGEST:-}" "${INPUT_IMAGES:-}")
@@ -57,7 +67,7 @@ echo "::endgroup::"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-build_body "$PIPELINE" "$BUNDLE_TYPE" "$NAMESPACE" "$IMAGES_JSON" >"$WORK/body.json"
+build_body "$PIPELINE" "$BUNDLE_TYPE" "$NAMESPACE" "$IMAGES_JSON" "$CONFIG_COMMIT" "$CONFIG_REPO" >"$WORK/body.json"
 # The token goes in a header file, not on the curl command line.
 (
   umask 077

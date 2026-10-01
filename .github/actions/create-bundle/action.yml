@@ -14,7 +14,7 @@ inputs:
     description: 'Single image reference (repository:tag or repository@sha256:digest). Use this for the common single-image case. Takes precedence over images when both are set.'
     required: false
   digest:
-    description: 'Image digest (sha256:...) to associate with the image input. Only used when image is set.'
+    description: 'Image digest (sha256:...) of the image input. It is sent together with the tag from image and replaces a digest given in image. Only used when image is set.'
     required: false
   images:
     description: 'Newline-separated list of image references (repository:tag or repository@digest). Use this for multi-image bundles.'
@@ -28,6 +28,14 @@ inputs:
     required: true
   ui-url:
     description: 'Base URL of the kardinal UI (port 8082 by default). Used for bundle-status-url; leave empty to skip the link.'
+    required: false
+    default: ''
+  config-commit:
+    description: 'Commit SHA of the configuration change (configRef.commitSHA). Required for type config and mixed.'
+    required: false
+    default: ''
+  config-repo:
+    description: 'Git repository URL of config-commit (configRef.gitRepo). Defaults to the Pipeline repository.'
     required: false
     default: ''
 
@@ -60,4 +68,6 @@ runs:
         INPUT_NAMESPACE: ${{ inputs.namespace }}
         INPUT_KARDINAL_URL: ${{ inputs.kardinal-url }}
         INPUT_UI_URL: ${{ inputs.ui-url }}
+        INPUT_CONFIG_COMMIT: ${{ inputs.config-commit }}
+        INPUT_CONFIG_REPO: ${{ inputs.config-repo }}
       run: bash "$GITHUB_ACTION_PATH/create-bundle.sh"

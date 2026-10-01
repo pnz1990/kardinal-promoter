@@ -102,7 +102,12 @@ func (r *tokenRateLimiter) Allow(token string) bool {
 
 // bundleAPIServer handles POST /api/v1/bundles requests.
 type bundleAPIServer struct {
-	client    client.Client
+	client client.Client
+	// reader reads the API server directly. A Pipeline the cache does not
+	// have yet is looked up here before the API answers 404, so a CI job that
+	// applies a Pipeline and posts a Bundle right after is not refused. Nil
+	// trusts the cache.
+	reader    client.Reader
 	token     string
 	namespace string
 	// onlyNamespace, when set (--watch-namespace), is the only namespace the API
@@ -199,7 +204,12 @@ func (s *bundleAPIServer) Handler() http.HandlerFunc {
 		// The Pipeline must exist in the target namespace. This also stops the
 		// token from creating Bundles in namespaces that have no such Pipeline.
 		var pipeline v1alpha1.Pipeline
-		if err := s.client.Get(r.Context(), client.ObjectKey{Namespace: ns, Name: req.Pipeline}, &pipeline); err != nil {
+		key := client.ObjectKey{Namespace: ns, Name: req.Pipeline}
+		err = s.client.Get(r.Context(), key, &pipeline)
+		if apierrors.IsNotFound(err) && s.reader != nil {
+			err = s.reader.Get(r.Context(), key, &pipeline)
+		}
+		if err != nil {
 			if apierrors.IsNotFound(err) {
 				http.Error(w, fmt.Sprintf("pipeline %s/%s not found", ns, req.Pipeline), http.StatusNotFound)
 				return

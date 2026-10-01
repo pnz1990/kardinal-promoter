@@ -97,12 +97,14 @@ jobs:
 |---|---|---|---|
 | `pipeline` | Yes | — | Pipeline name |
 | `image` | No | — | Single image (`repo:tag` or `repo@sha256:digest`) |
-| `digest` | No | — | Override digest for the `image` input |
+| `digest` | No | — | Digest (`sha256:...`) of the `image` input. It is sent with the tag from `image` (the Bundle records both) and replaces a digest given in `image` |
 | `images` | No | — | Newline-separated list of images (multi-image case) |
 | `namespace` | No | `default` | Kubernetes namespace |
 | `kardinal-url` | Yes | — | Base URL of the Bundle API (the controller's webhook listener, `:8083` by default) |
 | `ui-url` | No | — | Base URL of the kardinal UI (`:8082` by default). Sets `bundle-status-url`; without it that output is empty |
 | `type` | No | `image` | Bundle type (`image`, `config`, `mixed`) |
+| `config-commit` | For `config` and `mixed` | — | Commit SHA of the configuration change (`configRef.commitSHA`) |
+| `config-repo` | No | the Pipeline's repository | Git repository of `config-commit` (`configRef.gitRepo`) |
 
 **Action outputs:**
 
@@ -135,6 +137,7 @@ build:
   script:
     - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA .
     - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - echo "IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA | cut -d@ -f2)" >> build.env
   artifacts:
     reports:
       dotenv: build.env
@@ -148,13 +151,12 @@ promote:
         -H "Content-Type: application/json" \
         -d "{
           \"pipeline\": \"my-app\",
-          \"artifacts\": {
-            \"images\": [{
-              \"name\": \"my-app\",
-              \"reference\": \"$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA\",
-              \"digest\": \"$IMAGE_DIGEST\"
-            }]
-          },
+          \"type\": \"image\",
+          \"images\": [{
+            \"repository\": \"$CI_REGISTRY_IMAGE\",
+            \"tag\": \"$CI_COMMIT_SHA\",
+            \"digest\": \"$IMAGE_DIGEST\"
+          }],
           \"provenance\": {
             \"commitSHA\": \"$CI_COMMIT_SHA\",
             \"ciRunURL\": \"$CI_PIPELINE_URL\",
@@ -251,6 +253,9 @@ in any namespace the controller watches, so treat it like a deploy credential. W
 `--watch-namespace` set, Bundles can only be created in that namespace (`403` otherwise).
 
 Rate limiting: 60 requests per minute. There is one token, so all callers share the limit.
+Every request with the right token counts, including ones rejected with `400`; a request
+over the limit gets `429`. The window is a fixed minute kept in the controller process, and
+the limit cannot be changed.
 
 ### kubectl access
 
@@ -380,7 +385,9 @@ When creating a Bundle from CI, you can specify the promotion intent:
 
 - `targetEnvironment` unset (default): promote through every environment in the Pipeline
 - `targetEnvironment: staging`: stop after staging (useful for testing)
-- `skipEnvironments: ["staging"]`: skip staging (requires SkipPermission PolicyGate)
+- `skipEnvironments: ["staging"]`: skip staging. If an org gate applies to staging, a
+  skip-permission PolicyGate in an org policy namespace must allow the skip; see
+  [Skip Permissions](policy-gates.md#skip-permissions)
 
 `intent` and `configRef` are copied to the Bundle spec as sent. Unknown fields are
 rejected with `400`, so a misspelt key fails the request instead of being ignored.

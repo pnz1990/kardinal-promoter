@@ -271,11 +271,15 @@ func TestDelivery_RetriesWithBackoff(t *testing.T) {
 	assert.Contains(t, h.Status.FailureMessage, "HTTP 503")
 	assert.Contains(t, h.Status.FailureMessage, "attempt 1 of 10")
 	assert.Empty(t, h.Status.LastEventKey)
+	assert.Equal(t, "2026-04-11T10:00:30Z", h.Status.NextRetryAt)
 
+	f.now = f.now.Add(res.RequeueAfter)
 	res = f.reconcileHook()
 	assert.Equal(t, time.Minute, res.RequeueAfter)
 	assert.Equal(t, int32(2), f.hook().Status.FailedAttempts)
+	assert.Equal(t, "2026-04-11T10:01:30Z", f.hook().Status.NextRetryAt)
 
+	f.now = f.now.Add(res.RequeueAfter)
 	res = f.reconcileHook()
 	assert.Zero(t, res.RequeueAfter)
 	h = f.hook()
@@ -283,6 +287,7 @@ func TestDelivery_RetriesWithBackoff(t *testing.T) {
 	assert.Empty(t, h.Status.FailureMessage)
 	assert.Equal(t, "Bundle.Failed/app-v0", h.Status.LastEventKey)
 	assert.Equal(t, []string{"Bundle.Failed/app-v0"}, h.Status.ProcessedEventKeys)
+	assert.Empty(t, h.Status.NextRetryAt)
 
 	f.reconcileHook()
 	assert.Len(t, srv.received(), 3, "delivered once, then not again")
@@ -302,16 +307,64 @@ func TestDelivery_GivesUpAfterMaxAttempts(t *testing.T) {
 		10 * time.Minute, 10 * time.Minute, 10 * time.Minute, 10 * time.Minute,
 	}
 	for i, want := range wantDelays {
-		assert.Equal(t, want, f.reconcileHook().RequeueAfter, "attempt %d", i+1)
+		got := f.reconcileHook().RequeueAfter
+		assert.Equal(t, want, got, "attempt %d", i+1)
+		f.now = f.now.Add(got)
 	}
 	f.reconcileHook() // attempt 10
 	h := f.hook()
 	assert.Contains(t, h.Status.FailureMessage, "gave up on Bundle.Failed/app-v0 after 10 attempts")
 	assert.Zero(t, h.Status.FailedAttempts)
+	assert.Empty(t, h.Status.NextRetryAt)
 	assert.Contains(t, h.Status.ProcessedEventKeys, "Bundle.Failed/app-v0")
 
 	f.reconcileHook()
 	assert.Len(t, srv.received(), 10, "no POST after giving up")
+}
+
+// TestDelivery_NoRetryBeforeNextRetryAt: the hook is reconciled whenever a
+// Bundle, PolicyGate or PromotionStep in its namespace changes, far more often
+// than the backoff. Those reconciles must not POST before status.nextRetryAt
+// (the live e2e run saw 10 attempts in 4m20s, often two a second). A spec edit
+// still retries at once.
+func TestDelivery_NoRetryBeforeNextRetryAt(t *testing.T) {
+	srv := &webhookServer{statuses: []int{503, 503, 503, 200}}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	f := newFixture(t, newHook(ts.URL, v1alpha1.NotificationEventBundleFailed), failedBundle("app-v0", saturday))
+
+	assert.Equal(t, 30*time.Second, f.reconcileHook().RequeueAfter)
+	require.Len(t, srv.received(), 1)
+
+	// Watch-triggered reconciles before the retry time only requeue.
+	for _, after := range []time.Duration{0, time.Second, 29 * time.Second} {
+		f.now = saturday.Add(after)
+		assert.Equal(t, 30*time.Second-after, f.reconcileHook().RequeueAfter, "reconcile at +%s", after)
+	}
+	assert.Len(t, srv.received(), 1, "no POST before status.nextRetryAt")
+	assert.Equal(t, int32(1), f.hook().Status.FailedAttempts)
+
+	f.now = saturday.Add(30 * time.Second)
+	assert.Equal(t, time.Minute, f.reconcileHook().RequeueAfter)
+	assert.Len(t, srv.received(), 2, "retried once the backoff elapsed")
+	f.reconcileHook()
+	assert.Len(t, srv.received(), 2)
+
+	// A spec edit (for example a corrected URL) retries at once.
+	// The fake client does not manage metadata.generation, so bump it as the
+	// API server does.
+	h := f.hook()
+	require.Equal(t, int64(1), h.Status.ObservedGeneration)
+	h.Spec.Webhook.AuthorizationHeader = "Bearer fixed"
+	h.Generation = 2
+	require.NoError(t, f.c.Update(context.Background(), &h))
+	require.Equal(t, int64(2), f.hook().Generation)
+	f.reconcileHook()
+	assert.Len(t, srv.received(), 3, "a spec edit retries without waiting")
+	h = f.hook()
+	assert.Equal(t, int32(1), h.Status.FailedAttempts, "the count restarts after a spec edit")
+	assert.Equal(t, "2026-04-11T10:01:00Z", h.Status.NextRetryAt)
 }
 
 // TestDelivery_RedirectIsNotFollowed covers C04-gates-14: the controller does

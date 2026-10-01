@@ -65,23 +65,33 @@ var semverTag = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Z
 type OCIWatcher struct {
 	// Registry is the OCI image repository (e.g. "ghcr.io/myorg/myapp").
 	// A reference without a registry host ("nginx", "myorg/app") is a Docker Hub
-	// repository. For a local/test registry include the scheme:
-	// "http://localhost:5000/myapp".
+	// repository. For a plain-HTTP in-cluster registry include the scheme:
+	// "http://registry.registry.svc.cluster.local:5000/myapp".
 	Registry string
 	// TagFilter is an optional regex that tags must match. When empty, all tags match.
 	TagFilter string
 	// httpClient is the HTTP client used for requests. NewOCIWatcher sets a
-	// client with a timeout.
+	// client with a timeout and the egress guard.
 	httpClient *http.Client
 }
 
-// NewOCIWatcher creates an OCIWatcher with an HTTP client that times out.
+// NewOCIWatcher creates an OCIWatcher with an HTTP client that times out and
+// refuses loopback, link-local and cloud metadata addresses (pkg/egress).
 func NewOCIWatcher(registry, tagFilter string) *OCIWatcher {
 	return &OCIWatcher{
 		Registry:   registry,
 		TagFilter:  tagFilter,
 		httpClient: newHTTPClient(),
 	}
+}
+
+// WithHTTPClient makes w send every request, token fetches included, with c
+// instead of the egress-guarded default, and returns w. It is for tests: an
+// httptest server listens on loopback, which the guard refuses. The
+// controller keeps the default.
+func (w *OCIWatcher) WithHTTPClient(c *http.Client) *OCIWatcher {
+	w.httpClient = c
+	return w
 }
 
 // ociTagsListResponse is the JSON response from /v2/<name>/tags/list.

@@ -15,8 +15,10 @@ print(json.dumps(dict(zip(a[::2], a[1::2])), separators=(",", ":")))' "$@"
 }
 
 # parse_image <ref> [override_digest] — prints one ImageRef JSON object.
-# A ':' in the last path segment is a tag; a ':' before a '/' is a registry port.
-# override_digest replaces any tag or digest in the ref.
+# A ':' in the last path segment is a tag; a ':' before a '/' is a registry port;
+# '@' starts a digest. A tag and a digest are both sent: the Bundle records an
+# image with both, as `kardinal create bundle` does for repo:tag@digest.
+# override_digest replaces a digest in the ref; the ref's tag is kept.
 parse_image() {
   local img="$1" override_digest="${2:-}" repo digest="" tag="" last
   repo="$img"
@@ -32,13 +34,14 @@ parse_image() {
   if [ -n "$override_digest" ]; then
     digest="$override_digest"
   fi
-  if [ -n "$digest" ]; then
-    json_object repository "$repo" digest "$digest"
-  elif [ -n "$tag" ]; then
-    json_object repository "$repo" tag "$tag"
-  else
-    json_object repository "$repo"
+  local fields=(repository "$repo")
+  if [ -n "$tag" ]; then
+    fields+=(tag "$tag")
   fi
+  if [ -n "$digest" ]; then
+    fields+=(digest "$digest")
+  fi
+  json_object "${fields[@]}"
 }
 
 # build_images_json <image> <digest> <images> — prints the images JSON array.
@@ -59,13 +62,17 @@ build_images_json() {
   echo "[$items]"
 }
 
-# build_body <pipeline> <type> <namespace> <images_json> — prints the
-# POST /api/v1/bundles request body, with provenance from the GitHub Actions
-# environment.
+# build_body <pipeline> <type> <namespace> <images_json> [config_commit] [config_repo]
+# — prints the POST /api/v1/bundles request body, with provenance from the
+# GitHub Actions environment. A config commit adds configRef (config and
+# mixed Bundles need one); config_repo is its gitRepo, omitted when empty so
+# the controller uses the Pipeline repository.
 build_body() {
   python3 -c 'import json, os, sys
 pipeline, bundle_type, namespace, images = sys.argv[1:5]
-print(json.dumps({
+config_commit = sys.argv[5] if len(sys.argv) > 5 else ""
+config_repo = sys.argv[6] if len(sys.argv) > 6 else ""
+body = {
     "pipeline": pipeline,
     "type": bundle_type,
     "namespace": namespace,
@@ -78,7 +85,12 @@ print(json.dumps({
             os.environ.get("GITHUB_RUN_ID", "0")),
         "author": os.environ.get("GITHUB_ACTOR", ""),
     },
-}))' "$@"
+}
+if config_commit:
+    body["configRef"] = {"commitSHA": config_commit}
+    if config_repo:
+        body["configRef"]["gitRepo"] = config_repo
+print(json.dumps(body))' "$@"
 }
 
 # is_k8s_name <value> — true when value is a valid Kubernetes object name

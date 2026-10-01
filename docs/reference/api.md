@@ -162,6 +162,7 @@ NotificationHook defines an outbound webhook that is triggered when specific pro
 | `status.lastEvent` | string |  | LastEvent is the event type of the last successfully delivered notification. |
 | `status.lastEventKey` | string |  | LastEventKey is a deterministic string identifying the last delivered event (e.g. "Bundle.Verified/nginx-demo-abc123"). Idempotency uses processedEventKeys; this field is informational. |
 | `status.lastSentAt` | string |  | LastSentAt is the RFC3339 timestamp of the last successful webhook delivery. |
+| `status.nextRetryAt` | string |  | NextRetryAt is the RFC3339 time of the next delivery attempt after a failed one. No webhook is sent before it, however often the hook is reconciled. Cleared on a successful delivery, when the controller gives up on the event, and when the hook's spec changes. |
 | `status.observedGeneration` | integer (int64) |  | ObservedGeneration is the hook generation the controller last reconciled. Zero means the hook was never reconciled. On that first reconcile only the newest qualifying event that already exists is delivered; older ones are recorded as processed rather than backfilled. |
 | `status.processedEventKeys` | []string |  | ProcessedEventKeys lists the keys of the qualifying events that were delivered, or given up on after the retry limit. Each event is delivered once. The list is pruned to events that still qualify, so it stays bounded. |
 
@@ -429,12 +430,12 @@ Subscription watches an OCI registry or Git repository for new artifacts and aut
 | `spec` | object |  | SubscriptionSpec defines the desired state of a Subscription. |
 | `spec.git` | object |  | Git holds Git repository watching parameters. Required when type=git. |
 | `spec.git.branch` | string |  | Branch is the branch to watch. Defaults to "main". Default: `main`. |
-| `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
+| `spec.git.interval` | string |  | Interval is how often to poll the repository. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
 | `spec.git.pathGlob` | string |  | PathGlob is reserved for path filtering, which is not implemented. A non-empty value puts the Subscription in phase Error; leave it empty (every new commit on the branch creates a Bundle). |
-| `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. |
+| `spec.git.repoURL` | string | yes | RepoURL is the HTTPS Git repository URL. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
 | `spec.image` | object |  | Image holds OCI registry watching parameters. Required when type=image. |
-| `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Default: `5m`. |
-| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://localhost:5000/myapp" for a plain-HTTP registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. |
+| `spec.image.interval` | string |  | Interval is how often to poll the registry. Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised to 30s; empty or "0" means the 5m default. Default: `5m`. |
+| `spec.image.registry` | string | yes | Registry is the image repository to poll, without a tag or digest (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP in-cluster registry). Only public repositories are supported: the watcher uses the registry's anonymous token flow and sends no credentials. Loopback (the controller's own pod), link-local, cloud metadata, unspecified and multicast addresses are refused. |
 | `spec.image.tagFilter` | string |  | TagFilter is an optional regular expression that image tags must match. Empty string matches all tags. With one matching tag its digest is tracked (a moving tag such as "^main$"); when every matching tag is a semantic version the highest wins; otherwise the most recently built image wins (at most 50 matching tags). No matching tag is an error. |
 | `spec.namespace` | string |  | Namespace must be empty or equal to the Subscription's own namespace. Bundles are always created in the Subscription's namespace; any other value puts the Subscription in phase Error and creates no Bundle. Leave it empty: the field is kept only so existing manifests still apply. |
 | `spec.pipeline` | string | yes | Pipeline is the name of the Pipeline CRD that Bundles should target. |

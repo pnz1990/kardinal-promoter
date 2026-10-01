@@ -50,9 +50,11 @@ type SubscriptionSpec struct {
 type ImageSubscriptionSpec struct {
 	// Registry is the image repository to poll, without a tag or digest
 	// (e.g. "ghcr.io/myorg/myapp", "docker.io/library/nginx", or
-	// "http://localhost:5000/myapp" for a plain-HTTP registry). Only public
-	// repositories are supported: the watcher uses the registry's anonymous
-	// token flow and sends no credentials.
+	// "http://registry.registry.svc.cluster.local:5000/myapp" for a plain-HTTP
+	// in-cluster registry). Only public repositories are supported: the watcher
+	// uses the registry's anonymous token flow and sends no credentials.
+	// Loopback (the controller's own pod), link-local, cloud metadata,
+	// unspecified and multicast addresses are refused.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Registry string `json:"registry"`
@@ -66,7 +68,8 @@ type ImageSubscriptionSpec struct {
 	TagFilter string `json:"tagFilter,omitempty"`
 
 	// Interval is how often to poll the registry.
-	// Uses Go duration format (e.g. "5m", "1h").
+	// Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised
+	// to 30s; empty or "0" means the 5m default.
 	// +kubebuilder:default="5m"
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional
@@ -75,7 +78,9 @@ type ImageSubscriptionSpec struct {
 
 // GitSubscriptionSpec configures Git repository watching.
 type GitSubscriptionSpec struct {
-	// RepoURL is the HTTPS Git repository URL.
+	// RepoURL is the HTTPS Git repository URL. Loopback (the controller's own
+	// pod), link-local, cloud metadata, unspecified and multicast addresses are
+	// refused.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	RepoURL string `json:"repoURL"`
@@ -92,7 +97,8 @@ type GitSubscriptionSpec struct {
 	PathGlob string `json:"pathGlob,omitempty"`
 
 	// Interval is how often to poll the repository.
-	// Uses Go duration format (e.g. "5m", "1h").
+	// Uses Go duration format (e.g. "5m", "1h"). Values below 30s are raised
+	// to 30s; empty or "0" means the 5m default.
 	// +kubebuilder:default="5m"
 	// +kubebuilder:validation:Pattern=`^$|^(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$`
 	// +optional

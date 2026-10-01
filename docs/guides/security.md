@@ -370,7 +370,8 @@ Disable with `--set networkPolicy.enabled=false` if your CNI does not support Ne
 
 ### Outbound requests to user URLs
 
-NotificationHook webhooks (`spec.webhook.url`) and MetricCheck queries (`spec.prometheusURL`)
+NotificationHook webhooks (`spec.webhook.url`), MetricCheck queries (`spec.prometheusURL`)
+and Subscription polls (`spec.image.registry` with its token realm, `spec.git.repoURL`)
 send HTTP requests from the controller to a URL a user wrote into a resource. The controller
 refuses to connect when the address is one of these:
 
@@ -385,14 +386,16 @@ The check runs when the connection is opened, on the resolved address, for every
 connection including redirects. A host name that resolves, or later re-resolves, to one of
 these addresses is refused too. The failure reads `destination address is not allowed:
 127.0.0.1 is loopback` and appears where that resource reports errors: NotificationHook
-`status.failureMessage` or MetricCheck `status.reason`.
+`status.failureMessage`, MetricCheck `status.reason` or Subscription `status.message`.
 
 Private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and public
-addresses are allowed, because in-cluster Services and Prometheus are the normal targets.
+addresses are allowed, because in-cluster Services, Prometheus, registries and Git servers
+are the normal targets.
 To narrow egress further, enable the NetworkPolicy and list the allowed destinations in
 `networkPolicy.extraEgress`.
 
-NotificationHook and MetricCheck requests honour `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`.
+NotificationHook, MetricCheck and Subscription requests honour `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY`.
 Through a proxy, the controller connects to the proxy, so before it sends a request there it
 checks the target itself: an IP address against the list above, and a host name by resolving
 it and checking every address it resolves to. This applies to every request, including

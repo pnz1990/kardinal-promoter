@@ -428,17 +428,20 @@ func TestSubscriptionReconciler_LegacyDigestLabelStillDedups(t *testing.T) {
 	}
 }
 
-// newReconcilerWithRealWatchers wires the production watchers exactly as
-// cmd/kardinal-controller/main.go does.
-func newReconcilerWithRealWatchers(c client.Client, now func() time.Time) *subscription.Reconciler {
+// newReconcilerWithRealWatchers wires the production watchers as
+// cmd/kardinal-controller/main.go does, except that they send their requests
+// with httpClient: the egress guard of the default client refuses the
+// loopback address an httptest server listens on.
+func newReconcilerWithRealWatchers(c client.Client, now func() time.Time, httpClient *http.Client) *subscription.Reconciler {
 	return &subscription.Reconciler{
 		Client: c,
 		WatcherFn: func(sub *kardinalv1alpha1.Subscription) (source.Watcher, error) {
 			switch sub.Spec.Type {
 			case kardinalv1alpha1.SubscriptionTypeImage:
-				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter), nil
+				return source.NewOCIWatcher(sub.Spec.Image.Registry, sub.Spec.Image.TagFilter).WithHTTPClient(httpClient), nil
 			case kardinalv1alpha1.SubscriptionTypeGit:
-				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob), nil
+				return source.NewGitWatcher(sub.Spec.Git.RepoURL, sub.Spec.Git.Branch, sub.Spec.Git.PathGlob).
+					WithHTTPClient(httpClient), nil
 			}
 			return nil, fmt.Errorf("unknown type %q", sub.Spec.Type)
 		},
@@ -504,7 +507,7 @@ func TestSubscriptionReconciler_RealOCIWatcher_NewPushCreatesBundle(t *testing.T
 	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
 	sub.Spec.Image.TagFilter = `^v\d+\.\d+\.\d+$`
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
-	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) })
+	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) }, srv.Client())
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
 
 	_, err := r.Reconcile(context.Background(), req)
@@ -547,7 +550,7 @@ func TestSubscriptionReconciler_MutableTagRepush(t *testing.T) {
 	sub := makeImageSub("app-sub", "default", "my-pipeline", srv.URL+"/org/app")
 	sub.Spec.Image.TagFilter = "^latest$"
 	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(sub).WithStatusSubresource(sub).Build()
-	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) })
+	r := newReconcilerWithRealWatchers(c, func() time.Time { return time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC) }, srv.Client())
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
 
 	for _, d := range []byte{'1', '2', '3'} {

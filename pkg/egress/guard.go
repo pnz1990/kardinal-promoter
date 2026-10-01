@@ -2,8 +2,9 @@
 // Licensed under the Apache License, Version 2.0
 
 // Package egress guards the HTTP requests the controller sends to URLs that
-// users write into custom resources (NotificationHook webhooks and MetricCheck
-// Prometheus URLs).
+// users write into custom resources: NotificationHook webhooks, MetricCheck
+// Prometheus URLs, and the registries (token realms included) and git
+// repositories that Subscriptions poll.
 //
 // The guard runs as a net.Dialer Control function, so it sees the address the
 // connection is about to use after DNS resolution, on every connection,
@@ -18,7 +19,7 @@
 //   - unspecified (0.0.0.0/8, ::) and multicast addresses.
 //
 // Private ranges (10/8, 172.16/12, 192.168/16, fc00::/7) stay allowed: in-cluster
-// Services and Prometheus are the normal targets. Use the chart NetworkPolicy
+// Services, Prometheus, registries and git servers are the normal targets. Use the chart NetworkPolicy
 // (networkPolicy.enabled, networkPolicy.extraEgress) to narrow egress further.
 //
 // When the transport uses a proxy, the connection goes to the proxy, so the
