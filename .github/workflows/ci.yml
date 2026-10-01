@@ -231,7 +231,7 @@ jobs:
         # TestJourney5 runs bin/kardinal, built above.
         # TestPromotionLoop_*: promotion loop unit tests.
         # The live tests (test/e2e/live) are behind the e2e build tag and run
-        # in e2e-live.yml.
+        # with make e2e-all (hack/e2e/all.sh) and in e2e-live.yml.
         run: go test ./test/e2e/... -race -count=1 -timeout 120s -v
 
   # ── create-bundle composite action tests ──────────────────────────────────
