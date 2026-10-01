@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -210,18 +212,26 @@ func (e *Env) RunningPod(t *testing.T, ns, selector string) string {
 }
 
 // PodHTTP sends method path to port of pod through the API server's pod
-// proxy and returns the status code and body.
+// proxy and returns the status code and body of whatever the pod answers,
+// errors included (client-go's REST client drops the code and body of a
+// non-2xx text/plain response). path may carry a query string.
 func (e *Env) PodHTTP(ctx context.Context, ns, pod string, port int, method, path string) (int, string, error) {
-	res := e.Kube.CoreV1().RESTClient().Verb(method).
-		Namespace(ns).Resource("pods").Name(fmt.Sprintf("%s:%d", pod, port)).
-		SubResource("proxy").Suffix(path).Do(ctx)
-	var code int
-	res.StatusCode(&code)
-	raw, err := res.Raw()
-	if err != nil && code == 0 {
-		return 0, "", err
+	hc, err := rest.HTTPClientFor(e.Config)
+	if err != nil {
+		return 0, "", fmt.Errorf("http client: %w", err)
 	}
-	return code, string(raw), nil
+	u := fmt.Sprintf("%s/api/v1/namespaces/%s/pods/%s:%d/proxy%s", strings.TrimSuffix(e.Config.Host, "/"), ns, pod, port, path)
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	if err != nil {
+		return 0, "", fmt.Errorf("request %s: %w", path, err)
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(raw), err
 }
 
 // Manifests reads the YAML documents of file (relative to the test's
