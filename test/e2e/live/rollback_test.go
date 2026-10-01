@@ -8,9 +8,7 @@ package live
 import (
 	"context"
 	"fmt"
-	"os/user"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -67,53 +65,20 @@ func rbOutput(env, from, target, artifacts, rb string) string {
 		pipelineName, env, from, target, artifacts, rb, target, pipelineName, env)
 }
 
-// rbActor is the user kardinal rollback records: the OS user name without a
-// domain, as the CLI reads it.
-func rbActor(t *testing.T) string {
-	t.Helper()
-	u, err := user.Current()
-	if err != nil {
-		return "unknown"
-	}
-	name := u.Username
-	if i := strings.LastIndex(name, `\`); i >= 0 {
-		name = name[i+1:]
-	}
-	if i := strings.Index(name, "@"); i >= 0 {
-		name = name[:i]
-	}
-	return name
-}
-
-// rbBundle gets the Bundle.
-func rbBundle(t *testing.T, e *framework.Env, ns, name string) *v1alpha1.Bundle {
-	t.Helper()
-	var b v1alpha1.Bundle
-	require.NoError(t, e.Client.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: name}, &b))
-	return &b
-}
-
-// rbBundleNames lists the namespace's Bundles, sorted.
-func rbBundleNames(ctx context.Context, e *framework.Env, ns string) ([]string, error) {
-	var list v1alpha1.BundleList
-	if err := e.Client.List(ctx, &list, client.InNamespace(ns)); err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(list.Items))
-	for _, b := range list.Items {
-		names = append(names, b.Name)
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
 // rbOnlyBundles checks that the namespace has exactly the Bundles want.
 func rbOnlyBundles(t *testing.T, e *framework.Env, ns string, want ...string) {
 	t.Helper()
-	got, err := rbBundleNames(context.Background(), e, ns)
-	require.NoError(t, err)
-	sort.Strings(want)
-	assert.Equal(t, want, got, "the Bundles in %s", ns)
+	assert.ElementsMatch(t, want, bundleNames(t, e, ns), "the Bundles in %s", ns)
+}
+
+// rbCountBundles counts the namespace's Bundles. It does not fail the test,
+// so a Consistently check can call it.
+func rbCountBundles(ctx context.Context, e *framework.Env, ns string) (int, error) {
+	var list v1alpha1.BundleList
+	if err := e.Client.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return 0, fmt.Errorf("list Bundles in %s: %w", ns, err)
+	}
+	return len(list.Items), nil
 }
 
 // rbAssertBundle checks the rollback Bundle rb of env against the documented
@@ -123,8 +88,8 @@ func rbOnlyBundles(t *testing.T, e *framework.Env, ns string, want ...string) {
 // intent's target.
 func rbAssertBundle(t *testing.T, e *framework.Env, ns, rb, env, from, target, actor, reason string) *v1alpha1.Bundle {
 	t.Helper()
-	b := rbBundle(t, e, ns, rb)
-	of := rbBundle(t, e, ns, target)
+	b := getBundle(t, e, ns, rb)
+	of := getBundle(t, e, ns, target)
 	assert.Equal(t, "true", b.Labels["kardinal.io/rollback"], "label kardinal.io/rollback")
 	assert.Equal(t, pipelineName, b.Labels["kardinal.io/pipeline"], "label kardinal.io/pipeline")
 	got, ok := b.Labels["kardinal.io/reason"]
@@ -185,19 +150,16 @@ func rbEvents(ctx context.Context, e *framework.Env, ns, kind, name, reason stri
 	return out, nil
 }
 
-// rbHistory is kardinal history's rows, each split into its fields: BUNDLE,
-// ACTION, ENV, PR, DURATION and the TIMESTAMP's date and time.
-func rbHistory(t *testing.T, a *app) [][]string {
+// rbHistory is kardinal history's rows, keyed by its columns BUNDLE, ACTION,
+// ENV, PR, DURATION and TIMESTAMP.
+func rbHistory(t *testing.T, a *app) []map[string]string {
 	t.Helper()
-	lines := strings.Split(strings.TrimSpace(a.e.MustKardinal(t, a.ns, "history", pipelineName)), "\n")
-	require.Equal(t, []string{"BUNDLE", "ACTION", "ENV", "PR", "DURATION", "TIMESTAMP"}, strings.Fields(lines[0]))
-	rows := make([][]string, 0, len(lines)-1)
-	for _, l := range lines[1:] {
-		f := strings.Fields(l)
-		require.Len(t, f, 7, "history row %q", l)
-		rows = append(rows, f)
-	}
-	return rows
+	return framework.ParseTable(a.e.MustKardinal(t, a.ns, "history", pipelineName))
+}
+
+// rbHistoryRow is a history row's BUNDLE, ACTION, ENV and PR.
+func rbHistoryRow(r map[string]string) []string {
+	return []string{r["BUNDLE"], r["ACTION"], r["ENV"], r["PR"]}
 }
 
 // rbFinished is a history DURATION of a finished step: a whole number of a
@@ -226,106 +188,6 @@ func rbVerified(t *testing.T, a *app, bundle string, envs ...string) {
 		a.e.WaitStepState(t, a.ns, pipelineName, bundle, env, "Verified", promoteTimeout)
 	}
 	a.e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
-}
-
-// TestRollback_Previous checks kardinal rollback with no --to: it rolls back
-// to the previous Verified Bundle with a rollback Bundle that copies that
-// Bundle's images and provenance, names the replaced Bundle and the user, and
-// promotes through the environment like any Bundle (git, then the running
-// Deployment). A second rollback does not return to the Bundle the first one
-// rolled back from, so with nothing else left it is refused and creates
-// nothing. A manual rollback writes no RollbackStarted AuditEvent.
-//
-// Covers RB-PREV-01.
-func TestRollback_Previous(t *testing.T) {
-	t.Parallel()
-	e := framework.New(t)
-	a := newArgoApp(t, e, "test")
-	a.apply(t, a.pipeline(nil))
-
-	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2,
-		"--commit", "0123abc", "--author", "e2e-bot", "--ci-run-url", "https://ci.example/run/1")
-	rbVerified(t, a, b1, "test")
-	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
-	rbVerified(t, a, b2, "test")
-	assertEnvAt(t, a, "test", fixtures.V3)
-
-	out, rb := rbRollback(t, a, "test")
-	assert.Equal(t, rbOutput("test", b2, b1, imageV2, rb), out)
-	assert.True(t, strings.HasPrefix(rb, pipelineName+"-rollback-"), "rollback Bundle name %s", rb)
-	b := rbAssertBundle(t, e, a.ns, rb, "test", b2, b1, rbActor(t), "")
-	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, b.Spec.Images)
-	assert.Equal(t, "0123abc", b.Spec.Provenance.CommitSHA)
-	assert.Equal(t, "e2e-bot", b.Spec.Provenance.Author)
-
-	ps := e.WaitStepState(t, a.ns, pipelineName, rb, "test", "Verified", promoteTimeout)
-	assert.Equal(t, argoVerified, ps.Status.Message)
-	e.WaitBundlePhase(t, a.ns, rb, "Verified", time.Minute)
-	assertEnvAt(t, a, "test", fixtures.V2)
-
-	assert.Equal(t, fmt.Sprintf("rollback: no earlier Bundle with artifacts, not already rolled back from, was Verified in test "+
-		"(deployed now: %s); pick one with --to: conflict", rb), rbRefused(t, a, "--env", "test"))
-	rbOnlyBundles(t, e, a.ns, b1, b2, rb)
-
-	succeeded, err := rbAudit(context.Background(), e, a.ns, rb, "PromotionSucceeded")
-	require.NoError(t, err)
-	assert.Len(t, succeeded, 1, "the rollback's promotion is audited like any other")
-	rbNoAudit(t, e, a.ns, "RollbackStarted")
-}
-
-// TestRollback_To checks kardinal rollback --to: it restores the named
-// Bundle, also one an earlier rollback rolled back from, and promotes it
-// through the environments upstream of the target first. It refuses, with a
-// specific error and without creating a Bundle, a Bundle that does not exist,
-// the one deployed now, one never Verified in the environment, and an unknown
-// environment.
-//
-// Covers RB-TO-01.
-func TestRollback_To(t *testing.T) {
-	t.Parallel()
-	e := framework.New(t)
-	a := newArgoApp(t, e, "test", "prod")
-	a.apply(t, a.pipeline(nil))
-
-	b1 := e.CreateBundle(t, a.ns, pipelineName, "--image", imageV2)
-	rbVerified(t, a, b1, "test", "prod")
-	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
-	rbVerified(t, a, b2, "test", "prod")
-	// b3 reaches test only, so it was never Verified in prod.
-	b3 := e.CreateBundleObject(t, &v1alpha1.Bundle{
-		ObjectMeta: metav1.ObjectMeta{Namespace: a.ns},
-		Spec: v1alpha1.BundleSpec{Type: "image", Pipeline: pipelineName,
-			Images: []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V1}},
-			Intent: &v1alpha1.BundleIntent{TargetEnvironment: "test"}},
-	})
-	rbVerified(t, a, b3, "test")
-	e.NoStep(t, a.ns, pipelineName, b3, "prod", 10*time.Second)
-
-	assert.Equal(t, fmt.Sprintf("rollback: bundle %s/nope: not found", a.ns),
-		rbRefused(t, a, "--env", "prod", "--to", "nope"))
-	assert.Equal(t, fmt.Sprintf("rollback: bundle %s is what prod runs now: conflict", b2),
-		rbRefused(t, a, "--env", "prod", "--to", b2))
-	assert.Equal(t, fmt.Sprintf("rollback: bundle %s was never Verified in prod, so it is not known to work there; "+
-		"pick a Bundle that was: invalid request", b3), rbRefused(t, a, "--env", "prod", "--to", b3))
-	assert.Equal(t, `rollback: pipeline podinfo has no environment "nope": invalid request`,
-		rbRefused(t, a, "--env", "nope", "--to", b1))
-	rbOnlyBundles(t, e, a.ns, b1, b2, b3)
-
-	out, r1 := rbRollback(t, a, "prod", "--to", b1)
-	assert.Equal(t, rbOutput("prod", b2, b1, imageV2, r1), out)
-	rbAssertBundle(t, e, a.ns, r1, "prod", b2, b1, rbActor(t), "")
-	rbVerified(t, a, r1, "test", "prod")
-	assertEnvAt(t, a, "test", fixtures.V2)
-	assertEnvAt(t, a, "prod", fixtures.V2)
-
-	// b2 is the Bundle r1 rolled back from: a plain rollback skips it, --to
-	// may name it.
-	out, r2 := rbRollback(t, a, "prod", "--to", b2)
-	assert.Equal(t, rbOutput("prod", r1, b2, fixtures.Image+":"+fixtures.V3, r2), out)
-	rbAssertBundle(t, e, a.ns, r2, "prod", r1, b2, rbActor(t), "")
-	rbVerified(t, a, r2, "test", "prod")
-	assertEnvAt(t, a, "test", fixtures.V3)
-	assertEnvAt(t, a, "prod", fixtures.V3)
 }
 
 // rbAliasApp is an app whose test environment runs three Deployments,
@@ -429,7 +291,7 @@ func TestRollback_RestoresUnnamedImages(t *testing.T) {
 	// Verified Bundle that names it.
 	out, rb := rbRollback(t, a, "test")
 	assert.Equal(t, rbOutput("test", b5, b4, "podinfo-a:"+fixtures.V3+", podinfo-b:"+fixtures.V1, rb), out)
-	b := rbAssertBundle(t, e, a.ns, rb, "test", b5, b4, rbActor(t), "")
+	b := rbAssertBundle(t, e, a.ns, rb, "test", b5, b4, cliUser(t), "")
 	assert.Equal(t, []v1alpha1.ImageRef{
 		{Repository: fixtures.Workload("a"), Tag: fixtures.V3},
 		{Repository: fixtures.Workload("b"), Tag: fixtures.V1},
@@ -463,7 +325,7 @@ func TestRollback_PullRequest(t *testing.T) {
 	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("test"), fixtures.Image+":"+fixtures.V3, syncTimeout)
 
 	_, rb := rbRollback(t, a, "test")
-	actor := rbActor(t)
+	actor := cliUser(t)
 	e.WaitStepState(t, a.ns, pipelineName, rb, "test", "WaitingForMerge", promoteTimeout)
 	head := "kardinal/" + rb + "/test"
 	pr := e.WaitPR(t, a.repo, time.Minute, "the rollback PR", func(pr gitserver.PR) bool { return pr.Head == head })
@@ -506,7 +368,7 @@ func TestRollback_PullRequest(t *testing.T) {
 		{b2, "promote", "test", fmt.Sprintf("#%d", pr2.Number)},
 		{b1, "promote", "test", fmt.Sprintf("#%d", pr1.Number)},
 	} {
-		assert.Equal(t, w, rows[i][:4], "history row %d", i)
+		assert.Equal(t, w, rbHistoryRow(rows[i]), "history row %d", i)
 	}
 }
 
@@ -556,7 +418,11 @@ func TestRollback_PolicyGates(t *testing.T) {
 // TestRollback_History checks that kardinal history lists a rollback as
 // such, with its duration, newest first, and that historyLimit bounds how
 // far back a rollback can go: once more Bundles finished than the limit, the
-// oldest is deleted, and rollback --to it fails as not found.
+// oldest is deleted, and rollback --to it fails as not found. The manual
+// rollback it lists has no kardinal.io/reason label, passes the Argo CD
+// health check like any promotion and gets a PromotionSucceeded AuditEvent,
+// but no RollbackStarted one. rollback --to an unknown environment is
+// refused. (TestCLI_Rollback covers the rollback itself.)
 //
 // Covers RB-HISTORY-01.
 func TestRollback_History(t *testing.T) {
@@ -571,8 +437,20 @@ func TestRollback_History(t *testing.T) {
 	rbVerified(t, a, b1, "test")
 	b2 := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V3)
 	rbVerified(t, a, b2, "test")
+	assert.Equal(t, `rollback: pipeline podinfo has no environment "nope": invalid request`,
+		rbRefused(t, a, "--env", "nope", "--to", b1))
+	rbOnlyBundles(t, e, a.ns, b1, b2)
+
 	_, rb := rbRollback(t, a, "test")
-	rbVerified(t, a, rb, "test")
+	rbAssertBundle(t, e, a.ns, rb, "test", b2, b1, cliUser(t), "")
+	ps := e.WaitStepState(t, a.ns, pipelineName, rb, "test", "Verified", promoteTimeout)
+	assert.Equal(t, argoVerified, ps.Status.Message)
+	e.WaitBundlePhase(t, a.ns, rb, "Verified", time.Minute)
+	assertEnvAt(t, a, "test", fixtures.V2)
+	succeeded, err := rbAudit(context.Background(), e, a.ns, rb, "PromotionSucceeded")
+	require.NoError(t, err)
+	assert.Len(t, succeeded, 1, "the rollback's promotion is audited like any other")
+	rbNoAudit(t, e, a.ns, "RollbackStarted")
 
 	rows := rbHistory(t, a)
 	require.Len(t, rows, 3)
@@ -581,8 +459,8 @@ func TestRollback_History(t *testing.T) {
 		{b2, "promote", "test", "--"},
 		{b1, "promote", "test", "--"},
 	} {
-		assert.Equal(t, w, rows[i][:4], "history row %d", i)
-		assert.Regexp(t, rbFinished, rows[i][4], "history row %d: a finished step's duration", i)
+		assert.Equal(t, w, rbHistoryRow(rows[i]), "history row %d", i)
+		assert.Regexp(t, rbFinished, rows[i]["DURATION"], "history row %d: a finished step's duration", i)
 	}
 
 	// b1, b2 and rb are finished: a new Bundle makes three, one over the
@@ -597,9 +475,13 @@ func TestRollback_History(t *testing.T) {
 	rbOnlyBundles(t, e, a.ns, b2, rb, b3)
 
 	framework.Eventually(t, time.Minute, "history without the deleted Bundle", func(context.Context) (bool, string) {
+		out, err := e.Kardinal(t, a.ns, "history", pipelineName)
+		if err != nil {
+			return false, fmt.Sprintf("kardinal history: %v: %s", err, out)
+		}
 		var got []string
-		for _, r := range rbHistory(t, a) {
-			got = append(got, r[0]+"/"+r[1])
+		for _, r := range framework.ParseTable(out) {
+			got = append(got, r["BUNDLE"]+"/"+r["ACTION"])
 		}
 		return assert.ObjectsAreEqual([]string{b3 + "/promote", rb + "/rollback", b2 + "/promote"}, got), strings.Join(got, " ")
 	})
@@ -742,7 +624,7 @@ func TestRollback_PolicyRefused(t *testing.T) {
 		if err := e.Client.Get(ctx, client.ObjectKey{Namespace: a.ns, Name: "rp"}, &cur); err != nil {
 			return false, err.Error()
 		}
-		names, err := rbBundleNames(ctx, e, a.ns)
+		n, err := rbCountBundles(ctx, e, a.ns)
 		if err != nil {
 			return false, err.Error()
 		}
@@ -751,8 +633,8 @@ func TestRollback_PolicyRefused(t *testing.T) {
 			return false, err.Error()
 		}
 		same := cur.Status.LastEvaluatedAt != nil && cur.Status.LastEvaluatedAt.Equal(evaluated)
-		return same && len(names) == 1 && len(evs) == 1 && evs[0].Series == nil,
-			fmt.Sprintf("%s; Bundles %v; %d Events", rbDescribePolicy(&cur), names, len(evs))
+		return same && n == 1 && len(evs) == 1 && evs[0].Series == nil,
+			fmt.Sprintf("%s; %d Bundles; %d Events", rbDescribePolicy(&cur), n, len(evs))
 	})
 }
 
@@ -797,7 +679,7 @@ func TestRollback_OnHealthFailure(t *testing.T) {
 	assert.True(t, strings.HasSuffix(msg, " — rollback Bundle "+rb+" created"), msg)
 
 	rbAssertBundle(t, e, a.ns, rb, "test", b2, b1, alarmActor, "AutoRollback")
-	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, rbBundle(t, e, a.ns, rb).Spec.Images)
+	assert.Equal(t, []v1alpha1.ImageRef{{Repository: fixtures.Image, Tag: fixtures.V2}}, getBundle(t, e, a.ns, rb).Spec.Images)
 
 	var audit v1alpha1.AuditEvent
 	framework.Eventually(t, time.Minute, "the RollbackStarted AuditEvent", func(ctx context.Context) (bool, string) {
@@ -885,7 +767,7 @@ func TestRollback_OnHealthFailureRefused(t *testing.T) {
 	e.WaitBundlePhase(t, a.ns, rb, "Failed", time.Minute)
 
 	framework.Consistently(t, 20*time.Second, "no rollback of the rollback", func(ctx context.Context) (bool, string) {
-		names, err := rbBundleNames(ctx, e, a.ns)
+		n, err := rbCountBundles(ctx, e, a.ns)
 		if err != nil {
 			return false, err.Error()
 		}
@@ -893,7 +775,7 @@ func TestRollback_OnHealthFailureRefused(t *testing.T) {
 		if err != nil || ps == nil {
 			return false, fmt.Sprintf("step lookup: %v", err)
 		}
-		return len(names) == 4 && ps.Status.State == "AbortedByAlarm", fmt.Sprintf("Bundles %v; %s", names, framework.DescribeStep(ps))
+		return n == 4 && ps.Status.State == "AbortedByAlarm", fmt.Sprintf("%d Bundles; %s", n, framework.DescribeStep(ps))
 	})
 	rbNoAudit(t, e, a.ns, "RollbackStarted")
 }
@@ -921,7 +803,7 @@ func TestRollback_MultiEnvironment(t *testing.T) {
 
 	out, rb := rbRollback(t, a, "prod-us")
 	assert.Equal(t, rbOutput("prod-us", b2, b1, imageV2, rb), out)
-	rbAssertBundle(t, e, a.ns, rb, "prod-us", b2, b1, rbActor(t), "")
+	rbAssertBundle(t, e, a.ns, rb, "prod-us", b2, b1, cliUser(t), "")
 	test := e.WaitStepState(t, a.ns, pipelineName, rb, "test", "Verified", promoteTimeout)
 	prodUS := e.WaitStepState(t, a.ns, pipelineName, rb, "prod-us", "Verified", promoteTimeout)
 	at, _ := verifiedAt(t, test)
