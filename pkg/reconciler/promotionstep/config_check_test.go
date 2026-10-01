@@ -73,8 +73,7 @@ func TestSecretRefNamespace(t *testing.T) {
 					Data:       map[string][]byte{"token": []byte("token-of-" + ns)},
 				})
 			}
-			ps := makeStep("step-sec", "nginx-demo", "b1", "test")
-			ps.Status.State = "Promoting"
+			ps := asPromoting(makeStep("step-sec", "nginx-demo", "b1", "test"), pipeline)
 			var reads []string
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}).
@@ -96,7 +95,9 @@ func TestSecretRefNamespace(t *testing.T) {
 			if tt.wantFailed {
 				assert.Equal(t, "Failed", got.Status.State)
 				assert.Contains(t, got.Status.Message, tt.wantMessage)
-				assert.Empty(t, got.Status.Steps, "no step may run")
+				for _, s := range got.Status.Steps {
+					assert.NotEqual(t, v1alpha1.StepExecutionCompleted, s.State, "no step may run: %s ran", s.Name)
+				}
 				assert.NotContains(t, got.Status.Message, "token-of-")
 				return
 			}

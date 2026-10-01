@@ -16,6 +16,7 @@
 package prstatus_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
@@ -514,4 +516,22 @@ func TestReconciler_ReviewStatus_FallbackOnError(t *testing.T) {
 	// Must preserve previous approved state when review poll fails.
 	assert.True(t, updated.Status.Approved, "approved must be preserved on review error")
 	assert.Equal(t, 2, updated.Status.ApprovalCount, "approvalCount must be preserved on review error")
+}
+
+// TestReconciler_DeletedBeforeStatusWrite: a PRStatus deleted between its
+// read and the status write after a poll ends the reconcile with no error,
+// requeue or warn or error log.
+func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	prs := &v1alpha1.PRStatus{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pr", Namespace: "default"},
+		Spec:       v1alpha1.PRStatusSpec{PRURL: "https://github.com/owner/repo/pull/42", PRNumber: 42, Repo: "owner/repo"},
+	}
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(prs).WithStatusSubresource(prs).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	r := &prstatus.Reconciler{Client: c, SCM: &fakeSCM{open: true}}
+	var logs bytes.Buffer
+	res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "test-pr", Namespace: "default"},
+	})
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

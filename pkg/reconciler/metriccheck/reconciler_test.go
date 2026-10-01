@@ -4,6 +4,7 @@
 package metriccheck_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -21,6 +22,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/metriccheck"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 )
 
 // fakeProvider is a MetricsProvider implementation for testing.
@@ -328,4 +330,17 @@ func TestReconciler_StatusWriteFailureRequeuesAtInterval(t *testing.T) {
 			assert.Equal(t, 5, denied)
 		})
 	}
+}
+
+// TestReconcile_DeletedBeforeStatusWrite: a MetricCheck deleted between its
+// read and its status write ends the reconcile with no error, requeue or warn
+// or error log.
+func TestReconcile_DeletedBeforeStatusWrite(t *testing.T) {
+	mc := newMetricCheck("error-rate", "lt", 0.01)
+	c := fake.NewClientBuilder().WithScheme(buildScheme()).WithStatusSubresource(mc).WithObjects(mc).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	r := &metriccheck.Reconciler{Client: c, Provider: &fakeProvider{value: 0.001}, NowFn: func() time.Time { return fixedNow }}
+	var logs bytes.Buffer
+	res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{NamespacedName: key(mc)})
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

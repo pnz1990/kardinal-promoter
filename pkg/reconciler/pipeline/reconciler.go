@@ -28,6 +28,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
 // Ready condition reasons.
@@ -59,8 +60,16 @@ type Reconciler struct {
 // Reconcile is called whenever a Pipeline, one of its PromotionSteps, the
 // phase of one of its Bundles or its freeze gate changes. It validates the
 // spec, converges the freeze gate to spec.paused, derives status.phase from
-// the Bundles and PromotionSteps and sets the Ready condition.
+// the Bundles and PromotionSteps and sets the Ready condition. A Pipeline
+// deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, pipelinesResource, r.reconcile)
+}
+
+// pipelinesResource is the resource objectgone matches a NotFound against.
+var pipelinesResource = kardinalv1alpha1.GroupVersion.WithResource("pipelines").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("pipeline", req.Name).
 		Str("namespace", req.Namespace).

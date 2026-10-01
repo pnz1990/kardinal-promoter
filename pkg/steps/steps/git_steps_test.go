@@ -271,12 +271,15 @@ func TestGitCommitStep_NoChanges(t *testing.T) {
 // TestGitPushStep_Modes covers force-push of the kardinal-owned PR branch
 // (a re-run after a restart must not fail non-fast-forward), the restart on
 // a moved base branch for auto environments (C05-steps-12) and the skip when
-// nothing changed (E2E-04).
+// nothing changed (E2E-04). The branch follows from the sequence being run
+// (approval when the step started), not the live approval: an approval edited
+// mid-promotion takes effect from the next Bundle.
 func TestGitPushStep_Modes(t *testing.T) {
 	nonFF := fmt.Errorf("push: %w", scm.ErrNonFastForward)
 	tests := []struct {
 		name       string
-		approval   string
+		approval   string // the approval the sequence was built for
+		live       string // the Pipeline's approval now; approval when empty
 		noChanges  string
 		layout     string
 		pushErrs   []error
@@ -291,6 +294,10 @@ func TestGitPushStep_Modes(t *testing.T) {
 			wantPushes: 1, wantBranch: "kardinal/nginx-demo-v1-29-0/prod", wantForce: true},
 		{name: "auto pushes the base branch without force", approval: "auto", wantStatus: parentsteps.StepSuccess,
 			wantPushes: 1, wantBranch: "main", wantForce: false},
+		{name: "pr-review edited to auto still pushes its own branch", approval: "pr-review", live: "auto",
+			wantStatus: parentsteps.StepSuccess, wantPushes: 1, wantBranch: "kardinal/nginx-demo-v1-29-0/prod", wantForce: true},
+		{name: "auto edited to pr-review still pushes the base branch", approval: "auto", live: "pr-review",
+			wantStatus: parentsteps.StepSuccess, wantPushes: 1, wantBranch: "main", wantForce: false},
 		{name: "auto non-fast-forward restarts the sequence", approval: "auto", pushErrs: []error{nonFF},
 			wantStatus: parentsteps.StepRestart, wantPushes: 1, wantBranch: "main", wantMsg: "fresh clone"},
 		{name: "pr-review push error fails", approval: "pr-review", pushErrs: []error{errors.New("denied")},
@@ -304,7 +311,11 @@ func TestGitPushStep_Modes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			git := &mockGitClient{pushErrs: tc.pushErrs}
 			state := makeState(t, git, nil)
+			state.Sequence = parentsteps.DefaultSequenceForBundle(tc.approval, "image", "", "")
 			state.Environment.Approval = tc.approval
+			if tc.live != "" {
+				state.Environment.Approval = tc.live
+			}
 			state.Environment.Layout = tc.layout
 			if tc.noChanges != "" {
 				state.Outputs["noChanges"] = tc.noChanges

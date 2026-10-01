@@ -50,6 +50,7 @@ import (
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/source"
 )
 
@@ -86,7 +87,16 @@ type Reconciler struct {
 //  4. If error → write phase=Error + message, requeue after 1m.
 //  5. If Changed=false → write phase=Watching, requeue after interval.
 //  6. If Changed=true → create Bundle CRD (image or config), update status, requeue.
+//
+// A Subscription deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, subscriptionsResource, r.reconcile)
+}
+
+// subscriptionsResource is the resource objectgone matches a NotFound against.
+var subscriptionsResource = kardinalv1alpha1.GroupVersion.WithResource("subscriptions").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("subscription", req.Name).
 		Str("namespace", req.Namespace).

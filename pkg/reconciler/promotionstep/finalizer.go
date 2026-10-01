@@ -22,6 +22,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
 )
 
 // FinalizerClosePR keeps a PromotionStep that may hold an open PR until the
@@ -30,12 +31,14 @@ import (
 // one later changed the environment with no PromotionStep tracking it.
 //
 // The finalizer is on a step only while it is Promoting or WaitingForMerge and
-// opens, or has opened, a PR: its step sequence has open-pr (a pr-review
-// environment), or its status has a PR URL. An auto step never holds it. It is
-// added when such a step enters Promoting, before the PR is opened, so no PR
-// exists without it. It is removed as soon as the step leaves those states
-// (the PR was merged, closed, or the step ended), and on delete once the PR is
-// closed.
+// opens, or has opened, a PR: its recorded step sequence has open-pr (the
+// environment was pr-review when the step started), or its status has a PR
+// URL. An auto step never holds it. It is added when such a step enters
+// Promoting, before the PR is opened, so no PR exists without it; the step
+// runs that recorded sequence, so an approval edit cannot open a PR the
+// finalizer was not added for. It is removed as soon as the step leaves those
+// states (the PR was merged, closed, or the step ended), and on delete once
+// the PR is closed.
 //
 // While the controller is not running, a deleted step that holds the
 // finalizer stays until the controller is back. Uninstalling the controller
@@ -61,19 +64,23 @@ func holdsPR(state string) bool {
 }
 
 // openPRStep is the name of the step that opens the PR, in status.steps.
-const openPRStep = "open-pr"
+const openPRStep = steps.OpenPRStepName
+
+// opensPR reports whether the recorded sequence of ps opens a PR (only
+// environments that were pr-review when the step started have open-pr).
+func opensPR(ps *v1alpha1.PromotionStep) bool {
+	return slices.ContainsFunc(ps.Status.Steps, func(s v1alpha1.StepStatus) bool { return s.Name == openPRStep })
+}
 
 // needsPRFinalizer reports whether ps must hold FinalizerClosePR: it is in a
 // state that can hold an open PR, and it is a step that opens one. That is
-// read from the step sequence handlePending writes on entering Promoting
-// (only pr-review environments have open-pr), or from a PR URL in the status.
+// read from the recorded step sequence, or from a PR URL in the status.
 // spec.prStatusRef says nothing: the Graph builder sets it on every step.
 func needsPRFinalizer(ps *v1alpha1.PromotionStep) bool {
 	if !holdsPR(ps.Status.State) {
 		return false
 	}
-	opensPR := slices.ContainsFunc(ps.Status.Steps, func(s v1alpha1.StepStatus) bool { return s.Name == openPRStep })
-	return opensPR || ps.Status.PRURL != "" || ps.Status.Outputs["prURL"] != ""
+	return opensPR(ps) || ps.Status.PRURL != "" || ps.Status.Outputs["prURL"] != ""
 }
 
 // syncPRFinalizer adds or removes FinalizerClosePR so that ps holds it exactly
@@ -130,7 +137,9 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // the new step open a second PR. If no new step comes (the Bundle is deleted
 // or stops promoting first), nothing closes that PR: docs/troubleshooting.md
 // says how to find it. A failed read in stepRecreated is retried like a failed
-// close; past closePRDeadline the PR is closed.
+// close. Past closePRDeadline the finalizer is removed and the PR is left open
+// and uncommented, with an error log and a PRLeftOpen Warning Event: leaking an
+// open PR is safer than closing one a recreated step may own.
 //
 // In a namespace being deleted the API server refuses the ClosePRFailed
 // Event, so the error log is the only record of a PR left open there.
@@ -160,16 +169,20 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 		log.Warn().Err(err).Dur("retryIn", delay).
 			Msg("could not tell whether a deleted PromotionStep comes back; retrying before closing its PR")
 		return ctrl.Result{RequeueAfter: delay}, nil
-	case err == nil && recreated:
+	case err != nil:
+		// Past the deadline the step may still come back and reuse the PR, and
+		// closing it would close the new step's PR under it. An open PR nothing
+		// tracks can be found and closed by hand (docs/troubleshooting.md).
+		note := fmt.Sprintf("env %s: could not tell within %s whether the deleted step comes back (%v); "+
+			"left its PR open: close it by hand if no new PromotionStep uses it", ps.Spec.Environment, closePRDeadline, err)
+		log.Error().Err(err).Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
+			Msg("gave up telling whether a deleted PromotionStep comes back; left its PR open and removed its finalizer")
+		kubeevent.Emit(r.Recorder, ps, corev1.EventTypeWarning, ReasonPRLeftOpen, "Delete", note)
+	case recreated:
 		log.Info().Str("env", ps.Spec.Environment).Str("prURL", ps.Status.PRURL).
 			Msg("left the PR of a step deleted with its Graph open: the Bundle recreates the Graph, " +
 				"and the new step reuses the PR")
 	default:
-		// Past the deadline a read that still fails counts as "does not come
-		// back": a second PR is better than an open one nothing tracks.
-		if err != nil {
-			log.Warn().Err(err).Msg("still cannot tell whether a deleted PromotionStep comes back; closing its PR")
-		}
 		if err := r.closeStepPR(ctx, ps, r.deleteReason(ctx, ps)); err != nil {
 			if elapsed < closePRDeadline {
 				delay := closePRRetryDelay(elapsed)
@@ -187,6 +200,10 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	}
 	return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
 }
+
+// ReasonPRLeftOpen is the Warning Event reason for a deleted step whose PR was
+// left open because the controller could not tell whether the step comes back.
+const ReasonPRLeftOpen = "PRLeftOpen"
 
 // stepRecreated reports whether a new step for ps's environment will reuse
 // ps's open PR. That is when ps went with its Graph (deleted by hand, for

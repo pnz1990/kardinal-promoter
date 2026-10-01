@@ -60,6 +60,7 @@ import (
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/egress"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
 const (
@@ -148,7 +149,16 @@ type Reconciler struct {
 //  5. On a failed POST, record the attempt and status.nextRetryAt and requeue
 //     with backoff; after maxDeliveryAttempts give up on that event. No POST
 //     is made before status.nextRetryAt, however often the hook is reconciled.
+//
+// A NotificationHook deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, notificationHooksResource, r.reconcile)
+}
+
+// notificationHooksResource is the resource objectgone matches a NotFound against.
+var notificationHooksResource = v1alpha1.GroupVersion.WithResource("notificationhooks").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("notificationhook", req.Name).
 		Str("namespace", req.Namespace).

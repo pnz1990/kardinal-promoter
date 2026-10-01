@@ -18,11 +18,13 @@ package promotionstep
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -102,14 +104,23 @@ func TestWriteAuditEvent_Idempotent(t *testing.T) {
 // of being dropped, and an AlreadyExists from a re-run reconcile is not.
 func TestWriteAuditEvent_LogsErrors(t *testing.T) {
 	gr := schema.GroupResource{Group: "kardinal.io", Resource: "auditevents"}
+	terminating := apierrors.NewForbidden(gr, "x",
+		errors.New("unable to create new content in namespace default because it is being terminated"))
+	terminating.ErrStatus.Details.Causes = append(terminating.ErrStatus.Details.Causes, metav1.StatusCause{
+		Type: corev1.NamespaceTerminatingCause, Field: "metadata.namespace",
+		Message: "namespace default is being terminated"})
 	tests := []struct {
 		name    string
 		err     error
 		wantLog []string
+		noLog   []string
 	}{
 		{name: "forbidden is logged", err: apierrors.NewForbidden(gr, "x", nil),
-			wantLog: []string{"failed to write AuditEvent", "forbidden", "PromotionFailed"}},
+			wantLog: []string{"failed to write AuditEvent", "forbidden", "PromotionFailed", `"level":"error"`}},
 		{name: "already exists is not logged", err: apierrors.NewAlreadyExists(gr, "x")},
+		// The namespace deletion removes the step next: nothing to report.
+		{name: "a namespace being deleted is debug", err: terminating,
+			wantLog: []string{`"level":"debug"`, "being terminated"}, noLog: []string{`"level":"error"`, `"level":"warn"`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,6 +142,9 @@ func TestWriteAuditEvent_LogsErrors(t *testing.T) {
 			}
 			for _, s := range tt.wantLog {
 				assert.Contains(t, buf.String(), s)
+			}
+			for _, s := range tt.noLog {
+				assert.NotContains(t, buf.String(), s)
 			}
 		})
 	}

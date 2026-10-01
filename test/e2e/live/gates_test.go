@@ -341,18 +341,44 @@ func tickTimes(t *testing.T, e *framework.Env, ns, name string, d time.Duration)
 // instance seen during d.
 func evaluations(t *testing.T, e *framework.Env, ns, bundle, env, template string, d time.Duration) []time.Time {
 	t.Helper()
-	var seen []time.Time
-	framework.Consistently(t, d, "gate "+template+" readable", func(ctx context.Context) (bool, string) {
+	evals, _ := evaluationsAndTicks(t, e, ns, bundle, env, template, d)
+	return evals
+}
+
+// evaluationsAndTicks is evaluations, and also collects the distinct
+// status.tick values of every ScheduleClock in the cluster seen during d (the
+// first of each clock is its tick when d starts).
+func evaluationsAndTicks(t *testing.T, e *framework.Env, ns, bundle, env, template string,
+	d time.Duration) (evals, ticks []time.Time) {
+	t.Helper()
+	lastTick := map[string]string{}
+	framework.Consistently(t, d, "gate "+template+" and ScheduleClocks readable", func(ctx context.Context) (bool, string) {
 		g, ok, err := e.GateInstance(ctx, ns, bundle, env, template)
 		if err != nil || !ok {
 			return false, fmt.Sprintf("gate lookup: ok=%v err=%v", ok, err)
 		}
-		if at := g.Status.LastEvaluatedAt; at != nil && (len(seen) == 0 || !seen[len(seen)-1].Equal(at.Time)) {
-			seen = append(seen, at.Time)
+		if at := g.Status.LastEvaluatedAt; at != nil && (len(evals) == 0 || !evals[len(evals)-1].Equal(at.Time)) {
+			evals = append(evals, at.Time)
+		}
+		var clocks v1alpha1.ScheduleClockList
+		if err := e.Client.List(ctx, &clocks); err != nil {
+			return ctx.Err() != nil, "list ScheduleClocks: " + err.Error() // d ending mid-list is fine
+		}
+		for _, c := range clocks.Items {
+			key := c.Namespace + "/" + c.Name
+			if c.Status.Tick == "" || lastTick[key] == c.Status.Tick {
+				continue
+			}
+			lastTick[key] = c.Status.Tick
+			at, err := time.Parse(time.RFC3339, c.Status.Tick)
+			if err != nil {
+				return false, fmt.Sprintf("ScheduleClock %s tick %q: %v", key, c.Status.Tick, err)
+			}
+			ticks = append(ticks, at)
 		}
 		return true, ""
 	})
-	return seen
+	return evals, ticks
 }
 
 // TestGate_ScheduleClockTicks checks the ScheduleClock contract: the chart's
@@ -742,14 +768,34 @@ func TestGate_RecheckInterval(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "5m", d.Spec.RecheckInterval)
 
+	// The window starts at an evaluation 5s after clockMu is ours: a fast
+	// clock's last tick, just before another test released clockMu, may still
+	// re-evaluate the gate first.
 	clockMu.Lock()
-	evals := evaluations(t, e, a.ns, bundle, "prod", "fast-recheck", 35*time.Second)
+	settled := time.Now().Add(5 * time.Second)
+	e.WaitGate(t, a.ns, bundle, "prod", "fast-recheck", 30*time.Second, "evaluated after the clocks settled",
+		func(g *v1alpha1.PolicyGate) bool {
+			return g.Status.LastEvaluatedAt != nil && !g.Status.LastEvaluatedAt.Time.Before(settled)
+		})
+	evals, ticks := evaluationsAndTicks(t, e, a.ns, bundle, "prod", "fast-recheck", 35*time.Second)
+	end := time.Now()
 	clockMu.Unlock()
-	t.Logf("evaluations in 35s: %v", evals)
-	// Every 10s gives three or four in 35s, plus at most one from the chart
-	// clock's tick; every 1s would give over thirty.
+	// Each evaluation after the first comes at least 10s after the one before
+	// (whole seconds, so also as written), or from a clock tick (only the
+	// chart's once a minute: clockMu). A tick up to 2s before an evaluation can
+	// re-run it: its watch event can arrive while that evaluation runs. Every
+	// 1s would give over thirty.
+	require.NotEmpty(t, evals, "the gate was evaluated after the clocks settled")
+	var windowTicks int
+	for _, tick := range ticks {
+		if !tick.Before(evals[0].Add(-2*time.Second)) && !tick.After(end) {
+			windowTicks++
+		}
+	}
+	most := 1 + int(end.Sub(evals[0])/(10*time.Second)) + windowTicks
+	t.Logf("evaluations %v to %s; clock ticks %v; at most %d", evals, end.Format(time.RFC3339), ticks, most)
 	assert.GreaterOrEqual(t, len(evals), 3, "the gate is re-evaluated periodically")
-	assert.LessOrEqual(t, len(evals), 5, "1s is raised to the 10s minimum")
+	assert.LessOrEqual(t, len(evals), most, "1s is raised to the 10s minimum")
 	var tenSecondGaps int
 	for i := 1; i < len(evals); i++ {
 		if gap := evals[i].Sub(evals[i-1]); gap >= 9*time.Second && gap <= 12*time.Second {

@@ -16,6 +16,7 @@
 package rollbackpolicy_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -35,6 +36,7 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/rollbackpolicy"
 )
 
@@ -629,4 +631,21 @@ func TestReconciler_RefusalClearsBelowTheThreshold(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestReconciler_DeletedBeforeStatusWrite: a RollbackPolicy deleted between
+// its read and its status write ends the reconcile with no error, requeue or
+// warn or error log.
+func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	rp := makeRollbackPolicy("rp-1", "nginx-demo", "prod", "bundle-1", 3)
+	step := makePromotionStep("step-1", "nginx-demo", "prod", 2)
+	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+		WithObjects(rp, step, makeBundle("bundle-1", "nginx-demo")).WithStatusSubresource(rp, step).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+	r := &rollbackpolicy.Reconciler{Client: c, NowFn: func() time.Time { return fixedNow }}
+	var logs bytes.Buffer
+	res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: rp.Name, Namespace: rp.Namespace},
+	})
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

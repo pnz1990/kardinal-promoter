@@ -16,6 +16,7 @@
 package promotionstep_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -38,6 +39,8 @@ import (
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/promotionstep"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/steps"
@@ -819,8 +822,7 @@ func TestPausedPipeline_ReconcilerNolongerChecksSpecPaused(t *testing.T) {
 			},
 		},
 	}
-	step := makeStep("step-paused", "nginx-demo", "bundle-1", "test")
-	step.Status.State = "Promoting"
+	step := asPromoting(makeStep("step-paused", "nginx-demo", "bundle-1", "test"), pausedPipeline)
 	bundle := makeBundle("bundle-1", "nginx-demo")
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
@@ -1699,5 +1701,66 @@ func pipelineWithHealthFailurePolicy(t *testing.T, name, env, policy string) *v1
 				},
 			},
 		},
+	}
+}
+
+// TestReconciler_DeletedBeforeStatusWrite: a PromotionStep deleted between its
+// read and a status write ends the reconcile with no error, requeue or warn or
+// error log, whichever write it was.
+func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	pending := func() *v1alpha1.PromotionStep {
+		ps := makeStep("step-prod", "my-app", "bundle-1", "prod")
+		ps.CreationTimestamp = gateStepCreated
+		return ps
+	}
+	gated := pending()
+	gated.Spec.RequiredGates = []string{"soak"}
+	promoting := asPromoting(makeStep("step-prod", "my-app", "bundle-1", "test"), makePipeline("my-app"))
+	superseded := makeBundle("bundle-1", "my-app")
+	superseded.Status.Phase = "Superseded"
+	waiting := pending()
+	waiting.Status.State = "WaitingForMerge"
+	waiting.Status.Outputs = map[string]string{"prURL": "https://github.com/org/repo/pull/42"}
+	tests := []struct {
+		name     string
+		objs     []client.Object
+		scm      *mockSCM
+		requeues bool
+	}{
+		{name: "gate wait message", objs: []client.Object{gated, makeBundle("bundle-1", "my-app"),
+			messageGate("soak", "wait for the soak", "upstream.uat.soakMinutes is 3")}},
+		{name: "paused", objs: []client.Object{pending(), makeBundle("bundle-1", "my-app"),
+			lifecycle.DesiredFreezeGate(makePipeline("my-app"))}},
+		// A transition patch that finds the step gone reports no change
+		// (patchState), and the reconcile may requeue; it is not an error.
+		{name: "transition", objs: []client.Object{promoting, makeBundle("bundle-1", "my-app")}, requeues: true},
+		{name: "supersession retry", objs: []client.Object{waiting, superseded},
+			scm: &mockSCM{open: true, closeErrs: []error{errors.New("bad gateway")}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(append(tt.objs, makePipeline("my-app"))...).
+				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.PolicyGate{}).
+				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+			scmMock := tt.scm
+			if scmMock == nil {
+				scmMock = &mockSCM{}
+			}
+			r := &promotionstep.Reconciler{
+				Client:    c,
+				SCM:       scmMock,
+				GitClient: &mockGit{},
+				WorkDirFn: func(_, _ string) string { return t.TempDir() },
+			}
+			var logs bytes.Buffer
+			res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "step-prod", Namespace: "default"},
+			})
+			if tt.requeues {
+				res = ctrl.Result{}
+			}
+			objectgonetest.AssertQuiet(t, res, err, &logs)
+		})
 	}
 }

@@ -24,6 +24,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
 const (
@@ -74,7 +75,16 @@ type Reconciler struct {
 //  5. Requeue after spec.interval (default 1m, minimum 10s). When the status
 //     patch fails, requeue after min(interval, 5s) the first time and after
 //     the interval while it keeps failing.
+//
+// A MetricCheck deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, metricChecksResource, r.reconcile)
+}
+
+// metricChecksResource is the resource objectgone matches a NotFound against.
+var metricChecksResource = kardinalv1alpha1.GroupVersion.WithResource("metricchecks").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("metriccheck", req.Name).
 		Str("namespace", req.Namespace).

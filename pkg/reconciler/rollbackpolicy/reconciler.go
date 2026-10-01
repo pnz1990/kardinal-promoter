@@ -51,6 +51,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/eventfilter"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/kubeevent"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 )
 
 const (
@@ -98,7 +99,16 @@ type Reconciler struct {
 
 // Reconcile processes one RollbackPolicy event.
 // It is idempotent: safe to re-run after a crash at any point.
+//
+// A RollbackPolicy deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, rollbackPoliciesResource, r.reconcile)
+}
+
+// rollbackPoliciesResource is the resource objectgone matches a NotFound against.
+var rollbackPoliciesResource = v1alpha1.GroupVersion.WithResource("rollbackpolicies").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("rollbackpolicy", req.Name).
 		Str("namespace", req.Namespace).

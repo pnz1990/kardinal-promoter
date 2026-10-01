@@ -65,6 +65,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
 )
 
@@ -123,7 +124,16 @@ type Reconciler struct {
 
 // Reconcile processes one PRStatus event.
 // It is idempotent: safe to re-run after a crash at any point.
+//
+// A PRStatus deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, prStatusesResource, r.reconcile)
+}
+
+// prStatusesResource is the resource objectgone matches a NotFound against.
+var prStatusesResource = v1alpha1.GroupVersion.WithResource("prstatuses").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("prstatus", req.Name).
 		Str("namespace", req.Namespace).

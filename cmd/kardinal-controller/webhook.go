@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -209,7 +210,13 @@ func (s *webhookServer) markPRStatusMerged(ctx context.Context, event scm.Webhoo
 			prs.Status.MergeCommitSHA = event.MergeCommitSHA
 		}
 
-		if patchErr := s.client.Status().Patch(ctx, prs, patch); patchErr != nil {
+		patchErr := s.client.Status().Patch(ctx, prs, patch)
+		if apierrors.IsNotFound(patchErr) {
+			// Deleted since the list, with its Graph or step: nothing to advance.
+			s.log.Debug().Str("prstatus", prs.Name).Msg("PRStatus deleted before it was marked merged; skipped")
+			continue
+		}
+		if patchErr != nil {
 			s.log.Error().Err(patchErr).
 				Str("prstatus", prs.Name).
 				Msg("failed to mark PRStatus as merged via webhook")

@@ -4,6 +4,7 @@
 package pipeline_test
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -16,9 +17,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/pipeline"
 )
 
@@ -430,4 +433,21 @@ func TestDerivePhase_MultiBundle_NewFailed_OldVerified(t *testing.T) {
 	bundles := []kardinalv1alpha1.Bundle{phaseBundle("old", "Verified", old), phaseBundle("new", "Failed", now)}
 	// The newest Bundle per env wins: new is Failed in prod → Degraded
 	assert.Equal(t, "Degraded", pipeline.DerivePhase("app", bundles, steps))
+}
+
+// TestPipelineReconciler_DeletedBeforeStatusWrite: a Pipeline deleted between
+// its read and its status write ends the reconcile with no error, requeue or
+// warn or error log; there is nothing left to write.
+func TestPipelineReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	p := newPipeline("podinfo", []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}})
+	c := fake.NewClientBuilder().WithScheme(newScheme()).WithObjects(p).
+		WithStatusSubresource(&kardinalv1alpha1.Pipeline{}).
+		WithIndex(&kardinalv1alpha1.PromotionStep{}, "spec.pipelineName", func(client.Object) []string { return nil }).
+		WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).
+		Build()
+	var logs bytes.Buffer
+	res, err := (&pipeline.Reconciler{Client: c}).Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "podinfo", Namespace: "default"},
+	})
+	objectgonetest.AssertQuiet(t, res, err, &logs)
 }

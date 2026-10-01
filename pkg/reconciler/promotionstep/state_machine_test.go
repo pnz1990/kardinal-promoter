@@ -130,8 +130,7 @@ func TestStepErrorRetry(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ps := labelled(makeStep("step", "p", "b1", tt.env))
-			ps.Status.State = "Promoting"
+			ps := asPromoting(labelled(makeStep("step", "p", "b1", tt.env)), makePipeline("p"))
 			ps.Status.CurrentStepIndex = tt.startIdx
 			ps.Status.RetryCount = tt.retryCount
 			ps.Status.Outputs = tt.outputs
@@ -174,8 +173,7 @@ func TestStepErrorRetry(t *testing.T) {
 // the status, so it is neither lost nor opened twice, and a later failure can
 // close it (see TestStepErrorRetry).
 func TestStepErrorAfterOpenPR(t *testing.T) {
-	ps := labelled(makeStep("step", "p", "b1", "prod"))
-	ps.Status.State = "Promoting"
+	ps := asPromoting(labelled(makeStep("step", "p", "b1", "prod")), makePipeline("p"))
 	ps.Status.CurrentStepIndex = 4 // open-pr, then wait-for-merge
 	ps.Spec.PRStatusRef = "prs"    // the Graph creates the PRStatus before the PR exists
 	c := newClient(t, ps, openPRStatus("prs", "", 0), makePipeline("p"), makeBundle("b1", "p"))

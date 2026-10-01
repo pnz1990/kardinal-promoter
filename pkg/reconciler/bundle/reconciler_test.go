@@ -4,6 +4,7 @@
 package bundle_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,6 +26,7 @@ import (
 
 	kardinalv1alpha1 "github.com/kardinal-promoter/kardinal-promoter/api/v1alpha1"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/bundle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone/objectgonetest"
 )
 
 func newScheme() *runtime.Scheme {
@@ -2419,5 +2421,62 @@ func TestBundleReconciler_NoMetricsUntilEveryPipelineEnvVerified(t *testing.T) {
 		if cond.Type == "Ready" {
 			assert.NotEqual(t, metav1.ConditionTrue, cond.Status, "Ready must not be True before prod")
 		}
+	}
+}
+
+// TestBundleReconciler_DeletedBeforeStatusWrite: a Bundle deleted between its
+// read and a status write ends the reconcile with no error, requeue, Event or
+// warn or error log, whichever write it was.
+func TestBundleReconciler_DeletedBeforeStatusWrite(t *testing.T) {
+	older := metav1.NewTime(time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC))
+	newer := metav1.NewTime(older.Add(time.Minute))
+	pipeline := func(limit int) *kardinalv1alpha1.Pipeline {
+		return &kardinalv1alpha1.Pipeline{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-demo", Namespace: "default"},
+			Spec: kardinalv1alpha1.PipelineSpec{
+				Environments:            []kardinalv1alpha1.EnvironmentSpec{{Name: "test"}},
+				MaxConcurrentPromotions: limit,
+			},
+		}
+	}
+	bundleIn := func(name, phase string, created metav1.Time) *kardinalv1alpha1.Bundle {
+		return &kardinalv1alpha1.Bundle{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", CreationTimestamp: created},
+			Spec:       kardinalv1alpha1.BundleSpec{Type: "image", Pipeline: "nginx-demo"},
+			Status:     kardinalv1alpha1.BundleStatus{Phase: phase},
+		}
+	}
+	tests := []struct {
+		name       string
+		objs       []client.Object
+		translator *mockTranslator
+	}{
+		{name: "Available", objs: []client.Object{pipeline(0), bundleIn("nginx-demo-v1", "", older)}},
+		{name: "Superseded", objs: []client.Object{pipeline(0),
+			bundleIn("nginx-demo-v1", "Available", older), bundleIn("nginx-demo-v2", "Available", newer)}},
+		{name: "waiting for a slot", translator: &mockTranslator{graphName: "g"}, objs: []client.Object{pipeline(1),
+			bundleIn("nginx-demo-v1", "Available", newer), bundleIn("nginx-demo-v0", "Promoting", older)}},
+		{name: "translation error", translator: &mockTranslator{err: assert.AnError},
+			objs: []client.Object{pipeline(0), bundleIn("nginx-demo-v1", "Available", older)}},
+		{name: "Promoting", translator: &mockTranslator{graphName: "g"},
+			objs: []client.Object{pipeline(0), bundleIn("nginx-demo-v1", "Available", older)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := indexedBuilder(newScheme()).WithObjects(tt.objs...).WithStatusSubresource(&kardinalv1alpha1.Bundle{}).
+				WithInterceptorFuncs(objectgonetest.DeleteOnWrite(t, nil)).Build()
+			recorder := events.NewFakeRecorder(10)
+			r := &bundle.Reconciler{Client: c, Recorder: recorder}
+			if tt.translator != nil {
+				r.Translator = tt.translator
+			}
+			var logs bytes.Buffer
+			res, err := r.Reconcile(objectgonetest.Context(&logs), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "nginx-demo-v1", Namespace: "default"},
+			})
+			objectgonetest.AssertQuiet(t, res, err, &logs)
+			assert.NotContains(t, logs.String(), `"level":"error"`)
+			assert.Empty(t, recorder.Events, "no Event on a deleted Bundle")
+		})
 	}
 }

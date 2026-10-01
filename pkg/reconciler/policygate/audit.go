@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -98,7 +100,16 @@ func writeGateAuditEvent(
 	}
 
 	// AlreadyExists is the same transition written by an earlier attempt.
-	if err := c.Create(ctx, ae); client.IgnoreAlreadyExists(err) != nil {
+	err := c.Create(ctx, ae)
+	switch {
+	case client.IgnoreAlreadyExists(err) == nil:
+	case apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause):
+		// The namespace is being deleted: it refuses new objects, and its
+		// deletion removes the gate and its records next.
+		zerolog.Ctx(ctx).Debug().Err(err).
+			Str("gate", gate.Name).Str("auditEvent", name).
+			Msg("namespace is being deleted — PolicyGate AuditEvent not written")
+	default:
 		zerolog.Ctx(ctx).Warn().Err(err).
 			Str("gate", gate.Name).Str("auditEvent", name).
 			Msg("failed to write PolicyGate AuditEvent")

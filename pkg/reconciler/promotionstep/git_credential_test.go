@@ -115,8 +115,7 @@ func TestGitCredentialMissing(t *testing.T) {
 			pipeline := makePipeline("nginx-demo")
 			pipeline.Spec.Git.SecretRef = tt.secretRef
 			bundle := makeBundle("b1", "nginx-demo")
-			ps := makeStep("step-cred", "nginx-demo", "b1", "test")
-			ps.Status.State = "Promoting"
+			ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 				WithObjects(ps, pipeline, bundle).Build()
@@ -201,8 +200,7 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 			ctx := context.Background()
 			pipeline := makePipeline("nginx-demo")
 			pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
-			ps := makeStep("step-cred", "nginx-demo", "b1", "test")
-			ps.Status.State = "Promoting"
+			ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 				WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).Build()
@@ -251,11 +249,11 @@ func TestGitCredentialRetries_LeaveTheRetryLimit(t *testing.T) {
 // cloned without them, and the push is refused: its first retry is counted as
 // the first, and backs off 10s.
 func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
-	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
-	ps.Status.State = "Promoting"
+	pipeline := makePipeline("nginx-demo")
+	ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
-		WithObjects(ps, makePipeline("nginx-demo"), makeBundle("b1", "nginx-demo")).Build()
+		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).Build()
 	git := &authGit{} // the clone needs a token
 	workDir := filepath.Join(t.TempDir(), "w")
 	r := &promotionstep.Reconciler{Client: c, SCM: &mockSCM{}, GitClient: git,
@@ -290,8 +288,7 @@ func TestGitCredentialRetries_ResetOnProgress(t *testing.T) {
 func TestGitCredentialRetries_BackOffTogether(t *testing.T) {
 	pipeline := makePipeline("nginx-demo")
 	pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
-	ps := makeStep("step-cred", "nginx-demo", "b1", "test")
-	ps.Status.State = "Promoting"
+	ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
 	c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 		WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 		WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).Build()
@@ -337,8 +334,7 @@ func TestGitCredentialUnreadable_KeepsTheRetryLimit(t *testing.T) {
 		t.Run(fmt.Sprintf("other errors first %v", otherErrorsFirst), func(t *testing.T) {
 			pipeline := makePipeline("nginx-demo")
 			pipeline.Spec.Git.SecretRef = &v1alpha1.SecretRef{Name: "git-creds"}
-			ps := makeStep("step-cred", "nginx-demo", "b1", "test")
-			ps.Status.State = "Promoting"
+			ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 				WithObjects(ps, pipeline, makeBundle("b1", "nginx-demo")).
@@ -430,8 +426,7 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 					Data:       map[string][]byte{"token": []byte("a-token")},
 				})
 			}
-			ps := makeStep("step-cred", "nginx-demo", "b1", "test")
-			ps.Status.State = "Promoting"
+			ps := asPromoting(makeStep("step-cred", "nginx-demo", "b1", "test"), pipeline)
 			c := fake.NewClientBuilder().WithScheme(buildScheme(t)).
 				WithStatusSubresource(&v1alpha1.PromotionStep{}, &v1alpha1.Bundle{}).
 				WithObjects(append(objs, ps)...).Build()

@@ -332,7 +332,10 @@ For `recurring`, `schedule` lists when promotions are **allowed**; the window is
 day it starts on. A ChangeWindow with an invalid spec (end not after start, an unknown
 timezone, `timezone: Local`, an unknown day name) is treated as active, so gates that
 reference it block. Its `Valid` condition is `False` with reason `InvalidSpec` and a message
-that names the problem; `kubectl get changewindows` shows `VALID`, and `-o wide` adds the reason. The
+that names the problem; `kubectl get changewindows` shows `VALID`, and `-o wide` adds the reason.
+The controller reports each invalid generation of the spec once, with a warning log line and,
+in cluster mode, an `InvalidSpec` Warning Event on the ChangeWindow (in the `default`
+namespace, because ChangeWindows are cluster-scoped). The
 timezone database is compiled into the controller, so any IANA name works without tzdata in
 the image.
 
@@ -479,7 +482,7 @@ PolicyGates are re-evaluated when any of the following occurs:
 1. **ScheduleClock tick** (primary mechanism) — A `ScheduleClock` object in `kardinal-system`
    writes `status.tick` every minute by default. The PolicyGate reconciler watches all `ScheduleClock`
    objects; each tick triggers re-evaluation of all active PolicyGate instances cluster-wide
-   (not those of [finished Bundles](#gates-of-finished-bundles)).
+   (not those of [finished Bundles](#gates-of-finished-bundles)). Creating, editing or deleting a clock does not.
    This is the recommended pattern for time-based gates (`schedule.isWeekend`, `schedule.hour`, etc.).
 
 2. **`recheckInterval`** — Each gate is also re-evaluated every `recheckInterval`, whether or not

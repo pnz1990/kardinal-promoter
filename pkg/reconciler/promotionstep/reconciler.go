@@ -42,6 +42,7 @@ import (
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/graph"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/health"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/lifecycle"
+	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/objectgone"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/observability"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/reconciler/prstatus"
 	"github.com/kardinal-promoter/kardinal-promoter/pkg/scm"
@@ -164,7 +165,16 @@ func (r *Reconciler) now() time.Time {
 
 // Reconcile processes one PromotionStep event.
 // It is idempotent: safe to re-run after a crash at any point.
+//
+// A PromotionStep deleted while it is reconciled ends the reconcile (objectgone).
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	return objectgone.Reconcile(ctx, req, promotionStepsResource, r.reconcile)
+}
+
+// promotionStepsResource is the resource objectgone matches a NotFound against.
+var promotionStepsResource = v1alpha1.GroupVersion.WithResource("promotionsteps").GroupResource()
+
+func (r *Reconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := zerolog.Ctx(ctx).With().
 		Str("promotionstep", req.Name).
 		Str("namespace", req.Namespace).
@@ -304,7 +314,7 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 			ps.Status.RetryCount++
 			ps.Status.Message = fmt.Sprintf("bundle %s was superseded; closing its PR failed, retrying (%d/%d): %v",
 				ps.Spec.BundleName, ps.Status.RetryCount, maxStepRetries, closeErr)
-			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("patch supersession retry: %w", err)
 			}
 			return ctrl.Result{RequeueAfter: retryDelay(ps.Status.RetryCount)}, nil
@@ -331,9 +341,12 @@ func (r *Reconciler) handleSuperseded(ctx context.Context, log zerolog.Logger, p
 // (by a human, or by an earlier attempt whose finalizer removal or response
 // was lost) is left alone, with no comment; without the check a merged PR got
 // a "kardinal closed this PR" comment, and Bitbucket and Azure DevOps were
-// asked to decline or abandon it. The PR is closed before it is commented on,
-// so a restart in between leaves no comment rather than two. Only the status
-// read and the close can fail; the comment is best-effort.
+// asked to decline or abandon it. Only a PRStatus that says merged is taken
+// without asking, since a merge is final; a closed PR can be reopened, so a
+// PRStatus that says closed is checked like an open one. The PR is closed
+// before it is commented on, so a restart in between leaves no comment rather
+// than two. Only the status read and the close can fail; the comment is
+// best-effort.
 func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep, reason string) error {
 	repo, num := "", 0
 	if ps.Spec.PRStatusRef != "" {
@@ -341,8 +354,8 @@ func (r *Reconciler) closeStepPR(ctx context.Context, ps *v1alpha1.PromotionStep
 		err := r.Get(ctx, types.NamespacedName{Name: ps.Spec.PRStatusRef, Namespace: ps.Namespace}, &prs)
 		switch {
 		case err == nil:
-			if prs.Status.Merged || prstatus.IsClosed(&prs.Status) {
-				return nil // merged or already closed: nothing to close
+			if prs.Status.Merged {
+				return nil // a merge is final: nothing to close
 			}
 			repo, num = prs.Spec.Repo, prs.Spec.PRNumber
 		case !apierrors.IsNotFound(err):
@@ -439,7 +452,12 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 			// Update message for visibility but do NOT change state.
 			if ps.Status.Message != msg {
 				ps.Status.Message = msg
-				if patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base)); patchErr != nil {
+				patchErr := r.Status().Patch(ctx, ps, client.MergeFrom(base))
+				if apierrors.IsNotFound(patchErr) {
+					log.Debug().Msg("step deleted before the gate wait message patch — ignoring")
+					return ctrl.Result{}, nil
+				}
+				if patchErr != nil {
 					log.Warn().Err(patchErr).Msg("failed to patch gate wait message (non-fatal)")
 				}
 			}
@@ -453,17 +471,16 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		approvalMode = "auto"
 	}
 
-	// Load bundle to determine type (image vs config) for step sequence routing.
-	bundle, bundleErr := r.loadBundle(ctx, ps)
-	bundleType := ""
-	updateStrategy := env.Update.Strategy
-	if bundleErr != nil {
-		log.Warn().Err(bundleErr).Msg("could not load bundle for sequence routing; using default kustomize sequence")
-	} else if bundle != nil {
-		bundleType = bundle.Spec.Type
+	// The Bundle type picks the step list: a config or mixed Bundle merges its
+	// config first. A failed read is retried, not taken as an image Bundle:
+	// the list recorded here is the one the step runs to the end, so an image
+	// list would verify a config or mixed Bundle without its config change.
+	bundle, err := r.loadBundle(ctx, ps)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
+	seq := stepSequence(env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -501,16 +518,28 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	if msg := unsupportedConfig(pipeline, env, ps); msg != "" {
 		return ctrl.Result{}, r.transition(ctx, base, ps, StateFailed, msg)
 	}
-	approvalMode := env.Approval
-	if approvalMode == "" {
-		approvalMode = "auto"
+	// Run the step list recorded when the step left Pending, never one rebuilt
+	// from the live Pipeline: an approval edit made while the step runs would
+	// otherwise move the current index into another sequence (skipping open-pr,
+	// or opening a PR the finalizer was not added for). The edit applies from
+	// the next Bundle.
+	seq := recordedSequence(ps)
+	if len(seq) == 0 {
+		// A step is Promoting with no step list only if its status was edited
+		// by hand or it started before status.steps existed. Record the list
+		// and run it from the next reconcile: the finalizer sync at the end of
+		// this one then adds kardinal.io/close-pr before open-pr can run.
+		ps.Status.Steps = initStepStatuses(stepSequence(env, bundle))
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("record step list: %w", err)
+		}
+		log.Info().Str("env", ps.Spec.Environment).Strs("steps", recordedSequence(ps)).
+			Msg("recorded the step list of a Promoting step that had none")
+		return ctrl.Result{Requeue: true}, nil
 	}
-	updateStrategy := env.Update.Strategy
-	bundleType := ""
-	if bundle != nil {
-		bundleType = bundle.Spec.Type
-	}
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundleType, updateStrategy, env.Layout)
 	eng := steps.NewEngine(seq)
 
 	// The working directory is always recomputed from the PromotionStep's
@@ -543,6 +572,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		StepTimeoutSeconds:   env.StepTimeoutSeconds,
 		GateResults:          r.collectGateResults(ctx, log, ps),
 		UpstreamEnvironments: upstreamEnvironments(bundle, ps.Spec.Environment),
+		Sequence:             seq,
 	}
 	r.setRollbackState(ctx, log, state, bundle)
 
@@ -603,7 +633,7 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 		if nextIdx >= len(seq) {
 			// All steps completed — move to HealthChecking. Record the commit
 			// the health check must see deployed (E2E-01).
-			r.recordPushedCommit(ctx, log, ps, pipeline, env, workDir)
+			r.recordPushedCommit(ctx, log, ps, pipeline, workDir)
 			if ps.Spec.PRStatusRef != "" && state.Outputs["prURL"] != "" {
 				if prErr := r.patchPRStatusSpec(ctx, ps, state.Outputs); prErr != nil {
 					log.Warn().Err(prErr).Msg("failed to patch PRStatus spec (non-fatal)")
@@ -741,11 +771,11 @@ func (r *Reconciler) handleStepError(ctx context.Context, log zerolog.Logger, ba
 
 // recordPushedCommit stores, as outputs.commitSHA, the commit the health check
 // must find deployed (E2E-01). It is known here only when the step pushed
-// straight to the branch the GitOps tool tracks; for pr-review the merge
-// commit comes from the PRStatus instead.
+// straight to the branch the GitOps tool tracks; when the recorded sequence
+// opens a PR the merge commit comes from the PRStatus instead.
 func (r *Reconciler) recordPushedCommit(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep,
-	pipeline *v1alpha1.Pipeline, env v1alpha1.EnvironmentSpec, workDir string) {
-	if env.Approval == "pr-review" {
+	pipeline *v1alpha1.Pipeline, workDir string) {
+	if opensPR(ps) {
 		return
 	}
 	target := pipeline.Spec.Git.Branch
@@ -1045,13 +1075,15 @@ func (r *Reconciler) handleHealthChecking(ctx context.Context, log zerolog.Logge
 
 	var result health.HealthStatus
 	var checkErr error
-	if adapter.Name() == "flux" && env.Approval == "pr-review" && opts.ExpectedRevision == "" &&
+	if adapter.Name() == "flux" && opensPR(ps) && opts.ExpectedRevision == "" &&
 		ps.Status.Outputs["noChanges"] != "true" {
 		// The flux adapter has no image check to fall back on: without the
 		// merge commit, a Kustomization Ready on the previous commit would
 		// pass. Wait for it; health.timeout ends the wait (#1307). With no
 		// changes there is no PR and no merge commit, and the previous
-		// commit already is the target.
+		// commit already is the target. Whether there is a PR follows from
+		// the recorded sequence, not the live approval: a step that pushed
+		// straight to the base branch has no merge commit to wait for.
 		result = health.HealthStatus{Progressing: true,
 			Reason: "merge commit of the PR not known yet (needed to check lastAppliedRevision)"}
 	} else {
@@ -1705,6 +1737,23 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 		}
 	}
 	return ss
+}
+
+// stepSequence is the step list a step of env runs for bundle, recorded in
+// status.steps when the step starts.
+func stepSequence(env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, env.Layout)
+}
+
+// recordedSequence returns the step names in status.steps: the sequence
+// handlePending recorded on entering Promoting, which handlePromoting runs.
+// Only the controller writes the status.
+func recordedSequence(ps *v1alpha1.PromotionStep) []string {
+	names := make([]string, 0, len(ps.Status.Steps))
+	for _, s := range ps.Status.Steps {
+		names = append(names, s.Name)
+	}
+	return names
 }
 
 // updateStepStatuses updates ps.Status.Steps to reflect the result of the most

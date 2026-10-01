@@ -571,9 +571,9 @@ If a PolicyGate node is not ready, downstream PromotionSteps will not be created
 
 Two finalizers can hold a delete, and the controller removes both itself while it runs.
 
-**`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (a `pr-review`
-environment) carries it while it is `Promoting` or `WaitingForMerge`, from before it opens the
-PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
+**`kardinal.io/close-pr` on a PromotionStep.** A step that opens a promotion PR (its environment
+was `pr-review` when the step started) carries it while it is `Promoting` or `WaitingForMerge`,
+from before it opens the PR; an `auto` step never carries it. When the step is deleted, the controller asks the SCM whether
 the PR is still open, closes it with a comment if it is (a merged or closed PR is left alone), then
 removes the finalizer. What happens to the PR depends on what was deleted:
 
@@ -594,6 +594,15 @@ PromotionStep; removing its finalizer` with the `env` and `prURL`: close that PR
 merging it would change the environment with no PromotionStep tracking it. It also emits a
 `ClosePRFailed` Warning Event on the step, except in a namespace being deleted: the API server
 refuses new Events there, and the step is gone, so the controller log is the only record.
+
+Before it closes the PR, the controller reads the Bundle, its namespace, its Pipeline and its
+Graph to tell whether the step comes back (the Graph case above). If one of those reads keeps
+failing, it retries for about 5 minutes, then removes the finalizer without closing or
+commenting on the PR: a new step may still come back and reuse it, and leaking an open PR is
+safer than closing one that step owns. It logs the error `gave up telling whether a deleted
+PromotionStep comes back; left its PR open and removed its finalizer` with the `env` and
+`prURL`, and emits a `PRLeftOpen` Warning Event on the step (not in a namespace being deleted,
+as above). If no PromotionStep uses that PR, close it by hand, as below.
 
 **A PR left open with no PromotionStep.** In the Graph case above, the PR stays open on the
 promise that a new step reuses it. If the Bundle is deleted or stops `Promoting`, or its
