@@ -197,7 +197,11 @@ export function App() {
           return
         }
         try {
-          const [g, steps] = await Promise.all([api.getGraph(shown.name), api.getSteps(shown.name)])
+          // The bundle's own namespace: its name may repeat in other namespaces.
+          const [g, steps] = await Promise.all([
+            api.getGraph(shown.name, shown.namespace),
+            api.getSteps(shown.name, shown.namespace),
+          ])
           if (stale()) return
           setGraph(g)
           setActiveSteps(steps)
@@ -298,12 +302,15 @@ export function App() {
   const handleTimelineBundleSelect = useCallback((bundleName: string) => {
     const seq = ++viewSeq.current
     const stale = () => seq !== viewSeq.current
+    // The timeline lists the selected pipeline's bundles, so the picked one is
+    // in that pipeline's namespace.
+    const namespace = bundles.find(b => b.name === bundleName)?.namespace ?? selectedNamespace
     userBundleRef.current = bundleName
     setShownBundleName(bundleName)
     setGraphLoading(true)
     setGraphError(undefined)
     setSelectedNode(null) // close detail panel when switching bundles
-    void track(seq, Promise.all([api.getGraph(bundleName), api.getSteps(bundleName)])
+    void track(seq, Promise.all([api.getGraph(bundleName, namespace), api.getSteps(bundleName, namespace)])
       .then(([g, steps]) => {
         if (stale()) return
         setGraph(g)
@@ -311,7 +318,7 @@ export function App() {
       })
       .catch(e => { if (!stale()) setGraphError(String(e)) })
       .finally(() => { if (!stale()) setGraphLoading(false) }))
-  }, [setSelectedNode])
+  }, [setSelectedNode, bundles, selectedNamespace])
 
   // Namespace chip: the selected pipeline's namespace, or the only namespace.
   const currentNamespace = activePipeline?.namespace

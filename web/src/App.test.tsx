@@ -221,6 +221,35 @@ describe('App pipeline selection', () => {
     // The timeline only lists bundles from the selected namespace.
     expect(screen.queryByTitle(/^app-a:/)).not.toBeInTheDocument()
   })
+
+  it('reads the graph and steps of the bundle in the namespace on screen', async () => {
+    // Bundle names repeat across namespaces; the server only tells them apart
+    // by ?namespace=, so every read names the namespace of the pipeline shown.
+    window.history.replaceState(null, '', '/ui/#pipeline=app&ns=team-b')
+    h.state.pipelines = [
+      pipeline('app', { namespace: 'team-a', activeBundleName: 'app-v2' }),
+      pipeline('app', { namespace: 'team-b', activeBundleName: 'app-v2' }),
+    ]
+    h.state.bundles = {
+      app: [
+        bundle('app-v2', 'Promoting', 1, { namespace: 'team-a' }),
+        bundle('app-v2', 'Failed', 1, { namespace: 'team-b' }),
+      ],
+    }
+    render(<App />)
+    await flush()
+    expect(h.api.getGraph).toHaveBeenLastCalledWith('app-v2', 'team-b')
+    expect(h.api.getSteps).toHaveBeenLastCalledWith('app-v2', 'team-b')
+
+    // A poll tick and a timeline pick read the same namespace again.
+    await flush(5_100)
+    fireEvent.click(screen.getByTitle(/^app-v2: Failed/))
+    await flush()
+    for (const fn of [h.api.getGraph, h.api.getSteps]) {
+      expect(fn.mock.calls.length).toBeGreaterThanOrEqual(3)
+      for (const call of fn.mock.calls) expect(call).toEqual(['app-v2', 'team-b'])
+    }
+  })
 })
 
 describe('App header', () => {

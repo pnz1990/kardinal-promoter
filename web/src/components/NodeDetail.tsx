@@ -333,6 +333,8 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
   const isPromotionStep = node?.type === 'PromotionStep'
   const promotionState = stepDetail?.state ?? node?.state ?? ''
   const isActiveNode = isPromotionStep && IN_FLIGHT_STATES.has(promotionState)
+  // The namespace of the bundle on screen; its name may repeat in others.
+  const bundleNs = activeBundle?.namespace ?? namespace
 
   // A different node starts with no dialog and no stale result.
   useEffect(() => {
@@ -383,7 +385,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
     if (!bundleName) return
     let ignore = false
     setStepLoading(true)
-    api.getSteps(bundleName)
+    api.getSteps(bundleName, bundleNs)
       .then(ss => {
         if (ignore) return
         const match = ss.find(s => s.environment === node.environment)
@@ -392,7 +394,7 @@ export function NodeDetail({ node, onClose, bundleName, pipelineName, namespace 
       .catch(() => { if (!ignore) setStepDetail(null) })
       .finally(() => { if (!ignore) setStepLoading(false) })
     return () => { ignore = true }
-  }, [node?.id, isPromotionStep, steps, bundleName])
+  }, [node?.id, isPromotionStep, steps, bundleName, bundleNs])
 
   // #527: Kubernetes events for the selected PromotionStep. stepDetail is a new
   // object after every parent poll, so events refresh on the same 5s cadence.

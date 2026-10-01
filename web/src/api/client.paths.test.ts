@@ -27,6 +27,9 @@ describe('api client path segments', () => {
     { name: 'listBundles with an encoded namespace', call: () => api.listBundles('app', 'team a&x=1'), want: '/api/v1/ui/pipelines/app/bundles?namespace=team%20a%26x%3D1' },
     { name: 'getGraph', call: () => api.getGraph('../gates'), want: '/api/v1/ui/bundles/..%2Fgates/graph' },
     { name: 'getSteps', call: () => api.getSteps('b#frag'), want: '/api/v1/ui/bundles/b%23frag/steps' },
+    // The same bundle name can exist in two namespaces: the read names the one on screen.
+    { name: 'getGraph in a namespace', call: () => api.getGraph('app-v2', 'team a&x=1'), want: '/api/v1/ui/bundles/app-v2/graph?namespace=team%20a%26x%3D1' },
+    { name: 'getSteps in a namespace', call: () => api.getSteps('app-v2', 'team-b'), want: '/api/v1/ui/bundles/app-v2/steps?namespace=team-b' },
     { name: 'getStepEvents', call: () => api.getStepEvents('ns/x', 'step?y'), want: '/api/v1/ui/steps/ns%2Fx/step%3Fy/events' },
     { name: 'a real Kubernetes name is unchanged', call: () => api.listBundles('kardinal-test-app', 'default'), want: '/api/v1/ui/pipelines/kardinal-test-app/bundles?namespace=default' },
   ])('$name', async ({ call, want }) => {
