@@ -586,6 +586,10 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 	if !observedFound {
 		return progressing("status.observedGeneration not set: Flux has not reconciled this generation"), nil
 	}
+	attempted, _, _ := unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
+	if readyStatus == "Unknown" && observedGen == generation && applied != "" && attempted == applied {
+		return a.reconcilingAgain(ctx, ks, state, applied, opts), nil
+	}
 	if readyStatus != "True" || observedGen != generation {
 		return progressing(state), nil
 	}
@@ -616,6 +620,41 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		}
 	}
 	return healthy(reason), nil
+}
+
+// reconcilingAgain checks a Kustomization that is Ready=Unknown because Flux
+// reconciles again the revision it last applied (its interval, `flux
+// reconcile` or a webhook receiver): Flux marks every reconcile
+// Ready=Unknown until it ends. That revision passed Flux's health checks
+// when Flux applied it, so while Flux checks again the Kustomization's
+// Deployments decide: the result is theirs, Healthy when they are all rolled
+// out and the applied revision is the promoted one. Without Deployments to
+// read, or for another revision, it is Progressing as before.
+func (a *FluxAdapter) reconcilingAgain(ctx context.Context, ks *unstructured.Unstructured, state, applied string,
+	opts CheckOptions) HealthStatus {
+	w, err := a.workloads(ctx, ks, opts.ExpectedImages)
+	if err != nil || w.count == 0 {
+		return progressing(state)
+	}
+	rev, verifiable := fluxCommit(applied)
+	note := ""
+	switch want := opts.ExpectedRevision; {
+	case want == "":
+	case !verifiable:
+		note = fmt.Sprintf(" (revision not verified: lastAppliedRevision %q is not a git commit)", applied)
+	case SameRevision(rev, want):
+	case w.bundle:
+		note = fmt.Sprintf(" (not %s, but the Kustomization's Deployments run the Bundle images)", shortRev(want))
+	default:
+		return progressing(fmt.Sprintf("%s, lastAppliedRevision=%s, waiting for %s", state, shortRev(rev), shortRev(want)))
+	}
+	st := w.worst
+	prefix := fmt.Sprintf("Ready=Unknown while Flux reconciles lastAppliedRevision=%s again", shortRev(rev))
+	if !verifiable {
+		prefix = "Ready=Unknown while Flux reconciles lastAppliedRevision again"
+	}
+	st.Reason = fmt.Sprintf("%s: %s%s", prefix, st.Reason, note)
+	return st
 }
 
 // fluxWorkloads is the result of checking a Kustomization's Deployments.

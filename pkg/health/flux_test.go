@@ -243,3 +243,76 @@ func TestFluxAdapter_SharedBranch(t *testing.T) {
 		})
 	}
 }
+
+// reconciling is the Kustomization Flux v2.9.5 reports while it reconciles
+// again: Ready=Unknown, reason Progressing, the last applied revision still
+// in place.
+func reconciling(applied, attempted string, mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+	return kustomization("Unknown", "Progressing", "Reconciliation in progress", applied, both(
+		func(obj map[string]interface{}) {
+			obj["status"].(map[string]interface{})["lastAttemptedRevision"] = attempted
+		}, withInventory("web"), func(obj map[string]interface{}) {
+			if mutate != nil {
+				mutate(obj)
+			}
+		}))
+}
+
+// TestFluxAdapter_ReconcilingAgain proves the bake flicker of the flux e2e
+// suite fixed: Flux marks a Kustomization Ready=Unknown at the start of
+// every reconcile, also when it reconciles again the commit it applied. That
+// result is the Deployments' result, so a bake neither stops on a healthy
+// release nor misses a failure that Flux is still checking. A Kustomization
+// that is applying another commit still waits.
+func TestFluxAdapter_ReconcilingAgain(t *testing.T) {
+	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
+	pushed, previous, later := "main@sha1:"+fluxPushed, "main@sha1:"+fluxPrevious, "main@sha1:"+fluxLater
+	good := deploymentObj("web", 2, podinfo+":6.15.0", 1)
+	unready := deploymentObj("web", 2, podinfo+":6.15.0", 1)
+	unready.Object["status"].(map[string]interface{})["availableReplicas"] = int64(0)
+	stalled := deploymentObj("web", 2, podinfo+":6.15.0", 1)
+	stalled.Object["status"].(map[string]interface{})["conditions"].([]interface{})[1] = map[string]interface{}{
+		"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded"}
+	tests := []struct {
+		name   string
+		objs   []runtime.Object
+		want   wantKind
+		reason string
+	}{
+		{name: "the promoted commit again, Deployment healthy",
+			objs: []runtime.Object{reconciling(pushed, pushed, nil), good}, want: isHealthy,
+			reason: "Ready=Unknown while Flux reconciles lastAppliedRevision=034ce92a1b2c again: " +
+				"Deployment prod/web: Available=True, 1/1 replicas updated and available"},
+		{name: "the promoted commit again, Deployment lost its replicas",
+			objs: []runtime.Object{reconciling(pushed, pushed, nil), unready}, want: isUnhealthy,
+			reason: "Ready=Unknown while Flux reconciles lastAppliedRevision=034ce92a1b2c again: " +
+				"Deployment prod/web: 0 of 1 updated replicas available"},
+		{name: "the promoted commit again, Deployment past its deadline",
+			objs: []runtime.Object{reconciling(pushed, pushed, nil), stalled}, want: isTerminal,
+			reason: "ProgressDeadlineExceeded"},
+		{name: "a sibling's later commit again, Deployment on the Bundle image",
+			objs: []runtime.Object{reconciling(later, later, nil), good}, want: isHealthy,
+			reason: "(not 034ce92a1b2c, but the Kustomization's Deployments run the Bundle images)"},
+		{name: "the previous commit again",
+			objs: []runtime.Object{reconciling(previous, previous, nil), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			want: isProgressing, reason: "lastAppliedRevision=d7d4d8a00000, waiting for 034ce92a1b2c"},
+		{name: "applying the promoted commit",
+			objs: []runtime.Object{reconciling(previous, pushed, nil), good}, want: isProgressing,
+			reason: "Ready=Unknown, observedGen=3, generation=3: Reconciliation in progress"},
+		{name: "a new generation",
+			objs: []runtime.Object{reconciling(pushed, pushed, func(obj map[string]interface{}) {
+				obj["metadata"].(map[string]interface{})["generation"] = int64(4)
+			}), good}, want: isProgressing, reason: "Ready=Unknown, observedGen=3, generation=4"},
+		{name: "no Deployments",
+			objs: []runtime.Object{reconciling(pushed, pushed, func(obj map[string]interface{}) {
+				delete(obj["status"].(map[string]interface{}), "inventory")
+			})}, want: isProgressing, reason: "Ready=Unknown, observedGen=3, generation=3: Reconciliation in progress"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: bundle}, tt.objs...)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Contains(t, got.Reason, tt.reason)
+		})
+	}
+}
