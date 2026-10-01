@@ -923,6 +923,46 @@ func TestLifecycle_TerminatingNamespaceNotTranslated(t *testing.T) {
 	assert.Equal(t, "Promoting", lcGet(t, c, "app-v1").Status.Phase)
 }
 
+// B54: in a namespace being deleted, a Bundle whose Pipeline went first is not
+// marked PipelineNotFound: the status write and the Warning Event would only
+// be refused, and the namespace deletion deletes the Bundle next. In an active
+// namespace it is marked as before (C02-bundle-11).
+func TestLifecycle_TerminatingNamespacePipelineGone(t *testing.T) {
+	newClient := func(t *testing.T, objs ...client.Object) client.Client {
+		s := newScheme()
+		require.NoError(t, corev1.AddToScheme(s))
+		return indexedBuilder(s).WithObjects(objs...).
+			WithStatusSubresource(&kardinalv1alpha1.Bundle{}, &kardinalv1alpha1.Pipeline{}).Build()
+	}
+	terminating := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default", Finalizers: []string{"kubernetes"},
+		DeletionTimestamp: &metav1.Time{Time: time.Now()}}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating}}
+	active := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}
+	for _, phase := range []string{"Available", "Promoting"} {
+		for _, ns := range []*corev1.Namespace{terminating, active} {
+			t.Run(phase+"/"+string(ns.Status.Phase), func(t *testing.T) {
+				c := newClient(t, ns.DeepCopy(), lcBundle("app-v1", "image", phase, time.Now().UTC()))
+				rec := events.NewFakeRecorder(10)
+				r := &bundle.Reconciler{Client: c, Translator: &countingTranslator{}, Recorder: rec}
+
+				res := lcReconcile(t, r, "app-v1")
+				ready := meta.FindStatusCondition(lcGet(t, c, "app-v1").Status.Conditions, "Ready")
+				if ns == terminating {
+					assert.Zero(t, res.RequeueAfter)
+					assert.False(t, ready != nil && ready.Reason == "PipelineNotFound", "not marked PipelineNotFound")
+					assert.Empty(t, rec.Events, "no Event")
+					return
+				}
+				require.NotNil(t, ready)
+				assert.Equal(t, "PipelineNotFound", ready.Reason)
+				assert.Positive(t, res.RequeueAfter)
+				require.Len(t, rec.Events, 1)
+				assert.Contains(t, <-rec.Events, "PipelineNotFound")
+			})
+		}
+	}
+}
+
 // Pausing a Pipeline does not re-translate every in-flight Graph.
 func TestLifecycle_PauseDoesNotChangePipelineSpecHash(t *testing.T) {
 	p := lcPipeline("app", lcEnvs("test")...)

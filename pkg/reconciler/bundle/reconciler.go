@@ -622,8 +622,16 @@ func (r *Reconciler) superseded(b *kardinalv1alpha1.Bundle) {
 // The Bundle is kept: the Pipeline may be applied after the Bundle, or
 // spec.pipeline may be a typo the caller has to see. Creating the Pipeline
 // re-queues the Bundle through the Pipeline watch.
+//
+// In a namespace being deleted the Pipeline is gone with the namespace, which
+// deletes the Bundle next: nothing is recorded, since the status write and the
+// Warning Event would only fail or be refused.
 func (r *Reconciler) markPipelineNotFound(ctx context.Context, log zerolog.Logger,
 	b *kardinalv1alpha1.Bundle) (ctrl.Result, error) {
+	if r.namespaceDeleting(ctx, log, b.Namespace) {
+		log.Debug().Str("pipeline", b.Spec.Pipeline).Msg("namespace is being deleted — pipeline gone with it")
+		return ctrl.Result{}, nil
+	}
 	patch := client.MergeFrom(b.DeepCopy())
 	msg := fmt.Sprintf("pipeline %q not found in namespace %s; create it or fix spec.pipeline", b.Spec.Pipeline, b.Namespace)
 	if setBundleCondition(b, condReady, metav1.ConditionFalse, "PipelineNotFound", msg) {
@@ -769,21 +777,12 @@ func (r *Reconciler) countPromoting(ctx context.Context, b *kardinalv1alpha1.Bun
 // errNamespaceTerminating without trying, or when the API server refused an
 // object because the namespace started terminating meanwhile.
 //
-// The namespace is read from the API server (the controller has no Namespace
-// cache), only before a translation. When it cannot be read, translate goes on.
+// The namespace is read only before a translation (namespaceDeleting).
 func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 	pipeline *kardinalv1alpha1.Pipeline, b *kardinalv1alpha1.Bundle) (string, error) {
-	reader := r.APIReader
-	if reader == nil {
-		reader = r.Client
-	}
-	var ns corev1.Namespace
-	switch err := reader.Get(ctx, client.ObjectKey{Name: b.Namespace}, &ns); {
-	case err == nil && (ns.DeletionTimestamp != nil || ns.Status.Phase == corev1.NamespaceTerminating):
+	if r.namespaceDeleting(ctx, log, b.Namespace) {
 		log.Debug().Msg("namespace is being deleted — not translating the bundle")
 		return "", errNamespaceTerminating
-	case err != nil && !apierrors.IsNotFound(err):
-		log.Debug().Err(err).Msg("failed to read the bundle's namespace (non-fatal), translating")
 	}
 	name, err := r.Translator.Translate(ctx, pipeline, b)
 	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) {
@@ -791,6 +790,25 @@ func (r *Reconciler) translate(ctx context.Context, log zerolog.Logger,
 		return "", errNamespaceTerminating
 	}
 	return name, err
+}
+
+// namespaceDeleting reports whether namespace is being deleted. It reads the
+// namespace from the API server (the controller has no Namespace cache), so it
+// is called only before a translation or on a missing Pipeline. A namespace
+// that cannot be read counts as not being deleted.
+func (r *Reconciler) namespaceDeleting(ctx context.Context, log zerolog.Logger, namespace string) bool {
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	var ns corev1.Namespace
+	if err := reader.Get(ctx, client.ObjectKey{Name: namespace}, &ns); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Debug().Err(err).Msg("failed to read the bundle's namespace (non-fatal)")
+		}
+		return false
+	}
+	return ns.DeletionTimestamp != nil || ns.Status.Phase == corev1.NamespaceTerminating
 }
 
 // markInvalid fails a Bundle that has no Graph yet because its Pipeline,
