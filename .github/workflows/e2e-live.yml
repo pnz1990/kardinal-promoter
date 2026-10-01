@@ -114,9 +114,20 @@ jobs:
         run: gunzip -c controller-image.tar.gz | docker load
 
       # TestCLI_Completion checks the zsh completion script with zsh -n.
+      # apt can hang on a slow mirror (core 1.35 jobs of #1396 sat here for
+      # the job's whole hour), so each call gets a timeout and three tries.
       - name: Install zsh
         if: matrix.suite == 'core'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends zsh
+        timeout-minutes: 12
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 180 sudo apt-get update -qq && timeout 180 sudo apt-get install -y -qq --no-install-recommends zsh; then
+              break
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 10
+          done
+          command -v zsh
 
       # The ui suite's browser tests run Playwright from web/ (components/ui.sh).
       - if: matrix.suite == 'ui'
