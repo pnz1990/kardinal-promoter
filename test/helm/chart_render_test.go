@@ -673,6 +673,27 @@ func TestChartExposesUIAndWebhookPorts(t *testing.T) {
 	assert.Equal(t, ":9083", args["webhook-bind-address"])
 }
 
+// terminationGracePeriodSeconds 0 is a valid value (kill at once); the chart
+// used `default 60`, which treats 0 as unset and rendered 60.
+func TestChartTerminationGracePeriod(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want int64
+	}{
+		{nil, 60},
+		{[]string{"--set", "terminationGracePeriodSeconds=0"}, 0},
+		{[]string{"--set", "terminationGracePeriodSeconds=120"}, 120},
+		{[]string{"--set", "terminationGracePeriodSeconds=null"}, 60},
+	} {
+		deps := docsOfKind(render(t, "kardinal-promoter", tc.args...), "Deployment")
+		require.Len(t, deps, 1)
+		var dep appsv1.Deployment
+		decodeStrict(t, deps[0], &dep)
+		require.NotNil(t, dep.Spec.Template.Spec.TerminationGracePeriodSeconds, "%v", tc.args)
+		assert.Equal(t, tc.want, *dep.Spec.Template.Spec.TerminationGracePeriodSeconds, "%v", tc.args)
+	}
+}
+
 // ── C08-api-config-11: values wired to real controller flags ─────────────────
 
 var flagDef = regexp.MustCompile(`flag\.\w+Var\(\s*&[\w.]+,\s*"([a-z0-9-]+)"`)

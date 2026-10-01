@@ -503,11 +503,13 @@ the PromotionStep in an inconsistent state.
 The Helm chart sets `terminationGracePeriodSeconds: 60` (double the shutdown timeout)
 so Kubernetes sends `SIGKILL` only after the controller has had a full 30 seconds to drain.
 
-To adjust the timeout:
+The 30-second drain is fixed in the controller. `terminationGracePeriodSeconds` only sets
+when Kubernetes sends `SIGKILL`, so a value above 30 does not give reconciles more time.
+A value below 30 cuts the drain short, and `0` kills the Pod at once:
 
 ```yaml
 # values.yaml
-terminationGracePeriodSeconds: 120  # increase if reconcile loops routinely take >30s
+terminationGracePeriodSeconds: 0  # no drain: SIGKILL at once
 ```
 
 ---

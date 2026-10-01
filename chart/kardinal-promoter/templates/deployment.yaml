@@ -31,7 +31,8 @@ spec:
       serviceAccountName: {{ include "kardinal-promoter.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 60 }}
+      {{- /* default treats 0 as unset; 0 is a valid grace period */}}
+      terminationGracePeriodSeconds: {{ if kindIs "invalid" .Values.terminationGracePeriodSeconds }}60{{ else }}{{ .Values.terminationGracePeriodSeconds }}{{ end }}
       containers:
         - name: controller
           securityContext:
