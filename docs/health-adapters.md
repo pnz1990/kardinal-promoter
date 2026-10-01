@@ -117,7 +117,9 @@ On a branch shared with other environments, a later commit can reach Argo CD bef
 | `health.status = Degraded` before that | Wait: it is the previous version's health |
 | `operationState.phase = Failed` or `Error` on the promoted commit | Unhealthy (counts as a health failure) |
 | `operationState.phase = Failed` or `Error` on another commit | Wait until the promoted commit is synced (`ignoring the operation on <old>`); does not hold a Healthy, Synced promoted commit |
-| An operation running on any commit | Wait. `Degraded` health counts only once the promoted commit is `Synced` or in `status.history` |
+| An operation running on the promoted commit | Wait. `Degraded` health counts only once the promoted commit is `Synced` or in `status.history` |
+| An operation running on another commit | Wait. `Degraded` health counts once the promoted commit is deployed, or, on a shared branch, once `status.summary.images` shows the Bundle images |
+| An operation running, with `update.strategy: argocd` | Wait. `Degraded` health counts once `status.summary.images` shows the Bundle images |
 | `update.strategy: argocd`, and `status.summary.images` lists none of the Bundle repositories | `Healthy` and `Synced` pass (`image not verified`); `Degraded` health or a failed operation waits |
 | Application not found | Unhealthy (counts as a health failure) |
 
