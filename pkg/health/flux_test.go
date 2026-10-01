@@ -244,6 +244,54 @@ func TestFluxAdapter_SharedBranch(t *testing.T) {
 	}
 }
 
+// TestFluxAdapter_StalledSharedBranch: when Flux gave up on a later commit of
+// the shared branch (a sibling environment pushed after the promoted commit)
+// and the Kustomization's Deployments carry the Bundle images, Flux applied
+// the Bundle's change and that rollout stalled: the step fails at once. A
+// stall while the Deployments still carry another image stays unhealthy.
+func TestFluxAdapter_StalledSharedBranch(t *testing.T) {
+	bundle := []health.ImageExpectation{{Repository: podinfo, Tag: "6.15.0"}}
+	stalledLater := func(mutate func(obj map[string]interface{})) *unstructured.Unstructured {
+		return kustomization("False", "HealthCheckFailed", stalledMessage, "main@sha1:"+fluxPrevious, both(
+			func(obj map[string]interface{}) {
+				obj["status"].(map[string]interface{})["lastAttemptedRevision"] = "main@sha1:" + fluxLater
+			}, mutate))
+	}
+	tests := []struct {
+		name   string
+		objs   []runtime.Object
+		images []health.ImageExpectation
+		want   wantKind
+		reason string
+	}{
+		{name: "the Deployment carries the Bundle image",
+			objs: []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			want: isTerminal,
+			reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage + " (lastAttemptedRevision=8e9966475a0b, " +
+				"not 034ce92a1b2c, but the Kustomization's Deployments carry the Bundle images)"},
+		{name: "the Deployment carries the previous image",
+			objs: []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.14.0", 1)},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage},
+		{name: "no Deployments",
+			objs: []runtime.Object{stalledLater(func(map[string]interface{}) {})},
+			want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage},
+		{name: "no Bundle images to compare",
+			objs:   []runtime.Object{stalledLater(withInventory("web")), deploymentObj("web", 2, podinfo+":6.15.0", 1)},
+			images: []health.ImageExpectation{}, want: isUnhealthy, reason: "Ready=False, observedGen=3, generation=3: " + stalledMessage},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			images := bundle
+			if tt.images != nil {
+				images = tt.images
+			}
+			got := checkFlux(t, health.CheckOptions{ExpectedRevision: fluxPushed, ExpectedImages: images}, tt.objs...)
+			assert.Equal(t, tt.want, kindOf(got), got.Reason)
+			assert.Equal(t, tt.reason, got.Reason)
+		})
+	}
+}
+
 // reconciling is the Kustomization Flux v2.9.5 reports while it reconciles
 // again: Ready=Unknown, reason Progressing, the last applied revision still
 // in place.

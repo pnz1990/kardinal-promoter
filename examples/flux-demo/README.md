@@ -75,7 +75,7 @@ Together these prevent a false positive where Flux reconciled the previous commi
 - `spec.suspend: true` before the commit is applied: the message says the Kustomization is suspended; Flux applies nothing until it is resumed
 
 **States that count as a health failure:**
-- `Ready=False` (build or apply failed, or a health check timed out). When Flux gave up because the promoted commit's resources stalled (`HealthCheckFailed`), `onHealthFailure` applies at once
+- `Ready=False` (build or apply failed, or a health check timed out). When Flux gave up because the promoted commit's resources stalled (`HealthCheckFailed`), or a later commit's while the Deployments carry the Bundle images, `onHealthFailure` applies at once
 - Kustomization not found
 
 Waiting ends at `health.timeout`, which then applies `onHealthFailure`. See [docs/health-adapters.md](../../docs/health-adapters.md) for every case.

@@ -287,6 +287,40 @@ func TestFlux_UnhealthyKustomizations(t *testing.T) {
 	assert.Equal(t, fluxRev(a.repo.Branch, commit), framework.FluxAppliedRevision(a.kustomization(t, "behind")))
 }
 
+// TestFlux_StalledOnSiblingCommit checks a stall on a later commit of the
+// shared branch: another push lands after the promoted commit and before Flux
+// fetches, so Flux applies the later commit, which carries the Bundle's
+// change, and gives up on the stalled rollout. The step fails at once, not at
+// its 5m health timeout, and says the Deployment carries the Bundle image.
+//
+// Covers HEALTH-FLUX-08.
+func TestFlux_StalledOnSiblingCommit(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newFluxApp(t, e, "stalled")
+	p := a.pipeline(nil)
+	p.Spec.Environments[0].Health.Timeout = "5m"
+	a.apply(t, p)
+
+	// Hold Flux until the later commit is on the branch.
+	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, fluxSource, true)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", fixtures.Image+":"+fixtures.BrokenTag)
+	commit := stepCommit(t, e, a.ns, pipelineName, bundle, "stalled")
+	later := commitNote(t, committer(t, e), a.repo, "another environment's push")
+	e.SuspendFlux(t, framework.GitRepositoryGVR, a.ns, fluxSource, false)
+
+	ps := e.WaitStepState(t, a.ns, pipelineName, bundle, "stalled", "Failed", 3*time.Minute)
+	assert.Contains(t, ps.Status.Message, "health alarm via flux (onHealthFailure=none)")
+	assert.Contains(t, ps.Status.Message, "stalled resources")
+	assert.Contains(t, ps.Status.Message, fmt.Sprintf(
+		"(lastAttemptedRevision=%s, not %s, but the Kustomization's Deployments carry the Bundle images)",
+		shortSHA(later), shortSHA(commit)))
+	assert.NotContains(t, ps.Status.Message, "health check timeout", "a stalled Kustomization fails before the timeout")
+	attempted, _, _ := unstructured.NestedString(a.kustomization(t, "stalled").Object, "status", "lastAttemptedRevision")
+	assert.Equal(t, fluxRev(a.repo.Branch, later), attempted, "Flux attempted the later commit")
+	e.WaitBundlePhase(t, a.ns, bundle, "Failed", time.Minute)
+}
+
 // TestFlux_PRReviewWaitsForMergeCommit checks that a pr-review environment
 // on flux health waits for Flux to apply the PR's merge commit: a
 // Kustomization still Ready on the previous commit after the merge does not

@@ -525,7 +525,8 @@ var fluxKustomizationGVR = schema.GroupVersionResource{
 // another commit while the Kustomization's Deployments run the Bundle
 // images (a sibling environment pushed to the same branch).
 // Ready=False is a health failure, and Terminal when Flux gave up on the
-// promoted commit because its resources stalled. Ready=Unknown, a generation
+// promoted commit because its resources stalled, or on a later commit while
+// the Kustomization's Deployments carry the Bundle images. Ready=Unknown, a generation
 // not yet observed or an older applied revision is Progressing. While the
 // Kustomization is suspended (spec.suspend) Flux applies nothing, so a
 // Progressing result says so.
@@ -577,14 +578,24 @@ func (a *FluxAdapter) check(ctx context.Context, ks *unstructured.Unstructured, 
 		// Flux gives up early on a Deployment past its progress deadline
 		// ("failed early due to stalled resources"); like the resource
 		// adapter's ProgressDeadlineExceeded, that will not recover. Only a
-		// stall of the promoted commit fails the step at once.
+		// stall of the promoted commit fails the step at once, or of a later
+		// commit on the shared branch (another environment's push) when the
+		// Kustomization's Deployments carry the Bundle images: Flux applied
+		// the Bundle's change and that rollout stalled.
 		reason, _ := readyCond["reason"].(string)
 		msg, _ := readyCond["message"].(string)
 		if reason == "HealthCheckFailed" && strings.Contains(msg, "stalled resources") {
 			attempted, _, _ := unstructured.NestedString(ks.Object, "status", "lastAttemptedRevision")
 			rev, _ := fluxCommit(attempted)
-			if want := opts.ExpectedRevision; want == "" || SameRevision(rev, want) {
+			want := opts.ExpectedRevision
+			if want == "" || SameRevision(rev, want) {
 				return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s)", state, shortRev(rev))), nil
+			}
+			if len(opts.ExpectedImages) > 0 {
+				if w, err := a.workloads(ctx, ks, opts.ExpectedImages); err == nil && w.bundle {
+					return terminal(fmt.Sprintf("%s (lastAttemptedRevision=%s, not %s, but the Kustomization's Deployments carry the Bundle images)",
+						state, shortRev(rev), shortRev(want))), nil
+				}
 			}
 		}
 		return unhealthy(state), nil

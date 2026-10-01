@@ -149,7 +149,8 @@ health:
 | `spec.suspend: true` and the promoted commit not applied | Wait; the message starts with `Kustomization <namespace>/<name> is suspended; Flux applies nothing until it is resumed`. `onHealthFailure` at `health.timeout`. A suspended Kustomization that already applied the commit is Healthy |
 | `approval: pr-review` and the merge commit is not known yet | Wait, then `onHealthFailure` at `health.timeout` (see below) |
 | `Ready=False` because Flux gave up on the promoted commit: its resources stalled (`HealthCheckFailed`, "failed early due to stalled resources", for example a Deployment past its `progressDeadlineSeconds`) | **Failed at once**: `onHealthFailure` applies without waiting for the timeout |
-| `Ready=False` otherwise (build or apply failed, a health check timed out, or a stall of another commit) | Unhealthy (counts as a health failure) |
+| The same stall on a later commit (a sibling environment pushed to the same branch before Flux fetched ours) while the Kustomization's Deployments carry the Bundle images in their pod templates | **Failed at once**; the message says `(lastAttemptedRevision=<later>, not <commit>, but the Kustomization's Deployments carry the Bundle images)` |
+| `Ready=False` otherwise (build or apply failed, a health check timed out, or a stall of another commit whose Deployments do not carry the Bundle images) | Unhealthy (counts as a health failure) |
 | Not found | Unhealthy (counts as a health failure) |
 
 **The promoted commit must be known.** For a direct push it is the pushed commit. For a PR (`approval: pr-review`) it is the merge commit: the SCM webhook records it with the merge for GitHub and GitLab, and otherwise the controller asks the SCM provider for it after the merge. Until it is known, the check waits with `merge commit of the PR not known yet`, because a Kustomization that is `Ready=True` on the **previous** commit would otherwise pass: there is no image check to fall back on, unlike `argocd` and `resource`. If the commit never becomes known, `health.timeout` applies `onHealthFailure` with that reason. That happens when:
@@ -267,7 +268,7 @@ Each health check has one of four results:
 - **Healthy** — Verified (or the bake window starts or advances).
 - **Waiting** — the promoted revision is still rolling out or syncing. It does not count as a failure.
 - **Unhealthy** — for example Degraded, `Ready=False`, not found, or replicas unavailable after the rollout finished. Each check increments `status.consecutiveHealthFailures`, which a `RollbackPolicy` you create reads (see [Rollback](rollback.md)).
-- **Failed** — Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision. `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
+- **Failed** — Deployment `ProgressDeadlineExceeded`, Flagger canary `Failed` or a Flux Kustomization whose resources stalled, on the promoted revision (for Flux, also on a later commit while its Deployments carry the Bundle images). `onHealthFailure` (`none` → Failed, `abort` → AbortedByAlarm, `rollback` → RollingBack) applies at once.
 
 Reaching `health.timeout` without a Healthy result is treated like a Failed result: it is counted and applies `onHealthFailure`. A new image that crash-loops is **Waiting**, not Unhealthy: Kubernetes reports the rollout as still progressing (`Progressing=True`, reason `ReplicaSetUpdated`) until the Deployment's `progressDeadlineSeconds` (default 600s) passes. Set `progressDeadlineSeconds` below `health.timeout` to fail such a rollout sooner; otherwise the timeout fails it.
 
