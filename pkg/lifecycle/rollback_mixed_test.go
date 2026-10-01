@@ -237,6 +237,24 @@ func TestPlanRollback_BundleTypes(t *testing.T) {
 			wantTarget: "v1", wantType: "image", wantImages: []string{"a:2", "b:1"},
 		},
 		{
+			// The only Bundle that names b, v1, was rolled back from, so the
+			// history does not know which b the environment runs: deploying
+			// b:1 counts as a change, not as the deployed image.
+			name: "image to image with a repository the history has no deployed version of is not a conflict",
+			objs: []client.Object{
+				img("v1", 10, "a:2", "b:1"), verified("v1", 10),
+				func() *v1alpha1.Bundle {
+					b := img("rb-v1", 15, "a:2")
+					b.Labels = map[string]string{lifecycle.LabelRollback: "true", lifecycle.LabelPipeline: "app"}
+					b.Annotations = map[string]string{lifecycle.AnnotationRollbackFrom: "v1"}
+					b.Spec.Intent = &v1alpha1.BundleIntent{TargetEnvironment: "prod"}
+					return b
+				}(),
+				img("v2", 20, "a:2"), deployed("v2", 20)},
+			to:         "v1",
+			wantTarget: "v1", wantType: "image", wantImages: []string{"a:2", "b:1"},
+		},
+		{
 			name: "without --to a candidate that changes nothing is skipped",
 			objs: []client.Object{
 				img("v0", 5, "a:1"), verified("v0", 5), img("v1", 10, "a:2", "b:1"), verified("v1", 10),
