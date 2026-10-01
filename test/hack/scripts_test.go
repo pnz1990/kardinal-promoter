@@ -19,6 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 )
 
 const fakeKubectl = `#!/usr/bin/env bash
@@ -155,6 +157,30 @@ func TestKindContextGuard(t *testing.T) {
 			assert.Contains(t, string(out), "HELM=helm --kube-context kind-kardinal-e2e\n")
 		})
 	}
+}
+
+// TestPodinfoPrePullIsTheFixtureImage: components/podinfo.sh pulls
+// PODINFO_IMAGE onto the node so the fixtures' first release and the probe
+// Pods start without pulling. It must be that image (fixtures.V1), and the
+// chart and multi-cluster suites, the spoke included, must run it.
+func TestPodinfoPrePullIsTheFixtureImage(t *testing.T) {
+	cmd := exec.Command("bash", "-c", `source hack/e2e/versions.env && echo "$PODINFO_IMAGE"`)
+	cmd.Dir = repoRoot(t)
+	out, err := cmd.Output()
+	require.NoError(t, err)
+	assert.Equal(t, fixtures.Image+":"+fixtures.V1, strings.TrimSpace(string(out)),
+		"PODINFO_IMAGE in hack/e2e/versions.env is the fixtures' first release")
+
+	up, err := os.ReadFile(filepath.Join(repoRoot(t), "hack/e2e/up.sh"))
+	require.NoError(t, err)
+	for _, suite := range []string{"chart", "multi-cluster"} {
+		assert.Regexp(t, `(?m)^\s*`+regexp.QuoteMeta(suite)+`\) COMPONENTS=\([^)]*\bpodinfo\.sh\b`, string(up),
+			"suite %s pulls podinfo onto its node", suite)
+	}
+	spoke, err := os.ReadFile(filepath.Join(repoRoot(t), "hack/e2e/components/spoke.sh"))
+	require.NoError(t, err)
+	assert.Contains(t, string(spoke), `KIND_CLUSTER=$SPOKE bash "$E2E_DIR/components/podinfo.sh"`,
+		"the spoke, where the multi-cluster fixtures run, gets podinfo too")
 }
 
 // TestKindClusterKeepsDefaultKubeconfig runs kind_cluster (hack/e2e/lib.sh),

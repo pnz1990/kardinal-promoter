@@ -16,11 +16,15 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/kardinal-promoter/kardinal-promoter/test/e2e/fixtures"
 )
 
-// probeImage is the podinfo image the fixtures deploy (already on the node).
+// probeImage is the podinfo release the fixtures deploy first, which the
+// chart and multi-cluster suites pull onto their nodes
+// (hack/e2e/components/podinfo.sh, PODINFO_IMAGE in hack/e2e/versions.env).
 // It ships curl, nc and a shell, so a probe Pod can make in-cluster requests.
-const probeImage = "ghcr.io/stefanprodan/podinfo:6.13.0"
+const probeImage = fixtures.Image + ":" + fixtures.V1
 
 // Probe is a long-running Pod tests exec curl in, to reach the controller
 // from inside the cluster the way another pod (or an Ingress) would.

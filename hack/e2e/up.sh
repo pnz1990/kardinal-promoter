@@ -17,14 +17,16 @@
 #   ui      Forgejo + Argo CD + the UI auth, CORS and TLS releases (ui.sh)
 #   flux    Forgejo + Flux + Prometheus Operator, Prometheus, Pushgateway,
 #           Grafana
-#   chart   Forgejo + Argo CD + cert-manager, and no controller release: each
-#           TestChart_ test installs the chart from this checkout itself
+#   chart   Forgejo + Argo CD + cert-manager + podinfo on the node, and no
+#           controller release: each TestChart_ test installs the chart from
+#           this checkout itself
 #   upgrade Forgejo + Argo CD + kardinal-promoter v0.8.1 (kardinal-v081.sh) and
 #           no kro: the TestUpgrade_ test upgrades v0.8.1 to this checkout,
 #           so the cluster serves one run; delete it before the next
 #   multi-cluster  the hub (Forgejo, Argo CD, Flux, Argo Rollouts, kardinal)
 #           and a second kind cluster, <cluster>-spoke, with Argo Rollouts,
-#           which the hub's Argo CD and Flux manage (spoke.sh)
+#           which the hub's Argo CD and Flux manage (spoke.sh); both have
+#           podinfo on the node
 #
 # Env:
 #   KIND_CLUSTER     cluster name (default kardinal-e2e-SUITE)
@@ -68,7 +70,7 @@ case "$SUITE" in
   # ServiceMonitor, PrometheusRule and Grafana dashboard.
   flux) COMPONENTS=("giteafamily.sh forgejo" flux.sh prometheus.sh grafana.sh) RUN='^Test(Flux|Metric|Obs)_'
     HELM_ARGS='--set serviceMonitor.enabled=true --set prometheusRule.enabled=true --set grafanaDashboard.enabled=true' ;;
-  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh) RUN='^Test(Chart|Deprecated)_'
+  chart) COMPONENTS=("giteafamily.sh forgejo" argocd.sh cert-manager.sh podinfo.sh) RUN='^Test(Chart|Deprecated)_'
     export KARDINAL_E2E_INSTALL=0 ;;
   # v0.8.1 ran its own Graph controller, so kro is not installed: the test
   # installs it as the upgrade guide's step 6. kardinal.sh only builds and
@@ -77,7 +79,7 @@ case "$SUITE" in
     export KARDINAL_E2E_INSTALL=build KARDINAL_E2E_KRO=0 ;;
   # Argo Rollouts runs in the hub too, so a Rollout the hub's argoRollouts
   # check cannot find is missing from the hub, not from its API.
-  multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh spoke.sh)
+  multi-cluster) COMPONENTS=("giteafamily.sh forgejo" argocd.sh flux.sh rollouts.sh podinfo.sh spoke.sh)
     RUN='^TestMultiCluster_' ;;
   *)
     echo "unknown suite $SUITE" >&2

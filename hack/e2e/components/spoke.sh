@@ -3,7 +3,7 @@
 #
 # The multi-cluster suite's workload cluster: creates the kind cluster
 # $KIND_CLUSTER-spoke (test/e2e/kind-config.yaml's node image), installs Argo
-# Rollouts in it, and lets the hub ($KIND_CLUSTER) manage it the way
+# Rollouts and pulls podinfo (podinfo.sh) in it, and lets the hub ($KIND_CLUSTER) manage it the way
 # docs/distributed-mode.md describes: Argo CD in the hub gets a cluster
 # Secret for it, and Flux in the hub a kubeconfig Secret for Kustomizations'
 # spec.kubeConfig.secretRef. kardinal gets nothing: it reads health from the
@@ -37,6 +37,8 @@ FLUX_SECRET=spoke-kubeconfig
 # In the hub's kubeconfig (up.sh's KUBECONFIG), with the default node image.
 NODE_IMAGE='' kind_cluster "$SPOKE"
 KIND_CLUSTER=$SPOKE bash "$E2E_DIR/components/rollouts.sh"
+# The fixtures' workloads run in the spoke.
+KIND_CLUSTER=$SPOKE bash "$E2E_DIR/components/podinfo.sh"
 
 use_kind_context "$SPOKE_CTX" >&2
 SPOKE_KUBECTL=("${KUBECTL[@]}")
