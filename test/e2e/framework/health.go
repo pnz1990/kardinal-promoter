@@ -56,22 +56,6 @@ func DescribeStep(ps *v1alpha1.PromotionStep) string {
 	return fmt.Sprintf("state=%q failures=%d bakeResets=%d message=%q", s.State, s.ConsecutiveHealthFailures, s.BakeResets, s.Message)
 }
 
-// SetArgoAutoSync turns automated sync of the Argo CD Application on or off.
-// Off, the Application keeps running what it last synced while git moves on.
-func (e *Env) SetArgoAutoSync(t *testing.T, name string, on bool) {
-	t.Helper()
-	patch := `{"spec":{"syncPolicy":null}}`
-	if on {
-		patch = `{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}`
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if _, err := e.Dynamic.Resource(ApplicationGVR).Namespace(ArgoCDNamespace).Patch(ctx, name,
-		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-		t.Fatalf("set auto-sync=%v on Argo CD Application %s: %v", on, name, err)
-	}
-}
-
 // SetArgoSyncRetry sets how often Argo CD retries a failed automated sync of
 // the Application. Argo CD 3 retries 5 times by default, with a backoff from
 // 5s, so a failing sync stays Running for minutes before it is Failed.
