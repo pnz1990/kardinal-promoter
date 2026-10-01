@@ -128,7 +128,7 @@ MetricCheck is a Prometheus-backed metric gate. The MetricCheckReconciler querie
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `spec` | object |  | MetricCheckSpec defines a Prometheus-backed metric gate. The MetricCheckReconciler queries Prometheus at spec.interval, evaluates the threshold, and writes results to status. PolicyGate CEL expressions can reference these results via the metrics.* context variable. |
-| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty. Values below "10s" are raised to "10s". |
+| `spec.interval` | string |  | Interval is how often to re-evaluate the metric (e.g. "1m", "5m"). Defaults to "1m" if empty or "0". Other values below "10s" are raised to "10s". |
 | `spec.prometheusURL` | string | yes | PrometheusURL is the base URL of the Prometheus HTTP API (http or https). A path is kept as a prefix: the query goes to &lt;prometheusURL&gt;/api/v1/query. Example: http://prometheus.monitoring.svc:9090 |
 | `spec.provider` | string | yes | Provider is the metrics backend. Currently only "prometheus" is supported. One of: `prometheus`. Default: `prometheus`. |
 | `spec.query` | string | yes | Query is the PromQL query string to evaluate. The query must return a scalar or a single-element vector. |
