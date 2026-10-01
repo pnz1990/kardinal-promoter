@@ -7,9 +7,7 @@ package live
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -571,38 +569,17 @@ func TestObs_ControllerMetrics(t *testing.T) {
 		map[string]string{"controller": "metriccheck", "result": "requeue_after"}), 1.0, "a MetricCheck requeues after its interval")
 }
 
-// dashboardExprs lists every "expr" in a Grafana dashboard, in nested rows too.
-func dashboardExprs(v interface{}) []string {
-	var out []string
-	switch v := v.(type) {
-	case map[string]interface{}:
-		for k, x := range v {
-			if s, ok := x.(string); ok && k == "expr" {
-				out = append(out, s)
-			} else {
-				out = append(out, dashboardExprs(x)...)
-			}
-		}
-	case []interface{}:
-		for _, x := range v {
-			out = append(out, dashboardExprs(x)...)
-		}
-	}
-	return out
-}
-
 // TestObs_ChartMonitoring checks the chart's monitoring integration with
-// Prometheus Operator (hack/e2e/up.sh flux enables serviceMonitor,
-// prometheusRule and grafanaDashboard): Prometheus scrapes the controller,
-// loads the alerts and evaluates them without error, KardinalControllerDown
-// stays inactive, and the dashboard ConfigMap carries the sidecar label and
-// the chart's dashboard, whose every query runs on what Prometheus scrapes.
+// Prometheus Operator (hack/e2e/up.sh flux enables serviceMonitor and
+// prometheusRule): Prometheus scrapes the controller through the
+// ServiceMonitor, loads the alerts and evaluates them without error, and
+// KardinalControllerDown stays inactive. TestObs_GrafanaDashboard covers the
+// grafanaDashboard.
 //
 // Covers CHART-MON-01.
 func TestObs_ChartMonitoring(t *testing.T) {
 	t.Parallel()
 	e := framework.New(t)
-	ctx := context.Background()
 	const job = "kardinal-promoter"
 	framework.Eventually(t, 2*time.Minute, "Prometheus to scrape the controller", func(ctx context.Context) (bool, string) {
 		s, err := e.PromQuery(ctx, fmt.Sprintf("up{job=%q}", job))
@@ -642,46 +619,4 @@ func TestObs_ChartMonitoring(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"KardinalControllerDown", "KardinalHighReconcileErrors", "KardinalBundleReconcilerStalled",
 		"KardinalWorkQueueBacklog", "KardinalPolicyGateReconcileSlow"}, names)
-
-	cm, err := e.Kube.CoreV1().ConfigMaps(framework.ControllerNamespace).Get(ctx, "kardinal-promoter-grafana-dashboard", metav1.GetOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, "1", cm.Labels["grafana_dashboard"], "the Grafana sidecar label")
-	data := cm.Data["kardinal-promoter-dashboard.json"]
-	shipped, err := os.ReadFile("../../../chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json")
-	require.NoError(t, err)
-	assert.JSONEq(t, string(shipped), data, "the ConfigMap carries the chart's dashboard")
-	var dash map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(data), &dash))
-	assert.Equal(t, "kardinal-promoter-v1", dash["uid"])
-	exprs := dashboardExprs(dash)
-	require.NotEmpty(t, exprs)
-	framework.Eventually(t, time.Minute, "every dashboard query to run", func(ctx context.Context) (bool, string) {
-		for _, q := range exprs {
-			s, err := e.PromQuery(ctx, q)
-			if err != nil {
-				return false, fmt.Sprintf("%s: %v", q, err)
-			}
-			if strings.Contains(q, fmt.Sprintf("job=%q", job)) && len(s) == 0 {
-				return false, q + ": no data for the controller's job"
-			}
-		}
-		return true, ""
-	})
-	// A queue's depth series appears once something is queued on it: queue a
-	// PolicyGate.
-	e.CreateGate(t, framework.Gate(e.Namespace(t), "queued", "test", "true", recheck))
-	framework.Eventually(t, 2*time.Minute, "the queue depth panel to show the policygate queue", func(ctx context.Context) (bool, string) {
-		s, err := e.PromQuery(ctx, `workqueue_depth{name=~"bundle|promotionstep|policygate"}`)
-		if err != nil {
-			return false, err.Error()
-		}
-		gate := false
-		for _, x := range s {
-			if !assert.Contains(t, []string{"bundle", "promotionstep", "policygate"}, x.Metric["name"]) {
-				return true, ""
-			}
-			gate = gate || x.Metric["name"] == "policygate"
-		}
-		return gate, fmt.Sprintf("%v", s)
-	})
 }

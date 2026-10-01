@@ -339,7 +339,8 @@ CHART-GRAPH-01	live	chart	todo	chart	graph.serviceAccountName, kroNamespace, rea
 CHART-NETPOL-01	live	chart	todo	chart	networkPolicy allows metrics/UI/webhook ingress and API/SCM egress only	chart/kardinal-promoter/values.yaml:243-255; docs/guides/security.md:352-370
 CHART-CLOCK-01	live	chart	todo	chart	scheduleClock creates kardinal-clock	chart/kardinal-promoter/values.yaml:261-263
 CHART-DEMO-01	live	chart	todo	chart	demo values	chart/kardinal-promoter/values.yaml:293-309
-CHART-MON-01	live	flux	covered	chart	serviceMonitor, prometheusRule and grafanaDashboard are picked up by Prometheus Operator	chart/kardinal-promoter/values.yaml:315-359; docs/guides/monitoring.md:205-327
+CHART-MON-01	live	flux	covered	chart	serviceMonitor and prometheusRule are picked up by Prometheus Operator: the controller target is up and the alerts are loaded	chart/kardinal-promoter/values.yaml:310-335; docs/guides/monitoring.md:22-43; docs/guides/monitoring.md:205-278
+CHART-MON-02	live	flux	covered	chart	grafanaDashboard is imported by Grafana's dashboard sidecar, and its panels query the default Prometheus datasource and show data	chart/kardinal-promoter/values.yaml:337-359; chart/kardinal-promoter/templates/grafana-dashboard.yaml; chart/kardinal-promoter/dashboards/kardinal-promoter-dashboard.json; docs/guides/monitoring.md:281-329
 CHART-SCHEMA-01	live	chart	todo	chart	values schema rejects removed keys (controller.shard, v0.8.1 krocodile block) with a clear error	chart/kardinal-promoter/values.schema.json:6; chart/kardinal-promoter/values.schema.json:89; docs/changelog.md:27
 CHART-INTEGJOBS-01	deprecated	chart	todo	chart	rbac.integrationTestJobs has no effect	chart/kardinal-promoter/values.yaml:205; docs/changelog.md:67
 CHART-VAP-01	deprecated	chart	todo	chart	validatingAdmissionPolicy.enabled has no effect	chart/kardinal-promoter/values.yaml:238; docs/changelog.md:67
