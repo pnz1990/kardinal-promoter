@@ -240,22 +240,22 @@ CLI-OUTPUT-01	live	cli	covered	cli	-o json|yaml on get pipelines/bundles/steps/s
 CLI-GET-PIPELINES-01	live	cli	covered	cli	get pipelines table per env (-A, -w) and -o json array	cmd/kardinal/cmd/get_pipelines.go:68; docs/reference/cli/kardinal-get-pipelines.md
 CLI-GET-BUNDLES-01	live	cli	covered	cli	get bundles (--active)	docs/reference/cli/kardinal-get-bundles.md
 CLI-GET-STEPS-01	live	cli	covered	cli	get steps (-w) one row per env	docs/reference/cli/kardinal-get-steps.md
-CLI-GET-AUDIT-01	live	cli	covered	cli	get auditevents --pipeline --bundle --env --limit	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
+CLI-GET-AUDIT-01	live	cli	covered	cli	get auditevents --pipeline --bundle --env --limit [-o json|yaml]	docs/reference/cli/kardinal-get-auditevents.md; docs/guides/security.md:290-310
 CLI-GET-SUBS-01	live	core	covered	cli	get subscriptions -A	docs/reference/cli/kardinal-get-subscriptions.md
 CLI-EXPLAIN-01	live	cli	covered	cli	explain <pipeline> --env shows each gate STATE (Waiting/Block/Superseded), expression and reason	cmd/kardinal/cmd/explain.go:43; docs/reference/cli/kardinal-explain.md
 CLI-EXPLAIN-02	live	cli	covered	cli	explain --watch and --color	cmd/kardinal/cmd/explain.go:43
 CLI-STATUS-01	live	cli	covered	cli	status [pipeline] shows controller health, version and blocking gates	cmd/kardinal/cmd/status.go:37
 CLI-CREATE-BUNDLE-01	live	cli	covered	cli	create bundle <pipeline> --image --commit --author --ci-run-url creates an image Bundle	cmd/kardinal/cmd/create_bundle.go:65; cmd/kardinal/cmd/create_bundle.go:184; docs/ci-integration.md:168-190
 CLI-CREATE-BUNDLE-02	live	cli	covered	cli	create bundle --type config --config-commit [--config-repo]; config without --config-commit errors	cmd/kardinal/cmd/create_bundle.go:139-140; docs/ci-integration.md:183
-CLI-CREATE-DRYRUN-01	live	cli	covered	cli	create bundle --dry-run prints the Bundle and makes no API calls	cmd/kardinal/cmd/create_bundle.go:65
+CLI-CREATE-DRYRUN-01	live	cli	covered	cli	create bundle --dry-run reads the Pipeline and its PolicyGates, builds the Graph in memory, prints its node count and the environments with their gates, and creates nothing	cmd/kardinal/cmd/create_bundle.go:65
 CLI-DELETE-BUNDLE-01	live	cli	covered	cli	delete bundle	cmd/kardinal/cmd/delete_bundle.go:41
 CLI-PROMOTE-01	live	cli	covered	cli	promote <pipeline> -e <env> promotes the latest Verified upstream Bundle	cmd/kardinal/cmd/promote.go:33; pkg/lifecycle/promote.go:53
 CLI-ROLLBACK-01	live	cli	covered	cli	rollback <pipeline> --env [--to] prints Bundle X created (rollbackOf=T)	cmd/kardinal/cmd/rollback.go:40; cmd/kardinal/cmd/rollback.go:106
 CLI-PAUSE-01	live	cli	covered	cli	pause <pipeline> sets spec.paused=true and prints paused	cmd/kardinal/cmd/pause.go:31
 CLI-RESUME-01	live	cli	covered	cli	resume <pipeline> clears spec.paused and promotion continues	cmd/kardinal/cmd/pause.go:68
-CLI-OVERRIDE-01	live	cli	covered	cli	override --stage --reason --expires-in [--gate] patches gate instances in the Pipeline namespace	cmd/kardinal/cmd/override.go:43; cmd/kardinal/cmd/override.go:243
-CLI-POLICY-LIST-01	live	cli	covered	cli	policy list shows gates per namespace	cmd/kardinal/cmd/policy.go:69
-CLI-POLICY-SIMULATE-01	live	cli	covered	cli	policy simulate --pipeline --env --time [--soak-minutes] reports PASS/BLOCKED per gate	cmd/kardinal/cmd/policy.go:238
+CLI-OVERRIDE-01	live	cli	covered	cli	override --gate --reason [--stage] [--expires-in] patches gate instances in the Pipeline namespace	cmd/kardinal/cmd/override.go:43; cmd/kardinal/cmd/override.go:243
+CLI-POLICY-LIST-01	live	cli	covered	cli	policy list shows gates per namespace and when their instances were last evaluated	cmd/kardinal/cmd/policy.go:69
+CLI-POLICY-SIMULATE-01	live	cli	covered	cli	policy simulate --pipeline --env [--time] [--soak-minutes] prints RESULT: PASS or BLOCKED and a PASS or BLOCK row per gate; exits 0 either way	cmd/kardinal/cmd/policy.go:238
 CLI-POLICY-TEST-01	live	cli	covered	cli	policy test evaluates an expression locally	cmd/kardinal/cmd/policy.go:571
 CLI-HISTORY-01	live	cli	covered	cli	history <pipeline> --env --limit	cmd/kardinal/cmd/history.go:37
 CLI-LOGS-01	live	cli	covered	cli	logs <pipeline> --env --bundle [-f] follows until a terminal state	cmd/kardinal/cmd/logs.go:42; docs/reference/cli/kardinal-logs.md:16
