@@ -2,8 +2,8 @@
 
 > Status: Partially implemented. This page was rewritten on 2026-09-29 to match the code.
 > The original design (cherry-pick and overlay strategies, `spec.artifacts.gitCommit`,
-> a `gitCommit` Subscription, mixed Bundles) was never built; what is left of it is listed
-> under [Not implemented](#not-implemented).
+> a `gitCommit` Subscription) was never built; what is left of it is listed
+> under [Not implemented](#not-implemented). Mixed Bundles were added on 2026-10-01.
 > Depends on: 08-promotion-steps-engine (config-merge is a step), 02-pipeline-to-graph-translator
 > Blocks: nothing (additive)
 > User docs: [concepts](../concepts.md), [CI integration](../ci-integration.md), `examples/config-promotion/`
@@ -22,7 +22,7 @@ Bundles have a `spec.type` field:
 |---|---|---|---|
 | `image` (default) | `spec.images[]` | `kustomize-set-image` or `helm-set-image` | New container image version |
 | `config` | `spec.configRef` | `config-merge` | Configuration change without image change |
-| `mixed` | `spec.images[]` (and `spec.configRef`, which no step reads) | same as `image` | Accepted, but promoted like an image Bundle; see [Not implemented](#not-implemented) |
+| `mixed` | `spec.images[]` and `spec.configRef` | `config-merge`, then the `image` update step | An image and the config change it needs, in one commit per environment |
 
 ## Config Bundle CRD
 
@@ -58,7 +58,7 @@ There is no per-Bundle Secret. The Pipeline's Git token is sent to the config re
 
 ## Config-Merge Step
 
-For a `config` Bundle with a `configRef.commitSHA`, `git-clone` checks out `configRef.gitRepo` at that commit into a directory next to the GitOps checkout (`pkg/steps/steps/git_clone.go`). `config-merge` (`pkg/steps/steps/config_merge.go`) then copies one directory from it into the GitOps checkout:
+For a `config` or `mixed` Bundle with a `configRef.commitSHA`, `git-clone` checks out `configRef.gitRepo` at that commit into a directory next to the GitOps checkout (`pkg/steps/steps/git_clone.go`). `config-merge` (`pkg/steps/steps/config_merge.go`) then copies one directory from it into the GitOps checkout:
 
 - It copies the environment's directory: `environments[].path`, or `environments/<name>` when the path is empty. The same relative path is read from the config commit and written in the GitOps repo.
 - It overwrites files with the same name and creates missing ones. It never deletes files, and it skips `.git`, symlinks and special files.
@@ -79,6 +79,12 @@ git-push
 open-pr + wait-for-merge (pr-review only)
 health-check
 ```
+
+A `mixed` Bundle runs `config-merge` and then the image update step (`kustomize-set-image`,
+or `helm-set-image` with `update.strategy: helm`) before `git-commit`, so one commit carries
+both changes. The images are written last, so they win over any image pin in the config
+commit's copy of the environment directory. `update.strategy: argocd` refuses config and
+mixed Bundles.
 
 ## How Config Bundles Interact With Other Features
 
@@ -210,7 +216,6 @@ These parts of the original design were never built. Open an issue before relyin
 - A per-Bundle `secretRef` for the config repo.
 - `message` and `path` fields on the config reference.
 - A config-specific PR body (commit message, changed files).
-- **Mixed Bundles** that run `config-merge` before the image update. A `mixed` Bundle runs the image sequence today, and `git-clone` checks out the config source only for `config` Bundles.
 - Subscription path filtering (`pathGlob`) and one Bundle per commit.
 - CLI flags for a config reference.
 - Rollback of a config Bundle to the previous `configRef.commitSHA`.

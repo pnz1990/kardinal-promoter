@@ -367,6 +367,8 @@ curl -X POST https://kardinal.example.com/api/v1/bundles \
 
 Config Bundles go through the same Pipeline, PolicyGates, and PR flow as image Bundles. The only difference is the update step: instead of `kustomize-set-image`, the controller uses `config-merge`. It checks out `configRef.commitSHA` of `configRef.gitRepo` (default: the Pipeline repo) and copies the files under the environment's directory in that commit (`environments/<name>` or `environments[].path`) over the same directory of the GitOps checkout. Only that directory is copied; `.git`, symlinks and files outside it are not. Files deleted in the config commit are not deleted from the GitOps repo. The Pipeline's git token is sent to `configRef.gitRepo` only when it has the same scheme, host and port as the Pipeline repo, so it is never sent over plain `http://` or to another port. A config commit that has no directory for the environment fails the step.
 
+A `mixed` Bundle carries both `images` and `configRef`. Each environment runs `config-merge` and then the image update step, and commits both changes together. The images are written after the merge, so they win over any image pin in the config commit.
+
 ## Bundle Intent
 
 When creating a Bundle from CI, you can specify the promotion intent:

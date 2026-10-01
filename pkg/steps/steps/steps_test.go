@@ -396,6 +396,60 @@ func TestDefaultSequenceForBundle_ConfigBundle(t *testing.T) {
 	assert.NotContains(t, seq, "helm-set-image", "config bundle must not use helm-set-image")
 }
 
+// TestDefaultSequenceForBundle_MixedBundle verifies that a mixed Bundle
+// merges its config commit and then updates its images in one sequence:
+// before, it ran the image sequence only and its config change was dropped.
+func TestDefaultSequenceForBundle_MixedBundle(t *testing.T) {
+	tests := []struct {
+		approval, strategy string
+		want               []string
+	}{
+		{"auto", "", []string{"git-clone", "config-merge", "kustomize-set-image", "git-commit", "git-push", "health-check"}},
+		{"auto", "helm", []string{"git-clone", "config-merge", "helm-set-image", "git-commit", "git-push", "health-check"}},
+		{"pr-review", "kustomize", []string{"git-clone", "config-merge", "kustomize-set-image", "git-commit", "git-push",
+			"open-pr", "wait-for-merge", "health-check"}},
+		// argocd refuses mixed Bundles in argocd-set-image (#1281).
+		{"auto", "argocd", []string{"argocd-set-image", "health-check"}},
+	}
+	for _, tc := range tests {
+		assert.Equal(t, tc.want, parentsteps.DefaultSequenceForBundle(tc.approval, "mixed", tc.strategy, ""),
+			"approval=%q strategy=%q", tc.approval, tc.strategy)
+	}
+}
+
+// TestMixedBundle_MergesConfigThenImages runs the update steps of a mixed
+// Bundle's sequence over one work tree: the config commit's files are merged,
+// and the Bundle's image wins over the older pin in the config commit's
+// kustomization.yaml.
+func TestMixedBundle_MergesConfigThenImages(t *testing.T) {
+	workDir, srcDir := configMergeFixture(t)
+	require.NoError(t, os.WriteFile(filepath.Join(srcDir, "environments", "prod", "kustomization.yaml"),
+		[]byte("resources:\n- deployment.yaml\n- configmap.yaml\nimages:\n- name: ghcr.io/nginx/nginx\n  newTag: 1.27.0\n"), 0o644))
+	state := configMergeState(workDir, srcDir)
+	state.Bundle.Type = "mixed"
+	state.Bundle.Images = []v1alpha1.ImageRef{{Repository: "ghcr.io/nginx/nginx", Tag: "1.29.0"}}
+
+	seq := parentsteps.DefaultSequenceForBundle("auto", "mixed", "kustomize", "")
+	require.Equal(t, "git-clone", seq[0])
+	for _, name := range seq[1:] {
+		if name == "git-commit" {
+			break
+		}
+		res, err := runStep(t, name, state)
+		require.NoError(t, err, name)
+		require.Equal(t, parentsteps.StepSuccess, res.Status, "%s: %s", name, res.Message)
+	}
+
+	data, err := os.ReadFile(filepath.Join(workDir, "environments", "prod", "configmap.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "new-value", "the config change is merged")
+	kust, err := os.ReadFile(filepath.Join(workDir, "environments", "prod", "kustomization.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(kust), "configmap.yaml", "the config commit's kustomization.yaml is merged")
+	assert.Contains(t, string(kust), "newTag: 1.29.0", "the Bundle's image wins")
+	assert.NotContains(t, string(kust), "1.27.0")
+}
+
 // TestDefaultSequenceForBundle_HelmStrategy verifies that helm update strategy uses helm-set-image.
 func TestDefaultSequenceForBundle_HelmStrategy(t *testing.T) {
 	seq := parentsteps.DefaultSequenceForBundle("auto", "image", "helm", "")

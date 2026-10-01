@@ -82,7 +82,7 @@ spec:
 ```
 
 Both types go through the same Pipeline, same PolicyGates, and same PR flow.
-For a config Bundle, the `config-merge` step copies the environment's directory
+For a config or mixed Bundle, the `config-merge` step copies the environment's directory
 (`environments/<name>` or `environments[].path`) from the `configRef` commit over the
 same directory in the GitOps repo. Nothing outside that directory is copied, and files
 deleted in the config commit are not deleted.

@@ -489,6 +489,47 @@ func TestBundle_ConfigBundle(t *testing.T) {
 	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
 }
 
+// TestBundle_MixedBundle promotes a mixed Bundle (an image and a config
+// commit) through test and prod. Each environment runs config-merge and then
+// kustomize-set-image in one step sequence and one commit: the Deployment gets
+// the config change and runs the new image, which wins over the old image in
+// the config commit's deployment.yaml. Before the fix a mixed Bundle ran the
+// image steps only and its config change was dropped.
+//
+// Covers BUNDLE-MIXED-01.
+func TestBundle_MixedBundle(t *testing.T) {
+	t.Parallel()
+	e := framework.New(t)
+	a := newArgoApp(t, e, "test", "prod")
+	a.apply(t, a.pipeline(nil))
+	cfg, sha := a.configRepo(t, "test", "prod")
+	ctx := context.Background()
+	before, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 20)
+	require.NoError(t, err)
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--type", "mixed", "--image", imageV2,
+		"--config-commit", sha, "--config-repo", cfg.CloneURL)
+
+	for _, env := range []string{"test", "prod"} {
+		ps := e.WaitStepState(t, a.ns, pipelineName, bundle, env, "Verified", promoteTimeout)
+		var names []string
+		for _, s := range ps.Status.Steps {
+			names = append(names, s.Name)
+			assert.Equal(t, v1alpha1.StepExecutionCompleted, s.State, "%s %s completes", env, s.Name)
+		}
+		assert.Equal(t, []string{"git-clone", "config-merge", "kustomize-set-image", "git-commit", "git-push", "health-check"},
+			names, "%s merges the config, then sets the image", env)
+		assert.Equal(t, "1", ps.Status.Outputs["mergedFiles"], "%s merges the one changed file", env)
+		assert.True(t, a.configDeployed(t, env), "%s deployment.yaml has the config change", env)
+		a.fileHas(t, env, fixtures.V2, "the image is promoted with the config")
+		a.waitConfigRunning(t, env)
+		a.running(t, env, imageV2, "the Bundle's image wins over the config commit's")
+	}
+	e.WaitBundlePhase(t, a.ns, bundle, "Verified", time.Minute)
+	after, err := gitserver.Commits(ctx, e.Git, a.repo, a.repo.Branch, 20)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before)+2, "one commit per environment carries both changes")
+}
+
 // TestBundle_MultiImage promotes a Bundle with two images into a Deployment
 // with two containers: kustomization.yaml pins both, and both containers run
 // the new versions.
