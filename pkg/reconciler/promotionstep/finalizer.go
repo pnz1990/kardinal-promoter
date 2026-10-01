@@ -39,8 +39,9 @@ import (
 //
 // While the controller is not running, a deleted step that holds the
 // finalizer stays until the controller is back. Uninstalling the controller
-// before deleting the Bundles leaves such steps behind: remove the finalizer
-// by hand (docs/troubleshooting.md).
+// before deleting the Bundles, or downgrading to a controller that does not
+// know the finalizer, leaves such steps behind: remove the finalizer by hand
+// (docs/installation.md, Uninstall and Downgrading).
 const FinalizerClosePR = "kardinal.io/close-pr"
 
 // closePRDeadline is how long after the delete request a step keeps retrying
@@ -123,11 +124,16 @@ func prFinalizerSyncFailed(log zerolog.Logger, err error) (ctrl.Result, error) {
 // after the delete request; then the finalizer is removed anyway and a Warning
 // Event and an error log say the PR must be closed by hand.
 //
-// The PR is left open when the step comes back (stepRecreated): it went with
-// its Graph while the Bundle goes on promoting, so the Bundle reconciler
+// The PR is left open when a new step reuses it (stepRecreated): the step went
+// with its Graph while the Bundle goes on promoting, so the Bundle reconciler
 // recreates the Graph and the new step reuses the PR. Closing it there made
-// the new step open a second PR. A failed read in stepRecreated is retried
-// like a failed close; past closePRDeadline the PR is closed.
+// the new step open a second PR. If no new step comes (the Bundle is deleted
+// or stops promoting first), nothing closes that PR: docs/troubleshooting.md
+// says how to find it. A failed read in stepRecreated is retried like a failed
+// close; past closePRDeadline the PR is closed.
+//
+// In a namespace being deleted the API server refuses the ClosePRFailed
+// Event, so the error log is the only record of a PR left open there.
 //
 // The step is read again from the API server first: the cached step can still
 // hold the finalizer the previous reconcile removed, and closing from it
@@ -182,11 +188,12 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 	return ctrl.Result{}, r.removePRFinalizer(ctx, ps)
 }
 
-// stepRecreated reports whether the deleted step ps comes back. That is when
-// ps went with its Graph (deleted by hand, for instance) while the Bundle goes
-// on promoting: the Bundle reconciler recreates the Graph, and kro creates a
-// new step for ps's environment, which finds and reuses ps's open PR
-// (GRAPH-HEAL-01). All of these must hold, read from the API server:
+// stepRecreated reports whether a new step for ps's environment will reuse
+// ps's open PR. That is when ps went with its Graph (deleted by hand, for
+// instance) while the Bundle goes on promoting: the Bundle reconciler
+// recreates the Graph, and kro creates a new step for ps's environment, which
+// finds and reuses ps's open PR (GRAPH-HEAL-01). All of these must hold, read
+// from the API server:
 //
 //   - the Bundle exists, is not being deleted, and is Promoting;
 //   - its namespace is not being deleted;
@@ -194,10 +201,12 @@ func (r *Reconciler) handleDeleted(ctx context.Context, log zerolog.Logger, cach
 //   - its Graph is gone, is being deleted, or was created at or after ps's
 //     delete request (it was recreated before ps was reconciled).
 //
-// A step deleted on its own, or because a Pipeline edit dropped its
-// environment (kro updates the Graph in place), does not come back, nor does
-// one whose Bundle or namespace is being deleted or gone. A read that fails
-// for another reason than NotFound is an error: handleDeleted retries it
+// A step deleted on its own is not one: kro applies it again under the same
+// name, but only once it is gone, so after handleDeleted closed its PR, and
+// the new step opens a new PR (checked on kind). A step whose environment a
+// Pipeline edit dropped (kro updates the Graph in place) does not come back,
+// nor does one whose Bundle or namespace is being deleted or gone. A read that
+// fails for another reason than NotFound is an error: handleDeleted retries it
 // rather than close a PR the new step would reuse.
 func (r *Reconciler) stepRecreated(ctx context.Context, ps *v1alpha1.PromotionStep) (bool, error) {
 	if ps.Spec.BundleName == "" {
