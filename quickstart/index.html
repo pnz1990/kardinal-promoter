@@ -75,11 +75,14 @@
 <a id=__codelineno-3-12 name=__codelineno-3-12 href=#__codelineno-3-12></a><span class=c1># Graph:      kro v0.10.0-rc.0</span>
 </code></pre></div> <h2 id=set-up-your-gitops-repo>Set up your GitOps repo<a class=headerlink href=#set-up-your-gitops-repo title="Permanent link">&para;</a></h2> <p>This quickstart uses <a href=https://github.com/pnz1990/kardinal-demo><code>pnz1990/kardinal-demo</code></a> as the GitOps target repository. It already has one directory per environment on <code>main</code>. Fork it: kardinal pushes to this repository, so the token needs write access to it.</p> <p>The repository structure:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-4-1 name=__codelineno-4-1 href=#__codelineno-4-1></a>environments/
 <a id=__codelineno-4-2 name=__codelineno-4-2 href=#__codelineno-4-2></a>  test/
-<a id=__codelineno-4-3 name=__codelineno-4-3 href=#__codelineno-4-3></a>    kustomization.yaml      # patches for test
-<a id=__codelineno-4-4 name=__codelineno-4-4 href=#__codelineno-4-4></a>  uat/
-<a id=__codelineno-4-5 name=__codelineno-4-5 href=#__codelineno-4-5></a>    kustomization.yaml      # patches for uat
-<a id=__codelineno-4-6 name=__codelineno-4-6 href=#__codelineno-4-6></a>  prod/
-<a id=__codelineno-4-7 name=__codelineno-4-7 href=#__codelineno-4-7></a>    kustomization.yaml      # patches for prod
+<a id=__codelineno-4-3 name=__codelineno-4-3 href=#__codelineno-4-3></a>    kustomization.yaml      # pins the image tag kardinal updates
+<a id=__codelineno-4-4 name=__codelineno-4-4 href=#__codelineno-4-4></a>    deployment.yaml         # the kardinal-test-app Deployment, in namespace default
+<a id=__codelineno-4-5 name=__codelineno-4-5 href=#__codelineno-4-5></a>  uat/
+<a id=__codelineno-4-6 name=__codelineno-4-6 href=#__codelineno-4-6></a>    kustomization.yaml
+<a id=__codelineno-4-7 name=__codelineno-4-7 href=#__codelineno-4-7></a>    deployment.yaml
+<a id=__codelineno-4-8 name=__codelineno-4-8 href=#__codelineno-4-8></a>  prod/
+<a id=__codelineno-4-9 name=__codelineno-4-9 href=#__codelineno-4-9></a>    kustomization.yaml
+<a id=__codelineno-4-10 name=__codelineno-4-10 href=#__codelineno-4-10></a>    deployment.yaml
 </code></pre></div> <h2 id=create-argo-cd-applications>Create Argo CD Applications<a class=headerlink href=#create-argo-cd-applications title="Permanent link">&para;</a></h2> <p>Create an Argo CD ApplicationSet to manage the three environments:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-5-1 name=__codelineno-5-1 href=#__codelineno-5-1></a>cat<span class=w> </span><span class=s>&lt;&lt;EOF | kubectl apply -f -</span>
 <a id=__codelineno-5-2 name=__codelineno-5-2 href=#__codelineno-5-2></a><span class=s>apiVersion: argoproj.io/v1alpha1</span>
 <a id=__codelineno-5-3 name=__codelineno-5-3 href=#__codelineno-5-3></a><span class=s>kind: ApplicationSet</span>
@@ -102,16 +105,20 @@
 <a id=__codelineno-5-20 name=__codelineno-5-20 href=#__codelineno-5-20></a><span class=s>        repoURL: https://github.com/pnz1990/kardinal-demo   # your fork</span>
 <a id=__codelineno-5-21 name=__codelineno-5-21 href=#__codelineno-5-21></a><span class=s>        targetRevision: main</span>
 <a id=__codelineno-5-22 name=__codelineno-5-22 href=#__codelineno-5-22></a><span class=s>        path: environments/{{env}}</span>
-<a id=__codelineno-5-23 name=__codelineno-5-23 href=#__codelineno-5-23></a><span class=s>      destination:</span>
-<a id=__codelineno-5-24 name=__codelineno-5-24 href=#__codelineno-5-24></a><span class=s>        server: https://kubernetes.default.svc</span>
-<a id=__codelineno-5-25 name=__codelineno-5-25 href=#__codelineno-5-25></a><span class=s>        namespace: kardinal-test-app-{{env}}</span>
-<a id=__codelineno-5-26 name=__codelineno-5-26 href=#__codelineno-5-26></a><span class=s>      syncPolicy:</span>
-<a id=__codelineno-5-27 name=__codelineno-5-27 href=#__codelineno-5-27></a><span class=s>        automated:</span>
-<a id=__codelineno-5-28 name=__codelineno-5-28 href=#__codelineno-5-28></a><span class=s>          prune: true</span>
-<a id=__codelineno-5-29 name=__codelineno-5-29 href=#__codelineno-5-29></a><span class=s>          selfHeal: true</span>
-<a id=__codelineno-5-30 name=__codelineno-5-30 href=#__codelineno-5-30></a><span class=s>        syncOptions:</span>
-<a id=__codelineno-5-31 name=__codelineno-5-31 href=#__codelineno-5-31></a><span class=s>          - CreateNamespace=true</span>
-<a id=__codelineno-5-32 name=__codelineno-5-32 href=#__codelineno-5-32></a><span class=s>EOF</span>
+<a id=__codelineno-5-23 name=__codelineno-5-23 href=#__codelineno-5-23></a><span class=s>        # The kardinal-demo overlays set namespace "default"; move each</span>
+<a id=__codelineno-5-24 name=__codelineno-5-24 href=#__codelineno-5-24></a><span class=s>        # environment into its own namespace so they do not collide.</span>
+<a id=__codelineno-5-25 name=__codelineno-5-25 href=#__codelineno-5-25></a><span class=s>        kustomize:</span>
+<a id=__codelineno-5-26 name=__codelineno-5-26 href=#__codelineno-5-26></a><span class=s>          namespace: kardinal-test-app-{{env}}</span>
+<a id=__codelineno-5-27 name=__codelineno-5-27 href=#__codelineno-5-27></a><span class=s>      destination:</span>
+<a id=__codelineno-5-28 name=__codelineno-5-28 href=#__codelineno-5-28></a><span class=s>        server: https://kubernetes.default.svc</span>
+<a id=__codelineno-5-29 name=__codelineno-5-29 href=#__codelineno-5-29></a><span class=s>        namespace: kardinal-test-app-{{env}}</span>
+<a id=__codelineno-5-30 name=__codelineno-5-30 href=#__codelineno-5-30></a><span class=s>      syncPolicy:</span>
+<a id=__codelineno-5-31 name=__codelineno-5-31 href=#__codelineno-5-31></a><span class=s>        automated:</span>
+<a id=__codelineno-5-32 name=__codelineno-5-32 href=#__codelineno-5-32></a><span class=s>          prune: true</span>
+<a id=__codelineno-5-33 name=__codelineno-5-33 href=#__codelineno-5-33></a><span class=s>          selfHeal: true</span>
+<a id=__codelineno-5-34 name=__codelineno-5-34 href=#__codelineno-5-34></a><span class=s>        syncOptions:</span>
+<a id=__codelineno-5-35 name=__codelineno-5-35 href=#__codelineno-5-35></a><span class=s>          - CreateNamespace=true</span>
+<a id=__codelineno-5-36 name=__codelineno-5-36 href=#__codelineno-5-36></a><span class=s>EOF</span>
 </code></pre></div> <h2 id=create-the-pipeline>Create the Pipeline<a class=headerlink href=#create-the-pipeline title="Permanent link">&para;</a></h2> <p>First, create a Secret with your GitHub token:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-6-1 name=__codelineno-6-1 href=#__codelineno-6-1></a>kubectl<span class=w> </span>create<span class=w> </span>secret<span class=w> </span>generic<span class=w> </span>github-token<span class=w> </span><span class=se>\</span>
 <a id=__codelineno-6-2 name=__codelineno-6-2 href=#__codelineno-6-2></a><span class=w>  </span>--from-literal<span class=o>=</span><span class=nv>token</span><span class=o>=</span>&lt;your-github-pat&gt;
 </code></pre></div> <p>You can generate a Pipeline YAML using <code>kardinal init</code>:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-7-1 name=__codelineno-7-1 href=#__codelineno-7-1></a>kardinal<span class=w> </span>init
@@ -164,7 +171,9 @@
 <a id=__codelineno-9-38 name=__codelineno-9-38 href=#__codelineno-9-38></a><span class=s>        type: argocd</span>
 <a id=__codelineno-9-39 name=__codelineno-9-39 href=#__codelineno-9-39></a><span class=s>        argocd:</span>
 <a id=__codelineno-9-40 name=__codelineno-9-40 href=#__codelineno-9-40></a><span class=s>          name: kardinal-test-app-prod</span>
-<a id=__codelineno-9-41 name=__codelineno-9-41 href=#__codelineno-9-41></a><span class=s>EOF</span>
+<a id=__codelineno-9-41 name=__codelineno-9-41 href=#__codelineno-9-41></a><span class=s>        timeout: 15m</span>
+<a id=__codelineno-9-42 name=__codelineno-9-42 href=#__codelineno-9-42></a><span class=s>  historyLimit: 20</span>
+<a id=__codelineno-9-43 name=__codelineno-9-43 href=#__codelineno-9-43></a><span class=s>EOF</span>
 </code></pre></div> <p>Verify the Pipeline was created:</p> <div class=highlight><pre><span></span><code><a id=__codelineno-10-1 name=__codelineno-10-1 href=#__codelineno-10-1></a>kardinal<span class=w> </span>get<span class=w> </span>pipelines
 <a id=__codelineno-10-2 name=__codelineno-10-2 href=#__codelineno-10-2></a><span class=c1># PIPELINE            BUNDLE   TEST   UAT   PROD   SUB   AGE</span>
 <a id=__codelineno-10-3 name=__codelineno-10-3 href=#__codelineno-10-3></a><span class=c1># kardinal-test-app   -        -      -     -      0     10s</span>
