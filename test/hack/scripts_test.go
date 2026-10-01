@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -153,6 +154,34 @@ func TestKindContextGuard(t *testing.T) {
 			assert.Contains(t, string(out), "KUBECTL=kubectl --context kind-kardinal-e2e\n")
 			assert.Contains(t, string(out), "HELM=helm --kube-context kind-kardinal-e2e\n")
 		})
+	}
+}
+
+// TestE2EScriptsUseKindContext: every kubectl and helm call in hack/e2e goes
+// through the KUBECTL and HELM arrays of hack/kind-context.sh, so a live suite
+// never acts on the current kube context. A bare call is reported with its
+// file and line.
+func TestE2EScriptsUseKindContext(t *testing.T) {
+	bare := regexp.MustCompile(`(^|[\s;|&(` + "`" + `])(kubectl|helm)\s`)
+	var scripts []string
+	require.NoError(t, filepath.WalkDir(filepath.Join(repoRoot(t), "hack", "e2e"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".sh") {
+			scripts = append(scripts, p)
+		}
+		return err
+	}))
+	require.NotEmpty(t, scripts)
+	for _, p := range scripts {
+		data, err := os.ReadFile(p)
+		require.NoError(t, err)
+		for i, line := range strings.Split(string(data), "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "#") {
+				continue
+			}
+			assert.False(t, bare.MatchString(code), "%s:%d calls kubectl or helm without the kind context; use \"${KUBECTL[@]}\" or \"${HELM[@]}\": %s",
+				strings.TrimPrefix(p, repoRoot(t)+"/"), i+1, code)
+		}
 	}
 }
 
