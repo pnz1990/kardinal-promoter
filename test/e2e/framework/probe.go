@@ -101,6 +101,12 @@ func (r CurlResult) TimedOut() bool {
 	return r.Code == 0 && strings.Contains(r.Err, "curl: (28)")
 }
 
+// Refused reports whether the connection was refused (curl exit 7): the host
+// answered, but nothing listens on the port.
+func (r CurlResult) Refused() bool {
+	return r.Code == 0 && strings.Contains(r.Err, "curl: (7)")
+}
+
 var curlStatus = regexp.MustCompile(`(?m)^HTTP/[0-9.]+ ([0-9]{3})`)
 
 // Curl runs curl in the probe Pod with args (method, headers, URL...) and a

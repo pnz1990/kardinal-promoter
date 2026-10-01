@@ -2153,13 +2153,17 @@ func TestChart_RestartMidStep(t *testing.T) {
 	exited := lines[len(lines)-1].At.Sub(sigterm)
 	t.Logf("the controller wrote its last line %s after the scale-down; the kubelet reported it stopped after %s",
 		exited.Round(time.Millisecond), stopped.Round(time.Millisecond))
-	_, ok = logLine(logs, "Wait completed, proceeding to shutdown the manager")
+	assert.True(t, lines[len(lines)-1].At.After(sigterm), "the controller's last line comes after the scale-down")
+	finished, ok := logLine(logs, "Wait completed, proceeding to shutdown the manager")
 	assert.True(t, ok, "the manager finishes its shutdown, so the controller exits rather than being killed")
 
-	_, ok = logLine(logs, "Shutdown signal received, waiting for all workers to finish")
+	received, ok := logLine(logs, "Shutdown signal received, waiting for all workers to finish")
 	assert.True(t, ok, "the controller logs the SIGTERM and waits for its workers")
-	_, ok = logLine(logs, "All workers finished")
+	workers, ok := logLine(logs, "All workers finished")
 	assert.True(t, ok, "the workers finish before the controller exits")
+	assert.True(t, received.At.After(sigterm) && !workers.At.Before(received.At) && !finished.At.Before(workers.At),
+		"the shutdown runs in order after the scale-down: signal %s, workers finished %s, manager done %s",
+		received.At.Sub(sigterm).Round(time.Millisecond), workers.At.Sub(sigterm).Round(time.Millisecond), finished.At.Sub(sigterm).Round(time.Millisecond))
 	cancelled, ok := logLine(logs, `"message":"step failed, will retry"`, "context canceled")
 	if assert.True(t, ok, "the shutdown cancels the open-pr call in flight") {
 		assert.True(t, cancelled.At.After(sigterm), "the call ends after the SIGTERM")
@@ -2286,6 +2290,13 @@ func TestChart_ShutdownDrain(t *testing.T) {
 	})
 	out, err = caller.Exec(t, "touch", "/tmp/go")
 	require.NoError(t, err, out)
+	// The server's listener closes with the drain, so the controller refuses a
+	// new connection; the process (still draining) answers with a reset.
+	var refused framework.CurlResult
+	framework.Eventually(t, 10*time.Second, "the webhook server refuses new connections", func(context.Context) (bool, string) {
+		refused = caller.Curl(t, 3*time.Second, fmt.Sprintf("http://%s:8083/webhook/scm", ip))
+		return refused.Refused(), fmt.Sprintf("the new connection was not refused: %d %s", refused.Code, refused.Err)
+	})
 	select {
 	case <-logs.Done():
 	case <-time.After(90 * time.Second):
