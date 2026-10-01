@@ -535,7 +535,9 @@ func TestRollback_Policy(t *testing.T) {
 	})
 	assert.Equal(t, 0, rp.Status.ConsecutiveFailures)
 	assert.False(t, rp.Status.ShouldRollback)
-	assert.Zero(t, rp.Spec.FailureThreshold, "failureThreshold is unset; the reconciler uses 3")
+	// failureThreshold is unset: the reconciler uses 3 for 0, and since B49
+	// (#1386) the CRD defaults it to 3.
+	assert.Contains(t, []int{0, 3}, rp.Spec.FailureThreshold, "failureThreshold is unset")
 
 	e.SetReadyz(t, a.ns, map[string]string{"app.kubernetes.io/name": fixtures.Workload("test")}, false)
 	rbWaitPolicy(t, a, "counting failures below the threshold", func(s v1alpha1.RollbackPolicyStatus) bool {
