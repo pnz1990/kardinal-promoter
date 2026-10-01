@@ -240,7 +240,7 @@ func (r *Reconciler) reconcileState(ctx context.Context, log zerolog.Logger, ps 
 		// step could still turn Verified and, with onHealthFailure=rollback,
 		// open a rollback of a version nobody promotes any more.
 		if parentBundle.Status.Phase == "Superseded" && isCancellable(ps.Status.State) {
-			return r.handleSuperseded(ctx, log, ps)
+			return r.cancelSuperseded(ctx, log, ps)
 		}
 	}
 
@@ -285,6 +285,37 @@ func isCancellable(state string) bool {
 		return true
 	}
 	return false
+}
+
+// cancelSuperseded cancels ps, whose Bundle is Superseded, from the status the
+// API server has, not the cached one. The cache can lag this reconciler's own
+// status patch: the rollback Bundle that applyHealthFailurePolicy creates is a
+// newer Bundle of the same pipeline and type, so the Bundle reconciler
+// supersedes the parent at once, and that Bundle event wakes the step
+// (bundleMapper) before the cache has its RollingBack transition. Cancelling
+// from the cached HealthChecking overwrote RollingBack with Failed, "bundle ...
+// was superseded — promotion cancelled" (ONFAIL-ROLLBACK-03). A step that is
+// not cancellable any more, or is being deleted (handleDeleted closes its PR),
+// is left as it is; one still in flight is cancelled from its fresh status, so
+// a PR recorded since the cached read is closed too. The fresh copy replaces
+// the cached one for the rest of the reconcile (the finalizer sync after it).
+func (r *Reconciler) cancelSuperseded(ctx context.Context, log zerolog.Logger, ps *v1alpha1.PromotionStep) (ctrl.Result, error) {
+	fresh, err := r.readStep(ctx, client.ObjectKeyFromObject(ps))
+	if err != nil || fresh == nil {
+		return ctrl.Result{}, err
+	}
+	if fresh.Status.State != ps.Status.State {
+		log.Debug().
+			Str("bundle", ps.Spec.BundleName).
+			Str("cached", ps.Status.State).
+			Str("state", fresh.Status.State).
+			Msg("parent bundle superseded; the cached step lags its last status patch, using the API server's copy")
+	}
+	*ps = *fresh
+	if !isCancellable(ps.Status.State) || !ps.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	return r.handleSuperseded(ctx, log, ps)
 }
 
 // handleSuperseded closes the step's PR, if it opened one that is still open,
