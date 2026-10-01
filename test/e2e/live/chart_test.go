@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -1939,4 +1940,138 @@ func TestChart_Demo(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, out, "values don't meet the specifications of the schema")
 	assert.Contains(t, out, "url")
+}
+
+// logLine is the first line of logs that contains every one of substrs.
+func logLine(logs *framework.LogStream, substrs ...string) (framework.LogLine, bool) {
+	for _, l := range logs.Lines() {
+		all := true
+		for _, s := range substrs {
+			all = all && strings.Contains(l.Text, s)
+		}
+		if all {
+			return l, true
+		}
+	}
+	return framework.LogLine{}, false
+}
+
+// TestChart_RestartMidStep stops the controller with SIGTERM (a scale-down,
+// as in a rolling update or a node drain) while a pr-review step, its branch
+// already pushed, waits on the SCM API to open its PR, then starts it again.
+// The Pod keeps the chart's 60s grace period. The shutdown cancels the SCM
+// call in flight rather than waiting for it, the workers finish and the
+// controller exits well inside its 30s drain. After the restart the step
+// runs again and opens one PR with one commit; the base branch is untouched
+// until the merge, and the Bundle is Verified.
+//
+// Covers INST-SHUTDOWN-01, STEP-RESUME-01.
+func TestChart_RestartMidStep(t *testing.T) {
+	t.Parallel()
+	namespaceScoped(t)
+	e := framework.New(t)
+	ctx := context.Background()
+	heads, ok := e.Git.(gitserver.Committer)
+	require.True(t, ok, "git server %s does not report branch heads", e.Git.Kind())
+	prCommits, ok := e.Git.(gitserver.PRCommitLister)
+	require.True(t, ok, "git server %s does not list PR commits", e.Git.Kind())
+	a := newArgoApp(t, e, "prod")
+	base, err := heads.BranchSHA(ctx, a.repo)
+	require.NoError(t, err)
+
+	// An SCM API that never answers: a Pod no ingress may reach, so every
+	// call to it hangs until it is cancelled or times out.
+	holeLabels := map[string]string{"role": "scm-blackhole"}
+	hole := e.Probe(t, a.ns, "scm-blackhole", holeLabels)
+	_, err = e.Kube.NetworkingV1().NetworkPolicies(a.ns).Create(ctx, &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "scm-blackhole"},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: holeLabels},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+		},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	holeURL := fmt.Sprintf("http://%s:9898", hole.IP)
+	caller := e.Probe(t, a.ns, "caller", nil)
+	framework.Eventually(t, time.Minute, "connections to the blackhole hang", func(context.Context) (bool, string) {
+		res := caller.Curl(t, 3*time.Second, holeURL+"/api/v1/version")
+		return res.Code == 0 && strings.Contains(res.Err, "(28)"), brief(res)
+	})
+
+	values := func(scm framework.Values) framework.Values {
+		if scm == nil {
+			return nsValues(a.ns, nil)
+		}
+		return nsValues(a.ns, framework.Values{"scm": scm})
+	}
+	r := e.InstallChart(t, releaseName(a.ns), a.ns, values(framework.Values{"apiURL": holeURL}))
+	pod := runningPod(t, r)
+	require.NotNil(t, pod.Spec.TerminationGracePeriodSeconds)
+	assert.EqualValues(t, 60, *pod.Spec.TerminationGracePeriodSeconds, "the chart's default grace period")
+	logs := r.FollowLogs(t, pod.Name)
+
+	a.apply(t, a.resourcePipeline(map[string]string{"prod": "pr-review"}))
+	image := fixtures.Image + ":" + fixtures.V2
+	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", image)
+	var opening framework.LogLine
+	framework.Eventually(t, 2*time.Minute, "the step pushes and starts opening its PR", func(context.Context) (bool, string) {
+		opening, ok = logLine(logs, `"step":"open-pr"`, `"message":"executing step"`)
+		return ok, "open-pr has not started"
+	})
+
+	d := r.Deployment(t)
+	scaleDown := client.MergeFrom(d.DeepCopy())
+	zero := int32(0)
+	d.Spec.Replicas = &zero
+	sigterm := time.Now()
+	require.NoError(t, e.Client.Patch(ctx, d, scaleDown))
+	select {
+	case <-logs.Done():
+	case <-time.After(90 * time.Second):
+		t.Fatalf("the controller Pod %s still runs 90s after the scale-down", pod.Name)
+	}
+	exited := time.Since(sigterm)
+	t.Logf("the controller exited %s after the scale-down", exited.Round(time.Millisecond))
+
+	_, ok = logLine(logs, "Shutdown signal received, waiting for all workers to finish")
+	assert.True(t, ok, "the controller logs the SIGTERM and waits for its workers")
+	_, ok = logLine(logs, "All workers finished")
+	assert.True(t, ok, "the workers finish before the controller exits")
+	cancelled, ok := logLine(logs, `"message":"step failed, will retry"`, "context canceled")
+	if assert.True(t, ok, "the shutdown cancels the open-pr call in flight") {
+		assert.True(t, cancelled.At.After(sigterm), "the call ends after the SIGTERM")
+		assert.Less(t, cancelled.At.Sub(opening.At), 30*time.Second, "the call is cancelled, not timed out")
+	}
+	assert.Less(t, exited, 30*time.Second, "the controller exits inside its 30s drain, long before the 60s SIGKILL")
+
+	promotion := fmt.Sprintf("kardinal/%s/prod", bundle)
+	kustomization, err := e.Git.ReadFile(ctx, a.repo, promotion, fixtures.Path("prod")+"/kustomization.yaml")
+	require.NoError(t, err, "the step pushed %s before the restart", promotion)
+	assert.Contains(t, string(kustomization), fixtures.V2)
+	prs, err := e.Git.PullRequests(ctx, a.repo)
+	require.NoError(t, err)
+	assert.Empty(t, prs, "no PR is open before the restart")
+
+	r.Upgrade(t, values(nil))
+	runningPod(t, r)
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "WaitingForMerge", promoteTimeout)
+	prs, err = e.Git.PullRequests(ctx, a.repo)
+	require.NoError(t, err)
+	require.Len(t, prs, 1, "the restarted step opens one PR")
+	pr := prs[0]
+	assert.Equal(t, promotion, pr.Head)
+	assert.Equal(t, "open", pr.State)
+	commits, err := prCommits.PRCommits(ctx, a.repo, pr.Number)
+	require.NoError(t, err)
+	assert.Len(t, commits, 1, "the PR has one commit: the re-run replaced the first push")
+	now, err := heads.BranchSHA(ctx, a.repo)
+	require.NoError(t, err)
+	assert.Equal(t, base, now, "the base branch is untouched before the merge")
+
+	require.NoError(t, e.Git.MergePR(ctx, a.repo, pr.Number))
+	e.WaitStepState(t, a.ns, pipelineName, bundle, "prod", "Verified", promoteTimeout)
+	e.WaitDeploymentImage(t, a.ns, fixtures.Workload("prod"), image, syncTimeout)
+	prs, err = e.Git.PullRequests(ctx, a.repo)
+	require.NoError(t, err)
+	assert.Len(t, prs, 1, "no other PR is opened")
 }
