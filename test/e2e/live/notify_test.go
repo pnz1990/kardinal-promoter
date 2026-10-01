@@ -31,10 +31,10 @@ import (
 // team PolicyGate that always blocks (holdApp): a Bundle's gate instance
 // blocks within seconds and nothing is promoted.
 
-// holdGate is the team PolicyGate template holdApp creates.
-const holdGate = "hold"
+// holdGateName is the team PolicyGate template holdApp creates.
+const holdGateName = "hold"
 
-// holdApp sets up, in ns, a GitOps repo, the team gate holdGate on
+// holdApp sets up, in ns, a GitOps repo, the team gate holdGateName on
 // environment test (expression "false", re-evaluated every 10s) and one
 // Pipeline per name over the repo. Every Bundle of those Pipelines is held at
 // the gate, so it creates a PolicyGate.Blocked event and promotes nothing.
@@ -44,14 +44,14 @@ func holdApp(t *testing.T, e *framework.Env, ns string, pipelines ...string) *ap
 	a := &app{e: e, ns: ns, envs: envs,
 		repo: e.Repo(t, ns, fixtures.KustomizeRepo(fixtures.App{Namespace: ns, Envs: envs}))}
 	gate := &v1alpha1.PolicyGate{
-		ObjectMeta: metav1.ObjectMeta{Name: holdGate, Namespace: ns, Labels: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Name: holdGateName, Namespace: ns, Labels: map[string]string{
 			"kardinal.io/scope":      "team",
 			"kardinal.io/applies-to": "test",
 			"kardinal.io/type":       "gate",
 		}},
 		Spec: v1alpha1.PolicyGateSpec{Expression: "false", Message: "held by the e2e test", RecheckInterval: "10s"},
 	}
-	require.NoError(t, e.Client.Create(context.Background(), gate), "create PolicyGate %s", holdGate)
+	require.NoError(t, e.Client.Create(context.Background(), gate), "create PolicyGate %s", holdGateName)
 	for _, name := range pipelines {
 		p := a.pipeline(nil)
 		p.Name = name
@@ -60,16 +60,16 @@ func holdApp(t *testing.T, e *framework.Env, ns string, pipelines ...string) *ap
 	return a
 }
 
-// holdBundle creates a Bundle of pipeline and waits until its holdGate
+// holdBundle creates a Bundle of pipeline and waits until its holdGateName
 // instance blocks. It returns the Bundle name and the gate instance.
 func holdBundle(t *testing.T, a *app, pipeline string) (string, *v1alpha1.PolicyGate) {
 	t.Helper()
 	bundle := a.e.CreateBundle(t, a.ns, pipeline, "--image", fixtures.Image+":"+fixtures.V2)
 	var gate v1alpha1.PolicyGate
-	framework.Eventually(t, 2*time.Minute, "the "+holdGate+" gate of "+bundle+" to block", func(ctx context.Context) (bool, string) {
+	framework.Eventually(t, 2*time.Minute, "the "+holdGateName+" gate of "+bundle+" to block", func(ctx context.Context) (bool, string) {
 		var list v1alpha1.PolicyGateList
 		if err := a.e.Client.List(ctx, &list, client.InNamespace(a.ns),
-			client.MatchingLabels{"kardinal.io/bundle": bundle, "kardinal.io/gate-template": holdGate}); err != nil {
+			client.MatchingLabels{"kardinal.io/bundle": bundle, "kardinal.io/gate-template": holdGateName}); err != nil {
 			return false, err.Error()
 		}
 		if len(list.Items) != 1 {
