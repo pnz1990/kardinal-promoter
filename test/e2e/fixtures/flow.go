@@ -109,10 +109,17 @@ func HelmRepo(app App) map[string][]byte {
 	return files
 }
 
-// SlowGitServer is a podinfo Deployment and Service named name that answer
-// every request after 30 seconds. A Pipeline whose git.url points at it gets
-// a git server that hangs, which drives step timeouts. It has no readiness
-// probe: a probe would time out too, and the Service would have no endpoints.
+// SlowGitPath is the URL path prefix SlowGitServer delays. podinfo delays only
+// requests that match one of its routes, and /swagger/ matches every path
+// under it; other unknown paths get an immediate 404.
+const SlowGitPath = "/swagger/"
+
+// SlowGitServer is a podinfo Deployment and Service named name, port 9898,
+// that answer requests under SlowGitPath after 30 seconds. A Pipeline whose
+// git.url is http://<name>.<ns>.svc.cluster.local:9898/swagger/<repo>.git
+// gets a git server that hangs, which drives step timeouts. It has no
+// readiness probe: a probe would time out too, and the Service would have no
+// endpoints.
 func SlowGitServer(name string) (deploymentYAML, serviceYAML string) {
 	d := strings.NewReplacer("NAME", name, "IMAGE", Image+":"+V1).Replace(`apiVersion: apps/v1
 kind: Deployment
