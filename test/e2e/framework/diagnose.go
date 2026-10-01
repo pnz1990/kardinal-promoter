@@ -99,6 +99,46 @@ func (e *Env) diagnose(t *testing.T, ns, dir string) {
 	t.Logf("diagnostics written to %s", dir)
 }
 
+// DiagnoseCNI writes the kindnet Pods' restart counts and their logs since
+// since to $KARDINAL_E2E_ARTIFACTS/<ns>/, for a test whose NetworkPolicy
+// check failed. kindnet enforces NetworkPolicy and fails open: it accepts
+// the packets it cannot evaluate (no listener while it restarts, a full
+// queue, a parse or policy error), so its log and restarts say whether the
+// CNI let a denied connection through.
+func (e *Env) DiagnoseCNI(t *testing.T, ns string, since time.Time) {
+	t.Helper()
+	dir := filepath.Join(artifactsDir(), ns)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Logf("diagnostics: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	pods, err := e.Kube.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{LabelSelector: "app=kindnet"})
+	if err != nil {
+		t.Logf("diagnostics: list kindnet pods: %v", err)
+		return
+	}
+	start := metav1.NewTime(since.Add(-time.Minute))
+	for _, p := range pods.Items {
+		var b strings.Builder
+		for _, cs := range p.Status.ContainerStatuses {
+			fmt.Fprintf(&b, "container %s: %d restarts", cs.Name, cs.RestartCount)
+			if last := cs.LastTerminationState.Terminated; last != nil {
+				fmt.Fprintf(&b, ", last ended %s: %s (exit %d)", last.FinishedAt.UTC().Format(time.RFC3339), last.Reason, last.ExitCode)
+			}
+			b.WriteString("\n")
+		}
+		raw, err := e.Kube.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{SinceTime: &start, Timestamps: true}).DoRaw(ctx)
+		if err != nil {
+			fmt.Fprintf(&b, "logs: %v\n", err)
+		}
+		b.Write(raw)
+		write(t, dir, "cni-"+p.Name+".txt", []byte(b.String()))
+		t.Logf("diagnostics: kindnet pod %s: %s", p.Name, firstLine(b.String()))
+	}
+}
+
 // namespacedResources lists the namespaced, listable resources of groups.
 func (e *Env) namespacedResources(t *testing.T, groups []string) []schema.GroupVersionResource {
 	t.Helper()

@@ -1745,8 +1745,8 @@ func TestChart_GraphIdentity(t *testing.T) {
 // TestChart_NetworkPolicy checks networkPolicy on a CNI that enforces it.
 // Each port admits the peers networkPolicy.ingressFrom lists, or any peer
 // when none are listed. The controller may reach DNS, :443 and :6443, and
-// the extraEgress destinations, and nothing else: it cannot promote until
-// extraEgress lets it reach the git server.
+// the extraEgress destinations, and nothing else: its clone times out, and
+// it cannot promote until extraEgress lets it reach the git server.
 //
 // Covers CHART-NETPOL-01.
 func TestChart_NetworkPolicy(t *testing.T) {
@@ -1821,22 +1821,62 @@ func TestChart_NetworkPolicy(t *testing.T) {
 	res = asController.Curl(t, 3*time.Second, podinfo)
 	assert.Equal(t, 0, res.Code, "the controller may not reach other pods: %s", brief(res))
 
+	// kindnet checks a connection only when it opens, so one the controller
+	// opened before kindnet enforced the policy for its Pod would outlive
+	// it. Replace the Pod now that the policy is enforced, and see that it is
+	// enforced for the new Pod too, so no connection predates the policy.
+	since := time.Now()
+	t.Cleanup(func() {
+		if t.Failed() {
+			e.DiagnoseCNI(t, ns, since)
+		}
+	})
+	old := runningPod(t, r)
+	require.NoError(t, e.Client.Delete(ctx, &old))
+	framework.Eventually(t, 3*time.Minute, "a new controller Pod replaces "+old.Name, func(ctx context.Context) (bool, string) {
+		var running []string
+		for _, p := range r.Pods(t) {
+			if p.Name == old.Name || p.DeletionTimestamp != nil {
+				return false, p.Name + " is still there"
+			}
+			if p.Status.Phase == corev1.PodRunning && podReady(&p) {
+				running = append(running, p.Name)
+			}
+		}
+		return len(running) == 1, fmt.Sprintf("ready: %v", running)
+	})
+	framework.Eventually(t, time.Minute, "ingressFrom.metrics refuses other pods at the new controller Pod", func(context.Context) (bool, string) {
+		res := other.Curl(t, 3*time.Second, metrics)
+		return res.Code == 0, brief(res)
+	})
+
 	a.apply(t, a.resourcePipeline(nil))
 	bundle := e.CreateBundle(t, ns, pipelineName, "--image", fixtures.Image+":"+fixtures.V2)
-	framework.Consistently(t, 45*time.Second, "without git egress the promotion does not land", func(ctx context.Context) (bool, string) {
+	// The controller's own clone must time out: that, not only the absence
+	// of a promotion, shows the policy blocks its git traffic.
+	framework.Eventually(t, 2*time.Minute, "without git egress the controller's clone times out", func(ctx context.Context) (bool, string) {
+		ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test")
+		if err != nil {
+			return false, err.Error()
+		}
+		if !ok {
+			return false, "no test step yet"
+		}
+		require.NotEqual(t, "Verified", ps.Status.State, "without git egress the promotion landed: %s", ps.Status.Message)
+		return strings.Contains(ps.Status.Message, "step git-clone") && strings.Contains(ps.Status.Message, "i/o timeout"),
+			ps.Status.State + ": " + ps.Status.Message
+	})
+	framework.Consistently(t, 10*time.Second, "without git egress the promotion does not land", func(ctx context.Context) (bool, string) {
 		ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test")
 		if err != nil {
 			return false, err.Error()
 		}
 		if ok && ps.Status.State == "Verified" {
-			return false, "the test step is Verified"
+			return false, "the test step is Verified: " + ps.Status.Message
 		}
 		return true, ""
 	})
 	assert.Equal(t, fixtures.Image+":"+fixtures.V1, e.DeploymentImage(t, ns, fixtures.Workload("test")))
-	if ps, ok, err := e.Step(ctx, ns, pipelineName, bundle, "test"); err == nil && ok {
-		t.Logf("test step without git egress: %s: %s", ps.Status.State, ps.Status.Message)
-	}
 
 	r.Upgrade(t, values(gitEgress))
 	runningPod(t, r)
