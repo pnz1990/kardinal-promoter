@@ -432,7 +432,10 @@ func (r *Reconciler) policiesForStep(ctx context.Context, obj client.Object) []r
 	}
 	var list v1alpha1.RollbackPolicyList
 	if err := r.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
-		zerolog.Ctx(ctx).Error().Err(err).Str("promotionstep", obj.GetName()).
+		// Policies are not polled: this event is lost, and the log is all
+		// that shows it.
+		zerolog.Ctx(ctx).Error().Err(err).
+			Str("namespace", obj.GetNamespace()).Str("promotionstep", obj.GetName()).
 			Msg("failed to list RollbackPolicies for PromotionStep event; the next event of the step re-evaluates them")
 		return nil
 	}
