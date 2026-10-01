@@ -44,6 +44,13 @@ const requeueApplierBinding = 10 * time.Second
 // changed under every retry.
 const requeueConflict = time.Second
 
+// requeueNamespace is how often a deleting Graph whose namespace is not being
+// deleted is checked again. The controller only gets namespaces, so it sees
+// no event when one starts terminating; a Graph whose teardown was already
+// stuck then (its applier RoleBinding was deleted first, so kro's deletes are
+// forbidden and kro writes nothing) is found by this requeue instead.
+const requeueNamespace = 30 * time.Second
+
 // GraphLister lists the kardinal Graphs in a namespace (graph.GraphClient).
 type GraphLister interface {
 	List(ctx context.Context, namespace string) ([]*graph.Graph, error)
@@ -69,6 +76,10 @@ type GraphLister interface {
 //     owner reference to a kardinal.io Bundle) and has a deletionTimestamp;
 //   - its namespace is Terminating (or gone);
 //   - the applier RoleBinding is gone or being deleted.
+//
+// A deleting Graph is checked again every requeueNamespace while its
+// namespace is not terminating: there is no namespace watch, and a Graph
+// stuck before its namespace was deleted gets no other event.
 //
 // kardinal's Graphs create their resources (PromotionSteps, PolicyGates,
 // PRStatuses) in the Graph's own namespace, which the namespace controller
@@ -109,8 +120,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	terminating, err := r.namespaceTerminating(ctx, req.Namespace)
-	if err != nil || !terminating {
+	switch {
+	case err != nil:
 		return ctrl.Result{}, err
+	case !terminating:
+		// kro tears the Graph down; look again in case the namespace starts
+		// terminating while the teardown is stuck.
+		return ctrl.Result{RequeueAfter: requeueNamespace}, nil
 	}
 	var rb rbacv1.RoleBinding
 	err = r.APIReader.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: r.Identity.ApplierBindingName()}, &rb)

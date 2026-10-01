@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -183,10 +184,11 @@ func TestReconciler_NamespaceDeletion(t *testing.T) {
 			wantRequeue:   true,
 		},
 		{
-			name:          "the namespace is not being deleted",
+			name:          "the namespace is not being deleted: checked again later",
 			graph:         kardinalGraph("team-a", true, graphcleanup.KroFinalizer),
 			objs:          []client.Object{namespace("team-a", false)},
 			wantFinalizer: true,
+			wantRequeue:   true,
 		},
 		{
 			name:          "the Graph is not being deleted",
@@ -235,6 +237,31 @@ func TestReconciler_NamespaceDeletion(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReconciler_StuckBeforeNamespaceDeletion covers the #1387 review: a
+// Graph whose teardown is stuck before its namespace is deleted (the applier
+// RoleBinding went first, so kro's deletes are forbidden) gets no event when
+// the namespace starts terminating. It is requeued while it waits, and the
+// reconcile after the namespace starts terminating removes kro's finalizer.
+func TestReconciler_StuckBeforeNamespaceDeletion(t *testing.T) {
+	ns := namespace("team-a", false)
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).
+		WithObjects(ns, kardinalGraph("team-a", true, graphcleanup.KroFinalizer)).Build()
+	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{},
+		Identity: &graph.IdentityProvisioner{Writer: c, Reader: c}}
+
+	res, err := reconcile(t, r, "team-a")
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Second, res.RequeueAfter, "the stuck Graph is checked again")
+	require.NotNil(t, getGraph(t, c, "team-a"))
+
+	ns.Status.Phase = corev1.NamespaceTerminating
+	require.NoError(t, c.Status().Update(context.Background(), ns))
+	res, err = reconcile(t, r, "team-a")
+	require.NoError(t, err)
+	assert.Zero(t, res.RequeueAfter)
+	assert.Nil(t, getGraph(t, c, "team-a"), "kro's finalizer is removed and the Graph goes")
 }
 
 // TestReconciler_DeletesResourcesOutsideNamespace covers B45: a resource kro
