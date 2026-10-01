@@ -331,9 +331,10 @@ func (r *Release) AllLogs(t *testing.T) string {
 	return b.String()
 }
 
-// LogLine is one controller log line. At is when the container runtime wrote
-// it (the kubelet's log timestamp; kind nodes share the host's clock).
-type LogLine struct {
+// StreamLine is one line of a followed controller log (see LogStream). At is
+// when the container runtime wrote it (the kubelet's log timestamp; kind
+// nodes share the host's clock).
+type StreamLine struct {
 	At   time.Time
 	Text string
 }
@@ -341,7 +342,7 @@ type LogLine struct {
 // LogStream follows one controller Pod's log (see Release.FollowLogs).
 type LogStream struct {
 	mu    sync.Mutex
-	lines []LogLine
+	lines []StreamLine
 	done  chan struct{}
 	// last is the latest timestamp read, and atLast how many lines had it:
 	// what a reconnected stream skips.
@@ -350,20 +351,20 @@ type LogStream struct {
 }
 
 // Lines returns the lines read so far.
-func (s *LogStream) Lines() []LogLine {
+func (s *LogStream) Lines() []StreamLine {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]LogLine(nil), s.lines...)
+	return append([]StreamLine(nil), s.lines...)
 }
 
 // Find returns the first line read so far that contains substr.
-func (s *LogStream) Find(substr string) (LogLine, bool) {
+func (s *LogStream) Find(substr string) (StreamLine, bool) {
 	for _, l := range s.Lines() {
 		if strings.Contains(l.Text, substr) {
 			return l, true
 		}
 	}
-	return LogLine{}, false
+	return StreamLine{}, false
 }
 
 // Done is closed when the log ends: the container exited or restarted, the
@@ -490,7 +491,7 @@ func (s *LogStream) read(rc io.Reader) {
 		case at.Equal(s.last):
 			s.atLast++
 		}
-		s.lines = append(s.lines, LogLine{At: at, Text: text})
+		s.lines = append(s.lines, StreamLine{At: at, Text: text})
 		s.mu.Unlock()
 	}
 }

@@ -2054,7 +2054,7 @@ func TestChart_Demo(t *testing.T) {
 }
 
 // logLine is the first line of logs that contains every one of substrs.
-func logLine(logs *framework.LogStream, substrs ...string) (framework.LogLine, bool) {
+func logLine(logs *framework.LogStream, substrs ...string) (framework.StreamLine, bool) {
 	for _, l := range logs.Lines() {
 		all := true
 		for _, s := range substrs {
@@ -2064,7 +2064,7 @@ func logLine(logs *framework.LogStream, substrs ...string) (framework.LogLine, b
 			return l, true
 		}
 	}
-	return framework.LogLine{}, false
+	return framework.StreamLine{}, false
 }
 
 // TestChart_RestartMidStep stops the controller with SIGTERM (a scale-down,
@@ -2124,7 +2124,7 @@ func TestChart_RestartMidStep(t *testing.T) {
 	a.apply(t, a.resourcePipeline(map[string]string{"prod": "pr-review"}))
 	image := fixtures.Image + ":" + fixtures.V2
 	bundle := e.CreateBundle(t, a.ns, pipelineName, "--image", image)
-	var opening framework.LogLine
+	var opening framework.StreamLine
 	framework.Eventually(t, 2*time.Minute, "the step pushes and starts opening its PR", func(context.Context) (bool, string) {
 		opening, ok = logLine(logs, `"step":"open-pr"`, `"message":"executing step"`)
 		return ok, "open-pr has not started"
@@ -2267,7 +2267,7 @@ func TestChart_ShutdownDrain(t *testing.T) {
 	d.Spec.Replicas = &zero
 	sigterm := time.Now()
 	require.NoError(t, e.Client.Patch(ctx, d, scaleDown))
-	var drain framework.LogLine
+	var drain framework.StreamLine
 	framework.Eventually(t, 30*time.Second, "the webhook server starts draining", func(context.Context) (bool, string) {
 		drain, ok = logLine(logs, `"server":"webhook"`, `"message":"shutting down server"`)
 		return ok, "the webhook server has not logged shutting down server"
