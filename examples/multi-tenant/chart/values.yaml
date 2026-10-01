@@ -11,8 +11,8 @@ gitRepo: https://github.com/pnz1990/kardinal-demo
 gitBranch: main
 
 # gitSecretName is the Secret, in the team's namespace, whose "token" key the
-# controller uses to clone and push gitRepo and to open PRs. Every promotion
-# pushes, so the Secret must exist before the first Bundle.
+# controller uses to clone and push gitRepo. Every promotion pushes, so the
+# Secret must exist before the first Bundle.
 gitSecretName: github-token
 
 # environments lists the promotion environments.
