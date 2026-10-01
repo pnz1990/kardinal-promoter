@@ -171,22 +171,33 @@ metrics["error-rate"].result == "Pass"
 
 ## E2E Testing Infrastructure
 
-The live validation loop is `.github/workflows/pdca.yml` (see §Product Validation Scenarios).
+The live e2e tests are in test/e2e/live, behind the `e2e` build tag. Each suite (hack/e2e/up.sh
+defines them) gets its own kind cluster with a real git server, a GitOps engine and the
+controller built from the checkout. test/e2e/README.md has the details.
 
-**Single-cluster setup** (kind, all environments):
 ```bash
-make e2e-setup           # kind + kro + kardinal built from this checkout + quickstart fixtures
-make test-e2e-kind       # cluster e2e tests (build tag e2e) against that kind cluster
-make setup-e2e-env       # kind + kro + Argo CD + test/uat/prod
-make kind-down           # delete the kind cluster
+make e2e-up SUITE=core          # hack/e2e/up.sh core: kind cluster kardinal-e2e-core + components
+make test-e2e-live SUITE=core   # hack/e2e/run.sh core: the suite's tests
+make e2e-down SUITE=core        # delete the kind cluster
 ```
+
+- **A skipped live test fails CI.** run.sh fails when a test fails or skips, or when no test
+  ran. A missing cluster, component or credential fails the test.
+- `.github/workflows/e2e-live.yml` runs every suite on every PR, on pushes to main and weekly
+  (each test three times); core runs on three Kubernetes minors. It needs no repo secret. Its
+  `e2e live` job runs `go run ./test/e2e/proof` on the suites' results and fails when a
+  coverage row's test failed, skipped or did not run.
+- test/e2e/coverage.tsv has one row per documented behavior. A live test claims rows with one
+  sentence in its doc comment, `Covers STEP-AUTO-01, SCM-CLOSED-01.`, only for what it fully
+  asserts. `go test ./test/hack -run TestE2ECoverage` fails when a row's status and the tests
+  disagree, when a live test claims no row, or when no suite runs it.
 
 **Multi-cluster (J2):** there is no live multi-cluster setup in this repo. J2 evidence is
 tracked in #1293.
 
-**Test application**: `github.com/pnz1990/kardinal-test-app`
-- Image: `ghcr.io/pnz1990/kardinal-test-app:sha-<7chars>`
-- Get latest SHA: `gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]'`
+**Test application**: podinfo (`ghcr.io/stefanprodan/podinfo`) at the real tags pinned in
+test/e2e/fixtures (`fixtures.V1`..`V3`); `fixtures.BrokenTag` gives a rollout that never becomes
+Available. Live tests use these fixtures, not kardinal-test-app or a placeholder image.
 
 ## Go Standards
 
@@ -419,54 +430,37 @@ and workflows run with repo secrets. The `agent instructions guard` check
 - Before tagging: docs/changelog.md has the section with upgrade notes; README.md, docs/quickstart.md
   and docs/installation.md show the new version; the kro pin (hack/install-kro.sh, the Chart.yaml
   kro.version annotation, the release notes text in release.yml) matches kro's latest release;
-  J1–J6 have live kind evidence on the tagged commit.
+  J1–J6 have e2e-live evidence on the tagged commit (§Journey validation).
 - After tagging, check the pages that drift: /roadmap/, /comparison/ (maturity row), / and
   /changelog/ on https://pnz1990.github.io/kardinal-promoter/.
 
 ## Journey validation
 
-A journey counts as passing only with live-cluster evidence: a PDCA workflow run (pdca.yml;
-results are in the job summary) or a `[LIVE CLUSTER VALIDATED]` comment on the PR or release
-issue. The comment gives the commands, their output, the kind version and the
-kardinal-test-app image SHA. Record the run or comment link in docs/aide/definition-of-done.md
-§Journey Status. TestJourneyN (fake client) is a unit test, not evidence.
+A journey counts as passing only with live evidence: the link to an e2e-live run
+(`.github/workflows/e2e-live.yml`) on the commit in which the live tests covering the journey's
+steps passed. The `e2e live` job summary lists each coverage.tsv row's result. Record the run
+link in docs/aide/definition-of-done.md §Journey Status. TestJourneyN (fake client) is a unit
+test, not evidence.
 
 ```bash
-# Trigger the PDCA workflow for one scenario (1-6) or all of them
-gh workflow run pdca.yml --repo pnz1990/kardinal-promoter -f scenario=1
-gh run list --repo pnz1990/kardinal-promoter --workflow=pdca.yml --limit 3
+gh run list --repo pnz1990/kardinal-promoter --workflow=e2e-live.yml --commit <sha>
+gh workflow run e2e-live.yml --repo pnz1990/kardinal-promoter --ref <branch>   # -f count=N repeats each test
 ```
-
-PDCA's first step checks that the `KARDINAL_DEMO_PAT` secret can read pnz1990/kardinal-demo.
-When it fails with "rotate it", the owner replaces the PAT; a session cannot.
 
 ## Journey Self-Validation Commands
 
-Read docs/aide/definition-of-done.md and run the relevant journey steps on a kind cluster
-(`make e2e-setup`, or by hand: `bash hack/install-kro.sh`, then install the chart):
+Read docs/aide/definition-of-done.md for the journey's steps, then run the live tests that
+cover them on a suite cluster. RUN narrows the suite to some tests:
 
 ```bash
-# Journey 1 (Quickstart)
-kubectl apply -f examples/quickstart/pipeline.yaml
-kardinal get pipelines
-kardinal explain kardinal-test-app --env prod
-
-# Journey 2 (Multi-cluster) — no live setup yet; evidence is tracked in #1293
-
-# Journey 3 (Policies)
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm"
-# must return: RESULT: BLOCKED
-
-# Journey 4 (Rollback)
-kardinal rollback kardinal-test-app --env prod
-# must open PR with kardinal/rollback label
-
-# Journey 5 (CLI)
-kardinal version
-kardinal get pipelines
-kardinal explain kardinal-test-app --env prod
-# all must match output format in docs/cli-reference.md
+make e2e-up SUITE=core
+make test-e2e-live SUITE=core RUN='^TestGate_Pause'   # only the pause tests
+make e2e-down SUITE=core
 ```
+
+Journey 2 (multi-cluster) has no live setup yet; evidence is tracked in #1293. The fake-client
+journey tests run without a cluster: `go test ./test/e2e/ -run TestJourney` (TestJourney5CLI
+needs `make build` first).
 
 ## Product invariants
 
@@ -480,125 +474,16 @@ kardinal explain kardinal-test-app --env prod
 
 ## Product Validation Scenarios
 
-`.github/workflows/pdca.yml` runs these scenarios nightly and on demand on a kind cluster
-(`make setup-e2e-env` gives you the same setup by hand). Use kardinal as a customer would.
-Do not mock anything.
+The live suites replace the hand-run scenarios that were here (happy path, pause, weekend
+gate, explain, rollback, supersession). Each documented behavior is a row in
+test/e2e/coverage.tsv; e2e-live.yml runs the tests that cover them. A `todo` row has no live
+test yet. Live tests use kardinal as a customer would, against real components, with nothing
+mocked (test/e2e/README.md §Rules).
 
-### CRITICAL: Use the real test repos, not nginx
+To add a scenario:
 
-**ALWAYS use these repos for testing — never nginx, never placeholder images:**
-
-| Repo | Purpose | Image |
-|---|---|---|
-| `github.com/pnz1990/kardinal-test-app` | The application being promoted | `ghcr.io/pnz1990/kardinal-test-app:sha-<7chars>` |
-| `github.com/pnz1990/kardinal-demo` | The GitOps target repo (environment branches) | Pipeline `repoURL` points here |
-
-```bash
-# Get the REAL latest image — do not use nginx or :latest
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
-echo "Using image: $TEST_IMAGE"
-```
-
-If you find yourself using `nginx` or any other placeholder image in tests, STOP and switch to
-`kardinal-test-app`. The point is to validate with a real application that reflects real-world
-usage.
-
-### Setup (before running scenarios)
-
-```bash
-make setup-e2e-env
-
-LATEST_SHA=$(gh api repos/pnz1990/kardinal-test-app/commits/main --jq '.sha[:7]')
-TEST_IMAGE="ghcr.io/pnz1990/kardinal-test-app:sha-${LATEST_SHA}"
-
-# examples/quickstart/pipeline.yaml points at https://github.com/pnz1990/kardinal-demo,
-# which has the environment branches (env/test, env/uat, env/prod).
-kubectl apply -f examples/quickstart/pipeline.yaml
-kubectl apply -f examples/quickstart/policy-gates.yaml
-kubectl create secret generic github-token \
-  --from-literal=token=${GITHUB_TOKEN} \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
-### Scenario 1: Happy path promotion
-
-```bash
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
-sleep 30
-kardinal get pipelines
-# Expected: test=Verified, uat=Verified, prod=PR open
-kubectl get deployment kardinal-test-app -n kardinal-test-app-test
-# Expected: READY 1/1
-```
-
-**Pass criteria**: test and uat auto-promote; prod PR opened with evidence body.
-
-### Scenario 2: Pause blocks in-flight promotion
-
-```bash
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
-kardinal pause kardinal-test-app
-sleep 30
-kardinal get pipelines
-# Expected: PAUSED badge visible, bundle does not advance past test
-kardinal resume kardinal-test-app
-```
-
-**Pass criteria**: PAUSED badge appears; promotion halts; resumes after resume.
-
-### Scenario 3: Weekend gate blocks prod
-
-```bash
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Saturday 3pm" --soak-minutes 60
-# Expected: RESULT: BLOCKED
-kardinal policy simulate --pipeline kardinal-test-app --env prod --time "Tuesday 10am" --soak-minutes 60
-# Expected: RESULT: PASS
-```
-
-**Pass criteria**: exact BLOCKED/PASS strings returned. (Without `--soak-minutes`, the
-require-uat-soak gate also blocks.)
-
-### Scenario 4: Explain shows gate details
-
-```bash
-kardinal explain kardinal-test-app --env prod
-# Expected: shows no-weekend-deploys gate with expression and current value
-```
-
-**Pass criteria**: gate name, CEL expression (`!schedule.isWeekend`), and result visible.
-
-### Scenario 5: Rollback opens a PR
-
-```bash
-# Promote first
-kardinal create bundle kardinal-test-app --image $TEST_IMAGE
-sleep 60  # wait for test+uat
-kardinal rollback kardinal-test-app --env prod
-# Expected: PR opened with kardinal/rollback label and evidence body
-```
-
-**Pass criteria**: PR has `kardinal/rollback` label; PR body contains promotion evidence.
-
-### Scenario 6: Concurrent bundles — correct supersession
-
-```bash
-IMAGE_A="ghcr.io/pnz1990/kardinal-test-app:sha-aaa1111"
-IMAGE_B="ghcr.io/pnz1990/kardinal-test-app:sha-bbb2222"
-kardinal create bundle kardinal-test-app --image $IMAGE_A
-sleep 5
-kardinal create bundle kardinal-test-app --image $IMAGE_B
-sleep 30
-kardinal get pipelines
-# Expected: only IMAGE_B bundle is Promoting; IMAGE_A bundle is Superseded
-```
-
-**Pass criteria**: older bundle superseded, newer one continues.
-
-### After running scenarios
-
-For each scenario: record PASS/FAIL + actual output.
-Open `kind/bug` issue if any scenario fails.
-Open `kind/docs` issue if output doesn't match `docs/cli-reference.md`.
-Record the result in docs/aide/definition-of-done.md §Journey Status with the run URL.
-Tear down: `make kind-down` (or keep running for continuous validation).
+1. Add its row to coverage.tsv, or pick its `todo` row.
+2. Write the test in test/e2e/live, with `Covers ID.` in its doc comment and a name that a
+   suite's RUN pattern in hack/e2e/up.sh matches.
+3. Set the row to `covered` and run `go test ./test/hack -run TestE2ECoverage`.
+4. Run the suite: `make e2e-up SUITE=<suite>` and `make test-e2e-live SUITE=<suite>`.

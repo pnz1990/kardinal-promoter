@@ -6,8 +6,6 @@
 //
 // Design ref: docs/design/25-anchor-kardinal-promoter.md §Future
 //   "Playwright integration in PDCA — first 3 UI scenarios: rollback button"
-//
-// PDCA scenario: S27
 
 import { test, expect } from '@playwright/test'
 

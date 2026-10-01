@@ -420,7 +420,7 @@ func TestPRTemplate_GateComplianceWithNamespace(t *testing.T) {
 // when the directory is not a git repository.
 func TestGoGitClient_PushNotARepo(t *testing.T) {
 	// go-git hangs on macOS when PlainInit or PlainOpen are called on certain filesystem paths.
-	// Skip on non-Linux platforms; the real behavior is validated in CI (Linux) and PDCA workflow.
+	// Skip on non-Linux platforms; the real behavior is validated in CI (Linux).
 	if testing.Short() {
 		t.Skip("skipping go-git test in short mode")
 	}

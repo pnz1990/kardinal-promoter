@@ -1,6 +1,8 @@
 # kardinal-promoter Demo Environment
 
-This directory contains everything needed to create a **complete, working demo environment** for kardinal-promoter — three clusters, one main pipeline plus optional Flux, Argo Rollouts and Flagger pipelines, and a validation script that serves as the source of truth that the product works. The controller is built from your checkout, so the demo always runs the code you have.
+This directory contains everything needed to create a **complete, working demo environment** for kardinal-promoter — three clusters, one main pipeline plus optional Flux, Argo Rollouts and Flagger pipelines. The controller is built from your checkout, so the demo always runs the code you have.
+
+CI does not run the demo. The live e2e suites validate kardinal: see [Validation](#validation).
 
 ## What You Get
 
@@ -24,7 +26,7 @@ test (auto) → uat (auto) → prod (PR review)
                                          business-hours-only, no-bot-deploys
 ```
 
-**Features exercised end-to-end:**
+**Features the demo shows:**
 
 | Feature | Where |
 |---|---|
@@ -83,10 +85,7 @@ kubectl port-forward -n kardinal-system \
   deployment/kardinal-promoter 8082:8082 &
 kardinal dashboard     # opens http://localhost:8082/ui/
 
-# 5. Validate everything works
-./demo/scripts/validate.sh
-
-# 6. Tear down
+# 5. Tear down
 ./demo/scripts/teardown.sh
 ```
 
@@ -178,34 +177,19 @@ kardinal create bundle kardinal-test-app --image "$IMAGE" --dry-run
 
 ---
 
-## Validation (Source of Truth)
+## Validation
 
-The `validate.sh` script is the canonical definition of "kardinal works":
+The live e2e suites in `test/e2e/live` validate kardinal on kind clusters with
+real git servers and GitOps engines, using podinfo as the test app:
 
 ```bash
-./demo/scripts/validate.sh              # all scenarios
-./demo/scripts/validate.sh --scenario 5 # just policy gate scenario
-./demo/scripts/validate.sh --fast       # skip soak waits (for CI)
+make e2e-up SUITE=core        # hack/e2e/up.sh core
+make test-e2e-live SUITE=core # hack/e2e/run.sh core
+make e2e-down SUITE=core
 ```
 
-**Scenarios validated:**
-
-| # | Scenario | Feature |
-|---|---|---|
-| 1 | Controller health | `kardinal doctor` |
-| 2 | Pipeline list | `kardinal get pipelines` |
-| 3 | UI reachable | HTTP 200 from `/api/v1/ui/pipelines` |
-| 4 | Happy path promotion | test → uat auto, prod PR |
-| 5 | Weekend gate | `policy simulate` → BLOCKED / PASS |
-| 6 | Soak gate | gate visible in `kardinal explain` |
-| 7 | Pause / resume | `kardinal pause` + `resume` |
-| 8 | Rollback | `kardinal rollback` opens PR |
-| 9 | CLI completeness | version, explain, history, completion, --dry-run |
-| 11 | Flux adapter | `kardinal-test-app-flux` pipeline and Kustomizations |
-| 12 | Argo Rollouts adapter | `kardinal-test-app-rollouts` pipeline and Rollout |
-| 13 | Flagger adapter | `kardinal-test-app-flagger` pipeline and Canary |
-
-This script also runs **nightly in CI** (`.github/workflows/demo-validate.yml`). If it's red, the product is broken.
+[test/e2e/README.md](../test/e2e/README.md) lists the suites and their tests.
+CI runs them in `.github/workflows/e2e-live.yml`.
 
 ---
 
@@ -218,17 +202,15 @@ The `--eks` option and the Terraform behind it were removed; the demo runs on ki
 ## Keeping the Demo Current
 
 **When you add a new feature:**
-1. Add a scenario to `demo/scripts/validate.sh`
-2. Add a manifest to `demo/manifests/` if the feature requires a new CRD
-3. Add a walkthrough to this README under "Scenario Walkthroughs"
-4. The nightly CI will catch any regressions
+1. Add a manifest to `demo/manifests/` if the feature requires a new CRD
+2. Add a walkthrough to this README under "Scenario Walkthroughs"
 
 **When you change a CRD field or CLI flag:**
 1. Update `demo/manifests/` to use the new field
-2. Update `demo/scripts/validate.sh` to check the new behaviour
-3. Update the walkthrough section above
+2. Update the walkthrough section above
 
-**The rule:** if a feature is not in `validate.sh`, it is not validated. If it is not validated, it will silently break.
+`go test ./test/examples/...` checks the manifests in `demo/manifests/` against
+the CRD schemas and the `kardinal` commands in this README against the CLI.
 
 ---
 
@@ -239,8 +221,7 @@ demo/
 ├── README.md                    # this file
 ├── scripts/
 │   ├── setup.sh                 # create all clusters + install everything
-│   ├── teardown.sh              # destroy all clusters
-│   └── validate.sh              # end-to-end validation (source of truth)
+│   └── teardown.sh              # destroy all clusters
 └── manifests/
     ├── policy-gates/
     │   └── org-gates.yaml       # 4 PolicyGates covering all gate types
@@ -248,7 +229,7 @@ demo/
     │   └── pipeline.yaml        # kardinal-test-app (test→uat→prod)
     ├── argocd/
     │   └── applications.yaml    # ArgoCD Applications for all envs
-    ├── flux/                    # Flux pipeline + Kustomizations (scenario 11)
-    ├── rollouts/                # Argo Rollouts pipeline + Rollout (scenario 12)
-    └── flagger/                 # Flagger pipeline + Canary (scenario 13)
+    ├── flux/                    # Flux pipeline + Kustomizations
+    ├── rollouts/                # Argo Rollouts pipeline + Rollout
+    └── flagger/                 # Flagger pipeline + Canary
 ```

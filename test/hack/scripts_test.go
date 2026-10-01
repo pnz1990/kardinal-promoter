@@ -1,9 +1,9 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-// Package hack tests the hack/ cluster setup scripts without a cluster.
+// Package hack tests the repository's scripts and workflows without a cluster.
 //
-// Each test puts fake kubectl, helm, kind and docker binaries first on PATH.
+// Script tests put fake kubectl, helm, kind and docker binaries first on PATH.
 // The fakes record their arguments and never contact anything, so the tests
 // can check that the scripts only ever act on the kind context they own.
 package hack
@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -104,101 +105,84 @@ func runScript(t *testing.T, script string, env map[string]string, args ...strin
 	return string(out), calls, err
 }
 
-// clusterCalls drops the read-only kubeconfig lookups the guard makes.
-func clusterCalls(calls []string) []string {
-	var out []string
-	for _, c := range calls {
-		if strings.HasPrefix(c, "kubectl config ") || strings.HasPrefix(c, "kind ") ||
-			strings.HasPrefix(c, "docker ") {
-			continue
-		}
-		out = append(out, c)
+// TestKindContextGuard runs use_kind_context (hack/kind-context.sh, which
+// hack/e2e/lib.sh sources) against a fake kubeconfig. It accepts only a kind-*
+// context whose API server is on the local host, and then points KUBECTL and
+// HELM at that context.
+func TestKindContextGuard(t *testing.T) {
+	tests := []struct {
+		name    string
+		ctx     string
+		env     []string
+		wantErr string
+	}{
+		{name: "local kind context", ctx: "kind-kardinal-e2e",
+			env: []string{"FAKE_KIND_CONTEXT=kind-kardinal-e2e", "FAKE_SERVER=https://127.0.0.1:40123"}},
+		{name: "not a kind-* name", ctx: "prod-cluster",
+			env:     []string{"FAKE_KIND_CONTEXT=prod-cluster", "FAKE_SERVER=https://127.0.0.1:40123"},
+			wantErr: "not a kind-* context"},
+		{name: "kind context points at a remote API server", ctx: "kind-kardinal-e2e",
+			env:     []string{"FAKE_KIND_CONTEXT=kind-kardinal-e2e", "FAKE_SERVER=https://ABCDEF.gr7.us-east-2.eks.amazonaws.com"},
+			wantErr: "is not local"},
+		{name: "kind context missing from kubeconfig", ctx: "kind-kardinal-e2e",
+			env:     []string{"FAKE_KIND_CONTEXT=", "FAKE_SERVER=https://127.0.0.1:40123"},
+			wantErr: "not found in kubeconfig"},
 	}
-	return out
-}
-
-func TestClusterSetupScriptsTargetOnlyTheirKindContext(t *testing.T) {
-	for _, script := range []string{"setup-e2e-env.sh", "e2e-setup.sh"} {
-		t.Run(script, func(t *testing.T) {
-			out, calls, err := runScript(t, script, map[string]string{
-				"FAKE_CURRENT_CONTEXT": "arn:aws:eks:us-east-2:111111111111:cluster/prod",
-				"FAKE_KIND_CONTEXT":    "kind-kardinal-e2e",
-				"FAKE_KIND_CLUSTERS":   "kardinal-e2e",
-				"FAKE_SERVER":          "https://127.0.0.1:40123",
-				"SKIP_BUILD":           "1",
-				"SKIP_ARGOCD":          "1",
-			})
-			require.NoError(t, err, out)
-
-			cc := clusterCalls(calls)
-			require.NotEmpty(t, cc, "the script made no kubectl/helm calls")
-			for _, c := range cc {
-				switch {
-				case strings.HasPrefix(c, "kubectl "):
-					assert.Contains(t, c, "--context kind-kardinal-e2e", "kubectl call without the kind context")
-				case strings.HasPrefix(c, "helm "):
-					assert.Contains(t, c, "--kube-context kind-kardinal-e2e", "helm call without the kind context")
-				}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "kubectl"), []byte(fakeKubectl), 0o755))
+			cmd := exec.Command("bash", "-c",
+				`source hack/kind-context.sh && use_kind_context "$1" && echo "KUBECTL=${KUBECTL[*]}" && echo "HELM=${HELM[*]}"`,
+				"guard", tt.ctx)
+			cmd.Dir = repoRoot(t)
+			cmd.Env = append([]string{
+				"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"FAKE_LOG=" + filepath.Join(t.TempDir(), "calls.log"),
+				"FAKE_CURRENT_CONTEXT=arn:aws:eks:us-east-2:111111111111:cluster/prod",
+				"KUBECONFIG=" + os.DevNull,
+			}, tt.env...)
+			out, err := cmd.CombinedOutput()
+			if tt.wantErr != "" {
+				require.Error(t, err, string(out))
+				assert.Contains(t, string(out), "ERROR: ")
+				assert.Contains(t, string(out), tt.wantErr)
+				assert.NotContains(t, string(out), "KUBECTL=")
+				return
 			}
+			require.NoError(t, err, string(out))
+			assert.Contains(t, string(out), "KUBECTL=kubectl --context kind-kardinal-e2e\n")
+			assert.Contains(t, string(out), "HELM=helm --kube-context kind-kardinal-e2e\n")
 		})
 	}
 }
 
-func TestClusterSetupScriptsRefuseNonKindTargets(t *testing.T) {
-	tests := []struct {
-		name string
-		env  map[string]string
-	}{
-		{
-			name: "kind context points at a remote API server",
-			env: map[string]string{
-				"FAKE_KIND_CONTEXT":  "kind-kardinal-e2e",
-				"FAKE_KIND_CLUSTERS": "kardinal-e2e",
-				"FAKE_SERVER":        "https://ABCDEF.gr7.us-east-2.eks.amazonaws.com",
-			},
-		},
-		{
-			name: "kind context missing from kubeconfig",
-			env: map[string]string{
-				"FAKE_KIND_CONTEXT":  "",
-				"FAKE_KIND_CLUSTERS": "kardinal-e2e",
-				"FAKE_SERVER":        "https://127.0.0.1:40123",
-			},
-		},
-	}
-	for _, script := range []string{"setup-e2e-env.sh", "e2e-setup.sh"} {
-		for _, tt := range tests {
-			t.Run(script+"/"+tt.name, func(t *testing.T) {
-				env := map[string]string{
-					"FAKE_CURRENT_CONTEXT": "arn:aws:eks:us-east-2:111111111111:cluster/prod",
-					"SKIP_BUILD":           "1",
-					"SKIP_ARGOCD":          "1",
-				}
-				for k, v := range tt.env {
-					env[k] = v
-				}
-				out, calls, err := runScript(t, script, env)
-				require.Error(t, err, "script must refuse: %s", out)
-				assert.Contains(t, out, "ERROR: ")
-				assert.Empty(t, clusterCalls(calls), "no kubectl/helm call may run before the guard")
-			})
+// TestE2EScriptsUseKindContext: every kubectl and helm call in hack/e2e goes
+// through the KUBECTL and HELM arrays of hack/kind-context.sh, so a live suite
+// never acts on the current kube context. A bare call is reported with its
+// file and line.
+func TestE2EScriptsUseKindContext(t *testing.T) {
+	bare := regexp.MustCompile(`(^|[\s;|&(` + "`" + `])(kubectl|helm)\s`)
+	var scripts []string
+	require.NoError(t, filepath.WalkDir(filepath.Join(repoRoot(t), "hack", "e2e"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".sh") {
+			scripts = append(scripts, p)
+		}
+		return err
+	}))
+	require.NotEmpty(t, scripts)
+	for _, p := range scripts {
+		data, err := os.ReadFile(p)
+		require.NoError(t, err)
+		for i, line := range strings.Split(string(data), "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "#") {
+				continue
+			}
+			assert.False(t, bare.MatchString(code), "%s:%d calls kubectl or helm without the kind context; use \"${KUBECTL[@]}\" or \"${HELM[@]}\": %s",
+				strings.TrimPrefix(p, repoRoot(t)+"/"), i+1, code)
 		}
 	}
-}
-
-func TestKindContextGuardRejectsNonKindName(t *testing.T) {
-	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "kubectl"), []byte(fakeKubectl), 0o755))
-	cmd := exec.Command("bash", "-c", `source hack/kind-context.sh && use_kind_context prod-cluster`)
-	cmd.Dir = repoRoot(t)
-	cmd.Env = []string{
-		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
-		"FAKE_LOG=" + filepath.Join(t.TempDir(), "calls.log"),
-		"KUBECONFIG=" + os.DevNull,
-	}
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	assert.Contains(t, string(out), "not a kind-* context")
 }
 
 // TestDemoTeardownIgnoresRemovedEKSFlag: the demo's --eks mode and

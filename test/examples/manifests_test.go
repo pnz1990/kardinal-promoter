@@ -1,8 +1,8 @@
 // Copyright 2026 The kardinal-promoter Authors.
 // Licensed under the Apache License, Version 2.0
 
-// Package examples checks the manifests and READMEs under examples/, demo/ and
-// test/pdca/ (the PDCA workflow's fixtures) without a cluster: every kardinal.io object must be accepted by the CRD
+// Package examples checks the manifests and READMEs under examples/ and demo/
+// without a cluster: every kardinal.io object must be accepted by the CRD
 // schemas as written, every documented CLI invocation must parse, and every
 // path an example points at must exist in the repository it names.
 package examples
@@ -38,7 +38,7 @@ import (
 )
 
 // manifestDirs are the trees whose YAML files are checked.
-var manifestDirs = []string{"examples", "demo", "test/pdca"}
+var manifestDirs = []string{"examples", "demo"}
 
 // doc is one YAML document from a manifest file or a rendered chart.
 type doc struct {

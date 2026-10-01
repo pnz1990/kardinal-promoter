@@ -465,8 +465,8 @@ func TestInjectHealthWatchNodes_ResourceWatchKindVsWatch(t *testing.T) {
 
 // TestInjectHealthWatchNodes_ResourceRef verifies that health.type=resource with
 // health.resource set uses the specified name and namespace instead of the defaults.
-// This exercises the fix for PDCA S9 — the `resource:` sub-field was rejected
-// as an unknown field before ResourceRef was added to HealthConfig.
+// The `resource:` sub-field was rejected as an unknown field before
+// ResourceRef was added to HealthConfig.
 func TestInjectHealthWatchNodes_ResourceRef(t *testing.T) {
 	pipeline := makePipeline("my-pipeline", []kardinalv1alpha1.EnvironmentSpec{
 		{

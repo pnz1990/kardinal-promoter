@@ -132,54 +132,6 @@ func TestWorkflowBashSyntaxValidator(t *testing.T) {
 	})
 }
 
-// fakeSimulate is a kardinal CLI whose policy simulate output is chosen by
-// the --time argument. The gate rows use the real CLI's format: tabwriter
-// pads with spaces, and a blocking gate is BLOCK (cmd/kardinal/cmd/policy.go).
-const fakeSimulate = `#!/usr/bin/env bash
-case "$*" in
-  *Saturday*) printf 'RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n\nno-weekend-deploys:   BLOCK   (weekend)\nno-bot-deploys:       PASS    (ok)\n' ;;
-  *Tuesday*) printf '%b' "$FAKE_TUESDAY" ;;
-esac
-`
-
-func TestDemoValidateScenarioSelectionAndMatching(t *testing.T) {
-	tests := []struct {
-		name     string
-		tuesday  string
-		wantFail bool
-	}{
-		{
-			name:    "weekend gate passes on Tuesday while another gate blocks",
-			tuesday: `RESULT: BLOCKED\nBlocked by: require-uat-soak\n\nno-weekend-deploys:   PASS    (weekday)\nrequire-uat-soak:     BLOCK   (soak)\n`,
-		},
-		{
-			name:     "weekend gate blocks on Tuesday; another gate's PASS must not count",
-			tuesday:  `RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n\nno-weekend-deploys:   BLOCK   (weekend)\nno-bot-deploys:       PASS    (ok)\n`,
-			wantFail: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bin := t.TempDir()
-			kardinal := filepath.Join(bin, "kardinal")
-			require.NoError(t, os.WriteFile(kardinal, []byte(fakeSimulate), 0o755))
-			out, err := runWithFakes(t, filepath.Join(repoRoot(t), "demo", "scripts", "validate.sh"),
-				map[string]string{"kubectl": "#!/usr/bin/env bash\nexit 0\n", "curl": "#!/usr/bin/env bash\nexit 7\n"},
-				[]string{"KARDINAL=" + kardinal, "FAKE_TUESDAY=" + tt.tuesday},
-				"--fast", "--scenario", "5")
-			assert.Contains(t, out, "Scenario 5")
-			assert.NotContains(t, out, "Scenario 1:")
-			if tt.wantFail {
-				require.Error(t, err, out)
-				assert.Contains(t, out, "1 failed")
-			} else {
-				require.NoError(t, err, out)
-				assert.Contains(t, out, "2 passed")
-			}
-		})
-	}
-}
-
 // TestGitignoreDoesNotHideSources checks that .gitignore matches no tracked
 // file and no new file under cmd/. The root binary patterns once matched the
 // cmd/kardinal and cmd/kardinal-controller source directories.

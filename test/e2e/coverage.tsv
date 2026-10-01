@@ -2,7 +2,7 @@ id	tier	suite	status	area	feature	source
 INST-KRO-01	live	core	todo	install	kro v0.10.0-rc.0 Graph controller with GraphKind gate installed by hack/install-kro.sh; graphs.kro.run and graphrevisions CRDs present	docs/changelog.md:22; docs/installation.md:23
 INST-CRD-01	live	core	todo	install	kardinal CRDs installable from config/crd/bases (Pipeline, Bundle, PolicyGate, PromotionStep)	docs/installation.md:72; config/crd/bases
 INST-CRD-02	live	core	todo	install	secondary CRDs installed and served (Subscription, NotificationHook, MetricCheck, ChangeWindow, ScheduleClock, RollbackPolicy, AuditEvent, PRStatus)	config/crd/bases; docs/installation.md:72
-INST-QUICKSTART-01	live	core	todo	install	examples/quickstart pipeline.yaml and policy-gates.yaml are accepted by the API server	hack/e2e-setup.sh:58-60; docs/quickstart.md
+INST-QUICKSTART-01	live	core	todo	install	examples/quickstart pipeline.yaml and policy-gates.yaml are accepted by the API server	examples/quickstart/README.md:62-71; docs/quickstart.md:236
 INST-SHUTDOWN-01	live	upgrade	todo	install	graceful SIGTERM shutdown drains in-flight reconciles up to 30s (terminationGracePeriodSeconds 60)	docs/installation.md:258-268; chart/kardinal-promoter/values.yaml:10
 GRAPH-SEQ-01	live	core	todo	graph	default sequential ordering: each environment starts only after the previous one is Verified	docs/pipeline-reference.md:96
 GRAPH-DEP-01	live	core	todo	graph	dependsOn fan-out and fan-in: parallel environments, join waits for all	docs/pipeline-reference.md:96; docs/pipeline-reference.md:165
@@ -312,7 +312,7 @@ CIAPI-KUBECTL-01	live	core	covered	ci-api	Bundle applied with kubectl (spec.prov
 CIAPI-ACTION-01	live	core	covered	ci-api	GitHub Action create-bundle posts an image Bundle with provenance from GITHUB_SHA/RUN/ACTOR	docs/ci-integration.md:37-125; .github/actions/create-bundle/action.yml:5-33
 CIAPI-ACTION-02	live	core	covered	ci-api	GitHub Action type config or mixed	docs/ci-integration.md:105; .github/actions/create-bundle/action.yml:9-12; .github/actions/create-bundle/parse.sh:65-82; pkg/lifecycle/newbundle.go:42
 CIAPI-GITLAB-01	live	core	covered	ci-api	GitLab CI example payload creates a Bundle	docs/ci-integration.md:126-165; cmd/kardinal-controller/bundle_api.go:168-174
-CHART-DEFAULT-01	live	chart	todo	chart	default helm install: controller Deployment becomes Ready	docs/installation.md:72-110; hack/e2e-setup.sh:30-62
+CHART-DEFAULT-01	live	chart	todo	chart	default helm install: controller Deployment becomes Ready	docs/installation.md:58-87; chart/kardinal-promoter/values.yaml
 CHART-IMAGE-01	live	chart	todo	chart	image.repository/tag/pullPolicy	chart/kardinal-promoter/values.yaml:12-18
 CHART-HA-01	live	chart	todo	chart	replicaCount > 1 with leaderElect, pdb and topologySpread: one leader reconciles, failover works	chart/kardinal-promoter/values.yaml:5; chart/kardinal-promoter/values.yaml:60; chart/kardinal-promoter/values.yaml:268-277
 CHART-GRACE-01	live	chart	todo	chart	terminationGracePeriodSeconds	chart/kardinal-promoter/values.yaml:10; chart/kardinal-promoter/templates/deployment.yaml:34

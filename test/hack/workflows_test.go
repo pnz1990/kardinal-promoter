@@ -159,7 +159,7 @@ var (
 // matches the kind node's minor, and nothing installs a floating version.
 func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 	tv := toolVersions(t)
-	for _, tool := range []string{"KIND", "KUBECTL", "ARGOCD"} {
+	for _, tool := range []string{"KIND", "KUBECTL"} {
 		assert.Regexp(t, semver, tv[tool+"_VERSION"], "%s_VERSION", tool)
 		assert.Regexp(t, sha256Hex, tv[tool+"_SHA256"], "%s_SHA256", tool)
 	}
@@ -190,7 +190,7 @@ func TestToolDownloadsArePinnedAndVerified(t *testing.T) {
 				"%s: step %q must check every download with sha256sum -c", f, s.Name)
 		}
 	}
-	assert.GreaterOrEqual(t, downloads, 5, "expected the kind and kubectl installs in e2e and pdca, and the demo-validate tools")
+	assert.GreaterOrEqual(t, downloads, 2, "expected the kind and kubectl installs in e2e-live")
 
 	for _, rel := range append(workflowFiles(t), "Makefile") {
 		data, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
@@ -260,17 +260,10 @@ func workflowStepNamed(t *testing.T, rel, prefix string) workflowStep {
 	return workflowStep{}
 }
 
-// pdcaStep returns the pdca.yml step whose name starts with prefix
-// (case-insensitively).
-func pdcaStep(t *testing.T, prefix string) workflowStep {
-	t.Helper()
-	return workflowStepNamed(t, ".github/workflows/pdca.yml", prefix)
-}
-
-// runPDCAScript runs a pdca.yml run: script the way Actions does (bash -e -o
-// pipefail) with fake tools first on PATH. sleep only advances $SECONDS, so
-// the wait loops run to their deadlines instantly.
-func runPDCAScript(t *testing.T, script string, fakes map[string]string, env ...string) (string, error) {
+// runWorkflowScript runs a workflow run: script the way Actions does (bash -e
+// -o pipefail) with fake tools first on PATH. sleep only advances $SECONDS,
+// so wait loops run to their deadlines instantly.
+func runWorkflowScript(t *testing.T, script string, fakes map[string]string, env ...string) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "step.sh")
@@ -289,245 +282,6 @@ func runPDCAScript(t *testing.T, script string, fakes map[string]string, env ...
 	}, env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
-}
-
-const fakeFailing = `#!/usr/bin/env bash
-echo "error: $(basename "$0") cannot reach the cluster" >&2
-exit 1
-`
-
-// fakeGateCLI answers policy simulate and explain the way a correct
-// controller does for the quickstart gates; everything else fails.
-const fakeGateCLI = `#!/usr/bin/env bash
-case "$*" in
-  *"policy simulate"*Saturday*"--soak-minutes 60"*) printf 'RESULT: BLOCKED\nBlocked by: no-weekend-deploys\n' ;;
-  *"policy simulate"*Saturday*) printf 'RESULT: BLOCKED\nBlocked by: no-weekend-deploys\nBlocked by: require-uat-soak\n' ;;
-  *"policy simulate"*"--soak-minutes 60"*) echo 'RESULT: PASS' ;;
-  *"policy simulate"*) printf 'RESULT: BLOCKED\nBlocked by: require-uat-soak\n' ;;
-  "explain "*) printf 'ENVIRONMENT  TYPE  NAME  STATE  EXPRESSION\nprod  gate  no-weekend-deploys  Pass  !schedule.isWeekend\n' ;;
-  *) echo "error: unexpected call: $*" >&2; exit 1 ;;
-esac
-`
-
-// fakeAlwaysPass is a CLI that says every gate passes: the weekend gate is
-// broken, and the checks must notice.
-const fakeAlwaysPass = `#!/usr/bin/env bash
-echo 'RESULT: PASS'
-`
-
-func readResults(t *testing.T, path string) (pass, fail []string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	require.NoError(t, err, "the scenario step wrote no results file")
-	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		switch {
-		case l == "":
-		case strings.HasPrefix(l, "✅"):
-			pass = append(pass, l)
-		case strings.HasPrefix(l, "❌"):
-			fail = append(fail, l)
-		default:
-			t.Errorf("result line is neither a pass nor a failure: %q", l)
-		}
-	}
-	return pass, fail
-}
-
-// TestPDCAScenarioChecksCanFail runs the PDCA scenario step against fake
-// tools. A check passes only when the tools report the expected behavior;
-// when they fail or misbehave, every selected check records a failure.
-func TestPDCAScenarioChecksCanFail(t *testing.T) {
-	scenarios := pdcaStep(t, "Run PDCA scenarios")
-	tests := []struct {
-		name     string
-		scenario string
-		kardinal string
-		wantPass int
-		minFail  int
-	}{
-		{"every check fails when the cluster is unreachable", "all", fakeFailing, 0, 20},
-		{"scenario 3 passes on correct gate answers", "3", fakeGateCLI, 4, 0},
-		{"scenario 3 fails when the weekend gate never blocks", "3", fakeAlwaysPass, 1, 3},
-		{"scenario 4 passes when explain shows the gate", "4", fakeGateCLI, 1, 1}, // S1 still needs a cluster
-		{"scenario 2 selects only the pause check", "2", fakeFailing, 0, 1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			results := filepath.Join(t.TempDir(), "results.txt")
-			out, err := runPDCAScript(t, scenarios.Run,
-				map[string]string{"kardinal": tt.kardinal, "kubectl": fakeFailing},
-				"SCENARIO="+tt.scenario, "RESULTS_FILE="+results,
-				"TEST_IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-abc1234")
-			require.NoError(t, err, "the scenario step must run every check to the end:\n%s", out)
-			pass, fail := readResults(t, results)
-			assert.Len(t, pass, tt.wantPass, "passes:\n%s", strings.Join(pass, "\n"))
-			assert.GreaterOrEqual(t, len(fail), tt.minFail, "failures:\n%s", strings.Join(fail, "\n"))
-		})
-	}
-}
-
-func TestPDCAScenarioSelection(t *testing.T) {
-	scenarios := pdcaStep(t, "Run PDCA scenarios")
-	want := map[string][]string{
-		"1": {"S1:", "S8:"},
-		"2": {"S2:"},
-		"3": {"S3:", "S3b:", "S13:", "S14:"},
-		"4": {"S1:", "S4:"},
-		"5": {"S1:", "S5:"},
-		"6": {"S6:", "S19:"},
-	}
-	for scenario, ids := range want {
-		t.Run("scenario "+scenario, func(t *testing.T) {
-			results := filepath.Join(t.TempDir(), "results.txt")
-			_, err := runPDCAScript(t, scenarios.Run,
-				map[string]string{"kardinal": fakeFailing, "kubectl": fakeFailing},
-				"SCENARIO="+scenario, "RESULTS_FILE="+results,
-				"TEST_IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-abc1234")
-			require.NoError(t, err)
-			pass, fail := readResults(t, results)
-			var got []string
-			for _, l := range append(pass, fail...) {
-				got = append(got, strings.Fields(l)[1])
-			}
-			assert.Equal(t, ids, got)
-		})
-	}
-}
-
-// TestPDCAReportFailsUnlessEveryCheckPasses runs the PDCA report step. It
-// writes the evidence to the job summary (Issue #1, where it used to post, is
-// closed), never calls gh, and fails the job unless every check passed.
-func TestPDCAReportFailsUnlessEveryCheckPasses(t *testing.T) {
-	report := pdcaStep(t, "Write PDCA evidence to the job summary")
-	// Any gh call is a bug: the report no longer posts anywhere.
-	fakeGH := `#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FAKE_LOG"
-exit 1
-`
-	tests := []struct {
-		name       string
-		results    string
-		scenarios  string
-		ui         string
-		wantOK     bool
-		wantStatus string
-	}{
-		{"all checks pass", "✅ S1: ok\n✅ S3: ok\n", "success", "success", true, "ALL PASS"},
-		{"UI skipped for one scenario", "✅ S3: ok\n", "success", "skipped", true, "ALL PASS"},
-		{"a check failed", "✅ S1: ok\n❌ S3: blocked\n", "success", "success", false, "1 FAILED"},
-		{"no checks ran", "", "success", "skipped", false, "NO CHECKS RAN"},
-		{"scenario step stopped early", "✅ S1: ok\n", "failure", "skipped", false, "INCOMPLETE"},
-		{"scenario step cancelled", "✅ S1: ok\n", "cancelled", "skipped", false, "INCOMPLETE"},
-		{"UI step failed", "✅ S1: ok\n", "success", "failure", false, "INCOMPLETE"},
-		{"setup failed before the scenario step", "", "", "", false, "NO CHECKS RAN"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			results := filepath.Join(dir, "results.txt")
-			if tt.results != "" {
-				require.NoError(t, os.WriteFile(results, []byte(tt.results), 0o600))
-			}
-			log := filepath.Join(dir, "gh.log")
-			summary := filepath.Join(dir, "summary.md")
-			out, err := runPDCAScript(t, report.Run, map[string]string{"gh": fakeGH},
-				"RESULTS_FILE="+results, "SCENARIO=all", "FAKE_LOG="+log,
-				"GITHUB_STEP_SUMMARY="+summary,
-				"SCENARIOS_OUTCOME="+tt.scenarios, "UI_OUTCOME="+tt.ui,
-				"GH_REPO=pnz1990/kardinal-promoter", "RUN_ID=1", "TRIGGER=schedule",
-				"TEST_IMAGE=ghcr.io/pnz1990/kardinal-test-app:sha-abc1234")
-			if tt.wantOK {
-				assert.NoError(t, err, out)
-			} else {
-				assert.Error(t, err, "the job must fail: %s", out)
-			}
-			assert.Contains(t, out, "Status: "+tt.wantStatus)
-			written, readErr := os.ReadFile(summary)
-			require.NoError(t, readErr, "the report must reach the job summary even when the job fails")
-			assert.Contains(t, string(written), "Status: "+tt.wantStatus)
-			assert.Contains(t, string(written), "https://github.com/pnz1990/kardinal-promoter/actions/runs/1")
-			for _, l := range strings.Split(strings.TrimSpace(tt.results), "\n") {
-				if l != "" {
-					assert.Contains(t, string(written), "- "+l)
-				}
-			}
-			_, statErr := os.Stat(log)
-			assert.True(t, os.IsNotExist(statErr), "the report must not call gh (no Issue comment)")
-		})
-	}
-
-	var wf struct {
-		Jobs map[string]struct {
-			Permissions map[string]string `json:"permissions"`
-		} `json:"jobs"`
-	}
-	data, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "pdca.yml"))
-	require.NoError(t, err)
-	require.NoError(t, yaml.Unmarshal(data, &wf))
-	assert.Equal(t, map[string]string{"contents": "read"}, wf.Jobs["pdca"].Permissions,
-		"PDCA posts nothing, so it needs no issues: write")
-}
-
-// TestPDCAPreflightFailsWhenTheDemoTokenCannotRead runs the first pdca.yml
-// step. An expired or missing KARDINAL_DEMO_PAT fails it with one message
-// that names the fix, and the token never reaches the log, even when gh
-// prints it.
-func TestPDCAPreflightFailsWhenTheDemoTokenCannotRead(t *testing.T) {
-	steps := workflowSteps(t, ".github/workflows/pdca.yml")
-	require.NotEmpty(t, steps)
-	preflight := steps[0]
-	require.True(t, strings.HasPrefix(preflight.Name, "Preflight"), "the preflight must be the first step, before any setup: %q", preflight.Name)
-	assert.Equal(t, "${{ secrets.KARDINAL_DEMO_PAT }}", preflight.Env["DEMO_TOKEN"])
-
-	// The fake gh logs its arguments and the token it was given, and prints
-	// the token the way a careless tool might.
-	fakeGH := `#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FAKE_LOG"
-printf '%s' "$GH_TOKEN" > "$FAKE_TOKEN_SEEN"
-echo "token $GH_TOKEN: HTTP $FAKE_STATUS" >&2
-[ "$FAKE_STATUS" = 200 ]
-`
-	const token = "github_pat_FAKE0123456789secret"
-	const msg = "KARDINAL_DEMO_PAT cannot read pnz1990/kardinal-demo: rotate it"
-	tests := []struct {
-		name      string
-		token     string
-		status    string
-		wantOK    bool
-		wantGHRun bool
-	}{
-		{"the token can read the repo", token, "200", true, true},
-		{"the token is expired or revoked", token, "401", false, true},
-		{"the secret is not set", "", "200", false, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			log := filepath.Join(dir, "gh.log")
-			seen := filepath.Join(dir, "token")
-			out, err := runPDCAScript(t, preflight.Run, map[string]string{"gh": fakeGH},
-				"DEMO_TOKEN="+tt.token, "GITHUB_TOKEN=job-token-must-not-be-used",
-				"FAKE_LOG="+log, "FAKE_TOKEN_SEEN="+seen, "FAKE_STATUS="+tt.status)
-			if tt.wantOK {
-				require.NoError(t, err, out)
-				assert.NotContains(t, out, msg)
-			} else {
-				require.Error(t, err, out)
-				assert.Contains(t, out, "::error::"+msg)
-			}
-			assert.NotContains(t, out, token, "the step must never print the token")
-			calls, readErr := os.ReadFile(log)
-			if !tt.wantGHRun {
-				assert.True(t, os.IsNotExist(readErr), "an empty token must fail before gh can fall back to GITHUB_TOKEN")
-				return
-			}
-			require.NoError(t, readErr)
-			assert.Contains(t, string(calls), "api repos/pnz1990/kardinal-demo")
-			used, readErr := os.ReadFile(seen)
-			require.NoError(t, readErr)
-			assert.Equal(t, tt.token, string(used), "gh must use KARDINAL_DEMO_PAT, not the job's GITHUB_TOKEN")
-		})
-	}
 }
 
 // TestAgentInstructionsGuardIsSafeForForks checks the shape that makes a
@@ -638,7 +392,7 @@ exit 1
 			if tt.ghFails {
 				fail = "1"
 			}
-			out, err := runPDCAScript(t, guard.Run, map[string]string{"gh": fakeGH},
+			out, err := runWorkflowScript(t, guard.Run, map[string]string{"gh": fakeGH},
 				"REPO=pnz1990/kardinal-promoter", "PR_NUMBER=7", "AUTHOR="+tt.author,
 				"CHANGED_FILES="+tt.changed, "GH_TOKEN=fake", "FAKE_LOG="+log,
 				"FAKE_FILES="+resp, "FAKE_FAIL="+fail)

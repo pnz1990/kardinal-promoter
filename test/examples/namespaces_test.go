@@ -29,7 +29,7 @@ var prerequisiteNamespaces = map[string]*regexp.Regexp{
 }
 
 // exampleUnit returns the example a document belongs to: examples/<name>, or
-// demo, or test/pdca. A user applies one example, so its namespaces must be
+// demo. A user applies one example, so its namespaces must be
 // created within it.
 func exampleUnit(source string) string {
 	p := strings.Fields(strings.TrimPrefix(source, "helm template "))[0]
@@ -214,13 +214,12 @@ func TestNamespaceCheckCatchesKnownMistakes(t *testing.T) {
 	}
 	assert.Equal(t, "examples/quickstart", exampleUnit("examples/quickstart/policy-gates.yaml"))
 	assert.Equal(t, "demo", exampleUnit("demo/manifests/argocd/applications.yaml"))
-	assert.Equal(t, "test/pdca", exampleUnit("test/pdca/pipeline.yaml"))
 	assert.Equal(t, "examples/multi-tenant", exampleUnit("helm template examples/multi-tenant/chart --values v.yaml"))
 }
 
 // pipelineNameClashes reports every Pipeline namespace/name that more than one
 // example under examples/ declares: applying the second example replaces the
-// first one's Pipeline (#1297). demo/ and test/pdca are separate stacks.
+// first one's Pipeline (#1297). demo/ is a separate stack.
 func pipelineNameClashes(docs []doc) []string {
 	units := map[string]map[string]bool{} // namespace/name -> examples declaring it
 	for _, d := range docs {

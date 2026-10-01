@@ -33,9 +33,12 @@ the core suite on each of the three Kubernetes minors. A weekly run repeats
 every test three times to find flakes. The `e2e live` check passes when every suite
 passed.
 
+`hack/e2e/up.sh` defines the suites: each one's components and the `RUN`
+pattern of its tests.
+
 | Suite | Components | Tests |
 |---|---|---|
-| `core` | Forgejo, Argo CD | `TestCore_*` |
+| `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
 | `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*` |
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
