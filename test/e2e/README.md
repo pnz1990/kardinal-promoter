@@ -71,7 +71,7 @@ pattern of its tests.
 | `core` | Forgejo, Argo CD, a webhook receiver for NotificationHooks, two OCI registries for Subscriptions, the Bundle API token | `TestCore_*`, `TestSCM_*`, `TestForgejo_*`, `TestGate_*`, `TestBundle_*`, `TestPipeline_*`, `TestGraph_*`, `TestStep_*`, `TestRollback_*`, `TestHealth_*`, `TestCLI_*`, `TestCIAPI_*`, `TestNotify_*`, `TestSub_*`, `TestAudit_*` |
 | `gitea` | Gitea, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitea_*` |
 | `gitlab` | GitLab CE, Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitLab_*` |
-| `github` | GitHub (branches of `pnz1990/kardinal-demo`), Argo CD | `TestCore_*`, `TestSCM_*`, `TestGitHub_*` |
+| `github` | GitHub (branches of `pnz1990/kardinal-demo`), Argo CD, the webhook receiver (the other API host `TestGitHub_SCMAPIURL` points the controller at) | `TestCore_*`, `TestSCM_*`, `TestGitHub_*` |
 | `delivery` | Forgejo, Argo CD, Argo Rollouts, Flagger | `TestRollouts_*`, `TestFlagger_*`, `TestDelivery_*` |
 | `ui` | Forgejo, Argo CD, four more chart releases (static token and CORS, TokenReview, TokenReview without its RBAC, TLS), Playwright's Chromium | `TestUI_*` |
 | `flux` | Forgejo, Flux, Prometheus Operator, Prometheus, Pushgateway, Grafana | `TestFlux_*`, `TestMetric_*`, `TestObs_*` |
