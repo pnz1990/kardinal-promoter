@@ -14,7 +14,7 @@ GRAPH-TARGET-01	live	core	covered	graph	intent.targetEnvironment promotes only u
 GRAPH-INPLACE-01	live	core	covered	graph	Pipeline edit updates the Bundle Graph in place without re-running Verified environments	docs/changelog.md:99
 GRAPH-HEAL-01	live	core	covered	graph	a deleted Graph is recreated and the Bundle continues	docs/graph-coverage.md
 GRAPH-RBAC-01	live	chart	todo	graph	Graph ServiceAccount and RBAC (graph-rbac.yaml) let kro create PromotionSteps, PolicyGates and PRStatus nodes	chart/kardinal-promoter/templates/graph-rbac.yaml
-GRAPH-PRSTATUS-01	live	scm-forgejo	todo	graph	PRStatus companion node per pr-review step tracks PR state	docs/graph-coverage.md; api/v1alpha1/prstatus_types.go
+GRAPH-PRSTATUS-01	live	scm-forgejo	covered	graph	PRStatus companion node per pr-review step tracks PR state	docs/graph-coverage.md; api/v1alpha1/prstatus_types.go
 GRAPH-NSDELETE-01	live	core	covered	graph	deleting a namespace with a Bundle finishes even when its applier RoleBinding goes first: the controller removes kro's finalizer from its Graphs in a Terminating namespace	pkg/reconciler/graphcleanup/reconciler.go:67; docs/changelog.md:66
 GRAPH-READER-PRUNE-01	live	core	covered	graph	deleting a namespace's last Bundle deletes the reader RoleBinding its Graph had in argocd	pkg/reconciler/graphcleanup/reconciler.go:61; docs/installation.md:610
 GRAPH-READER-PRUNE-02	live	core	covered	graph	deleting a namespace deletes the reader RoleBindings its Graphs had in argocd, with the applier RoleBinding and its record gone	pkg/graph/identity.go:246; docs/changelog.md:67
@@ -55,7 +55,7 @@ STEP-GITAUTH-01	live	core	covered	step	git.secretRef token Secret authenticates 
 STEP-RETRY-01	live	core	covered	step	transient git or SCM errors are retried with backoff before the step fails	docs/pipeline-reference.md:110
 STEP-APPROVAL-EDIT-01	live	core	covered	step	an approval edit made while a step runs applies from the next Bundle: the step finishes with the step list it recorded when it started (pr-review still opens its PR, auto still pushes the base branch)	docs/pipeline-reference.md:99; docs/pipeline-reference.md:273-276
 STEP-TIMEOUT-01	live	core	covered	step	stepTimeoutSeconds cancels a step that runs too long; handled like a step error	docs/pipeline-reference.md:110
-STEP-MERGETIMEOUT-01	live	scm-forgejo	todo	step	waitForMergeTimeout fails the step and closes the PR so a late merge cannot deliver	docs/pipeline-reference.md:109
+STEP-MERGETIMEOUT-01	live	scm-forgejo	covered	step	waitForMergeTimeout fails the step and closes the PR so a late merge cannot deliver	docs/pipeline-reference.md:109
 STEP-RESUME-01	live	upgrade	todo	step	controller restart after git-push resumes the step without a duplicate commit or PR	docs/installation.md:267
 STEP-ORPHAN-01	live	core	covered	step	PromotionSteps whose Bundle is gone are cleaned up	pkg/reconciler/promotionstep
 STEP-DELETE-PR-01	live	core	covered	step	a pr-review step holds the kardinal.io/close-pr finalizer and a Verified auto step does not; deleting their Bundle closes the PR with one comment, and the steps go	pkg/reconciler/promotionstep/finalizer.go:28; docs/changelog.md:65
@@ -110,71 +110,72 @@ ONFAIL-ABORT-01	live	core	todo	health	onHealthFailure: abort marks the step Abor
 ONFAIL-ROLLBACK-01	live	core	todo	rollback	onHealthFailure: rollback creates a rollback Bundle from the previous Verified Bundle; step RollingBack	docs/pipeline-reference.md:113; docs/rollback.md:87
 ONFAIL-ROLLBACK-02	live	core	todo	rollback	onHealthFailure: rollback with nothing safe to roll back to -> AbortedByAlarm; a rollback Bundle never rolls back again	docs/pipeline-reference.md:113; docs/rollback.md:87
 HEALTH-FAILCOUNT-01	live	core	todo	health	status.consecutiveHealthFailures increments per unhealthy check	docs/health-adapters.md:261
-SCM-GH-01	live	scm-github	todo	scm	GitHub: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:31-75; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
+SCM-GH-01	live	scm-github	covered	scm	GitHub: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:31-75; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
 SCM-GH-02	live	scm-github	todo	scm	GitHub: PR labels kardinal and kardinal/promotion (plus kardinal/rollback on rollbacks); label failure leaves PR open	docs/scm-providers.md:11; docs/pr-evidence.md:26-34; pkg/steps/steps/open_pr.go:102
-SCM-GH-03	live	scm-github	todo	scm	GitHub: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
-SCM-GH-04	live	scm-github	todo	webhook	GitHub: merge webhook with a valid X-Hub-Signature-256 (HMAC-SHA256) marks PRStatus merged and records mergeCommitSHA	docs/scm-providers.md:9-27; pkg/scm/github.go:237-270; cmd/kardinal-controller/webhook.go:165-227
-SCM-GH-05	live	scm-github	todo	webhook	GitHub: webhook with a wrong or missing X-Hub-Signature-256 (HMAC-SHA256) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/github.go:237-270
-SCM-GH-06	live	scm-github	todo	scm	GitHub: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
+SCM-GH-03	live	scm-github	covered	scm	GitHub: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
+SCM-GH-04	live	scm-github	covered	webhook	GitHub: merge webhook with a valid X-Hub-Signature-256 (HMAC-SHA256) marks PRStatus merged and records mergeCommitSHA	docs/scm-providers.md:9-27; pkg/scm/github.go:237-270; cmd/kardinal-controller/webhook.go:163-232
+SCM-GH-05	live	scm-github	covered	webhook	GitHub: webhook with a wrong or missing X-Hub-Signature-256 (HMAC-SHA256) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/github.go:237-270
+SCM-GH-06	live	scm-github	covered	scm	GitHub: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
 SCM-GH-07	live	scm-github	todo	scm	GitHub: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
-SCM-GH-08	live	scm-github	todo	scm	GitHub: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
-SCM-GH-09	live	scm-github	todo	scm	GitHub: startup token check logs SCM TOKEN SCOPE WARNING for a rejected or under-scoped token and still starts	docs/scm-providers.md:255-277; pkg/scm/token_validator.go
-SCM-GH-10	live	scm-github	todo	scm	GitHub: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:31-75
-SCM-GL-01	live	scm-gitlab	todo	scm	GitLab: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:78-131; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
+SCM-GH-08	live	scm-github	covered	scm	GitHub: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
+SCM-GH-09	live	scm-github	covered	scm	GitHub: startup token check logs SCM TOKEN SCOPE WARNING for a rejected token and still starts	docs/scm-providers.md:282-304; pkg/scm/token_validator.go
+SCM-GH-10	live	scm-github	covered	scm	GitHub: --scm-api-url sets the API base URL the controller calls for PRs and the token check	docs/scm-providers.md:31-75
+SCM-GL-01	live	scm-gitlab	covered	scm	GitLab: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:78-158; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
 SCM-GL-02	live	scm-gitlab	todo	scm	GitLab: PR labels kardinal and kardinal/promotion (plus kardinal/rollback on rollbacks); label failure leaves PR open	docs/scm-providers.md:12; docs/pr-evidence.md:26-34; pkg/steps/steps/open_pr.go:102
-SCM-GL-03	live	scm-gitlab	todo	scm	GitLab: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
-SCM-GL-04	live	scm-gitlab	todo	webhook	GitLab: merge webhook with a valid X-Gitlab-Token (plaintext) marks PRStatus merged and records mergeCommitSHA	docs/scm-providers.md:9-27; pkg/scm/gitlab.go:196-222; cmd/kardinal-controller/webhook.go:165-227
-SCM-GL-05	live	scm-gitlab	todo	webhook	GitLab: webhook with a wrong or missing X-Gitlab-Token (plaintext) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/gitlab.go:196-222
-SCM-GL-06	live	scm-gitlab	todo	scm	GitLab: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
-SCM-GL-07	live	scm-gitlab	todo	scm	GitLab: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
-SCM-GL-08	live	scm-gitlab	todo	scm	GitLab: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
-SCM-GL-09	live	scm-gitlab	todo	scm	GitLab: startup token check logs SCM TOKEN SCOPE WARNING for a rejected or under-scoped token and still starts	docs/scm-providers.md:255-277; pkg/scm/token_validator.go
-SCM-GL-10	live	scm-gitlab	todo	scm	GitLab: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:78-131
-SCM-FJ-01	live	scm-forgejo	todo	scm	Forgejo: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:134-190; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
-SCM-FJ-02	live	scm-forgejo	todo	scm	Forgejo: PR labels kardinal and kardinal/promotion (plus kardinal/rollback on rollbacks); label failure leaves PR open	docs/scm-providers.md:13; pkg/scm/forgejo.go:315; docs/pr-evidence.md:26-34; pkg/steps/steps/open_pr.go:102
-SCM-FJ-03	live	scm-forgejo	todo	scm	Forgejo: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
-SCM-FJ-04	live	scm-forgejo	todo	webhook	Forgejo: merge webhook with a valid X-Forgejo-Signature or X-Gitea-Signature (HMAC) marks PRStatus merged; merge commit fetched by polling	docs/scm-providers.md:9-27; pkg/scm/forgejo.go:247-276; cmd/kardinal-controller/webhook.go:165-227
-SCM-FJ-05	live	scm-forgejo	todo	webhook	Forgejo: webhook with a wrong or missing X-Forgejo-Signature or X-Gitea-Signature (HMAC) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/forgejo.go:247-276
-SCM-FJ-06	live	scm-forgejo	todo	scm	Forgejo: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
-SCM-FJ-07	live	scm-forgejo	todo	scm	Forgejo: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
-SCM-FJ-08	live	scm-forgejo	todo	scm	Forgejo: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
-SCM-FJ-09	live	scm-forgejo	todo	scm	Forgejo: startup token check logs SCM TOKEN SCOPE WARNING for a rejected or under-scoped token and still starts	docs/scm-providers.md:255-277; pkg/scm/token_validator.go
-SCM-FJ-10	live	scm-forgejo	todo	scm	Forgejo: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:134-190
-SCM-GT-01	live	scm-gitea	todo	scm	Gitea: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:134-190; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
-SCM-GT-02	live	scm-gitea	todo	scm	Gitea: PR labels kardinal and kardinal/promotion (plus kardinal/rollback on rollbacks); label failure leaves PR open	docs/scm-providers.md:14; pkg/scm/forgejo.go:315; docs/pr-evidence.md:26-34; pkg/steps/steps/open_pr.go:102
-SCM-GT-03	live	scm-gitea	todo	scm	Gitea: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
-SCM-GT-04	live	scm-gitea	todo	webhook	Gitea: merge webhook with a valid X-Gitea-Signature (HMAC) marks PRStatus merged; merge commit fetched by polling	docs/scm-providers.md:9-27; pkg/scm/forgejo.go:247-276; pkg/scm/factory.go:35; cmd/kardinal-controller/webhook.go:165-227
-SCM-GT-05	live	scm-gitea	todo	webhook	Gitea: webhook with a wrong or missing X-Gitea-Signature (HMAC) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/forgejo.go:247-276; pkg/scm/factory.go:35
-SCM-GT-06	live	scm-gitea	todo	scm	Gitea: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
-SCM-GT-07	live	scm-gitea	todo	scm	Gitea: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
-SCM-GT-08	live	scm-gitea	todo	scm	Gitea: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
-SCM-GT-09	live	scm-gitea	todo	scm	Gitea: startup token check logs SCM TOKEN SCOPE WARNING for a rejected or under-scoped token and still starts	docs/scm-providers.md:255-277; pkg/scm/token_validator.go
-SCM-GT-10	live	scm-gitea	todo	scm	Gitea: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:134-190
-SCM-GL-11	live	scm-gitlab	todo	scm	GitLab: project in a subgroup (group/sub/repo) resolves and gets MRs	docs/scm-providers.md:12
-SCM-GL-12	live	scm-gitlab	todo	scm	GitLab: fast-forward merge (no merge commit in webhook) falls back to the API for the merge commit	docs/pr-evidence.md:117-120
-SCM-FJ-11	live	scm-forgejo	todo	webhook	Forgejo/Gitea: X-Hub-Signature-256 is also accepted and takes precedence over X-Gitea/X-Forgejo-Signature	pkg/scm/repo_url.go:214-221; docs/scm-providers.md:13
-SCM-BB-01	contract	core	covered	scm	Bitbucket Cloud: open PR with Bearer access token on workspace/repo from spec.git.url	docs/scm-providers.md:193-205; pkg/scm/bitbucket.go:84
+SCM-GL-03	live	scm-gitlab	covered	scm	GitLab: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
+SCM-GL-04	live	scm-gitlab	covered	webhook	GitLab: merge webhook with a valid X-Gitlab-Token (plaintext) marks PRStatus merged and records mergeCommitSHA	docs/scm-providers.md:9-27; pkg/scm/gitlab.go:196-222; cmd/kardinal-controller/webhook.go:163-232
+SCM-GL-05	live	scm-gitlab	covered	webhook	GitLab: webhook with a wrong or missing X-Gitlab-Token (plaintext) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/gitlab.go:196-222
+SCM-GL-06	live	scm-gitlab	covered	scm	GitLab: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
+SCM-GL-07	live	scm-gitlab	covered	scm	GitLab: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
+SCM-GL-08	live	scm-gitlab	covered	scm	GitLab: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
+SCM-GL-09	live	scm-gitlab	covered	scm	GitLab: startup token check logs SCM TOKEN SCOPE WARNING for a rejected token or one with only read_api, and still starts	docs/scm-providers.md:282-304; pkg/scm/token_validator.go
+SCM-GL-10	live	scm-gitlab	covered	scm	GitLab: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:78-158
+SCM-FJ-01	live	scm-forgejo	covered	scm	Forgejo: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:161-217; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
+SCM-FJ-02	live	scm-forgejo	covered	scm	Forgejo: PR labels kardinal and kardinal/promotion (plus kardinal/rollback on rollbacks); label failure leaves PR open	docs/scm-providers.md:13; pkg/scm/forgejo.go:315; docs/pr-evidence.md:26-34; pkg/steps/steps/open_pr.go:102
+SCM-FJ-03	live	scm-forgejo	covered	scm	Forgejo: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
+SCM-FJ-04	live	scm-forgejo	covered	webhook	Forgejo: merge webhook with a valid X-Forgejo-Signature or X-Gitea-Signature (HMAC) marks PRStatus merged; merge commit fetched by polling	docs/scm-providers.md:9-27; pkg/scm/forgejo.go:247-276; cmd/kardinal-controller/webhook.go:163-232
+SCM-FJ-05	live	scm-forgejo	covered	webhook	Forgejo: webhook with a wrong or missing X-Forgejo-Signature or X-Gitea-Signature (HMAC) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/forgejo.go:247-276
+SCM-FJ-06	live	scm-forgejo	covered	scm	Forgejo: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
+SCM-FJ-07	live	scm-forgejo	covered	scm	Forgejo: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
+SCM-FJ-08	live	scm-forgejo	covered	scm	Forgejo: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
+SCM-FJ-09	live	scm-forgejo	covered	scm	Forgejo: startup token check logs SCM TOKEN SCOPE WARNING for a rejected token, logs that it cannot check a valid token's scopes, and still starts	docs/scm-providers.md:282-304; pkg/scm/token_validator.go
+SCM-FJ-10	live	scm-forgejo	covered	scm	Forgejo: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:161-217
+SCM-GT-01	live	scm-gitea	covered	scm	Gitea: pr-review opens a PR with title [kardinal] Promote <bundle> to <env>, evidence body and gate table	docs/scm-providers.md:161-217; pkg/steps/steps/open_pr.go:67; docs/pr-evidence.md:7-61
+SCM-GT-02	live	scm-gitea	covered	scm	Gitea: PR labels kardinal and kardinal/promotion (plus kardinal/rollback on rollbacks); label failure leaves PR open	docs/scm-providers.md:14; pkg/scm/forgejo.go:315; docs/pr-evidence.md:26-34; pkg/steps/steps/open_pr.go:102
+SCM-GT-03	live	scm-gitea	covered	scm	Gitea: merge detected by PRStatus polling (30s) without webhooks; step moves to HealthChecking	docs/pr-evidence.md:107-120; pkg/scm/revision.go:43-114
+SCM-GT-04	live	scm-gitea	covered	webhook	Gitea: merge webhook with a valid X-Gitea-Signature (HMAC) marks PRStatus merged; merge commit fetched by polling	docs/scm-providers.md:9-27; pkg/scm/forgejo.go:247-276; pkg/scm/factory.go:35; cmd/kardinal-controller/webhook.go:163-232
+SCM-GT-05	live	scm-gitea	covered	webhook	Gitea: webhook with a wrong or missing X-Gitea-Signature (HMAC) is rejected with 401 and changes nothing	docs/scm-providers.md:25-27; pkg/scm/forgejo.go:247-276; pkg/scm/factory.go:35
+SCM-GT-06	live	scm-gitea	covered	scm	Gitea: superseded Bundle or waitForMergeTimeout closes the PR via ClosePR	docs/pipeline-reference.md:109; pkg/scm/provider.go
+SCM-GT-07	live	scm-gitea	covered	scm	Gitea: approvals are read (isApproved, approvalCount) for bundle.pr.* gate attributes	docs/scm-providers.md:9-16; docs/policy-gates.md:229
+SCM-GT-08	live	scm-gitea	covered	scm	Gitea: re-running open-pr finds the existing PR instead of opening a duplicate	docs/pr-evidence.md:102
+SCM-GT-09	live	scm-gitea	covered	scm	Gitea: startup token check logs SCM TOKEN SCOPE WARNING for a rejected token, logs that it cannot check a valid token's scopes, and still starts	docs/scm-providers.md:282-304; pkg/scm/token_validator.go
+SCM-GT-10	live	scm-gitea	covered	scm	Gitea: --scm-api-url points the controller at a self-hosted or enterprise API	docs/scm-providers.md:161-217
+SCM-GL-11	live	scm-gitlab	covered	scm	GitLab: project in a subgroup (group/sub/repo) resolves and gets MRs	docs/scm-providers.md:12
+SCM-GL-12	live	scm-gitlab	covered	scm	GitLab: fast-forward merge (no merge commit in webhook) falls back to the API for the merge commit	docs/pr-evidence.md:117-120
+SCM-FJ-11	live	scm-forgejo	covered	webhook	Forgejo/Gitea: X-Hub-Signature-256 is also accepted and takes precedence over X-Gitea/X-Forgejo-Signature	pkg/scm/repo_url.go:214-221; docs/scm-providers.md:13
+SCM-BB-01	contract	core	covered	scm	Bitbucket Cloud: open PR with Bearer access token on workspace/repo from spec.git.url	docs/scm-providers.md:220-232; pkg/scm/bitbucket.go:84
 SCM-BB-02	contract	core	covered	scm	Bitbucket Cloud: no PR labels (AddLabelsToPR is a no-op); rollback PRs found by title	docs/scm-providers.md:15; docs/scm-providers.md:21-23; pkg/scm/bitbucket.go:302
 SCM-BB-03	contract	core	covered	scm	Bitbucket Cloud: merge detected by polling; merge commit fetched from API	pkg/scm/bitbucket.go:196; pkg/scm/revision.go:90
 SCM-BB-04	contract	core	covered	webhook	Bitbucket Cloud: X-Hub-Signature sha256 HMAC verified; pullrequest.state MERGED marks merged; bad signature 401	docs/scm-providers.md:15; pkg/scm/bitbucket.go:246-287
 SCM-BB-05	contract	core	covered	scm	Bitbucket Cloud: approvals read, close PR, existing-PR reuse	pkg/scm/bitbucket.go:123; pkg/scm/bitbucket.go:167; pkg/scm/bitbucket.go:217
-SCM-BB-06	contract	core	covered	scm	Bitbucket Cloud: no startup token check, info line logged	docs/scm-providers.md:266
-SCM-ADO-01	contract	core	covered	scm	Azure DevOps: open PR with PAT on org/project/repo from dev.azure.com URL	docs/scm-providers.md:212-227; pkg/scm/azuredevops.go
+SCM-BB-06	contract	core	covered	scm	Bitbucket Cloud: no startup token check, info line logged	docs/scm-providers.md:293
+SCM-ADO-01	contract	core	covered	scm	Azure DevOps: open PR with PAT on org/project/repo from dev.azure.com URL	docs/scm-providers.md:239-254; pkg/scm/azuredevops.go
 SCM-ADO-02	contract	core	covered	scm	Azure DevOps: labels applied as PR tags	docs/scm-providers.md:16
-SCM-ADO-03	contract	core	covered	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:226; pkg/scm/revision.go:43-114
+SCM-ADO-03	contract	core	covered	scm	Azure DevOps: merge detected by polling (status completed); merge commit fetched from API	docs/scm-providers.md:253; pkg/scm/revision.go:43-114
 SCM-ADO-04	contract	core	covered	webhook	Azure DevOps: X-AzureDevOps-Token compared in constant time; resource.status completed marks merged; wrong token 401	docs/scm-providers.md:16; pkg/scm/azuredevops.go:270-313
 SCM-ADO-05	contract	core	covered	scm	Azure DevOps: approvals read, close PR, existing-PR reuse	pkg/scm/azuredevops.go
 SCM-REOPEN-01	live	scm-forgejo	covered	scm	PR closed without merge can be reopened within 5 minutes and the promotion continues	docs/changelog.md:102
 SCM-CLOSED-01	live	scm-forgejo	covered	scm	PR closed for more than 5 minutes: kardinal comments once, stops polling, fails the step (closedAt, closedFinal)	docs/changelog.md:102
-SCM-ROTATE-01	live	scm-forgejo	todo	scm	SCM token Secret change is picked up within about 30s without restart (log SCM credentials rotated)	docs/scm-providers.md:281-329; pkg/scm/secret_watcher.go:31
-SCM-STATIC-01	live	scm-forgejo	todo	scm	static mode (--github-token without --scm-token-secret-name) needs a restart to rotate	docs/scm-providers.md:330-340
-SCM-BREAKER-01	live	scm-forgejo	todo	scm	SCM circuit breaker and rate-limit backoff stop hammering a failing SCM API	pkg/scm/circuit_breaker.go
-SCM-PRBODY-01	live	scm-forgejo	todo	scm	PR body is a one-time snapshot: artifact provenance (commit, CI run link or dash), gate compliance table incl. OVERRIDDEN reason, upstream verification	docs/pr-evidence.md:33-105; pkg/scm/pr_template.go:109; pkg/scm/pr_template.go:153
-SCM-PROVIDERFLAG-01	live	scm-forgejo	todo	scm	controller-wide --scm-provider selects the provider; spec.git.provider is ignored	docs/scm-providers.md:231-236; pkg/scm/factory.go:28
-WEBHOOK-NOSECRET-01	live	scm-forgejo	todo	webhook	without --webhook-secret, POST /webhook/scm returns 401 for every event and merges come from polling	docs/scm-providers.md:25-27; cmd/kardinal-controller/webhook.go:80-82
-WEBHOOK-NONMERGE-01	live	scm-forgejo	todo	webhook	non-merge events (opened, closed without merge, push) return 204 and change nothing	cmd/kardinal-controller/webhook.go:119-122
+SCM-ROTATE-01	live	scm-forgejo	covered	scm	SCM token Secret change is picked up within about 30s without restart (log SCM credentials rotated)	docs/scm-providers.md:308-366; pkg/scm/secret_watcher.go:31
+SCM-STATIC-01	live	scm-forgejo	covered	scm	static mode (--github-token without --scm-token-secret-name) needs a restart to rotate	docs/scm-providers.md:367-377
+SCM-BREAKER-01	live	scm-forgejo	covered	scm	SCM circuit breaker and rate-limit backoff stop hammering a failing SCM API	pkg/scm/circuit_breaker.go
+SCM-PRBODY-01	live	scm-forgejo	covered	scm	PR body is a one-time snapshot: artifact provenance (commit, CI run link or dash), gate compliance table incl. OVERRIDDEN reason, upstream verification	docs/pr-evidence.md:33-105; pkg/scm/pr_template.go:109; pkg/scm/pr_template.go:153
+SCM-PROVIDERFLAG-01	live	scm-forgejo	covered	scm	controller-wide --scm-provider selects the provider; spec.git.provider is ignored	docs/scm-providers.md:258-263; pkg/scm/factory.go:28
+WEBHOOK-NOSECRET-01	live	scm-forgejo	covered	webhook	without --webhook-secret, POST /webhook/scm returns 401 for every event and merges come from polling	docs/scm-providers.md:25-27; cmd/kardinal-controller/webhook.go:80-82
+WEBHOOK-NONMERGE-01	live	scm-forgejo	covered	webhook	non-merge events (opened, closed without merge, push) return 204 and change nothing	cmd/kardinal-controller/webhook.go:119-122
 WEBHOOK-HEALTH-01	live	core	covered	webhook	GET /webhook/scm/health reports webhookConfigured and eventsProcessed	cmd/kardinal-controller/webhook.go:143
-WEBHOOK-SECRET-01	live	scm-forgejo	todo	webhook	webhook secret is read once at startup; changing it needs a restart	cmd/kardinal-controller/main.go:118; pkg/scm/dynamic.go:35-48
+WEBHOOK-SECRET-01	live	scm-forgejo	covered	webhook	webhook secret is read once at startup; changing it needs a restart	cmd/kardinal-controller/main.go:118; pkg/scm/dynamic.go:35-48
+SCM-OTHERBASE-01	live	scm-all	covered	scm	a refused duplicate PR reuses only the open PR into the same base; a PR from the same branch into another base is never adopted	pkg/scm/github.go; pkg/scm/gitlab.go; pkg/scm/forgejo.go
 GATE-CEL-01	live	core	covered	gates	team PolicyGate CEL expression blocks the env step while false and releases it when true	docs/policy-gates.md:13-66; pkg/reconciler/policygate/reconciler.go:310-436
 GATE-CEL-02	live	core	covered	gates	invalid or non-bool CEL expression fails closed with a reason in status	docs/policy-gates.md:149-168; pkg/reconciler/policygate/cel_evaluator.go
 GATE-CEL-03	live	core	covered	gates	CEL cost limit and evaluation bounds stop runaway expressions (fail closed)	docs/policy-gates.md:273-348
@@ -382,7 +383,7 @@ EX-TENANT-01	live	health-argocd	todo	examples	multi-tenant Helm chart + Applicat
 DEP-WHEN-01	deprecated	core	todo	deprecated	PolicyGate spec.when is accepted with a warning and has no effect	docs/changelog.md:115; docs/policy-gates.md:67-88
 DEP-CLUSTER-01	deprecated	multi-cluster	todo	deprecated	env health.cluster sets Pipeline Ready=False NotImplemented and steps fail	docs/changelog.md:115; pkg/graph/unimplemented.go:26-28; pkg/reconciler/promotionstep/config_check.go:20-45
 DEP-REGIONS-01	deprecated	core	todo	deprecated	regions: one region ignored, two or more set Ready=False NotImplemented	docs/changelog.md:106
-DEP-GITPROVIDER-01	deprecated	core	todo	deprecated	Pipeline spec.git.provider is ignored; --scm-provider decides	docs/changelog.md:115; docs/scm-providers.md:231-236
+DEP-GITPROVIDER-01	deprecated	core	covered	deprecated	Pipeline spec.git.provider is ignored; --scm-provider decides	docs/changelog.md:115; docs/scm-providers.md:258-263
 STEP-GITCRED-01	live	core	covered	step	git.secretRef names a missing Secret: the step message and GitCredentialMissing condition name it, one Warning Event, retries past the limit of 5, Verified once the Secret is created	docs/troubleshooting.md; pkg/reconciler/promotionstep/git_credential.go
 STEP-GITCRED-02	live	core	covered	step	no git.secretRef on an HTTPS repo: the step message says the push has no credentials, GitCredentialMissing condition, one Warning Event, Verified once the secretRef is set	docs/troubleshooting.md; pkg/reconciler/promotionstep/git_credential.go
 RB-AUDIT-02	live	core	covered	rollback	RollbackSucceeded AuditEvent, once per step, when a rollback Bundle's step reaches Verified; forward Bundles write none	docs/guides/security.md:276; pkg/reconciler/promotionstep/transition.go:119-123; pkg/reconciler/promotionstep/transition.go:146-182
