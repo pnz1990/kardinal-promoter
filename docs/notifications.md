@@ -59,10 +59,13 @@ carry the environment:
   "pipeline":    "nginx-demo",
   "bundle":      "nginx-demo-abc123",
   "environment": "prod",
-  "message":     "PromotionStep nginx-demo-abc123-prod failed: health check timeout after 10m0s",
+  "message":     "PromotionStep nginx-demo-nginx-demo-abc123-prod failed: health alarm via argocd (onHealthFailure=none): health check timeout after 10m0s; last result: waiting for argocd: health=Progressing, sync=Synced, opPhase=Succeeded",
   "timestamp":   "2026-04-21T10:12:00Z"
 }
 ```
+
+A PromotionStep is named `<pipeline>-<bundle>-<environment>`, and the message
+after `failed: ` is the step's `status.message`.
 
 | Field         | Type   | Description                                          |
 |---------------|--------|------------------------------------------------------|

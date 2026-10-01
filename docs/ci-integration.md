@@ -385,7 +385,9 @@ When creating a Bundle from CI, you can specify the promotion intent:
 
 - `targetEnvironment` unset (default): promote through every environment in the Pipeline
 - `targetEnvironment: staging`: stop after staging (useful for testing)
-- `skipEnvironments: ["staging"]`: skip staging (requires SkipPermission PolicyGate)
+- `skipEnvironments: ["staging"]`: skip staging. If an org gate applies to staging, a
+  skip-permission PolicyGate in an org policy namespace must allow the skip; see
+  [Skip Permissions](policy-gates.md#skip-permissions)
 
 `intent` and `configRef` are copied to the Bundle spec as sent. Unknown fields are
 rejected with `400`, so a misspelt key fails the request instead of being ignored.
