@@ -28,8 +28,9 @@
 #   EOF
 #   git add . && git commit -m "feat: add my-service" && git push
 #   # Give the team's Pipeline a token for gitRepo (the chart's gitSecretName),
-#   # in the namespace the ApplicationSet created:
-#   kubectl -n my-service create secret generic github-token --from-literal=token=<token>
+#   # in the namespace the ApplicationSet created. kubectl reads the token from
+#   # a file, so it is not in the shell history or the process list:
+#   kubectl -n my-service create secret generic github-token --from-file=token=<file with the token>
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
