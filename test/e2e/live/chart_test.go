@@ -2143,8 +2143,18 @@ func TestChart_RestartMidStep(t *testing.T) {
 	case <-time.After(90 * time.Second):
 		t.Fatalf("the controller Pod %s still runs 90s after the scale-down", pod.Name)
 	}
-	exited := time.Since(sigterm)
-	t.Logf("the controller exited %s after the scale-down", exited.Round(time.Millisecond))
+	// The log ends when the kubelet reports the container stopped, which can
+	// lag the process's exit by seconds on a busy node (the container
+	// runtime handles exit events in turn); the last line the controller
+	// wrote dates its exit.
+	stopped := time.Since(sigterm)
+	lines := logs.Lines()
+	require.NotEmpty(t, lines, "the controller logged")
+	exited := lines[len(lines)-1].At.Sub(sigterm)
+	t.Logf("the controller wrote its last line %s after the scale-down; the kubelet reported it stopped after %s",
+		exited.Round(time.Millisecond), stopped.Round(time.Millisecond))
+	_, ok = logLine(logs, "Wait completed, proceeding to shutdown the manager")
+	assert.True(t, ok, "the manager finishes its shutdown, so the controller exits rather than being killed")
 
 	_, ok = logLine(logs, "Shutdown signal received, waiting for all workers to finish")
 	assert.True(t, ok, "the controller logs the SIGTERM and waits for its workers")
