@@ -324,7 +324,7 @@ func TestRollback_PullRequest(t *testing.T) {
 	want := fmt.Sprintf(`<!-- kardinal-promoter auto-generated PR -->
 ## ROLLBACK: %[1]s -> podinfo/test
 
-> **This is a rollback PR.** It reverts environment test to the state of bundle %[2]s.
+> **This is a rollback PR.** It restores the images of bundle %[2]s in environment test.
 > Rolling back FROM: %[3]s (%[4]s)
 > Rolling back TO: %[2]s (%[5]s)
 > Rolled back by: %[6]s
@@ -601,7 +601,7 @@ func TestRollback_PolicyRefused(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, corev1.EventTypeWarning, events[0].Type)
 	assert.Equal(t, "Rollback", events[0].Action)
-	assert.Equal(t, fmt.Sprintf("env test: no rollback Bundle created for %s after 1 consecutive health failures: %s", b1, want),
+	assert.Equal(t, fmt.Sprintf("env test: no rollback Bundle created for %s after 1 consecutive health failure: %s", b1, want),
 		events[0].Note)
 
 	evaluated := rp.Status.LastEvaluatedAt
