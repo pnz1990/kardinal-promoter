@@ -96,10 +96,15 @@ export function App() {
   }, [setUrlState])
 
   // #740: When graph data changes, restore selectedNode from URL if a node= param is present
-  // and the current selectedNode doesn't already match.
+  // and the current selectedNode doesn't already match. With no node= (Back to an entry
+  // before the node was opened), the details close.
   useEffect(() => {
     const nodeId = urlState.node
-    if (!nodeId || !graph) return
+    if (!nodeId) {
+      if (selectedNode?.id) setSelectedNodeLocal(null)
+      return
+    }
+    if (!graph) return
     if (selectedNode?.id === nodeId) return
     const node = graph.nodes?.find(n => n.id === nodeId)
     if (node) setSelectedNodeLocal(node)
