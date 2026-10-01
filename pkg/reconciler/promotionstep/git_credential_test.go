@@ -409,6 +409,14 @@ func TestGitCredentialPresent_KeepsTheRetryLimit(t *testing.T) {
 			cloneErr: "git clone https://github.com/test/repo: HTTP 407 Proxy Authentication Required: Proxy authentication required"},
 		{name: "no secretRef, a 500 page says authorization failed", url: "https://github.com/test/repo",
 			cloneErr: "git clone https://github.com/test/repo: HTTP 500 Internal Server Error: upstream authorization failed"},
+		// A body that starts with go-git's words follows ": " too; only
+		// right after "git clone <url>: " are they go-git's.
+		{name: "no secretRef, a 404 page starts with authentication required", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: repository not found: authentication required to see this repository"},
+		{name: "no secretRef, a proxy page starts with authentication required", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 407 Proxy Authentication Required: authentication required by the proxy"},
+		{name: "no secretRef, a 503 page starts with authorization failed", url: "https://github.com/test/repo",
+			cloneErr: "git clone https://github.com/test/repo: HTTP 503 Service Unavailable: authorization failed for the upstream"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
