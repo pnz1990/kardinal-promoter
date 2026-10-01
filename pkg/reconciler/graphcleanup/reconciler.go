@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +39,10 @@ const KroFinalizer = "kro.run/graph-finalizer"
 // namespace is checked again while its applier RoleBinding still exists, so
 // kro can still tear it down itself.
 const requeueApplierBinding = 10 * time.Second
+
+// requeueConflict is how soon kro's finalizer is removed again when the Graph
+// changed under every retry.
+const requeueConflict = time.Second
 
 // GraphLister lists the kardinal Graphs in a namespace (graph.GraphClient).
 type GraphLister interface {
@@ -120,19 +125,61 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.deleteOutside(ctx, log, g); err != nil {
 		return ctrl.Result{}, err
 	}
-	base := g.DeepCopy()
-	controllerutil.RemoveFinalizer(g, KroFinalizer)
-	if err := r.Client.Patch(ctx, g, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
+	removed, err := r.removeKroFinalizer(ctx, g)
+	switch {
+	case apierrors.IsConflict(err):
+		// The Graph kept changing under every retry: try again shortly. A
+		// conflict is expected while kro and the namespace controller write
+		// the Graph too, so it is not a reconcile error.
+		log.Debug().Err(err).Msg("graph changed while removing kro's finalizer; trying again")
+		return ctrl.Result{RequeueAfter: requeueConflict}, nil
+	case err != nil:
 		return ctrl.Result{}, fmt.Errorf("remove finalizer %s from graph %s: %w", KroFinalizer, req, err)
+	case !removed:
+		return ctrl.Result{}, nil
 	}
 	// The namespace is terminating, so no Event can be created in it.
 	log.Info().Str("finalizer", KroFinalizer).
 		Msg("removed kro's finalizer from a Graph in a terminating namespace: its applier RoleBinding " +
 			"is gone, so kro cannot delete the Graph's resources; the namespace deletion deletes them")
 	return ctrl.Result{}, nil
+}
+
+// removeKroFinalizer removes kro's finalizer from g. The patch carries g's
+// resourceVersion, so it fails with a conflict when kro or the namespace
+// controller wrote the Graph since it was read. It then reads the Graph again
+// from the API server (the cache can still serve the old one) and retries
+// against that copy. It reports false when the Graph is gone or no longer has
+// the finalizer, and returns the conflict when every retry hit one.
+func (r *Reconciler) removeKroFinalizer(ctx context.Context, g *unstructured.Unstructured) (bool, error) {
+	key := client.ObjectKeyFromObject(g)
+	removed := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		base := g.DeepCopy()
+		controllerutil.RemoveFinalizer(g, KroFinalizer)
+		err := r.Client.Patch(ctx, g, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		if err == nil {
+			removed = true
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return client.IgnoreNotFound(err)
+		}
+		fresh := &unstructured.Unstructured{}
+		fresh.SetGroupVersionKind(graph.GraphGVK)
+		if gerr := r.APIReader.Get(ctx, key, fresh); gerr != nil {
+			if apierrors.IsNotFound(gerr) {
+				return nil
+			}
+			return fmt.Errorf("get graph %s: %w", key, gerr)
+		}
+		if !controllerutil.ContainsFinalizer(fresh, KroFinalizer) {
+			return nil
+		}
+		g = fresh
+		return err
+	})
+	return removed, err
 }
 
 // prune deletes the reader RoleBindings of namespace that no remaining Graph

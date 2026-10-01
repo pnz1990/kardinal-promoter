@@ -326,6 +326,91 @@ func TestReconciler_PrunesOnGraphDelete(t *testing.T) {
 	}
 }
 
+// TestReconciler_FinalizerConflict covers B55: when the Graph changed since
+// it was read, removing kro's finalizer hits a conflict. The Reconciler reads
+// the Graph again and retries, and when the conflict persists it requeues
+// without a reconcile error.
+func TestReconciler_FinalizerConflict(t *testing.T) {
+	annotate := func(g *unstructured.Unstructured) {
+		g.SetAnnotations(map[string]string{"example.com/written": g.GetResourceVersion()})
+	}
+	dropKro := func(g *unstructured.Unstructured) {
+		g.SetFinalizers(slices.DeleteFunc(g.GetFinalizers(), func(f string) bool { return f == graphcleanup.KroFinalizer }))
+	}
+	tests := []struct {
+		name          string
+		finalizers    []string
+		writes        int // the Patch calls preceded by another writer's update
+		write         func(*unstructured.Unstructured)
+		wantPatches   int
+		wantRequeue   bool
+		wantGone      bool
+		wantFinalizer []string
+	}{
+		{
+			name:        "the Graph changed once",
+			finalizers:  []string{graphcleanup.KroFinalizer},
+			writes:      1,
+			write:       annotate,
+			wantPatches: 2,
+			wantGone:    true,
+		},
+		{
+			name:          "the Graph changes under every retry",
+			finalizers:    []string{graphcleanup.KroFinalizer},
+			writes:        100,
+			write:         annotate,
+			wantPatches:   5,
+			wantRequeue:   true,
+			wantFinalizer: []string{graphcleanup.KroFinalizer},
+		},
+		{
+			name:          "kro removed its finalizer first",
+			finalizers:    []string{graphcleanup.KroFinalizer, "example.com/keep"},
+			writes:        1,
+			write:         dropKro,
+			wantPatches:   1,
+			wantFinalizer: []string{"example.com/keep"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			patches := 0
+			c := fake.NewClientBuilder().WithScheme(newScheme(t)).
+				WithObjects(kardinalGraph("team-a", true, tt.finalizers...), namespace("team-a", true)).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Patch: func(ctx context.Context, w client.WithWatch, obj client.Object, p client.Patch, opts ...client.PatchOption) error {
+						patches++
+						if patches <= tt.writes {
+							cur := getGraph(t, w, "team-a")
+							tt.write(cur)
+							require.NoError(t, w.Update(ctx, cur))
+						}
+						return w.Patch(ctx, obj, p, opts...)
+					},
+				}).Build()
+			r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{},
+				Identity: &graph.IdentityProvisioner{Writer: c, Reader: c}}
+
+			res, err := reconcile(t, r, "team-a")
+			require.NoError(t, err, "a conflict is not a reconcile error")
+			assert.Equal(t, tt.wantPatches, patches)
+			if tt.wantRequeue {
+				assert.Positive(t, res.RequeueAfter)
+			} else {
+				assert.Zero(t, res.RequeueAfter)
+			}
+			got := getGraph(t, c, "team-a")
+			if tt.wantGone {
+				assert.Nil(t, got, "the Graph is gone")
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantFinalizer, got.GetFinalizers())
+		})
+	}
+}
+
 func TestReconciler_PruneListError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(readerBinding("argocd", "team-a")).Build()
 	r := &graphcleanup.Reconciler{Client: c, APIReader: c, Graphs: &graphLister{err: errors.New("boom")},
