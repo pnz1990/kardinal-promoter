@@ -690,11 +690,17 @@ spec:
   duration: 2160h  # 90 days
   renewBefore: 360h
   dnsNames:
+    - kardinal-promoter.kardinal-system.svc
     - kardinal-promoter.kardinal-system.svc.cluster.local
   issuerRef:
-    name: letsencrypt-prod  # your ClusterIssuer
+    name: internal-ca  # your private CA ClusterIssuer
     kind: ClusterIssuer
 ```
+
+The issuer must be one that signs in-cluster names, such as a cert-manager
+[CA issuer](https://cert-manager.io/docs/configuration/ca/) backed by your private CA.
+Public ACME issuers such as Let's Encrypt cannot issue certificates for `.svc` names.
+Clients then trust that CA (for example `curl --cacert ca.crt`).
 
 ```yaml
 # 2. tls-values.yaml: mount the cert-manager Secret and point the controller at it

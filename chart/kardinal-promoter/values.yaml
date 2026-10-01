@@ -79,8 +79,9 @@ controller:
   # namespace too.
   watchNamespace: ""
   # -- Namespaces holding org-level PolicyGates (--policy-namespaces).
-  # Empty keeps the controller default, platform-policies. Ignored in
-  # namespace mode, which always uses watchNamespace.
+  # Empty keeps the controller default, platform-policies. In namespace
+  # mode org gates are read from watchNamespace, and an entry other than
+  # watchNamespace fails the install.
   policyNamespaces: []
   # -- Extra controller args, e.g. ["--cors-allowed-origins=https://kardinal.example.com"].
   extraArgs: []
