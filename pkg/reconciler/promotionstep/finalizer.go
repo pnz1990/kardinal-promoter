@@ -313,10 +313,18 @@ func (r *Reconciler) apiReader() client.Reader {
 	return r.Client
 }
 
-// deleteReason is the reason the PR comment gives for closing it: the Bundle
-// was deleted (gone or being deleted, which includes its namespace being
-// deleted), or else only the step was.
+// deleteReason is the reason the PR comment gives for closing it: the
+// namespace was deleted (it is being deleted), else the Bundle was (gone or
+// being deleted), else only the step was. The namespace comes first: its
+// deletion deletes the Bundle and the steps in no set order, and the comment
+// must not depend on which went first. The namespace is read from the API
+// server, which the controller may only get, not watch.
 func (r *Reconciler) deleteReason(ctx context.Context, ps *v1alpha1.PromotionStep) string {
+	var ns corev1.Namespace
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: ps.Namespace}, &ns); err == nil &&
+		(!ns.DeletionTimestamp.IsZero() || ns.Status.Phase == corev1.NamespaceTerminating) {
+		return "namespace " + ps.Namespace + " was deleted"
+	}
 	if ps.Spec.BundleName == "" {
 		return "PromotionStep " + ps.Name + " was deleted"
 	}

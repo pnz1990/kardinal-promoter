@@ -548,8 +548,10 @@ PR; an `auto` step never carries it. When the step is deleted, the controller as
 the PR is still open, closes it with a comment if it is (a merged or closed PR is left alone), then
 removes the finalizer. What happens to the PR depends on what was deleted:
 
-- **The Bundle or its namespace.** The PR is closed with the comment `kardinal closed this PR:
-  bundle <bundle> was deleted. ...`.
+- **The Bundle.** The PR is closed with the comment `kardinal closed this PR: bundle <bundle>
+  was deleted. ...`.
+- **The namespace.** The PR is closed with the comment `kardinal closed this PR: namespace
+  <namespace> was deleted. ...`.
 - **The PromotionStep alone** (`kubectl delete promotionstep`). kro creates the step again, under
   the same name, once the old one is gone. The old PR is closed first (`kardinal closed this PR:
   PromotionStep <name> was deleted. ...`), and the new step opens a new PR.

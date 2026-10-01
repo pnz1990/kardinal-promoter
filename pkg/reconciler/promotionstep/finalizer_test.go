@@ -666,7 +666,13 @@ func TestPRFinalizer_GraphRecreatedKeepsPR(t *testing.T) {
 		{name: "only the step was deleted: the PR is closed", graph: graphOld, bundle: func(*v1alpha1.Bundle) {},
 			wantClosed: true, wantComment: "PromotionStep step was deleted"},
 		{name: "the namespace is being deleted: the PR is closed", graph: graphDeleting, nsDeleting: true,
-			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true},
+			bundle: func(*v1alpha1.Bundle) {}, wantClosed: true,
+			wantComment: "kardinal closed this PR: namespace default was deleted."},
+		// The namespace deletion deletes the Bundle and the steps in no set
+		// order: the comment names the namespace either way.
+		{name: "the namespace is being deleted and the Bundle is gone: the comment names the namespace",
+			graph: graphGone, nsDeleting: true, wantClosed: true,
+			wantComment: "kardinal closed this PR: namespace default was deleted."},
 		{name: "the Bundle is being deleted: the PR is closed", graph: graphDeleting,
 			bundle: func(b *v1alpha1.Bundle) {
 				b.Finalizers = []string{"test/hold"}
