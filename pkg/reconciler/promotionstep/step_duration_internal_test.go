@@ -98,9 +98,9 @@ func TestUpdateStepStatuses_DurationOfStepsRunInOneReconcile(t *testing.T) {
 			}
 			ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(seq)}}
 
-			updateStepStatuses(ps, seq, tt.nextIdx, tt.failed, "boom", tt.timings)
+			updateStepStatuses(ps, seq, tt.nextIdx, tt.failed, "boom", tt.timings).record()
 			// A second update for the same result must not observe again.
-			updateStepStatuses(ps, seq, tt.nextIdx, tt.failed, "boom", tt.timings)
+			updateStepStatuses(ps, seq, tt.nextIdx, tt.failed, "boom", tt.timings).record()
 
 			for i, s := range ps.Status.Steps {
 				assert.Equal(t, tt.wantState[i], s.State, "step %d state", i)
@@ -132,11 +132,11 @@ func TestUpdateStepStatuses_StepAcrossReconciles(t *testing.T) {
 	updateStepStatuses(ps, seq, 1, false, "", map[int]steps.StepTiming{
 		0: {Started: t0, Finished: t0.Add(time.Second)},
 		1: {Started: t0.Add(time.Second), Finished: t0.Add(2 * time.Second)},
-	})
+	}).record()
 	// Reconcile 2, a minute later: step 1 completes.
 	updateStepStatuses(ps, seq, 2, false, "", map[int]steps.StepTiming{
 		1: {Started: t0.Add(time.Minute), Finished: t0.Add(time.Minute + time.Second)},
-	})
+	}).record()
 
 	step := ps.Status.Steps[1]
 	assert.Equal(t, v1alpha1.StepExecutionCompleted, step.State)
@@ -182,10 +182,10 @@ func TestStepDuration_StateMachineSteps(t *testing.T) {
 			0: {Started: at(-10 * time.Minute), Finished: at(-10*time.Minute + time.Second)},
 			1: {Started: at(-10*time.Minute + time.Second), Finished: at(-10*time.Minute + 2*time.Second)},
 			2: {Started: at(-10*time.Minute + 2*time.Second), Finished: at(-10*time.Minute + 2*time.Second)},
-		})
+		}).record()
 		assert.Equal(t, map[string]uint64{"git-clone": 1, "open-pr": 1}, delta(before))
 
-		closeStepStatuses(ps, StateHealthChecking)
+		closeStepStatuses(ps, StateHealthChecking).record()
 		wfm := ps.Status.Steps[2]
 		assert.Equal(t, v1alpha1.StepExecutionCompleted, wfm.State)
 		assert.InDelta(t, (10*time.Minute - 2*time.Second).Milliseconds(), wfm.DurationMs, 1000, "wait-for-merge lasts until the merge")
@@ -195,12 +195,12 @@ func TestStepDuration_StateMachineSteps(t *testing.T) {
 		require.Equal(t, v1alpha1.StepExecutionInProgress, hc.State)
 		started := metav1.NewTime(at(-3 * time.Minute)) // the health check began 3m ago
 		hc.StartedAt = &started
-		closeStepStatuses(ps, StateVerified)
+		closeStepStatuses(ps, StateVerified).record()
 		assert.Equal(t, v1alpha1.StepExecutionCompleted, hc.State)
 		assert.InDelta(t, (3 * time.Minute).Milliseconds(), hc.DurationMs, 1000)
 		assert.Equal(t, map[string]uint64{"git-clone": 1, "open-pr": 1, "wait-for-merge": 1, "health-check": 1}, delta(before))
 
-		closeStepStatuses(ps, StateVerified)
+		closeStepStatuses(ps, StateVerified).record()
 		assert.Len(t, delta(before), 4, "closing again observes nothing")
 	})
 
@@ -211,12 +211,12 @@ func TestStepDuration_StateMachineSteps(t *testing.T) {
 		updateStepStatuses(ps, auto, 2, false, "", map[int]steps.StepTiming{
 			0: {Started: at(-2 * time.Second), Finished: at(-time.Second)},
 			1: {Started: at(-time.Second), Finished: at(-time.Second)},
-		})
+		}).record()
 		assert.Equal(t, v1alpha1.StepExecutionCompleted, ps.Status.Steps[1].State)
 		assert.Equal(t, map[string]uint64{"git-clone": 1}, delta(before))
 
-		closeStepStatuses(ps, StateHealthChecking)
-		closeStepStatuses(ps, StateFailed)
+		closeStepStatuses(ps, StateHealthChecking).record()
+		closeStepStatuses(ps, StateFailed).record()
 		assert.Equal(t, v1alpha1.StepExecutionFailed, ps.Status.Steps[1].State)
 		assert.Equal(t, map[string]uint64{"git-clone": 1, "health-check": 1}, delta(before), "the failed health check is observed")
 	})
@@ -224,7 +224,7 @@ func TestStepDuration_StateMachineSteps(t *testing.T) {
 	t.Run("a step that never started is not observed", func(t *testing.T) {
 		before := samples()
 		ps := &v1alpha1.PromotionStep{Status: v1alpha1.PromotionStepStatus{Steps: initStepStatuses(seq)}}
-		closeStepStatuses(ps, StateFailed)
+		closeStepStatuses(ps, StateFailed).record()
 		assert.Equal(t, v1alpha1.StepExecutionFailed, ps.Status.Steps[0].State)
 		assert.Empty(t, delta(before))
 	})

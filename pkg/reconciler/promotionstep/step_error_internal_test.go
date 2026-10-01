@@ -64,7 +64,7 @@ func TestHandleStepError_Classification(t *testing.T) {
 			base := ps.DeepCopy()
 
 			res, err := r.handleStepError(context.Background(), zerolog.Nop(), base, ps,
-				[]string{"git-clone", "argocd-set-image", "git-push"}, nil, tt.err)
+				[]string{"git-clone", "argocd-set-image", "git-push"}, nil, tt.err, nil)
 			require.NoError(t, err)
 
 			var got v1alpha1.PromotionStep
