@@ -53,6 +53,9 @@ func TestPause_FreezeGateHoldsStep(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			step := makeStep("step-test", "nginx-demo", "bundle-1", "test")
+			if tc.state == "Promoting" {
+				asPromoting(step, makePipeline("nginx-demo"))
+			}
 			step.Status.State = tc.state
 			objs := []client.Object{step, makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")}
 			if tc.state == "WaitingForMerge" {

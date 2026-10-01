@@ -822,8 +822,7 @@ func TestPausedPipeline_ReconcilerNolongerChecksSpecPaused(t *testing.T) {
 			},
 		},
 	}
-	step := makeStep("step-paused", "nginx-demo", "bundle-1", "test")
-	step.Status.State = "Promoting"
+	step := asPromoting(makeStep("step-paused", "nginx-demo", "bundle-1", "test"), pausedPipeline)
 	bundle := makeBundle("bundle-1", "nginx-demo")
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(
@@ -1716,8 +1715,7 @@ func TestReconciler_DeletedBeforeStatusWrite(t *testing.T) {
 	}
 	gated := pending()
 	gated.Spec.RequiredGates = []string{"soak"}
-	promoting := makeStep("step-prod", "my-app", "bundle-1", "test")
-	promoting.Status.State = "Promoting"
+	promoting := asPromoting(makeStep("step-prod", "my-app", "bundle-1", "test"), makePipeline("my-app"))
 	superseded := makeBundle("bundle-1", "my-app")
 	superseded.Status.Phase = "Superseded"
 	waiting := pending()

@@ -480,7 +480,7 @@ func (r *Reconciler) handlePending(ctx context.Context, log zerolog.Logger, ps *
 		return ctrl.Result{}, fmt.Errorf("load bundle: %w", err)
 	}
 
-	seq := steps.DefaultSequenceForBundle(approvalMode, bundle.Spec.Type, env.Update.Strategy, env.Layout)
+	seq := stepSequence(env, bundle)
 	log.Info().
 		Str("env", ps.Spec.Environment).
 		Str("approval", approvalMode).
@@ -525,17 +525,20 @@ func (r *Reconciler) handlePromoting(ctx context.Context, log zerolog.Logger, ps
 	// the next Bundle.
 	seq := recordedSequence(ps)
 	if len(seq) == 0 {
-		// Entered Promoting before status.steps was recorded: build the list
-		// once; updateStepStatuses records it with this reconcile's patch.
-		approvalMode := env.Approval
-		if approvalMode == "" {
-			approvalMode = "auto"
+		// A step is Promoting with no step list only if its status was edited
+		// by hand or it started before status.steps existed. Record the list
+		// and run it from the next reconcile: the finalizer sync at the end of
+		// this one then adds kardinal.io/close-pr before open-pr can run.
+		ps.Status.Steps = initStepStatuses(stepSequence(env, bundle))
+		if err := r.Status().Patch(ctx, ps, client.MergeFrom(base)); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, fmt.Errorf("record step list: %w", err)
 		}
-		bundleType := ""
-		if bundle != nil {
-			bundleType = bundle.Spec.Type
-		}
-		seq = steps.DefaultSequenceForBundle(approvalMode, bundleType, env.Update.Strategy, env.Layout)
+		log.Info().Str("env", ps.Spec.Environment).Strs("steps", recordedSequence(ps)).
+			Msg("recorded the step list of a Promoting step that had none")
+		return ctrl.Result{Requeue: true}, nil
 	}
 	eng := steps.NewEngine(seq)
 
@@ -1734,6 +1737,12 @@ func initStepStatuses(seq []string) []v1alpha1.StepStatus {
 		}
 	}
 	return ss
+}
+
+// stepSequence is the step list a step of env runs for bundle, recorded in
+// status.steps when the step starts.
+func stepSequence(env v1alpha1.EnvironmentSpec, bundle *v1alpha1.Bundle) []string {
+	return steps.DefaultSequenceForBundle(env.Approval, bundle.Spec.Type, env.Update.Strategy, env.Layout)
 }
 
 // recordedSequence returns the step names in status.steps: the sequence

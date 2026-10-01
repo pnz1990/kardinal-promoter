@@ -59,6 +59,23 @@ func recordedSteps(approval string) []v1alpha1.StepStatus {
 	return out
 }
 
+// asPromoting puts ps in Promoting with the step list handlePending records
+// for an image Bundle in ps's environment of pl, every step Pending.
+func asPromoting(ps *v1alpha1.PromotionStep, pl *v1alpha1.Pipeline) *v1alpha1.PromotionStep {
+	var env v1alpha1.EnvironmentSpec
+	for _, e := range pl.Spec.Environments {
+		if e.Name == ps.Spec.Environment {
+			env = e
+		}
+	}
+	ps.Status.State = "Promoting"
+	ps.Status.Steps = nil
+	for _, name := range steps.DefaultSequenceForBundle(env.Approval, "image", env.Update.Strategy, env.Layout) {
+		ps.Status.Steps = append(ps.Status.Steps, v1alpha1.StepStatus{Name: name, State: v1alpha1.StepExecutionPending})
+	}
+	return ps
+}
+
 // setApproval edits the approval of env in the Pipeline, as a user would.
 func setApproval(t *testing.T, c client.Client, pipeline, env, approval string) {
 	t.Helper()
@@ -140,11 +157,7 @@ func TestApprovalEditMidPromotion(t *testing.T) {
 			assert.Equal(t, tt.wantFinalizer, slices.Contains(got.Finalizers, promotionstep.FinalizerClosePR),
 				"finalizers %v", got.Finalizers)
 			assert.Equal(t, tt.wantCommit, got.Status.Outputs["commitSHA"])
-			names := make([]string, 0, len(got.Status.Steps))
-			for _, s := range got.Status.Steps {
-				names = append(names, s.Name)
-			}
-			assert.Equal(t, tt.wantSteps, names, "status.steps keeps the recorded list")
+			assert.Equal(t, tt.wantSteps, recordedNames(got), "status.steps keeps the recorded list")
 			assert.Equal(t, v1alpha1.StepExecutionCompleted, stepStates(got)[tt.retrying])
 		})
 	}
@@ -191,12 +204,89 @@ func TestPendingRetriesFailedBundleRead(t *testing.T) {
 			reconcileStep(t, r, step.Name)
 			got = getStep(t, api, step.Name)
 			require.Equal(t, "Promoting", got.Status.State, got.Status.Message)
-			names := make([]string, 0, len(got.Status.Steps))
-			for _, s := range got.Status.Steps {
-				names = append(names, s.Name)
-			}
+			names := recordedNames(got)
 			assert.Equal(t, steps.DefaultSequenceForBundle("auto", bundleType, "", ""), names)
 			assert.Contains(t, names, "config-merge")
 		})
 	}
+}
+
+// finalizerAtOpenSCM is a mockSCM that records, at every OpenPR call, whether
+// the step holds the close-pr finalizer.
+type finalizerAtOpenSCM struct {
+	*mockSCM
+	c        client.Client
+	step     string
+	heldAtPR []bool
+}
+
+func (s *finalizerAtOpenSCM) OpenPR(ctx context.Context, repo, title, body, head, base string) (string, int, error) {
+	var ps v1alpha1.PromotionStep
+	if err := s.c.Get(ctx, client.ObjectKey{Name: s.step, Namespace: "default"}, &ps); err != nil {
+		return "", 0, err
+	}
+	s.heldAtPR = append(s.heldAtPR, slices.Contains(ps.Finalizers, promotionstep.FinalizerClosePR))
+	return s.mockSCM.OpenPR(ctx, repo, title, body, head, base)
+}
+
+// TestPromotingWithoutStepList covers a step that is Promoting with no
+// status.steps (a status edited by hand, or a step started before
+// status.steps existed). Its first reconcile only records the step list, so
+// the close-pr finalizer is added before a pr-review step opens its PR; the
+// next reconcile runs the list. Running the list in the first reconcile
+// opened the PR before the finalizer was added.
+func TestPromotingWithoutStepList(t *testing.T) {
+	tests := []struct {
+		env           string
+		approval      string
+		wantFinalizer bool
+		wantState     string // after the second reconcile
+		wantPushes    []string
+		wantHeldAtPR  []bool
+	}{
+		{env: "prod", approval: "pr-review", wantFinalizer: true, wantState: "WaitingForMerge",
+			wantPushes: []string{"kardinal/bundle-1/prod force=true"}, wantHeldAtPR: []bool{true}},
+		{env: "test", approval: "auto", wantFinalizer: false, wantState: "HealthChecking",
+			wantPushes: []string{"main force=false"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.env, func(t *testing.T) {
+			pl, b := makePipeline("nginx-demo"), makeBundle("bundle-1", "nginx-demo")
+			step := builtStep(t, pl, b, tt.env)
+			step.Status.State = "Promoting"
+			c := newClient(t, step, pl, b, openPRStatus(step.Spec.PRStatusRef, "", 0))
+			m := &finalizerAtOpenSCM{c: c, step: step.Name,
+				mockSCM: &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/5", prNumber: 5}}
+			git := &pushRecorder{headGit: headGit{sha: newSHA}}
+			r := &promotionstep.Reconciler{Client: c, SCM: m, GitClient: git,
+				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
+			wantSteps := steps.DefaultSequenceForBundle(tt.approval, "image", "", "")
+
+			reconcileStep(t, r, step.Name) // records the step list only
+			got := getStep(t, c, step.Name)
+			require.Equal(t, "Promoting", got.Status.State, got.Status.Message)
+			assert.Equal(t, wantSteps, recordedNames(got))
+			assert.Equal(t, v1alpha1.StepExecutionPending, stepStates(got)["git-clone"])
+			assert.Equal(t, tt.wantFinalizer, slices.Contains(got.Finalizers, promotionstep.FinalizerClosePR),
+				"finalizers %v", got.Finalizers)
+			assert.Empty(t, git.pushes, "nothing is pushed before the list is recorded")
+			assert.Zero(t, m.openCalled, "no PR is opened before the list is recorded")
+
+			reconcileStep(t, r, step.Name) // runs the recorded list
+			got = getStep(t, c, step.Name)
+			assert.Equal(t, tt.wantState, got.Status.State, got.Status.Message)
+			assert.Equal(t, wantSteps, recordedNames(got))
+			assert.Equal(t, tt.wantPushes, git.pushes)
+			assert.Equal(t, tt.wantHeldAtPR, m.heldAtPR, "the finalizer is held when the PR is opened")
+		})
+	}
+}
+
+// recordedNames returns the step names in ps's status.steps.
+func recordedNames(ps v1alpha1.PromotionStep) []string {
+	names := make([]string, 0, len(ps.Status.Steps))
+	for _, s := range ps.Status.Steps {
+		names = append(names, s.Name)
+	}
+	return names
 }

@@ -382,9 +382,9 @@ func TestPushedCommitRecorded(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.env, func(t *testing.T) {
-			ps := makeStep("step", "p", "b1", tt.env)
-			ps.Status.State = "Promoting"
-			c := newClient(t, ps, makePipeline("p"), makeBundle("b1", "p"))
+			pl := makePipeline("p")
+			ps := asPromoting(makeStep("step", "p", "b1", tt.env), pl)
+			c := newClient(t, ps, pl, makeBundle("b1", "p"))
 			r := &promotionstep.Reconciler{Client: c, GitClient: &headGit{sha: newSHA},
 				SCM:       &mockSCM{open: true, prURL: "https://github.com/test/repo/pull/3", prNumber: 3},
 				WorkDirFn: func(_, _ string) string { return t.TempDir() }}
